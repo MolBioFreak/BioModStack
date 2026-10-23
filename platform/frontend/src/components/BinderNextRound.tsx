@@ -3,7 +3,8 @@ import { useQueries, useQuery } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import type { BinderSelectedControlsProps } from './BinderSelectedControls';
 import type { BinderOperation } from '../lib/binderContinuation';
-import { roundStageParams } from '../lib/binderRound';
+import { activeInvocationPlan } from '../lib/binderInvocationPlan';
+import { BinderInvocationPlan } from './BinderInvocationPlan';
 import { readBinderCandidateDocuments } from '../lib/binderContinuation';
 import { candidateKey, fetchSelectedRounds, readRoundStorage, submitSelectedRound, uniqueCandidates, writeRoundStorage, type CandidateRef, type SelectedRoundStage } from '../lib/binderSelectedRound';
 import { ExecutionPolicyControl } from './ExecutionPolicyControl';
@@ -24,7 +25,6 @@ interface Draft { stages: DraftStage[]; target: string | null; policy?: Executio
 const labels: Record<string, string> = { fampnn: 'FA-MPNN', proteinmpnn: 'ProteinMPNN', caliby_binder: 'Caliby', protonpottsmpnn: 'ProtonPottsMPNN', binder_refinement: 'PPIFlow', protenix: 'Protenix', boltz2: 'Boltz-2', esmfold2: 'ESMFold2' };
 const operations: Record<string, BinderOperation> = { fampnn: 'fampnn', proteinmpnn: 'proteinmpnn', caliby_binder: 'caliby', protonpottsmpnn: 'protonpottsmpnn', binder_refinement: 'refine', protenix: 'predict_protenix', boltz2: 'predict_boltz2', esmfold2: 'predict_esmfold2' };
 const names = { sequence_design: 'Sequence design', maturation: 'Maturation', prediction: 'Blind prediction' };
-const choices = { sequence_design: ['fampnn', 'proteinmpnn', 'caliby_binder', 'protonpottsmpnn'], prediction: ['protenix', 'boltz2', 'esmfold2'] };
 const control = 'min-w-0 max-w-full whitespace-normal rounded border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-sm';
 const identity = () => crypto.randomUUID();
 function newStage(kind: SelectedRoundStage['kind'], previous?: string): DraftStage {
@@ -56,8 +56,7 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
         ...selectedDesignIds.map((design_id, index) => ({ kind: 'design' as const, job_id: owners[index]?.data ?? sourceJobId, design_id, ...(documents[design_id] ? { document: documents[design_id] } : {}) })).filter(ref => !extra.some(exact => exact.kind === 'design' && exact.job_id === ref.job_id && exact.design_id === ref.design_id && exact.document?.artifact_id === ref.document?.artifact_id && exact.document?.target_state === ref.document?.target_state)),
         ...selectedNativeSources.filter(source => !extra.some(ref => ref.kind === 'native_document' && ref.job_id === source.job_id && ref.artifact_id === source.artifact_id)).map(source => ({ kind: 'native_document' as const, job_id: source.job_id, artifact_id: source.artifact_id, ...(source.document?.target_state != null ? { target_state: source.document.target_state } : {}) })), ...extra,
     ]);
-    const activeStages = draft.stages.filter(item => item.enabled).map(item => item.stage.kind === 'prediction' ? { ...item.stage, models: item.stage.models.map(model => ({ ...model, params: roundStageParams(model.model_id, model.params) })) } : item.stage);
-    const intent = { operation: 'round' as const, source_job_id: sourceJobId, selection: { candidate_refs: selection }, round_plan: { schema_version: 1 as const, stages: activeStages }, execution_target_id: draft.target, execution_policy: draft.policy ?? newJobExecutionPolicy(), ...(launchContextId !== undefined ? { launch_context_id: launchContextId } : {}) };
+    const intent = { operation: 'round' as const, source_job_id: sourceJobId, selection: { candidate_refs: selection }, round_plan: activeInvocationPlan(draft.stages), execution_target_id: draft.target, execution_policy: draft.policy ?? newJobExecutionPolicy(), ...(launchContextId !== undefined ? { launch_context_id: launchContextId } : {}) };
     const changeStage = (id: string, update: (stage: DraftStage) => DraftStage) => setDraft(previous => ({ ...previous, stages: previous.stages.map(item => item.stage.id === id ? update(item) : item) }));
     const addStage = (kind: SelectedRoundStage['kind']) => setDraft(previous => ({ ...previous, stages: [...previous.stages, newStage(kind, previous.stages.filter(item => item.enabled).at(-1)?.stage.id)] }));
     const addProteinRecipe = () => setDraft(previous => {
@@ -117,21 +116,8 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
             <p>Protein maturation recipe: flow → chosen designer(s) → blind predictor(s). Flow-only backbones remain available for later design.</p>
             <button type="button" className={control} onClick={addProteinRecipe}>Add protein flow → design → predict</button>
             <div className="flex flex-wrap gap-2">{(['maturation', 'sequence_design', 'prediction'] as const).map(kind => <button type="button" className={control} key={kind} onClick={() => addStage(kind)}>Add {names[kind]}</button>)}</div>
-            {draft.stages.map((item, index) => <fieldset key={item.stage.id} className="space-y-2 rounded border border-[var(--border-color)] p-3"><legend>{index + 1}. {names[item.stage.kind]}</legend>
-                <label className="flex items-center gap-2"><input type="checkbox" checked={item.enabled} onChange={event => changeStage(item.stage.id, value => ({ ...value, enabled: event.target.checked }))} />Include stage {index + 1}</label>
-                <label className="block">Input<select aria-label={`Stage ${index + 1} input`} className={control} value={'stage_id' in item.stage.input ? item.stage.input.stage_id : ''} onChange={event => changeStage(item.stage.id, value => ({ ...value, stage: { ...value.stage, input: event.target.value ? { stage_id: event.target.value } : { selected: true } } }))}><option value="">Selected candidates</option>{draft.stages.slice(0, index).map((previous, i) => <option value={previous.stage.id} key={previous.stage.id}>{i + 1}. {names[previous.stage.kind]}{!previous.enabled ? ' (inactive)' : ''}</option>)}</select></label>
-                <div className="flex flex-wrap items-center gap-2"><button type="button" className={control} disabled={index === 0} onClick={() => setDraft(previous => { const stages = [...previous.stages]; [stages[index - 1], stages[index]] = [stages[index], stages[index - 1]]; return { ...previous, stages }; })}>Move up</button>
-                <button type="button" className={control} onClick={() => setDraft(previous => ({ ...previous, stages: previous.stages.filter(value => value.stage.id !== item.stage.id) }))}>Remove stage</button>
-                </div>
-                {item.stage.kind === 'maturation' ? <button className={control} type="button" onClick={() => setEditing({ stage: item.stage.id, model: 'binder_refinement' })}>PPIFlow settings</button> : <div className="flex flex-wrap gap-3">{choices[item.stage.kind].map(model => {
-                    const chosen = item.stage.kind !== 'maturation' && item.stage.models.some(value => value.model_id === model);
-                    return <div key={model} className="flex min-h-12 flex-wrap items-center gap-3 rounded border border-[var(--border-color)] px-3 py-2"><label className="flex items-center gap-2"><input type="checkbox" aria-label={`Stage ${index + 1} ${labels[model]}`} checked={chosen} onChange={() => changeStage(item.stage.id, value => {
-                        if (value.stage.kind === 'maturation') return value;
-                        const selected = value.stage.models.find(branch => branch.model_id === model);
-                        return { ...value, drafts: selected ? { ...value.drafts, [model]: selected.params } : value.drafts, stage: { ...value.stage, models: selected ? value.stage.models.filter(branch => branch.model_id !== model) : [...value.stage.models, { model_id: model, params: value.drafts[model] ?? {} }] } };
-                    })} />{labels[model]}</label>{chosen && <button type="button" className={control} onClick={() => setEditing({ stage: item.stage.id, model })}>{labels[model]} settings</button>}</div>;
-                })}</div>}
-            </fieldset>)}
+            <BinderInvocationPlan renderSettings={(call, candidateRefs, onChange) => operations[call.model_id] ? renderEditor({ operation: operations[call.model_id], candidateRefs, params: call.params, onChange }) : undefined} showAdd={false} stages={draft.stages} candidates={selection} onChange={stages => setDraft(previous => ({ ...previous, stages }))} />
+            {draft.stages.filter(item => item.stage.kind === 'maturation').map(item => <button key={item.stage.id} type="button" onClick={() => setEditing({ stage: item.stage.id, model: 'binder_refinement' })}>PPIFlow settings</button>)}
             {editing && activeEditor && editorParams && <section key={`${editing.stage}:${editing.model}`} aria-label="Stage native editor"><h4>{names[activeEditor.stage.kind]} · {labels[editing.model]}</h4>{'stage_id' in activeEditor.stage.input && <p>Inputs and declared chain roles come from the earlier stage’s actual outputs. Source-stage chain letters are not copied. Explicit role overrides remain editable.</p>}<button type="button" className={control} onClick={() => setEditing(undefined)}>Back to round</button>{renderEditor({ operation: operations[editing.model], candidateRefs: 'selected' in activeEditor.stage.input ? selection : [], params: editorParams, onChange: params => updateEditor(editing.stage, editing.model, params) })}</section>}
             <ExecutionTargetPicker value={draft.target} onChange={target => setDraft(previous => ({ ...previous, target }))} disabled={busy} />
             <ExecutionPolicyControl initialPolicy={draft.policy ?? newJobExecutionPolicy()} onChange={policy => setDraft(previous => ({ ...previous, policy }))} />

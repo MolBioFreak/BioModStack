@@ -36,6 +36,42 @@ async def retry_round(job_id: str, round_id: str | None = None, session: AsyncSe
     return await reconcile_round(session, experiment_session, job_id, retry=True)
 
 
+class PaidRoundApproval(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    approved_estimate_fingerprint: str = Field(min_length=1)
+
+
+@router.post('/{job_id}/round/{round_id}/steps/{step_id}/paid-approval')
+async def approve_paid_round_step(job_id: str, round_id: str, step_id: str, approval: PaidRoundApproval,
+                                 session: AsyncSession = Depends(get_session),
+                                 experiment_session: AsyncSession = Depends(get_experiment_session)):
+    from services import binder_round as rounds
+    from services.binder_continuation import resolve_root
+    _, source_root = await resolve_root(session, job_id)
+    root_id = source_root.id
+    root = await rounds.lock_root(session, root_id)
+    progress = rounds.progress_of(root)
+    retained = next((r for r in progress.get('selected_rounds', []) if r['round_id'] == round_id), None)
+    if retained is None and progress.get('round_id') == round_id:
+        retained = progress
+    step = (retained or {}).get('steps', {}).get(step_id)
+    if step is None or step['metadata'].get('route') != 'boltz_api':
+        raise HTTPException(404, 'Paid round step not found')
+    if not step.get('job_id'):
+        step['metadata']['approved_estimate_fingerprint'] = approval.approved_estimate_fingerprint
+        step.update(state='prepared')
+        step.pop('error', None)
+        step.pop('review', None)
+        retained['state'] = 'running'
+        rounds.save(root, progress)
+        await session.commit()
+    else:
+        await session.rollback()
+    if retained is progress:
+        return await rounds.reconcile_round(session, experiment_session, root_id)
+    return await rounds.reconcile_selected(session, experiment_session, root_id, round_id)
+
+
 class NativeSource(BaseModel):
     model_config = ConfigDict(extra='forbid')
     job_id: str

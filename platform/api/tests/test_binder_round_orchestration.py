@@ -53,7 +53,7 @@ async def test_sequence_native_bypasses_redesign_and_uses_independent_target(sel
         child = await session.get(Job, step['job_id'])
         assert child.model_id == 'protenix'
         assert child.params['complex_components'] == [
-            {'id': 'A', 'type': 'protein', 'sequence': 'A'}, {'id': 'B', 'type': 'protein', 'sequence': 'G'}]
+            {'id': 'A', 'type': 'protein', 'sequence': 'A', 'modifications': []}, {'id': 'B', 'type': 'protein', 'sequence': 'G', 'modifications': []}]
         assert child.params['protenix_n_sample'] == 2
         assert child.params['protenix_use_msa'] is False
         assert not child.params.get('input_pdb')

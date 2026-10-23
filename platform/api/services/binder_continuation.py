@@ -21,8 +21,9 @@ async def resolve_root(session: AsyncSession, source_job_id: str) -> tuple[Job, 
     while current.id not in visited:
         visited.add(current.id)
         params = current.params or {}
+        step = (current.provenance or {}).get('binder_round_step') or {}
         root_id = (current.lineage_root_job_id or params.get('lineage_root_job_id')
-                   or params.get('iteration_source_root_job_id'))
+                   or params.get('iteration_source_root_job_id') or step.get('root_job_id'))
         source_id = (current.selection_source_job_id or current.source_stage_job_id
                      or params.get('selection_source_job_id') or params.get('source_stage_job_id')
                      or params.get('iteration_source_job_id'))

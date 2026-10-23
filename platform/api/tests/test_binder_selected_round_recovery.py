@@ -17,13 +17,25 @@ from test_binder_selected_round import source, request
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('after_commit', [False, True])
-async def test_interrupted_insertion_completed_native_child_recovers(selected, setup_store, monkeypatch, after_commit):
+@pytest.mark.parametrize('envelope_kind', ['selected_legacy', 'selected_invocations', 'initial_invocations'])
+async def test_interrupted_insertion_completed_native_child_recovers(selected, setup_store, monkeypatch, after_commit, envelope_kind):
     from services import protonpottsmpnn_design as native, analysis_autorun
     from services.protonpottsmpnn_publication import publish_native_results
     client, session, root, tmp = await source(selected)
     payload = request('interrupted')
     payload['round_plan']['stages'][0]['models'] = [{'model_id': 'protonpottsmpnn', 'params': {'binder_chain': 'A'}}]
     payload['round_plan']['stages'][1]['models'] = payload['round_plan']['stages'][1]['models'][:1]
+    if envelope_kind != 'selected_legacy':
+        payload['round_plan']['schema_version'] = 2
+        for stage in payload['round_plan']['stages']:
+            for call in stage['models']:
+                call.update(invocation_id=stage['id'] + '-call', mode=selected_round.MODES[call['model_id']])
+    if envelope_kind == 'initial_invocations':
+        root.status = 'completed'
+        root.execution_target_id = None
+        root.provenance = {**(root.provenance or {}), rounds.SEQUENCE_REQUEST: {
+            'schema_version': 2, 'enabled': True, 'round_plan': payload['round_plan']}}
+        await session.commit()
     original = jobs.submit_selected_child_jobs
     async def interrupted(*args, **kwargs):
         if after_commit:
@@ -31,10 +43,14 @@ async def test_interrupted_insertion_completed_native_child_recovers(selected, s
         raise asyncio.CancelledError('process interrupted at insertion boundary')
     monkeypatch.setattr(jobs, 'submit_selected_child_jobs', interrupted)
     with pytest.raises(asyncio.CancelledError):
-        await client.post('/api/binder-continuation/selected', json=payload)
+        if envelope_kind == 'initial_invocations':
+            async with setup_store() as experiments:
+                await rounds.reconcile_round(session, experiments, 'root')
+        else:
+            await client.post('/api/binder-continuation/selected', json=payload)
     await session.rollback()
     root = await session.get(Job, 'root', populate_existing=True)
-    retained = rounds.progress_of(root)['selected_rounds'][0]
+    retained = rounds.progress_of(root) if envelope_kind == 'initial_invocations' else rounds.progress_of(root)['selected_rounds'][0]
     identity = retained['round_id']
     assert all(s['job_id'] is None for s in retained['steps'].values())
     children = list(await session.scalars(select(Job).where(Job.provenance[rounds.STEP]['round_id'].as_string() == identity)))

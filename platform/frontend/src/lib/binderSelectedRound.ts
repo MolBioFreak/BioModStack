@@ -24,6 +24,7 @@ export interface SelectedRoundInputGroup {
 export type SelectedRoundModel = BinderRoundStage & {
     invocation_id?: string; mode?: string; execution_target_id?: string | null;
     input_groups?: SelectedRoundInputGroup[];
+    route?: 'job' | 'boltz_api'; approved_estimate_fingerprint?: string | null;
 };
 export type SelectedRoundStage = { id: string; input: StageInput } & (
     | { kind: 'sequence_design' | 'prediction'; models: SelectedRoundModel[] }
@@ -61,6 +62,44 @@ export function candidateIdentity(ref: CandidateRef): CandidateRef {
     return { ...base, kind: ref.kind, publication_ref: ref.publication_ref, native_record_id: ref.native_record_id };
 }
 export const uniqueCandidates = (refs: CandidateRef[]) => [...new Map(refs.map(ref => [candidateKey(ref), candidateIdentity(ref)])).values()];
+
+export interface PredictionOperationDetour {
+    schema_version: 1;
+    candidate_ref?: CandidateRef;
+    /** Exact selected sequence/composition; never ancestral coordinate paths. */
+    composition: Record<string, UntypedApiValue>;
+    round_plan: SelectedRoundPlan;
+    md_draft: Record<string, UntypedApiValue>;
+    return_to?: string;
+    destination_launch_context_id?: string | null;
+}
+export interface ProjectRoundDraftRef { project_id: string; setup_context_id: string }
+/** Existing Project revision storage is durable; browser storage is not authority. */
+export async function savePredictionOperationDetour(reference: ProjectRoundDraftRef, detour: PredictionOperationDetour) {
+    const { getProjectWorkflowSetup, saveProjectWorkflowSetupDraft } = await import('./projectManager');
+    const { requireMolecularDynamicsReturn } = await import('../components/gen2StartingStructureState');
+    if (detour.return_to !== undefined) requireMolecularDynamicsReturn(detour.return_to);
+    const setup = await getProjectWorkflowSetup(reference.project_id, reference.setup_context_id);
+    const { native_job_request, ...editor_state } = setup.draft;
+    const payload = structuredClone(detour);
+    if (payload.candidate_ref) payload.candidate_ref = candidateIdentity(payload.candidate_ref);
+    await saveProjectWorkflowSetupDraft(reference.project_id, reference.setup_context_id, {
+        expected_generation: setup.generation,
+        draft: { editor_state: { ...editor_state, prediction_operation_detour: JSON.parse(JSON.stringify(payload)) },
+            ...(native_job_request !== undefined ? { native_job_request } : {}) },
+    });
+    // Exact target readback before navigation; a lost response is recoverable by GET.
+    return loadPredictionOperationDetour(reference);
+}
+export async function loadPredictionOperationDetour(reference: ProjectRoundDraftRef): Promise<PredictionOperationDetour> {
+    const { getProjectWorkflowSetup } = await import('./projectManager');
+    const { requireMolecularDynamicsReturn } = await import('../components/gen2StartingStructureState');
+    const setup = await getProjectWorkflowSetup(reference.project_id, reference.setup_context_id);
+    const detour = setup.draft.prediction_operation_detour as unknown as PredictionOperationDetour;
+    if (!detour || detour.schema_version !== 1) throw Error('Saved prediction operation is unavailable.');
+    if (detour.return_to !== undefined) requireMolecularDynamicsReturn(detour.return_to);
+    return structuredClone(detour);
+}
 export function readRoundStorage<T>(jobId: string, slot: string, fallback: T): T {
     try { return JSON.parse(localStorage.getItem(`bms:binder-round:${jobId}:${slot}`) ?? 'null') ?? fallback; } catch { return fallback; }
 }

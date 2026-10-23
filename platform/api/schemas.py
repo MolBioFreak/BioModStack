@@ -105,11 +105,31 @@ class ExecutionPolicy(BaseModel):
 class SequenceDesignRequest(BaseModel):
     """Optional general-generation follow-on; settings remain model-owned."""
     model_config = ConfigDict(extra='forbid')
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     enabled: bool = False
-    model_id: Literal['proteinmpnn', 'fampnn', 'caliby_experimental']
+    model_id: Literal['proteinmpnn', 'fampnn', 'caliby_experimental'] | None = None
     params: dict[str, Any] = Field(default_factory=dict)
     input_settings: dict[str, Any] = Field(default_factory=dict)
+    round_plan: 'SelectedRoundPlan | None' = None
+
+    @model_validator(mode='after')
+    def versioned_operations(self):
+        if self.schema_version == 1:
+            if self.model_id is None or self.round_plan is not None:
+                raise ValueError('Legacy sequence design requires its scalar model')
+        elif self.round_plan is None or self.round_plan.schema_version != 2 or self.model_id is not None or self.params or self.input_settings:
+            raise ValueError('Sequence design v2 uses only the shared invocation plan')
+        return self
+
+    @model_serializer(mode='wrap')
+    def historical_wire(self, handler):
+        payload = handler(self)
+        if self.schema_version == 1:
+            payload.pop('round_plan', None)
+        else:
+            for key in ('model_id', 'params', 'input_settings'):
+                payload.pop(key, None)
+        return payload
 
 
 class BinderRoundDesign(BaseModel):
@@ -233,6 +253,8 @@ class SelectedRoundModel(BaseModel):
     mode: str | None = Field(default=None, min_length=1)
     execution_target_id: str | None = None
     input_groups: list[SelectedRoundInputGroup] = Field(default_factory=list)
+    route: Literal['job', 'boltz_api'] = 'job'
+    approved_estimate_fingerprint: str | None = None
     model_id: str
     params: dict[str, Any] = Field(default_factory=dict)
 
@@ -242,6 +264,9 @@ class SelectedRoundModel(BaseModel):
         # Omitted placement inherits; explicit null means Local, including replay.
         if 'execution_target_id' not in self.model_fields_set:
             payload.pop('execution_target_id', None)
+        for field in ('route', 'approved_estimate_fingerprint'):
+            if field not in self.model_fields_set:
+                payload.pop(field, None)
         return payload
 
 
@@ -262,7 +287,7 @@ class SelectedRoundStage(BaseModel):
                 raise ValueError('Maturation uses binder_refinement/refine')
         else:
             allowed = ({'proteinmpnn', 'fampnn', 'caliby_binder', 'protonpottsmpnn', 'caliby_experimental', 'ligandmpnn'}
-                       if self.kind == 'sequence_design' else {'protenix', 'boltz2', 'esmfold2'})
+                       if self.kind == 'sequence_design' else {'protenix', 'boltz2', 'esmfold2', 'boltz_cp_experimental'})
             if not self.models or self.model_id or self.mode or self.params:
                 raise ValueError('Design/prediction stages use models')
             if any(m.model_id not in allowed for m in self.models):
@@ -273,7 +298,7 @@ class SelectedRoundStage(BaseModel):
 class SelectedRoundPlan(BaseModel):
     model_config = ConfigDict(extra='forbid')
     schema_version: Literal[1, 2] = 1
-    stages: list[SelectedRoundStage] = Field(min_length=1)
+    stages: list[SelectedRoundStage] = Field(default_factory=list)
 
     @model_serializer(mode='wrap')
     def historical_wire(self, handler):
@@ -285,12 +310,14 @@ class SelectedRoundPlan(BaseModel):
                 for field in ('invocation_id', 'scope', 'chains'):
                     stage.get('input', {}).pop(field, None)
                 for model in stage.get('models', []):
-                    for field in ('invocation_id', 'mode', 'execution_target_id', 'input_groups'):
+                    for field in ('invocation_id', 'mode', 'execution_target_id', 'input_groups', 'route', 'approved_estimate_fingerprint'):
                         model.pop(field, None)
         return payload
 
     @model_validator(mode='after')
     def dependencies(self):
+        if self.schema_version == 1 and not self.stages:
+            raise ValueError('Legacy plans require a stage')
         seen = set()
         calls = {}
         for stage in self.stages:
@@ -298,7 +325,7 @@ class SelectedRoundPlan(BaseModel):
             if self.schema_version == 1:
                 if len({m.model_id for m in models}) != len(models):
                     raise ValueError('Legacy stage models must be unique')
-                if any(m.model_id in {'caliby_experimental', 'ligandmpnn'} or
+                if any(m.model_id in {'caliby_experimental', 'ligandmpnn', 'boltz_cp_experimental'} or m.route != 'job' or m.approved_estimate_fingerprint is not None or
                        m.invocation_id is not None or m.mode is not None or m.input_groups or
                        m.execution_target_id is not None for m in models):
                     raise ValueError('Explicit invocation settings require plan v2')
@@ -306,6 +333,8 @@ class SelectedRoundPlan(BaseModel):
                     raise ValueError('Explicit input scope requires plan v2')
             elif any(not m.invocation_id or not m.mode for m in models) or len({m.invocation_id for m in models}) != len(models):
                 raise ValueError('Plan v2 requires unique invocation IDs and native modes per stage')
+            if any(m.route == 'boltz_api' and (stage.kind != 'prediction' or m.model_id != 'boltz2') for m in models):
+                raise ValueError('The paid Boltz route belongs to an explicit Boltz prediction call')
             if stage.id in seen or (stage.input.stage_id is not None and stage.input.stage_id not in seen):
                 raise ValueError('Stage IDs must be unique and dependencies must name an earlier stage')
             if stage.input.invocation_id and stage.input.invocation_id not in calls.get(stage.input.stage_id, set()):

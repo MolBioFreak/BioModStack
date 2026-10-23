@@ -21,7 +21,8 @@ KEY = 'selected_rounds'
 TERMINAL = {'completed', 'failed', 'cancelled'}
 MODES = {'proteinmpnn': 'design', 'fampnn': 'binder_design', 'caliby_binder': 'design',
          'protonpottsmpnn': 'redesign', 'binder_refinement': 'refine',
-         'protenix': 'complex', 'boltz2': 'complex', 'esmfold2': 'predict'}
+         'protenix': 'complex', 'boltz2': 'complex', 'esmfold2': 'predict',
+         'boltz_cp_experimental': 'design'}
 
 
 def wire(ref):
@@ -68,6 +69,8 @@ def normalize(request):
             # Roles are operator settings; physical source paths are server-owned.
             bound = BOUND_INPUTS - {'binder_chains', 'target_chains', 'design_chain', 'target_chain'}
             bound |= {'target_pdb'}
+            if model == 'boltz_cp_experimental':
+                bound.add('input_path')
             if any(invocation.params.get(key) for key in bound):
                 raise ValueError('Round inputs are bound from the selected candidate and independent target')
             if stage.kind == 'prediction' and any(invocation.params.get(key) for key in BLIND_FIXED_PARAMETERS):
@@ -77,9 +80,9 @@ def normalize(request):
             if stage.kind == 'prediction':
                 defaults.update({key: False for key in BLIND_FIXED_PARAMETERS if key in known})
             invocation.params = {**defaults, **invocation.params}
-            if model == 'protonpottsmpnn':
-                # Final native validation runs after role_defaults binds the
-                # exact producer chain. No placeholder chain is scientific input.
+            if model in {'protonpottsmpnn', 'ligandmpnn'}:
+                # Final native validation runs after exact source/roles bind.
+                # LigandMPNN's chemistry validator also needs real coordinates.
                 errors = []  # Model owner validates the complete source-bound request.
             else:
                 errors = registry.validate_job_params(model, mode, invocation.params)
@@ -142,9 +145,49 @@ async def native_sequences(session, owner):
     return artifact, result['designs']
 
 
+async def native_operation_records(session, owner):
+    """Adapt existing verified native publications, never annotate their custody."""
+    if owner.model_id == 'caliby_experimental':
+        from services.caliby_native_publication import read_published_native_results, DIRECTORY
+        primary = 'caliby_results.json'
+    elif owner.model_id == 'ligandmpnn':
+        from services.ligandmpnn_design_publication import read_published_native_results, DIRECTORY
+        primary = 'manifest.json'
+    else:
+        raise ValueError('Unsupported native operation publication')
+    publication = await read_published_native_results(owner, session)
+    manifest = next(a for a in publication['artifacts'] if a['path'] == primary)
+    result = []
+    for record in publication['records']:
+        structures = ([record['structure']] if owner.model_id == 'caliby_experimental' else
+                      [a for a in record['artifacts'] if a['kind'] == 'structure'])
+        if structures:
+            refs = [{'kind': 'native_document', 'job_id': owner.id, 'artifact_id': a['artifact_id']} for a in structures]
+        else:
+            producer = record['producer']
+            native_id = json.dumps([producer['name'], producer['batch_idx'], producer['design_idx']], separators=(',', ':'))
+            refs = [{'kind': 'native_sequence', 'job_id': owner.id, 'publication_ref': manifest['artifact_id'],
+                     'native_output_id': native_id}]
+        result.extend((ref, record) for ref in refs)
+    return publication, result
+
+
+async def operation_document(session, owner, ref):
+    _, records = await native_operation_records(session, owner)
+    matches = [record for candidate, record in records if candidate.get('artifact_id') == ref['artifact_id']]
+    if len(matches) != 1:
+        raise ValueError('Selected native document is not an exact published record')
+    artifact = await session.get(JobArtifact, ref['artifact_id'])
+    # The model reader has already checked attempt/path/hash/provenance equality.
+    return Path(artifact.storage_path), {'artifact_id': artifact.id, 'artifact_sha256': artifact.sha256,
+        'owner_job_id': owner.id, 'producer_model_id': owner.model_id,
+        'lineage_root_job_id': (owner.provenance or {}).get(rounds.STEP, {}).get('root_job_id', owner.id),
+        'producer_document': {'sha256': artifact.sha256, 'native_record': matches[0]}}
+
+
 def retained_candidate_directory(root, ref):
     """Recover an exact prior source snapshot after producer cleanup."""
-    for previous in rounds.progress_of(root).get(KEY, []):
+    for previous in [rounds.progress_of(root), *rounds.progress_of(root).get(KEY, [])]:
         rows = list(previous.get('selection', {}).get('resolved', []))
         rows += list(previous.get('resolved_outputs', {}).values())
         for row in rows:
@@ -215,7 +258,10 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
             row['path'] = manifest['designs'][0]['selection_pdb_path']
     elif ref['kind'] == 'native_document':
         from services.binder_native_selection import resolve_native_source
-        path, identity = await resolve_native_source(session, owner.id, ref['artifact_id'])
+        if owner.model_id in {'caliby_experimental', 'ligandmpnn'}:
+            path, identity = await operation_document(session, owner, ref)
+        else:
+            path, identity = await resolve_native_source(session, owner.id, ref['artifact_id'])
         if ref.get('target_state') is not None and ref['target_state'] != identity.get('target_state'):
             raise ValueError('Selected native target state differs from document')
         if ref.get('model') is not None:
@@ -226,7 +272,10 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
         if ref.get('model') is not None:
             row['model'] = ref['model']
         if snapshot:
-            directory = snapshot_selection(owner, root, [], native_sources=[(path, identity)], output_format=output_format)
+            try:
+                directory = snapshot_selection(owner, root, [], native_sources=[(path, identity)], output_format=output_format)
+            except FileNotFoundError:
+                directory = retained_candidate_directory(root, ref)
             row['selection_dir'] = str(directory)
             row['path'] = json.loads((directory / 'selection_manifest.json').read_text())['designs'][0]['selection_pdb_path']
     elif ref['kind'] == 'native_observation' and owner.model_id == 'boltzgen':
@@ -270,6 +319,27 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
                    publication_sha256=artifact.sha256)
         # A body-less observation stays selectable/rankable. No Design or pose
         # is synthesized; an actual downstream model still owns its input needs.
+    elif ref['kind'] == 'native_sequence' and owner.model_id == 'ligandmpnn':
+        _, records = await native_operation_records(session, owner)
+        matches = [record for candidate, record in records if candidate == ref]
+        if len(matches) != 1:
+            raise ValueError('Native sequence identity is missing or ambiguous')
+        artifact = await session.get(JobArtifact, ref['publication_ref'])
+        row.update(sequence=matches[0]['native_output']['sequence'], native_record=deepcopy(matches[0]),
+                   binder_chains=prior.get('binder_chains', []), target_chains=prior.get('target_chains', []),
+                   publication_sha256=artifact.sha256)
+    elif ref['kind'] == 'native_sequence' and owner.model_id in {'proteinmpnn', 'fampnn'}:
+        from services.binder_native_selection import read_native_sequence_candidates
+        artifact, records = await read_native_sequence_candidates(session, owner, verify_bytes=True)
+        matches = [record for record in records if record['candidate_ref'] == ref]
+        if len(matches) != 1:
+            raise ValueError('Native sequence identity is missing or ambiguous')
+        record = matches[0]
+        row.update(sequence=record['sequence'], native_record=deepcopy(record),
+                   binder_chains=prior.get('binder_chains', []), target_chains=prior.get('target_chains', []),
+                   publication_sha256=artifact.sha256)
+        # A sequence index is not a coordinate output, even when its producer
+        # recorded a source backbone. Structure consumers must choose a pose.
     elif owner.model_id == 'protonpottsmpnn':
         artifact, outputs = await native_sequences(session, owner)
         if ref['publication_ref'] != artifact.id:
@@ -318,7 +388,7 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
     if snapshot and not any(t.get('components') for t in targets):
         # Same exact candidate's retained independent inputs survive cleanup.
         # This is custody reuse, not extraction from its generated pose.
-        for previous in rounds.progress_of(root).get(KEY, []):
+        for previous in [rounds.progress_of(root), *rounds.progress_of(root).get(KEY, [])]:
             retained_rows = list(previous.get('selection', {}).get('resolved', []))
             retained_rows += list(previous.get('resolved_outputs', {}).values())
             match = next((r for r in retained_rows if r.get('ref') == ref
@@ -333,6 +403,9 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
 async def output_refs(session, child):
     refs = [{'kind': 'design', 'job_id': child.id, 'design_id': d.id}
             for d in await session.scalars(select(Design).where(Design.job_id == child.id).order_by(Design.id))]
+    if child.model_id in {'caliby_experimental', 'ligandmpnn'}:
+        _, records = await native_operation_records(session, child)
+        refs.extend(ref for ref, _ in records)
     if child.model_id == 'protonpottsmpnn':
         # No result yet is not a fabricated empty successful publication.
         from services.protonpottsmpnn_design import DIRECTORY
@@ -344,6 +417,22 @@ async def output_refs(session, child):
             artifact, rows = await native_sequences(session, child)
             refs.extend({'kind': 'native_sequence', 'job_id': child.id, 'publication_ref': artifact.id,
                          'native_output_id': row['design_id']} for row in rows)
+    if child.model_id in {'proteinmpnn', 'fampnn'}:
+        from services.binder_native_selection import read_native_sequence_candidates
+        try:
+            _, records = await read_native_sequence_candidates(session, child)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            if not refs and child.status == 'completed':
+                raise FileNotFoundError('Native sequence publication is not registered yet') from exc
+        else:
+            # Native membership is authoritative; its selected subset may also
+            # have Designs. Keep coordinates for those exact projected records.
+            designs = list(await session.scalars(select(Design).where(Design.job_id == child.id)))
+            projected = {(d.provenance or {}).get('sequence_design_candidate', {}).get('name') for d in designs}
+            refs.extend(wire(record['candidate_ref']) for record in records
+                        if not (record.get('selected') and record['native_output_id'] in projected))
     # Registered molecular outputs not projected as Designs remain reusable.
     design_paths = {d.pdb_path for d in await session.scalars(select(Design).where(Design.job_id == child.id))}
     for artifact in await session.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == child.id,
@@ -351,7 +440,7 @@ async def output_refs(session, child):
         doc = (artifact.provenance or {}).get('native_document')
         if doc and artifact.storage_path not in design_paths and artifact.media_type in {'chemical/x-pdb', 'chemical/x-mmcif'}:
             refs.append({'kind': 'native_document', 'job_id': child.id, 'artifact_id': artifact.id})
-    return refs
+    return list({digest(ref): ref for ref in refs}.values())
 
 
 def prediction_request(root, row, target, model, params, placement, *, scope='binder', selected_chains=None, mode=None):
@@ -362,14 +451,29 @@ def prediction_request(root, row, target, model, params, placement, *, scope='bi
         binder = [{'id': (row.get('binder_chains') or ['binder'])[0], 'type': 'protein', 'sequence': row['sequence']}]
     else:
         if scope == 'whole_composition' and row.get('path'):
-            from services.binder_diagnostic_selection import independent_structure_components
-            binder = independent_structure_components(Path(row['path']), selected_chains or [])
+            from services.binder_source_materialization import materialize_source_bytes, structure_suffix
+            path = Path(row['path'])
+            directory = Path(row['selection_dir']) / 'composition'
+            directory.mkdir(exist_ok=True)
+            prepared = materialize_source_bytes(path.read_bytes(), structure_suffix(path), directory,
+                                                output_format='native')
+            recipe = prepared['native_recipe']
+            binder = deepcopy(recipe['complex_components'])
+            # The native chemistry owner reports unresolved atoms/identities;
+            # never manufacture ligand chemistry from a coordinate label.
+            row = {**row, 'covalent_bonds': recipe.get('covalent_bonds', []),
+                   'unresolved_chemistry': recipe.get('unresolved', [])}
         elif not row.get('path') or not row.get('binder_chains'):
             raise ValueError('Prediction needs the selected binder sequence or declared structural binder roles')
         else:
             binder = source_components(row['path'], row['binder_chains'], 'binder')
+    bonds = deepcopy(row.get('covalent_bonds', [])) if scope == 'whole_composition' else []
     if selected_chains is not None:
-        binder = [component for component in binder if component['id'] in selected_chains]
+        indices = [i for i, component in enumerate(binder, 1) if component['id'] in selected_chains]
+        remap = {old: new for new, old in enumerate(indices, 1)}
+        binder = [component for i, component in enumerate(binder, 1) if i in remap]
+        bonds = [{**bond, 'left_entity': remap[bond['left_entity']], 'right_entity': remap[bond['right_entity']]}
+                 for bond in bonds if bond['left_entity'] in remap and bond['right_entity'] in remap]
     targets = deepcopy((target or {}).get('components') or [])
     if not targets and scope != 'whole_composition':
         raise ValueError('No independently declared target components are available')
@@ -382,6 +486,18 @@ def prediction_request(root, row, target, model, params, placement, *, scope='bi
                             'sequence': component.get('sequence')})
     ref = row['ref']
     params = deepcopy(params)
+    # Strip source-pose conditioning, not native chemistry or MSA controls.
+    from services.binder_round_inputs import BLIND_FIXED_PARAMETERS
+    for key in BLIND_FIXED_PARAMETERS:
+        if key in params:
+            params[key] = False
+    for key in ('constraint', 'templates', 'template_path', 'initial_guess', 'pocket', 'contact'):
+        params.pop(key, None)
+    for component in components:
+        for key in ('templatesPath', 'template', 'initial_guess', 'structure', 'coordinates'):
+            component.pop(key, None)
+    if bonds:
+        params['covalent_bonds'] = bonds
     params.update(complex_components=components,
         sequence=('' if model == 'esmfold2' else ':').join(c.get('sequence', '') for c in components if c.get('type') == 'protein'),
         sequence_name=ref.get('design_id') or ref.get('native_output_id') or ref.get('native_record_id') or ref.get('artifact_id'),
@@ -395,6 +511,7 @@ def prediction_request(root, row, target, model, params, placement, *, scope='bi
     child = JobCreate(name='selected-prediction', model_id=model, mode=mode or MODES[model], params=params,
                       execution_target_id=placement)
     return child, {'target_binding': target, 'input_components': mapping,
+                   'unresolved_chemistry': deepcopy(row.get('unresolved_chemistry', [])),
                    'binder_chains': [m['id'] for m in mapping if m['role'] == 'binder'],
                    'target_chains': [m['id'] for m in mapping if m['role'] == 'target']}
 
@@ -534,7 +651,10 @@ async def plan(session, root, retained):
                                 for group in getattr(invocation, 'input_groups', []):
                                     states = []
                                     for state in group.states:
-                                        resolved = await resolve_ref(session, root, state.candidate_ref, output_format='native')
+                                        state_key = digest(wire(state.candidate_ref))
+                                        if state_key not in retained['resolved_outputs']:
+                                            retained['resolved_outputs'][state_key] = await resolve_ref(session, root, state.candidate_ref, output_format='native')
+                                        resolved = retained['resolved_outputs'][state_key]
                                         if not resolved.get('path'):
                                             raise ValueError('Caliby requires selected coordinates, not an ancestral sequence backbone')
                                         refs.append(resolved['ref'])
@@ -552,10 +672,10 @@ async def plan(session, root, retained):
                             elif model == 'ligandmpnn':
                                 if not row.get('selection_dir'):
                                     raise ValueError('LigandMPNN requires selected coordinates')
-                                directory = structural_selection(row, root.id)
+                                directory = Path(row['selection_dir'])
                                 manifest = json.loads((directory / 'selection_manifest.json').read_text())
                                 child = JobCreate(name='selected-ligandmpnn', model_id=model, mode=mode,
-                                    params={**deepcopy(invocation.params), 'input_pdb': manifest['designs'][0]['selection_pdb_path']},
+                                    params={**deepcopy(invocation.params), 'target_pdb': manifest['designs'][0]['selection_pdb_path']},
                                     execution_target_id=placement)
                             else:
                                 if not row.get('selection_dir'):
@@ -594,6 +714,15 @@ async def plan(session, root, retained):
                                 'independent_targets': deepcopy(row['targets']),
                                 'target_state': target.get('name') if target else None,
                                 'binder_chains': row.get('binder_chains', []), 'target_chains': row.get('target_chains', []), **binding}
+                            if getattr(invocation, 'route', 'job') == 'boltz_api':
+                                from services.boltz_api_jobs import build_boltz_api_input, BOLTZ_API_MODEL
+                                metadata.update(route='boltz_api', provider_model=BOLTZ_API_MODEL,
+                                    launch_context_id=request.launch_context_id, execution_target_id=placement,
+                                    approved_estimate_fingerprint=invocation.approved_estimate_fingerprint,
+                                    provider_input=build_boltz_api_input(sequence=child.params.get('sequence', ''),
+                                        primary_chain_id='A', complex_components=child.params['complex_components'],
+                                        num_samples=child.params.get('boltz_diffusion_samples', 1),
+                                        use_msa=child.params.get('boltz_use_msa', True)))
                             steps[step_id] = {'metadata': metadata, 'request': child.model_dump(mode='json'),
                                              'state': 'prepared', 'job_id': None, 'outputs': []}
                             retained['errors'].pop(step_id, None)
@@ -669,87 +798,7 @@ async def submit(session, experiments, request):
 
 
 async def reconcile(session, experiments, root_id, round_id, *, retry=False):
-    root = await rounds.lock_root(session, root_id)
-    progress = rounds.progress_of(root)
-    retained = next((r for r in progress.get(KEY, []) if r['round_id'] == round_id), None)
-    if retained is None:
-        raise HTTPException(404, 'Selected round not found')
-    if not retry and retained['state'] in {'completed', 'completed_with_errors'}:
-        await session.rollback()
-        root = await session.get(Job, root_id)
-        return (await read_selected(session, root, round_id=round_id))[0]
-    await rounds.refresh_children(session, root_id, retained)
-    if retry:
-        retained.pop('outputs_retained', None)
-        retained['errors'] = {}
-        for old_id, step in list(retained['steps'].items()):
-            child = await session.get(Job, step['job_id']) if step.get('job_id') else None
-            if step.get('superseded_by') or child is None or child.status not in {'failed', 'cancelled'}:
-                continue
-            identity = str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms:selected-round:retry:' + old_id))
-            replacement = deepcopy(step)
-            replacement.update(state='prepared', job_id=None, outputs=[])
-            for key in ('review', 'error'):
-                replacement.pop(key, None)
-            replacement['metadata'].update(step_id=identity, retry_of_step_id=old_id, retry_of_job_id=child.id)
-            replacement['request'].update(name=f'binder-round-{identity}', launch_context_id=None,
-                execution_plan_approval=None, binder_round_step={'root_job_id': root_id, 'step_id': identity})
-            for key in ('workflow_adapter', '_global_resource_admission', '_global_dispatch_authority'):
-                replacement['request']['params'].pop(key, None)
-            step['superseded_by'] = identity
-            retained['steps'][identity] = replacement
-    await plan(session, root, retained)
-    rounds.save(root, progress)
-    await session.commit()
-    for identity in list(retained['steps']):
-        root = await rounds.lock_root(session, root_id)
-        progress = rounds.progress_of(root)
-        retained = next(r for r in progress[KEY] if r['round_id'] == round_id)
-        step = retained['steps'][identity]
-        child = await session.scalar(select(Job).where(Job.provenance[rounds.STEP]['root_job_id'].as_string() == root_id,
-            Job.provenance[rounds.STEP]['step_id'].as_string() == identity))
-        if child:
-            step.update(job_id=child.id, state=child.status)
-            rounds.save(root, progress)
-            await session.commit()
-            continue
-        if step.get('superseded_by') or step['state'] == 'review_required' or (step['state'] == 'error' and not retry):
-            await session.rollback()
-            continue
-        outcome, tasks = await rounds.submit_step(session, experiments, step,
-            destination=retained['request']['launch_context_id'],
-            context={'operation': 'round', 'root_job_id': root_id, 'round_id': round_id,
-                     'binder_round_step_id': identity, 'source_job_id': retained['source_job_id']})
-        root = await rounds.lock_root(session, root_id)
-        progress = rounds.progress_of(root)
-        retained = next(r for r in progress[KEY] if r['round_id'] == round_id)
-        retained['steps'][identity].update(outcome)
-        rounds.save(root, progress)
-        await session.commit()
-        await tasks()
-    root = await rounds.lock_root(session, root_id)
-    progress = rounds.progress_of(root)
-    retained = next(r for r in progress[KEY] if r['round_id'] == round_id)
-    await rounds.refresh_children(session, root_id, retained)
-    # A predecessor may have completed during submission. Retain its newly
-    # expanded successors now; prepared children remain scheduler-recoverable.
-    await plan(session, root, retained)
-    retained['state'] = rounds.round_state(retained)
-    if retained['state'] in {'completed', 'completed_with_errors'}:
-        # Freeze leaf output references too, so terminal GET never needs source
-        # bytes. Missing leaf publication is an observation, not a new gate.
-        for step in retained['steps'].values():
-            if not step.get('job_id') or step.get('outputs'):
-                continue
-            child = await session.get(Job, step['job_id'])
-            try:
-                step['outputs'] = await output_refs(session, child)
-            except (ValueError, OSError, HTTPException) as exc:
-                step['publication_error'] = str(exc.detail if isinstance(exc, HTTPException) else exc)
-        retained['outputs_retained'] = True
-    rounds.save(root, progress)
-    await session.commit()
-    return (await read_selected(session, root, round_id=round_id))[0]
+    return await rounds.reconcile_selected(session, experiments, root_id, round_id, retry=retry)
 
 
 async def response(session, retained):

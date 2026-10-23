@@ -22,6 +22,12 @@ PDB = ''.join(
 
 @pytest_asyncio.fixture
 async def selected(tmp_path, monkeypatch, setup_store):
+    # This fixture qualifies queue insertion/recovery, never inference or asset
+    # installation. Keep the external checkpoint availability leaf inert.
+    monkeypatch.setattr(jobs, '_validate_protenix_checkpoint_requirements', lambda *args: None)
+    import paths
+    monkeypatch.setattr(paths, 'get_inputs_dir', lambda: tmp_path / 'inputs')
+    monkeypatch.setattr(paths, 'get_results_dir', lambda: tmp_path / 'results')
     monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path / 'results')
     monkeypatch.setattr(jobs, '_resolve_design_structure_path', lambda path: Path(path))
