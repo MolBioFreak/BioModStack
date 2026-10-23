@@ -5,7 +5,7 @@ import { CatalogProvisionPanel, WorkflowProvisionPanel } from './dashboard/Indep
 import {
     EXECUTION_TARGET_STORAGE_KEY,
     fetchExecutionTargets,
-    prepareJobSubmission, prepareExecutionPlacement, type WorkflowProvisionRequest, type CatalogProvisionSelection,
+    prepareJobSubmission, prepareExecutionPlacement, type WorkflowProvisionRequest, type CatalogProvisionSelection, type WorkflowPackSelection,
 } from '../lib/api';
 
 interface ExecutionTargetPickerProps {
@@ -13,7 +13,7 @@ interface ExecutionTargetPickerProps {
     onChange?: (targetId: string | null) => void;
     disabled?: boolean;
     workflowRequest?: WorkflowProvisionRequest | null;
-    preloadSelection?: CatalogProvisionSelection;
+    preloadSelection?: CatalogProvisionSelection | WorkflowPackSelection;
     submissionOptions?: { launchContext?: boolean };
 }
 

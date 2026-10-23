@@ -582,7 +582,7 @@ export interface CatalogProvisionSelection {
 }
 export interface WorkflowPackSelection {
     kind: 'workflow_pack';
-    workflow_id: 'structure_prediction' | 'antibody_denovo';
+    workflow_id: 'structure_prediction' | 'antibody_denovo' | 'de_novo_design';
 }
 export interface MdLaunchPreviewRequest {
     schema_version: 'bms.md.launch-preview-request.v1';

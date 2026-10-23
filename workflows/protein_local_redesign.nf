@@ -310,7 +310,7 @@ process PrepareProteinLocalNativeRFD3Input {
     label 'pyrosetta_tools'
     stageInMode 'copy'
 
-    publishDir "${params.out_dir}/collected/protein_local_redesign", mode: 'copy', pattern: 'rfd3_preparation_receipt.json'
+    publishDir "${params.out_dir}/collected/protein_local_redesign", mode: 'copy', pattern: '{rfd3_preparation_receipt.json,rfd3_sources}'
     publishDir "${params.out_dir}/collected/protein_local_redesign", mode: 'copy', pattern: 'rfd3_input_protein_local_redesign_0.json'
 
     input:
@@ -318,8 +318,9 @@ process PrepareProteinLocalNativeRFD3Input {
     path request_json
 
     output:
-    tuple val('protein_local_redesign_0'), path('rfd3_input_protein_local_redesign_0.json'), path(input_structure), emit: input_json
+    tuple val('protein_local_redesign_0'), path('rfd3_input_protein_local_redesign_0.json'), path({ [input_structure, 'rfd3_sources'] }), emit: input_json
     path 'rfd3_preparation_receipt.json', emit: receipt
+    path 'rfd3_sources', emit: sources
 
     script:
     def codeRootArg = shellQuote(params.code_root)
@@ -330,6 +331,7 @@ process PrepareProteinLocalNativeRFD3Input {
         --request ${requestArg} \\
         --input-structure ${inputStructureArg} \\
         --design-id protein_local_redesign_0 \\
+        --source-dir rfd3_sources \\
         --output-native rfd3_input_protein_local_redesign_0.json \\
         --output-receipt rfd3_preparation_receipt.json
     """
@@ -365,7 +367,7 @@ process BuildProteinLocalRFD3ResultManifest {
     def producerMetadataArg = shellQuote(producer_metadata_jsonl)
     def storageRootArg = shellQuote("${params.out_dir}/run/rfd3")
     def requestStorageArg = shellQuote(params.rfd3_request_path)
-    def sourceFileArg = shellQuote(source_structure)
+    def sourceFileArg = shellQuote(source_structure instanceof List ? source_structure.find { it.name != 'rfd3_sources' } : source_structure)
     def sourceStorageArg = shellQuote(params.plr_input_pdb)
     def preparationReceiptStorageArg = shellQuote("${params.out_dir}/collected/protein_local_redesign/rfd3_preparation_receipt.json")
     """

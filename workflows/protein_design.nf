@@ -503,14 +503,15 @@ PY
 process PrepareGeneralRFD3Input {
     label 'pyrosetta_tools'
     stageInMode 'copy'
-    publishDir "${params.out_dir}/collected/rfd3_generation", mode: 'copy', pattern: 'rfd3_generation_*json'
+    publishDir "${params.out_dir}/collected/rfd3_generation", mode: 'copy', pattern: '{rfd3_generation_*json,rfd3_sources}'
 
     input:
     path request_json
 
     output:
-    tuple val('generation_0'), path('rfd3_generation_native_input.json'), path(request_json), emit: input_json
+    tuple val('generation_0'), path('rfd3_generation_native_input.json'), path({ [request_json, 'rfd3_sources'] }), emit: input_json
     path 'rfd3_generation_preparation_receipt.json', emit: receipt
+    path 'rfd3_sources', emit: sources
 
     script:
     """
@@ -522,6 +523,7 @@ process PrepareGeneralRFD3Input {
       --expected-num-designs '${params.rfd3_generation_num_designs}' \
       --expected-seed '${params.rfd3_generation_seed}' \
       --expected-dump-trajectories '${params.rfd3_generation_dump_trajectories}' \
+      --source-dir rfd3_sources \
       --output-native rfd3_generation_native_input.json \
       --output-receipt rfd3_generation_preparation_receipt.json
     """
