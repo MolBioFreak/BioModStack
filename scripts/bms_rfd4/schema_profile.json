@@ -271,7 +271,6 @@
                   "null"
                 ],
                 "default": null,
-                "exclusiveMinimum": 0,
                 "exclusiveMaximum": 1
               },
               "partial_t_latent": {
@@ -280,7 +279,6 @@
                   "null"
                 ],
                 "default": null,
-                "exclusiveMinimum": 0,
                 "exclusiveMaximum": 1
               },
               "couple_partial_t": {

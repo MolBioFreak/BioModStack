@@ -241,7 +241,8 @@ def native_overlay(request, bindings=None):
     if 'guidance' in r:
         guide=copy.deepcopy(r['guidance'])
         # Metric implementation is a registered official example, never a user _target_.
-        guide['metrics']={name:{'_target_':'rfproteina.metrics.contract_ca_metric.ContractCAMetric'} for name in guide['metrics']}
+        if 'metrics' in guide:
+            guide['metrics']={name:{'_target_':'rfproteina.metrics.contract_ca_metric.ContractCAMetric'} for name in guide['metrics']}
         for modalities in guide.get('terms',{}).values():
             for schedule in modalities.values():
                 schedule['_target_']='rfproteina.guidance.schedules.'+schedule.pop('kind')
@@ -280,7 +281,7 @@ def selected_dependencies(request):
         if tags.issuperset(all_tags) and (not any_tags or tags.intersection(any_tags)) and not tags.intersection(prohibited):
             active_profiles.append(family);active.append(extension['name'])
     return {'primary':'rfd4_proteina','providers':{k:v['profile'] for k,v in r.get('providers',{}).items()},
-            'oracle_parameter_family':r.get('oracle_parameter_family'),
+            'oracle_parameter_family':r.get('oracle_parameter_family', selected['profile'] if selected['profile'] in ('af3','of3') else None),
             'active_oracle_profiles':list(dict.fromkeys(active_profiles)),'active_oracle_names':active,
             'metric_extensions':[e['implementation'] for e in r.get('metric_extensions',[])],
             'metrics_tags':r.get('settings',{}).get('metrics_tags',[]),'search':search,'source_slots':source_slots(r)}

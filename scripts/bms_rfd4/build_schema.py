@@ -53,7 +53,8 @@ def main(source, image_sha256=None):
         for part in path.split('.'):node=node['properties'][part]
         node['enum']=choices
     for name in ('partial_trajectory_fraction_steps','partial_t_backbone','partial_t_latent'):
-        settings['properties']['generation']['properties']['args']['properties'][name].update(exclusiveMinimum=0, **({'maximum':1} if name.endswith('steps') else {'exclusiveMaximum':1}))
+        settings['properties']['generation']['properties']['args']['properties'][name].update(
+            **({'exclusiveMinimum':0,'maximum':1} if name.endswith('steps') else {'exclusiveMaximum':1}))
     # Keep selected provider alternatives separate; never merge AF2 defaults into AF3.
     groups={}
     for directory in ['recycle_strategy','generation','metrics/inline_metrics','metrics/refolding_oracles','metrics/refolding_metrics','metrics/pre_oracle_filters','metrics/pass_criteria','guidance']:

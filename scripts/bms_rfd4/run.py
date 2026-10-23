@@ -66,7 +66,8 @@ def oracle_environment(request, runtime_bindings):
     deps=selected_dependencies(request)
     active=set(deps['active_oracle_profiles'])
     selected={profile for profile in active if profile=='af2'}
-    if 'af3' in active:selected.add(request.get('oracle_parameter_family','af3'))
+    for profile in active.intersection({'af3','of3'}):
+        selected.add(request.get('oracle_parameter_family',profile))
     result={}
     for family in selected:
         if family not in runtime_bindings:
