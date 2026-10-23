@@ -774,8 +774,10 @@ for _id, (_model_id, _mode, _generator) in _NATIVE_GENERATION_SETUPS.items():
         availability_state='operational', availability_reason=None, workflow_family='typed_core_job',
         workflow_adapter_id=f'bms.core-job.{_model_id}.adapter.v1', launch_mode='typed_launcher_handoff',
         destination=_destination, model_modes=[{'model_id': _model_id, 'mode': _mode}],
-        result_adapter_ids=[f'bms.native-binder.{_model_id}.adapter.v1'],
-        result_contracts=['native_binder_result'], viewer_id='job_results', accepted_source_roles=[],
+        result_adapter_ids=[f'bms.core-job.{_model_id}.adapter.v1' if _model_id == 'protein_local_redesign'
+                            else f'bms.native-binder.{_model_id}.adapter.v1'],
+        result_contracts=['rfd3_local_redesign_v1' if _model_id == 'protein_local_redesign'
+                          else 'native_binder_result'], viewer_id='job_results', accepted_source_roles=[],
         receipt_contracts=[], project_setup_destination=_destination,
         project_native_owner_id=_owner))
 

@@ -43,11 +43,6 @@ def produce_return(tmp_path, monkeypatch, *, trajectories=False, zero=False):
         if zero:
             index = translated.index('--cif-file')
             del translated[index:index + 2]
-            result = real_run(translated, capture_output=True, text=True)
-            assert result.returncode != 0
-            assert 'at least one native RFD3 candidate CIF artifact is required' in result.stderr
-            assert not (worker_output / MANIFEST).exists()
-            raise ZeroYield
         result = real_run(translated, **kwargs)
         sealed.update({str(p.relative_to(worker_output)): p.read_bytes()
                        for p in worker_output.rglob('*') if p.is_file()})
@@ -63,9 +58,6 @@ def produce_return(tmp_path, monkeypatch, *, trajectories=False, zero=False):
     assert all((controller / name).read_bytes() == content for name, content in sealed.items())
     return values
 
-
-class ZeroYield(Exception):
-    pass
 
 
 def request_row(request, digest):
@@ -167,9 +159,17 @@ def test_return_tampering_preserves_existing_integrity(tmp_path, monkeypatch, da
         validate_rfd3_local_redesign_manifest(root, request_row(request, digest))
 
 
-def test_zero_yield_remains_producer_failure(tmp_path, monkeypatch):
-    with pytest.raises(ZeroYield):
-        produce_return(tmp_path, monkeypatch, zero=True)
+def test_zero_yield_retains_native_population_without_invented_candidates(tmp_path, monkeypatch):
+    request, digest, manifest_digest, root = produce_return(tmp_path, monkeypatch, zero=True)
+    proof = validate_rfd3_local_redesign_manifest(root, request_row(request, digest))
+    assert proof['digest'] == manifest_digest
+    assert proof['candidates'] == []
+    assert proof['manifest']['population']['generated'] == 0
+    assert proof['manifest']['population']['missing'] == 1
+    assert proof['manifest']['population']['failed'] is None
+    unpaired = proof['manifest']['population']['unpaired_artifacts']
+    assert len(unpaired) == 1 and unpaired[0]['role'] == 'unpaired_native_output'
+    assert proof['descriptors'][unpaired[0]['relative_path']] == unpaired[0]
 
 
 def historical_absolute_manifest(root):

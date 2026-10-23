@@ -9100,13 +9100,13 @@ async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = De
     ).scalars().all()
     artifact_roles = {row.role for row in artifacts}
     candidate_ids = {row.candidate_id for row in candidates}
+    roles_by_candidate = {candidate_id: set() for candidate_id in candidate_ids}
+    for artifact in artifacts:
+        if artifact.candidate_id in roles_by_candidate:
+            roles_by_candidate[artifact.candidate_id].add(artifact.role)
     trajectory_roles_by_candidate = {
-        candidate_id: {
-            row.role
-            for row in artifacts
-            if row.candidate_id == candidate_id and row.role in {"denoised_trajectory", "noisy_trajectory"}
-        }
-        for candidate_id in candidate_ids
+        candidate_id: roles & {"denoised_trajectory", "noisy_trajectory"}
+        for candidate_id, roles in roles_by_candidate.items()
     }
     request_execution = request.request_json.get("execution", {}) if isinstance(request.request_json, dict) else {}
     trajectories_requested = isinstance(request_execution, dict) and request_execution.get("dump_trajectories") is True
@@ -9123,18 +9123,28 @@ async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = De
                 'candidate_id': artifact.candidate_id,
                 'document': {'artifact_id': artifact.artifact_id}, 'output_format': 'native',
             })
+    requested_count = request_execution.get("num_designs") if isinstance(request_execution, dict) else None
+    generated_count = len(candidates)
+    population = {
+        "requested": requested_count, "generated": generated_count, "failed": None,
+        "missing": max(0, requested_count - generated_count) if isinstance(requested_count, int) else None,
+        "unexpected": max(0, generated_count - requested_count) if isinstance(requested_count, int) else None,
+        "unpaired_artifacts": sum(row.role == "unpaired_native_output" for row in artifacts),
+    }
     return {
         "schema": "bms.rfd3.local-redesign.read-model.v1",
         "job_id": str(job.id),
+        "execution_status": str(job.status),
+        "population": population,
+        "population_completeness": ("unknown" if requested_count is None else
+                                    "complete" if requested_count == generated_count else "partial"),
         "capabilities": {
             "source_structure": "source_structure" in artifact_roles,
             "candidate_structures": bool(candidate_ids) and all(
-                any(row.candidate_id == candidate_id and row.role == "structure" for row in artifacts)
-                for candidate_id in candidate_ids
+                "structure" in roles for roles in roles_by_candidate.values()
             ),
             "native_metadata": bool(candidate_ids) and all(
-                any(row.candidate_id == candidate_id and row.role == "native_prediction_metadata" for row in artifacts)
-                for candidate_id in candidate_ids
+                "native_prediction_metadata" in roles for roles in roles_by_candidate.values()
             ),
             "trajectories": {
                 "requested": trajectories_requested,

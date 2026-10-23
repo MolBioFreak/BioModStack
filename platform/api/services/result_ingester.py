@@ -3133,8 +3133,11 @@ def validate_rfd3_local_redesign_manifest(
         manifest = json.loads(manifest_bytes)
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"RFD3 local-redesign result manifest is malformed: {exc}") from exc
-    if not isinstance(manifest, dict) or manifest.get("schema") != "bms.rfd3.local-redesign.result.v1":
+    if not isinstance(manifest, dict) or manifest.get("schema") not in {
+        "bms.rfd3.local-redesign.result.v1", "bms.rfd3.local-redesign.result.v2",
+    }:
         raise RuntimeError("RFD3 local-redesign result manifest schema is invalid")
+    population_result = manifest["schema"] == "bms.rfd3.local-redesign.result.v2"
     unsigned = dict(manifest)
     claimed_manifest_sha = unsigned.pop("manifest_sha256", None)
     if not isinstance(claimed_manifest_sha, str) or _local_redesign_canonical_sha(unsigned) != claimed_manifest_sha:
@@ -3178,8 +3181,15 @@ def validate_rfd3_local_redesign_manifest(
 
     manifest_artifacts = manifest.get("artifacts")
     candidates = manifest.get("candidates")
-    if not isinstance(manifest_artifacts, list) or not isinstance(candidates, list) or not candidates:
+    if (not isinstance(manifest_artifacts, list) or not isinstance(candidates, list)
+            or (not population_result and not candidates)):
         raise RuntimeError("RFD3 local-redesign result lacks declared artifacts or candidates")
+    population = manifest.get("population", {})
+    if population_result:
+        if not isinstance(population, dict) or not isinstance(population.get("unpaired_artifacts"), list):
+            raise RuntimeError("RFD3 local-redesign population is malformed")
+        # Unpaired native evidence is retained without inventing a candidate join.
+        manifest_artifacts = [*manifest_artifacts, *population["unpaired_artifacts"]]
     descriptor_by_path: dict[str, dict[str, Any]] = {}
     semantic_bytes: dict[str, bytes] = {}
     for descriptor in manifest_artifacts:
@@ -3227,12 +3237,21 @@ def validate_rfd3_local_redesign_manifest(
         not isinstance(requested_num_designs, int)
         or execution_evidence.get("requested_num_designs") != requested_num_designs
         or execution_evidence.get("observed_num_designs") != len(candidates)
-        or execution_evidence.get("candidate_count_integrity") != "exact"
-        or len(candidates) != requested_num_designs
+        or execution_evidence.get("candidate_count_integrity") != (
+            "exact" if len(candidates) == requested_num_designs else "partial_or_unexpected"
+        )
+        or (not population_result and len(candidates) != requested_num_designs)
     ):
         raise RuntimeError("RFD3 local-redesign candidate count integrity is invalid")
+    if population_result and any(population.get(key) != value for key, value in {
+        "requested": requested_num_designs, "generated": len(candidates),
+        "missing": max(0, requested_num_designs - len(candidates)),
+        "unexpected": max(0, len(candidates) - requested_num_designs),
+    }.items()):
+        raise RuntimeError("RFD3 local-redesign population accounting is invalid")
     trajectories_requested = execution.get("dump_trajectories") is True
-    expected_trajectory_state = "produced" if trajectories_requested else "not_requested"
+    trajectory_count = role_counts.get("denoised_trajectory", 0) + role_counts.get("noisy_trajectory", 0)
+    expected_trajectory_state = "produced" if (trajectory_count if population_result else trajectories_requested) else "not_requested"
     if execution_evidence.get("trajectories") != expected_trajectory_state:
         raise RuntimeError("RFD3 local-redesign trajectory evidence is invalid")
     if request_payload.get("sequence_policy") == "skip" and execution_evidence.get("sequence_design") != "not_requested":
@@ -3240,17 +3259,21 @@ def validate_rfd3_local_redesign_manifest(
     expected_role_counts = {role: 1 for role in required_roles}
     expected_role_counts.update(
         {
-            "structure": requested_num_designs,
-            "native_prediction_metadata": requested_num_designs,
-            "denoised_trajectory": requested_num_designs if trajectories_requested else 0,
-            "noisy_trajectory": requested_num_designs if trajectories_requested else 0,
+            "structure": len(candidates),
+            "native_prediction_metadata": len(candidates),
+            "denoised_trajectory": (role_counts.get("denoised_trajectory", 0) if population_result else len(candidates)) if trajectories_requested else 0,
+            "noisy_trajectory": (role_counts.get("noisy_trajectory", 0) if population_result else len(candidates)) if trajectories_requested else 0,
         }
     )
+    if population_result:
+        expected_role_counts["native_source_structure"] = int(bool(role_counts.get("native_source_structure")))
+        expected_role_counts["unpaired_native_output"] = len(population["unpaired_artifacts"])
     if role_counts != {role: count for role, count in expected_role_counts.items() if count}:
         raise RuntimeError("RFD3 local-redesign artifact role cardinality is invalid")
 
     seen_candidates: set[str] = set()
     seen_artifacts: set[str] = set()
+    incomplete_trajectories: set[str] = set()
     for candidate in candidates:
         if not isinstance(candidate, dict):
             raise RuntimeError("RFD3 local-redesign candidate entry is malformed")
@@ -3269,7 +3292,9 @@ def validate_rfd3_local_redesign_manifest(
         trajectory_roles = {"denoised_trajectory", "noisy_trajectory"}
         expected_candidate_roles = {"structure", "native_prediction_metadata"}
         if trajectories_requested:
-            expected_candidate_roles.update(trajectory_roles)
+            expected_candidate_roles.update(candidate_roles & trajectory_roles if population_result else trajectory_roles)
+            if population_result and not trajectory_roles.issubset(candidate_roles):
+                incomplete_trajectories.add(candidate_id)
         if candidate_roles != expected_candidate_roles or len(candidate_artifacts) != len(expected_candidate_roles):
             raise RuntimeError(f"RFD3 local-redesign candidate artifact roles are invalid: {candidate_id}")
         for descriptor in candidate_artifacts:
@@ -3317,6 +3342,8 @@ def validate_rfd3_local_redesign_manifest(
     }
     if seen_artifacts != declared_candidate_artifacts:
         raise RuntimeError("RFD3 local-redesign candidate artifact assignment is incomplete")
+    if population_result and set(execution_evidence.get("incomplete_trajectory_candidates", [])) != incomplete_trajectories:
+        raise RuntimeError("RFD3 local-redesign trajectory accounting is invalid")
 
     receipt_descriptors = [
         descriptor for descriptor in descriptor_by_path.values() if descriptor.get("role") == "preparation_receipt"
@@ -3360,20 +3387,32 @@ def validate_rfd3_local_redesign_manifest(
         native_runtime_input = receipt_native.get("input") if isinstance(receipt_native, dict) else None
         expected_native = dict(request_payload.get("rfd3") or {})
         expected_native["input"] = native_runtime_input
+        source_mapping = preparation_receipt.get("source_mapping")
+        if source_mapping is not None:
+            from scripts.rfd3_local_redesign.source_mapping import lower_native
+            native_sources = [item for item in descriptor_by_path.values() if item.get("role") == "native_source_structure"]
+            if (not isinstance(source_mapping, dict) or len(native_sources) != 1
+                    or source_mapping.get("original_sha256") != source_binding.get("sha256")
+                    or source_mapping.get("native_sha256") != native_sources[0]["sha256"]
+                    or Path(str(native_runtime_input)).name != Path(native_sources[0]["relative_path"]).name):
+                raise RuntimeError("RFD3 local-redesign source mapping binding is invalid")
+            expected_native = lower_native(request_payload.get("rfd3") or {}, source_mapping, native_runtime_input)
+        elif role_counts.get("native_source_structure"):
+            raise RuntimeError("RFD3 local-redesign native source lacks its mapping")
         runtime_input = preparation_receipt.get("runtime_input")
         sequence_design = preparation_receipt.get("sequence_design")
         if (
             not isinstance(design_id, str)
             or not design_id
             or not isinstance(native_runtime_input, str)
-            or Path(native_runtime_input).name != source_path.name
+            or (source_mapping is None and Path(native_runtime_input).name != source_path.name)
             or receipt_native != expected_native
             or native_input_payload != {design_id: expected_native}
             or preparation_receipt.get("native_input_sha256")
             != _local_redesign_canonical_sha(native_input_payload)
             or not isinstance(runtime_input, dict)
-            or runtime_input.get("path") != source_path.name
-            or runtime_input.get("sha256") != source_binding.get("sha256")
+            or runtime_input.get("path") != native_runtime_input
+            or runtime_input.get("sha256") != (source_mapping["native_sha256"] if source_mapping is not None else source_binding.get("sha256"))
             or preparation_receipt.get("redesign_mode") != request_payload.get("redesign_mode")
             or preparation_receipt.get("sequence_policy") != request_payload.get("sequence_policy")
             or not isinstance(sequence_design, dict)
@@ -3417,8 +3456,8 @@ async def _ingest_rfd3_local_redesign_manifest(
     request.result_manifest_sha256 = claimed_manifest_sha
     now = datetime.utcnow()
     job_status = str(job.status or "").strip().lower()
-    if job_status == "completed":
-        request.status = "completed"
+    if job_status in {"completed", "failed", "cancelled", "canceled"}:
+        request.status = "cancelled" if job_status == "canceled" else job_status
         request.terminal_at = request.terminal_at or now
     elif job_status in {"queued", "running", "awaiting_input"}:
         request.status = "generated"
@@ -3434,14 +3473,14 @@ async def _ingest_rfd3_local_redesign_manifest(
         "media_type": "application/json",
     }
     all_descriptors = [*descriptor_by_path.values(), manifest_descriptor]
+    candidate_by_artifact = {
+        item["relative_path"]: candidate["candidate_id"]
+        for candidate in candidates for item in candidate.get("artifacts", [])
+    }
     for descriptor in all_descriptors:
         relative_path = str(descriptor["relative_path"])
         artifact_id = hashlib.sha256(f"{request.request_id}:{relative_path}".encode("utf-8")).hexdigest()
-        candidate_id = None
-        for candidate in candidates:
-            if any(item.get("relative_path") == relative_path for item in candidate.get("artifacts", [])):
-                candidate_id = candidate.get("candidate_id")
-                break
+        candidate_id = candidate_by_artifact.get(relative_path)
         existing = (
             await session.execute(
                 select(RFD3LocalRedesignArtifact).where(

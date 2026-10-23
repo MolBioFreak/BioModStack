@@ -216,7 +216,7 @@ it('prepares and submits the exact current Shape request, keeping retry identity
         const family = container.querySelector('[aria-label="Independent dependency preparation"]')!;
         const familyButton = [...family.querySelectorAll('button')].find(b => b.textContent === 'Preview artifact downloads')!;
         await act(async () => familyButton.click()); await flush();
-        expect(posts.at(-1)!.body).toEqual({ kind: 'model', model_id: 'protein_modification_experimental' });
+        expect(posts.at(-1)!.body).toEqual({ kind: 'workflow_pack', workflow_id: 'de_novo_design' });
     } finally { api.defaults.adapter = adapter; }
 });
 

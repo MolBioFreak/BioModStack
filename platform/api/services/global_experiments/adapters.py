@@ -610,10 +610,10 @@ class Rfd3LocalRedesignAdapter:
         profile_digest = _sha256(record.profile_registry_sha256, "RFD3 profile registry digest")
         result_digest = record.result_manifest_sha256
         candidate_count = 0
-        if str(record.status) == "completed":
-            if result_digest is None:
-                raise AdapterError("source_contract_unavailable", "completed RFD3 result has no authoritative manifest digest")
+        if result_digest is not None:
             content_digest, candidate_count = _verify_rfd3_result_manifest(job, record, expected_request_digest)
+        elif str(record.status) == "completed":
+            raise AdapterError("source_contract_unavailable", "completed RFD3 result has no authoritative manifest digest")
         else:
             content_digest = expected_request_digest
         return _receipt(
@@ -3303,7 +3303,7 @@ class NativeBinderJobResultAdapter:
         "ligandmpnn": {"interface_context"},
         "rfd4_proteina": {"generate", "evaluate"},
         "complexa": {"generate", "evaluate"},
-        "protein_modification_experimental": {"de_novo_design"},
+        "protein_modification_experimental": {"de_novo_design", "region_redesign"},
         "protein_cad_experimental": {"design"},
         "esmfold2": {"blind_pose"},
         "ppiflow": {"protein_binder", "antibody_binder", "nanobody_binder"},
