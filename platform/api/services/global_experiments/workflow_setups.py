@@ -550,6 +550,14 @@ async def prepare_workflow_setup_launch(
         payload["scheduler"]["resources"] = {
             "pinned_gpu": native_job["pinned_gpu"],
         }
+        # Placement is independent of native scientific parameters. In particular,
+        # explicit Local must not disappear into an ambient remote selection.
+        placement = native_request if isinstance(native_request, dict) else {}
+        for key in ("execution_target_id", "execution_policy"):
+            if key in placement:
+                payload["scheduler"][key] = copy.deepcopy(placement[key])
+        if "pinned_gpu" in placement:
+            payload["scheduler"]["resources"]["pinned_gpu"] = placement["pinned_gpu"]
         if native_job.get("execution_target_id") is None:
             from biomodstack_local_resources import GIB, applied_local_policy
             from services.gpu_config import read_scheduler_config
@@ -575,7 +583,7 @@ async def prepare_workflow_setup_launch(
     preparation = await prepare_workflow(session, revision.resource_id, {
         "input_dataset_revision_ids": [],
         "launch_authority": await protein_setup_launch_authority(session, authority),
-    }, normalize_native_job=True)
+    }, normalize_native_job=not native)  # Native Plan already pins model-owned normalized params.
     if preparation.validation_status != "valid":
         raise ValidationFailure(preparation.validation_receipt_json)
     preparation_id = preparation.resource_id

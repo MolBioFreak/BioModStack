@@ -769,10 +769,16 @@ def _validate_workflow_payload(
                     "native RFD3 typed workflow requires scheduler.resources.pinned_gpu as a non-negative integer"
                 )
             try:
-                validate_local_redesign_workflow_params(
-                    scheduler["params"],
-                    expected_adapter_id=adapter_id,
-                )
+                native_pinned = (capability_contract or {}).get("capability", {}).get("normalized_job_request")
+                # The native Plan pins the actual normalized request (including
+                # source-derived fields). The legacy raw-parameter validator
+                # does not accept that projection; exact pinned-schema validation
+                # above remains its authority, as for other native model Plans.
+                if not isinstance(native_pinned, dict):
+                    validate_local_redesign_workflow_params(
+                        scheduler["params"],
+                        expected_adapter_id=adapter_id,
+                    )
             except ContractError as exc:
                 raise ValidationFailure(str(exc)) from exc
     if family == "conformational_mapping":
@@ -894,7 +900,8 @@ def _validate_workflow_payload(
         if not isinstance(scheduler, dict):
             raise ValidationFailure("workflow scheduler must be an object")
         unknown_scheduler_keys = sorted(
-            set(scheduler) - {"name", "model_id", "mode", "params", "resources", "profile"}
+            set(scheduler) - {"name", "model_id", "mode", "params", "resources", "profile",
+                              "execution_target_id", "execution_policy"}
         )
         if unknown_scheduler_keys:
             raise ValidationFailure(
@@ -2521,7 +2528,9 @@ async def prepare_workflow(
             mode = scheduler_payload.get("mode")
             params = scheduler_payload.get("params")
             if isinstance(model_id, str) and isinstance(mode, str) and isinstance(params, dict):
-                if model_id == "protein_local_redesign":
+                native_pinned = (plan_authority[1]["capability"].get("normalized_job_request")
+                                 if plan_authority is not None else None)
+                if model_id == "protein_local_redesign" and not isinstance(native_pinned, dict):
                     try:
                         params = prepare_local_redesign_scheduler_params(
                             params,

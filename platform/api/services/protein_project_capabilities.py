@@ -749,6 +749,7 @@ _NATIVE_GENERATION_SETUPS = {
     'protein.de_novo.laproteina': ('protein_modification_experimental', 'de_novo_design', 'laproteina'),
     'protein.de_novo.disco': ('protein_modification_experimental', 'de_novo_design', 'disco'),
     'protein.de_novo.local_redesign': ('protein_local_redesign', 'local_redesign', None),
+    'protein.native.protein_modification_experimental.region_redesign': ('protein_modification_experimental', 'region_redesign', None),
     **{f'protein.native.{model}.{mode}': (model, mode, None)
        for model in ('rfd4_proteina', 'complexa') for mode in ('generate', 'evaluate')},
 }

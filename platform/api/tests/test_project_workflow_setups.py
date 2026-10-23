@@ -43,13 +43,13 @@ def test_migration_v21_persists_and_attests_workflow_setup_contexts(tmp_path: Pa
     experiment_migrations.run_all(db_path)
     connection = sqlite3.connect(db_path)
     try:
-        assert experiment_migrations.LATEST_MIGRATION_VERSION == 21
+        assert experiment_migrations.LATEST_MIGRATION_VERSION == 22
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='workflow_setup_contexts'"
         ).fetchone() == ("workflow_setup_contexts",)
         assert connection.execute(
             "SELECT version, name FROM experiment_schema_migrations ORDER BY version DESC LIMIT 1"
-        ).fetchone() == (21, "project_workflow_setup_context_authority")
+        ).fetchone() == (22, "native_model_workflow_setup_routes")
         assert experiment_migrations.attest_schema(connection)["ok"] is True
     finally:
         connection.close()
@@ -147,31 +147,19 @@ def _configure_legacy_protein_cad_catalog(
 
 
 @pytest.mark.asyncio
-async def test_project_picker_never_promotes_a_de_novo_child_as_a_workflow(
+async def test_native_project_picker_is_independent_of_legacy_cad_publication(
     monkeypatch, tmp_path: Path
 ) -> None:
     rfd3_mode, local_redesign, templates_dir = _de_novo_capabilities()
-    assert rfd3_mode["label"] == "RFD3 de novo design"
-    assert rfd3_mode["product_taxonomy"]["workflow_id"] == "protein_modification_experimental"
-    assert rfd3_mode["product_taxonomy"]["parent_capability_id"] is None
-    assert rfd3_mode["exposure_state"] == "integrated_component"
-    assert rfd3_mode["availability"]["state"] == "operational_as_child"
-    assert rfd3_mode["canonical_source_destination"] == "/submit?template=protein_modification_experimental"
-    assert rfd3_mode["workflow_adapter_id"] is None
-    assert rfd3_mode["allowed_model_modes"] == []
-    assert rfd3_mode["project_setup_destination"] is None
-    assert rfd3_mode["project_native_owner_id"] is None
-    assert rfd3_mode["publication_template_id"] is None
-    assert local_redesign["product_taxonomy"]["workflow_id"] == "protein_modification_experimental"
-    assert local_redesign["product_taxonomy"]["parent_capability_id"] is None
-    assert local_redesign["exposure_state"] == "integrated_component"
-    assert local_redesign["availability"]["state"] == "operational_as_child"
-    assert local_redesign["project_setup_destination"] is None
-    assert local_redesign["project_native_owner_id"] is None
-    assert local_redesign["publication_template_id"] is None
+    for record in (rfd3_mode, local_redesign):
+        assert record["exposure_state"] == "accepted"
+        assert record["availability"]["state"] == "operational"
+        assert record["workflow_adapter_id"].startswith("bms.core-job.")
+        assert record["allowed_model_modes"]
+        assert record["project_setup_destination"] == "/submit?template=protein_modification_experimental"
     assert protein_project_capabilities._PARAMETER_SCHEMAS[
         "protein.de_novo.local_redesign"
-    ]["x-bms-executable-authority"] == "typed_core_job_outside_project_manager"
+    ]["x-bms-native-editor-draft"] is True
     baseline_registry = TemplateRegistry(templates_dir)
     monkeypatch.setattr(
         protein_project_capabilities, "get_template_registry", lambda: baseline_registry
@@ -181,7 +169,7 @@ async def test_project_picker_never_promotes_a_de_novo_child_as_a_workflow(
         item["capability_id"]
         for item in existing_inventory["capabilities"]
     }
-    assert "protein.de_novo.local_redesign" not in existing_ids
+    assert {"protein.de_novo.local_redesign", "protein.de_novo.rfd3"} <= existing_ids
     _configure_legacy_protein_cad_catalog(monkeypatch, tmp_path)
 
     inventory = await _project_capability_api()
@@ -191,7 +179,7 @@ async def test_project_picker_never_promotes_a_de_novo_child_as_a_workflow(
     assert ready_ids == existing_ids
     assert protein_project_capabilities.protein_capability_record(
         "protein.de_novo.local_redesign"
-    )["project_setup_state"] == "unavailable"
+    )["project_setup_state"] == "ready"
     for item in inventory["capabilities"]:
         assert set(item) == {
             "capability_id", "label", "state", "adapter_id", "native_owner_id",
@@ -200,9 +188,7 @@ async def test_project_picker_never_promotes_a_de_novo_child_as_a_workflow(
         assert item["state"] == "ready"
         assert item["adapter_id"].strip()
         assert item["native_owner_id"].strip()
-        assert item["setup_destination"].startswith(
-            f"/submit?template={item['native_owner_id']}"
-        )
+        assert item["setup_destination"].startswith(("/submit?template=", "/submit?model="))
         assert isinstance(item["source_requirements"], list)
         assert set(item["follow_up_compatible_capability_ids"]) == ready_ids
 
@@ -322,8 +308,6 @@ def test_unavailable_capabilities_remain_catalogued_but_hidden_from_project_pick
         for item in protein_capability_inventory(project_ready_only=True)["capabilities"]
     }
     hidden_ids = {
-        "protein.de_novo.rfd3",
-        "protein.de_novo.local_redesign",
         "protein.sequence_design.fampnn",
         "protein.sequence_design.proteinmpnn",
         "protein.simulation.gromacs_md",
