@@ -9,9 +9,11 @@ outputs: [cif, json, csv]
 modes:
 - id: generate
   name: Generate or refine
+  description: Official native generation, refinement and configured search.
   params: [rfd4_request]
 - id: evaluate
   name: Evaluate native structures
+  description: Official evaluation of retained native structures.
   params: [rfd4_request]
 # Nested schema is projected by services.rfd4_proteina.generation_settings(mode).
 # This catalog must never become another scientific default list.
@@ -19,6 +21,7 @@ params:
 - name: rfd4_request
   type: object
   label: Native RFD4 request
+  description: Model-owned closed scientific request; discover generation-settings for its complete schema.
   required: true
 acquisition:
 - artifact_id: rfd4_proteina-cu13-48377e45
