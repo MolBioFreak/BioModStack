@@ -1111,7 +1111,7 @@ def materialize_md_job_spec(
                 source=Path(resolve_runtime_path("bms-md-starting-structure:original")),
                 field="original_structure", contract_dir=contract_dir,
                 expected_sha256=source_provenance["original_sha256"],
-                suffix=".cif" if source_provenance.get("original_format") == "cif" else ".pdb",
+                suffix=source_provenance.get("original_suffix") or (".cif" if source_provenance.get("original_format") == "cif" else ".pdb"),
             )
             published_snapshots.append(original_snapshot)
 
@@ -1121,7 +1121,7 @@ def materialize_md_job_spec(
                 continue
             snapshot, digest, size = _snapshot_input_file(
                 source=Path(str(source_value)),
-                field=f"structure-model-{source_provenance['model_number']}" if field == "structure" and original_snapshot is not None else field,
+                field=f"structure-model-{source_provenance['model_number']}" if field == "structure" and source_provenance.get('model_number') is not None else field,
                 contract_dir=contract_dir,
                 expected_sha256=expected_structure_sha256 if field == "structure" else None,
                 suffix=(".cif" if source_provenance.get("original_format") == "cif" else ".pdb") if field == "structure" and original_snapshot is not None else None,

@@ -260,10 +260,12 @@ export function MolecularDynamicsTemplate({
     const loadedReturnedPredictionRef = useRef<string | null>(null);
     const [predictionPage, setPredictionPage] = useState<Gen2PredictionPage | null>(null);
     const [selectedPredictionCandidate, setSelectedPredictionCandidate] = useState<Gen2PredictionCandidate | null>(null);
-    const [sequence, setSequence] = useState('');
-    const [sequenceName, setSequenceName] = useState('MD candidate');
-    const [sequenceSource, setSequenceSource] = useState<'new' | 'saved'>('new');
-    const [savedSequenceId, setSavedSequenceId] = useState('');
+    const retainedSequence = initialValues?.md_sequence_snapshot
+        ? parseMolecularDynamicsHandoffUserSequence(initialValues.md_sequence_snapshot) : null;
+    const [sequence, setSequence] = useState(retainedSequence?.sequence ?? '');
+    const [sequenceName, setSequenceName] = useState(retainedSequence?.name ?? 'MD candidate');
+    const [sequenceSource, setSequenceSource] = useState<'new' | 'saved'>(initialValues?.md_sequence_source === 'saved' ? 'saved' : 'new');
+    const [savedSequenceId, setSavedSequenceId] = useState(retainedSequence?.id ?? '');
     const [designId, setDesignId] = useState(String(initialValues?.md_design_id ?? (cloneSource?.kind === 'design' ? cloneSource.id : '')));
     const [priorMdJobId, setPriorMdJobId] = useState(String(initialValues?.md_prior_job_id ?? (cloneSource?.kind === 'prior_md_input' ? cloneSource.id : '')));
     const [serverSearch, setServerSearch] = useState('');
@@ -279,7 +281,12 @@ export function MolecularDynamicsTemplate({
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
-    const [placement, setPlacement] = useState(() => prepareExecutionPlacement({ execution_target_id: native?.execution_target_id, execution_policy: native?.execution_policy }));
+    const [placement, setPlacement] = useState(() => prepareExecutionPlacement({
+        execution_target_id: Object.hasOwn(initialValues ?? {}, 'execution_target_id')
+            ? initialValues!.execution_target_id as string | null : native?.execution_target_id,
+        execution_policy: Object.hasOwn(initialValues ?? {}, 'execution_policy')
+            ? initialValues!.execution_policy as MolecularDynamicsNativeDraft['execution_policy'] : native?.execution_policy,
+    }));
     useEffect(() => {
         const changed = () => setPlacement(current => prepareExecutionPlacement({ execution_policy: current.execution_policy }));
         const policyChanged = () => setPlacement(current => prepareExecutionPlacement({ execution_target_id: current.execution_target_id }));
@@ -553,7 +560,8 @@ export function MolecularDynamicsTemplate({
         try {
             let sequenceId = savedSequenceId;
             if (sequenceSource === 'saved') {
-                const selected = savedSequencesQuery.data?.find((candidate) => candidate.id === savedSequenceId)
+                const selected = (retainedSequence?.id === savedSequenceId ? retainedSequence : null)
+                    ?? savedSequencesQuery.data?.find((candidate) => candidate.id === savedSequenceId)
                     ?? (savedSequenceId ? parseMolecularDynamicsHandoffUserSequence((await api.get<unknown>(`/api/user-sequences/${savedSequenceId}`)).data, savedSequenceId) : null);
                 if (!selected) throw new Error('Select one available saved sequence before opening Structure Prediction.');
                 sequenceId = selected.id;
@@ -565,6 +573,8 @@ export function MolecularDynamicsTemplate({
                 });
                 sequenceId = parseMolecularDynamicsHandoffUserSequence(saved.data).id;
             }
+            const exact = retainedSequence?.id === sequenceId ? retainedSequence
+                : parseMolecularDynamicsHandoffUserSequence((await api.get<unknown>(`/api/user-sequences/${sequenceId}`)).data, sequenceId);
             const draftId = crypto.randomUUID();
             const retainedDraft = {
                 form: {
@@ -574,28 +584,43 @@ export function MolecularDynamicsTemplate({
                     coordinatesPath: undefined,
                     topologyPath: undefined,
                 },
+                sequenceSnapshot: exact, sequenceSource,
+                ...(initialValues?.complex_components !== undefined ? { complex_components: JSON.parse(JSON.stringify(initialValues.complex_components)) } : {}),
+                ...(initialValues?.primary_chain_id !== undefined ? { primary_chain_id: JSON.parse(JSON.stringify(initialValues.primary_chain_id)) } : {}),
                 selectedProfileId,
                 selectedProfileDigest,
                 destinationLaunchContextId: launchContextId,
+                source_ref: inspection?.source_ref ?? cloneSource,
+                return_to: initialValues?.md_return_to ?? initialValues?.return_to,
+                ...placement,
             };
             const route = new URL(buildMolecularDynamicsPredictionRoute(sequenceId, draftId), window.location.origin);
             const search = new URLSearchParams(window.location.search);
             const project_id = search.get('project_id') ?? search.get('operation_project_id');
             const setup_context_id = search.get('setup_context_id') ?? search.get('operation_setup_context_id');
+            const detour: Parameters<typeof savePredictionOperationDetour>[1] = {
+                schema_version: 1 as const,
+                composition: { source_sequence_id: sequenceId, sequence: exact.sequence,
+                    ...(initialValues?.primary_chain_id !== undefined ? { primary_chain_id: JSON.parse(JSON.stringify(initialValues.primary_chain_id)) } : {}),
+                    ...(initialValues?.complex_components ? { complex_components: JSON.parse(JSON.stringify(initialValues.complex_components)) } : {}) },
+                round_plan: { schema_version: 2 as const, stages: [] }, md_draft: retainedDraft,
+                destination_launch_context_id: launchContextId,
+                ...(initialValues?.candidate_ref ? { candidate_ref: JSON.parse(JSON.stringify(initialValues.candidate_ref)) } : {}),
+                ...(typeof initialValues?.md_return_to === 'string' ? { return_to: initialValues.md_return_to }
+                    : typeof initialValues?.return_to === 'string' ? { return_to: initialValues.return_to } : {}),
+            };
             if (project_id && setup_context_id) {
-                const exact = parseMolecularDynamicsHandoffUserSequence((await api.get<unknown>(`/api/user-sequences/${sequenceId}`)).data, sequenceId);
-                await savePredictionOperationDetour({ project_id, setup_context_id }, {
-                    schema_version: 1,
-                    composition: { source_sequence_id: sequenceId, sequence: exact.sequence,
-                        ...(initialValues?.complex_components ? { complex_components: initialValues.complex_components } : {}) },
-                    round_plan: { schema_version: 2, stages: [] }, md_draft: retainedDraft,
-                    destination_launch_context_id: launchContextId,
-                    ...(typeof initialValues?.return_to === 'string' ? { return_to: initialValues.return_to } : {}),
-                });
+                await savePredictionOperationDetour({ project_id, setup_context_id }, detour);
                 route.searchParams.set('operation_project_id', project_id);
                 route.searchParams.set('operation_setup_context_id', setup_context_id);
+            } else {
+                const saved = await api.post<{ id: string }>('/api/molecular-dynamics/prediction-detours', detour);
+                // Read the exact durable target before navigating; browser storage
+                // remains a convenience and can be absent on return.
+                await api.get(`/api/molecular-dynamics/prediction-detours/${saved.data.id}`);
+                route.searchParams.set('md_operation_id', saved.data.id);
             }
-            storeMolecularDynamicsDraft(sessionStorage, draftId, retainedDraft);
+            try { storeMolecularDynamicsDraft(sessionStorage, draftId, { ...retainedDraft, sequenceSnapshot: undefined }); } catch { /* Durable snapshot above is authority. */ }
             navigate(route.pathname + route.search);
         } catch (error) {
             setSourceError(displayError(error, 'Structure Prediction handoff failed.'));
