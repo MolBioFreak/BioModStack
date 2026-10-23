@@ -617,6 +617,8 @@ export function JobSubmission() {
                         ...data.params, pinned_gpu: data.pinned_gpu,
                         ...(Object.hasOwn(data, 'sequence_design') ? { sequence_design: data.sequence_design } : {}),
                         ...(Object.hasOwn(data, 'native_sources') ? { native_sources: data.native_sources } : {}),
+                        ...(Object.hasOwn(data, 'source_structure') ? { source_structure: data.source_structure } : {}),
+                        ...(Object.hasOwn(data, 'execution_policy') ? { execution_policy: data.execution_policy } : {}),
                         execution_target_id: data.execution_target_id ?? null,
                         name: data.name, job_name: data.name,
                     });
@@ -624,6 +626,7 @@ export function JobSubmission() {
                     pendingTemplateRoute.current = DE_NOVO_TEMPLATE;
                     setSelectedTemplateIdInternal(DE_NOVO_TEMPLATE);
                     setSelectedModelId(null); setSelectedModeId(null);
+                    if (data.execution_policy) setInitialReturnPolicy({ remote_result_policy: normalizeResultPolicy(data.execution_policy.remote_result_policy) });
                     setClonedValues(draft);
                     setDedicatedTemplateVersion(version => version + 1);
                     navigateDeNovo(deNovoNavigation(draft), true);

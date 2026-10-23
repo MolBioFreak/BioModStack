@@ -103,13 +103,13 @@ for (const model of ['rfd4_proteina', 'complexa']) for (const sequenceState of [
     it(`Dashboard hydrates and clones ${model} with ${sequenceState} sequence design through real Router and Axios`, async () => {
         const request = model === 'complexa' ? { task: 'protein_binder', task_name: 'clone', seed: 0, reward: null, source: { document_id: 'retained-document', binder_center: [1, 0, -2] } } : nativeRequest;
         const key = model === 'complexa' ? 'complexa_request' : 'rfd4_request';
-        const sources = { 'retained-document': { source: 'upload', filename: 'retained.pdb' } };
-        job = { id: 'clone-source', name: 'Native retained fixture', model_id: model, mode: 'generate', status: 'completed', created_at: '2026-01-01T00:00:00Z', params: { [key]: request, native_sources: sources }, source_structure: 'retained.pdb', execution_target_id: null, execution_policy: { remote_result_policy: 'automatic' }, pinned_gpu: 0, ...(sequenceState === 'null' ? { sequence_design: null } : {}) };
+        const sources = { 'retained-document': { path: 'inputs/retained.pdb', output_format: 'native' } };
+        job = { id: 'clone-source', name: 'Native retained fixture', model_id: model, mode: 'generate', status: 'completed', created_at: '2026-01-01T00:00:00Z', params: { [key]: request, native_sources: sources }, source_structure: sources['retained-document'], execution_target_id: null, execution_policy: { remote_result_policy: 'automatic' }, pinned_gpu: 0, ...(sequenceState === 'null' ? { sequence_design: null } : {}) };
         sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'unrelated-remote');
         await mountDashboard();
         expect(requests.filter(r => r.url === '/api/jobs/clone-source')).toHaveLength(1);
         expect(storedClone.params).toEqual(job.params);
-        expect(storedClone.source_structure).toBe(job.source_structure);
+        expect(storedClone.source_structure).toEqual(job.source_structure);
         expect(Object.hasOwn(storedClone, 'sequence_design')).toBe(sequenceState === 'null');
         expect(localStorage.getItem('clonedJobData')).toBeNull();
         expect(sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
@@ -121,7 +121,7 @@ for (const model of ['rfd4_proteina', 'complexa']) for (const sequenceState of [
         expect.soft(wire.execution_target_id).toBeNull();
         expect.soft(wire.pinned_gpu).toBe(0);
         expect.soft(wire.execution_policy).toEqual(job.execution_policy);
-        expect.soft(wire.source_structure).toBe(job.source_structure);
+        expect.soft(wire.source_structure).toEqual(job.source_structure);
         expect.soft(Object.hasOwn(wire, 'sequence_design')).toBe(sequenceState === 'null');
         if (sequenceState === 'null') expect.soft(wire.sequence_design).toBeNull();
     });

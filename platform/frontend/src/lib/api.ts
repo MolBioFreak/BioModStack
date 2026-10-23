@@ -98,6 +98,7 @@ export interface NativeGenerationSettingsInventory {
     schema?: import('./bioxpClient').BioXpOperatorJsonSchema;
     limitations?: string[];
     native_profile_defaults?: Record<string, unknown>;
+    native_sources_schema?: import('./bioxpClient').BioXpOperatorJsonSchema;
 }
 
 export const fetchNativeGenerationSettings = (model: 'rfd4_proteina' | 'complexa', mode: string) =>
@@ -1243,8 +1244,11 @@ export const uploadImmutableFile = async (path: string, file: File, sha256: stri
 export interface StructureMaterialization {
     source_structure?: StructureSourceSelection;
     original_path?: string; original_sha256?: string;
-    path: string; format: 'pdb' | 'cif'; sha256: string;
-    native_path: string; native_format: 'pdb' | 'cif'; native_sha256: string;
+    path: string; format: 'pdb' | 'cif' | 'bcif'; sha256: string;
+    native_path: string; native_format: 'pdb' | 'cif' | 'bcif'; native_sha256: string;
+    decoded_path?: string; decoded_sha256?: string; selected_path?: string; selected_sha256?: string;
+    stored_encoding?: string; inspection_error?: string | null;
+    source_positions?: Array<Record<string, unknown>>; declared_chemistry?: Record<string, unknown>;
     model_number: number | null; model_numbers: number[];
     author_residues: Array<{ model_number: number; auth_asym_id: string; auth_seq_id: number; insertion_code: string; residue_name: string }>;
     source_identity: Record<string, unknown>; source_path: string;
@@ -1253,8 +1257,11 @@ export interface StructureSourceSelection {
     path?: string; design_id?: string; job_id?: string;
     request_id?: string; candidate_id?: string;
     document?: { artifact_id?: string; target_state?: string };
+    candidate?: import('./binderSelectedRound').CandidateRef;
     output_format?: 'native' | 'pdb'; model_number?: number; expected_sha256?: string;
 }
+export type NativeGenerationSourceBinding = StructureSourceSelection | { kind: 'file'; path: string; expected_sha256?: string };
+export type NativeGenerationSourceBindings = Record<string, NativeGenerationSourceBinding>;
 export const materializeExactStructure = async (source: StructureSourceSelection): Promise<StructureMaterialization> =>
     (await api.post<StructureMaterialization>('/api/files/materialize-structure', source)).data;
 

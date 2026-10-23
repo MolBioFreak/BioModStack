@@ -232,8 +232,9 @@ it('shares job intent only with untouched engine drafts and preserves explicit n
     await edit('Job name', ''); await edit('Engine', 'rfd3'); await edit('Job name', 'Changed RFD3'); await edit('Engine', 'disco');
     expect(control('Job name').value).toBe('');
     const saved = JSON.parse(JSON.stringify(latest(draft)));
-    saved.de_novo_drafts['de_novo_design:disco:unconditional'].disco_checkpoint_path = '/retained/checkpoint.pt';
-    saved.de_novo_drafts['de_novo_design:disco:unconditional'].disco_use_deepspeed_evo_attention = false;
+    expect(saved.de_novo_drafts).not.toHaveProperty('de_novo_design:disco:unconditional');
+    saved.disco_checkpoint_path = '/retained/checkpoint.pt';
+    saved.disco_use_deepspeed_evo_attention = false;
     await act(async () => root.unmount()); document.body.replaceChildren();
     await render({ initialValues: saved }); await edit('Job name', 'Native replay'); await click('Generate candidates');
     expect(latest(mocks.submit).params).toMatchObject({ disco_checkpoint_path: '/retained/checkpoint.pt', disco_use_deepspeed_evo_attention: false });

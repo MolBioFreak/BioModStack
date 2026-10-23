@@ -8,9 +8,10 @@ export interface FileBrowserProps {
     /** Optional extension filter; omitted preserves the historical all-files view. */
     accept?: string;
     title?: string;
+    allowDirectory?: boolean;
 }
 
-export function FileBrowser({ onSelect, onCancel, accept, title = 'Select File' }: FileBrowserProps) {
+export function FileBrowser({ onSelect, onCancel, accept, title = 'Select File', allowDirectory = false }: FileBrowserProps) {
     const [path, setPath] = useState('/');
     const fileInputRef = useRef<HTMLInputElement>(null);
     const queryClient = useQueryClient();
@@ -97,6 +98,7 @@ export function FileBrowser({ onSelect, onCancel, accept, title = 'Select File' 
                 </div>
 
                 <div className="flex-1 overflow-auto p-2">
+                    {allowDirectory && path !== '/' && <button type="button" onClick={() => onSelect(path)}>Use selected folder</button>}
                     {(browseError || uploadMutation.error) && <p role="alert" className="text-sm text-red-400">{String((browseError || uploadMutation.error)?.message || 'File operation failed')}</p>}
                     {files?.data.entries.filter((entry: UntypedApiValue) => entry.is_directory || matches(entry.name)).map((entry: UntypedApiValue) => (
                         <div

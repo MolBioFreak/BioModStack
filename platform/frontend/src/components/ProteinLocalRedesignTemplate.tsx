@@ -1054,7 +1054,7 @@ export function ProteinLocalRedesignTemplate({
             params: {
                 input_pdb: resolvedPath,
                 model_number: selectedModelNumber ?? undefined,
-                design_chains: normalizeChainList(designChain),
+                design_chains: normalizeChainList(designChain).join(','),
                 context_chains: contextChains.length > 0 ? contextChains.join(',') : null,
                 region_mode: regionMode,
                 redesign_ranges: regionMode === 'manual_ranges' ? effectiveRanges : null,
