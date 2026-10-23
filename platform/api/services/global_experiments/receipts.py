@@ -633,6 +633,15 @@ async def verify_and_link_terminal_outputs(
 
     workflow_payload = json.loads(revision.canonical_payload)
     adapter_id = str(workflow_payload.get("adapter_id") or "")
+    # Launch and result adapters have distinct owners. Use the immutable Plan's
+    # native result reader rather than requiring a Design-backed launch receipt.
+    from experiment_services import load_workflow_plan_authority
+    plan = await load_workflow_plan_authority(experiment_session, workflow.aggregate_id, required=False)
+    if plan is not None:
+        native_result_ids = [value for value in plan[1]["capability"].get("result_adapter_ids", [])
+                             if value.startswith("bms.native-binder.")]
+        if len(native_result_ids) == 1:
+            adapter_id = native_result_ids[0]
     adapter = registry.get(adapter_id)
     try:
         binding = json.loads(attempt.external_binding_receipt_json or "{}")

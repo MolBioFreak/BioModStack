@@ -3474,7 +3474,7 @@ async def reconcile_run_group(
             }
             if resource_evidence is not None:
                 receipt["resource_usage_evidence"] = resource_evidence
-            if projected_state == "completed":
+            if projected_state == "completed" or native_protein:
                 try:
                     from services.global_experiments.receipts import verify_and_link_terminal_outputs
 
@@ -3495,14 +3495,19 @@ async def reconcile_run_group(
                         "message": str(exc)[:512],
                         "provenance": _public_runtime_metadata(job.provenance or {}),
                     }
-                    pending_json = canonical_json(pending_receipt)
-                    if attempt.runtime_identity_json == pending_json:
-                        continue
-                    attempt.runtime_identity_json = pending_json
-                    projected_state = "running"
-                    event_type = "core_output_reconciliation_pending"
-                    idempotency_key = f"core-output-pending:{attempt.scheduler_job_id}:{sha256_text(pending_json)}"
-                    receipt = None
+                    if native_protein:
+                        # Missing output proof cannot turn an authoritative
+                        # terminal native Job into a running Project attempt.
+                        receipt["output_evidence"] = pending_receipt
+                    else:
+                        pending_json = canonical_json(pending_receipt)
+                        if attempt.runtime_identity_json == pending_json:
+                            continue
+                        attempt.runtime_identity_json = pending_json
+                        projected_state = "running"
+                        event_type = "core_output_reconciliation_pending"
+                        idempotency_key = f"core-output-pending:{attempt.scheduler_job_id}:{sha256_text(pending_json)}"
+                        receipt = None
             if receipt is not None:
                 terminal_receipt_json = canonical_json(receipt)
                 attempt.terminal_receipt_json = terminal_receipt_json

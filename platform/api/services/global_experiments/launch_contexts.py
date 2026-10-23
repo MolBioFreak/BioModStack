@@ -44,6 +44,7 @@ DOMAIN_JOB_MODELS = {
         "ppiflow", "protein_local_redesign", "protein_modification_experimental", "protenix", "rf3",
         "template_antibody_denovo", "antibody_denovo", "bindcraft2", "binder_refinement",
         "caliby_binder", "caliby_experimental", "proteinmpnn", "fampnn", "frustrampnn", "ligandmpnn",
+        "rfd4_proteina", "complexa",
     },
     "ngs_molbio": {"nanopore", "ngs_alignment", "ont_fastq_qc", "sequence_qc", "oligo_builder", "oligo_design"},
 }

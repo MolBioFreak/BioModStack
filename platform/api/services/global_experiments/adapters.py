@@ -3342,10 +3342,13 @@ class NativeBinderJobResultAdapter:
         from services.core_protein_result_contract import CandidateIntegrityError
         from services.rfd4_proteina_results import has_native_publication
         from fastapi import HTTPException
+        record_count = None
         try:
             if has_native_publication(job):
                 from services.rfd4_proteina_results import read_published_generation_page
-                publication = (await read_published_generation_page(job, core_session, limit=1))['publication']
+                page = await read_published_generation_page(job, core_session, limit=1)
+                publication = page['publication']
+                record_count = page['total']
             elif self.model_id == 'protein_modification_experimental' and (job.params or {}).get('rfd3_generation_request'):
                 from services.rfd3_generation_results import read_generation_results
                 result = await read_generation_results(job, core_session, limit=1)
@@ -3380,6 +3383,7 @@ class NativeBinderJobResultAdapter:
                 "model_id": job.model_id, "mode": job.mode,
                 "artifact_authority": "verified_native_publication",
                 "result_contract_id": "native_binder_job_result_v1",
+                **({"record_count": record_count} if record_count is not None else {}),
             },
         )
 
