@@ -68,6 +68,14 @@ from services.md.state import (
 router = APIRouter(prefix="/api/molecular-dynamics", tags=["molecular-dynamics"])
 
 
+@router.get("/native-parameters")
+async def get_native_parameters() -> dict[str, Any]:
+    """Discover the same versioned MDP metadata used by native authoring."""
+    from scripts.bms_md.native_parameters import native_parameter_catalog
+
+    return native_parameter_catalog()
+
+
 class LifecycleCommand(BaseModel):
     expected_state_version: int = Field(ge=0)
     idempotency_key: str = Field(min_length=1, max_length=128)
