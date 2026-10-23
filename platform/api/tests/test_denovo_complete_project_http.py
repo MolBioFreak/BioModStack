@@ -41,6 +41,26 @@ async def test_mounted_native_project_http_lifecycle(admission, setup_store, tmp
     monkeypatch.setattr(paths, 'get_data_root', lambda: tmp_path)
     monkeypatch.setattr(paths, 'get_inputs_dir', lambda: tmp_path / 'inputs')
     monkeypatch.setattr(nextflow, 'get_data_root', lambda: tmp_path)
+    if model == 'rfd4_proteina' and mode == 'evaluate':
+        # The actual mounted capture names a source slot but does not select
+        # bytes. Complete that selection through the existing typed binding;
+        # retain the captured native scientific request without alteration.
+        import gzip
+        import hashlib
+        from routers import files
+        from tests.test_binder_source_materialization import cif
+        roots = {'inputs': tmp_path / 'inputs', 'bms_results': tmp_path / 'results'}
+        for root in roots.values():
+            root.mkdir(parents=True, exist_ok=True)
+        for module in (paths, jobs, files):
+            monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
+        source = roots['inputs'] / 'project-source.cif.gz'
+        source.write_bytes(gzip.compress(cif(models=(3, 7)).encode()))
+        binding = {'path': 'inputs/project-source.cif.gz', 'model_number': 7,
+                   'expected_sha256': hashlib.sha256(source.read_bytes()).hexdigest()}
+        draft['native_job_request']['params']['native_sources'] = {'exact-retained': binding}
+        original_request = copy.deepcopy(draft['native_job_request'])
+        record_property('source_binding', 'captured exact-retained slot bound to scratch CIF MODEL 7; not inference')
     # Ambient remote inventory cannot replace the envelope's explicit Local.
     admission.add(ExecutionTarget(id='vast:inactive-not-selected', provider='vast',
         provider_instance_id='inactive-not-selected', active=True, state='ready',
@@ -105,6 +125,7 @@ async def test_mounted_native_project_http_lifecycle(admission, setup_store, tmp
             from experiment_services import load_workflow_plan_authority
             authority = await load_workflow_plan_authority(session, prepared['diagnostics']['workflow_id'])
             assert authority is not None
+            assert authority[1]['capability']['result_adapter_ids'] == [f'bms.native-binder.{model}.adapter.v1']
             submission = copy.deepcopy(authority[1]['capability']['normalized_job_request'])
             submission['params']['workflow_adapter'] = authority[1]['capability']['workflow_adapter_id']
             await session.commit()
@@ -131,3 +152,11 @@ async def test_mounted_native_project_http_lifecycle(admission, setup_store, tmp
     async with setup_store() as session:
         context = await session.get(ExperimentLaunchContext, prepared['launch_context_id'])
         assert context.canonical_job_id == job_id
+        from services.global_experiments.launch_contexts import validate_bound_job
+        await validate_bound_job(session, context, row)
+    if model == 'rfd4_proteina' and mode == 'evaluate':
+        retained = row.params['native_sources']['exact-retained']
+        assert retained['model_number'] == 7
+        assert retained['expected_sha256'] == binding['expected_sha256']
+        assert row.params['rfd4_input_closure'] == submission['params']['rfd4_input_closure']
+        record_property('canonical_bind', 'real insertion and cold authority verification preserve CIF MODEL 7 custody')

@@ -480,6 +480,10 @@ async def persist_workflow_plan_authority(
         if loaded is None:
             raise ValidationFailure("Workflow Plan authority is unavailable")
         existing, stored_contract = loaded
+        if native_contract is not None and "result_adapter_ids" not in stored_contract["capability"]:
+            # Reopen historical immutable Plans without retroactively adding
+            # result-routing metadata to their original request identity.
+            native_contract["capability"].pop("result_adapter_ids", None)
         if (
             head.workspace_id != workspace_id
             or head.parent_id != domain_experiment_id

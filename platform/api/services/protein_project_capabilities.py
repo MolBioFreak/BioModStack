@@ -915,6 +915,9 @@ def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | N
         "native_entrypoint": native_entrypoint,
         "normalized_job_request": request.model_dump(mode="json"),
     }
+    declared = _CAPABILITY_BY_ID.get(capability_id)
+    if declared is not None:
+        capability["result_adapter_ids"] = copy.deepcopy(declared["result_adapter_ids"])
     return {
         "schema": "bms.workflow-plan-capability-contract.v1",
         "capability": capability, "allowed_model_modes": [pair_document],

@@ -530,6 +530,20 @@ async def prepare_workflow_setup_launch(
         except ValueError as exc:
             raise ValidationFailure(str(exc)) from exc
         native_request = shape_job_request(staged, submitted).model_dump(mode="json")
+    if native and core_session is not None and (native_request or {}).get("params", {}).get("native_sources"):
+        # Freeze the same retained source projection that canonical Job creation
+        # consumes; otherwise valid source materialization changes Plan params.
+        # Unbound authoring drafts retain their existing Prepare behavior.
+        from schemas import JobCreate
+        from routers.jobs import normalize_job_request
+        from services.native_generation_sources import prepare_native_sources
+        staged = normalize_job_request(JobCreate.model_validate(native_request))
+        # Use the immutable Plan's serialization before deriving closure paths.
+        # Model normalization adds request defaults; their insertion order must
+        # not make a second source preparation select a different directory.
+        staged = JobCreate.model_validate(json.loads(canonical_json(staged.model_dump(mode="json"))))
+        await prepare_native_sources(staged, core_session)
+        native_request = staged.model_dump(mode="json")
     authority, plan_contract = await persist_workflow_plan_authority(
         session, workflow_id=row.workflow_id, workspace_id=project_id,
         domain_experiment_id=row.domain_experiment_id,

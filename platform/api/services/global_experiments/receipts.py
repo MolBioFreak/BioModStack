@@ -637,11 +637,18 @@ async def verify_and_link_terminal_outputs(
     # native result reader rather than requiring a Design-backed launch receipt.
     from experiment_services import load_workflow_plan_authority
     plan = await load_workflow_plan_authority(experiment_session, workflow.aggregate_id, required=False)
-    if plan is not None:
-        native_result_ids = [value for value in plan[1]["capability"].get("result_adapter_ids", [])
-                             if value.startswith("bms.native-binder.")]
-        if len(native_result_ids) == 1:
-            adapter_id = native_result_ids[0]
+    result_ids = plan[1]["capability"].get("result_adapter_ids") if plan is not None else None
+    if result_ids is None:
+        # Historical normalized Plans omitted result routing. Their existing
+        # setup snapshot still pins it; never consult mutable catalog defaults.
+        from experiment_models import ExperimentWorkflowSetupContext
+        setup = await experiment_session.scalar(select(ExperimentWorkflowSetupContext).where(
+            ExperimentWorkflowSetupContext.workflow_id == workflow.aggregate_id))
+        if setup is not None:
+            result_ids = json.loads(setup.capability_contract_json)["capability"].get("result_adapter_ids", [])
+    native_result_ids = [value for value in result_ids or [] if value.startswith("bms.native-binder.")]
+    if len(native_result_ids) == 1:
+        adapter_id = native_result_ids[0]
     adapter = registry.get(adapter_id)
     try:
         binding = json.loads(attempt.external_binding_receipt_json or "{}")
