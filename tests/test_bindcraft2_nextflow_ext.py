@@ -23,6 +23,7 @@ def test_bc2_ext_options_resolve_at_actual_task_submission(tmp_path):
         "nextflow.enable.dsl = 2\n"
         "params.bc2_gpu_ids = '0'\nparams.gpu_id = 'fallback-sentinel'\n"
         "params.weights_root = '/fixture/weights'\n"
+        "params.code_root = '/fixture/source'\n"
         + f"params.cache_root = '{cache}'\n"
         + "process RunBindCraft2 {\n    label 'gpu'\n" + directive + "\n" + preamble + "\n"
         "    output:\n    path 'ext.txt'\n    script:\n"
@@ -75,5 +76,7 @@ def test_bc2_ext_options_resolve_at_actual_task_submission(tmp_path):
     assert "CUDA_VISIBLE_DEVICES=0" in resolved and "fallback-sentinel" not in resolved
     assert "BINDCRAFT_AF2_PARAMS=/fixture/weights/alphafold/params" in resolved
     assert f"--bind {cache}/bindcraft2/compile:/cache/bindcraft2/compile" in resolved
+    assert "--bind /fixture/source:/fixture/source:ro" in resolved
     wrapper = outputs[0].with_name(".command.run").read_text()
+    assert "--bind /fixture/source:/fixture/source:ro" in wrapper
     assert wrapper.index("flock -x 198") < wrapper.index("mkdir -p '") < wrapper.index("(nxf_launch | tee")
