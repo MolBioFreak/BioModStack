@@ -12,7 +12,7 @@ async def resolve_native_source(session, job_id: str, artifact_id: str) -> tuple
     # root or a surviving ancestor Job. Lineage remains descriptive metadata.
     from services.binder_diagnostic_selection import root_id
     lineage_root = root_id(owner)
-    if owner.model_id == 'rfd4_proteina':
+    if owner.model_id in {'rfd4_proteina', 'complexa'}:
         # The native index/ingester registers output-relative JobArtifacts. Do
         # not interpret its observation manifest as a second custody authority.
         artifact = await session.get(JobArtifact, artifact_id)
@@ -24,7 +24,7 @@ async def resolve_native_source(session, job_id: str, artifact_id: str) -> tuple
         relative = Path(artifact.logical_path)
         if (relative.is_absolute() or '..' in relative.parts or '\\' in artifact.logical_path
                 or relative.as_posix() != artifact.logical_path
-                or not artifact.logical_path.startswith('collected/rfd4_proteina/')
+                or not artifact.logical_path.startswith(f'collected/{owner.model_id}/')
                 or structure_suffix(relative) not in {'.pdb', '.cif', '.mmcif', '.bcif',
                     '.cif.gz', '.mmcif.gz', '.cif.zst', '.mmcif.zst', '.bcif.gz', '.bcif.zst'}):
             raise HTTPException(404, 'Selected native structure not found')

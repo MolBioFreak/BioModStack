@@ -742,6 +742,43 @@ _CAPABILITIES.append(_capability(
 ))
 
 
+# Native de novo editors persist complete requests; Project does not reconstruct
+# their science. Legacy generator selection remains in params/editor state.
+_NATIVE_GENERATION_SETUPS = {
+    'protein.de_novo.rfd3': ('protein_modification_experimental', 'de_novo_design', 'rfd3'),
+    'protein.de_novo.laproteina': ('protein_modification_experimental', 'de_novo_design', 'laproteina'),
+    'protein.de_novo.disco': ('protein_modification_experimental', 'de_novo_design', 'disco'),
+    'protein.de_novo.local_redesign': ('protein_local_redesign', 'local_redesign', None),
+    **{f'protein.native.{model}.{mode}': (model, mode, None)
+       for model in ('rfd4_proteina', 'complexa') for mode in ('generate', 'evaluate')},
+}
+for _id, (_model_id, _mode, _generator) in _NATIVE_GENERATION_SETUPS.items():
+    _legacy_editor = _model_id in {'protein_modification_experimental', 'protein_local_redesign'}
+    _owner = 'protein_modification_experimental' if _legacy_editor else f'{_model_id}:{_mode}'
+    _destination = '/submit?template=protein_modification_experimental' if _legacy_editor else f'/submit?model={_model_id}&mode={_mode}'
+    _editor = {'model_id': _model_id, 'mode': _mode, 'modification_mode': 'rfd3_local_redesign' if _mode == 'local_redesign' else _mode}
+    if _generator is not None:
+        _editor['generator'] = _generator
+    _native_schema = _schema(_id, f'{_generator or _model_id} native editor draft', {
+        'native_job_request': {'type': 'object', 'description': 'Complete native JobCreate, normalized by the model owner during preparation.'},
+        'editor_state': {'type': 'object', 'default': _editor, 'description': 'Reopenable native editor state.'},
+    }, ['native_job_request'], authority='project_manager_typed_launcher_handoff')
+    _native_schema['x-bms-native-editor-draft'] = True
+    _PARAMETER_SCHEMAS[_id] = _native_schema
+    _PARAMETER_SCHEMA_BY_ID[_native_schema['$id']] = _native_schema
+    _CAPABILITIES = [record for record in _CAPABILITIES if record['capability_id'] != _id]
+    _CAPABILITIES.append(_capability(_id, label=f'{_generator or _model_id} · {_mode.replace("_", " ")}',
+        family='de_novo_design', category='generative_design', role='general_de_novo_generation',
+        allowed_modes=['design', 'redesign', 'analysis'], plannable=True, exposure_state='accepted',
+        availability_state='operational', availability_reason=None, workflow_family='typed_core_job',
+        workflow_adapter_id=f'bms.core-job.{_model_id}.adapter.v1', launch_mode='typed_launcher_handoff',
+        destination=_destination, model_modes=[{'model_id': _model_id, 'mode': _mode}],
+        result_adapter_ids=[f'bms.native-binder.{_model_id}.adapter.v1'],
+        result_contracts=['native_binder_result'], viewer_id='job_results', accepted_source_roles=[],
+        receipt_contracts=[], project_setup_destination=_destination,
+        project_native_owner_id=_owner))
+
+
 _CAPABILITY_BY_ID = {record["capability_id"]: record for record in _CAPABILITIES}
 if len(_CAPABILITY_BY_ID) != len(_CAPABILITIES):
     raise RuntimeError("duplicate Protein Project capability ID")
@@ -845,11 +882,11 @@ def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | N
         raise ProteinProjectCapabilityError("native child workflow adapter disagrees")
     capability_id = f"protein.native.{request.model_id}.{request.mode}"
     if setup_capability_id is not None:
-        supported_pair = (
-            pair == ('protein_modification_experimental', 'shape_blueprint')
-            if setup_capability_id == SHAPE_SETUP_CAPABILITY_ID
-            else request.mode in _NATIVE_BINDER_SETUP_PAIRS.get(request.model_id, ())
-        )
+        supported_pair = any(pair == (allowed['model_id'], allowed['mode'])
+                             for allowed in protein_capability_record(setup_capability_id)['allowed_model_modes'])
+        generation_setup = _NATIVE_GENERATION_SETUPS.get(setup_capability_id)
+        if generation_setup and generation_setup[2] is not None:
+            supported_pair = supported_pair and request.params.get('generator', 'rfd3') == generation_setup[2]
         if setup_capability_id.startswith('protein.structure_prediction.') or setup_capability_id == 'protein.simulation.gromacs_md':
             supported_pair = any(
                 pair == (allowed['model_id'], allowed['mode'])

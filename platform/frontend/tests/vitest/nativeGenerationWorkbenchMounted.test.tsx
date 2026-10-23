@@ -1,3 +1,4 @@
+import * as mdSender from '../../src/components/gen2StartingStructureState';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -45,6 +46,21 @@ async function mount(props: Partial<React.ComponentProps<typeof NativeBinderGene
     await flush();
 }
 afterEach(async () => { await act(async () => tree?.unmount()); client?.clear(); api.defaults.adapter = original; vi.unstubAllGlobals(); });
+
+it('sends the inspected native document and MODEL to MD without manufacturing a Design', async () => {
+    window.history.replaceState({}, '', '/designs/job?native_candidate=native&artifact_id=alternate&target_state=B&model_number=2');
+    await mount({ artifactId: 'alternate', targetState: 'B' }, [{ candidate_key: 'native',
+        candidate_ref: { kind: 'native_document', job_id: 'job', artifact_id: 'alternate', target_state: 'B', model: 2 },
+        metrics: {}, structures: [primary, alternate] }]);
+    const sender = vi.spyOn(mdSender, 'buildResultsViewerMolecularDynamicsRoute').mockImplementation(() => { throw Error('captured navigation boundary'); });
+    try {
+        expect(() => button('Use as MD starting structure').props.onClick()).toThrow('captured navigation boundary');
+        expect(sender).toHaveBeenCalledWith('job', null, {
+            sourceRef: { kind: 'candidate', id: 'job', candidate_ref: { kind: 'native_document', job_id: 'job', artifact_id: 'alternate', target_state: 'B', model: 2 } },
+            returnTo: '/designs/job?native_candidate=native&artifact_id=alternate&target_state=B&model_number=2',
+        });
+    } finally { sender.mockRestore(); }
+});
 
 it('uses page scrolling for candidates and readable measurements below the full-width molecule', async () => {
     await mount({}, [{ ...records[0], metrics: { seq_length: 80, native_identity: 'unbroken-native-value-'.repeat(20) } }]);

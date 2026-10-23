@@ -4472,38 +4472,27 @@ async def _ingest_rfd3_generation_manifest(
     manifest_path = output_path / "collected" / "rfd3_generation" / "rfd3_generation_result_manifest.json"
     if manifest_path.is_symlink() or not manifest_path.is_file():
         raise GenerationContractError("RFD3 generation result manifest is absent or unsafe")
-    if manifest_path.stat().st_size > 8 * 1024 * 1024:
-        raise GenerationContractError("RFD3 generation result manifest exceeds 8 MiB")
-    try:
-        raw_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise GenerationContractError(f"RFD3 generation result manifest is malformed: {exc}") from exc
     params = _parse_job_params(job.params)
     request = params.get("rfd3_generation_request")
     if not isinstance(request, dict):
         raise GenerationContractError("persisted RFD3 generation request is missing")
-    manifest = validate_result_manifest(
-        raw_manifest,
-        request=request,
-        output_root=output_path,
-        job_id=str(job.id),
-    )
+    from services.rfd3_generation_results import load_incremental_manifest, check_incremental_candidates, retain_unpaired_artifacts
     manifest_sha256 = file_sha256(manifest_path)
-    existing = list((await session.execute(select(Design).where(Design.job_id == job.id))).scalars().all())
-    expected_ids = {
-        str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms:rfd3-generation:{job.id}:{candidate['candidate_id']}"))
-        for candidate in manifest["candidates"]
-    }
-    if existing:
-        if {str(row.id) for row in existing} != expected_ids or any(
-            not isinstance(row.provenance, dict)
-            or row.provenance.get("result_manifest_sha256") != manifest_sha256
-            for row in existing
-        ):
-            raise GenerationContractError("persisted RFD3 generation candidates conflict with the producer manifest")
-        return len(existing)
+    try:
+        manifest, candidates, candidate_names = load_incremental_manifest(manifest_path,
+            request=request, output_root=output_path, job_id=str(job.id))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise GenerationContractError(f"RFD3 generation result manifest is malformed: {exc}") from exc
+    existing_names = set(await session.scalars(select(Design.name).where(Design.job_id == job.id)))
+    if not existing_names <= candidate_names:
+        raise GenerationContractError('persisted RFD3 generation candidates conflict with the producer manifest')
+    await retain_unpaired_artifacts(session, job, output_path, manifest)
 
-    for candidate in manifest["candidates"]:
+    from services.rfd3_generation_results import candidate_batches
+    async for candidate_index, candidate, existing_row in candidate_batches(session, job.id, candidates):
+        if existing_row is not None:
+            check_incremental_candidates([existing_row], {**manifest, 'candidates': [candidate]}, manifest_sha256)
+            continue
         artifacts = {item["role"]: item for item in candidate["artifacts"]}
         structure = artifacts["candidate_structure"]
         metadata = artifacts["candidate_metadata"]
@@ -4567,16 +4556,23 @@ async def _ingest_rfd3_generation_manifest(
                 },
             )
         )
+        if candidate_index % 256 == 0:
+            await session.flush()
+    if file_sha256(manifest_path) != manifest_sha256:
+        raise GenerationContractError('RFD3 generation manifest changed during import')
     persisted_params = dict(params)
     persisted_params["rfd3_generation_result_manifest_sha256"] = manifest_sha256
     persisted_params["rfd3_generation_aggregate"] = manifest["aggregate"]
+    persisted_params["rfd3_generation_result_schema"] = manifest["schema"]
+    persisted_params["rfd3_generation_population"] = manifest.get("population")
+    persisted_params["rfd3_generation_execution_status"] = manifest.get("execution_status", job.status)
     job.params = persisted_params
     flag_modified(job, "params")
     if commit:
         await session.commit()
     else:
         await session.flush()
-    return len(manifest["candidates"])
+    return len(candidate_names)
 
 
 async def _ingest_protenix_primary_publications(
@@ -5122,6 +5118,10 @@ async def _ingest_job_results(
     with session.no_autoflush:
         job_result = await session.execute(select(Job).where(Job.id == job_id))
         current_job = job_result.scalar_one_or_none()
+    if current_job is not None and current_job.model_id in {'rfd4_proteina', 'complexa'}:
+        from services.rfd4_proteina_results import publish_native_generation
+        await publish_native_generation(session, current_job, output_path)
+        return 0  # Native documents/observations are not synthetic Designs.
     if current_job is not None and current_job.model_id == "nanopore":
         # NGS products are read by their native package/domain owners. A protein
         # CSV/PDB scan can manufacture Designs from unrelated native sidecars.

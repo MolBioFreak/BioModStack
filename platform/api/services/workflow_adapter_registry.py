@@ -32,6 +32,8 @@ TYPED_CORE_JOB_MODELS = {
     "fampnn",
     "frustrampnn",
     "ligandmpnn",
+    "rfd4_proteina",
+    "complexa",
 }
 TYPED_CORE_JOB_ADAPTERS = {
     f"bms.core-job.{model_id}.adapter.v1": model_id
@@ -76,6 +78,10 @@ PROJECT_NATIVE_OWNER_REGISTRY: dict[str, dict[str, Any]] = {
 for _model, _modes in {
     "boltzgen": ("protein_binder", "nanobody_binder", "peptide_binder", "antibody_binder", "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking"),
     "ppiflow": ("protein_binder", "antibody_binder", "nanobody_binder"),
+    "rfd4_proteina": ("generate", "evaluate"),
+    "complexa": ("generate", "evaluate"),
+    "protein_modification_experimental": ("de_novo_design",),
+    "protein_local_redesign": ("local_redesign",),
 }.items():
     for _mode in _modes:
         PROJECT_NATIVE_OWNER_REGISTRY[f"{_model}:{_mode}"] = {

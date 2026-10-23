@@ -2,6 +2,7 @@ import { api } from './api';
 
 export const isNativeBinderGeneration = (job: { model_id: string; mode: string } | undefined) => Boolean(job && (
     (job.model_id === 'boltzgen' && ['protein_binder', 'nanobody_binder', 'peptide_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'].includes(job.mode))
+    || (['rfd4_proteina', 'complexa'].includes(job.model_id) && ['generate', 'evaluate'].includes(job.mode))
     || (job.model_id === 'ppiflow' && ['protein_binder', 'antibody_binder', 'nanobody_binder'].includes(job.mode))));
 export interface NativeGenerationDocument {
     artifact_id: string; target_state?: string | null; logical_path?: string; download_url?: string; primary?: boolean; sha256?: string;
@@ -25,6 +26,7 @@ export interface NativeGenerationRecord extends Record<string, unknown> {
 export interface NativeGenerationPage {
     receipt: Record<string, unknown>; records: NativeGenerationRecord[];
     publication: Record<string, unknown>; total: number; offset: number; limit: number;
+    execution_status?: string; population_completeness?: string; observation_errors?: unknown[]; missingness?: unknown;
     artifacts?: Array<{ path: string; download_url?: string; bytes?: number }>;
 }
 /** Display-only projection: BoltzGen publishes verified scalar records, PPIFlow publishes flat metrics. */

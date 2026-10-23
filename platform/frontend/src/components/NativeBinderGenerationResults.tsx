@@ -9,6 +9,7 @@ import { readBinderSelection, writeBinderSelection, readBinderNativeSources, wri
 import { BinderCandidateSets } from './BinderCandidateSets';
 import { candidateKey, candidateIdentity, uniqueCandidates, readRoundStorage, writeRoundStorage, type CandidateRef } from '../lib/binderSelectedRound';
 import { continuationHref } from '../lib/deNovoContinuation';
+import { buildResultsViewerMolecularDynamicsRoute } from './gen2StartingStructureState';
 import type { CohortInitialMetrics } from './CohortAnalytics';
 import { CohortMetricPicker } from './CohortMetricPicker';
 import { describeCohortMetric } from '../lib/cohortMetricPresentation';
@@ -373,7 +374,19 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                             if (launchContextId) { href.searchParams.set('launch_context_id', launchContextId); back.searchParams.set('launch_context_id', launchContextId); }
                             href.searchParams.set('return_to', `${back.pathname}${back.search}${back.hash}`);
                             return <a className="mr-3 underline" key={destination} href={`${href.pathname}${href.search}`}>{destination === 'redesign' ? 'Redesign exact structure' : destination === 'sequence' ? 'Design sequence from exact structure' : 'Predict exact structure'}</a>;
-                        })}</nav>}
+                        })}<button className="underline" type="button" onClick={() => {
+                            const requestedModel = new URLSearchParams(window.location.search).get('model_number');
+                            const nativeRef = row.candidate_ref;
+                            const model = requestedModel ? Number(requestedModel) : nativeRef?.kind === 'design' ? nativeRef.document?.model : nativeRef?.kind === 'native_document' ? nativeRef.model : undefined;
+                            const selected = { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}), ...(model != null ? { model } : {}) };
+                            const ref: CandidateRef = row.design_id ? { kind: 'design', job_id: jobId, design_id: row.design_id, document: selected } : { kind: 'native_document', job_id: jobId, ...selected };
+                            const back = new URL(window.location.href);
+                            back.searchParams.set('native_candidate', activeId!); back.searchParams.set('artifact_id', document.artifact_id);
+                            if (document.target_state != null) back.searchParams.set('target_state', document.target_state); else back.searchParams.delete('target_state');
+                            if (adapter) back.searchParams.set('native_scope', adapter.key);
+                            const href = buildResultsViewerMolecularDynamicsRoute(jobId, row.design_id ?? null, { sourceRef: { kind: 'candidate', id: jobId, candidate_ref: ref }, returnTo: `${back.pathname}${back.search}${back.hash}` });
+                            window.location.assign(launchContextId ? `${href}&launch_context_id=${encodeURIComponent(launchContextId)}` : href);
+                        }}>Use as MD starting structure</button></nav>}
                         {adapter?.inspect?.(row)}
                         {!row.design_id && <details className="my-3"><summary className="cursor-pointer text-sm">Select saved structures for another operation</summary>
                             {!documents.length ? <p>No saved molecule. This record remains available for inspection and export.</p> : documents.filter(doc => doc.artifact_id).map((doc, index) => <div key={doc.artifact_id} className="my-3 space-y-2"><label className="flex items-start gap-2"><input type="checkbox" aria-label={`Use native document ${doc.artifact_id}`} checked={nativeSources.some(source => source.job_id === jobId && source.artifact_id === doc.artifact_id)} onChange={event => {
@@ -389,6 +402,8 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                 </div>
                 <p className="text-xs text-[var(--text-secondary)]">Model predictions are not experimental validation. {adapter && 'Phase plots show recorded optimization updates, not acceptance scores. '}{!complete && 'Only loaded records are included.'}</p>
             </>}
+            {(page.execution_status || page.population_completeness) && <p role="status">Execution: {page.execution_status ?? 'Not reported'} · Population: {page.population_completeness ?? 'Not reported'}</p>}
+            {!!page.observation_errors?.length && <OnDemand title="Native observation errors"><BindCraft2SettingsReadback value={page.observation_errors} /></OnDemand>}
             {row && <OnDemand title="Selected record: complete native readback"><BindCraft2SettingsReadback value={row.native_record ?? row} /><a href={dataUrl(row.native_record ?? row)} download={`${jobId}-native-record.json`}>Export selected record JSON</a></OnDemand>}
             <OnDemand title="Native receipt and accounting"><BindCraft2SettingsReadback value={page.receipt} /><a href={dataUrl(page.receipt)} download={`${jobId}-native-receipt.json`}>Export receipt JSON</a></OnDemand>
             <OnDemand title="Native files and provenance">{page.artifacts?.map((file, i) => <p key={i}>{file.path} {file.download_url && <a href={file.download_url} download>Download native file</a>}</p>)}<BindCraft2SettingsReadback value={page.publication} /><a href={dataUrl(page.publication)} download={`${jobId}-native-publication.json`}>Export publication JSON</a></OnDemand>

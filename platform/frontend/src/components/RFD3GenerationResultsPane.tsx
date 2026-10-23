@@ -37,6 +37,7 @@ export function NativeCandidatePagination({ page, total, onPage }: { page: numbe
 }
 
 export function RFD3GenerationResultsContent({ result }: { result: RFD3GenerationReadModel }) {
+    const native = result as RFD3GenerationReadModel & { execution_status?: string; population?: Record<string, unknown> | null };
     const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(() => inspectedResultState().candidate);
     const [requestedPage, setRequestedPage] = useState(() => inspectedResultState().page);
     const setPage = (page: number) => { setRequestedPage(page); rememberInspectedResult(selectedCandidateId, page); };
@@ -49,6 +50,8 @@ export function RFD3GenerationResultsContent({ result }: { result: RFD3Generatio
             <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-5">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Native RFD3 de novo generation</div>
                 <h2 className="mt-1 text-2xl font-semibold text-white">Generation summary</h2>
+                {native.execution_status && <p role="status">Native execution: {native.execution_status}</p>}
+                {native.population && <details><summary>Native population and unpaired artifacts</summary><pre>{JSON.stringify(native.population, null, 2)}</pre></details>}
                 <div className="mt-4 grid gap-3 sm:grid-cols-3">
                     <SummaryCard label="Requested" value={result.counts.requested} />
                     <SummaryCard label="Generated" value={result.counts.generated} />

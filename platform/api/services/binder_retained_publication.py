@@ -158,7 +158,8 @@ async def publish_sequence_index(session, job, output_path, validated):
     expected = (str(path), index_sha, path.stat().st_size, provenance)
     if existing is not None:
         if existing.id != identity or (existing.storage_path, existing.sha256, existing.bytes, existing.provenance) != expected:
-            raise ValueError('Native sequence publication replay changed')
+            from scripts.sequence_design_results import SequenceDesignResultError
+            raise SequenceDesignResultError('Sequence import replay has a different native source (native publication changed)')
         return existing
     artifact = JobArtifact(id=identity, owner_job_id=job.id, attempt=attempt,
         logical_path=RESULT_PATH, storage_path=str(path), sha256=index_sha,

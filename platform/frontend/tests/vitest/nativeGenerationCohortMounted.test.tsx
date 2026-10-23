@@ -54,8 +54,8 @@ async function mount(rows = fixture(), props: Partial<Props> = {}, transport?: (
     mountedRows = rows;
     api.defaults.adapter = async config => {
         if (config.method === 'get' && ['/api/jobs/cohort-job', '/api/jobs/new-job'].includes(String(config.url))) return { config, status: 200, statusText: 'OK', headers: {}, data: { id: config.url!.split('/').at(-1), saved_selection_sets: [] } };
-        if (config.method === 'get' && config.url?.endsWith('/round')) return { config, status: 200, statusText: 'OK', headers: {}, data: { job_id: props.jobId ?? 'cohort-job', state: 'not_requested', steps: {}, errors: {} } };
-        if (config.method === 'get' && config.url?.endsWith('/binder-evidence')) return { config, status: 200, statusText: 'OK', headers: {}, data: { schema_version: 1, job_id: props.jobId ?? 'cohort-job', offset: 0, limit: 100, total: 0, records: [] } };
+        if (config.method === 'get' && config.url?.endsWith('/round')) return { config, status: 200, statusText: 'OK', headers: {}, data: { job_id: decodeURIComponent(config.url.split('/')[3]), state: 'not_requested', steps: {}, errors: {} } };
+        if (config.method === 'get' && config.url?.endsWith('/binder-evidence')) return { config, status: 200, statusText: 'OK', headers: {}, data: { schema_version: 1, job_id: decodeURIComponent(config.url.split('/')[3]), offset: 0, limit: 100, total: 0, records: [] } };
         requests.push(config);
         if (config.method !== 'get' || !config.url?.endsWith('/generation-results')) throw new Error(`Unexpected request ${config.method} ${config.url}`);
         return transport ? transport(config) : response(config, rows);
@@ -79,7 +79,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
     await act(async () => tree?.unmount()); client?.clear(); api.defaults.adapter = originalAdapter; vi.restoreAllMocks(); vi.unstubAllGlobals();
-    expect(requests.every(config => config.method === 'get' && config.url.endsWith('/generation-results'))).toBe(true);
+    expect(requests.every(config => config.method === 'get' && config.url.endsWith('/generation-results')), JSON.stringify(requests.map(config => [config.method, config.url]))).toBe(true);
 });
 
 it('loads 1205 records through native pages while bounding the table and charting the whole cohort', async () => {

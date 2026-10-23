@@ -1871,8 +1871,11 @@ function ResultsViewerContent() {
         window.addEventListener('bms:binder-documents', syncDocumentRoute);
         return () => window.removeEventListener('bms:binder-documents', syncDocumentRoute);
     }, [selectedJobId, requestedDesignId, location.pathname, location.search, navigate]);
-    const mdRoute = (source: string, design: string) => {
-        const route = buildResultsViewerMolecularDynamicsRoute(source, design);
+    const mdRoute = (ref: CandidateRef) => {
+        const route = buildResultsViewerMolecularDynamicsRoute(ref.job_id, ref.kind === 'design' ? ref.design_id : null, {
+            sourceRef: { kind: 'candidate', id: ref.job_id, candidate_ref: ref },
+            returnTo: `${location.pathname}${location.search}${location.hash}`,
+        });
         return destinationLaunchContextId ? `${route}&launch_context_id=${encodeURIComponent(destinationLaunchContextId)}` : route;
     };
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
@@ -5437,7 +5440,9 @@ function ResultsViewerContent() {
                                     && !activeJob.provenance?.binder_round_request && !activeJob.provenance?.binder_round_step && (
                                     <button
                                         type="button"
-                                        onClick={() => navigate(mdRoute(activeJob.id, selectedDesign.id))}
+                                        onClick={() => navigate(mdRoute({ kind: 'design', job_id: selectedDesign.job_id ?? activeJob.id, design_id: selectedDesign.id,
+                                            document: { ...(selectedCandidateDocuments[selectedDesign.id] ?? {}),
+                                                ...(returnParams.get('model_number') ? { model: Number(returnParams.get('model_number')) } : {}) } }))}
                                         className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100 hover:bg-cyan-500/20"
                                     >
                                         Use as MD starting structure
@@ -5678,7 +5683,7 @@ function ResultsViewerContent() {
                     ) : isRFD3LocalRedesignResultJob(activeJob) ? (
                         <RFD3LocalRedesignResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : activeJob.model_id === 'molecular_dynamics' ? (
-                        <MDResultsPane key={activeJob.id} jobId={activeJob.id} />
+                        <MDResultsPane key={activeJob.id} jobId={activeJob.id} returnTo={typeof activeJob.params?.intent === 'object' && activeJob.params.intent !== null && 'return_to' in activeJob.params.intent && typeof activeJob.params.intent.return_to === 'string' ? activeJob.params.intent.return_to : undefined} />
                     ) : designsError && !nativeResults ? (
                         <DataViewerQueryError
                             title="Results could not be loaded"
