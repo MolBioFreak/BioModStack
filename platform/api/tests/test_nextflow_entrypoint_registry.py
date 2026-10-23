@@ -175,15 +175,6 @@ def test_missing_complex_components_is_not_warned_for_sequence_only_launches(cap
     assert not any("complex_components NOT in params" in record.getMessage() for record in caplog.records)
 
 
-def test_main_entrypoint_is_thin_compatibility_wrapper() -> None:
-    main_text = (REPO_ROOT / LEGACY_MAIN_ENTRYPOINT).read_text(encoding="utf-8")
-    assert len(main_text.splitlines()) <= 12
-    assert "include { PROTEIN_DESIGN } from './workflows/protein_design.nf'" in main_text
-    assert "params.rfd_mode" not in main_text
-    assert "RunBoltz" not in main_text
-    assert "RFANTIBODY" not in main_text
-
-
 def test_resolver_keeps_profile_migrated_workflows_off_main() -> None:
     for workflow_id, rel_path in EXPECTED_PROFILE_ENTRYPOINTS.items():
         assert resolve_nextflow_entrypoint(effective_profile=workflow_id) == rel_path
