@@ -190,6 +190,10 @@ class CandidateRef(BaseModel):
         return self
 
 
+# Resolve the existing source envelope's exact native-candidate alternative.
+StructureSourceRequest.model_rebuild(_types_namespace={'CandidateRef': CandidateRef})
+
+
 class SelectedRoundInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     selected: Literal[True] | None = None

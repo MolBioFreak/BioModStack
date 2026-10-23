@@ -4967,6 +4967,8 @@ async def _ingest_public_sequence_results(job: Job, output_path: Path, session: 
     from scripts.sequence_design_results import load_result_index, SequenceDesignResultError
 
     index, candidates, index_sha = load_result_index(output_path, job.model_id, job.mode)
+    from services.binder_retained_publication import publish_sequence_index
+    await publish_sequence_index(session, job, output_path, (index, candidates, index_sha))
     selected = {row['name']: (row, metadata) for row, metadata in candidates if row['selected']}
     existing_rows = (await session.execute(select(Design).where(
         Design.job_id == job.id, Design.source_stage.is_(None)))).scalars().all()

@@ -387,7 +387,7 @@ async def materialize_structure(
     session: AsyncSession = Depends(get_session),
     governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
 ):
-    from services.binder_source_materialization import resolve_structure_source, materialize_source_bytes
+    from services.binder_source_materialization import resolve_structure_source, materialize_source_bytes, structure_suffix
     directory = None
     try:
         source, identity = await resolve_structure_source(payload, session)
@@ -410,8 +410,9 @@ async def materialize_structure(
         parent = resolve_allowed_path("inputs")
         parent.mkdir(parents=True, exist_ok=True)
         directory = Path(tempfile.mkdtemp(prefix="structure-", dir=parent))
-        result = materialize_source_bytes(raw, ".cif.gz" if source.name.lower().endswith((".cif.gz", ".mmcif.gz")) else source.suffix, directory,
-            output_format=payload.output_format, model_number=payload.model_number)
+        result = materialize_source_bytes(raw, structure_suffix(source), directory,
+            output_format=payload.output_format, model_number=payload.model_number,
+            verified_original_sha256=digest)
         retained = payload.model_copy(update={"path": result["original_path"],
                                               "expected_sha256": result["original_sha256"]})
         return {**result, "source_identity": identity, "source_path": to_allowed_relative(source),

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 
 import pytest
 
@@ -78,7 +79,6 @@ def test_real_cold_warm_archive_chain(git_package, monkeypatch, record_property)
     monkeypatch.setattr(Path, 'open', opened)
     monkeypatch.setattr(subprocess, 'run', run)
     monkeypatch.setattr(bundle, '_safe_extract', extract)
-    record_passes = int(os.environ.get('BMS_TEST_ARCHIVE_RECORD_PASSES', '0'))
     snapshots = []
     prepared_bundles = []
     for cold in (True, False):
@@ -93,21 +93,25 @@ def test_real_cold_warm_archive_chain(git_package, monkeypatch, record_property)
         leaves = [r for r in source_records if r != archive_record]
         assert counts['git_archive'] == counts['generated_opens'] == int(cold)
         assert counts['generated_bytes'] == size * int(cold)
-        assert counts['copy_opens'] == counts['extract'] == 1
+        assert counts['copy_opens'] == 1
         assert counts['copy_bytes'] == size
-        assert counts['record_archive_opens'] == record_passes
-        assert counts['record_archive_bytes'] == size * record_passes
-        assert counts['leaf_opens'] == len(leaves)
-        assert counts['leaf_bytes'] == sum(r.size_bytes for r in leaves)
+        assert counts['extract'] == counts['leaf_opens'] == counts['leaf_bytes'] == 0
+        assert counts['record_archive_opens'] == counts['record_archive_bytes'] == 0
         record_property('cold' if cold else 'warm', json.dumps(dict(counts), sort_keys=True))
         assert archive_record.sha256 == prepared.envelope.source_archive_sha256
         snapshots.append([r.model_dump() for r in source_records])
         # Test oracle reads are outside the measured preparation operation.
-        for record in source_records:
-            path = source / record.relative_path.removeprefix('source/')
-            with original_open(path, 'rb') as stream: payload = stream.read()
-            assert (record.sha256, record.size_bytes, record.mode) == (
-                hashlib.sha256(payload).hexdigest(), len(payload), path.stat().st_mode & 0o777)
+        archive_path = source / '.bms-source.tar.gz'
+        with tarfile.open(archive_path, 'r:*') as archive:
+            members = {member.name: member for member in archive if member.isfile()}
+            assert set(members) == {record.relative_path.removeprefix('source/') for record in leaves}
+            for record in leaves:
+                member = members[record.relative_path.removeprefix('source/')]
+                with archive.extractfile(member) as stream: payload = stream.read()
+                assert (record.sha256, record.size_bytes, record.mode) == (
+                    hashlib.sha256(payload).hexdigest(), len(payload), member.mode & 0o555)
+        with original_open(archive_path, 'rb') as stream: payload = stream.read()
+        assert (archive_record.sha256, archive_record.size_bytes) == (hashlib.sha256(payload).hexdigest(), len(payload))
     assert snapshots[0] == snapshots[1]
     record_property('source_records', json.dumps(snapshots[0], sort_keys=True))
     first, second = prepared_bundles
@@ -121,15 +125,19 @@ def test_real_cold_warm_archive_chain(git_package, monkeypatch, record_property)
     store.ingest(item, incoming)
     attempt = roots['data'] / 'fixture-worker'
     destination = attempt / 'bundle/source'
-    store.extract_source(item, destination)
-    shutil.copyfile(artifact.source, destination / '.bms-source.tar.gz')
+    store.extract_source(item, destination, immutable=True)
+    # Preserve the staged archive's declared immutable mode at the receiver.
+    shutil.copy2(artifact.source, destination / '.bms-source.tar.gz')
     envelope = second.envelope.model_dump(mode='json', by_alias=True)
     envelope.update(files=snapshots[1], working_directory=str(destination),
                     output_directory=str(attempt / 'results'))
     (attempt / worker.ENVELOPE_FILE).write_text(json.dumps(envelope))
     assert worker.verify_bundle(attempt) == envelope
     leaf = destination / 'main.nf'
+    mode = leaf.stat().st_mode & 0o777
+    leaf.chmod(mode | 0o200)
     leaf.write_bytes(b'x' * leaf.stat().st_size)
+    leaf.chmod(mode)
     with pytest.raises(RuntimeError, match='bundle file hash mismatch'):
         worker.verify_bundle(attempt)
 
