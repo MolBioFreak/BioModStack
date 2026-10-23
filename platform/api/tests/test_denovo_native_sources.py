@@ -30,8 +30,9 @@ def request(model, binding):
 @pytest.mark.asyncio
 @pytest.mark.parametrize('model', ['rfd4_proteina', 'complexa'])
 @pytest.mark.parametrize('source_kind', ['path', 'candidate'])
+@pytest.mark.parametrize('experimental', [False, True])
 async def test_preview_insert_replay_clone_real_stores(isolated_core, setup_store,
-        isolate_applied_local_policy, tmp_path, monkeypatch, model, source_kind):
+        isolate_applied_local_policy, tmp_path, monkeypatch, model, source_kind, experimental):
     import paths
     roots = {'inputs': tmp_path / 'owned/inputs', 'bms_results': tmp_path / 'owned/results'}
     for module in (paths, jobs, files):
@@ -51,8 +52,9 @@ async def test_preview_insert_replay_clone_real_stores(isolated_core, setup_stor
         if model == 'rfd4_proteina':
             payload['params']['rfd4_request']['input'] = {'kind': 'condition_spec', 'examples': [
                 {'name': 'conditioned', 'sources': [{'slot': 'target'}], 'contig': 'a42-42'}]}
-            payload.update(model_id='protein_modification_experimental', mode='de_novo_design')
-            payload['params']['generator'] = model
+    if experimental:
+        payload.update(model_id='protein_modification_experimental', mode='de_novo_design')
+        payload['params']['generator'] = model
     app = FastAPI()
     app.include_router(jobs.router, prefix='/jobs')
     app.include_router(models.router, prefix='/models')
@@ -112,6 +114,47 @@ async def test_preview_insert_replay_clone_real_stores(isolated_core, setup_stor
         key = 'rfd4_input_closure' if model == 'rfd4_proteina' else 'complexa_request_dir'
         assert clone.params[key] == job.params[key]
     assert document['input_identities'], 'Shared portable-input discovery must include the native closure'
+    refs = document['input_identities']
+    assert {row['source_path'] for row in refs} == {
+        str(path) for path in closure.rglob('*') if path.is_file()}
+    assert all(row['selector'][0] == key for row in refs)
+    consumed_ref = next(row for row in refs if row['source_path'] == str(consumed))
+    assert consumed_ref['sha256'] == identity['consumed_sha256']
+    assert consumed_ref['size_bytes'] == consumed.stat().st_size
+    # Exercise the real portable receiver after controller closure removal.
+    import shutil
+    from scripts.lib.portable_inputs import ENV, SCHEMA, resolve_input_path
+    worker = tmp_path / 'worker'
+    shutil.copytree(closure, worker)
+    envelope = tmp_path / 'bindings.json'
+    envelope.write_text(json.dumps({'schema': SCHEMA, 'roots': [str(worker)],
+        'bindings': [{'reference': row,
+                      'path': str(worker / Path(row['source_path']).relative_to(closure))}
+                     for row in refs]}))
+    shutil.rmtree(closure)
+    monkeypatch.setenv(ENV, str(envelope))
+    for row in refs:
+        received = resolve_input_path(row['source_path'])
+        assert received.is_relative_to(worker)
+        assert hashlib.sha256(received.read_bytes()).hexdigest() == row['sha256']
+    received = resolve_input_path(str(consumed))
+    received.write_bytes(b'changed worker source')
+    with pytest.raises(ValueError, match='digest/size mismatch'):
+        resolve_input_path(str(consumed))
+
+
+@pytest.mark.parametrize('model,mode,generator', [
+    ('boltz2', 'predict', 'rfd4_proteina'),
+    ('protein_modification_experimental', 'shape_blueprint', 'complexa'),
+    ('protein_modification_experimental', 'de_novo_design', 'rfd3'),
+])
+def test_closure_discovery_is_model_scoped(tmp_path, model, mode, generator):
+    from scripts.lib.portable_inputs import discover_native_input_references
+    # Out-of-scope fields must not be opened, even if copied into params.
+    assert discover_native_input_references(model, mode, {
+        'generator': generator, 'rfd4_input_closure': '/invented/rfd4',
+        'complexa_request_dir': '/invented/complexa'}, (),
+        output_dir=tmp_path, allowed_roots=[tmp_path]) == []
 
 
 @pytest.mark.asyncio

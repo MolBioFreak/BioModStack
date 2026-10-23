@@ -539,6 +539,15 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
                     visit(state['path'], None, ('structures', i, 'path'))
     if model_id == 'protein_modification_experimental' and mode == 'shape_blueprint':
         keys.add('shape_request_path')
+    # Prepared source trees are owned by the selected native generator, not
+    # arbitrary params on another model or experimental workflow.
+    generation_model = (params.get('generator')
+                        if model_id == 'protein_modification_experimental'
+                        and mode == 'de_novo_design' else model_id)
+    if generation_model == 'rfd4_proteina':
+        keys.add('rfd4_input_closure')
+    elif generation_model == 'complexa':
+        keys.add('complexa_request_dir')
     if model_id == 'bindcraft2':
         keys.add('bc2_compilation')
     if model_id == 'ppiflow' and mode in {'protein_binder', 'antibody_binder', 'nanobody_binder'}:
