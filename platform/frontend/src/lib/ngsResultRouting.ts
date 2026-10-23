@@ -5,7 +5,7 @@ export interface NgsJobRouteIdentity {
     params?: Record<string, unknown> | null;
 }
 
-export type NgsToolkitView = 'launch' | 'instrument' | 'runs';
+export type NgsToolkitView = 'launch' | 'instrument' | 'raw-signal' | 'runs';
 
 const NGS_MODEL_IDS = new Set([
     'nanopore',
@@ -79,6 +79,7 @@ export function ngsToolkitViewFromSearch(search: string): NgsToolkitView {
     if (section === 'analyses' || section === 'evidence') return 'runs';
     if ((params.get('view') || '').trim().toLowerCase() === 'workbench') return 'runs';
     if (section === 'instrument') return 'instrument';
+    if (section === 'raw-signal') return 'raw-signal';
     if ((params.get('job_id') || '').trim()) return 'runs';
     return 'launch';
 }
@@ -91,7 +92,7 @@ export function ngsToolkitSearchForView(search: string, view: NgsToolkitView): s
         params.delete('job_id');
         params.delete('view');
         params.delete('viewer_session_id');
-        if (view === 'instrument') params.set('section', 'instrument');
+        if (view === 'instrument' || view === 'raw-signal') params.set('section', view);
         else params.delete('section');
     }
     const value = params.toString();

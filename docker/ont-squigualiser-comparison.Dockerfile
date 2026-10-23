@@ -2,6 +2,7 @@ ARG SOURCE_DATE_EPOCH=1
 FROM python:3.10-slim-bookworm@sha256:9643927a6fc74bd81b0f1bbb5cce3cb4a491f46b4c5dbee770f28e575f180015
 
 ARG SOURCE_DATE_EPOCH
+ARG DEBIAN_SNAPSHOT=20260810T000000Z
 ARG SQUIGUALISER_VERSION=0.7.0
 ARG SQUIGUALISER_COMMIT=5a2404f1f43bc3227a85475c59b2b77970078b2e
 ARG SQUIGUALISER_ARCHIVE_SHA256=b459f9cef1873efbfa576f33c6ca46bc9e25eaf694a5bbb709e85d1bdf7ec0fd
@@ -21,7 +22,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 COPY docker/ont-squigualiser-requirements.txt /opt/bms/requirements.txt
 COPY scripts/ont_signal_comparison_runtime.py /opt/bms/ont_signal_comparison_runtime.py
-RUN apt-get update \
+# Retain the released package pins through Debian's signed snapshot archive.
+RUN rm -f /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\n' \
+      "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ bookworm main" \
+      "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/ bookworm-security main" \
+      > /etc/apt/sources.list \
+    && apt-get update \
     && apt-get install -y --no-install-recommends "ca-certificates=${CA_CERTIFICATES_VERSION}" "curl=${CURL_VERSION}" \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 RUN pip install --no-cache-dir --require-hashes -r /opt/bms/requirements.txt

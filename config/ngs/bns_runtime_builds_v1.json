@@ -1,0 +1,66 @@
+{
+  "build_inputs": {
+    "apptainer/dorado.def": "3b415b5debfbd5aded234c9d3b4fda01f066b70f7887549381f7828494a38371",
+    "apptainer/medaka.def": "0f090864ee05939a55e64c0c7e70c7f281f5c8912a6954c07d8ed2cbead2033c",
+    "docker/ont-raw-signal.Dockerfile": "ea244bd61bfc5decd6f23172f5ab45933642999dc9601691756856e931f72281",
+    "docker/ont-squigualiser-comparison.Dockerfile": "aef3a733d4cd6489dd754b6fee61341dc76bb0bf2e3e5c7e8ae52288fa36dcfb",
+    "docker/ont-squigualiser-requirements.txt": "d85b091a4240195b162c6ba3dd3cb28936f05124c1aff1adcd2510d0edeec9b6",
+    "docker/ont-squigualiser.Dockerfile": "2a0cad06c377af65e918428a3ae99374f114a71e8b550d9e4ea058d93c09b812",
+    "docker/ont-squigulator.Dockerfile": "802ac9c5c59f3da85d92df38af321e3135b070f65379b868c0aa8d6b6ef06620"
+  },
+  "builds": [
+    {
+      "edition_image_id": "sha256:30570bdcaf8b8157dea0ae9911c2155c06b45d9ea2b1222eed68d812351b853a",
+      "policy": "raw_signal_runtime_policy_v1.json",
+      "upstream_image_id": "sha256:1faa098a72bf7f22242e642ac1e6fb61175c72945f74070f0ffefc952b13d4f3"
+    },
+    {
+      "edition_image_id": "sha256:9c14929e0381f57685dca89c788da5d55482ed1f780ec51473b54bff3f07ee90",
+      "policy": "runtime_policy_v1.json",
+      "upstream_image_id": "sha256:750a72343bd3a0015ff6d55d6ec38671eff200838acdd2fb065f7e03fdcca40c"
+    },
+    {
+      "edition_image_id": "sha256:6ac94569f179e766c55725429af4f9820062ddefb799e6adf666c75b46dab43b",
+      "policy": "squigulator_runtime_policy_v1.json",
+      "upstream_image_id": "sha256:0f7fc490368461fe783b77fcec6c76a4f2ccf84c28b57329463bacc0e7b0ee02"
+    },
+    {
+      "edition_image_id": "sha256:002a005369fe3f46b1df7968d217f6f726c2242abe217b3d9520948f23457368",
+      "policy": "comparison_render_runtime_policy_v1.json",
+      "upstream_image_id": "sha256:87f5e453664111aa9eb11521b8c6541ce91aab89f682b765ad1ebcdd20215648"
+    },
+    {
+      "edition_sif_sha256": "3ad5fa9286660b7d3389541c70d14c1194227d156e350f053a23f4d57ece31a1",
+      "policy": "config/ngs/dorado_v2.1.2.lock.json",
+      "upstream_sif_sha256": "10beca60d75a17471ec56513d713f300af9617a11277283f2944b8138969b12b"
+    },
+    {
+      "edition_sif_sha256": "f1a8b4bd4d1e00a12a19e48d9125301803f72759fe391202d1042415c1879937",
+      "label": "wfplasmid",
+      "upstream_sif_sha256": "28d79c632f990c4a220b0d9d55fa7af1684320f77c8f907dcd37c803205eb8cc"
+    },
+    {
+      "edition_sif_sha256": "7bb99dd38ebdfeaa9785c9617b7c0193f29828753362ec0c11180e353d0cb044",
+      "label": "canu",
+      "upstream_sif_sha256": "fd26bc095b1970900d60b9a3a81f925218da39934ecad04054e1ffe9773762f1"
+    },
+    {
+      "edition_sif_sha256": "66ff42ab4839cb711354e11daa24500bf4207a5580b4fd386a257bbb6724f6a7",
+      "label": "medaka",
+      "upstream_sif_sha256": "58122b812860996a29dce1e70aa14253702ac86ec36b7f31185fe5555e200687"
+    },
+    {
+      "edition_sif_sha256": "3371148352b3c8004eb564198184503bd577f1d3ee7a823f1c89bc398adad30f",
+      "label": "wf_common",
+      "upstream_sif_sha256": "8cacb6a3c0a9a1ad3dd0f0e0624e7da512ae6d247bb878d16b3b8457d8342262"
+    },
+    {
+      "edition_sif_sha256": "0d7d7beb3f08397b7369cf5b68367dedd17ff49c9360c52b6788e403a99c643c",
+      "label": "plannotate",
+      "upstream_sif_sha256": "46ed6a2c15c986f9d04a452199f741b84e06d48dd5d16ced20a095b4cdbaf3b1"
+    }
+  ],
+  "schema": "bns.ngs-runtime-build-identities.v1",
+  "scientific_sources_and_model_hashes_preserved": true,
+  "upstream_test": "8348ec0b01c36ab212a2f75b9209951e627104b5"
+}
