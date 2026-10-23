@@ -282,6 +282,12 @@ def _frustrampnn_discovery_metadata() -> dict:
 
 def _native_parameter_schema(model_id: str, mode_id: str) -> dict | None:
     """Discovery metadata only; scientific validation stays model-owned."""
+    if model_id == 'rfd4_proteina' and mode_id in ('generate', 'evaluate'):
+        from services.rfd4_proteina import parameter_schema
+        return parameter_schema(mode_id)
+    if model_id == 'complexa' and mode_id in ('generate', 'evaluate'):
+        from services.complexa import parameter_schema
+        return parameter_schema()
     if model_id in {'boltz2', 'esmfold2', 'esmfold2_experimental'} and mode_id in ('predict', 'complex'):
         from services.structure_native_schemas import parameter_schema
         return parameter_schema(model_id)
@@ -428,13 +434,35 @@ async def read_bindcraft2_campaign_settings(job_id: str, session: AsyncSession =
 
 
 @router.get('/{model_id}/generation-settings')
-async def get_generation_settings(model_id: str, mode: str):
+async def get_generation_settings(model_id: str, mode: str, generator: str | None = None, task: str | None = None):
     """Model-owned initial-generation settings for browser and agent callers."""
     registry = get_registry()
     model = registry.get_model(model_id)
     if model is None or mode not in {item.id for item in model.modes}:
         raise HTTPException(status_code=404, detail='Initial-generation model/mode not found')
     try:
+        selected = generator if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id
+        native_mode = task or ('generate' if selected != model_id else mode)
+        if selected == 'rfd3':
+            from scripts.lib.rfd3_scientific_settings import scientific_inventory
+            return {'model_id': selected, 'mode': task or 'unconditional_monomer',
+                    **scientific_inventory()}
+        if selected == 'laproteina':
+            from scripts.lib.laproteina_contract import settings_schema, PROFILES, resolve_profile
+            return {'model_id': selected, 'mode': native_mode, 'parameter_schema': settings_schema(),
+                    'profiles': {name: resolve_profile(name) for name in PROFILES}}
+        if selected == 'disco':
+            from pydantic import TypeAdapter
+            from scripts.lib.disco_contract import NativeSettings, BondedNativeJob, NATIVE_REVISION
+            return {'model_id': selected, 'mode': native_mode, 'source_revision': NATIVE_REVISION,
+                    'parameter_schema': TypeAdapter(NativeSettings).json_schema(),
+                    'input_schema': TypeAdapter(list[BondedNativeJob]).json_schema()}
+        if selected == 'rfd4_proteina':
+            from services.rfd4_proteina import generation_settings
+            return generation_settings(native_mode)
+        if selected == 'complexa':
+            from services.complexa import discovery
+            return {**discovery(), 'mode': native_mode}
         if model_id == 'ppiflow':
             from services.ppiflow_generation import ppiflow_generation_inventory
             return ppiflow_generation_inventory(mode)

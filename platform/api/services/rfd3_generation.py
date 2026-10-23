@@ -73,6 +73,26 @@ def normalize_generation_params(
     params: Mapping[str, Any], *, job_name: str
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     raw = dict(params)
+    envelope = {key: raw.pop(key) for key in ('workflow_adapter', 'frustrampnn_requiredness') if key in raw}
+    if 'rfd3_generation_request' in raw:
+        retained = raw['rfd3_generation_request']
+        if not isinstance(retained, dict) or request_sha256(retained) != raw.get('rfd3_generation_request_sha256'):
+            raise GenerationContractError('RFD3 generation request digest mismatch')
+        expected, request, _ = normalize_generation_params(
+            {key: value for key, value in raw.items() if key in _ALLOWED_INPUTS}, job_name=job_name)
+        # IDs are bound by the existing preview/Job owner; the scientific object
+        # must still match normalization exactly, not merely its supplied digest.
+        scientific = lambda value: {key: item for key, item in value.items() if key not in {'request_id', 'job_id'}}
+        if scientific(retained) != scientific(request):
+            raise GenerationContractError('RFD3 generation scientific request changed')
+        bound_fields = {'rfd3_generation_request', 'rfd3_generation_request_sha256',
+                        'rfd3_generation_request_path', 'rfd3_generation_request_id',
+                        'rfd3_generation_result_contract_id'}
+        unexpected = set(raw) - set(expected) - bound_fields
+        divergent = [key for key in set(raw) & set(expected) - bound_fields if raw[key] != expected[key]]
+        if unexpected or divergent:
+            raise GenerationContractError('RFD3 normalized fields changed: ' + ', '.join(sorted(unexpected | set(divergent))))
+        return {**expected, **raw, **envelope}, retained, raw['rfd3_generation_request_sha256']
     unexpected = sorted(str(key) for key in raw if key not in _ALLOWED_INPUTS)
     if unexpected:
         raise GenerationContractError(f"unsupported general RFD3 parameters: {', '.join(unexpected)}")
@@ -122,6 +142,7 @@ def normalize_generation_params(
     digest = request_sha256(request)
     normalized = {
         **raw,
+        **envelope,
         "generator": "rfd3",
         "generation_mode": generation_mode,
         "modification_mode": "de_novo_design",

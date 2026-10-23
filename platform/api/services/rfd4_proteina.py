@@ -69,6 +69,24 @@ def prepare_for_job(mode,params,directory,*,resolved_sources,allowed_roots,runti
             'rfd4_input_closure':str(dest)}
 
 
+def bind_for_job(mode, params, directory):
+    """Pure generated inputs; retained source closures stay with prepare_for_job."""
+    from component_runtime import GeneratedInput
+    compiled = compile_request(mode, params)
+    result = normalize_params(mode, params)
+    if result.get('rfd4_input_closure'):
+        return result, ()
+    relative = Path(DIRECTORY) / compiled['request_identity']
+    payload = {'request': compiled['request'], 'request_identity': compiled['request_identity'],
+               'runtime_identity': {'sources': compiled['sources']}, 'oracle_runtime': {}}
+    generated = tuple(GeneratedInput((relative / name).as_posix(), (json.dumps(value, indent=2) + '\n').encode())
+                      for name, value in (('request.json', payload), ('bindings.json', {})))
+    result.update({PREPARED_FIELD: str(Path(directory) / relative / 'request.json'),
+                   BINDINGS_FIELD: str(Path(directory) / relative / 'bindings.json'),
+                   'rfd4_input_closure': str(Path(directory) / relative)})
+    return result, generated
+
+
 def generation_settings(mode='generate'):
     return {'model_id':MODEL_ID,'mode':mode,'parameter_schema':parameter_schema(mode),
             'request_field':REQUEST_FIELD,'contract':CONTRACT}

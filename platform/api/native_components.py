@@ -7,6 +7,8 @@ from __future__ import annotations
 
 # source:process -> labels, input declarations, output declarations, helpers, directives
 PROCESS_CONTRACTS = {
+    'modules/rfd4_proteina.nf:RunRFD4Proteina': (('RFD4Proteina', 'gpu'), ("path closure, stageAs: 'rfd4_closure'",), ("path 'rfd4_proteina', emit: native_outputs",), ('scripts/bms_rfd4/run.py',), ()),
+    'modules/complexa.nf:RunComplexa': (('Complexa', 'gpu'), ('path request_dir',), ("path 'results', emit: native_results",), ('scripts/run_complexa_inference.py',), ()),
     'modules/af2.nf:RunAF2': (('AF2', 'gpu'), ('tuple val(batch_id), path(pdbs)',), ('tuple path("outputs/*.pdb"), path("*.json"), emit: pdbs_jsons', 'path ("*.json"), emit: json, topic: metadata_ch_fold_seq', 'path "*.log"'), ('scripts/run_af2_initial_guess.py',), ()),
     'modules/af2.nf:AlignAF2': (('pyrosetta_tools',), ('path af2_pdbs', 'path reference_pdb'), ('path "aligned/*.pdb", emit: pdbs, optional: true', 'path "alignment_${task.index}.log", emit: logs, optional: true'), (), ()),
     'modules/af2.nf:FilterAF2': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("output/*.pdb"), emit: pdbs, optional: true', 'path "filter_af2_${task.index}.log"', 'path ("filtered.jsonl"), emit: jsonl, optional: true'), (), ()),
@@ -298,6 +300,8 @@ LABEL_ASSETS = {
     'ShapeRFD3': ('shape_rfd3.sif', None, None, None),
     'ShapeEvaluate': ('shape_rfd3.sif', None, None, None),
     'BoltzGen': ('boltzgen.sif', None, None, None),
+    'RFD4Proteina': ('rfd4_proteina.sif', 'rfd4_proteina_container_path', None, None),
+    'Complexa': ('complexa.sif', 'complexa_container_path', None, None),
     'LaProteina': ('laproteina.sif', None, None, None),
     'DISCO': ('disco.sif', None, None, None),
     'Antiberty': ('antibody_tools.sif', None, None, None),
@@ -473,6 +477,10 @@ class _NativeAnnotations:
         for label in labels:
             if label in LABEL_ASSETS:
                 image, selector, weights, weight_selector = LABEL_ASSETS[label]
+                if label == 'MolecularDynamicsPreparation' and isinstance(self.p.get('md_config'), dict):
+                    from scripts.bms_md.chemistry.prepare import preparation_owner
+                    if preparation_owner(self.p['md_config']) != 'amber':
+                        image, selector, weights, weight_selector = LABEL_ASSETS['MolecularDynamicsCpu']
                 deps.append(self.asset('image', image, 'nextflow.config:process.withLabel.' + label, selector))
                 if weights and native_name not in {'RunProteinPartialFlow', 'RunPPIFlowGeneration', 'RunBoltz', 'RunShapeBoltzValidator', 'DoradoBasecall', 'PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets'}:
                     deps.append(self.asset('weights', weights, authority, weight_selector))
@@ -864,7 +872,8 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         engines = [engine] if engine in {'gromacs', 'openmm'} else []
         retry = workflow == 'orchestrator' and bool(p.get('md_retry_spawn_receipt'))
         prep = a.chain(['MD_PREPARE_CONFIG']) if workflow == 'orchestrator' and not retry else ()
-        if prep:
+        from scripts.bms_md.chemistry.prepare import preparation_owner
+        if prep and (not isinstance(cfg, dict) or preparation_owner(cfg) == 'amber'):
             a.asset('runtime_data', 'md-preparation/env-v1-explicit.txt', 'nextflow.config:params.md_preparation_runtime_lock', 'md_preparation_runtime_lock')
         spawn = a.chain(['MD_SPAWN_REPLICAS'], prep) if prep else ()
         for selected_engine in engines:
@@ -893,6 +902,13 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
                 result = a.chain(['MD_COLLECT_ANALYSIS', 'MD_ASSERT_ANALYSIS_OUTCOME'], analysis_wait)
                 a.stage('MD_COMPLETION_BARRIER', (*collect, *result))
                 a.callback(replica, 'workflows/experimental/molecular_dynamics/orchestrator.nf:MD_SPAWN_REPLICAS/MD_SPAWN_ANALYSIS')
+        return True
+
+    if workflow == 'rfd4_proteina':
+        a.stage('RunRFD4Proteina')
+        return True
+    if workflow == 'complexa':
+        a.stage('RunComplexa')
         return True
 
     if workflow == 'protein_cad_experimental':

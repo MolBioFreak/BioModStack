@@ -82,7 +82,7 @@ params:
     description: General-generation authority; RFD3 is preferred
     required: false
     default: rfd3
-    enum: [rfd3, disco, laproteina]
+    enum: [rfd3, disco, laproteina, rfd4_proteina, complexa]
     ui_group: De Novo Design
     ui_order: 1
   - name: generation_mode

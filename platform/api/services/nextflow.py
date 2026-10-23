@@ -602,6 +602,14 @@ def resolve_nextflow_entrypoint(
     if normalized_model_id.lower() == "bind" + "craft":
         raise ValueError("This retired workflow has been permanently removed")
 
+    selected_generator = ((params or {}).get('generator')
+        if normalized_model_id == 'protein_modification_experimental' and normalized_mode == 'de_novo_design'
+        else normalized_model_id)
+    if selected_generator in {'rfd4_proteina', 'complexa'}:
+        if normalized_model_id == selected_generator and normalized_mode not in {'generate', 'evaluate'}:
+            raise ValueError(f'Unsupported {selected_generator} mode: {normalized_mode}')
+        return f'workflows/{selected_generator}.nf'
+
     if normalized_model_id in {"boltzgen", "ppiflow"}:
         # Initial generation has its own typed native path. Historical seeded
         # partial flow stays under its existing antibody parent identity; an
@@ -4447,7 +4455,12 @@ async def compile_native_workflow_provision_request(workflow_request, http_reque
     native_parameters: dict[str, Any] = {'input_bindings': normalized.input_bindings}
     if normalized.model_id == 'molecular_dynamics':
         from paths import get_md_preparation_runtime_lock
-        native_parameters['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
+        from scripts.bms_md.chemistry.prepare import preparation_owner
+        cfg = normalized.effective_params.get('md_config', {})
+        owner = preparation_owner(cfg)
+        native_parameters['md_preparation_owner'] = owner or 'prepared'
+        if owner == 'amber':
+            native_parameters['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
     plan = build_selected_execution_plan(
         model_id=normalized.model_id, mode=normalized.mode, entrypoint=normalized.entrypoint,
         requested=normalized.requested_params, effective=normalized.effective_params,
@@ -5267,6 +5280,19 @@ def compile_nextflow_invocation(
         params = bound
         plan_input(request_path, (canonical_json(bound['rfd3_generation_request']) + '\n').encode('utf-8'))
 
+    selected_generator = (params.get('generator')
+        if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id)
+    if selected_generator in {'rfd4_proteina', 'complexa'}:
+        native_mode = mode if selected_generator == model_id else 'generate'
+        if selected_generator == 'rfd4_proteina':
+            from services.rfd4_proteina import bind_for_job
+        else:
+            from services.complexa import bind_for_job
+        params, native_inputs = bind_for_job(native_mode, params, output_dir)
+        generated_inputs.extend(native_inputs)
+        request_key = 'rfd4_request' if selected_generator == 'rfd4_proteina' else 'complexa_request'
+        native_parameters[request_key] = deepcopy(params[request_key])
+
     def bind_fampnn_declaration(command, value) -> None:
         # The same existing producer-owned biological declaration transport is
         # used by public and selected-parent callers; never inline large JSON.
@@ -5767,6 +5793,15 @@ def compile_nextflow_invocation(
     ):
         effective_profile = 'protein_cad_experimental'
 
+    selected_generator = (params.get('generator')
+        if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id)
+    if selected_generator in {'rfd4_proteina', 'complexa'}:
+        effective_profile = 'workstation_ryzen7960x'
+        if selected_generator == 'rfd4_proteina':
+            params.setdefault('rfd4_proteina_bundle', str(Path(params.get('weights_root') or get_weights_root()) / 'rfd4-proteina'))
+        else:
+            params.setdefault('complexa_weights_dir', str(Path(params.get('weights_root') or get_weights_root()) / 'complexa'))
+
     effective_profile = resolve_antibody_validation_profile(effective_profile)
 
     uses_protenix = (
@@ -5808,9 +5843,12 @@ def compile_nextflow_invocation(
 
     if model_id == 'molecular_dynamics' and mode == 'simulate':
         from paths import get_md_preparation_runtime_lock
-        # Carry the same managed binding as provisioning into argv so the
-        # existing bundle path map relocates the lock, not the host fallback.
-        params['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
+        from scripts.bms_md.chemistry.prepare import preparation_owner
+        cfg = _native_plan_metadata_settings(model_id, params)['md_config']
+        owner = preparation_owner(cfg)
+        params['md_preparation_owner'] = owner or 'prepared'
+        if owner == 'amber':
+            params['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
 
     if model_id == 'molecular_dynamics' and params.get('md_job_config'):
         params = dict(params)
@@ -7075,6 +7113,15 @@ def compile_nextflow_invocation(
              'boltzgen_input_pdb', 'boltzgen_ligand_pdb', 'boltzgen_dna_structure'}},
             sort_keys=True, separators=(',', ':'))
     for key, value in params.items():
+        if key in {'rfd4_request', 'complexa_request', 'md_source_provenance', 'native_sources'}:
+            # Structured request/provenance lives in the native projection, not argv.
+            native_parameters[key] = deepcopy(value)
+            continue
+        if key in {'pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json'}:
+            wire = value if isinstance(value, str) else json.dumps(value, allow_nan=False, separators=(',', ':'))
+            cmd.extend([f'--{key}', wire])
+            native_parameters[key] = deepcopy(value)
+            continue
         # Physical GPU assignment is exclusively scheduler-owned.  Never pass a
         # request-supplied component override through the generic parameter lane.
         if key in {

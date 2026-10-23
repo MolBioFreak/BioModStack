@@ -6164,6 +6164,21 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
             if internal:
                 raise HTTPException(status_code=422, detail={
                     'validation_errors': ['Server-owned sequence selection: ' + ', '.join(sorted(internal))]})
+        selected_generator = (job_data.params.get('generator')
+            if normalized_model_id == 'protein_modification_experimental' and normalized_mode == 'de_novo_design'
+            else normalized_model_id)
+        if selected_generator in {'rfd4_proteina', 'complexa'}:
+            native_mode = normalized_mode if selected_generator == normalized_model_id else 'generate'
+            try:
+                if selected_generator == 'rfd4_proteina':
+                    from services.rfd4_proteina import normalize_params
+                    job_data.params = normalize_params(native_mode, job_data.params)
+                else:
+                    from services.complexa import normalize_job_request as normalize_complexa
+                    job_data.params = {**job_data.params,
+                        'complexa_request': normalize_complexa(native_mode, job_data.params['complexa_request'])}
+            except (KeyError, TypeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         job_data.params = _normalize_nanopore_modbase_for_validation(
             registry,
             job_data.model_id,
@@ -7431,6 +7446,19 @@ async def _create_job(
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+        selected_generator = (job_params.get('generator')
+            if normalized_model_id == 'protein_modification_experimental' and normalized_mode == 'de_novo_design'
+            else normalized_model_id)
+        if selected_generator in {'rfd4_proteina', 'complexa'}:
+            native_mode = normalized_mode if selected_generator == normalized_model_id else 'generate'
+            if selected_generator == 'rfd4_proteina':
+                from services.rfd4_proteina import bind_for_job
+            else:
+                from services.complexa import bind_for_job
+            job_params, generated = bind_for_job(native_mode, job_params, output_dir)
+            for item in generated:
+                item.materialize(Path(output_dir))
+
         if is_md_launch:
             try:
                 job_params = materialize_md_job_spec(
@@ -7953,13 +7981,20 @@ async def _validated_typed_md_project_params(
     if native:
         from services.md.starting_structures import MdNativeLaunchIntent
         authority_fields = set(MdNativeLaunchIntent.model_fields) - {
-            "name", "launch_context_id", "execution_target_id", "execution_policy",
+            "name", "launch_context_id", "execution_target_id", "execution_policy", "return_to",
         }
     else:
         authority_fields = _TYPED_MD_INTENT_AUTHORITY_FIELDS
-    if set(intent) != authority_fields | {
-            "name", "launch_context_id", "execution_target_id", "execution_policy"}:
+    optional_navigation = {'return_to'}
+    required_intent = authority_fields | {
+        'name', 'launch_context_id', 'execution_target_id', 'execution_policy'}
+    if not required_intent <= set(intent) or set(intent) - required_intent - optional_navigation:
         raise _typed_md_adapter_error("Typed MD intent authority is not the sealed schema.")
+    from services.md.starting_structures import MdLaunchIntent, MdNativeLaunchIntent, StartingStructureSourceRef
+    try:
+        (MdNativeLaunchIntent if native else MdLaunchIntent).model_validate(intent)
+    except ValueError as exc:
+        raise _typed_md_adapter_error('Typed MD intent is invalid.') from exc
     if (
         intent.get("execution_target_id") != job_data.execution_target_id
         or intent.get("execution_policy") != job_data.execution_policy.model_dump(mode='json')
@@ -7986,7 +8021,7 @@ async def _validated_typed_md_project_params(
     effective_request = preview.get("effective_request")
     if not native and (
         not isinstance(source_ref, dict)
-        or source_ref.get("kind") != "design"
+        or source_ref.get("kind") not in {"design", "candidate"}
         or not isinstance(source_ref.get("id"), str)
         or not source_ref["id"]
         or preview.get("schema_version") != "bms.md.launch-preview.v1"
@@ -8146,6 +8181,8 @@ async def _validated_typed_md_project_params(
         raise _typed_md_adapter_error("Typed MD prepared authority has an invalid shape.")
     scheduler = workflow_payload.get("scheduler")
     expected_params = scheduler.get("params") if isinstance(scheduler, dict) else None
+    expected_science = ({key: value for key, value in expected_params.items()
+                         if key not in optional_navigation} if isinstance(expected_params, dict) else None)
     bound_refs = _launch_context_source_refs(normalized_request, workflow_payload)
     if (
         _canonical_typed_md_document(normalized_request)
@@ -8174,13 +8211,12 @@ async def _validated_typed_md_project_params(
         or scheduler.get("model_id") != "molecular_dynamics"
         or scheduler.get("mode") != "simulate"
         or not isinstance(expected_params, dict)
-        or set(expected_params) != authority_fields
-        or _canonical_typed_md_document(expected_params)
+        or set(expected_science) != authority_fields
+        or _canonical_typed_md_document(expected_science)
         != _canonical_typed_md_document(intent_authority)
         or (not native and (
             len(bound_refs) != 1
-            or bound_refs[0].kind != "design"
-            or bound_refs[0].id != source_ref["id"]
+            or bound_refs[0] != StartingStructureSourceRef.model_validate(source_ref)
         ))
     ):
         raise _typed_md_adapter_error(
@@ -8978,83 +9014,8 @@ async def get_rfd3_generation_result(job_id: str, session: AsyncSession = Depend
         or str(job.mode or "").strip().lower() != "de_novo_design"
     ):
         raise HTTPException(status_code=404, detail="RFD3 generation job not found")
-    params = job.params if isinstance(job.params, dict) else {}
-    request = params.get("rfd3_generation_request")
-    manifest_sha256 = params.get("rfd3_generation_result_manifest_sha256")
-    if not isinstance(request, dict) or not isinstance(manifest_sha256, str):
-        raise HTTPException(status_code=404, detail="RFD3 generation typed result is not available")
-    designs = list(
-        (await session.execute(select(Design).where(Design.job_id == job_id).order_by(Design.name.asc())))
-        .scalars()
-        .all()
-    )
-    if not designs:
-        raise HTTPException(status_code=404, detail="RFD3 generation candidates are not available")
-    candidates: list[dict[str, Any]] = []
-    lengths: list[float] = []
-    radii: list[float] = []
-    helices: list[float] = []
-    strands: list[float] = []
-    accepted = 0
-    for design in designs:
-        provenance = design.provenance if isinstance(design.provenance, dict) else {}
-        metrics = provenance.get("metrics")
-        if not isinstance(metrics, dict):
-            raise HTTPException(status_code=409, detail="RFD3 generation candidate metrics are unavailable")
-        length = float(metrics["residue_count"])
-        radius = float(metrics["radius_of_gyration"])
-        helix_count = metrics.get("helix_count")
-        strand_count = metrics.get("strand_count")
-        is_accepted = bool(provenance.get("accepted"))
-        accepted += int(is_accepted)
-        lengths.append(length)
-        radii.append(radius)
-        if helix_count is not None:
-            helices.append(float(helix_count))
-        if strand_count is not None:
-            strands.append(float(strand_count))
-        candidates.append(
-            {
-                "candidate_id": design.name,
-                "design_id": design.id,
-                "source_structure": {"job_id": job.id, "design_id": design.id, "output_format": "native"},
-                "status": "accepted" if is_accepted else "generated",
-                "length": int(length),
-                "radius": radius,
-                "helix_count": None if helix_count is None else int(helix_count),
-                "strand_count": None if strand_count is None else int(strand_count),
-                "structure_url": (
-                    f"/api/jobs/{quote(job_id, safe='')}/rfd3-generation/artifacts/"
-                    f"{quote(design.name, safe='')}/candidate_structure"
-                ),
-            }
-        )
-    aggregate = params.get("rfd3_generation_aggregate")
-    if not isinstance(aggregate, dict):
-        raise HTTPException(status_code=409, detail="RFD3 generation aggregate contract is unavailable")
-    if (
-        aggregate.get("length") != _rfd3_generation_range(lengths)
-        or aggregate.get("radius_of_gyration") != _rfd3_generation_range(radii)
-    ):
-        raise HTTPException(status_code=409, detail="RFD3 generation aggregate contract does not match persisted candidates")
-    return {
-        "schema": "bms.rfd3.generation.read-model.v1",
-        "job_id": job_id,
-        "request": _rfd3_public_json(request),
-        "result_manifest_sha256": manifest_sha256,
-        "counts": {
-            "requested": int(aggregate["requested"]),
-            "generated": len(candidates),
-            "accepted": accepted,
-        },
-        "aggregates": {
-            "length": _rfd3_generation_range(lengths),
-            "radius": _rfd3_generation_range(radii),
-            "helix": _rfd3_generation_range(helices),
-            "strand": _rfd3_generation_range(strands),
-        },
-        "candidates": candidates,
-    }
+    from services.rfd3_generation_results import read_generation_results
+    return await read_generation_results(job, session)
 
 
 @router.get("/{job_id}/rfd3-generation/artifacts/{candidate_id}/{role}")
@@ -9527,6 +9488,8 @@ async def get_native_generation_results(
         from services.boltzgen_candidate_publication import read_published_generation_page
     elif job.model_id == "ppiflow" and job.mode in {"protein_binder", "antibody_binder", "nanobody_binder"}:
         from services.ppiflow_generation import read_published_generation_page
+    elif job.model_id in {"rfd4_proteina", "complexa"} and job.mode in {"generate", "evaluate"}:
+        from services.rfd4_proteina_results import read_published_generation_page
     else:
         raise HTTPException(status_code=400, detail="Job is not a supported native generation mode")
     try:

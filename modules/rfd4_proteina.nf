@@ -3,6 +3,7 @@ nextflow.enable.dsl = 2
 process RunRFD4Proteina {
     tag 'rfd4-proteina'
     label 'RFD4Proteina'
+    label 'gpu'
     stageInMode 'copy'
     publishDir "${params.out_dir}/collected", mode: 'copy'
 

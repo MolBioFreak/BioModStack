@@ -15,6 +15,16 @@ def normalize_job_request(mode: str, params: dict) -> dict:
     return normalize_request(params)
 
 
+def bind_for_job(mode: str, params: dict, directory):
+    """Compile native request bytes without allocating the output directory."""
+    from component_runtime import GeneratedInput
+    request = normalize_job_request(mode, params['complexa_request'])
+    result = {**params, 'complexa_request': request}
+    relative = Path('complexa') / 'request.json'
+    result.setdefault('complexa_request_dir', str(Path(directory) / relative.parent))
+    return result, (GeneratedInput(relative.as_posix(), (json.dumps(request, indent=2) + '\n').encode()),)
+
+
 def discovery() -> dict:
     profiles = json.loads((Path(__file__).resolve().parents[3] / "scripts/bms_complexa/profiles.json").read_text())
     return {"model_id": MODEL_ID, "modes": sorted(SUPPORTED_MODES), "request_key": "complexa_request",

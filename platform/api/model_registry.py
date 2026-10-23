@@ -123,7 +123,7 @@ INDEPENDENT_RUNTIME_MODELS = frozenset({
     "boltz2", "af2", "proteinmpnn", "unidock", "protein_modification_experimental",
     "caliby_binder", "caliby_experimental", "ligandmpnn", "bindcraft2", "protonpottsmpnn",
     # Fold-CP uses its own image with the native BoltzCP shared Boltz tree.
-    "boltz_cp_experimental",
+    "boltz_cp_experimental", "rfd4_proteina", "complexa",
 })
 
 
@@ -158,6 +158,13 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
     if model_id == 'protein_modification_experimental':
         return _denovo_runtime_dependencies()
     refs = [RuntimeDependencyRef(kind="image", relative_path=model.container)]
+    if model_id == 'rfd4_proteina':
+        refs.append(RuntimeDependencyRef(kind='weights', relative_path='rfd4-proteina'))
+    if model_id == 'complexa':
+        from scripts.lib.complexa_contract import PROFILES
+        refs.extend(RuntimeDependencyRef(kind='weights', relative_path='complexa/' + pair + suffix)
+                    for pair in sorted({profile[1] for profile in PROFILES.values()})
+                    for suffix in ('.ckpt', '_ae.ckpt'))
     if model_id == 'bindcraft2':
         # Native campaign bind in scripts/run_bindcraft2.py; image-owned MPNN
         # plus the selected AlphaFold parameter tree.
@@ -227,6 +234,20 @@ def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
     mode constructs a task-local CIF, not a bulk mmCIF corpus.
     FrustraMPNN checkpoints are image-owned and add no shared weight members.
     """
+    if workflow_id == 'de_novo_design':
+        from scripts.lib.complexa_contract import PROFILES
+        groups = {'generators': tuple(ref.relative_path for ref in _denovo_runtime_dependencies()
+                                      if ref.kind == 'weights'),
+                  'rfd4_proteina': ('rfd4-proteina',),
+                  'complexa': tuple('complexa/' + pair + suffix
+                      for pair in sorted({profile[1] for profile in PROFILES.values()})
+                      for suffix in ('.ckpt', '_ae.ckpt'))}
+        for model_id in ('boltz2', 'esmfold2', 'caliby_experimental'):
+            groups[model_id] = tuple(ref.relative_path for ref in model_runtime_dependencies(model_id)
+                                     if ref.kind == 'weights')
+        groups['protenix'] = tuple(ref.relative_path for ref in
+            native_checkpoint_dependencies('ProtenixPredict', {})[0])
+        return groups
     if workflow_id == 'antibody_denovo':
         from services.ppiflow_generation import MODES
         boltzgen, blockers = native_checkpoint_dependencies('RunBoltzGen', {
@@ -286,6 +307,17 @@ def workflow_pack_weight_owners(workflow_id: str) -> dict[str, str]:
 def workflow_pack_dependencies(workflow_id: str):
     """Input-free union of the selected workflow's declared managed assets."""
     groups = workflow_pack_weight_groups(workflow_id)  # closed supported identity
+    if workflow_id == 'de_novo_design':
+        from native_components import LABEL_ASSETS
+        refs = list(_denovo_runtime_dependencies())
+        for label in ('RFD4Proteina', 'Complexa', 'MolecularDynamicsPreparation',
+                      'MolecularDynamicsGromacs', 'MolecularDynamicsAnalysis'):
+            refs.append(RuntimeDependencyRef(kind='image', relative_path=LABEL_ASSETS[label][0]))
+        for model_id in ('ligandmpnn', 'protonpottsmpnn', 'frustrampnn'):
+            refs.extend(model_runtime_dependencies(model_id, internal=True))
+        refs.extend(RuntimeDependencyRef(kind='weights', relative_path=member)
+                    for members in groups.values() for member in members)
+        return tuple(dict.fromkeys(refs))
     if workflow_id == 'antibody_denovo':
         from native_components import LABEL_ASSETS
         registry = get_registry()
@@ -367,7 +399,19 @@ def native_checkpoint_dependencies(process: str, params: dict):
             compatibility_authority='model_acquisition_plan; scripts/lib/pinned_weight_layout.py'))
         blockers.append(UnresolvedField(key, 'dependency_closure', authority, reason))
 
-    if process in {'PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets'}:
+    if process == 'RunRFD4Proteina':
+        dependencies.append(SelectedDependency('weights:rfd4-proteina', 'weights', 'rfd4-proteina',
+            'scripts.lib.rfd4_proteina_contract:selected_dependencies', selector='rfd4_proteina_bundle'))
+    elif process == 'RunComplexa':
+        from scripts.lib.complexa_contract import Request, PROFILES
+        request = Request.model_validate(params['complexa_request'])
+        pair = PROFILES[request.task][1]
+        for suffix in ('.ckpt', '_ae.ckpt'):
+            member = pair + suffix
+            dependencies.append(SelectedDependency('weights:complexa:' + member, 'weights',
+                'complexa/' + member, 'scripts/bms_complexa/config.py:compose_request',
+                selector='complexa_weights_dir', selector_subpath=member))
+    elif process in {'PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets'}:
         dependencies.append(SelectedDependency('weights:openfold3:checkpoint', 'weights',
             'openfold3/of3-p2-155k.pt', 'cm_request.confornets.checkpoint',
             selector='cn_checkpoint_path', semantic_release=(params.get('cm_request') or {}).get(
@@ -873,6 +917,21 @@ class ModelRegistry:
             except (TypeError, ValueError) as exc:
                 errors.append(str(exc))
 
+        selected_generator = (params.get('generator', 'rfd3')
+            if model_id == 'protein_modification_experimental' and mode_id == 'de_novo_design'
+            else model_id)
+        if selected_generator in {'rfd4_proteina', 'complexa'}:
+            native_mode = mode_id if selected_generator == model_id else 'generate'
+            try:
+                if selected_generator == 'rfd4_proteina':
+                    from services.rfd4_proteina import normalize_params
+                    normalize_params(native_mode, params)
+                else:
+                    from services.complexa import normalize_job_request
+                    normalize_job_request(native_mode, params['complexa_request'])
+            except (KeyError, TypeError, ValueError) as exc:
+                errors.append(str(exc))
+            return errors
         if model_id == 'protonpottsmpnn':
             from services.protonpottsmpnn_design import normalize_design_params
             try:
@@ -1410,6 +1469,15 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
         from services.ont_ngs_completion import ont_native_result_contract
         result_payload = ont_native_result_contract(model_id, mode, p)
         retrieval_authority = result_payload['native_contract_authority']
+    elif reviewed and workflow in {'rfd4_proteina', 'complexa'}:
+        if workflow == 'rfd4_proteina':
+            from scripts.lib.rfd4_proteina_contract import RESULT_CONTRACT
+        else:
+            from scripts.lib.complexa_contract import RESULT_CONTRACT
+        retrieval_authority = 'platform/api/services/rfd4_proteina_results.py:read_published_generation_page'
+        result_payload = {'native_contract_authority': retrieval_authority,
+            'publication_authority': 'platform/api/services/rfd4_proteina_results.py:publish_native_generation',
+            'analysis_contract_id': RESULT_CONTRACT, 'generator_model_id': workflow}
     elif native_generation is not None:
         result_payload = native_generation
         retrieval_authority = native_generation['native_contract_authority']
