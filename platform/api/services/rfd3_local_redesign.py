@@ -496,7 +496,19 @@ def normalize_local_redesign_params(
     if sequence_policy not in {"preserve", "explicit_positions", "insert_only", "skip"}:
         raise ContractError(f"unsupported native local-redesign sequence_policy '{sequence_policy}'")
     normalized["sequence_policy"] = sequence_policy
-    normalized["write_full_json"] = True
+    # The ingestion profile owns the effective value, not the operator's saved
+    # intent. Preserve even historical false/null/string values without adding
+    # a new refusal; compile the same full-metadata request as before below.
+    normalized.setdefault("write_full_json", True)
+    normalized["rfd3_output_profile"] = {
+        "write_full_json": {
+            "authority": EXECUTION_FIELDS["write_full_json"]["authority"],
+            "reason": EXECUTION_FIELDS["write_full_json"]["reason"],
+            "requested_present": "write_full_json" in params,
+            "requested": deepcopy(params.get("write_full_json")),
+            "effective": EXECUTION_FIELDS["write_full_json"]["default"],
+        }
+    }
     input_value = (
         normalized.get("input_structure")
         or normalized.get("input_pdb")
@@ -527,7 +539,10 @@ def normalize_local_redesign_params(
     if normalized.get("region_mode") == "interface_shell" and not isinstance(saved, dict):
         normalized["redesign_ranges"] = resolve_interface_shell(source_path, normalized)
     legacy_native = isinstance(saved, dict) and saved.get("contract_revision") == LEGACY_CONTRACT_REVISION
-    rebuilt_request = build_request(normalized, job_name=job_name, source_sha256=source_sha256, legacy_native=legacy_native)
+    rebuilt_request = build_request(
+        {**normalized, "write_full_json": normalized["rfd3_output_profile"]["write_full_json"]["effective"]},
+        job_name=job_name, source_sha256=source_sha256, legacy_native=legacy_native,
+    )
     existing_request = normalized.get("rfd3_request")
     if isinstance(existing_request, dict):
         if existing_request.get("schema") != "bms.rfd3.local-redesign.request.v1":
