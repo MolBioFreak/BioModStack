@@ -335,7 +335,10 @@ def prepared_generation_source_fields(model_id, mode, params):
     Do not reacquire controller sources on replay; only these model-owned input
     slots are superseded. Other parameters retain existing discovery behavior.
     """
-    if model_id == 'rfd4_proteina' and params.get('rfd4_input_closure'):
+    rfd4_selected = (model_id == 'rfd4_proteina' or
+                     (model_id == 'protein_modification_experimental' and
+                      mode == 'de_novo_design' and params.get('generator') == 'rfd4_proteina'))
+    if rfd4_selected and params.get('rfd4_input_closure'):
         return {'rfd4_request', 'native_sources'}
     if (model_id == 'protein_modification_experimental' and mode == 'shape_blueprint'
             and params.get('shape_request_path')):
@@ -555,7 +558,9 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         # derivative. Historical Jobs need not carry this optional metadata.
         visit(original_snapshot['path'], None,
               ('md_source_provenance', 'original_snapshot', 'path'), 'native-snapshot')
-    if model_id == 'rfd4_proteina' and params.get('rfd4_input_closure'):
+    if (model_id == 'rfd4_proteina' or
+            (model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
+             and params.get('generator') == 'rfd4_proteina')) and params.get('rfd4_input_closure'):
         # The model preparation owner has already retained each selected slot,
         # including native state companions. Preserve this relative tree; never
         # deserialize state or rediscover paths inside annotation/provenance.

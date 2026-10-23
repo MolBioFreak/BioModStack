@@ -354,8 +354,12 @@ def _records_for_source(
         # Native weight snapshots (including HF internal aliases) travel as
         # concrete files. Only the manifest-bound path above may escape the
         # selected tree into acquisition storage; never serialize host targets.
+        from scripts.lib.portable_inputs import file_stamp
         root = source.resolve(strict=True)
         records = []
+        # Invocation-local concrete identity, not logical pathname: native HF
+        # aliases and hardlinks keep all rows without rereading the same body.
+        inventory = runtime_sources if runtime_sources is not None else {}
         def visit(native, name, ancestry):
             concrete = native.resolve(strict=True)
             if concrete != root and not concrete.is_relative_to(root):
@@ -366,7 +370,13 @@ def _records_for_source(
                 for child in sorted(concrete.iterdir()):
                     visit(child, name + '/' + child.name, ancestry | {concrete})
             else:
-                records.append(_record_file(concrete, name, role))
+                stamp = file_stamp(concrete)
+                key = ('runtime-file', stamp)
+                record = _record_file(concrete, name, role,
+                                      staged_sha256=inventory.get(key))
+                if file_stamp(concrete) == stamp:
+                    inventory[key] = record.sha256
+                records.append(record)
                 if runtime_sources is not None:
                     runtime_sources[("runtime-source", name)] = concrete
         visit(source, prefix.rstrip('/'), set())
@@ -625,7 +635,9 @@ def _runtime_records(source: Path, prefix: str, *, publication=None, resolved=No
             for suffix, (concrete, row) in sorted(selected.items()):
                 name = prefix + ('/' + suffix if suffix else '')
                 records.append(RemoteFileRecord(relative_path=name, role='runtime',
-                    sha256=row['sha256'], size_bytes=row['size'], mode=0o400))
+                    # Ordinary immutable weights share the worker CAS's 0444
+                    # projection. Canonical image/acquisition donors stay intact.
+                    sha256=row['sha256'], size_bytes=row['size'], mode=0o444))
                 if resolved is not None:
                     resolved[('runtime-source', name)] = concrete
             return records
@@ -1448,6 +1460,12 @@ def _relocate_python_runtime(source: Path, destination: Path, remote_destination
     return destination
 
 
+# Execution projection is distinct from the full scientific Git revision/tree.
+# Keep the policy at this single archive owner; historical envelopes retain
+# their bound archive records and need not adopt a newer projection.
+SOURCE_MEMBERSHIP_POLICY = 'bms.execution-source.v1'
+_SOURCE_ARCHIVE_PATHS = ('.', ':(exclude,glob)artifacts/android/*.apk')
+
 # Digest and member inventory have one process-owned, revision-keyed lifetime.
 _SOURCE_ARCHIVE_DIGESTS: dict[str, tuple[str, tuple[RemoteFileRecord, ...]]] = {}
 
@@ -1496,7 +1514,7 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
             try:
                 with temporary.open('xb') as output:
                     subprocess.run(['git', 'archive', '--format=tar.gz', '-6', revision,
-                                    '--', '.', ':(exclude,glob)artifacts/android/*.apk'],
+                                    '--', *_SOURCE_ARCHIVE_PATHS],
                                    cwd=repo_root, check=True, stdout=output,
                                    stderr=subprocess.PIPE, timeout=300)
                     output.flush()
@@ -2054,6 +2072,8 @@ def prepare_remote_bundle(
 
     if binding:
         effective_environment.update(binding["environment"])
+    # Envelope-bound execution membership, not an assertion of a full Git tree.
+    effective_environment['BMS_SOURCE_MEMBERSHIP_POLICY'] = SOURCE_MEMBERSHIP_POLICY
 
     if clone_placement:
         # Keep the selected bridge (including udocker's CLI adapter), not the
