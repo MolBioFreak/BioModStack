@@ -26,5 +26,6 @@ export function isolateDeNovoTransport() {
         return { config, status: 200, statusText: 'OK', headers: {}, data: known[url] };
     };
     const xhr = vi.spyOn(XMLHttpRequest.prototype, 'open').mockImplementation(() => { unexpected.push('XHR bypassed adapter'); throw new Error('Network disabled'); });
-    return () => { api.defaults.adapter = previous; xhr.mockRestore(); expect(unexpected).toEqual([]); };
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { unexpected.push('fetch bypassed adapter'); throw new Error('Network disabled'); });
+    return () => { api.defaults.adapter = previous; xhr.mockRestore(); fetch.mockRestore(); expect(unexpected).toEqual([]); };
 }

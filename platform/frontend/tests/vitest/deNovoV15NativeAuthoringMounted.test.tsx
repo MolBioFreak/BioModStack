@@ -29,11 +29,13 @@ let unexpected: string[];
 let saved: any[];
 let project: any;
 let restoreXhr: ReturnType<typeof vi.spyOn>;
+let restoreFetch: ReturnType<typeof vi.spyOn>;
 const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
 beforeEach(() => {
     requests = []; unexpected = []; saved = []; project = null; previous = api.defaults.adapter;
     localStorage.clear(); sessionStorage.clear();
     restoreXhr = vi.spyOn(XMLHttpRequest.prototype, 'open').mockImplementation(() => { unexpected.push('XHR'); throw new Error('No network'); });
+    restoreFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { unexpected.push('fetch'); throw new Error('No network'); });
     api.defaults.adapter = async config => {
         const url = config.url ?? ''; const body = config.data ? JSON.parse(config.data) : undefined;
         requests.push({ url, method: config.method ?? 'get', body });
@@ -58,7 +60,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
     if (process.env.BMS_UI_EVIDENCE_DIR && requests.some(r => r.url === '/api/jobs')) writeFileSync(resolve(process.env.BMS_UI_EVIDENCE_DIR, `native-wire-${expect.getState().currentTestName!.replace(/[^A-Za-z0-9]/g, '_')}.json`), JSON.stringify(requests, null, 2));
-    await unmount(); api.defaults.adapter = previous; restoreXhr.mockRestore(); expect(unexpected).toEqual([]);
+    await unmount(); api.defaults.adapter = previous; restoreXhr.mockRestore(); restoreFetch.mockRestore(); expect(unexpected).toEqual([]);
 });
 async function unmount() { if (root) await act(async () => root!.unmount()); root = undefined; client?.clear(); document.body.replaceChildren(); }
 async function mount(model: string, mode = 'generate', request?: object, projectRoute = '') {
