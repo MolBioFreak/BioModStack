@@ -1,7 +1,7 @@
 {
   "network": "none",
-  "oci_digest": "sha256:1faa098a72bf7f22242e642ac1e6fb61175c72945f74070f0ffefc952b13d4f3",
-  "runtime_id": "sha256:1faa098a72bf7f22242e642ac1e6fb61175c72945f74070f0ffefc952b13d4f3",
+  "oci_digest": "sha256:30570bdcaf8b8157dea0ae9911c2155c06b45d9ea2b1222eed68d812351b853a",
+  "runtime_id": "sha256:30570bdcaf8b8157dea0ae9911c2155c06b45d9ea2b1222eed68d812351b853a",
   "schema": "bms.ont-raw-signal-runtime-policy.v1",
   "tools": {
     "blue_crab": "0.5.0",

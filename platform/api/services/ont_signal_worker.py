@@ -42,7 +42,7 @@ from database import (
 from molbio_ngs_models import MolBioNGSReferenceArtifact, MolBioNGSReferenceRevision
 from paths import get_allowed_roots, get_molbio_ngs_reference_root, get_results_dir
 from services import ngs_alignment_sessions, ont_raw_signal, ont_signal_workbench
-from services.container_cli_environment import container_cli_environment as _container_cli_env
+from services.container_cli_environment import container_cli_environment as _container_cli_env, container_user_namespace_args
 from services.file_lease_signals import lease_break_generation
 
 logger = logging.getLogger(__name__)
@@ -685,6 +685,8 @@ class OntSignalWorker:
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError("local approved Squigualiser image inspection failed") from exc
         observed = result.stdout.strip()
+        if runtime == "podman" and re.fullmatch(r"[0-9a-f]{64}", observed):
+            observed = f"sha256:{observed}"
         if result.returncode != 0 or observed != image:
             raise RuntimeError("local approved Squigualiser image is absent or diverged")
 
@@ -706,7 +708,7 @@ class OntSignalWorker:
         if not output.is_dir() or output.is_symlink() or not broker.is_dir() or broker.is_symlink():
             raise RuntimeError("container output or broker directory is invalid")
         command = [
-            runtime, "run", "--pull=never", "--network", "none", "--read-only", "--user", f"{uid}:{gid}",
+            runtime, "run", *container_user_namespace_args(runtime), "--pull=never", "--network", "none", "--read-only", "--user", f"{uid}:{gid}",
             "--pids-limit", "128", "--memory", "4g", "--cpus", "4", "--cap-drop", "ALL",
             "--label", WORKER_LABEL,
             "--ulimit", f"fsize={FILE_SIZE_LIMITS[kind]}:{FILE_SIZE_LIMITS[kind]}",
@@ -778,7 +780,7 @@ class OntSignalWorker:
         broker = Path(os.path.abspath(broker_dir))
         if not output.is_dir() or output.is_symlink() or not broker.is_dir() or broker.is_symlink():
             raise RuntimeError("comparison output or broker directory is invalid")
-        common = [runtime, "run", "--pull=never", "--network", "none", "--read-only",
+        common = [runtime, "run", *container_user_namespace_args(runtime), "--pull=never", "--network", "none", "--read-only",
                   "--user", f"{uid}:{gid}", "--cap-drop", "ALL", "--label", WORKER_LABEL,
                   "--security-opt", "no-new-privileges", "--mount",
                   f"type=bind,src={output},dst=/output", "--mount",

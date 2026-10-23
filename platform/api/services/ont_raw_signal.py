@@ -40,7 +40,7 @@ from database import (
     OntRawSignalLookup,
     OntRawSignalRepresentation,
 )
-from services.container_cli_environment import container_cli_environment
+from services.container_cli_environment import container_cli_environment, container_user_namespace_args
 from services.file_lease_signals import register_lease_break_listener
 from services.ont_read_metrics import publish_read_metrics_from_validation
 
@@ -191,7 +191,10 @@ def assert_local_raw_runtime_image(runtime: str, image: str) -> None:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError("local raw-signal runtime image inspection failed") from exc
-    if result.returncode != 0 or result.stdout.strip() != image:
+    observed = result.stdout.strip()
+    if runtime == "podman" and re.fullmatch(r"[0-9a-f]{64}", observed):
+        observed = f"sha256:{observed}"
+    if result.returncode != 0 or observed != image:
         raise RuntimeError("local raw-signal runtime image is absent or diverged")
 
 _RAW_FORMATS = frozenset({"pod5", "slow5", "blow5"})
@@ -1222,6 +1225,60 @@ async def create_external_run_registration(
     return {"run_id": run_id, "observed_generation": 1, "representation": representation}
 
 
+async def import_uploaded_raw_signal(
+    session: AsyncSession, domain_session: AsyncSession, *, file_path: str,
+    format: str, index_file_path: str | None, experiment_group: str,
+    sample_id: str | None,
+) -> dict[str, Any]:
+    """Register uploaded native bytes through the existing run/source authority."""
+    from paths import get_inputs_dir, resolve_allowed_path
+
+    await _validate_external_registration_context(
+        domain_session, experiment_group=experiment_group, sample_id=sample_id,
+    )
+    if format not in _RAW_FORMATS:
+        raise ValueError("format must be pod5, slow5, or blow5")
+    pattern = r"inputs/ont-raw-signal/[0-9a-f-]{36}/[A-Za-z0-9_.-]{1,200}"
+    if re.fullmatch(pattern, file_path) is None or not file_path.endswith(f".{format}"):
+        raise ValueError("select a native raw-signal upload")
+    if (format == "blow5" and index_file_path != file_path + ".idx") or (format != "blow5" and index_file_path is not None):
+        raise ValueError("indexed BLOW5 requires its adjacent uploaded .blow5.idx")
+
+    records = []
+    artifacts = []
+    for relative, kind in [(file_path, format), *([(index_file_path, "blow5_index")] if index_file_path else [])]:
+        path = resolve_allowed_path(relative)
+        lexical = get_inputs_dir() / Path(relative).relative_to("inputs")
+        if path != Path(os.path.abspath(lexical)):
+            raise ValueError("raw-signal uploads must not traverse symlinks")
+        artifact = await asyncio.to_thread(_file_artifact, path, "upload", kind=kind)
+        identity = str(uuid5(NAMESPACE_URL, f"bms:raw-signal-upload:{relative}:{artifact['sha256']}"))
+        artifact["artifact_id"] = identity
+        await session.execute(sqlite_insert(InputFile.__table__).values(
+            id=identity, filename=path.name, file_type=kind, directory=str(path.parent),
+            size_bytes=artifact["bytes"],
+        ).on_conflict_do_nothing(index_elements=["id"]))
+        records.append(identity)
+        artifacts.append(artifact)
+
+    candidate_id = _digest({"upload": file_path, "artifacts": [a["sha256"] for a in artifacts]})
+    registration_key = _digest({"candidate_id": candidate_id, "experiment_group": experiment_group, "sample_id": sample_id})
+    replay = await _external_registration_replay(
+        session, registration_key=registration_key, candidate_id=candidate_id,
+        source_sha256=artifacts[0]["sha256"], sample_id=sample_id, experiment_group=experiment_group,
+    )
+    if replay is not None:
+        return replay
+    result = await create_external_run_registration(
+        session, domain_session=domain_session, format=format, input_file_id=records[0],
+        index_input_file_id=records[1] if len(records) == 2 else None,
+        source_fidelity="unknown", sample_id=sample_id, experiment_group=experiment_group,
+        external_registration_key=registration_key, candidate_id=candidate_id,
+        source_sha256=artifacts[0]["sha256"], source_artifact_override=artifacts[0],
+    )
+    return {**result, "already_registered": False}
+
+
 async def _validate_external_registration_context(
     domain_session: AsyncSession,
     *,
@@ -1919,7 +1976,8 @@ def _conversion_commands(
         ))
     validator_input_args.extend(("--fd-socket", "/stage/source-fd.sock"))
     base = [
-        snapshot["container_runtime"], "run", "--rm", "--pull=never", "--network=none", "--read-only",
+        snapshot["container_runtime"], "run", *container_user_namespace_args(snapshot["container_runtime"]),
+        "--rm", "--pull=never", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=4", "--memory=16g", "--pids-limit=256", "--ulimit", "nofile=512:512",
         "--workdir", "/stage",
@@ -2219,7 +2277,8 @@ def _external_blow5_validation_commands(job: OntRawSignalDerivationJob, source: 
     stage = Path(snapshot["staging_root"]) / job.id / f"attempt-{job.attempt + 1}"
     image_ref = _container_image_ref(snapshot)
     common = [
-        snapshot["container_runtime"], "run", "--rm", "--pull=never", "--network=none", "--read-only",
+        snapshot["container_runtime"], "run", *container_user_namespace_args(snapshot["container_runtime"]),
+        "--rm", "--pull=never", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=1", "--memory=2g", "--pids-limit=64", "--ulimit", "nofile=128:128",
         "--workdir", "/stage",
@@ -2962,7 +3021,8 @@ async def claim_next_waveform_lookup(
         ],
     }
     command = [
-        snapshot["container_runtime"], "run", "--rm", "--pull=never", "--network=none", "--read-only",
+        snapshot["container_runtime"], "run", *container_user_namespace_args(snapshot["container_runtime"]),
+        "--rm", "--pull=never", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=1", "--memory=1g", "--pids-limit=64", "--ulimit", "nofile=128:128",
         "--mount", f"type=bind,src={output_root},dst=/output",

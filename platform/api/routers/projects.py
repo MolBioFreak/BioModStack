@@ -369,7 +369,7 @@ class NgsDataRecordRequest(StrictRequestModel):
     record_key: UUID
     title: str = Field(min_length=1, max_length=255)
     sample_name: str = Field(default="", max_length=255)
-    data_format: Literal["fastq", "pod5", "bam", "fasta", "results", "other"]
+    data_format: Literal["fastq", "pod5", "slow5", "blow5", "bam", "fasta", "results", "other"]
     use_case: Literal["sequence_identity", "clone_selection", "plasmid_screening", "plasmid_onboarding", "transcriptomics", "genomic_sequencing", "other"]
     workflow_stage: Literal["planned", "acquired", "basecalled", "analysing", "review", "complete"]
     data_location: str = Field(default="", max_length=2048)

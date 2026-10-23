@@ -1662,6 +1662,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     ont_runtime_environment = "\n        ".join(
         "Environment=" + systemd_value(f"{key}={value}")
         for key, value in {
+            "BMS_CONTAINER_RUNTIME": os.environ.get("BMS_CONTAINER_RUNTIME", ont_container_runtime),
             "BMS_ONT_CONTAINER_RUNTIME": ont_container_runtime,
             "BMS_ONT_SLOW5TOOLS_IMAGE": ont_runtime_image,
             "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST": ont_runtime_digest,

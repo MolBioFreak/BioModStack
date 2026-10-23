@@ -4456,6 +4456,14 @@ export function NGSToolkit() {
                             Instrument setup
                         </button>
                         <button
+                            onClick={() => selectView('raw-signal')}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'raw-signal'
+                                ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
+                                : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'}`}
+                        >
+                            Raw signal tools
+                        </button>
+                        <button
                             onClick={() => selectView('runs')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'runs'
                                 ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
@@ -4489,8 +4497,8 @@ export function NGSToolkit() {
                     onBack={() => selectView('runs')}
                     initialValues={initialValues}
                 />
-            ) : view === 'instrument' ? (
-                <OntInstrumentPanel onAnalyzeExistingData={() => selectView('launch')} />
+            ) : view === 'instrument' || view === 'raw-signal' ? (
+                <OntInstrumentPanel rawSignalOnly={view === 'raw-signal'} onAnalyzeExistingData={() => selectView('launch')} />
             ) : (
                 <section className="space-y-4">
                     <div className="flex items-center gap-3" aria-label="Jobs pagination">
