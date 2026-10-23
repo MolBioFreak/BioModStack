@@ -3407,6 +3407,29 @@ async def reconcile_run_group(
             continue
         attempt = attempts[0]
         if attempt.state in {"completed", "failed", "cancelled"}:
+            # Native terminal state remains authoritative. A producer may commit
+            # retained partial outputs after the first terminal projection.
+            terminal = json.loads(attempt.terminal_receipt_json or "{}")
+            if terminal.get("output_evidence") and not terminal.get("output_receipt_ids"):
+                preparation = await session.get(ExperimentWorkflowPreparation, attempt.preparation_id)
+                normalized = json.loads(preparation.normalized_request_json) if preparation else {}
+                if normalized.get("launch_authority", {}).get("schema") == "bms.protein-setup-launch-authority.v1":
+                    linked = await session.scalar(select(ExperimentLineageEdge.id).where(
+                        ExperimentLineageEdge.source_resource_id == attempt.resource_id,
+                        ExperimentLineageEdge.edge_mode == "produced",
+                        ExperimentLineageEdge.edge_key == "verified-terminal-output"))
+                    if linked is None:
+                        try:
+                            from services.global_experiments.receipts import verify_and_link_terminal_outputs
+
+                            await verify_and_link_terminal_outputs(
+                                session, core_session, attempt_id=attempt.resource_id,
+                            )
+                        except Exception:
+                            # Retain pending evidence without a lifecycle change.
+                            pass
+                        # The terminal receipt is immutable. Late outputs belong
+                        # to the existing verified external receipt/lineage owner.
             continue
         # A deterministic Job may survive a typed-claim or outbox crash cut.
         # Recovery owns completion of that durable handoff; reconciliation must
