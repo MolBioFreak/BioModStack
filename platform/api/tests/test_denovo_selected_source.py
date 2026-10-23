@@ -138,12 +138,16 @@ async def source_rows(session, root, native):
                                       'sha256': digest, 'bytes': len(raw)}]}))
         selection = dict(job_id=job.id, design_id='design')
     if not native:
+        # Populate the real persisted generation read-model contract. This is
+        # one generated, not accepted, source specimen; no inference is claimed.
         job.params = {'rfd3_generation_request': {}, 'rfd3_generation_result_manifest_sha256': '4' * 64,
-                      'rfd3_generation_aggregate': {'requested': 1,
+                      'rfd3_generation_aggregate': {'requested': 1, 'generated': 1, 'accepted': 0,
                           'length': jobs._rfd3_generation_range([1.0]),
                           'radius_of_gyration': jobs._rfd3_generation_range([0.0])}}
         design = next(row for row in session.new if isinstance(row, Design))
-        design.provenance = {**design.provenance, 'metrics': {'residue_count': 1, 'radius_of_gyration': 0.0}}
+        design.provenance = {**design.provenance, 'accepted': False,
+                             'metrics': {'residue_count': 1, 'radius_of_gyration': 0.0,
+                                         'helix_count': 0, 'strand_count': 0}}
     await session.commit()
     return path, dict(selection, output_format='pdb', model_number=7)
 
