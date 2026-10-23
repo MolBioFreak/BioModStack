@@ -30,6 +30,8 @@ def test_pure_compile_and_retained_source_closure(tmp_path):
 
 
 def test_schema_is_same_owner_not_rfd3_projection():
-    from scripts.lib.rfd4_proteina_contract import parameter_schema
-    assert service.generation_settings('generate')['parameter_schema']==parameter_schema('generate')
-    assert service.generation_settings('evaluate')['parameter_schema']==parameter_schema('evaluate')
+    from scripts.lib.rfd4_proteina_contract import parameter_schema, MODEL_ID
+    from services.native_generation_sources import source_slot_schema
+    # The shared owner annotates typed source-slot controls, not scientific defaults.
+    for mode in ('generate', 'evaluate'):
+        assert service.generation_settings(mode)['parameter_schema'] == source_slot_schema(parameter_schema(mode), MODEL_ID)

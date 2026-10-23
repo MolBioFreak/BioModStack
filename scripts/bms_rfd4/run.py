@@ -25,10 +25,13 @@ def compose_native(request, config_dir, *, inputs, output, bundle=None, bindings
         cfg=compose(config_name='inference' if request['mode']=='generate' else 'evaluate',overrides=groups)
     native_tables={'checkpoints','rewards','save_criteria','continuation_criteria','metric_thresholds',
                    'frac_under_thresholds','input_kwarg_names','term_cutoffs','terms'}
-    def apply(node,values):
+    def apply(node,values,path=()):
         for k,v in values.items():
-            if isinstance(v,dict) and k not in native_tables and k in node and OmegaConf.is_dict(node[k]) and not (
-                '_target_' in v and node[k].get('_target_')!=v['_target_']):apply(node[k],v)
+            # Guidance metrics are an explicit selected-name table, not partial
+            # constructor overrides. An empty list must clear inherited metrics.
+            replace_table=k in native_tables or (*path,k)==('guidance','metrics')
+            if isinstance(v,dict) and not replace_table and k in node and OmegaConf.is_dict(node[k]) and not (
+                '_target_' in v and node[k].get('_target_')!=v['_target_']):apply(node[k],v,(*path,k))
             else:node[k]=v
     with open_dict(cfg):
         apply(cfg,native_overlay(request,bindings=bindings))

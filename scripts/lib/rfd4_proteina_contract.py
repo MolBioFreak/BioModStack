@@ -27,7 +27,10 @@ S={'type':'string'}
 N={'type':'number'}
 I={'type':'integer'}
 B={'type':'boolean'}
-THRESHOLD=obj({'min':N,'max':N,'min_of':array(S),'max_of':array(S),'mean_of':array(S)})
+# Official PassCriterionMetric consumes both inclusive and strict bounds;
+# None explicitly clears a bound just as in its native thresholds.get() path.
+THRESHOLD=obj({**{key:nullable(N) for key in ('min','max','min_exclusive','max_exclusive')},
+               'min_of':array(S),'max_of':array(S),'mean_of':array(S)})
 REWARD=obj({'weight':{**N,'default':1.0},'normalize_by':{**N,'default':1.0},'clip':obj({'min':N,'max':N})})
 CHECKPOINT=obj({'metrics':array(S),'rewards':table(REWARD),'n_branch':I,'use_clean_prediction':B,'continuation_criteria':table(THRESHOLD)})
 SELECTION=obj({'select':{**S,'x-ui-control':'region'},'group':S},['select'])
