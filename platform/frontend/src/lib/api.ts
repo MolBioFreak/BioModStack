@@ -105,7 +105,7 @@ export const fetchNativeGenerationSettings = (model: 'rfd4_proteina' | 'complexa
     api.get<NativeGenerationSettingsInventory>(`/api/models/${model}/generation-settings`, { params: { mode } });
 
 export interface Job {
-    sequence_design?: import('./generalSequenceDesign').GeneralSequenceDesignRequest | null;
+    sequence_design?: import('./generalSequenceDesign').GeneralSequenceEnvelope | null;
     source_structure?: StructureSourceSelection | null;
     binder_round?: import('./binderRound').BinderRoundRequest | null;
     execution_plan_approval?: string | null;

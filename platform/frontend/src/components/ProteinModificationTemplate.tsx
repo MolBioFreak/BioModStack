@@ -1,4 +1,4 @@
-import { DeNovoNativeGenerationSettings } from './DeNovoNativeGenerationSettings';
+import { DeNovoNativeGenerationSettings, LegacyNativeGenerationControls } from './DeNovoNativeGenerationSettings';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -254,11 +254,15 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [ligandSdf, setLigandSdf] = useState(initialString(initialValues, 'disco_ligand_sdf', ''));
     const [ligandName, setLigandName] = useState(initialString(initialValues, 'disco_ligand_name', ''));
     const [nucleicSequence, setNucleicSequence] = useState(initialString(initialValues, 'disco_na_sequence', ''));
+    const [nativeControls, setNativeControls] = useState<Record<string, unknown>>(() => Object.fromEntries(
+        ['pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json'].filter(key => Object.hasOwn(initialValues, key)).map(key => { let value = initialValues[key]; if (typeof value === 'string') { try { value = JSON.parse(value); } catch { /* Retain invalid saved input for explicit repair. */ } } return [key, value]; })));
+    const hasNativeJobs = Object.hasOwn(nativeControls, 'pcad_disco_jobs_json');
     const [error, setError] = useState<string | null>(null);
     const [sequenceDesign, setSequenceDesign] = useState(() => hydrateGeneralSequenceDesign(initialValues));
 
     const draftJson = JSON.stringify({
         ...sequenceDesign,
+        ...nativeControls,
         ...Object.fromEntries(['laproteina_checkpoint_dir', 'laproteina_data_path', 'disco_checkpoint_path', 'disco_cutlass_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => [key, initialValues[key]])),
         job_name: jobName,
         num_designs: numDesigns,
@@ -303,6 +307,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             model_id: 'protein_modification_experimental',
             mode: 'de_novo_design',
             params: {
+                ...nativeControls,
                 modification_mode: 'de_novo_design',
                 generator: backend,
                 backend,
@@ -354,15 +359,15 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             setError('La-Proteina motif scaffolding requires an upstream motif task or a motif PDB with a contig string.');
             return;
         }
-        if (backend === 'disco' && designTask === 'custom_json' && !discoInputJson.trim()) {
+        if (backend === 'disco' && !hasNativeJobs && designTask === 'custom_json' && !discoInputJson.trim()) {
             setError('DISCO custom native JSON design requires an input JSON file.');
             return;
         }
-        if (backend === 'disco' && designTask === 'ligand_conditioned' && !ligandSdf.trim()) {
+        if (backend === 'disco' && !hasNativeJobs && designTask === 'ligand_conditioned' && !ligandSdf.trim()) {
             setError('DISCO ligand-conditioned design requires a ligand SDF.');
             return;
         }
-        if (backend === 'disco' && (designTask === 'dna_conditioned' || designTask === 'rna_conditioned') && !nucleicSequence.trim()) {
+        if (backend === 'disco' && !hasNativeJobs && (designTask === 'dna_conditioned' || designTask === 'rna_conditioned') && !nucleicSequence.trim()) {
             setError('DISCO DNA/RNA-conditioned design requires a nucleic-acid sequence.');
             return;
         }
@@ -410,7 +415,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
 
     const workflowRequest = generator === 'rfd3'
         ? (jobName.trim() && Number(minLength) >= 40 && Number(maxLength) <= 600 && Number(minLength) <= Number(maxLength) && Number.isInteger(numDesigns) && Number(numDesigns) >= 1 && Number.isInteger(seed) && Number(seed) >= 0 ? buildDeNovoWorkflowRequest() : null)
-        : (jobName.trim() && Number(numDesigns) >= 1 && targetLengths.trim() && DE_NOVO_TASK_OPTIONS[backend].some(option => option.value === designTask) && (backend !== 'laproteina' || designTask !== 'motif_scaffolding' || motifTaskName.trim() || (motifPdb.trim() && motifContig.trim())) && (backend !== 'disco' || (designTask !== 'custom_json' || discoInputJson.trim()) && (designTask !== 'ligand_conditioned' || ligandSdf.trim()) && (!['dna_conditioned', 'rna_conditioned'].includes(designTask) || nucleicSequence.trim())) ? buildAlternativeWorkflowRequest() : null);
+        : (jobName.trim() && Number(numDesigns) >= 1 && targetLengths.trim() && DE_NOVO_TASK_OPTIONS[backend].some(option => option.value === designTask) && (backend !== 'laproteina' || designTask !== 'motif_scaffolding' || motifTaskName.trim() || (motifPdb.trim() && motifContig.trim())) && (backend !== 'disco' || hasNativeJobs || (designTask !== 'custom_json' || discoInputJson.trim()) && (designTask !== 'ligand_conditioned' || ligandSdf.trim()) && (!['dna_conditioned', 'rna_conditioned'].includes(designTask) || nucleicSequence.trim())) ? buildAlternativeWorkflowRequest() : null);
     const workflowRequestJson = JSON.stringify(workflowRequest);
     useEffect(() => {
         const values = JSON.parse(draftJson) as Record<string, unknown>;
@@ -509,6 +514,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 </ProteinDesignPanel>}
             </div>
             <div hidden={section !== 'Sampling'} className="space-y-5">
+                <LegacyNativeGenerationControls model={backend} task={designTask} value={nativeControls} onChange={setNativeControls} />
                 {designTask !== 'unconditional' && <ProteinDesignPanel title="Generation" description={countHelp}>{generationControls}</ProteinDesignPanel>}
                 <ProteinDesignPanel title={`${engineName} sampling`}>
                     {generator === 'rfd3' ? <div className="grid gap-4 sm:grid-cols-2">
@@ -550,7 +556,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                                 <input className={fieldClass} value={discoSeeds} onChange={event => setDiscoSeeds(event.target.value)} placeholder="Optional comma-separated integers" />
                             </label>
                         </div>
-                        {['dna_conditioned', 'rna_conditioned', 'ligand_conditioned'].includes(designTask) && <p className="text-sm text-[var(--text-secondary)]">For conditional generation, preparation uses Max inference effort even when Fast is requested.</p>}
+                        {['dna_conditioned', 'rna_conditioned', 'ligand_conditioned'].includes(designTask) && <p className="text-sm text-[var(--text-secondary)]">Max effort is recommended for conditional generation. Explicit Fast remains Fast; native overrides take precedence over these controls.</p>}
                         <details className="rounded-lg border p-3" style={themedInsetStyle}>
                             <summary className="cursor-pointer text-sm font-medium">Advanced inference</summary>
                             <label className="mt-3 flex items-center gap-3 text-sm">
@@ -574,7 +580,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 <summary className="cursor-pointer text-sm font-medium">Run details</summary>
                 <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
                     <div><dt className="text-[var(--text-secondary)]">Engine</dt><dd>{engineName}</dd></div>
-                    <div><dt className="text-[var(--text-secondary)]">Sequence design</dt><dd>{sequenceDesign.sequence_design.enabled ? generalSequenceNames[sequenceDesign.sequence_design.model_id] : 'Off · generation only'}</dd></div>
+                    <div><dt className="text-[var(--text-secondary)]">Sequence design</dt><dd>{sequenceDesign.invocation_draft ? (sequenceDesign.invocation_draft.enabled ? 'Selected optional operations' : 'Off · generation only') : sequenceDesign.sequence_design.enabled ? generalSequenceNames[sequenceDesign.sequence_design.model_id] : 'Off · generation only'}</dd></div>
                     <div><dt className="text-[var(--text-secondary)]">Goal</dt><dd>{designTask === 'unconditional' ? 'Explore new folds' : DE_NOVO_TASK_OPTIONS[backend].find(task => task.value === designTask)?.label}</dd></div>
                     <div><dt className="text-[var(--text-secondary)]">Lengths</dt><dd>{generator === 'rfd3' ? `${minLength}–${maxLength}` : targetLengths || 'Not specified'}</dd></div>
                     {discoInputJson && generator === 'disco' && <div><dt className="text-[var(--text-secondary)]">Native input override</dt><dd className="break-all">{discoInputJson}</dd></div>}

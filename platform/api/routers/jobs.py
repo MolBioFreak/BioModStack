@@ -6278,6 +6278,8 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
         if errors:
             raise HTTPException(status_code=422, detail={"validation_errors": errors})
 
+    from scripts.lib.protein_cad_settings import bind_new_cad_settings
+    job_data.params = bind_new_cad_settings(job_data.model_id, job_data.mode, job_data.params)
     return job_data
 
 
@@ -7693,6 +7695,11 @@ async def _create_job(
             provenance_payload['sequence_design_request'] = job_data.sequence_design.model_dump(mode='json')
         if round_step_metadata is not None:
             provenance_payload['binder_round_step'] = deepcopy(round_step_metadata)
+            # A retained invocation owns ancestry independently of native params.
+            provenance_lineage_root = round_step_metadata['root_job_id']
+            provenance_source_stage_job_id = round_step_metadata['source_job_id']
+            provenance_selection_source_job_id = round_step_metadata['source_job_id']
+            provenance_source_selection_count = len(round_step_metadata.get('source_refs') or [round_step_metadata.get('source_ref')])
             if round_step_metadata.get('kind') == 'general_sequence_design':
                 # Server-bound retained step owns ancestry even for native models
                 # whose closed scientific request has no lineage parameters.
@@ -9489,11 +9496,12 @@ async def get_native_generation_results(
     job = await session.get(Job, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    from services.rfd4_proteina_results import has_native_publication
     if job.model_id == "boltzgen" and job.mode in {"protein_binder", "nanobody_binder", "peptide_binder", "antibody_binder", "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking"}:
         from services.boltzgen_candidate_publication import read_published_generation_page
     elif job.model_id == "ppiflow" and job.mode in {"protein_binder", "antibody_binder", "nanobody_binder"}:
         from services.ppiflow_generation import read_published_generation_page
-    elif job.model_id in {"rfd4_proteina", "complexa"} and job.mode in {"generate", "evaluate"}:
+    elif has_native_publication(job):
         from services.rfd4_proteina_results import read_published_generation_page
     else:
         raise HTTPException(status_code=400, detail="Job is not a supported native generation mode")
@@ -9656,6 +9664,9 @@ async def resubmit_job(
     output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
 
     resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
+    from scripts.lib.protein_cad_settings import replay_cad_settings
+    resubmit_params = replay_cad_settings(original_job.model_id, original_job.mode,
+                                          resubmit_params, resubmit_params)
     if original_job.model_id == "nanopore":
         resubmit_params = ont_submission_trust.fresh_computation_params(resubmit_params)
         resubmit_params = ont_ngs_contract.replay_expected_plasmid_size(
@@ -11093,6 +11104,8 @@ async def resume_job(
     if _should_normalize_antibody_job_params(job.model_id, job.mode, source_params):
         source_params = _normalize_antibody_job_params(source_params)
     merged_params = {**source_params, **param_overrides}
+    from scripts.lib.protein_cad_settings import replay_cad_settings
+    merged_params = replay_cad_settings(job.model_id, job.mode, source_params, merged_params, overrides=param_overrides)
     # Use the existing prospective complex interpretation, as fresh admission does.
     # The source Job (linked by resume_job_id) retains the original selector token.
     if (

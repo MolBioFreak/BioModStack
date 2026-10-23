@@ -456,7 +456,12 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
     const navigateAfterSubmission = async (jobResponse: unknown) => {
         const launchContextActive = Boolean(new URLSearchParams(window.location.search).get('launch_context_id'));
         if (!launchContextActive && returnTemplate === 'molecular_dynamics' && mdDraftId) {
-            navigate(buildMolecularDynamicsPredictionReturnRoute(mdDraftId, jobResponse));
+            const route = new URL(buildMolecularDynamicsPredictionReturnRoute(mdDraftId, jobResponse), window.location.origin);
+            const search = new URLSearchParams(window.location.search);
+            for (const key of ['operation_project_id', 'operation_setup_context_id']) {
+                const value = search.get(key); if (value) route.searchParams.set(key, value);
+            }
+            navigate(route.pathname + route.search);
             return;
         }
         navigate(await completeCurrentLaunchContext(jobResponse as UntypedApiValue) ?? '/');

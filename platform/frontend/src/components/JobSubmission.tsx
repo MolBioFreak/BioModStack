@@ -1,3 +1,4 @@
+import { loadPredictionOperationDetour } from '../lib/binderSelectedRound';
 import { prepareDeNovoContinuation, continuationRoleDefaults, nativeSequenceInput, sequenceDestinations, type DeNovoDestination } from '../lib/deNovoContinuation';
 import { sourceResultReturn } from '../lib/sourceResultReturn';
 import { deNovoAuthoringEnvelope, deNovoEditorState } from '../lib/deNovoAuthoring';
@@ -170,12 +171,17 @@ export function JobSubmission() {
             return { route: null, error: error instanceof Error ? error.message.slice(0, 512) : 'Invalid Molecular Dynamics handoff route.' };
         }
     }, [searchParams]);
+    const operationProject = searchParams.get('operation_project_id');
+    const operationSetup = searchParams.get('operation_setup_context_id');
+    const durableMdDetour = useQuery({ queryKey: ['md-operation-detour', operationProject, operationSetup],
+        queryFn: () => loadPredictionOperationDetour({ project_id: operationProject!, setup_context_id: operationSetup! }),
+        enabled: Boolean(operationProject && operationSetup), retry: false });
     const mdHandoffInitialValues = useMemo<Record<string, UntypedApiValue> | undefined>(() => {
         const route = mdHandoff.route;
         if (!route) return undefined;
-        const savedDraft = route.draftId ? loadMolecularDynamicsDraft(sessionStorage, route.draftId) : null;
+        const savedDraft = durableMdDetour.data?.md_draft ?? (route.draftId ? loadMolecularDynamicsDraft(sessionStorage, route.draftId) : null);
         return buildMolecularDynamicsHandoffInitialValues(route, savedDraft) as Record<string, UntypedApiValue>;
-    }, [mdHandoff.route]);
+    }, [mdHandoff.route, durableMdDetour.data]);
     const launchContextId = searchParams.get('launch_context_id')
         ?? (searchParams.get('template') === 'molecular_dynamics'
             && typeof mdHandoffInitialValues?.md_destination_launch_context_id === 'string'
@@ -1634,6 +1640,8 @@ export function JobSubmission() {
     if (isPreparedStructureFamily) {
         return <div className="min-h-screen bg-slate-950 p-6 text-slate-100"><main role="alert" className="mx-auto max-w-3xl rounded-2xl border border-red-500/40 bg-red-950/40 p-5">Project launch is blocked because the prepared Boltz-2/Protenix scheduler authority is incomplete or is not reserved by a Project Run Group.</main></div>;
     }
+    if (operationProject && operationSetup && durableMdDetour.isPending) return <p>Loading saved MD operation…</p>;
+    if (durableMdDetour.error) return <p role="alert">{String(durableMdDetour.error)}</p>;
     if (projectSetup.active && (projectSetup.isLoading || (projectSetup.setup && hydratedProjectSetup.current !== `${projectSetup.setup.project_id}:${projectSetup.setup.setup_context_id}`))) {
         return <div className="min-h-screen bg-slate-950 p-6 text-slate-100">Loading Project workflow setup…</div>;
     }

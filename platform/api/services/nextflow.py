@@ -6718,6 +6718,11 @@ def compile_nextflow_invocation(
         and str(params.get('generator') or '').strip().lower()
         in {'disco', 'laproteina'}
     ):
+        from scripts.lib.protein_cad_settings import settings_projection
+        params.update(settings_projection(params))
+        params.pop('laproteina_settings', None)
+        params.pop('disco_settings', None)
+        params.pop('disco_jobs', None)
         protein_cad_mappings = {
             'backend': 'pcad_backend',
             'design_task': 'pcad_task',

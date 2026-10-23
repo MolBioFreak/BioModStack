@@ -340,6 +340,12 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
                    publication_sha256=artifact.sha256)
         # A sequence index is not a coordinate output, even when its producer
         # recorded a source backbone. Structure consumers must choose a pose.
+    elif ref['kind'] in {'native_sequence', 'native_observation'} and (owner.provenance or {}).get('native_generation_publication'):
+        from services.rfd4_proteina_results import read_publication_record
+        output, publication = await read_publication_record(owner, session, ref)
+        row.update(sequence=output.get('sequence'), binder_chains=output.get('binder_chains', []),
+                   target_chains=output.get('target_chains', []), native_record=output,
+                   publication_sha256=publication['manifest_sha256'])
     elif owner.model_id == 'protonpottsmpnn':
         artifact, outputs = await native_sequences(session, owner)
         if ref['publication_ref'] != artifact.id:

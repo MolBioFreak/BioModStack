@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { InitialInvocationSettings } from './BinderRoundSettings';
 import { useQuery } from '@tanstack/react-query';
 import { NativeSetting } from './NativeBinderGeneration';
 import { SequenceDesignerSettings } from './SequenceDesignerSettings';
@@ -38,6 +39,13 @@ function presentation(parameter: GeneralSequenceParameter): GeneralSequenceParam
 
 /** Optional source-bound composition; all numerical settings remain model-owned. */
 export function GeneralSequenceDesignSettings({ value, onChange }: {
+    value: GeneralSequenceDesignDraft; onChange: (value: GeneralSequenceDesignDraft) => void;
+}) {
+    if (value.invocation_draft) return <InitialInvocationSettings draft={value.invocation_draft}
+        onChange={invocation_draft => onChange({ ...value, invocation_draft })} />;
+    return <LegacyGeneralSequenceDesignSettings value={value} onChange={onChange} />;
+}
+function LegacyGeneralSequenceDesignSettings({ value, onChange }: {
     value: GeneralSequenceDesignDraft;
     onChange: (value: GeneralSequenceDesignDraft) => void;
 }) {

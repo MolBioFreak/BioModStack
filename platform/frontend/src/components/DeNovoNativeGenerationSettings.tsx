@@ -77,7 +77,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
     const schema = inventory.data?.parameter_schema ?? inventory.data?.schema;
     const contract = inventory.data?.contract ?? (typeof schema?.$id === 'string' ? schema.$id : schema?.properties?.schema_version?.const !== undefined ? `${model}:${schema.properties.schema_version.const}` : typeof initialValues.native_contract === 'string' ? initialValues.native_contract : `${model}:unversioned`);
     const payload = { ...generalSequenceRequest(sequence), name, model_id: model, mode,
-        ...(!sequence.sequence_design.enabled && explicitSequenceNull ? { sequence_design: null } : {}),
+        ...(!sequence.invocation_draft && !sequence.sequence_design.enabled && explicitSequenceNull ? { sequence_design: null } : {}),
         ...(Object.hasOwn(initialValues, 'pinned_gpu') ? { pinned_gpu: initialValues.pinned_gpu } : {}),
         ...(Object.hasOwn(initialValues, 'source_structure') ? { source_structure: initialValues.source_structure } : {}),
         params: { [field]: request, ...(nativeDraft.sources !== undefined ? { native_sources: nativeDraft.sources } : {}) } };

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { savePredictionOperationDetour } from '../lib/binderSelectedRound';
 
 import { MolecularDynamicsNativeSettings } from './MolecularDynamicsNativeSettings';
 import { hydrateMolecularDynamicsNative, serializeMolecularDynamicsNativeDraft, type MolecularDynamicsNativeDraft, parseMolecularDynamicsNativePreview, type MolecularDynamicsNativeIntent, type MolecularDynamicsNativePreview } from './molecularDynamicsUiState';
@@ -565,7 +566,7 @@ export function MolecularDynamicsTemplate({
                 sequenceId = parseMolecularDynamicsHandoffUserSequence(saved.data).id;
             }
             const draftId = crypto.randomUUID();
-            storeMolecularDynamicsDraft(sessionStorage, draftId, {
+            const retainedDraft = {
                 form: {
                     ...form,
                     native_intent: nativeEnabled ? native : undefined,
@@ -576,8 +577,26 @@ export function MolecularDynamicsTemplate({
                 selectedProfileId,
                 selectedProfileDigest,
                 destinationLaunchContextId: launchContextId,
-            });
-            navigate(buildMolecularDynamicsPredictionRoute(sequenceId, draftId));
+            };
+            const route = new URL(buildMolecularDynamicsPredictionRoute(sequenceId, draftId), window.location.origin);
+            const search = new URLSearchParams(window.location.search);
+            const project_id = search.get('project_id') ?? search.get('operation_project_id');
+            const setup_context_id = search.get('setup_context_id') ?? search.get('operation_setup_context_id');
+            if (project_id && setup_context_id) {
+                const exact = parseMolecularDynamicsHandoffUserSequence((await api.get<unknown>(`/api/user-sequences/${sequenceId}`)).data, sequenceId);
+                await savePredictionOperationDetour({ project_id, setup_context_id }, {
+                    schema_version: 1,
+                    composition: { source_sequence_id: sequenceId, sequence: exact.sequence,
+                        ...(initialValues?.complex_components ? { complex_components: initialValues.complex_components } : {}) },
+                    round_plan: { schema_version: 2, stages: [] }, md_draft: retainedDraft,
+                    destination_launch_context_id: launchContextId,
+                    ...(typeof initialValues?.return_to === 'string' ? { return_to: initialValues.return_to } : {}),
+                });
+                route.searchParams.set('operation_project_id', project_id);
+                route.searchParams.set('operation_setup_context_id', setup_context_id);
+            }
+            storeMolecularDynamicsDraft(sessionStorage, draftId, retainedDraft);
+            navigate(route.pathname + route.search);
         } catch (error) {
             setSourceError(displayError(error, 'Structure Prediction handoff failed.'));
         }
