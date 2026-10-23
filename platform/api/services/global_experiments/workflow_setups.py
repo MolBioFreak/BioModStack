@@ -545,10 +545,23 @@ async def prepare_workflow_setup_launch(
     payload["parameters"] = (dict(plan_contract["capability"]["normalized_job_request"]["params"])
                              if native else stored_draft)
     if native:
-        payload["scheduler"]["name"] = plan_contract["capability"]["normalized_job_request"]["name"]
+        native_job = plan_contract["capability"]["normalized_job_request"]
+        payload["scheduler"]["name"] = native_job["name"]
         payload["scheduler"]["resources"] = {
-            "pinned_gpu": plan_contract["capability"]["normalized_job_request"]["pinned_gpu"],
+            "pinned_gpu": native_job["pinned_gpu"],
         }
+        if native_job.get("execution_target_id") is None:
+            from biomodstack_local_resources import GIB, applied_local_policy
+            from services.gpu_config import read_scheduler_config
+            policy = applied_local_policy()
+            cpu_share = read_scheduler_config().get("global", {}).get("cpu_threads_per_job")
+            cpu_threads = (max(1, min(policy.cpu_threads, int(cpu_share)))
+                           if cpu_share is not None else policy.cpu_threads)
+            # Match the existing standalone local execution envelope, rather
+            # than the generic Plan fallback of one thread and one GiB.
+            payload["scheduler"]["resources"].update(
+                cpu_threads=cpu_threads, dram_gib=policy.memory_bytes / GIB,
+            )
     payload["scheduler"]["params"] = {
         **payload["parameters"], "workflow_adapter": payload["adapter_id"],
     }

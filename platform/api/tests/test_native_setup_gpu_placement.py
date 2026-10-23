@@ -18,6 +18,8 @@ async def test_native_protenix_gpu_survives_real_reservation(setup_store, monkey
     from routers import gpu
     from biomodstack_local_resources import applied_local_policy
     applied_local_policy.cache_clear()
+    from services import gpu_config
+    monkeypatch.setattr(gpu_config, "read_scheduler_config", lambda: {"global": {"cpu_threads_per_job": 2}})
     monkeypatch.setattr(gpu, "_query_smi_gpu_map", lambda: {
         0: {"uuid": "GPU-fixture-zero"}, 2: {"uuid": "GPU-fixture-two"},
     })
@@ -43,6 +45,8 @@ async def test_native_protenix_gpu_survives_real_reservation(setup_store, monkey
             await validate_preparation_authority(session, preparation)
             scheduler = json.loads(preparation.scheduler_payload_json)
             assert scheduler["resources"]["pinned_gpu"] == pinned_gpu
+            assert scheduler["resources"]["cpu_threads"] == min(2, applied_local_policy().cpu_threads)
+            assert scheduler["resources"]["dram_gib"] * 1024**3 == applied_local_policy().memory_bytes
             context = await session.get(ExperimentLaunchContext, prepared["launch_context_id"])
             assert await launch_contexts.workflow_pinned_gpu(session, context) == pinned_gpu
             document = await _launch_context_document(session, context)
