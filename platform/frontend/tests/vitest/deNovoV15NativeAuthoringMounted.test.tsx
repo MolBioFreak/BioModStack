@@ -79,6 +79,53 @@ async function edit(label: string, value: string) {
     expect(node, label).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), 'value')!.set!.call(node, value); node!.dispatchEvent(new Event(node!.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); });
 }
 const nativeRequest = { input: { kind: 'unconditional', name: 'n', chains: [{ chain_id: 'A', min_length: 73, max_length: 99 }] }, settings: { seed: 0, delete_failing_pre_oracle: false, search: { checkpoints: null, save_states: false } } };
+async function disclose(name: string) {
+    await click('Native settings');
+    const summary = [...document.querySelectorAll('summary')].find(node => node.textContent?.trim().toLowerCase() === name.toLowerCase());
+    expect(summary, name).toBeTruthy();
+    await act(async () => { const details = summary!.parentElement as HTMLDetailsElement; details.open = true; details.dispatchEvent(new Event('toggle')); });
+}
+it('native tuple controls retain order and typed numbers through the actual parent request', async () => {
+    const request = { task: 'protein_binder', task_name: 'tuple-fixture', source: { document_id: 'exact-document', binder_center: [1, 0, -2] } };
+    await mount('complexa', 'generate', request);
+    await disclose('source');
+    const control = document.querySelector<HTMLInputElement>('[aria-label="source.source.binder_center[1]"]');
+    expect(control?.type).toBe('number');
+    await edit('source.source.binder_center[1]', '2.5');
+    await click('Generate candidates');
+    const wire = requests.find(r => r.url === '/api/jobs')!.body.params.complexa_request;
+    expect(wire).toEqual({ ...request, source: { ...request.source, binder_center: [1, 2.5, -2] } });
+});
+it('native metric name/cutoff tuples use their per-position schemas instead of an untyped fallback', async () => {
+    const choice = inventories.rfd4_proteina.generate.parameter_schema.properties.metric_extensions.items.oneOf.find((candidate: any) => candidate.properties.kwargs.properties.term_cutoffs);
+    const metric = { name: 'explicit-cutoff', section: 'inline_metrics', implementation: choice.properties.implementation.const, kwargs: { term_cutoffs: { contact: ['ljatr', 0] } } };
+    await mount('rfd4_proteina', 'generate', { ...nativeRequest, metric_extensions: [metric] });
+    await disclose('Metric extensions');
+    const label = 'metric_extensions.metric_extensions[0].kwargs.term_cutoffs.contact';
+    expect(document.querySelector<HTMLInputElement>(`[aria-label="${label}[0]"]`)?.type).toBe('text');
+    expect(document.querySelector<HTMLInputElement>(`[aria-label="${label}[1]"]`)?.type).toBe('number');
+    await edit(`${label}[1]`, '-0.25');
+    await click('Generate candidates');
+    expect(requests.find(r => r.url === '/api/jobs')!.body.params.rfd4_request.metric_extensions[0].kwargs.term_cutoffs.contact).toEqual(['ljatr', -0.25]);
+});
+it('Complexa task drafts survive template storage and cold load without entering the scientific request', async () => {
+    const request = { task: 'protein_binder', task_name: '', seed: 0, reward: null, source: { document_id: 'selected-native-model', ligand_only: false } };
+    await mount('complexa', 'generate', request);
+    const tasks = inventories.complexa.generate.schema.properties.task.enum as string[];
+    await edit('task.task', String(tasks.indexOf('ligand_binder')));
+    await click('Template Manager');
+    const name = document.querySelector<HTMLInputElement>('input[placeholder="e.g., My Boltz Config"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Independent native tasks'); name.dispatchEvent(new Event('input', { bubbles: true })); });
+    await click('Save Template');
+    await vi.waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0].params.native_job_request.params.complexa_request).toEqual({ task: 'ligand_binder' });
+    expect(Object.values(saved[0].params.editor_state.native_task_drafts)).toContainEqual(request);
+    await unmount(); await mount('complexa');
+    await click('Template Manager'); await click('← Back to list'); await click('Load');
+    await edit('task.task', String(tasks.indexOf('protein_binder')));
+    await click('Generate candidates');
+    expect(requests.find(r => r.url === '/api/jobs')!.body.params).toEqual({ complexa_request: request });
+});
 it('real JobSubmission clone submits the exact RFD4 request through Axios, with explicit Local and no inactive drafts', async () => {
     sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'unrelated-remote');
     await mount('rfd4_proteina', 'generate', nativeRequest);

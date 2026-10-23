@@ -10,6 +10,7 @@ import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { GeneralSequenceDesignSettings } from './GeneralSequenceDesignSettings';
 import { generalSequenceRequest, hydrateGeneralSequenceDesign } from '../lib/generalSequenceDesign';
+import { changeNativeTask, type NativeTaskDrafts } from '../lib/nativeModelDrafts';
 
 const record = (value: unknown): Record<string, any> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 
@@ -19,12 +20,14 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
     onDraftChange: (draft: Record<string, unknown>) => void; runDetails?: ReactNode;
 }) {
     const field = model === 'rfd4_proteina' ? 'rfd4_request' : 'complexa_request';
-    const [request, setRequest] = useState(() => {
+    const [nativeDraft, setNativeDraft] = useState(() => {
         const saved = record(initialValues[field]);
         // Complexa's mode is selected by its native operation; this is routing,
         // not a sampling default. Never overwrite an explicit saved operation.
-        return model === 'complexa' && mode === 'evaluate' && !Object.hasOwn(saved, 'operation') ? { ...saved, operation: 'evaluate' } : saved;
+        const request = model === 'complexa' && mode === 'evaluate' && !Object.hasOwn(saved, 'operation') ? { ...saved, operation: 'evaluate' } : saved;
+        return { request, inactive: record(initialValues.native_task_drafts) as NativeTaskDrafts };
     });
+    const request = nativeDraft.request;
     const [name, setName] = useState(typeof initialValues.job_name === 'string' ? initialValues.job_name : model);
     const [sequence, setSequence] = useState(() => hydrateGeneralSequenceDesign(initialValues));
     const [section, setSection] = useState('Design');
@@ -33,6 +36,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         queryFn: async () => (await fetchNativeGenerationSettings(model, mode)).data,
         staleTime: 60_000, retry: false });
     const schema = inventory.data?.parameter_schema ?? inventory.data?.schema;
+    const contract = inventory.data?.contract ?? (typeof schema?.$id === 'string' ? schema.$id : schema?.properties?.schema_version?.const !== undefined ? `${model}:${schema.properties.schema_version.const}` : typeof initialValues.native_contract === 'string' ? initialValues.native_contract : `${model}:unversioned`);
     const payload = { ...generalSequenceRequest(sequence), name, model_id: model, mode,
         ...(Object.hasOwn(initialValues, 'pinned_gpu') ? { pinned_gpu: initialValues.pinned_gpu } : {}),
         ...(Object.hasOwn(initialValues, 'native_sources') ? { native_sources: initialValues.native_sources } : {}),
@@ -40,16 +44,17 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
     const draft = JSON.stringify({ ...sequence, job_name: name, [field]: request, native_mode: mode,
         ...(Object.hasOwn(initialValues, 'pinned_gpu') ? { pinned_gpu: initialValues.pinned_gpu } : {}),
         ...(Object.hasOwn(initialValues, 'native_sources') ? { native_sources: initialValues.native_sources } : {}),
-        native_contract: inventory.data?.contract ?? schema?.$id,
+        native_contract: contract, native_task_drafts: nativeDraft.inactive,
         native_job_request: payload });
     useEffect(() => { onDraftChange(JSON.parse(draft)); }, [draft, onDraftChange]);
     const submit = useMutation({ mutationFn: () => submitJob({ ...payload,
         execution_target_id: sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || null } as Partial<Job>),
         onSuccess: async response => { client.invalidateQueries({ queryKey: ['jobs'] }); navigate(await completeCurrentLaunchContext(response.data) ?? '/'); } });
-    const patch = (key: string, value: unknown) => setRequest(previous => {
-        const next = { ...previous }; if (value === undefined) delete next[key]; else next[key] = value; return next;
+    const patch = (key: string, value: unknown) => setNativeDraft(previous => {
+        const next = { ...previous.request }; if (value === undefined) delete next[key]; else next[key] = value;
+        return changeNativeTask(model, mode, contract, previous.request, next, previous.inactive);
     });
-    const renderField = (key: string, child: Schema) => <BioXpSchemaInput label={key}
+    const renderField = (key: string, child: Schema) => <BioXpSchemaInput label={key} nativeLabels
         schema={{ type: 'object', properties: { [key]: child }, additionalProperties: false, required: schema?.required?.includes(key) ? [key] : [] }} rootSchema={schema}
         value={Object.hasOwn(request, key) ? { [key]: request[key] } : {}}
         onChange={value => patch(key, record(value)[key])}

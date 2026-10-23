@@ -77,8 +77,8 @@ function matches(schema: Schema, value: unknown, root: Schema): boolean {
 }
 
 /** Schema-driven presentation, not an admission/validation authority. */
-export function BioXpSchemaInput({ label, schema, value, onChange, fallback, rootSchema = schema, rawDraft = false }: {
-    label: string; schema: Schema; rootSchema?: Schema; rawDraft?: boolean; value: unknown; onChange: (value: unknown) => void;
+export function BioXpSchemaInput({ label, schema, value, onChange, fallback, rootSchema = schema, rawDraft = false, nativeLabels = false }: {
+    label: string; schema: Schema; rootSchema?: Schema; rawDraft?: boolean; nativeLabels?: boolean; value: unknown; onChange: (value: unknown) => void;
     fallback: (label: string, value: unknown, onChange: (value: unknown) => void) => React.ReactNode;
 }) {
     const [newKey, setNewKey] = useState('');
@@ -110,6 +110,11 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
     };
     const active = choices[selected];
     const kind = active.type ?? (active.properties ? 'object' : active.items ? 'array' : undefined);
+    // Native schemas use ordered heterogeneous tuples (for example metric
+    // name/cutoff pairs). Keep each position's schema instead of treating it as
+    // an untyped homogeneous array. Existing non-tuple controls are unchanged.
+    const prefixItems = Array.isArray(active.prefixItems) ? active.prefixItems as Schema[] : [];
+    const itemSchema = (index: number) => prefixItems[index] ?? active.items ?? {};
     const enums = active.enum ?? (Object.hasOwn(active, 'const') ? [active.const] : undefined);
     const fields = active.properties ?? {};
     const update = (name: string, next: unknown) => {
@@ -124,7 +129,10 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
         {rawDraft && ['string', 'number', 'integer', 'boolean'].includes(String(kind)) && !enums && <button type="button" aria-label={`Use expression for ${label}`} onClick={() => onChange({ expr: { version: 1, op: 'literal', value } })}>Use expression for {display(label)}</button>}
         {schema.description && <p className="text-xs text-slate-400">{schema.description}</p>}
         {choices.length > 1 && <label>Variant<select aria-label={`${label} variant`} className={classes} value={selected} onChange={event => { const index = Number(event.target.value); if (variantOwner?.change(label, index)) return; retainedVariants.current[selected] = structuredClone(value); setChosenVariant(index); const initial = variantValue(index), restored = retainedVariants.current[index]; if (objectValue(value) && objectValue(initial)) { const next = { ...value }; for (const key of Object.keys(choices[selected].properties ?? {})) if (!Object.hasOwn(choices[index].properties ?? {}, key)) delete next[key]; const prior = objectValue(restored) ? restored : {}; onChange({ ...prior, ...next, ...initial }); } else onChange(restored === undefined ? initial : structuredClone(restored)); }}>
-            {choices.map((choice, index) => <option key={index} value={index}>{choice.title ?? String(choice.type ?? `Variant ${index + 1}`)}</option>)}
+            {choices.map((choice, index) => {
+                const tags = Object.values(choice.properties ?? {}).map(child => resolve(child, rootSchema)).filter(child => Object.hasOwn(child, 'const')).map(child => String(child.const));
+                return <option key={index} value={index}>{nativeLabels && tags.length ? tags.join(' / ') : choice.title ?? String(choice.type ?? `Variant ${index + 1}`)}</option>;
+            })}
         </select></label>}
         {enums ? <label>{display(label)}<select aria-label={label} className={classes} value={enums.findIndex(item => JSON.stringify(item) === JSON.stringify(value))} onChange={event => onChange(structuredClone(enums[Number(event.target.value)]))}>
             <option value={-1}>Select…</option>{enums.map((item, index) => <option key={index} value={index}>{typeof item === 'string' ? item : JSON.stringify(item)}</option>)}
@@ -136,7 +144,7 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
                         <option value="omitted">{rawDraft ? 'Unspecified (preserved)' : `Omit (service default${Object.hasOwn(child, 'default') ? `: ${JSON.stringify(child.default)}` : ''})`}</option><option value="value">Explicit value</option>
                     </select></label>
                     {rawDraft && value[name] === undefined && Object.hasOwn(child, 'source_default') && <button type="button" aria-label={`Use source value for ${label}.${name}`} onClick={() => update(name, structuredClone(child.source_default))}>Use source value: {JSON.stringify(child.source_default)}</button>}
-                    {value[name] !== undefined && <BioXpSchemaInput label={`${label}.${name}`} schema={child} rootSchema={rootSchema} rawDraft={rawDraft} value={value[name]} onChange={next => update(name, next)} fallback={fallback} />}
+                    {value[name] !== undefined && <BioXpSchemaInput label={`${label}.${name}`} schema={child} rootSchema={rootSchema} rawDraft={rawDraft} nativeLabels={nativeLabels} value={value[name]} onChange={next => update(name, next)} fallback={fallback} />}
                 </div>;
             })}
             {active.additionalProperties !== false && <>
@@ -145,9 +153,9 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
             </>}
         </> : kind === 'array' && Array.isArray(value) ? <>
             <p className="text-xs text-slate-400">Items: {active.minItems ?? 'unbounded'} to {active.maxItems ?? 'unbounded'}</p>
-            {value.map((item, index) => <div key={index}><BioXpSchemaInput label={`${label}[${index}]`} schema={active.items ?? {}} rootSchema={rootSchema} rawDraft={rawDraft} value={item} onChange={next => onChange(value.map((old, i) => i === index ? next : old))} fallback={fallback} />
+            {value.map((item, index) => <div key={index}><BioXpSchemaInput label={`${label}[${index}]`} schema={itemSchema(index)} rootSchema={rootSchema} rawDraft={rawDraft} nativeLabels={nativeLabels} value={item} onChange={next => onChange(value.map((old, i) => i === index ? next : old))} fallback={fallback} />
                 <button type="button" onClick={() => onChange(value.filter((_, i) => i !== index))}>Remove {display(label)}[{index}]</button></div>)}
-            <button type="button" aria-label={`Add ${label} item`} onClick={() => onChange([...value, initialValue(active.items ?? {})])}>Add {display(label)} item</button>
+            <button type="button" aria-label={`Add ${label} item`} onClick={() => onChange([...value, initialValue(itemSchema(value.length))])}>Add {display(label)} item</button>
         </> : kind === 'boolean' ? <label>{display(label)}<input aria-label={label} type="checkbox" checked={value === true} onChange={event => onChange(event.target.checked)} /></label>
             : kind === 'null' ? <p>Explicit null</p>
                 : kind === 'string' || kind === 'number' || kind === 'integer' ? <>
