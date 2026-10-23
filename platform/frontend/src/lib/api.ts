@@ -1256,7 +1256,7 @@ export interface StructureMaterialization {
 export interface StructureSourceSelection {
     path?: string; design_id?: string; job_id?: string;
     request_id?: string; candidate_id?: string;
-    document?: { artifact_id?: string; target_state?: string };
+    document?: { artifact_id?: string; target_state?: string; model?: number };
     candidate?: import('./binderSelectedRound').CandidateRef;
     output_format?: 'native' | 'pdb'; model_number?: number; expected_sha256?: string;
 }

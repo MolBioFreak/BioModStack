@@ -120,6 +120,18 @@ it('clear while exact acquisition is pending never restores that document or ano
     expect(requests.find(r => r.url === '/api/jobs' && r.method === 'post')!.body.params.native_sources).toEqual({});
     expect(requests.filter(r => r.url.includes('materialize')).map(r => r.body.candidate.artifact_id)).toEqual(['alternate']);
 });
+it('legacy exact-document MODEL changes update both selector fields without stale primary or model identity', async () => {
+    const source = { job_id: 'producer', design_id: 'design', document: { artifact_id: 'alternate', target_state: 'state-B', model: 2 }, model_number: 2, output_format: 'native' };
+    await mount('rfd4_proteina', { rfd4_request: { input: { kind: 'annotated', slots: ['selected'] } }, native_sources: { selected: source } });
+    await sources(); await click('Inspect retained selected'); await edit('Source MODEL for selected', '1'); await settle();
+    const acquisitions = requests.filter(r => r.url.includes('materialize'));
+    expect(acquisitions).toHaveLength(2);
+    expect(acquisitions[1].body).toMatchObject({ document: { artifact_id: 'alternate', target_state: 'state-B', model: 1 }, model_number: 1 });
+    await edit('Source MODEL for selected', ''); await settle(); await click('Generate candidates');
+    const retained = requests.find(r => r.url === '/api/jobs' && r.method === 'post')!.body.params.native_sources.selected;
+    expect(retained.document).toEqual({ artifact_id: 'alternate', target_state: 'state-B' });
+    expect(retained).not.toHaveProperty('model_number');
+});
 it('new document selection wins when an older acquisition finishes last', async () => {
     let old!: (value: any) => void; materializer = body => body.candidate.artifact_id === 'alternate' ? new Promise(resolve => { old = resolve; }) : Promise.resolve(receipt(body));
     await mount(); await sources(); await nativeDocuments(); await choose('alternate'); await choose('primary');

@@ -34,6 +34,7 @@ function NativePositionControls({ slot, receipt, onSelection }: { slot: string; 
 const fileBinding = (value: NativeGenerationSourceBinding): value is { kind: 'file'; path: string } => 'kind' in value && value.kind === 'file';
 function withModel(source: StructureSourceSelection, model: number | undefined): StructureSourceSelection {
     const next = { ...source, model_number: model };
+    if (next.document) next.document = { ...next.document, model };
     if (next.candidate?.kind === 'native_document') next.candidate = { ...next.candidate, model };
     else if (next.candidate?.kind === 'design' && next.candidate.document) next.candidate = { ...next.candidate, document: { ...next.candidate.document, model } };
     return next;
