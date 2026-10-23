@@ -521,17 +521,20 @@ def _published_runtime_records(source: Path, prefix: str, *, publication=None, r
                 {IMAGE_SELECTORS[name][0]: str(source)})
             if source != path.resolve():
                 return None
-        rows = published_asset_rows(logical, index=publication, resolved=resolved)
         if digest is not None:
-            rows = [r for r in rows or [] if r['sha256'] == digest]
-            if not rows:
-                info = path.stat(follow_symlinks=False)
-                if not stat.S_ISREG(info.st_mode):
-                    raise RemoteBundleError('Selected runtime image is not regular')
-                rows = [dict(name=logical, sha256=digest, size_bytes=info.st_size,
-                             mode=stat.S_IMODE(info.st_mode))]
-        elif rows and any(Path(r.get('source', str(path.resolve()))) != source for r in rows):
-            return None
+            # The managed selector already owns the immutable image identity.
+            # Do not re-inventory an unrelated publication (or an older image
+            # published under this name) before using that declaration. Upload
+            # and worker receiving still verify the actual selected bytes.
+            info = path.stat(follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode):
+                raise RemoteBundleError('Selected runtime image is not regular')
+            rows = [dict(name=logical, sha256=digest, size_bytes=info.st_size,
+                         mode=stat.S_IMODE(info.st_mode))]
+        else:
+            rows = published_asset_rows(logical, index=publication, resolved=resolved)
+            if rows and any(Path(r.get('source', str(path.resolve()))) != source for r in rows):
+                return None
     else:
         return None
     if rows is None:
@@ -541,7 +544,7 @@ def _published_runtime_records(source: Path, prefix: str, *, publication=None, r
         link_target=r.get('target')) for r in rows]
 
 
-def _selected_weight_members(source: Path, model_id: str, *, resolved=None):
+def _selected_weight_members(source: Path, model_id: str | None, *, resolved=None):
     """Resolve only exact registry-manifest layouts to their acquisition bodies.
 
     Native names survive transport. A controller link target is never a worker
@@ -556,7 +559,28 @@ def _selected_weight_members(source: Path, model_id: str, *, resolved=None):
     # Resolve a selected directory alias, but keep a leaf's native name until
     # the manifest authenticates its acquisition referent.
     source = source.resolve(strict=True) if source.is_dir() else source.parent.resolve(strict=True) / source.name
-    for dependency, entries in _layouts(model_acquisition_plan(model_id)):
+    if not source.is_relative_to(weights / 'layouts'):
+        return None
+    # A pack (or a downstream selected component) can consume a layout owned
+    # by a different model. Match its exact declared layout digest, not an
+    # inferred model name or arbitrary symlink destination. Cache metadata only
+    # within this inventory operation; byte custody remains _verify_tree's.
+    def declared_layouts():
+        def owned(owner):
+            key = ('acquisition-layouts', owner)
+            layouts = resolved.get(key) if resolved is not None else None
+            if layouts is None:
+                layouts = list(_layouts(model_acquisition_plan(owner)))
+                if resolved is not None:
+                    resolved[key] = layouts
+            return layouts
+        if model_id:
+            yield from owned(model_id)
+        from model_registry import get_registry
+        for model in get_registry().list_models():
+            if model.id != model_id:
+                yield from owned(model.id)
+    for dependency, entries in declared_layouts():
         digest = hashlib.sha256(json.dumps({'dependency': dependency, 'members': sorted(
             entries, key=lambda e: e['member_path'])}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         root = weights / 'layouts' / dependency['relative_path'] / digest
@@ -594,7 +618,7 @@ def _runtime_records(source: Path, prefix: str, *, publication=None, resolved=No
                 result.append(_record_file(path, relative, 'runtime',
                     staged_sha256=members.get(name, {}).get('sha256')))
         return result
-    if prefix.startswith(('runtime/weights/', 'weights/')) and model_id is not None:
+    if prefix.startswith(('runtime/weights/', 'weights/')):
         selected = _selected_weight_members(source, model_id, resolved=resolved)
         if selected is not None:
             records = []
@@ -798,7 +822,7 @@ def _input_assets(
         system_roots.add(Path(params["runtime_image_store"]).resolve())
     destinations = {"work_dir", "out_dir", "out", "data_root", "code_root",
                     "weights_root", "container_dir", "msa_cache_dir", "cm_api_runtime_dir",
-                    "runtime_image_store", "wf_clone_nxf_home",
+                    "runtime_image_store", "wf_clone_nxf_home", "md_source_provenance",
                     *(flag for flag, _ in IMAGE_SELECTORS.values())}
     if native_invocation.model_id == 'bindcraft2':
         # The prepared tree is one native input. Its campaign destination is
@@ -1482,7 +1506,11 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
         # Each publisher needs a private inode: sibling staging links/unlinks
         # and cache recency updates otherwise change its HF generation identity.
         # Keep the broker's byte and metadata checks intact.
-        shutil.copy2(archive, staged)
+        from scripts.lib.runtime_image_views import allocate_private_file
+        descriptor = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, 'rb') as donor, staged.open('xb') as private:
+            allocate_private_file(donor.fileno(), private.fileno(), os.fstat(donor.fileno()))
+        shutil.copystat(archive, staged, follow_symlinks=False)
         os.utime(archive, None, follow_symlinks=False)
         _prune_source_archives(cache_root)
     # Only the shared archive/copy needs serialization. Extraction writes into
@@ -1699,7 +1727,9 @@ def prepare_remote_bundle(
         if _is_runtime_image(path, relative):
             # Preserve semantic aliases, but transfer/publish only one object per digest.
             source = path.resolve()
-            record = _record_file(source, f"runtime/{relative}", "runtime")
+            record, = _runtime_records(source, f"runtime/{relative}",
+                                       publication=publication, resolved=resolved,
+                                       model_id=str(job.model_id))
             runtime_hashes[relative] = record.sha256
             shared = f"{remote_root}/cache/runtime-images/objects/sha256/{record.sha256}/runtime.sif"
             previous = images.get(record.sha256)

@@ -79,6 +79,19 @@ def test_real_cold_warm_archive_chain(git_package, monkeypatch, record_property)
     monkeypatch.setattr(Path, 'open', opened)
     monkeypatch.setattr(subprocess, 'run', run)
     monkeypatch.setattr(bundle, '_safe_extract', extract)
+    from scripts.lib import runtime_image_views as views
+    original_ioctl, original_pread = views.fcntl.ioctl, views.os.pread
+    def ioctl(*args):
+        counts['clone_attempts'] += 1
+        value = original_ioctl(*args)
+        counts['clone_successes'] += 1
+        return value
+    def pread(*args):
+        data = original_pread(*args)
+        counts['allocation_bytes'] += len(data)
+        return data
+    monkeypatch.setattr(views.fcntl, 'ioctl', ioctl)
+    monkeypatch.setattr(views.os, 'pread', pread)
     snapshots = []
     prepared_bundles = []
     for cold in (True, False):
@@ -95,6 +108,10 @@ def test_real_cold_warm_archive_chain(git_package, monkeypatch, record_property)
         assert counts['generated_bytes'] == size * int(cold)
         assert counts['copy_opens'] == 1
         assert counts['copy_bytes'] == size
+        assert counts['clone_attempts'] == 1
+        assert counts['allocation_bytes'] == size * (1 - counts['clone_successes'])
+        cached = roots['data'] / 'remote-execution/source-archives' / (job.execution_source_revision + '.tar.gz')
+        assert cached.stat().st_ino != (source / '.bms-source.tar.gz').stat().st_ino
         assert counts['extract'] == counts['leaf_opens'] == counts['leaf_bytes'] == 0
         assert counts['record_archive_opens'] == counts['record_archive_bytes'] == 0
         record_property('cold' if cold else 'warm', json.dumps(dict(counts), sort_keys=True))

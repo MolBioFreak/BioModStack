@@ -335,6 +335,8 @@ def prepared_generation_source_fields(model_id, mode, params):
     Do not reacquire controller sources on replay; only these model-owned input
     slots are superseded. Other parameters retain existing discovery behavior.
     """
+    if model_id == 'rfd4_proteina' and params.get('rfd4_input_closure'):
+        return {'rfd4_request', 'native_sources'}
     if (model_id == 'protein_modification_experimental' and mode == 'shape_blueprint'
             and params.get('shape_request_path')):
         return {'shape_requested_sequence_settings', 'shape_requested_rfd3_settings',
@@ -465,7 +467,7 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
                         visit(row['processed_path'], path, ('processed_path', index),
                               lineage=(*lineage, logical_id))
             return
-        if path in visited or role == "runtime" or path.suffix.lower() not in {".json", ".yaml", ".yml"}:
+        if path in visited or role in {"runtime", "native-snapshot"} or path.suffix.lower() not in {".json", ".yaml", ".yml"}:
             return
         visited.add(path)
         if size > MAX_DOCUMENT_BYTES:
@@ -537,6 +539,17 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
             else:
                 for i, state in enumerate(params.get('structures', [])):
                     visit(state['path'], None, ('structures', i, 'path'))
+    original_snapshot = (params.get('md_source_provenance') or {}).get('original_snapshot') or {}
+    if original_snapshot.get('path'):
+        # Retain the original document independently of the selected MODEL
+        # derivative. Historical Jobs need not carry this optional metadata.
+        visit(original_snapshot['path'], None,
+              ('md_source_provenance', 'original_snapshot', 'path'), 'native-snapshot')
+    if model_id == 'rfd4_proteina' and params.get('rfd4_input_closure'):
+        # The model preparation owner has already retained each selected slot,
+        # including native state companions. Preserve this relative tree; never
+        # deserialize state or rediscover paths inside annotation/provenance.
+        visit(params['rfd4_input_closure'], None, ('rfd4_input_closure',), 'native-snapshot')
     if model_id == 'protein_modification_experimental' and mode == 'shape_blueprint':
         keys.add('shape_request_path')
     # Prepared source trees are owned by the selected native generator, not

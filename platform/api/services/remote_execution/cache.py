@@ -660,7 +660,7 @@ def independent_plan(selection, *, dependencies=None, publication=None):
     publication = hf_assets.publication_index() or {} if publication is None else publication
     for ref in {(r.kind, r.relative_path): r for r in refs}.values():
         model_id = (weight_owners.get(ref.relative_path) if weight_owners is not None
-                    else selection.model_id)
+                    else getattr(selection, 'model_id', None))
         if selection.kind == 'image' and ref.kind != 'image':
             continue
         root = (get_container_dir() if ref.kind == 'image' else get_weights_root()).resolve()
