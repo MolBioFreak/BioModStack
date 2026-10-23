@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import hashlib
+import os
+import shutil
 from pathlib import Path
 
 from contract import PREPARATION_RECEIPT_SCHEMA, canonical_json, canonical_sha256, validate_request
@@ -90,11 +92,26 @@ def main() -> None:
     parser.add_argument("--expected-dump-trajectories", required=True, type=_parse_bool)
     parser.add_argument("--output-native", required=True)
     parser.add_argument("--output-receipt", required=True)
+    parser.add_argument("--source-dir", help="Owned source closure staged with the native input")
     args = parser.parse_args()
 
     request = validate_request(json.loads(Path(args.request).read_text(encoding="utf-8")))
     _require_expected(request, args)
     native, receipt = prepare(request, source_destination=Path(args.output_native).resolve().with_name("rfd3_native_source.cif"))
+    if args.source_dir:
+        source_dir = Path(args.source_dir).resolve()
+        source_dir.mkdir(parents=True, exist_ok=True)
+        runtime = native['generation_0']
+        if 'input' in runtime:
+            source = Path(runtime['input'])
+            if not source.is_absolute():
+                source = Path(args.output_native).resolve().parent / source
+            target = source_dir / source.name
+            if source.resolve() != target:
+                shutil.copy2(source, target)
+            runtime['input'] = os.path.relpath(target, Path(args.output_native).resolve().parent)
+            receipt['native_input_sha256'] = canonical_sha256(native)
+            receipt['runtime_input'] = {'path': runtime['input'], 'sha256': hashlib.sha256(target.read_bytes()).hexdigest()}
     Path(args.output_native).write_text(canonical_json(native) + "\n", encoding="utf-8")
     Path(args.output_receipt).write_text(canonical_json(receipt) + "\n", encoding="utf-8")
 

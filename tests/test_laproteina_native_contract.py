@@ -177,8 +177,8 @@ def test_native_writer_exact_receiving(native, tmp_path, motif):
     assert [row["sequence"] for row in result] == ["ARN", "DCQ"]
     assert [row["native_sample_id"] for row in result] == [row["native_sample_id"] for row in index]
     assert [(r["batch_index"], r["sample_index"]) for r in index] == [(0, 0), (1, 0)]
-    assert all("ATOM" in Path(row["structure_path"]).read_text() for row in result)
-    assert all("DECOY" not in Path(row["structure_path"]).read_text() for row in result)
+    assert all("ATOM" in (output / row["structure_path"]).read_text() for row in result)
+    assert all("DECOY" not in (output / row["structure_path"]).read_text() for row in result)
     # Missing coordinate bytes remain an indexed sequence observation, not a
     # different PDB borrowed from the sample directory.
     (native_root / index[0]["structure_path"]).unlink()

@@ -137,6 +137,19 @@ def build_native_jobs(jobs: list[BondedNativeJob]) -> list[dict]:
     return [dict(deepcopy(job)) for job in jobs]
 
 
+def legacy_effective_settings(settings: dict, task: str) -> dict:
+    """Replay-only lowering for saved pre-native-contract CAD requests.
+
+    The Job/revision owner must select this only for a historical request, never
+    by molecular task alone for a new native request. Preserve old effective
+    conditional effort without retaining a hidden coercion in preparation.
+    """
+    effective = deepcopy(settings)
+    if task in {"ligand_conditioned", "dna_conditioned", "rna_conditioned"} and effective.get("effort", "fast") == "fast":
+        effective["effort"] = "max"
+    return effective
+
+
 def native_overrides(settings: NativeSettings) -> list[str]:
     """Hydra group selection first; explicit scalar overrides take precedence.
 

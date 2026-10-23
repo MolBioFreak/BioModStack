@@ -257,7 +257,8 @@ def test_population_reader_over_old_limit_and_truncation(tmp_path):
             list(iter_manifest_records(path, chunk_size=3))
 
 
-def test_local_partial_and_empty_producer_preserve_execution_state(tmp_path):
+@pytest.mark.parametrize('staged', [False, True])
+def test_local_partial_and_empty_producer_preserve_execution_state(tmp_path, staged):
     import subprocess
     import scripts.rfd3_local_redesign.contract as contract
     source = tmp_path / 'source.cif'
@@ -270,7 +271,8 @@ def test_local_partial_and_empty_producer_preserve_execution_state(tmp_path):
     native_path, receipt_path = tmp_path / 'native.json', tmp_path / 'receipt.json'
     subprocess.run([sys.executable, str(ROOT / 'scripts/rfd3_local_redesign/prepare_native_input.py'),
         '--request', str(request_path), '--input-structure', str(source),
-        '--output-native', str(native_path), '--output-receipt', str(receipt_path)], check=True)
+        '--output-native', str(native_path), '--output-receipt', str(receipt_path),
+        *(['--source-dir', str(tmp_path / 'rfd3_sources')] if staged else [])], check=True)
     structure = tmp_path / 'one.cif.gz'
     with gzip.open(structure, 'wt') as handle:
         handle.write(cif_source())

@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,7 @@ def main() -> None:
     parser.add_argument("--design-id", default="protein_local_redesign_0")
     parser.add_argument("--output-native", required=True, help="Native RFD3 JSON input")
     parser.add_argument("--output-receipt", required=True, help="Runtime preparation receipt")
+    parser.add_argument("--source-dir", help="Owned source closure staged with the native input")
     args = parser.parse_args()
 
     request_path = Path(args.request).expanduser().resolve()
@@ -49,12 +52,22 @@ def main() -> None:
     if input_binding.get("sha256") != staged_input_sha256:
         raise SystemExit("staged input structure does not match the canonical request")
     runtime_native = dict(native)
+    runtime_source = input_path
     runtime_native["input"] = input_path.name
     source_mapping = None
     if request.get("source_mapping") == "bms.rfd3.source-map.v1":
         derived = Path(args.output_native).resolve().with_name("rfd3_native_source.cif")
         source_mapping = materialize_source(input_path, derived, model_serial=request.get("source_model"))
         runtime_native = lower_native(native, source_mapping, derived.name)
+        runtime_source = derived
+    if args.source_dir:
+        source_dir = Path(args.source_dir).resolve()
+        source_dir.mkdir(parents=True, exist_ok=True)
+        source = runtime_source
+        target = source_dir / source.name
+        if source.resolve() != target:
+            shutil.copy2(source, target)
+        runtime_native['input'] = os.path.relpath(target, Path(args.output_native).resolve().parent)
     native_payload = {args.design_id: runtime_native}
     native_json = canonical_json(native_payload)
     Path(args.output_native).write_text(native_json + "\n", encoding="utf-8")
@@ -66,7 +79,7 @@ def main() -> None:
         "request_path": str(request_path),
         "native_input_sha256": hashlib.sha256(native_json.encode("utf-8")).hexdigest(),
         "runtime_input": {
-            "path": input_path.name,
+            "path": runtime_native['input'],
             "sha256": staged_input_sha256,
         },
         "design_id": args.design_id,

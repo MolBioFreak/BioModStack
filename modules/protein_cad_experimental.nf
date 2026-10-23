@@ -13,6 +13,10 @@ process PrepProteinCadRequest {
     script:
     def checkpointDir = params.pcad_laproteina_checkpoint_dir ?: params.laproteina_checkpoint_dir ?: "${params.weights_root}/laproteina"
     def dataPath = params.pcad_laproteina_data_path ?: params.laproteina_data_path ?: "${params.weights_root}/laproteina"
+    def jsonArg = { value, fallback ->
+        def text = value == null ? fallback : (value instanceof String ? value : groovy.json.JsonOutput.toJson(value))
+        "'" + text.replace("'", "'\"'\"'") + "'"
+    }
     def discoCheckpoint = params.pcad_disco_checkpoint_path ?: params.disco_checkpoint_path ?: "${params.weights_root}/disco/DISCO.pt"
     """
     mkdir -p protein_cad_inputs
@@ -48,6 +52,9 @@ process PrepProteinCadRequest {
         --disco-hf-cache-path "${params.weights_root}/disco/huggingface" \\
         --disco-use-deepspeed-evo-attention "${params.pcad_disco_use_deepspeed_evo_attention ?: params.disco_use_deepspeed_evo_attention ?: false}" \\
         --disco-cutlass-path "${params.pcad_disco_cutlass_path ?: params.disco_cutlass_path ?: ''}" \\
+        --laproteina-settings-json ${jsonArg(params.pcad_laproteina_settings_json, '{}')} \\
+        --disco-settings-json ${jsonArg(params.pcad_disco_settings_json, '{}')} \\
+        --disco-jobs-json ${jsonArg(params.pcad_disco_jobs_json, 'null')} \\
         --output protein_cad_request.json \\
         --input-dir protein_cad_inputs
     """
@@ -56,6 +63,8 @@ process PrepProteinCadRequest {
 process RunLaProteina {
     label 'LaProteina'
     label 'gpu'
+
+    publishDir "${params.out_dir}/collected/protein_cad_native", mode: 'copy', pattern: '{raw,invocation_*,design_manifest.json,laproteina_publication.json}'
 
     publishDir "${params.out_dir}/collected/protein_cad_raw", mode: 'copy', pattern: 'raw/pdbs/*.pdb', saveAs: { filename -> filename.replace('raw/pdbs/', '') }
     publishDir "${params.out_dir}/collected/protein_cad_raw", mode: 'copy', pattern: 'raw/metadata/*.json', saveAs: { filename -> filename.replace('raw/metadata/', '') }
@@ -67,9 +76,12 @@ process RunLaProteina {
     path input_dir
 
     output:
-    path 'raw/pdbs/*.pdb', emit: pdbs
-    path 'raw/metadata/*.json', emit: jsons
+    path 'raw/pdbs/*.pdb', optional: true, emit: pdbs
+    path 'raw/metadata/*.json', optional: true, emit: jsons
     path 'design_manifest.json', emit: manifest
+    path 'raw', emit: native_raw
+    path 'invocation_*', emit: invocations
+    path 'laproteina_publication.json', emit: publication
     path '*.log'
 
     script:
@@ -85,6 +97,8 @@ process RunDISCO {
     label 'DISCO'
     label 'gpu'
 
+    publishDir "${params.out_dir}/collected/protein_cad_native", mode: 'copy', pattern: '{raw,native,disco_output,design_manifest.json,disco_*.json,native_events.jsonl}'
+
     publishDir "${params.out_dir}/collected/protein_cad_raw", mode: 'copy', pattern: 'raw/pdbs/*.pdb', saveAs: { filename -> filename.replace('raw/pdbs/', '') }
     publishDir "${params.out_dir}/collected/protein_cad_raw", mode: 'copy', pattern: 'raw/metadata/*.json', saveAs: { filename -> filename.replace('raw/metadata/', '') }
     publishDir "${params.out_dir}/metadata", mode: 'copy', pattern: 'design_manifest.json'
@@ -95,9 +109,14 @@ process RunDISCO {
     path input_dir
 
     output:
-    path 'raw/pdbs/*.pdb', emit: pdbs
-    path 'raw/metadata/*.json', emit: jsons
+    path 'raw/pdbs/*.pdb', optional: true, emit: pdbs
+    path 'raw/metadata/*.json', optional: true, emit: jsons
     path 'design_manifest.json', emit: manifest
+    path 'raw', optional: true, emit: native_raw
+    path 'native', optional: true, emit: native_samples
+    path 'disco_output', emit: native_output
+    path 'disco_*.json', emit: publication
+    path 'native_events.jsonl', optional: true, emit: events
     path '*.log'
 
     script:
@@ -122,14 +141,14 @@ process FinalizeProteinCadOutputs {
     path design_manifest
 
     output:
-    path 'published/*.pdb', emit: pdbs
-    path 'published/confidence_*.json', emit: jsons
+    path 'published/*.pdb', optional: true, emit: pdbs
+    path 'published/confidence_*.json', optional: true, emit: jsons
     path 'published/design_manifest.json', emit: manifest
 
     script:
     """
     mkdir -p published
-    cp ${pdb_files} published/
+    for pdb in ${pdb_files}; do cp "\$pdb" published/; done
     cp ${design_manifest} published/design_manifest.json
     for meta in ${metadata_jsons}; do
         base=\$(basename "\$meta")

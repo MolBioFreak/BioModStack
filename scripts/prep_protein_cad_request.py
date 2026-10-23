@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from lib.portable_inputs import bind_native_document, resolve_input_path
+from lib.disco_contract import build_native_jobs
 
 
 def _parse_bool(value: Any) -> bool:
@@ -130,6 +131,9 @@ def main() -> None:
     parser.add_argument("--disco-hf-cache-path", default="")
     parser.add_argument("--disco-use-deepspeed-evo-attention", type=_parse_bool, default=False)
     parser.add_argument("--disco-cutlass-path", default="")
+    parser.add_argument("--laproteina-settings-json", type=json.loads, default={})
+    parser.add_argument("--disco-settings-json", type=json.loads, default={})
+    parser.add_argument("--disco-jobs-json", type=json.loads, default=None)
     parser.add_argument("--output", required=True)
     parser.add_argument("--input-dir", required=True)
     args = parser.parse_args()
@@ -161,11 +165,8 @@ def main() -> None:
             )
 
     if args.backend == "disco":
-        if args.task == "custom_json" and not copied_disco_json:
+        if args.task == "custom_json" and not copied_disco_json and args.disco_jobs_json is None:
             raise ValueError("DISCO custom_json requires --disco-input-json-path")
-        if args.task in {"ligand_conditioned", "dna_conditioned", "rna_conditioned"} and args.disco_effort == "fast":
-            # Upstream docs explicitly recommend max for conditional generation.
-            args.disco_effort = "max"
 
     request: dict[str, Any] = {
         "job_id": args.job_id,
@@ -204,7 +205,18 @@ def main() -> None:
         },
     }
 
-    if args.backend == "disco" and args.task != "custom_json":
+    # Typed native values are last, including explicit false, zero and null.
+    # Saved legacy effective effort is normalized by the Job migration owner;
+    # this producer never changes requested effort based on molecular task.
+    request["laproteina"].update(args.laproteina_settings_json)
+    request["disco"].update(args.disco_settings_json)
+
+    if args.backend == "disco" and args.disco_jobs_json is not None:
+        disco_jobs = bind_native_document(build_native_jobs(args.disco_jobs_json), "disco-json")
+        disco_input_path = input_dir / "disco_input.json"
+        disco_input_path.write_text(json.dumps(disco_jobs, indent=2), encoding="utf-8")
+        request["disco"]["input_json_path"] = str(disco_input_path)
+    elif args.backend == "disco" and args.task != "custom_json":
         disco_jobs = _build_disco_jobs(
             task=args.task,
             target_lengths=target_lengths,

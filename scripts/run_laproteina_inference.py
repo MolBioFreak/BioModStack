@@ -89,7 +89,7 @@ def _configure_laproteina(request: dict, output_dir: Path) -> dict:
             "receipt": receipt}
 
 
-def collect_outputs(request: dict, invocation: dict, output_dir: Path) -> list[dict]:
+def collect_outputs(request: dict, invocation: dict, output_dir: Path, native_returncode: int = 0) -> list[dict]:
     """Receive only native writer-indexed final samples, never directory guesses."""
     root = invocation["inference_root"]
     index_path = root / "sample_index.jsonl"
@@ -99,6 +99,8 @@ def collect_outputs(request: dict, invocation: dict, output_dir: Path) -> list[d
     raw_pdb.mkdir(parents=True, exist_ok=True)
     raw_meta.mkdir(parents=True, exist_ok=True)
     manifest = []
+    def relative(path):
+        return str(Path(path).relative_to(output_dir))
     prefix = _sanitize_name(request["job_name"])
     for record in records:
         native_id = record["native_sample_id"]
@@ -115,17 +117,23 @@ def collect_outputs(request: dict, invocation: dict, output_dir: Path) -> list[d
                     "generator_family": "protein_cad_experimental", "generator_mode": request["task"],
                     "length": len(sequence), "native_sample": record,
                     "structure_present": source.is_file(),
-                    "source_sample_dir": str(source.parent),
-                    "invocation_path": str(invocation["attempt"] / "invocation.json"),
-                    "trajectory_path": str(trajectory) if trajectory.exists() else None,
+                    "source_sample_dir": relative(source.parent),
+                    "invocation_path": relative(invocation["attempt"] / "invocation.json"),
+                    "trajectory_path": relative(trajectory) if trajectory.exists() else None,
                     "trajectory_sample_index": record["sample_index"]}
         metadata_path.write_text(json.dumps(metadata, indent=2))
         manifest.append({"design_id": design_id, "sequence": sequence,
-                         "structure_path": str(target) if source.is_file() else None,
-                         "metadata_path": str(metadata_path), "source_sample_dir": str(source.parent),
+                         "structure_path": relative(target) if source.is_file() else None,
+                         "metadata_path": relative(metadata_path), "source_sample_dir": relative(source.parent),
                          "native_sample_id": native_id,
                          "invocation_id": invocation["attempt"].name})
     (output_dir / "design_manifest.json").write_text(json.dumps(manifest, indent=2))
+    (output_dir / "laproteina_publication.json").write_text(json.dumps({
+        "schema": "laproteina_native_v1", "native_returncode": native_returncode,
+        "execution_failed": native_returncode != 0, "emitted_sample_count": len(manifest),
+        "manifest": "design_manifest.json", "invocation": relative(invocation["attempt"] / "invocation.json"),
+        "sample_index": relative(index_path) if index_path.is_file() else None,
+    }, indent=2))
     return manifest
 
 
@@ -147,7 +155,7 @@ def main() -> None:
         result = subprocess.run(invocation["command"], cwd=invocation["attempt"], env=invocation["env"],
                                 check=False, stdout=log, stderr=subprocess.STDOUT)
     # Retain emitted partial output even if native generation later failed.
-    collect_outputs(request, invocation, output_dir)
+    collect_outputs(request, invocation, output_dir, result.returncode)
     result.check_returncode()
 
 

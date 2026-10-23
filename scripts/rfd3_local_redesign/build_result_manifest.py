@@ -227,7 +227,7 @@ def main() -> None:
         or receipt_payload.get("native_input_sha256")
         != hashlib.sha256(canonical_json(native_input_payload).encode("utf-8")).hexdigest()
         or not isinstance(runtime_input, dict)
-        or runtime_input.get("path") != (native_runtime_input if source_mapping is not None else source_file.name)
+        or runtime_input.get("path") != native_runtime_input
         or runtime_input.get("sha256") != (source_mapping["native_sha256"] if source_mapping is not None else expected_source_sha)
         or receipt_payload.get("redesign_mode") != request.get("redesign_mode")
         or receipt_payload.get("sequence_policy") != request.get("sequence_policy")
