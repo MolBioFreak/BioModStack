@@ -108,6 +108,36 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         fallback={() => <p>Saved native value retained; this schema does not describe an editable value.</p>} />;
     const primary = new Set(['version', 'mode', 'operation', 'task', 'input', 'inputs', 'profile', 'sampling', 'seed', 'num_samples']);
     return <BioXpSchemaControlContext.Provider value={({ label, schema: child, value, onChange, path }) => {
+        if (model === 'rfd4_proteina' && path.length === 1 && path[0] === 'settings' && !child['x-bms-settings-group'] && child.type === 'object' && value !== null && typeof value === 'object' && !Array.isArray(value)) {
+            // Presentation only: partition the native schema, never its request.
+            // Merging a group's edits leaves omitted and inactive backend values exact.
+            const fields = child.properties ?? {};
+            const groups: Array<[string, string[]]> = [
+                ['Sampling controls', ['num_replicates', 'batch_size', 'seed', 'generation']],
+                ['Runtime acceleration', ['inference_backend', 'precision', 'nn', 'compile_lengths', 'bioir', 'torch_deterministic', 'num_workers']],
+                ['Search, checkpoints and continuation', ['search']],
+                ['Output and retention', ['skip_existing', 'save_chain_of_interest', 'compress_outputs', 'metrics_tags', 'delete_failing_pre_oracle']],
+            ];
+            const grouped = new Set(groups.flatMap(([, keys]) => keys));
+            groups.push(['Other native settings', [...new Set([...Object.keys(fields), ...Object.keys(record(value))])].filter(key => !grouped.has(key))]);
+            return <div data-rfd4-sampling>
+                <p>Sampling, partial diffusion and inverse folding retain their native meanings. Backbone and latent schedules are independent.</p>
+                {groups.map(([title, keys]) => {
+                    const properties = Object.fromEntries(keys.filter(key => Object.hasOwn(fields, key) || Object.hasOwn(record(value), key)).map(key => [key, fields[key] ?? {}]));
+                    if (!Object.keys(properties).length) return null;
+                    return <NativeSettingsDisclosure key={title} summary={<span>{title}</span>}>{() => <>
+                        {title === 'Runtime acceleration' && <p>Native torch.compile/cuEquivariance is the common path. BioIR is optional and requires CUDA 13; state/resume, clean-prediction scoring, continuation and per-checkpoint branching have native limitations. Switching backend retains requested expert values; the native owner reports unsupported combinations without silently changing settings.</p>}
+                        <BioXpSchemaInput label={label} nativeLabels schema={{ ...child, 'x-bms-settings-group': true, properties, required: child.required?.filter(key => Object.hasOwn(properties, key)) }} rootSchema={schema}
+                            path={path} value={Object.fromEntries(Object.entries(record(value)).filter(([key]) => Object.hasOwn(properties, key)))}
+                            onChange={next => {
+                                const merged = { ...record(value) };
+                                for (const key of Object.keys(properties)) delete merged[key];
+                                onChange({ ...merged, ...record(next) });
+                            }} fallback={() => <p>Saved native values retained.</p>} />
+                    </>}</NativeSettingsDisclosure>;
+                })}
+            </div>;
+        }
         if (model === 'rfd4_proteina' && child.type === 'string' && path[0] === 'input' && path.at(-1) === 'select' && String(child['x-native-mapping']).includes('.conditions.')) return <>
             <label>{label}<input aria-label={label} value={String(value ?? '')} onChange={event => onChange(event.target.value)} /></label>
             {currentVisual && path.at(-3) === currentVisual.slot && <button type="button" aria-label={`Use source selection for ${label}`} onClick={() => {
@@ -135,7 +165,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
             <DeNovoNativePreview request={payload as Partial<Job>} />
         </ProteinDesignPanel></div>
         <div hidden={section !== 'Native settings'}><ProteinDesignPanel title="Native settings" description="Requested overrides only. Omitted settings inherit the selected native profile at the model owner. Oracle template conditioning is not blind prediction.">
-            {schema && Object.entries(schema.properties ?? {}).filter(([key]) => !primary.has(key)).map(([key, child]) => <NativeSettingsDisclosure key={key} summary={<span>{child.title ?? key.replaceAll('_', ' ')}</span>}>
+            {schema && Object.entries(schema.properties ?? {}).filter(([key]) => !primary.has(key)).map(([key, child]) => <NativeSettingsDisclosure key={key} summary={<span>{model === 'rfd4_proteina' && key === 'settings' ? 'Sampling' : child.title ?? key.replaceAll('_', ' ')}</span>}>
                 {() => renderField(key, child)}
             </NativeSettingsDisclosure>)}
         </ProteinDesignPanel></div>
