@@ -492,10 +492,11 @@ const originalAdapter = api.defaults.adapter;
 const originalUrl = window.location.href;
 let captured: Array<Record<string, any>>;
 let previews: Array<Record<string, any>>;
+let unexpected: string[];
 const approvalDigest = 'a'.repeat(64);
 beforeEach(() => {
     window.history.replaceState({}, '', '/submit');
-    captured = []; previews = [];
+    captured = []; previews = []; unexpected = [];
     // Reject every unexpected transport operation, rather than opening a socket.
     api.defaults.adapter = async config => {
         if (config.method === 'post' && config.url === '/api/jobs/execution-plan/preview') {
@@ -511,13 +512,17 @@ beforeEach(() => {
                 deferred_preparation: [], blockers: [],
             }, status: 200, statusText: 'OK', headers: {}, config };
         }
-        if (config.method !== 'post' || config.url !== '/api/jobs') throw Error(`Unexpected fixture request: ${config.method} ${config.url}`);
+        if (config.method !== 'post' || config.url !== '/api/jobs') {
+            unexpected.push(`${config.method} ${config.url}`);
+            throw Error(`Unexpected fixture request: ${config.method} ${config.url}`);
+        }
         const payload = JSON.parse(config.data);
         captured.push(payload);
         console.info('GENERIC_SEQUENCE_CAPTURE ' + JSON.stringify(payload));
         return { data: {}, status: 200, statusText: 'OK', headers: {}, config };
     };
-    vi.stubGlobal('fetch', vi.fn(() => { throw Error('Unexpected fixture fetch'); }));
+    vi.stubGlobal('fetch', vi.fn(() => { unexpected.push('fetch bypassed adapter'); throw Error('Unexpected fixture fetch'); }));
+    vi.spyOn(XMLHttpRequest.prototype, 'open').mockImplementation(() => { unexpected.push('XHR bypassed adapter'); throw Error('Unexpected fixture XHR'); });
 });
 afterEach(async () => {
     if (root) await act(async () => root!.unmount());
@@ -528,6 +533,7 @@ afterEach(async () => {
     document.body.replaceChildren();
     localStorage.clear(); sessionStorage.clear();
     vi.unstubAllGlobals(); vi.restoreAllMocks(); fixtures.targets.mockClear();
+    expect(unexpected).toEqual([]);
 });
 const button = (text: string) => {
     const found = [...document.querySelectorAll('button')].find(item => item.textContent?.trim() === text);
@@ -543,9 +549,13 @@ async function change(input: HTMLInputElement | HTMLSelectElement, value: string
     });
 }
 function field(name: string) {
-    const label = [...document.querySelectorAll('label')].find(item => item.firstChild?.textContent === name);
-    expect(label, `field ${name}`).toBeTruthy();
-    const input = label!.parentElement!.querySelector<HTMLInputElement>('input:not([type="range"])');
+    // ModelParameterField presents a friendly label and retains the native key
+    // in its Parameter key disclosure. Bind to that owner, not obsolete labels.
+    const owner = [...document.querySelectorAll('.bms-model-parameter')].find(item =>
+        item.querySelector('details > code')?.textContent === name
+        || item.querySelector('label')?.firstChild?.textContent === name);
+    expect(owner, `field ${name}`).toBeTruthy();
+    const input = owner!.querySelector<HTMLInputElement>('input:not([type="range"])');
     expect(input, `input ${name}`).toBeTruthy();
     return input!;
 }
