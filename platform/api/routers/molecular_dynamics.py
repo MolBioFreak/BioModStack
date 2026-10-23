@@ -564,10 +564,10 @@ async def _validate_preview_launch_context(intent: MdLaunchIntent | MdNativeLaun
                 )
             return
         bound_refs = _launch_context_source_refs(normalized_request, workflow_payload)
-        if intent.source_ref.kind != "design":
+        if intent.source_ref.kind not in {"design", "candidate"}:
             raise LaunchContextError(
                 "launch_context_source_mismatch",
-                "Project Molecular Dynamics launch intent must select one Design source.",
+                "Project Molecular Dynamics launch intent must select one prepared source.",
                 status_code=409,
             )
         if len(bound_refs) != 1:
@@ -577,6 +577,16 @@ async def _validate_preview_launch_context(intent: MdLaunchIntent | MdNativeLaun
                 status_code=409,
             )
         bound_ref = bound_refs[0]
+        if intent.source_ref.kind == "candidate" or bound_ref.kind == "candidate":
+            # Native documents carry artifact/state/MODEL identity. Compare the
+            # existing prepared source, not a lossy Design-id projection.
+            if bound_ref.model_dump(mode="json") != intent.source_ref.model_dump(mode="json"):
+                raise LaunchContextError(
+                    "launch_context_source_mismatch",
+                    "Selected native document does not match the prepared Project source.",
+                    status_code=409,
+                )
+            return
         if bound_ref.kind != "design" or bound_ref.id != intent.source_ref.id:
             raise LaunchContextError(
                 "launch_context_source_mismatch",

@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-    cacheDir: process.env.BMS_SCIENTIFIC_VITE_CACHE,
+    cacheDir: process.env.BMS_VITE_CACHE_DIR ?? process.env.BMS_SCIENTIFIC_VITE_CACHE,
     test: {
         environment: 'jsdom',
         setupFiles: ['./tests/vitest/setup.ts'],
@@ -107,7 +107,7 @@ export default defineConfig({
             './tests/vitest/molecularDynamicsNativeAuthoring.test.tsx',
             './tests/vitest/mdTrajectoryFrameControls.test.tsx',
             './tests/vitest/rfd3GenerationMounted.test.tsx',
-            './tests/vitest/deNovoV15*.test.tsx',
+            './tests/vitest/deNovoV15*.test.{ts,tsx}',
             './tests/vitest/generalSequenceDesignMounted.test.tsx',
             './tests/vitest/candidateRoundProgressMounted.test.tsx',
             './tests/vitest/deNovoRemotePreparationMounted.test.tsx',

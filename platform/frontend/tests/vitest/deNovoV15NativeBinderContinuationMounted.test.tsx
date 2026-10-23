@@ -19,6 +19,7 @@ let tree: ReactTestRenderer;
 let client: QueryClient;
 const original = api.defaults.adapter;
 const posts: any[] = [];
+let unexpected: string[];
 const text = (node: any): string => typeof node === 'string' ? node : (node.children ?? []).map(text).join('');
 const button = (name: string) => tree.root.findAllByType('button').find(node => text(node) === name)!;
 const flush = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); }); };
@@ -28,7 +29,7 @@ async function mount(stage = 'draw') {
     await flush();
 }
 async function close() { await act(async () => tree.unmount()); client.clear(); }
-beforeEach(() => { localStorage.clear(); sessionStorage.clear(); window.history.replaceState({}, '', '/'); posts.length = 0; api.defaults.adapter = async config => {
+beforeEach(() => { unexpected = []; vi.stubGlobal('fetch', async () => { unexpected.push('fetch'); throw new Error('No live network'); }); vi.spyOn(XMLHttpRequest.prototype, 'open').mockImplementation(() => { unexpected.push('XHR'); throw new Error('No live network'); }); localStorage.clear(); sessionStorage.clear(); window.history.replaceState({}, '', '/'); posts.length = 0; api.defaults.adapter = async config => {
     let data: any = [];
     if (config.url?.startsWith('/api/models/')) data = { params: [{ name: 'samples', label: 'Samples', type: 'integer', default: 1 }] };
     if (config.url?.startsWith('/api/designs/')) data = { job_id: 'accepted-owner' };
@@ -36,7 +37,7 @@ beforeEach(() => { localStorage.clear(); sessionStorage.clear(); window.history.
     if (config.method === 'post') { posts.push(JSON.parse(config.data)); data = { launched_jobs: [] }; }
     return { config, status: 200, statusText: 'OK', headers: {}, data };
 }; });
-afterEach(async () => { await close(); api.defaults.adapter = original; sessionStorage.clear(); vi.unstubAllGlobals(); });
+afterEach(async () => { await close(); api.defaults.adapter = original; sessionStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); expect(unexpected).toEqual([]); });
 it('retains checked metrics-only records and rejected saved molecules across pages, scopes and reopen', async () => {
     await mount();
     for (const key of ['rejected', 'missing']) await act(async () => tree.root.findByProps({ 'aria-label': `Select ${key}` }).props.onChange({ target: { checked: true } }));
@@ -89,7 +90,7 @@ it('submits restored mixed or native-only sources through the editable existing 
     }
 });
 it('inspects only the chosen registered source and reports missing download without primary fallback or blocking submission', async () => {
-    const fetcher = vi.fn(async () => ({ ok: false, status: 404 }));
+    const fetcher = vi.fn(async (_url: string) => ({ ok: false, status: 404 }));
     vi.stubGlobal('fetch', fetcher);
     for (const available of [true, false]) {
         client = new QueryClient();

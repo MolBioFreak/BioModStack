@@ -59,7 +59,7 @@ beforeEach(() => {
     };
 });
 afterEach(async () => {
-    if (process.env.BMS_UI_EVIDENCE_DIR && requests.some(r => r.url === '/api/jobs')) writeFileSync(resolve(process.env.BMS_UI_EVIDENCE_DIR, `native-wire-${expect.getState().currentTestName!.replace(/[^A-Za-z0-9]/g, '_')}.json`), JSON.stringify(requests, null, 2));
+    if (process.env.BMS_UI_EVIDENCE_DIR) writeFileSync(resolve(process.env.BMS_UI_EVIDENCE_DIR, `native-wire-${expect.getState().currentTestName!.replace(/[^A-Za-z0-9]/g, '_')}.json`), JSON.stringify(requests, null, 2));
     await unmount(); api.defaults.adapter = previous; restoreXhr.mockRestore(); restoreFetch.mockRestore(); expect(unexpected).toEqual([]);
 });
 async function unmount() { if (root) await act(async () => root!.unmount()); root = undefined; client?.clear(); document.body.replaceChildren(); }
@@ -210,3 +210,21 @@ it('actual Project parent saves twice and cold hydrates the saved native request
     expect(sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
     expect(requests.some(r => r.url === '/api/jobs')).toBe(false);
 });
+
+for (const model of ['rfd4_proteina', 'complexa']) for (const mode of ['generate', 'evaluate']) {
+    it(`exports the actual ${model}/${mode} Template Manager envelope for real HTTP persistence replay`, async () => {
+        const request = model === 'complexa'
+            ? { task: 'protein_binder', task_name: 'http-native', operation: mode, seed: 0, reward: null, evaluation: { compute_binder_metrics: false } }
+            : mode === 'generate' ? nativeRequest
+                : { input: { kind: 'annotated', slots: ['exact-retained'] }, settings: { verbose: false, metrics_tags: [] } };
+        await mount(model, mode, request); await click('Template Manager');
+        const name = document.querySelector<HTMLInputElement>('input[placeholder="e.g., My Boltz Config"]')!;
+        await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'HTTP envelope'); name.dispatchEvent(new Event('input', { bubbles: true })); });
+        await click('Save Template'); await vi.waitFor(() => expect(saved).toHaveLength(1));
+        const transport = requests.find(r => r.url === '/api/user-templates' && r.method === 'post')!.body;
+        expect(transport.params).toEqual(saved[0].params);
+        expect(transport.params.native_job_request.params).toEqual({ [model === 'complexa' ? 'complexa_request' : 'rfd4_request']: request });
+        expect(transport.params.native_job_request.execution_target_id).toBeNull();
+        if (process.env.BMS_UI_EVIDENCE_DIR) writeFileSync(resolve(process.env.BMS_UI_EVIDENCE_DIR, `native-envelope-${model}-${mode}.json`), JSON.stringify(transport.params, null, 2));
+    });
+}

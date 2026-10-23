@@ -1275,6 +1275,12 @@ class _AcceptingRegistry:
     def reload(self) -> None:
         return None
 
+    def parameter_diagnostics(self, model_id, params):
+        # Keep the existing validation seam inert, but use the real diagnostic
+        # owner now called by canonical Job insertion rather than inventing it.
+        from model_registry import get_registry
+        return get_registry().parameter_diagnostics(model_id, params)
+
     def validate_job_params(self, *_args, **_kwargs) -> list[str]:
         return []
 
