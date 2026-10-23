@@ -83,6 +83,18 @@ async def submit_step(session, experiments, step, *, destination, context):
     from routers.jobs import submit_selected_child_jobs
     tasks = BackgroundTasks()
     try:
+        if step['metadata'].get('route') == 'md_native':
+            from routers.molecular_dynamics import _launch_native_md_job
+            from services.md.starting_structures import MdLaunchRequest
+            launch = MdLaunchRequest.model_validate(step['metadata']['md_launch_request'])
+            if (launch.intent.execution_target_id and
+                    step['metadata'].get('approved_md_preview_digest') != launch.preview_digest):
+                return {'state': 'review_required', 'review': {
+                    'code': 'md_native_preview_approval_required',
+                    'preview_digest': launch.preview_digest}}, tasks
+            child = await _launch_native_md_job(launch, session,
+                round_step=BinderRoundStepReference.model_validate(step['request']['binder_round_step']))
+            return {'state': child.status, 'job_id': child.id}, tasks
         if step['metadata'].get('route') == 'boltz_api':
             from services.boltz_api_jobs import queue_boltz_api_job
             metadata = step['metadata']
@@ -172,6 +184,14 @@ async def bind_step(session, request, preallocated_id=None, *, project_bound=Fal
         # binding. All retained scientific keys still have to agree here.
         expected.pop('launch_context_id', None)
         actual.pop('launch_context_id', None)
+        if step['metadata'].get('route') == 'md_native':
+            # The typed Project adapter materializes its validated scheduler
+            # authority beside canonical MD parameters. Compare added keys too.
+            expected['params'] = {
+                **{key: value for key, value in expected['params']['intent'].items()
+                   if key not in {'name', 'launch_context_id', 'execution_target_id', 'execution_policy'}},
+                **expected['params'],
+            }
         for key in ('workflow_adapter', '_global_resource_admission', '_global_dispatch_authority'):
             expected['params'].pop(key, None)
             actual['params'].pop(key, None)

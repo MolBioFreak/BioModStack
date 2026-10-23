@@ -22,7 +22,7 @@ TERMINAL = {'completed', 'failed', 'cancelled'}
 MODES = {'proteinmpnn': 'design', 'fampnn': 'binder_design', 'caliby_binder': 'design',
          'protonpottsmpnn': 'redesign', 'binder_refinement': 'refine',
          'protenix': 'complex', 'boltz2': 'complex', 'esmfold2': 'predict',
-         'boltz_cp_experimental': 'design'}
+         'boltz_cp_experimental': 'design', 'molecular_dynamics': 'simulate'}
 
 
 def wire(ref):
@@ -51,6 +51,10 @@ def normalize(request):
         invocations = stage.models if stage.kind != 'maturation' else [stage]
         for invocation in invocations:
             model = invocation.model_id
+            if model == 'molecular_dynamics':
+                # The existing native MD owner validates its intent after exact
+                # source binding; do not merge generic model catalog defaults.
+                continue
             if result.round_plan.schema_version == 2 and stage.kind != 'maturation' and 'execution_target_id' not in invocation.model_fields_set:
                 invocation.execution_target_id = result.execution_target_id
             from services.sequence_designer_settings import normalize_historical_sequence_settings
@@ -207,6 +211,48 @@ def retained_candidate_directory(root, ref):
     raise FileNotFoundError('Exact retained candidate source is unavailable')
 
 
+def retained_rows(root):
+    for progress in [rounds.progress_of(root), *rounds.progress_of(root).get(KEY, [])]:
+        yield from progress.get('selection', {}).get('resolved', [])
+        yield from progress.get('resolved_outputs', {}).values()
+
+
+async def retained_native_row(session, root, owner, ref):
+    """Reuse the existing retained source only after normal byte cleanup.
+
+    Live bytes still traverse their native reader; malformed/tampered publication
+    errors never select this path. Job/attempt/artifact identity remains required
+    by the original publication contract, not inferred from a display label.
+    """
+    artifact_id = ref.get('artifact_id') or ref.get('publication_ref')
+    if not artifact_id:
+        return None
+    artifact = await session.get(JobArtifact, artifact_id)
+    if artifact is None or Path(artifact.storage_path).exists():
+        return None
+    for row in retained_rows(root):
+        if row.get('ref') != ref or not row.get('source_publication'):
+            continue
+        expected = row['source_publication']
+        actual = publication_identity(owner, artifact)
+        if expected != actual:
+            raise ValueError('Retained native publication identity changed')
+        restored = deepcopy(row)
+        if row.get('selection_dir'):
+            directory = retained_candidate_directory(root, ref)
+            restored['selection_dir'] = str(directory)
+            restored['path'] = json.loads((directory / 'selection_manifest.json').read_text())['designs'][0]['selection_pdb_path']
+        return restored
+    return None
+
+
+def publication_identity(owner, artifact):
+    return {'artifact_id': artifact.id, 'owner_job_id': artifact.owner_job_id,
+            'attempt': artifact.attempt, 'owner_attempt': owner.retry_count or 0,
+            'remote_attempt_id': owner.remote_attempt_id, 'sha256': artifact.sha256,
+            'logical_path': artifact.logical_path, 'provenance': deepcopy(artifact.provenance)}
+
+
 async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb"):
     from services.binder_continuation import resolve_root, resolve_selection, resolve_candidate_documents, snapshot_selection
     from services.binder_round_inputs import candidate_roles
@@ -215,6 +261,10 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
     owner, owner_root = await resolve_root(session, ref['job_id'])
     if owner_root.id != root.id:
         raise ValueError('Selected candidate crosses the source-root boundary')
+    if snapshot and ref['kind'] in {'native_document', 'native_sequence', 'native_observation'}:
+        retained = await retained_native_row(session, root, owner, ref)
+        if retained is not None:
+            return retained
     row = {'ref': ref, 'owner_job_id': owner.id}
     prior = (owner.provenance or {}).get(rounds.STEP) or {}
     if ref['kind'] == 'design':
@@ -403,12 +453,28 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
                 targets = deepcopy(match['targets'])
                 break
     row['targets'] = targets
+    artifact_id = ref.get('artifact_id') or ref.get('publication_ref')
+    if artifact_id:
+        artifact = await session.get(JobArtifact, artifact_id)
+        if artifact is not None:
+            row['source_publication'] = publication_identity(owner, artifact)
     return row
 
 
 async def output_refs(session, child):
     refs = [{'kind': 'design', 'job_id': child.id, 'design_id': d.id}
             for d in await session.scalars(select(Design).where(Design.job_id == child.id).order_by(Design.id))]
+    if (child.provenance or {}).get('native_generation_publication'):
+        from services.rfd4_proteina_results import read_published_generation_page
+        offset = 0
+        while True:
+            page = await read_published_generation_page(child, session, offset=offset, limit=1000)
+            refs.extend(wire(record['candidate_ref']) for record in page['records'])
+            offset += len(page['records'])
+            if offset >= page['total']:
+                break
+            if not page['records']:
+                raise ValueError('Native publication page ended before its declared total')
     if child.model_id in {'caliby_experimental', 'ligandmpnn'}:
         _, records = await native_operation_records(session, child)
         refs.extend(ref for ref, _ in records)
@@ -446,7 +512,16 @@ async def output_refs(session, child):
         doc = (artifact.provenance or {}).get('native_document')
         if doc and artifact.storage_path not in design_paths and artifact.media_type in {'chemical/x-pdb', 'chemical/x-mmcif'}:
             refs.append({'kind': 'native_document', 'job_id': child.id, 'artifact_id': artifact.id})
-    return list({digest(ref): ref for ref in refs}.values())
+    # One registered coordinate projection and its Design are the same source;
+    # sequence rows sharing that backbone remain distinct native candidates.
+    unique = {}
+    for ref in refs:
+        if ref['kind'] == 'native_document':
+            artifact = await session.get(JobArtifact, ref['artifact_id'])
+            if artifact is not None and artifact.storage_path in design_paths:
+                continue
+        unique[digest(ref)] = ref
+    return list(unique.values())
 
 
 def prediction_request(root, row, target, model, params, placement, *, scope='binder', selected_chains=None, mode=None):
@@ -578,6 +653,47 @@ def role_defaults(model, params, explicit, row):
     return result
 
 
+async def md_request(session, root, row, params, placement, request, step_id):
+    """Bind a native MD intent through its existing preview/launch owner.
+
+    No prediction requirement, alternate runner, or scientific defaults live here.
+    The parent-owned router hunk exposes its existing request builder verbatim.
+    """
+    from routers.molecular_dynamics import _compile_native_preview, _native_md_job_request
+    from services.md.starting_structures import MdNativeLaunchIntent, MdLaunchRequest, StartingStructureSourceRef, resolve_source, read_resolved_structure
+    if not isinstance(params.get('intent'), dict):
+        raise ValueError('MD operation requires its existing native launch intent')
+    document = deepcopy(params['intent'])
+    document.update(name=f'binder-round-{step_id}', execution_target_id=placement,
+                    launch_context_id=request.launch_context_id,
+                    execution_policy=request.execution_policy.model_dump(mode='json'))
+    if not isinstance(document.get('input'), dict):
+        raise ValueError('Native MD intent requires its typed input')
+    if document['input'].get('kind') == 'guided':
+        source_ref = StartingStructureSourceRef(kind='candidate', id=row['owner_job_id'], candidate_ref=row['ref'])
+        resolved = await resolve_source(source_ref, session)
+        try:
+            sha = read_resolved_structure(resolved).sha256
+        finally:
+            resolved.close()
+        saved_source = document['input'].get('source_ref') or {}
+        # An already exact Design authority is the same selected source. Keep
+        # its native spelling so an existing prepared Project intent stays valid.
+        if saved_source.get('kind') != 'design' or saved_source.get('id') != row['ref'].get('design_id'):
+            document['input'].update(source_ref=source_ref.model_dump(mode='json'), expected_source_sha256=sha)
+    intent = MdNativeLaunchIntent.model_validate(document)
+    preview, resolved, _ = await _compile_native_preview(intent, session)
+    try:
+        launch = MdLaunchRequest(schema_version='bms.md.launch-request.v1', intent=intent,
+                                preview_digest=preview.preview_digest)
+        child = _native_md_job_request(launch, preview, resolved)
+        return child, {'route': 'md_native', 'md_launch_request': launch.model_dump(mode='json'),
+                       'md_preview': preview.model_dump(mode='json')}
+    finally:
+        if resolved is not None:
+            resolved.close()
+
+
 async def plan(session, root, retained):
     from routers.jobs import normalize_job_request
     from services.binder_continuation import model_request, individual_model_requests
@@ -602,7 +718,11 @@ async def plan(session, root, retained):
                 try:
                     parent.update(state=child.status, outputs=await output_refs(session, child))
                 except FileNotFoundError:
-                    disposition['state'] = 'awaiting_publication'
+                    # An unsuccessful ordinary Job need not publish an output.
+                    # Keep that terminal observation distinct from valid empty
+                    # success, without rerunning its science automatically.
+                    disposition['state'] = ('predecessor_' + child.status if child.status in {'failed', 'cancelled'}
+                                            else 'awaiting_publication')
                     continue
                 except (ValueError, OSError, HTTPException) as exc:
                     disposition.update(state='publication_error', error=str(exc.detail if isinstance(exc, HTTPException) else exc))
@@ -610,7 +730,8 @@ async def plan(session, root, retained):
                     continue
                 disposition.pop('error', None)
                 retained['errors'].pop(dependency_key, None)
-                disposition['state'] = 'resolved_outputs' if parent['outputs'] else 'valid_empty'
+                disposition['state'] = ('resolved_outputs' if parent['outputs'] else
+                                        ('predecessor_' + child.status if child.status in {'failed', 'cancelled'} else 'valid_empty'))
                 for ref in parent['outputs']:
                     key = digest(ref)
                     if key not in retained['resolved_outputs']:
@@ -648,7 +769,9 @@ async def plan(session, root, retained):
                             placement = (invocation.execution_target_id if request.round_plan.schema_version == 2
                                          and 'execution_target_id' in invocation.model_fields_set else request.execution_target_id)
                             binding = {}
-                            if stage.kind == 'prediction':
+                            if stage.kind == 'md':
+                                child, binding = await md_request(session, root, row, invocation.params, placement, request, step_id)
+                            elif stage.kind == 'prediction':
                                 child, binding = prediction_request(root, row, target, model, invocation.params, placement,
                                     scope=getattr(stage.input, 'scope', 'binder'), selected_chains=getattr(stage.input, 'chains', None), mode=mode)
                             elif model == 'caliby_experimental':
@@ -705,10 +828,12 @@ async def plan(session, root, retained):
                                 child = individual_model_requests(base, operation, directory)[0]
                                 child.mode = mode
                             child.name = f'binder-round-{step_id}'
-                            child.params['num_parallel_jobs'] = 1
+                            if stage.kind != 'md':
+                                child.params['num_parallel_jobs'] = 1
                             child.execution_policy = request.execution_policy.model_copy(deep=True)
                             child.binder_round_step = BinderRoundStepReference(root_job_id=root.id, step_id=step_id)
-                            child = normalize_job_request(child)
+                            if stage.kind != 'md':
+                                child = normalize_job_request(child)
                             metadata = {'schema_version': 1, 'round_id': retained['round_id'], 'step_id': step_id,
                                 'stage_id': stage.id, 'stage': stage.kind, 'model_id': model, 'root_job_id': root.id,
                                 'invocation_id': getattr(invocation, 'invocation_id', None), 'mode': mode,
@@ -761,6 +886,8 @@ async def read_selected(session, root, *, round_id=None):
             projected = {**deepcopy(step['metadata']), 'state': child.status if child else step['state'],
                          'job_id': child.id if child else step.get('job_id'),
                          'outputs': outputs}
+            if projected['state'] == 'review_required':
+                projected['request'] = deepcopy(step['request'])
             if publication_error:
                 projected['publication_error'] = publication_error
             for key in ('review', 'error', 'superseded_by', 'publication_error'):

@@ -27,7 +27,7 @@ export type SelectedRoundModel = BinderRoundStage & {
     route?: 'job' | 'boltz_api'; approved_estimate_fingerprint?: string | null;
 };
 export type SelectedRoundStage = { id: string; input: StageInput } & (
-    | { kind: 'sequence_design' | 'prediction'; models: SelectedRoundModel[] }
+    | { kind: 'sequence_design' | 'prediction' | 'md'; models: SelectedRoundModel[] }
     | { kind: 'maturation'; model_id: 'binder_refinement'; mode: 'refine'; params: BinderRoundStage['params'] });
 export interface SelectedRoundPlan { schema_version: 1 | 2; stages: SelectedRoundStage[] }
 export interface SelectedRoundRequest {
@@ -41,7 +41,7 @@ export interface SelectedRound {
     request: SelectedRoundRequest; selection: unknown;
     steps: Array<{ step_id: string; stage_id: string; model_id: string; state: string; job_id?: string;
         parent_step_ids: string[]; outputs: Array<CandidateRef & { label?: string; name?: string }>;
-        request?: Partial<Job>; error?: string }>;
+        request?: Partial<Job>; error?: string; review?: { code?: string; preview_digest?: string } }>;
 }
 export interface SelectedRoundResponse {
     operation: 'round'; source_job_id: string; root_job_id: string; round_id: string; state: string;

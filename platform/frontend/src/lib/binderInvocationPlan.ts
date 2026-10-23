@@ -4,7 +4,7 @@ export const invocationModes: Record<string, string[]> = {
     proteinmpnn: ['design'], fampnn: ['design', 'binder_design'], caliby_binder: ['design'],
     caliby_experimental: ['ensemble_design', 'sidechain_pack'], ligandmpnn: ['ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'],
     protonpottsmpnn: ['redesign'], protenix: ['complex', 'predict'], boltz2: ['complex', 'predict'],
-    esmfold2: ['predict'], boltz_cp_experimental: ['design'],
+    esmfold2: ['predict'], boltz_cp_experimental: ['design'], molecular_dynamics: ['simulate'],
 };
 export interface InvocationDraftStage {
     stage: SelectedRoundStage; enabled: boolean;

@@ -9,8 +9,18 @@ import { invocationDrafts, invocationModes, newInvocation, type InvocationDraftS
 import { candidateKey, type CandidateRef, type SelectedRoundModel, type SelectedRoundStage } from '../lib/binderSelectedRound';
 
 const control = 'rounded border p-2 bg-[var(--bg-primary)] max-w-full';
-const kinds = { sequence_design: 'Sequence design', prediction: 'Blind prediction', maturation: 'Maturation' };
-const models = { sequence_design: ['proteinmpnn', 'fampnn', 'caliby_binder', 'caliby_experimental', 'ligandmpnn', 'protonpottsmpnn'], prediction: ['protenix', 'boltz2', 'esmfold2', 'boltz_cp_experimental'] };
+const kinds = { sequence_design: 'Sequence design', prediction: 'Blind prediction', maturation: 'Maturation', md: 'Molecular dynamics' };
+const models = { sequence_design: ['proteinmpnn', 'fampnn', 'caliby_binder', 'caliby_experimental', 'ligandmpnn', 'protonpottsmpnn'], prediction: ['protenix', 'boltz2', 'esmfold2', 'boltz_cp_experimental'], md: ['molecular_dynamics'] };
+
+function NativeMdIntent({ call, onChange }: { call: SelectedRoundModel; onChange: (params: SelectedRoundModel['params']) => void }) {
+    const [text, setText] = useState(() => JSON.stringify(call.params.intent ?? {}, null, 2));
+    const [error, setError] = useState('');
+    return <div><p>Use the existing MD editor’s native launch intent. Guided input binds this exact selected structure; prepared/compiled system inputs stay explicit. No prediction is required. Chemistry, stages and MDP settings remain owned by MD.</p>
+        <label>Native MD launch intent<textarea aria-label={`Native MD intent ${call.invocation_id}`} value={text} onChange={event => setText(event.target.value)} /></label>
+        <button type="button" onClick={() => { try { const intent = JSON.parse(text); onChange({ ...call.params, intent }); setError(''); } catch { setError('Native MD intent must be JSON.'); } }}>Apply native MD intent</button>
+        {error && <p role="alert">{error}</p>}
+    </div>;
+}
 
 /** One intent editor for initial and selected operations. No lifecycle lives here. */
 export function BinderInvocationPlan({ stages: original, onChange, candidates = [], showAdd = true, renderSettings }: {
@@ -33,7 +43,7 @@ export function BinderInvocationPlan({ stages: original, onChange, candidates = 
     };
     return <div aria-label="Invocation plan" className="space-y-4">
         <p>Each call has its own identity, native mode and placement. OFF rows retain drafts and emit no operation. Packing requires actual coordinates and never changes the sequence.</p>
-        {showAdd && <div>{(['sequence_design', 'prediction'] as const).map(kind => <button className={control} type="button" key={kind} onClick={() => add(kind)}>Add {kinds[kind]}</button>)}</div>}
+        {showAdd && <div>{(['sequence_design', 'prediction', 'md'] as const).map(kind => <button className={control} type="button" key={kind} onClick={() => add(kind)}>Add {kinds[kind]}</button>)}</div>}
         {stages.map((item, index) => <fieldset key={item.stage.id} className="border rounded p-3 space-y-3"><legend>{index + 1}. {kinds[item.stage.kind]}</legend>
             <label><input type="checkbox" checked={item.enabled} onChange={event => patch(index, value => ({ ...value, enabled: event.target.checked }))} />Include stage {index + 1}</label>
             <label>Input<select aria-label={`Stage ${index + 1} input`} className={control} value={'stage_id' in item.stage.input ? `${item.stage.input.stage_id}:${item.stage.input.invocation_id ?? ''}` : ''} onChange={event => {
@@ -48,14 +58,14 @@ export function BinderInvocationPlan({ stages: original, onChange, candidates = 
                     const id = call.invocation_id!;
                     const catalog = queries[ids.indexOf(call.model_id)]?.data;
                     const modeFields = catalog?.modes?.find(mode => mode.id === call.mode)?.params;
-                    const specialized = renderSettings?.(call, 'selected' in item.stage.input ? candidates : [], params => callPatch(index, id, { params }));
+                    const specialized = renderSettings?.(call, 'selected' in item.stage.input ? candidates : [], params => callPatch(index, id, { params })) ?? (call.model_id === 'molecular_dynamics' ? <NativeMdIntent call={call} onChange={params => callPatch(index, id, { params })} /> : undefined);
                     const fields = catalog ? roundCatalogFields(catalog).filter(field => (!modeFields || modeFields.includes(field.name)) && (!roundParameterIsBound(field.name) || ['design_chain', 'target_chain', 'binder_chains', 'target_chains'].includes(field.name)) && !['ensembles', 'structures', 'input_json', 'caliby_request_dir', 'input_path'].includes(field.name)) : [];
                     return <section key={id} aria-label={`Invocation ${id}`} className="border p-3 space-y-2">
                         <h4>{call.model_id} · {id}</h4>
                         <label><input type="checkbox" aria-label={`Enable invocation ${id}`} checked={!item.disabledInvocationIds?.includes(id)} onChange={event => patch(index, value => ({ ...value,
                             disabledInvocationIds: event.target.checked ? value.disabledInvocationIds?.filter(key => key !== id) : [...value.disabledInvocationIds ?? [], id] }))} />Include this call (OFF retains settings)</label>
                         {call.model_id === 'boltz2' && <label>Execution route<select aria-label={`Route ${id}`} value={call.route ?? 'job'} onChange={event => callPatch(index, id, { route: event.target.value as 'job' | 'boltz_api' })}><option value="job">Ordinary Job</option><option value="boltz_api">Paid Boltz API (explicit estimate approval)</option></select></label>}
-                        <label>Native mode<select aria-label={`Mode ${id}`} value={call.mode} onChange={event => patch(index, value => value.stage.kind === 'maturation' ? value : ({ ...value, drafts: { ...value.drafts, [`${id}:${call.mode}`]: call.params }, stage: { ...value.stage, models: value.stage.models.map(other => other.invocation_id === id ? { ...other, mode: event.target.value, params: value.drafts[`${id}:${event.target.value}`] ?? {} } : other) } }))}>{(catalog?.modes?.map(mode => mode.id) ?? invocationModes[call.model_id]).map(mode => <option key={mode}>{mode}</option>)}</select></label>
+                        <label>Native mode<select aria-label={`Mode ${id}`} value={call.mode} onChange={event => patch(index, value => value.stage.kind === 'maturation' ? value : ({ ...value, drafts: { ...value.drafts, [`${id}:${call.mode}`]: call.params }, stage: { ...value.stage, models: value.stage.models.map(other => other.invocation_id === id ? { ...other, mode: event.target.value, params: value.drafts[`${id}:${event.target.value}`] ?? {} } : other) } }))}>{(invocationModes[call.model_id] ?? catalog?.modes?.map(mode => mode.id) ?? []).map(mode => <option key={mode}>{mode}</option>)}</select></label>
                         <button type="button" onClick={() => patch(index, value => value.stage.kind === 'maturation' ? value : ({ ...value, drafts: { ...value.drafts, [call.model_id]: call.params }, stage: { ...value.stage, models: value.stage.models.filter(other => other.invocation_id !== id) } }))}>Remove call</button>
                         <label><input type="checkbox" checked={Object.hasOwn(call, 'execution_target_id')} onChange={event => {
                             const next = { ...call }; if (event.target.checked) next.execution_target_id = null; else delete next.execution_target_id;
