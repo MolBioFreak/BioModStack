@@ -17,7 +17,7 @@ from typing import Any, Mapping
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts.lib.rfd3_scientific_settings import execution_settings
+from scripts.lib.rfd3_scientific_settings import execution_settings, conditioning_settings, CONDITION_FIELDS
 
 REQUEST_SCHEMA = "bms.rfd3.local-redesign.request.v1"
 RESULT_SCHEMA = "bms.rfd3.local-redesign.result.v1"
@@ -462,6 +462,26 @@ def _build_native_spec(
     source_identities: list[tuple[str, int, str]],
     *, legacy_native: bool = False,
 ) -> dict[str, Any]:
+    if mode == "native_recall":
+        native = conditioning_settings({key: params[key] for key in CONDITION_FIELDS if key in params})
+        saved = params.get("rfd3_request")
+        saved_native = saved.get("rfd3", {}) if isinstance(saved, Mapping) else None
+        # Keep the established canonical spelling for string/dictionary roles.
+        if isinstance(native.get("select_fixed_atoms"), Mapping):
+            native["select_fixed_atoms"] = _normalize_atom_map(native["select_fixed_atoms"], "select_fixed_atoms")
+        for key in ("contig", "select_unfixed_sequence"):
+            if isinstance(native.get(key), str):
+                native[key] = (_normalize_contig(native[key]) if key == "contig" else
+                               _normalize_residue_selector(native[key], key))
+        if saved_native is not None:
+            for key in list(native):
+                if native[key] in (None, {}, "") and key not in saved_native:
+                    del native[key]
+        native["input"] = input_path
+        if "partial_t" in params and (params["partial_t"] is not None or saved_native is None or "partial_t" in saved_native):
+            native["partial_t"] = params["partial_t"]
+        return native
+
     fixed_atoms = _normalize_atom_map(params.get("select_fixed_atoms"), "select_fixed_atoms")
     contig = _normalize_contig(params.get("contig"))
     unfixed_sequence = _normalize_residue_selector(
@@ -527,6 +547,10 @@ def _build_native_spec(
         native["partial_t"] = _nonnegative_float(
             partial_t, "partial_t", default=2.0 if mode == "partial_diffusion" else None
         )
+
+    for field in ("symmetry", "infer_ori_strategy", "plddt_enhanced", "is_non_loopy", "redesign_motif_sidechains"):
+        if field in params:
+            native.update(conditioning_settings({field: params[field]}))
 
     length = _normalize_length(params.get("length"))
     if length is not None:

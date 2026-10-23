@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { fetchNativeGenerationSettings, submitJob, completeCurrentLaunchContext, EXECUTION_TARGET_STORAGE_KEY, type Job, type NativeGenerationSourceBindings, type StructureMaterialization } from '../lib/api';
+import { api, fetchNativeGenerationSettings, submitJob, completeCurrentLaunchContext, EXECUTION_TARGET_STORAGE_KEY, type Job, type NativeGenerationSourceBindings, type StructureMaterialization } from '../lib/api';
 import { BioXpSchemaInput, BioXpSchemaControlContext } from './BioXpSchemaInput';
 import { DeNovoNativeSources } from './DeNovoNativeSources';
 import { DeNovoNativePreview } from './DeNovoNativePreview';
@@ -16,6 +16,36 @@ import { changeNativeTask, nativeTaskKey, type NativeTaskDrafts } from '../lib/n
 import { buildRfd4NativeSelection, type Rfd4NativeSelectionIdentity } from '../lib/rfd4NativeSelection';
 
 const record = (value: unknown): Record<string, any> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+
+/** Typed advanced CAD overrides; old simple controls remain the defaults. */
+export function LegacyNativeGenerationControls({ model, task, value, onChange }: {
+    model: 'laproteina' | 'disco'; task: string; value: Record<string, unknown>;
+    onChange: (value: Record<string, unknown>) => void;
+}) {
+    const inventory = useQuery({ queryKey: ['legacy-native-settings', model, task],
+        queryFn: async () => (await api.get<{ parameter_schema: Schema; input_schema?: Schema }>(
+            '/api/models/protein_modification_experimental/generation-settings',
+            { params: { mode: 'de_novo_design', generator: model, task } })).data,
+        staleTime: 60_000, retry: false });
+    const key = `pcad_${model}_settings_json`;
+    const schema = inventory.data?.parameter_schema;
+    return <NativeSettingsDisclosure summary={<span>{model === 'disco' ? 'DISCO' : 'La-Proteina'} native overrides</span>}>
+        {() => <div className="space-y-3">
+            <p>Only requested overrides are sent. These take precedence over the simple controls; omitted values retain the selected preset. Explicit false, zero and null are retained.</p>
+            {inventory.error && <p role="alert">{inventory.error.message}. Saved overrides are retained.</p>}
+            {schema && <BioXpSchemaInput label="Native settings" nativeLabels schema={schema} rootSchema={schema}
+                value={value[key] ?? {}} onChange={settings => onChange({ ...value, [key]: settings })}
+                fallback={() => <p>Saved native settings retained.</p>} />}
+            {model === 'disco' && inventory.data?.input_schema && <>
+                <p>Explicit native entities are ordered strands/copies. DNA does not add a reverse complement here. Legacy DNA shorthand retains its two-strand meaning. Effort fast stays fast; max is a recommendation, not a forced change.</p>
+                <BioXpSchemaInput label="Explicit DISCO jobs" nativeLabels schema={inventory.data.input_schema}
+                    rootSchema={inventory.data.input_schema} value={value.pcad_disco_jobs_json}
+                    onChange={jobs => { const next = { ...value }; if (jobs === undefined) delete next.pcad_disco_jobs_json; else next.pcad_disco_jobs_json = jobs; onChange(next); }}
+                    fallback={() => <p>Saved native jobs retained.</p>} />
+            </>}
+        </div>}
+    </NativeSettingsDisclosure>;
+}
 
 /** Presentation of the native owner's schema, never a second scientific compiler. */
 export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initialValues, onDraftChange, runDetails }: {

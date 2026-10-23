@@ -208,6 +208,10 @@ def main() -> None:
     # Typed native values are last, including explicit false, zero and null.
     # Saved legacy effective effort is normalized by the Job migration owner;
     # this producer never changes requested effort based on molecular task.
+    request["native_settings_fields"] = {
+        "laproteina": list(args.laproteina_settings_json),
+        "disco": list(args.disco_settings_json),
+    }
     request["laproteina"].update(args.laproteina_settings_json)
     request["disco"].update(args.disco_settings_json)
 

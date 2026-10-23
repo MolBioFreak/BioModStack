@@ -30,7 +30,7 @@ from scripts.rfd3_local_redesign.contract import (
 )
 
 
-from scripts.lib.rfd3_scientific_settings import EXECUTION_FIELDS
+from scripts.lib.rfd3_scientific_settings import EXECUTION_FIELDS, CONDITION_FIELDS
 
 RFD3_WORKFLOW_ADAPTER_ID = "bms.core-job.protein_local_redesign.adapter.v1"
 RFD3_SCIENTIFIC_PARAM_KEYS = {
@@ -43,6 +43,8 @@ RFD3_SCIENTIFIC_PARAM_KEYS = {
     "context_chains",
     "redesign_ranges",
     "region_mode",
+    "interface_cutoff",
+    "region_padding",
     "sequence_policy",
     "select_unfixed_sequence",
     "insertion_anchor",
@@ -64,7 +66,7 @@ RFD3_SCIENTIFIC_PARAM_KEYS = {
     "contig",
     "source_mapping",
     "source_model",
-} | set(EXECUTION_FIELDS)
+} | set(EXECUTION_FIELDS) | set(CONDITION_FIELDS)
 
 
 async def requeue_failed_request_for_job(session, *, job_id: str) -> bool:
@@ -201,6 +203,8 @@ def prepare_local_redesign_scheduler_params(
         job_name=job_name,
     )
     prepared = dict(scientific_params)
+    if "redesign_ranges" in normalized:
+        prepared["redesign_ranges"] = normalized["redesign_ranges"]
     prepared["sequence_policy"] = normalized["sequence_policy"]
     prepared["write_full_json"] = normalized["write_full_json"]
     prepared["rfd3_request"] = request
@@ -371,7 +375,7 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _source_residue_identities(path: Path, model_serial=None) -> list[dict[str, Any]]:
+def _source_model(path: Path, model_serial=None):
     name = path.name.lower()
     is_cif = name.endswith((".cif", ".mmcif", ".cif.gz", ".mmcif.gz"))
     parser = MMCIFParser(QUIET=True) if is_cif else PDBParser(QUIET=True)
@@ -389,6 +393,11 @@ def _source_residue_identities(path: Path, model_serial=None) -> list[dict[str, 
     except StopIteration as exc:
         raise ContractError("input structure contains no models") from exc
 
+    return model
+
+
+def _source_residue_identities(path: Path, model_serial=None) -> list[dict[str, Any]]:
+    model = _source_model(path, model_serial)
     chains: list[dict[str, Any]] = []
     seen: set[tuple[str, int, str]] = set()
     for chain in model:
@@ -414,6 +423,40 @@ def _source_residue_identities(path: Path, model_serial=None) -> list[dict[str, 
     if not chains:
         raise ContractError("input structure contains no residues")
     return chains
+
+
+def resolve_interface_shell(path: Path, params: Mapping[str, Any]) -> str:
+    """Use the existing region algorithm with exact native author/model identities.
+
+    Adapt CIF/PDB atoms to its records, not to a lossy PDB or integer-only range.
+    Padding is applied independently within each selected design chain.
+    """
+    from scripts.resolve_redesign_regions import ResidueKey, ResidueRecord, pick_interface_shell
+    from scripts.rfd3_local_redesign.contract import _string_list
+
+    model = _source_model(path, params.get("source_model"))
+    records = {
+        str(chain.id): [ResidueRecord(
+            key=ResidueKey(str(chain.id), int(residue.id[1]), str(residue.id[2]).strip()),
+            atom_coords=[tuple(float(x) for x in atom.coord) for atom in residue.get_atoms()],
+        ) for residue in chain if any(True for _ in residue.get_atoms())]
+        for chain in model
+    }
+    context = [r for chain in _string_list(params.get("context_chains"), "context_chains")
+               for r in records.get(chain, [])]
+    design = _string_list(params.get("design_chains"), "design_chains")
+    all_residues = [r for chain in design for r in records.get(chain, [])]
+    cutoff = params.get("interface_cutoff", 6.0)
+    hits = pick_interface_shell(all_residues, context, cutoff, 0)
+    hit_chains = {all_residues[i].key.chain for i in hits}
+    selected = []
+    for chain in design:
+        if chain not in hit_chains:
+            continue
+        residues = records.get(chain, [])
+        indices = pick_interface_shell(residues, context, cutoff, params.get("region_padding", 2))
+        selected.extend(residues[i].key.token for i in sorted(indices))
+    return ",".join(selected)
 
 
 def _resolve_local_redesign_source(value: Any) -> Path:
@@ -479,6 +522,10 @@ def normalize_local_redesign_params(
     normalized["source_residue_identities"] = _source_residue_identities(source_path, normalized.get("source_model"))
     source_sha256 = _sha256_file(source_path)
     saved = normalized.get("rfd3_request")
+    # Saved requests retain their already-effective ranges, including historical
+    # shell labels that did not perform resolution. Never reinterpret replay.
+    if normalized.get("region_mode") == "interface_shell" and not isinstance(saved, dict):
+        normalized["redesign_ranges"] = resolve_interface_shell(source_path, normalized)
     legacy_native = isinstance(saved, dict) and saved.get("contract_revision") == LEGACY_CONTRACT_REVISION
     rebuilt_request = build_request(normalized, job_name=job_name, source_sha256=source_sha256, legacy_native=legacy_native)
     existing_request = normalized.get("rfd3_request")

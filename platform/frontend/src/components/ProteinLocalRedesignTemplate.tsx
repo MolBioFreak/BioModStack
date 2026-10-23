@@ -3,6 +3,7 @@ import { ProteinDesignSections, ProteinDesignRun, themedPanelStyle, themedInsetS
 import { FampnnAnalysisControls, fampnnOverridePayload, hydrateFampnnOverrides } from './FampnnAnalysisControls';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { DeNovoNativePreview } from './DeNovoNativePreview';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
 import { completeCurrentLaunchContext, fetchDesigns, fetchJobById, submitJob, uploadImmutableFile, type Design, type Job } from '../lib/api';
@@ -40,7 +41,7 @@ interface ProteinLocalRedesignTemplateProps {
 
 type RegionMode = 'manual_ranges' | 'interface_shell';
 type SequenceMethod = 'skip' | 'fampnn' | 'mpnn';
-type NativeRedesignMode = 'partial_diffusion' | 'minimal_insertion';
+type NativeRedesignMode = 'partial_diffusion' | 'minimal_insertion' | 'native_recall';
 type ExecutionDepth = 'native' | 'validated';
 type ResidueRole = 'static' | 'coordinate' | 'recall';
 type SourcePredictor = 'boltz' | 'all';
@@ -80,6 +81,7 @@ const selectorError = (value: unknown): string => {
     } catch (error) { return String(error); }
 };
 function NativeSelectorInput({ value, onChange }: { value: unknown; onChange: (value: unknown) => void }) {
+    if (typeof value === 'boolean') return <div><select aria-label="Native selector boolean" value={String(value)} onChange={event => onChange(event.target.value === 'true')}><option value="true">true</option><option value="false">false</option></select><button type="button" onClick={() => onChange({})}>Use atom selections</button></div>;
     const error = selectorError(value);
     if (error) return <div role="alert">{error} Saved value: {JSON.stringify(value)} <button type="button" onClick={() => onChange('')}>Replace invalid selector</button></div>;
     if (value && typeof value === 'object' && !Array.isArray(value)) {
@@ -323,6 +325,8 @@ export function ProteinLocalRedesignTemplate({
     const [rfd3BatchesPerDesign, setRfd3BatchesPerDesign] = useState(1);
     const [rfd3ExtraConfig, setRfd3ExtraConfig] = useState('');
     const [nativeRedesignMode, setNativeRedesignMode] = useState<NativeRedesignMode>('partial_diffusion');
+    const [nativeRecallContig, setNativeRecallContig] = useState(() => String(initialValues?.contig ?? ''));
+    const [nativeRecallFixedAtoms, setNativeRecallFixedAtoms] = useState<unknown>(() => initialValues?.select_fixed_atoms);
     const [nativeProfileId, setNativeProfileId] = useState('generic_local_redesign_v1');
     const [nativePartialT, setNativePartialT] = useState(2.0);
 
@@ -453,7 +457,7 @@ export function ProteinLocalRedesignTemplate({
         }
         if (typeof initialValues.rfd3_batches_per_design === 'number') setRfd3BatchesPerDesign(initialValues.rfd3_batches_per_design);
         if (typeof initialValues.rfd3_extra_config === 'string') setRfd3ExtraConfig(initialValues.rfd3_extra_config);
-        if (initialValues.redesign_mode === 'partial_diffusion' || initialValues.redesign_mode === 'minimal_insertion') setNativeRedesignMode(initialValues.redesign_mode);
+        if (initialValues.redesign_mode === 'partial_diffusion' || initialValues.redesign_mode === 'minimal_insertion' || initialValues.redesign_mode === 'native_recall') setNativeRedesignMode(initialValues.redesign_mode);
         if (initialValues.profile_id === 'generic_local_redesign_v1' || initialValues.profile_id === 'drt4_datp_gate_v1') setNativeProfileId(initialValues.profile_id);
         if (typeof initialValues.partial_t === 'number') setNativePartialT(initialValues.partial_t);
 
@@ -662,31 +666,31 @@ export function ProteinLocalRedesignTemplate({
             new Set(Array.from(current).filter((key) => designResidueKeys.has(key)))
         );
         setSelectedSequenceRecallResidues((current) =>
-            new Set(Array.from(current).filter((key) => designResidueKeys.has(key)))
+            new Set(Array.from(current).filter((key) => nativeRedesignMode === 'native_recall' || designResidueKeys.has(key)))
         );
-    }, [designResidueKeys]);
+    }, [designResidueKeys, nativeRedesignMode]);
 
     useEffect(() => {
         if (!pendingRoleHydration || !activeDesignChains.length) return;
         try {
             const editable = hydrateRoleResidues(activeDesignChains, pendingRoleHydration.editable);
-            const recalled = hydrateRoleResidues(activeDesignChains, pendingRoleHydration.recall);
-            if ([...recalled].some(key => !editable.has(key))) throw new Error('Sequence recall must be a subset of editable residues.');
+            const recalled = hydrateRoleResidues(nativeRedesignMode === 'native_recall' ? activeProteinChains : activeDesignChains, pendingRoleHydration.recall);
+            if (nativeRedesignMode !== 'native_recall' && [...recalled].some(key => !editable.has(key))) throw new Error('Sequence recall must be a subset of editable residues.');
             setSelectedEditableResidues(editable);
             setSelectedSequenceRecallResidues(recalled);
             setRoleHydrationError('');
             setPendingRoleHydration(null);
         } catch (error) { setRoleHydrationError(String(error)); }
 
-    }, [activeDesignChains, pendingRoleHydration]);
+    }, [activeDesignChains, activeProteinChains, nativeRedesignMode, pendingRoleHydration]);
 
     const derivedManualRanges = useMemo(
         () => activeDesignChains.map(chain => buildManualRangeString(chain, selectedEditableResidues)).filter(Boolean).join(','),
         [activeDesignChains, selectedEditableResidues],
     );
     const rfd3SequenceRecallRanges = useMemo(
-        () => activeDesignChains.map(chain => buildManualRangeString(chain, selectedSequenceRecallResidues)).filter(Boolean).join(','),
-        [activeDesignChains, selectedSequenceRecallResidues],
+        () => (nativeRedesignMode === 'native_recall' ? activeProteinChains : activeDesignChains).map(chain => buildManualRangeString(chain, selectedSequenceRecallResidues)).filter(Boolean).join(','),
+        [activeDesignChains, activeProteinChains, nativeRedesignMode, selectedSequenceRecallResidues],
     );
     const activeRoleResidues = useMemo(() => {
         if (activeResidueRole === 'recall') return selectedSequenceRecallResidues;
@@ -704,22 +708,25 @@ export function ProteinLocalRedesignTemplate({
 
     let fampnnError = '';
     try { hydrateFampnnOverrides(fampnnOverrides); } catch (error) { fampnnError = String(error); }
+    const requestedPartialT = nativeRedesignMode === 'partial_diffusion' ? nativePartialT
+        : nativeRedesignMode === initialValues?.redesign_mode && Object.hasOwn(initialValues ?? {}, 'partial_t') ? initialValues?.partial_t : undefined;
     const projectDraftJson = JSON.stringify({
         // Preserve invalid imported requests for explicit repair, never broaden to defaults.
         fampnn_analysis_overrides: fampnnOverrides,
         source_structure: selectedTarget?.sourceStructure, _source_prepared: selectedTarget?.prepared,
         input_structure: sourcePath ?? '', redesign_mode: nativeRedesignMode,
+        ...(nativeRedesignMode === 'native_recall' ? { contig: nativeRecallContig, select_fixed_atoms: nativeRecallFixedAtoms } : {}),
         design_chains: normalizeChainList(designChain), context_chains: contextChains,
         redesign_ranges: manualRangesText,
         sequence_policy: nativeRedesignMode === 'minimal_insertion'
             ? 'insert_only'
-            : rfd3SequenceRecallRanges ? 'explicit_positions' : 'preserve',
+            : (roleTextIsManual ? recallRangesText : rfd3SequenceRecallRanges) ? 'explicit_positions' : 'preserve',
         select_unfixed_sequence: roleTextIsManual ? recallRangesText : rfd3SequenceRecallRanges,
         insertion_anchor: nativeInsertionAnchor.trim(),
         insertion_min_length: nativeInsertionMinLength,
         insertion_max_length: nativeInsertionMaxLength,
         select_hotspots: nativeHotspots, select_hbond_donor: nativeHbondDonors, select_hbond_acceptor: nativeHbondAcceptors,
-        partial_t: nativePartialT, ligand: nativeLigand.trim(), num_designs: numDesigns,
+        partial_t: requestedPartialT, ligand: nativeLigand.trim(), num_designs: numDesigns,
         seed: parseOptionalIntegerInput(nativeSeed) ?? null,
         dump_trajectories: nativeDumpTrajectories, write_full_json: true,
         profile_id: nativeProfileId,
@@ -986,7 +993,7 @@ export function ProteinLocalRedesignTemplate({
         }
 
         if (isNativeLocalRedesign) {
-            if (nativeRedesignMode === 'partial_diffusion' && !effectiveRanges) {
+            if (nativeRedesignMode === 'partial_diffusion' && regionMode === 'manual_ranges' && !effectiveRanges) {
                 throw new Error('Partial diffusion requires at least one selected editable residue.');
             }
             if (nativeRedesignMode === 'minimal_insertion' && !generatedInsertionContig) {
@@ -998,8 +1005,11 @@ export function ProteinLocalRedesignTemplate({
 
             const nativeParams: Record<string, unknown> = {
                 input_structure: resolvedPath,
+                source_mapping: 'bms.rfd3.source-map.v1',
                 redesign_mode: nativeRedesignMode,
-                region_mode: 'manual_ranges',
+                region_mode: regionMode,
+                ...(regionMode === 'interface_shell' ? { interface_cutoff: interfaceCutoff, region_padding: regionPadding } : {}),
+                ...(nativeRedesignMode === 'native_recall' ? { contig: nativeRecallContig || undefined, select_fixed_atoms: nativeRecallFixedAtoms } : {}),
                 design_chains: normalizeChainList(designChain),
                 context_chains: contextChains,
                 redesign_ranges: effectiveRanges || undefined,
@@ -1014,12 +1024,12 @@ export function ProteinLocalRedesignTemplate({
                 profile_id: nativeProfileId,
                 sequence_policy: nativeRedesignMode === 'minimal_insertion'
                     ? 'insert_only'
-                    : rfd3SequenceRecallRanges ? 'explicit_positions' : 'preserve',
-                select_unfixed_sequence: rfd3SequenceRecallRanges || undefined,
+                    : (roleTextIsManual ? recallRangesText : rfd3SequenceRecallRanges) ? 'explicit_positions' : 'preserve',
+                select_unfixed_sequence: (roleTextIsManual ? recallRangesText : rfd3SequenceRecallRanges) || undefined,
                 insertion_anchor: nativeRedesignMode === 'minimal_insertion' ? nativeInsertionAnchor.trim() || undefined : undefined,
                 insertion_min_length: nativeRedesignMode === 'minimal_insertion' ? Number.parseInt(nativeInsertionMinLength, 10) : undefined,
                 insertion_max_length: nativeRedesignMode === 'minimal_insertion' ? Number.parseInt(nativeInsertionMaxLength, 10) : undefined,
-                partial_t: nativeRedesignMode === 'partial_diffusion' ? nativePartialT : undefined,
+                partial_t: requestedPartialT,
                 ligand: nativeLigand.trim() || undefined,
                 select_hotspots: nativeHotspots,
                 select_hbond_donor: nativeHbondDonors,
@@ -1427,9 +1437,11 @@ export function ProteinLocalRedesignTemplate({
                             <div className="grid gap-3 md:grid-cols-3">
                                 <label className="space-y-1 text-xs font-medium">
                                     Redesign mode
+                                    <span className="block">Requested: {nativeRedesignMode}; effective native branch: {requestedPartialT != null ? 'partial_diffusion' : 'contig'}. Saved partial_t presence is retained.</span>
                                     <select className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={nativeRedesignMode} onChange={(event) => setNativeRedesignMode(event.target.value as NativeRedesignMode)}>
                                         <option value="partial_diffusion">Partial diffusion</option>
                                         <option value="minimal_insertion">Minimal insertion</option>
+                                        <option value="native_recall">Native independent coordinate / sequence recall</option>
                                     </select>
                                 </label>
                                 <label className="space-y-1 text-xs font-medium">
@@ -1445,6 +1457,11 @@ export function ProteinLocalRedesignTemplate({
                                 </label>
                             </div>
 
+                            {nativeRedesignMode === 'native_recall' && <div className="space-y-2">
+                                <p>Native contig task. Coordinate atoms below and sequence-recall ranges above are independent; the coordinate map is authoritative in this mode. Omitted atoms retain native behavior.</p>
+                                <label>Native contig<input aria-label="Native recall contig" value={nativeRecallContig} onChange={event => setNativeRecallContig(event.target.value)} /></label>
+                                <label>Fixed coordinate atoms<NativeSelectorInput value={nativeRecallFixedAtoms} onChange={setNativeRecallFixedAtoms} /></label>
+                            </div>}
                             {nativeRedesignMode === 'minimal_insertion' && (
                                 <>
                                     <div className="grid gap-3 md:grid-cols-3">
@@ -2159,6 +2176,7 @@ export function ProteinLocalRedesignTemplate({
                     || !gpuOptions.some(gpu => gpu.index === effectiveNativePinnedGpu)))}
                 submitLabel={isNativeLocalRedesign ? 'Launch Native RFD3' : 'Launch RFD3 + Sequence + Validation'}>
                 {runDetails}
+                {isNativeLocalRedesign && workflowRequest && <DeNovoNativePreview request={workflowRequest as Partial<Job>} />}
                 <ExecutionTargetPicker workflowRequest={workflowRequest} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
             </ProteinDesignRun>
         </div>

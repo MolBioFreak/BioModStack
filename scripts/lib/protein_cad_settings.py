@@ -1,0 +1,91 @@
+"""Presence-based CAD transport; native contracts remain the settings owners."""
+from copy import deepcopy
+import json
+
+from scripts.lib.laproteina_contract import CONTROLS, MOTIF_CONTROLS
+from scripts.lib.disco_contract import NativeSettings, legacy_effective_settings
+
+
+def is_cad(model_id, mode, params):
+    return model_id == 'protein_cad_experimental' or (
+        model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
+        and params.get('generator') in {'disco', 'laproteina'})
+
+
+def settings_projection(params):
+    """Project public typed overrides without truthiness filtering or defaults.
+
+    Explicit native JSON wins over the older flat controls, matching preparer
+    precedence. Return objects; the compiler serializes exactly once.
+    """
+    result = {}
+    for model, fields in [('laproteina', CONTROLS | MOTIF_CONTROLS),
+                          ('disco', NativeSettings.__annotations__)]:
+        settings = {}
+        for field in fields:
+            key = model + '_' + field
+            if key not in params and 'pcad_' + key in params:
+                key = 'pcad_' + key
+            if key in params:
+                value = deepcopy(params[key])
+                # Existing public comma-separated seed shorthand, not JSON text.
+                if model == 'disco' and field == 'seeds' and isinstance(value, str):
+                    value = [int(token.strip()) for token in value.split(',') if token.strip()]
+                # Old motif length inputs use blank for omitted, integers otherwise.
+                if model == 'laproteina' and field in {'motif_min_length', 'motif_max_length'} and isinstance(value, str):
+                    if not value.strip():
+                        continue
+                    value = int(value)
+                settings[field] = value
+        key = f'pcad_{model}_settings_json'
+        for native_key in (model + '_settings', key):
+            if native_key in params:
+                supplied = params[native_key]
+                if isinstance(supplied, str):
+                    supplied = json.loads(supplied)
+                settings.update(deepcopy(supplied))
+        if settings or key in params or model + '_settings' in params:
+            result[key] = settings
+    if 'disco_jobs' in params:
+        result['pcad_disco_jobs_json'] = deepcopy(params['disco_jobs'])
+    if 'pcad_disco_jobs_json' in params:
+        result['pcad_disco_jobs_json'] = deepcopy(params['pcad_disco_jobs_json'])
+    return result
+
+
+def bind_new_cad_settings(model_id, mode, params):
+    """Persist native settings at fresh admission, distinguishing future replays."""
+    result = deepcopy(params)
+    if is_cad(model_id, mode, params):
+        result.update(settings_projection(params))
+        if params.get('backend', params.get('generator', params.get('pcad_backend', 'disco'))) == 'disco':
+            result.setdefault('pcad_disco_settings_json', {})
+    return result
+
+
+def replay_cad_settings(model_id, mode, source_params, params, *, overrides=None):
+    """Called only by saved-Job replay owner; never infer age from task/effort.
+
+    A persisted native settings object marks new intent, including an empty
+    object. Pre-contract saved requests retain their old effective effort.
+    Explicit resume effort overrides take precedence over historical lowering.
+    """
+    result = deepcopy(params)
+    if not is_cad(model_id, mode, source_params):
+        return result
+    backend = source_params.get('backend', source_params.get('generator', source_params.get('pcad_backend', 'disco')))
+    if backend != 'disco' or any(key in source_params for key in ('pcad_disco_settings_json', 'disco_settings')):
+        return result
+    if overrides is not None and any(key in overrides for key in (
+            'disco_effort', 'pcad_disco_effort', 'disco_settings', 'pcad_disco_settings_json')):
+        return bind_new_cad_settings(model_id, mode, result)
+    settings = settings_projection(result).get('pcad_disco_settings_json', {})
+    task = source_params.get('design_task', source_params.get('pcad_task', 'unconditional'))
+    # Resume with a newly supplied native object expresses new explicit intent.
+    if any(key in result for key in ('pcad_disco_settings_json', 'disco_settings')):
+        return result
+    if result.get('disco_effort') != source_params.get('disco_effort'):
+        return result
+    settings = legacy_effective_settings(settings, task)
+    result['pcad_disco_settings_json'] = settings
+    return result

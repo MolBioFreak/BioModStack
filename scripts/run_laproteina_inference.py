@@ -55,7 +55,8 @@ def _configure_laproteina(request: dict, output_dir: Path) -> dict:
                      "motif_max_length": max(request["target_lengths"]),
                      "segment_order": "A", "atom_selection_mode": "all_atom"}
             for key in MOTIF_CONTROLS:
-                if key in settings and settings[key] is not None and settings[key] != "":
+                explicit = key in request.get("native_settings_fields", {}).get("laproteina", [])
+                if key in settings and (explicit or (settings[key] is not None and settings[key] != "")):
                     motif[key] = settings[key]
             OmegaConf.update(cfg, "generation.dataset.motif_dict_cfg." + motif_name, motif, merge=False, force_add=True)
         elif motif_name not in cfg.generation.dataset.motif_dict_cfg:

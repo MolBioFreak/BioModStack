@@ -173,6 +173,7 @@ CONDITION_FIELDS = {
         "contig", "unindex", "select_fixed_atoms", "select_unfixed_sequence",
         "select_hotspots", "select_hbond_donor", "select_hbond_acceptor",
         "select_buried", "select_exposed", "select_partially_buried")},
+    "symmetry": {"type": "symmetry", "native": "symmetry"},
     "ligand": {"type": "string"},
     "length": {"type": "string"},
     "ori_token": {"type": "vector3"},
@@ -204,6 +205,12 @@ def conditioning_settings(raw):
                     raise ValueError(f"{key} atom dictionary values must be atom strings/lists")
                 value = dict(value)
             result[key] = value
+        elif kind == "symmetry":
+            if not isinstance(value, Mapping):
+                raise ValueError("symmetry requires the native SymmetryConfig object")
+            # Native SymmetryConfig permits additional options; do not invent a
+            # second group/applicability policy here. Its parser is authoritative.
+            result[key] = dict(value)
         elif kind == "vector3":
             if not isinstance(value, list) or len(value) != 3:
                 raise ValueError(f"{key} requires three coordinates")

@@ -14,10 +14,6 @@ import string
 from pathlib import Path
 from typing import Any
 
-from Bio.PDB import MMCIFIO, PDBParser
-from Bio.PDB.MMCIF2Dict import MMCIF2Dict
-
-
 def _column(data, key, count, default):
     value = data.get(key)
     if value is None:
@@ -26,6 +22,8 @@ def _column(data, key, count, default):
 
 
 def materialize_source(source: Path, destination: Path, *, model_serial=None) -> dict[str, Any]:
+    from Bio.PDB import MMCIFIO, PDBParser
+    from Bio.PDB.MMCIF2Dict import MMCIF2Dict
     if source.resolve() == destination.resolve():
         raise ValueError("derived source destination must not overwrite original bytes")
     opener = gzip.open if source.name.endswith('.gz') else open
@@ -171,4 +169,10 @@ def lower_native(native, mapping, path):
                 'select_buried', 'select_exposed', 'select_partially_buried', 'ligand'):
         if key in result:
             result[key] = lower_selection(result[key], mapping)
+    if isinstance(result.get('symmetry'), dict):
+        result['symmetry'] = dict(result['symmetry'])
+        if 'is_unsym_motif' in result['symmetry']:
+            result['symmetry']['is_unsym_motif'] = lower_selection(result['symmetry']['is_unsym_motif'], mapping)
+    if isinstance(result.get('redesign_motif_sidechains'), str):
+        result['redesign_motif_sidechains'] = lower_selection(result['redesign_motif_sidechains'], mapping)
     return result
