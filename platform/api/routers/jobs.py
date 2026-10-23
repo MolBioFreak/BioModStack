@@ -6327,6 +6327,7 @@ class JobExecutionPlanPreview(BaseModel):
     declared_expansions: list[dict] = Field(default_factory=list)
     deferred_preparation: list[str]
     blockers: list[dict]
+    native_review: dict | None = None
 
 
 class PreparedJobReview(BaseModel):
@@ -6414,13 +6415,17 @@ def _execution_plan_preview(job_data: JobCreate, declared_expansions=None) -> di
             'sha256': hashlib.sha256(item.payload).hexdigest() }
             for item in invocation.generated_inputs],
     }
-    return {**authority, 'approval_digest': digest(authority), 'admissible': admissible,
+    from services.native_generation_sources import native_review
+    return {**authority, 'native_review': native_review(request),
+        'approval_digest': digest(authority), 'admissible': admissible,
         'deferred_preparation': [row.component_or_dependency_id for row in deferred],
         'blockers': replace(metadata, blockers=remaining).to_dict()['blockers']}
 
 
 async def _prepare_selected_structure(job_data: JobCreate, session):
     """Retain source bytes independently of placement and scientific settings."""
+    from services.native_generation_sources import prepare_native_sources
+    await prepare_native_sources(job_data, session)
     if job_data.source_structure is None:
         return None
     from services.binder_source_materialization import resolve_structure_source

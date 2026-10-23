@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 from scripts.lib.complexa_contract import MODEL_ID, PROFILES, Request, normalize_request, parameter_schema
 
+REQUEST_FIELD = 'complexa_request'
+SOURCE_SLOT_FIELDS = {'document_id': ('structure', None)}
+
 SUPPORTED_MODES = frozenset({"generate", "evaluate"})
 
 
@@ -20,16 +23,38 @@ def bind_for_job(mode: str, params: dict, directory):
     from component_runtime import GeneratedInput
     request = normalize_job_request(mode, params['complexa_request'])
     result = {**params, 'complexa_request': request}
+    if params.get('native_sources') and params.get('complexa_request_dir'):
+        return result, ()
     relative = Path('complexa') / 'request.json'
     result.setdefault('complexa_request_dir', str(Path(directory) / relative.parent))
     return result, (GeneratedInput(relative.as_posix(), (json.dumps(request, indent=2) + '\n').encode()),)
 
 
+def source_slots_for_params(mode, params):
+    request = normalize_job_request(mode, params[REQUEST_FIELD])
+    return [request['source']['document_id']] if request.get('source') else []
+
+
+def prepare_for_job(mode, params, directory, *, resolved_sources, allowed_roots, source_identities):
+    import shutil
+    from scripts.lib.portable_inputs import _contained
+    destination = Path(directory) / 'complexa'
+    request = normalize_job_request(mode, params[REQUEST_FIELD])
+    write_request(mode, request, destination)
+    for slot in source_slots_for_params(mode, params):
+        source = _contained(Path(resolved_sources[slot]), [Path(p).resolve() for p in allowed_roots])
+        shutil.copyfile(source, destination / 'source.pdb')
+    (destination / 'sources.json').write_text(json.dumps(source_identities, indent=2) + '\n')
+    return {**params, REQUEST_FIELD: request, 'complexa_request_dir': str(destination)}
+
+
 def discovery() -> dict:
+    from services.native_generation_sources import native_sources_schema, source_slot_schema
     profiles = json.loads((Path(__file__).resolve().parents[3] / "scripts/bms_complexa/profiles.json").read_text())
     return {"model_id": MODEL_ID, "modes": sorted(SUPPORTED_MODES), "request_key": "complexa_request",
             "native_profile_defaults": profiles,
-            "schema": parameter_schema(), "profiles": {
+            "native_sources_schema": native_sources_schema(),
+            "schema": source_slot_schema(parameter_schema(), MODEL_ID), "profiles": {
                 task: {"native_config": profile, "checkpoint_pair": pair,
                        "native_generation": branch + "_generate", "native_evaluation": branch + "_evaluate"}
                 for task, (profile, pair, branch) in PROFILES.items()},

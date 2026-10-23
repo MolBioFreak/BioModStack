@@ -17,6 +17,12 @@ REQUEST_FIELD='rfd4_request'
 PREPARED_FIELD='rfd4_prepared_request'
 BINDINGS_FIELD='rfd4_bindings'
 DIRECTORY='rfd4_proteina'
+SOURCE_SLOT_FIELDS = {
+    'slots': ('structure', 'items'), 'slot': ('structure', None),
+    'resume_slot': ('file', None), 'adapter_slot': ('file', None),
+    'archive_slot': ('file', None), 'ligand_params_slots': ('file', 'items'),
+    'off_target_slots': ('structure', 'additionalProperties'),
+}
 
 
 def normalize_params(mode,params):
@@ -87,6 +93,12 @@ def bind_for_job(mode, params, directory):
     return result, generated
 
 
+def source_slots_for_params(mode, params):
+    return source_slots(normalize_request(params[REQUEST_FIELD], mode))
+
+
 def generation_settings(mode='generate'):
-    return {'model_id':MODEL_ID,'mode':mode,'parameter_schema':parameter_schema(mode),
+    from services.native_generation_sources import native_sources_schema, source_slot_schema
+    return {'native_sources_schema': native_sources_schema(),
+            'model_id':MODEL_ID,'mode':mode,'parameter_schema':source_slot_schema(parameter_schema(mode), MODEL_ID),
             'request_field':REQUEST_FIELD,'contract':CONTRACT}
