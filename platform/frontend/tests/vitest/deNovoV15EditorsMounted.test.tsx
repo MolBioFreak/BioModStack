@@ -1,4 +1,5 @@
 import React, { act, useEffect } from 'react';
+import { isolateDeNovoTransport } from './deNovoTransport';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -51,6 +52,7 @@ const definition = { engine: 'proteinmpnn', initial_values: { temperature: 0.1, 
 let root: Root | undefined;
 let client: QueryClient;
 let container: HTMLDivElement;
+let restoreTransport: () => void;
 const flush = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 15)); }); };
 async function waitForViewer() {
     for (let attempt = 0; attempt < 40 && !container.querySelector('[data-testid="molecule"]'); attempt++) await flush();
@@ -76,13 +78,14 @@ async function edit(node: HTMLInputElement | HTMLTextAreaElement | HTMLSelectEle
     });
 }
 function field(label: string) {
-    const direct = container.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`);
+    const direct = container.querySelector<HTMLInputElement | HTMLSelectElement>(`input[aria-label="${label}"],select[aria-label="${label}"]`);
     if (direct) return direct;
     const owner = [...container.querySelectorAll('label')].find(node => node.textContent?.startsWith(label));
     const input = owner?.querySelector<HTMLInputElement | HTMLSelectElement>('input,select');
     if (!input) throw new Error(`Missing field ${label}`); return input;
 }
 beforeEach(() => {
+    restoreTransport = isolateDeNovoTransport();
     vi.clearAllMocks(); sessionStorage.clear();
     mocks.targets.mockResolvedValue({ data: [] });
     mocks.geometries.mockResolvedValue({ data: { geometries: [geometry('first'), geometry('second')] } });
@@ -93,7 +96,19 @@ beforeEach(() => {
         return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsText(this); });
     } });
 });
-afterEach(async () => { await unmount(); vi.unstubAllGlobals(); document.body.replaceChildren(); });
+afterEach(async () => { await unmount(); vi.unstubAllGlobals(); document.body.replaceChildren(); restoreTransport(); });
+
+it('cold two-chain native roles remain separate selected chains in the actual request owner', async () => {
+    const twoChains = pdb.replace('TER\nEND\n', '') + pdb.replaceAll(' A   ', ' B   ');
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, blob: async () => new Blob([twoChains]), json: async () => ({ structures: [], cached: [] }) })));
+    const changed = vi.fn();
+    await mount(<ProteinLocalRedesignTemplate embedded onBack={vi.fn()} onDraftChange={changed} initialValues={{ input_structure: 'retained/two-chains.pdb', _source_prepared: { path: 'retained/two-chains.pdb', format: 'pdb', sha256: 'a'.repeat(64), model_number: 1 }, design_chains: ['A', 'B'], context_chains: [], redesign_ranges: 'A1,B2', select_unfixed_sequence: 'A1,B2', seed: 0 }} />);
+    await waitForViewer();
+    await vi.waitFor(async () => { await flush(); expect(changed.mock.lastCall![0].native_job_request?.params.design_chains, JSON.stringify(changed.mock.lastCall![0])).toEqual(['A', 'B']); });
+    expect(changed.mock.lastCall![0].native_job_request.params.redesign_ranges).toBe('A1,B2');
+    expect([...container.querySelectorAll('button[aria-pressed="true"]')].filter(node => node.textContent?.startsWith('Chain ')).map(node => node.textContent)).toEqual(['Chain A (2 aa)', 'Chain B (2 aa)']);
+    expect(container.textContent).not.toContain('Saved design chain A,B is unavailable');
+});
 
 it('preserves explicitly cleared insertion bounds through serialized draft reopen', async () => {
     const changed = vi.fn();
@@ -118,10 +133,10 @@ it('keeps the real geometry controls and active preview mounted across sections,
     const upload = field('Geometry file');
     await edit(field('Geometry'), 'second');
     const preview = container.querySelector('[data-testid="mesh"]');
-    await click('Generation');
+    await click('RFD3');
     await edit(field('Deterministic seed'), '0');
     await edit(field('Target length'), '140');
-    await click('Optional next steps');
+    await click('Sequence design');
     await edit(field('Sequence policy'), 'skip');
     await edit(field('Job name'), '');
     await click('Geometry');
@@ -135,7 +150,7 @@ it('keeps the real geometry controls and active preview mounted across sections,
         shape_geometry_sha256: geometry('second').geometry_sha256, shape_length_policy: { mode: 'fixed', min: 140, max: 140 } });
     const policy = container.querySelector('[data-testid="policy"]')!;
     expect(policy.compareDocumentPosition(container.querySelector('[aria-label="Execution target"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(preview!.compareDocumentPosition(policy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(preview!.closest('.grid')?.contains(policy)).toBe(true); // Existing side-by-side workbench, not the retired vertical layout.
     await unmount();
     await mount(<ShapeBlueprintTemplate embedded initialValues={draft} onDraftChange={changed} />);
     expect(field('Geometry').value).toBe('second'); expect(field('Job name').value).toBe('');
@@ -174,7 +189,7 @@ it('prepares and submits the exact current Shape request, keeping retry identity
     try {
         await mount(<ShapeBlueprintTemplate initialValues={{ shape_sequence_policy: 'skip' }} />);
         expect(posts).toEqual([]); expect(mocks.submit).not.toHaveBeenCalled();
-        await click('Generation'); await edit(field('Target length'), '140');
+        await click('RFD3'); await edit(field('Target length'), '140');
         const panel = () => container.querySelector('[aria-label="Unsaved workflow provisioning"]')!;
         const previewCurrent = async () => {
             const node = [...panel().querySelectorAll('button')].find(b => b.textContent === 'Preview artifact downloads')!;
@@ -190,7 +205,7 @@ it('prepares and submits the exact current Shape request, keeping retry identity
         expect(execution_target_id).toBe(target.id); expect(execution_policy).toBeTruthy();
         const submitted = mocks.submit.mock.lastCall![0];
         expect(submitted.client_request_id).toBe(prepared.client_request_id);
-        await click('Optional next steps'); await click('Generation');
+        await click('Sequence design'); await click('RFD3');
         await click('Launch Shape Blueprint'); await flush();
         expect(mocks.submit.mock.lastCall![0]).toEqual(submitted);
         await edit(field('Target length'), '160');
@@ -308,23 +323,23 @@ it('prediction selects exact author/model sequence, clears and reselects ancestr
     expect(chooser().textContent).not.toContain('DNA');
     expect(chooser().value).toBe('');
     await edit(chooser(), '2:authorB');
-    expect(changed.mock.lastCall![0]).toMatchObject({ sequence: 'MK', primary_chain_id: 'authorB', source_structure: { ...retained, model_number: 2 } });
+    expect(changed.mock.lastCall![0].editor_state).toMatchObject({ sequence: 'MK', primary_chain_id: 'authorB', source_structure: { ...retained, model_number: 2 } });
     await click('Clear selected source');
-    expect(changed.mock.lastCall![0].source_structure).toBeUndefined();
-    expect(changed.mock.lastCall![0].sequence).toBe('');
+    expect(changed.mock.lastCall![0].editor_state.source_structure).toBeUndefined();
+    expect(changed.mock.lastCall![0].editor_state.sequence).toBe('');
     const cleared = JSON.parse(JSON.stringify(changed.mock.lastCall![0]));
     await unmount();
-    await mount(<StructurePredictionTemplate onBack={vi.fn()} initialValues={cleared} onDraftChange={changed} onOpenTemplateManager={save} />);
+    await mount(<StructurePredictionTemplate onBack={vi.fn()} initialValues={cleared.editor_state} onDraftChange={changed} onOpenTemplateManager={save} />);
     await edit(chooser(), '1:A');
-    expect(changed.mock.lastCall![0]).toMatchObject({ sequence: 'AG', source_structure: { ...retained, model_number: 1 } });
+    expect(changed.mock.lastCall![0].editor_state).toMatchObject({ sequence: 'AG', source_structure: { ...retained, model_number: 1 } });
     const sequenceInput = [...container.querySelectorAll<HTMLTextAreaElement>('textarea')].find(n => n.value === 'AG')!;
     expect(sequenceInput).toBeTruthy(); await edit(sequenceInput, 'AGM');
     const esmfold = [...container.querySelectorAll<HTMLButtonElement>('button')].find(n => n.querySelector('span')?.textContent === 'ESMFold2')!;
     expect(esmfold).toBeTruthy(); await act(async () => esmfold.click());
-    expect(changed.mock.lastCall![0]).toMatchObject({ pred_method: 'esmfold2', sequence: 'AGM', source_structure: { ...retained, model_number: 1 } });
+    expect(changed.mock.lastCall![0].editor_state).toMatchObject({ pred_method: 'esmfold2', sequence: 'AGM', source_structure: { ...retained, model_number: 1 } });
     await click('Save Template');
     const saved = JSON.parse(JSON.stringify(save.mock.lastCall![0].currentParams));
-    expect(saved).toEqual(changed.mock.lastCall![0]);
+    expect(saved).toEqual(changed.mock.lastCall![0].editor_state);
     await unmount();
     await mount(<StructurePredictionTemplate onBack={vi.fn()} initialValues={saved} onDraftChange={changed} />);
     await click('Launch Prediction'); await flush();
@@ -338,7 +353,7 @@ it('prediction selects exact author/model sequence, clears and reselects ancestr
     await unmount();
     await mount(<StructurePredictionTemplate onBack={vi.fn()} initialValues={{ ...request.params, source_structure: request.source_structure,
         pred_method: 'esmfold2', job_name: 'cloned prediction' }} onDraftChange={changed} />);
-    expect(changed.mock.lastCall![0]).toMatchObject({ sequence: 'AGM', source_structure: request.source_structure });
+    expect(changed.mock.lastCall![0].editor_state).toMatchObject({ sequence: 'AGM', source_structure: request.source_structure });
     expect(posts.filter(p => p.url === '/api/jobs')).toHaveLength(1);
 });
 

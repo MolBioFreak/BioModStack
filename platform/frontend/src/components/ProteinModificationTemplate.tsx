@@ -1,3 +1,4 @@
+import { DeNovoNativeGenerationSettings } from './DeNovoNativeGenerationSettings';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -18,6 +19,7 @@ export interface DeNovoNavigationState {
     modification_mode: string;
     generator?: string;
     design_task?: string;
+    native_mode?: string;
 }
 
 interface ProteinModificationTemplateProps {
@@ -61,26 +63,31 @@ const initialString = (values: Record<string, unknown> | undefined, key: string,
     return typeof value === 'string' ? value : fallback;
 };
 
-const initialNumber = (values: Record<string, unknown> | undefined, key: string, fallback: number): number => {
+const initialNumber = (values: Record<string, unknown> | undefined, key: string, fallback: number): number | '' => {
+    if (values?.[key] === '') return '';
     const value = Number(values?.[key]);
     return Number.isFinite(value) ? value : fallback;
 };
+const editedNumber = (value: string): number | '' => value === '' ? '' : Number(value);
 
 const resolveNavigation = (values?: Record<string, unknown>): DeNovoNavigationState => {
     const rawMode = values?.modification_mode;
     const modification_mode = rawMode === 'rfd3_local_redesign'
         ? 'rfd3_iteration'
         : rawMode === 'rfd3_iteration' || rawMode === 'region_redesign' || rawMode === 'shape_blueprint' ? rawMode : 'de_novo_design';
-    if (modification_mode !== 'de_novo_design') return { modification_mode };
+    const native = values?.generator === 'rfd4_proteina' || values?.generator === 'complexa';
+    const nativeMode = native ? { native_mode: typeof values?.native_mode === 'string' ? values.native_mode : 'generate' } : {};
+    if (modification_mode !== 'de_novo_design') return { modification_mode, ...(values?.generator === 'rfd4_proteina' ? { generator: 'rfd4_proteina', design_task: 'refine', ...nativeMode } : {}) };
     const engine = values?.generator ?? values?.backend;
     return {
         modification_mode,
-        generator: engine === 'disco' || engine === 'laproteina' ? engine : 'rfd3',
+        ...nativeMode,
+        generator: typeof engine === 'string' ? engine : 'rfd3',
         design_task: typeof values?.design_task === 'string' ? values.design_task : 'unconditional',
     };
 };
 const draftKey = (state: DeNovoNavigationState) => state.modification_mode === 'de_novo_design'
-    ? `${state.modification_mode}:${state.generator}:${state.design_task}` : state.modification_mode;
+    ? `${state.modification_mode}:${state.generator}:${state.design_task}${state.generator === 'rfd4_proteina' || state.generator === 'complexa' ? `:${state.native_mode ?? 'generate'}:v1` : ''}` : state.generator === 'rfd4_proteina' ? `${state.modification_mode}:rfd4_proteina:${state.native_mode ?? 'generate'}:v1` : state.modification_mode;
 
 export function ProteinModificationTemplate({
     onBack, initialValues, requiredPinnedGpu = null, onDraftChange, onNavigationChange, navigationState, runDetails, onOpenTemplateManager, launchContextId,
@@ -94,10 +101,17 @@ export function ProteinModificationTemplate({
     const initialized = useRef(false);
     if (!initialized.current) {
         const { de_novo_drafts: _drafts, ...activeValues } = initialValues ?? {};
+        for (const engine of ['laproteina', 'disco']) {
+            if (navigation.generator === engine) continue;
+            const legacy = Object.fromEntries(Object.entries(activeValues).filter(([key]) => key.startsWith(`${engine}_`)));
+            const key = draftKey({ modification_mode: 'de_novo_design', generator: engine, design_task: 'unconditional' });
+            if (Object.keys(legacy).length && !drafts.current[key]) drafts.current[key] = legacy;
+        }
         drafts.current[activeKey] = { ...drafts.current[activeKey], ...activeValues };
         initialized.current = true;
     }
     const callbacks = useRef({ onDraftChange, onNavigationChange });
+    const activeRequest = useRef<Record<string, unknown>>({});
     callbacks.current = { onDraftChange, onNavigationChange };
     const validatedRedesign = navigation.modification_mode === 'region_redesign';
     const savedMode = navigation.modification_mode;
@@ -110,9 +124,11 @@ export function ProteinModificationTemplate({
     }, [navigationSignature, navigationState]);
     const reportDraft = useCallback((draft: Record<string, unknown>) => {
         // Child snapshots replace values, including explicit clears; inactive drafts never enter requests.
-        drafts.current[activeKey] = { ...draft, modification_mode: savedMode };
+        const { native_job_request, ...editor } = draft;
+        activeRequest.current = Object.hasOwn(draft, 'native_job_request') ? { native_job_request } : {};
+        drafts.current[activeKey] = { ...editor, modification_mode: savedMode };
         callbacks.current.onDraftChange?.({ ...draft, ...navigation, modification_mode: savedMode, de_novo_drafts: { ...drafts.current } });
-    }, [activeKey, navigation.modification_mode, navigation.generator, navigation.design_task, savedMode]);
+    }, [activeKey, navigation.modification_mode, navigation.generator, navigation.design_task, navigation.native_mode, savedMode]);
     const changeNavigation = (state: DeNovoNavigationState) => {
         const next = resolveNavigation({ ...state });
         // Only shared intent seeds an untouched engine draft. Never translate
@@ -121,7 +137,7 @@ export function ProteinModificationTemplate({
         if (!Object.hasOwn(drafts.current, nextKey)) {
             const current = drafts.current[activeKey] ?? {};
             drafts.current[nextKey] = Object.fromEntries(
-                ['job_name', 'num_designs'].filter(key => Object.hasOwn(current, key)).map(key => [key, current[key]]),
+                (['rfd3', 'disco', 'laproteina'].includes(next.generator ?? '') && ['rfd3', 'disco', 'laproteina'].includes(navigation.generator ?? '') ? ['job_name', 'num_designs'] : ['job_name']).filter(key => Object.hasOwn(current, key)).map(key => [key, current[key]]),
             );
         }
         setNavigation(next);
@@ -130,12 +146,12 @@ export function ProteinModificationTemplate({
     const mode: ModificationMode = validatedRedesign ? 'rfd3_iteration' : navigation.modification_mode as ModificationMode;
     const generator = navigation.generator ?? 'rfd3';
     const task = navigation.design_task ?? 'unconditional';
-    const lastGeneration = useRef({ generator, design_task: task });
+    const lastGeneration = useRef({ generator, design_task: task, native_mode: navigation.native_mode });
     const lastRedesign = useRef(validatedRedesign || drafts.current.region_redesign ? 'region_redesign' : 'rfd3_iteration');
     const chooseMode = (next: ModificationMode) => changeNavigation(next === 'de_novo_design'
         ? { modification_mode: next, ...lastGeneration.current }
-        : { modification_mode: next === 'rfd3_iteration' ? lastRedesign.current : next });
-    if (mode === 'de_novo_design') lastGeneration.current = { generator, design_task: task };
+        : { modification_mode: next === 'rfd3_iteration' ? lastRedesign.current : next, ...(next === 'rfd3_iteration' && generator === 'rfd4_proteina' ? { generator } : {}) });
+    if (mode === 'de_novo_design') lastGeneration.current = { generator, design_task: task, native_mode: navigation.native_mode };
     if (mode === 'rfd3_iteration') lastRedesign.current = navigation.modification_mode;
     // Keep the hydration object stable while a child reports changes.
     const childValues = useRef<{ key: string; values: Record<string, unknown> } | null>(null);
@@ -151,6 +167,11 @@ export function ProteinModificationTemplate({
                     aria-pressed={mode === card.id} onClick={() => chooseMode(card.id)}
                     className={`rounded-lg border px-4 py-2 text-sm ${mode === card.id ? 'border-[var(--accent-primary)] bg-[var(--bg-tertiary)]' : 'border-[var(--border-primary)]'}`}>{card.label}</button>)}
             </nav>
+            {(generator === 'rfd4_proteina' || generator === 'complexa') && mode !== 'shape_blueprint' && <label className={labelClass}>Native mode
+                <select aria-label="Native mode" className={fieldClass} value={navigation.native_mode ?? 'generate'} onChange={event => changeNavigation({ ...navigation, native_mode: event.target.value })}>
+                    <option value="generate">Generate</option><option value="evaluate">Evaluate</option>
+                </select>
+            </label>}
             {mode === 'de_novo_design' ? <>
                 <div className="grid gap-4 sm:grid-cols-2">
                     <label className={labelClass}>Goal
@@ -159,7 +180,7 @@ export function ProteinModificationTemplate({
                             const engine = design_task === 'motif_scaffolding' ? 'laproteina' : design_task === 'unconditional' ? generator : 'disco';
                             changeNavigation({ modification_mode: mode, generator: engine, design_task });
                         }}>
-                            <option value="unconditional">Explore new folds</option>
+                            <option value="unconditional">{generator === 'rfd4_proteina' || generator === 'complexa' ? 'Native task (configure below)' : 'Explore new folds'}</option>
                             <option value="dna_conditioned">Design around DNA · DISCO</option>
                             <option value="rna_conditioned">Design around RNA · DISCO</option>
                             <option value="ligand_conditioned">Design around a small molecule · DISCO</option>
@@ -169,23 +190,26 @@ export function ProteinModificationTemplate({
                     </label>
                     <label className={labelClass}>Engine
                         <select className={fieldClass} value={generator} onChange={event => changeNavigation({ modification_mode: mode, generator: event.target.value, design_task: 'unconditional' })}>
-                            {(task === 'unconditional' ? ['rfd3', 'disco', 'laproteina'] : [generator]).map(engine => <option key={engine} value={engine}>{engine === 'rfd3' ? 'RFD3' : engine === 'disco' ? 'DISCO' : 'La-Proteina'}</option>)}
+                            {(task === 'unconditional' ? ['rfd3', 'disco', 'laproteina', 'rfd4_proteina', 'complexa'] : [generator]).map(engine => <option key={engine} value={engine}>{engine === 'rfd3' ? 'RFD3' : engine === 'disco' ? 'DISCO' : engine === 'laproteina' ? 'La-Proteina' : engine === 'rfd4_proteina' ? 'RFD4-Proteina' : engine === 'complexa' ? 'Complexa' : engine}</option>)}
                         </select>
                     </label>
                 </div>
-                <GenerationEditor key={activeKey} initialValues={childValues.current.values} generator={generator}
-                    designTask={task} runDetails={runDetails} onDraftChange={reportDraft} />
-            </> : mode === 'rfd3_iteration' ? <ProteinLocalRedesignTemplate key={activeKey} embedded
+                {generator === 'rfd4_proteina' || generator === 'complexa' ? <DeNovoNativeGenerationSettings key={activeKey} model={generator}
+                    mode={navigation.native_mode ?? 'generate'}
+                    initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />
+                    : ['rfd3', 'disco', 'laproteina'].includes(generator) ? <GenerationEditor key={activeKey} initialValues={childValues.current.values} generator={generator}
+                    designTask={task} runDetails={runDetails} onDraftChange={reportDraft} /> : <p role="alert">No native editor registered for {generator}. Retained settings have not been translated to another engine.</p>}
+            </> : mode === 'rfd3_iteration' ? <><label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} /> : <ProteinLocalRedesignTemplate key={activeKey} embedded
                 onBack={onBack} initialValues={childValues.current.values}
                 submissionModelId={validatedRedesign ? 'protein_modification_experimental' : 'protein_local_redesign'}
-                requiredPinnedGpu={requiredPinnedGpu} runDetails={runDetails} onDraftChange={reportDraft} />
+                requiredPinnedGpu={requiredPinnedGpu} runDetails={runDetails} onDraftChange={reportDraft} />}</>
                 : <ShapeBlueprintTemplate launchContextId={launchContextId} key={activeKey} embedded initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />}
             {onOpenTemplateManager && <button type="button" className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm"
                 onClick={() => onOpenTemplateManager({
-                    currentParams: { ...drafts.current[activeKey], ...navigation, modification_mode: savedMode, de_novo_drafts: { ...drafts.current } },
-                    currentModelId: mode === 'rfd3_iteration' && !validatedRedesign ? 'protein_local_redesign' : 'protein_modification_experimental',
+                    currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...navigation, modification_mode: savedMode, de_novo_drafts: { ...drafts.current } },
+                    currentModelId: generator === 'rfd4_proteina' || generator === 'complexa' ? generator : mode === 'rfd3_iteration' && !validatedRedesign ? 'protein_local_redesign' : 'protein_modification_experimental',
                     baseTemplateId: 'protein_modification_experimental',
-                    currentMode: mode === 'rfd3_iteration' ? validatedRedesign ? 'region_redesign' : 'rfd3_local_redesign' : mode,
+                    currentMode: generator === 'rfd4_proteina' || generator === 'complexa' ? navigation.native_mode ?? 'generate' : mode === 'rfd3_iteration' ? validatedRedesign ? 'region_redesign' : 'rfd3_local_redesign' : mode,
                 })}>Template Manager</button>}
         </div>
     );
@@ -264,8 +288,6 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         disco_ligand_name: ligandName,
         disco_na_sequence: nucleicSequence,
     });
-    useEffect(() => { onDraftChange(JSON.parse(draftJson)); }, [draftJson, onDraftChange]);
-
     const submitMutation = useMutation({
         mutationFn: async (payload: Partial<Job>) => submitJob(payload),
         onSuccess: async (response) => {
@@ -320,7 +342,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             setError('Job name is required.');
             return;
         }
-        if (numDesigns < 1 || !targetLengths.trim()) {
+        if (Number(numDesigns) < 1 || !targetLengths.trim()) {
             setError('Provide at least one design and one target length.');
             return;
         }
@@ -370,15 +392,15 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             setError('Job name is required.');
             return;
         }
-        if (minLength < 40 || minLength > 600 || maxLength < 40 || maxLength > 600 || minLength > maxLength) {
+        if (Number(minLength) < 40 || Number(minLength) > 600 || Number(maxLength) < 40 || Number(maxLength) > 600 || Number(minLength) > Number(maxLength)) {
             setError('Lengths must be between 40 and 600, with minimum no greater than maximum.');
             return;
         }
-        if (!Number.isInteger(numDesigns) || numDesigns < 1) {
+        if (!Number.isInteger(numDesigns) || Number(numDesigns) < 1) {
             setError('Number of designs must be at least 1.');
             return;
         }
-        if (!Number.isInteger(seed) || seed < 0) {
+        if (!Number.isInteger(seed) || Number(seed) < 0) {
             setError('Seed must be a non-negative integer.');
             return;
         }
@@ -387,9 +409,17 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     };
 
     const workflowRequest = generator === 'rfd3'
-        ? (jobName.trim() && minLength >= 40 && maxLength <= 600 && minLength <= maxLength && Number.isInteger(numDesigns) && numDesigns >= 1 && Number.isInteger(seed) && seed >= 0 ? buildDeNovoWorkflowRequest() : null)
-        : (jobName.trim() && numDesigns >= 1 && targetLengths.trim() && DE_NOVO_TASK_OPTIONS[backend].some(option => option.value === designTask) && (backend !== 'laproteina' || designTask !== 'motif_scaffolding' || motifTaskName.trim() || (motifPdb.trim() && motifContig.trim())) && (backend !== 'disco' || (designTask !== 'custom_json' || discoInputJson.trim()) && (designTask !== 'ligand_conditioned' || ligandSdf.trim()) && (!['dna_conditioned', 'rna_conditioned'].includes(designTask) || nucleicSequence.trim())) ? buildAlternativeWorkflowRequest() : null);
+        ? (jobName.trim() && Number(minLength) >= 40 && Number(maxLength) <= 600 && Number(minLength) <= Number(maxLength) && Number.isInteger(numDesigns) && Number(numDesigns) >= 1 && Number.isInteger(seed) && Number(seed) >= 0 ? buildDeNovoWorkflowRequest() : null)
+        : (jobName.trim() && Number(numDesigns) >= 1 && targetLengths.trim() && DE_NOVO_TASK_OPTIONS[backend].some(option => option.value === designTask) && (backend !== 'laproteina' || designTask !== 'motif_scaffolding' || motifTaskName.trim() || (motifPdb.trim() && motifContig.trim())) && (backend !== 'disco' || (designTask !== 'custom_json' || discoInputJson.trim()) && (designTask !== 'ligand_conditioned' || ligandSdf.trim()) && (!['dna_conditioned', 'rna_conditioned'].includes(designTask) || nucleicSequence.trim())) ? buildAlternativeWorkflowRequest() : null);
     const workflowRequestJson = JSON.stringify(workflowRequest);
+    useEffect(() => {
+        const values = JSON.parse(draftJson) as Record<string, unknown>;
+        // Migrate historical flat drafts without multiplying inactive engine defaults.
+        for (const key of Object.keys(values)) {
+            if ((key.startsWith('laproteina_') && generator !== 'laproteina') || (key.startsWith('disco_') && generator !== 'disco')) delete values[key];
+        }
+        onDraftChange({ ...values, native_job_request: JSON.parse(workflowRequestJson) });
+    }, [draftJson, workflowRequestJson, generator, onDraftChange]);
     const stableWorkflowRequest = useMemo(() => JSON.parse(workflowRequestJson) as typeof workflowRequest, [workflowRequestJson]);
     const isMotif = backend === 'laproteina' && designTask === 'motif_scaffolding';
     const contextTask = ['ligand_conditioned', 'dna_conditioned', 'rna_conditioned', 'custom_json'].includes(designTask)
@@ -411,23 +441,23 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const generationControls = <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {generator === 'rfd3' ? <>
             <label className={labelClass}>Minimum length
-                <input className={fieldClass} type="number" min={40} max={600} value={minLength} onChange={event => setMinLength(Number(event.target.value))} />
+                <input className={fieldClass} type="number" min={40} max={600} value={minLength} onChange={event => setMinLength(editedNumber(event.target.value))} />
             </label>
             <label className={labelClass}>Maximum length
-                <input className={fieldClass} type="number" min={40} max={600} value={maxLength} onChange={event => setMaxLength(Number(event.target.value))} />
+                <input className={fieldClass} type="number" min={40} max={600} value={maxLength} onChange={event => setMaxLength(editedNumber(event.target.value))} />
             </label>
             <label className={labelClass}>Number of designs
-                <input className={fieldClass} type="number" min={1} value={numDesigns} onChange={event => setNumDesigns(Number(event.target.value))} />
+                <input className={fieldClass} type="number" min={1} value={numDesigns} onChange={event => setNumDesigns(editedNumber(event.target.value))} />
             </label>
         </> : <>
             <label className={labelClass}>Target lengths
                 <input className={fieldClass} value={targetLengths} onChange={event => setTargetLengths(event.target.value)} placeholder="100,150,200" />
             </label>
             <label className={labelClass}>Requested design count
-                <input className={fieldClass} type="number" min={1} max={512} value={numDesigns} onChange={event => setNumDesigns(Number(event.target.value))} />
+                <input className={fieldClass} type="number" min={1} max={512} value={numDesigns} onChange={event => setNumDesigns(editedNumber(event.target.value))} />
             </label>
             {backend === 'laproteina' && <label className={labelClass}>Samples per length
-                <input className={fieldClass} type="number" min={1} max={512} value={laproteinaSamples} onChange={event => setLaproteinaSamples(Number(event.target.value))} />
+                <input className={fieldClass} type="number" min={1} max={512} value={laproteinaSamples} onChange={event => setLaproteinaSamples(editedNumber(event.target.value))} />
                 {isMotif && <span className="block text-xs text-[var(--text-secondary)]">Retained for unconditional sampling; not used for motifs.</span>}
             </label>}
         </>}
@@ -483,7 +513,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 <ProteinDesignPanel title={`${engineName} sampling`}>
                     {generator === 'rfd3' ? <div className="grid gap-4 sm:grid-cols-2">
                         <label className={labelClass}>Seed
-                            <input className={fieldClass} type="number" min={0} value={seed} onChange={event => setSeed(Number(event.target.value))} />
+                            <input className={fieldClass} type="number" min={0} value={seed} onChange={event => setSeed(editedNumber(event.target.value))} />
                         </label>
                         <label className="flex items-center gap-3 text-sm font-medium">
                             <input type="checkbox" checked={dumpTrajectories} onChange={event => setDumpTrajectories(event.target.checked)} />Dump trajectories
@@ -498,7 +528,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                             </select>
                         </label>
                         <label className={labelClass}>Sampling steps
-                            <input className={fieldClass} type="number" min={50} max={2000} value={laproteinaSteps} onChange={event => setLaproteinaSteps(Number(event.target.value))} />
+                            <input className={fieldClass} type="number" min={50} max={2000} value={laproteinaSteps} onChange={event => setLaproteinaSteps(editedNumber(event.target.value))} />
                         </label>
                     </div> : <>
                         <div className="grid gap-4 sm:grid-cols-2">
@@ -514,7 +544,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                                 </select>
                             </label>
                             <label className={labelClass}>Inference seed count
-                                <input className={fieldClass} type="number" min={1} max={1024} value={discoInferenceSeeds} onChange={event => setDiscoInferenceSeeds(Number(event.target.value))} />
+                                <input className={fieldClass} type="number" min={1} max={1024} value={discoInferenceSeeds} onChange={event => setDiscoInferenceSeeds(editedNumber(event.target.value))} />
                             </label>
                             <label className={labelClass}>Exact seeds
                                 <input className={fieldClass} value={discoSeeds} onChange={event => setDiscoSeeds(event.target.value)} placeholder="Optional comma-separated integers" />

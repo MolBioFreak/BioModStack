@@ -2,7 +2,8 @@ import React, { act, useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { isolateDeNovoTransport } from './deNovoTransport';
 
 const mocks = vi.hoisted(() => ({ submit: vi.fn(async (_payload: any) => ({ data: {} })) }));
 vi.mock('../../src/lib/api', async importOriginal => ({ ...await importOriginal<typeof import('../../src/lib/api')>(), fetchModelById: vi.fn(async () => ({ data: { params: [], modes: [{ id: 'design', params: [] }] } })), submitJob: mocks.submit, completeCurrentLaunchContext: vi.fn(async () => null) }));
@@ -22,7 +23,9 @@ vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: (props: any)
 
 let root: Root;
 let client: QueryClient;
-afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); vi.clearAllMocks(); });
+let restoreTransport: () => void;
+beforeEach(() => { restoreTransport = isolateDeNovoTransport(); });
+afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); vi.clearAllMocks(); restoreTransport(); });
 async function render(props: Partial<React.ComponentProps<typeof ProteinModificationTemplate>> = {}) {
     if (!root || !document.querySelector('#host')) {
         const host = document.createElement('div'); host.id = 'host'; document.body.append(host);
@@ -49,6 +52,19 @@ async function click(name: string) {
     await act(async () => button!.click());
 }
 const latest = (spy: ReturnType<typeof vi.fn>) => spy.mock.calls.at(-1)![0];
+
+it('preserves explicit cleared numeric drafts across engine switching and JSON reopen without converting them to zero', async () => {
+    const draft = vi.fn();
+    await render({ onDraftChange: draft });
+    await edit('Minimum length', ''); await edit('Seed', '');
+    await edit('Engine', 'disco'); await edit('Engine', 'rfd3');
+    expect(control('Minimum length').value).toBe(''); expect(control('Seed').value).toBe('');
+    const saved = JSON.parse(JSON.stringify(latest(draft)));
+    expect(saved.native_job_request).toBeNull();
+    await act(async () => root.unmount()); document.body.replaceChildren();
+    await render({ onDraftChange: draft, initialValues: saved });
+    expect(control('Minimum length').value).toBe(''); expect(control('Seed').value).toBe('');
+});
 
 it('defaults to one RFD3 editor and one run area after scientific inputs', async () => {
     await render({ runDetails: <div data-policy>Execution details</div> });

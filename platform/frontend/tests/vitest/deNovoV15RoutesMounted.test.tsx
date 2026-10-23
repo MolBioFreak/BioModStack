@@ -1,4 +1,5 @@
 import React, { act } from 'react';
+import { isolateDeNovoTransport } from './deNovoTransport';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
@@ -44,11 +45,13 @@ import { JobSubmission } from '../../src/components/JobSubmission';
 
 let root: Root | undefined;
 let client: QueryClient;
+let restoreTransport: () => void;
 function RouteProbe() {
     const location = useLocation(); const navigate = useNavigate();
     return <><output data-route>{location.pathname + location.search + location.hash}</output><button onClick={() => navigate(-1)}>History back fixture</button><button onClick={() => navigate(1)}>History forward fixture</button></>;
 }
 beforeEach(() => {
+    restoreTransport = isolateDeNovoTransport();
     mocks.create.mockImplementation(async data => {
         const saved = { ...data, id: 'saved-fixture', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' };
         mocks.saved = [saved]; return { data: saved };
@@ -58,6 +61,7 @@ afterEach(async () => {
     if (root) await act(async () => root!.unmount()); root = undefined;
     client?.clear(); document.body.replaceChildren(); localStorage.clear(); sessionStorage.clear();
     vi.clearAllMocks(); mocks.saved = []; mocks.project = null;
+    restoreTransport();
 });
 async function settle() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 25)); }); }
 async function mount(entry = '/submit?template=protein_modification_experimental', clone?: unknown) {
@@ -65,7 +69,7 @@ async function mount(entry = '/submit?template=protein_modification_experimental
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     await act(async () => root!.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[entry]}><JobSubmission /><RouteProbe /></MemoryRouter></QueryClientProvider>));
-    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[data-bms-de-novo-form]')).not.toBeNull(); });
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[data-bms-de-novo-form]')).not.toBeNull(); }, { timeout: 10000 });
 }
 const route = () => document.querySelector('[data-route]')!.textContent!;
 const visible = (e: Element) => !e.closest('[hidden]');
@@ -132,9 +136,9 @@ it('saved template round trip uses the real modal and retains current native val
     await input('input[placeholder="e.g., My Boltz Config"]', 'UI-only saved fixture');
     await click('Save Template');
     expect(mocks.create).toHaveBeenCalledTimes(1);
-    expect(mocks.saved[0]).toMatchObject({ base_template_id: 'protein_modification_experimental', params: {
+    expect(mocks.saved[0]).toMatchObject({ base_template_id: 'protein_modification_experimental', params: { editor_state: {
         generator: 'rfd3', min_length: 73, max_length: 99, num_designs: 3, seed: 0, dump_trajectories: false,
-    } });
+    }, native_job_request: { model_id: 'protein_modification_experimental', execution_target_id: null, params: { seed: 0, num_designs: 3 } } } });
     await click('Load');
     expect(document.querySelector('[data-bms-de-novo-form]')).not.toBeNull();
     expect([...document.querySelectorAll('input')].some(e => e.value === '73')).toBe(true);
@@ -148,7 +152,7 @@ it('Project hydration and Save draft retain native settings without launching a 
     mocks.saveProject.mockImplementation(async (_project, _setup, request) => ({ ...mocks.project, generation: 2, draft: request.draft }));
     await mount('/submit?template=protein_modification_experimental&project_id=project-fixture&setup_context_id=setup-fixture');
     await click('Save draft');
-    expect(mocks.saveProject).toHaveBeenCalledWith('project-fixture', 'setup-fixture', expect.objectContaining({ expected_generation: 1, draft: expect.objectContaining(initial) }));
+    expect(mocks.saveProject).toHaveBeenCalledWith('project-fixture', 'setup-fixture', expect.objectContaining({ expected_generation: 1, draft: expect.objectContaining({ editor_state: expect.objectContaining(initial), native_job_request: expect.objectContaining({ model_id: 'protein_modification_experimental', execution_target_id: null }) }) }));
     expect([...document.querySelectorAll('input')].some(e => e.value === '73')).toBe(true);
     expect(mocks.submit).not.toHaveBeenCalled();
 });

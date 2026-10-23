@@ -1,5 +1,6 @@
 import { prepareDeNovoContinuation, continuationRoleDefaults, nativeSequenceInput, sequenceDestinations, type DeNovoDestination } from '../lib/deNovoContinuation';
 import { sourceResultReturn } from '../lib/sourceResultReturn';
+import { deNovoAuthoringEnvelope, deNovoEditorState } from '../lib/deNovoAuthoring';
 import { materializeExactStructure, type StructureSourceSelection } from '../lib/api';
 import { launcherWorkflowTemplates, launcherExperimentalTemplates, visibleLauncherTemplates } from '../lib/launcherCatalog';
 
@@ -52,7 +53,7 @@ import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelInteg
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { ExecutionPolicyControl } from './ExecutionPolicyControl';
-import { initialExecutionPolicy } from '../lib/executionPolicy';
+import { initialExecutionPolicy, normalizeResultPolicy } from '../lib/executionPolicy';
 import { ProjectTechnicalDetails, ProjectWorkflowSetupBanner, useProjectWorkflowSetup } from './project-manager/ProjectWorkflowSetup';
 import {
     hydrateFrustraMpnnSettings,
@@ -145,7 +146,7 @@ const getCompactTemplateDescription = (template: UntypedApiValue): string => {
 };
 
 export function JobSubmission() {
-    const [initialReturnPolicy] = useState(initialExecutionPolicy);
+    const [initialReturnPolicy, setInitialReturnPolicy] = useState(initialExecutionPolicy);
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const location = useLocation();
@@ -322,7 +323,13 @@ export function JobSubmission() {
     const [projectActionBusy, setProjectActionBusy] = useState(false);
     const reportDeNovoDraft = useCallback((draft: Record<string, unknown>) => {
         deNovoDraftRef.current = draft;
-        if (projectSetup.active) setProjectDraftValues(draft);
+        if (projectSetup.active) setProjectDraftValues(deNovoAuthoringEnvelope(draft));
+    }, [projectSetup.active]);
+    useEffect(() => {
+        const refresh = () => { if (deNovoDraftRef.current && projectSetup.active) setProjectDraftValues(deNovoAuthoringEnvelope(deNovoDraftRef.current)); };
+        window.addEventListener('bms:execution-target-change', refresh);
+        window.addEventListener('bms:execution-policy-change', refresh);
+        return () => { window.removeEventListener('bms:execution-target-change', refresh); window.removeEventListener('bms:execution-policy-change', refresh); };
     }, [projectSetup.active]);
     useEffect(() => {
         if (!projectSetup.active || !projectSetup.setup) { hydratedProjectSetup.current = null; return; }
@@ -331,10 +338,11 @@ export function JobSubmission() {
         hydratedProjectSetup.current = identity;
         setBinderInitialDraft(undefined);
         binderDraftRef.current = undefined;
-        setClonedValues(projectSetup.settings as Record<string, UntypedApiValue>);
+        setClonedValues((projectSetup.settings.editor_state ?? projectSetup.settings) as Record<string, UntypedApiValue>);
         setProjectDraftValues(projectSetup.settings as Record<string, UntypedApiValue>);
-        const draft = projectSetup.settings as Record<string, UntypedApiValue>;
-        if (draft.model_id === 'protonpottsmpnn' && Object.hasOwn(draft, 'execution_target_id')) {
+        const draft = (projectSetup.settings.editor_state ?? projectSetup.settings) as Record<string, UntypedApiValue>;
+        if ((draft.modification_mode || draft.generator) && draft.execution_policy) setInitialReturnPolicy({ remote_result_policy: normalizeResultPolicy(draft.execution_policy.remote_result_policy) });
+        if ((draft.model_id === 'protonpottsmpnn' || draft.modification_mode || draft.generator) && Object.hasOwn(draft, 'execution_target_id')) {
             if (draft.execution_target_id) sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, draft.execution_target_id);
             else sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
             window.dispatchEvent(new Event('bms:execution-target-change'));
@@ -417,7 +425,7 @@ export function JobSubmission() {
         currentMode?: string;
         baseTemplateId?: string;
     }) => {
-        setTemplateManagerContext(context);
+        setTemplateManagerContext(isDeNovoModel(context.currentModelId) || context.baseTemplateId === DE_NOVO_TEMPLATE ? { ...context, currentParams: deNovoAuthoringEnvelope(context.currentParams ?? {}) } : context);
         setShowTemplateManager(true);
     };
 
@@ -607,6 +615,9 @@ export function JobSubmission() {
                 else if (isDeNovoModel(data.model_id) || isDeNovoModel(data.params?.template_model_id) || data.mode === 'shape_blueprint' || data.params?.modification_mode === 'shape_blueprint') {
                     const draft = deNovoSavedValues(data.model_id, data.mode, {
                         ...data.params, pinned_gpu: data.pinned_gpu,
+                        ...(Object.hasOwn(data, 'sequence_design') ? { sequence_design: data.sequence_design } : {}),
+                        ...(Object.hasOwn(data, 'native_sources') ? { native_sources: data.native_sources } : {}),
+                        execution_target_id: data.execution_target_id ?? null,
                         name: data.name, job_name: data.name,
                     });
                     setWizardMode('templates');
@@ -704,6 +715,7 @@ export function JobSubmission() {
     }, [routeTemplateId, selectedTemplateId, visibleApiTemplates]);
 
     const routeUserTemplate = (template: UntypedApiValue) => {
+        if (isDeNovoModel(template.model_id) || isDeNovoModel(template.base_template_id)) template = { ...template, params: deNovoEditorState(template.params ?? {}) };
         const loadedJobName = Object.hasOwn(template.params ?? {}, 'job_name') ? String(template.params.job_name ?? '')
             : Object.hasOwn(template.params ?? {}, 'name') ? String(template.params.name ?? '') : String(template.name ?? '');
         // Explicit Load replaces the whole authoring envelope. Cross-engine drafts
@@ -723,6 +735,7 @@ export function JobSubmission() {
             return;
         }
         if (isDeNovoModel(template.model_id) || isDeNovoModel(template.base_template_id)) {
+            if (template.params?.execution_policy) setInitialReturnPolicy({ remote_result_policy: normalizeResultPolicy(template.params.execution_policy.remote_result_policy) });
             const draft = deNovoSavedValues(template.model_id ?? template.base_template_id, template.mode, {
                 ...template.params,
                 job_name: loadedJobName,

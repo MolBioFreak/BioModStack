@@ -97,12 +97,15 @@ function NativeSelectorInput({ value, onChange }: { value: unknown; onChange: (v
 }
 
 // Source-bound role projection follows native range grammar; never discard a token.
-const hydrateRoleResidues = (chain: Chain, text: string): Set<string> => {
+const hydrateRoleResidues = (scope: Chain | Chain[], text: string): Set<string> => {
+    const chains = Array.isArray(scope) ? scope : [scope];
     const selected = new Set<string>();
     for (const token of text.split(/[,\n]+/).map(value => value.trim()).filter(Boolean)) {
         const match = token.match(/^(?:([^0-9,\s-]+))?(\d+)([A-Za-z]?)(?:-(?:([^0-9,\s-]+))?(\d+)([A-Za-z]?))?$/);
         if (!match) throw new Error(`Unsupported range: ${token}`);
         const [, startChain, startText, startCode, endChain, endText, endCode] = match;
+        const chain = startChain ? chains.find(item => item.id === startChain) : chains.length === 1 ? chains[0] : undefined;
+        if (!chain) throw new Error(`Range needs an explicit selected chain: ${token}`);
         const start = Number(startText), end = Number(endText ?? startText);
         if ((startChain && startChain !== chain.id) || (endChain && endChain !== chain.id)
             || end < start || (end !== start && (startCode || endCode))) throw new Error(`Range cannot be projected on chain ${chain.id}: ${token}`);
@@ -546,7 +549,7 @@ export function ProteinLocalRedesignTemplate({
                     ? summarizeChainsFromPdbContent(selectedModel.content)
                     : parsed.chains.map((chain) => ({ id: chain.id, residueCount: chain.length, type: 'protein' as ChainType }));
                 const requestedDesignChain = selectedTarget.designChainId;
-                if (requestedDesignChain && !chainSummaries.some((chain) => chain.id === requestedDesignChain && chain.type === 'protein')) {
+                if (requestedDesignChain && normalizeChainList(requestedDesignChain).some(id => !chainSummaries.some((chain) => chain.id === id && chain.type === 'protein'))) {
                     throw new Error(`Saved design chain ${requestedDesignChain} is unavailable. Select a design chain explicitly.`);
                 }
                 if (selectedTarget.contextChainIds?.some((id) => !chainSummaries.some((chain) => chain.id === id))) {
@@ -554,7 +557,7 @@ export function ProteinLocalRedesignTemplate({
                 }
                 const nextDesignChain = requestedDesignChain ?? chainSummaries.find((chain) => chain.type === 'protein')?.id ?? '';
                 setDesignChain(nextDesignChain);
-                setContextChains(selectedTarget.contextChainIds ?? chainSummaries.filter((chain) => chain.id !== nextDesignChain).map((chain) => chain.id));
+                setContextChains(selectedTarget.contextChainIds ?? chainSummaries.filter((chain) => !normalizeChainList(nextDesignChain).includes(chain.id)).map((chain) => chain.id));
             } catch (err: unknown) {
                 if (cancelled) return;
                 setParsedStructure(null);
@@ -613,10 +616,12 @@ export function ProteinLocalRedesignTemplate({
         [allChainSummaries],
     );
 
-    const activeDesignChain = useMemo(
-        () => activeProteinChains.find((chain) => chain.id === designChain) ?? null,
+    const activeDesignChains = useMemo(
+        () => activeProteinChains.filter(chain => normalizeChainList(designChain).includes(chain.id)),
         [activeProteinChains, designChain],
     );
+    // Minimal insertion remains a single-anchor operation.
+    const activeDesignChain = activeDesignChains.length === 1 ? activeDesignChains[0] : null;
 
     const generatedInsertionContig = useMemo(() => {
         const anchorText = nativeInsertionAnchor.trim();
@@ -649,9 +654,8 @@ export function ProteinLocalRedesignTemplate({
     }, [activeDesignChain, activeProteinChains, contextChains, nativeInsertionAnchor, nativeInsertionMaxLength, nativeInsertionMinLength]);
 
     const designResidueKeys = useMemo(() => {
-        if (!activeDesignChain) return new Set<string>();
-        return new Set(activeDesignChain.residues.map((residue) => residueKey(activeDesignChain, residue)));
-    }, [activeDesignChain]);
+        return new Set(activeDesignChains.flatMap(chain => chain.residues.map(residue => residueKey(chain, residue))));
+    }, [activeDesignChains]);
 
     useEffect(() => {
         setSelectedEditableResidues((current) =>
@@ -663,10 +667,10 @@ export function ProteinLocalRedesignTemplate({
     }, [designResidueKeys]);
 
     useEffect(() => {
-        if (!pendingRoleHydration || !activeDesignChain) return;
+        if (!pendingRoleHydration || !activeDesignChains.length) return;
         try {
-            const editable = hydrateRoleResidues(activeDesignChain, pendingRoleHydration.editable);
-            const recalled = hydrateRoleResidues(activeDesignChain, pendingRoleHydration.recall);
+            const editable = hydrateRoleResidues(activeDesignChains, pendingRoleHydration.editable);
+            const recalled = hydrateRoleResidues(activeDesignChains, pendingRoleHydration.recall);
             if ([...recalled].some(key => !editable.has(key))) throw new Error('Sequence recall must be a subset of editable residues.');
             setSelectedEditableResidues(editable);
             setSelectedSequenceRecallResidues(recalled);
@@ -674,15 +678,15 @@ export function ProteinLocalRedesignTemplate({
             setPendingRoleHydration(null);
         } catch (error) { setRoleHydrationError(String(error)); }
 
-    }, [activeDesignChain, pendingRoleHydration]);
+    }, [activeDesignChains, pendingRoleHydration]);
 
     const derivedManualRanges = useMemo(
-        () => buildManualRangeString(activeDesignChain, selectedEditableResidues),
-        [activeDesignChain, selectedEditableResidues],
+        () => activeDesignChains.map(chain => buildManualRangeString(chain, selectedEditableResidues)).filter(Boolean).join(','),
+        [activeDesignChains, selectedEditableResidues],
     );
     const rfd3SequenceRecallRanges = useMemo(
-        () => buildManualRangeString(activeDesignChain, selectedSequenceRecallResidues),
-        [activeDesignChain, selectedSequenceRecallResidues],
+        () => activeDesignChains.map(chain => buildManualRangeString(chain, selectedSequenceRecallResidues)).filter(Boolean).join(','),
+        [activeDesignChains, selectedSequenceRecallResidues],
     );
     const activeRoleResidues = useMemo(() => {
         if (activeResidueRole === 'recall') return selectedSequenceRecallResidues;
@@ -738,10 +742,7 @@ export function ProteinLocalRedesignTemplate({
         source_boltz_sampling_steps: sourceBoltzSamplingSteps, source_boltz_num_samples: sourceBoltzNumSamples,
         source_boltz_max_parallel_samples: sourceBoltzMaxParallelSamples, source_simulation_job_id: sourceSimulationJobId,
     });
-    useEffect(() => {
-        if (hydratedValues !== initialValues) return;
-        onDraftChange?.(JSON.parse(projectDraftJson) as Record<string, unknown>);
-    }, [onDraftChange, projectDraftJson, hydratedValues, initialValues]);
+
 
     const handleResidueRoleSelectionChange = (residues: Set<string>) => {
         setRoleTextIsManual(false);
@@ -967,7 +968,7 @@ export function ProteinLocalRedesignTemplate({
         if (nativeSelectorError) throw new Error(nativeSelectorError);
         if (roleHydrationError || pendingRoleHydration) throw new Error(roleHydrationError || 'Source selectors are still loading.');
         const effectiveRanges = (manualRangesText || derivedManualRanges).trim();
-        if (activeDesignChain && regionMode === 'manual_ranges' && effectiveRanges) hydrateRoleResidues(activeDesignChain, effectiveRanges);
+        if (activeDesignChains.length && regionMode === 'manual_ranges' && effectiveRanges) hydrateRoleResidues(activeDesignChains, effectiveRanges);
         if (!isNativeLocalRedesign && regionMode === 'manual_ranges' && !effectiveRanges) {
             throw new Error('Select editable residues visually or provide a redesign range string.');
         }
@@ -999,7 +1000,7 @@ export function ProteinLocalRedesignTemplate({
                 input_structure: resolvedPath,
                 redesign_mode: nativeRedesignMode,
                 region_mode: 'manual_ranges',
-                design_chains: designChain.trim() || undefined,
+                design_chains: normalizeChainList(designChain),
                 context_chains: contextChains,
                 redesign_ranges: effectiveRanges || undefined,
                 source_residue_identities: activeProteinChains.map((chain) => ({
@@ -1053,7 +1054,7 @@ export function ProteinLocalRedesignTemplate({
             params: {
                 input_pdb: resolvedPath,
                 model_number: selectedModelNumber ?? undefined,
-                design_chains: designChain.trim(),
+                design_chains: normalizeChainList(designChain),
                 context_chains: contextChains.length > 0 ? contextChains.join(',') : null,
                 region_mode: regionMode,
                 redesign_ranges: regionMode === 'manual_ranges' ? effectiveRanges : null,
@@ -1108,6 +1109,11 @@ export function ProteinLocalRedesignTemplate({
         if ((selectedTarget && !selectedTarget.prepared) || !sourcePath?.toLowerCase().endsWith('.pdb')) return null;
         try { return buildWorkflowRequest(sourcePath, true); } catch { return null; }
     })();
+    const workflowRequestJson = JSON.stringify(workflowRequest);
+    useEffect(() => {
+        if (hydratedValues !== initialValues) return;
+        onDraftChange?.({ ...JSON.parse(projectDraftJson), native_job_request: JSON.parse(workflowRequestJson) });
+    }, [onDraftChange, projectDraftJson, workflowRequestJson, hydratedValues, initialValues]);
 
     return (
         <div className="w-full space-y-5 text-[var(--text-primary)]" data-bms-rfd3-layout="wide" data-bms-rfd3-iteration-workbench="unified">
@@ -1225,16 +1231,17 @@ export function ProteinLocalRedesignTemplate({
                                                 <button
                                                     key={chain.id}
                                                     type="button"
-                                                    onClick={() => setDesignChain(chain.id)}
+                                                    onClick={() => { setDesignChain(current => nativeRedesignMode === 'minimal_insertion' ? chain.id : normalizeChainList(current).includes(chain.id) ? normalizeChainList(current).filter(id => id !== chain.id).join(',') : [...normalizeChainList(current), chain.id].join(',')); setContextChains(current => current.filter(id => id !== chain.id)); }}
+                                                    aria-pressed={normalizeChainList(designChain).includes(chain.id)}
                                                     className="rounded-lg border px-3 py-2 text-sm transition-all"
-                                                    style={designChain === chain.id ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}
+                                                    style={normalizeChainList(designChain).includes(chain.id) ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}
                                                 >
                                                     Chain {chain.id} ({chain.residueCount} aa)
                                                 </button>
                                             ))}
                                         </div>
                                         <p className="text-xs text-[var(--text-secondary)]">
-                                            Only protein chains are designable. The residue selector below follows this chain.
+                                            Only protein chains are designable. Each selected chain retains its own residue roles.
                                         </p>
                                     </div>
 
@@ -1242,7 +1249,7 @@ export function ProteinLocalRedesignTemplate({
                                         <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Context Chains</div>
                                         <div className="flex flex-wrap gap-2">
                                             {allChainSummaries
-                                                .filter((chain) => chain.id !== designChain)
+                                                .filter((chain) => !normalizeChainList(designChain).includes(chain.id))
                                                 .map((chain) => {
                                                     const accent = getChainTypeAccent(chain.type);
                                                     const selected = contextChains.includes(chain.id);
@@ -1347,12 +1354,12 @@ export function ProteinLocalRedesignTemplate({
                                     </div>
                                 </div>
 
-                                {activeDesignChain ? (
-                                    <EpitopeSelector
+                                {activeDesignChains.length ? activeDesignChains.map(chain => (
+                                    <EpitopeSelector key={chain.id}
                                         chains={activeProteinChains}
-                                        activeChain={designChain}
+                                        activeChain={chain.id}
                                         selectedResidues={activeRoleResidues}
-                                        onSelectionChange={handleResidueRoleSelectionChange}
+                                        onSelectionChange={selection => handleResidueRoleSelectionChange(new Set([...Array.from(activeRoleResidues).filter(key => !chain.residues.some(residue => residueKey(chain, residue) === key)), ...selection]))}
                                         selectedLabel={
                                             activeResidueRole === 'static'
                                                 ? 'Fixed scaffold residues'
@@ -1361,7 +1368,7 @@ export function ProteinLocalRedesignTemplate({
                                                     : 'Coordinate-only redesign residues'
                                         }
                                     />
-                                ) : (
+                                )) : (
                                     <div className="rounded-lg border px-4 py-8 text-sm text-[var(--text-secondary)]" style={themedInsetStyle}>
                                         Choose a source structure and design chain to enable residue picking.
                                     </div>

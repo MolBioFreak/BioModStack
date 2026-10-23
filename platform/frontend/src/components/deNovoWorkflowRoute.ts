@@ -1,11 +1,12 @@
 // Navigation metadata only. Native model owners still compile scientific requests.
 export const DE_NOVO_TEMPLATE = 'protein_modification_experimental';
-const DE_NOVO_MODELS = new Set([DE_NOVO_TEMPLATE, 'protein_local_redesign', 'protein_cad_experimental']);
-export const DE_NOVO_ROUTE_KEYS = ['modification_mode', 'generator', 'design_task'] as const;
+const DE_NOVO_MODELS = new Set([DE_NOVO_TEMPLATE, 'protein_local_redesign', 'protein_cad_experimental', 'rfd4_proteina', 'complexa']);
+export const DE_NOVO_ROUTE_KEYS = ['modification_mode', 'generator', 'design_task', 'native_mode'] as const;
 export interface DeNovoNavigationState {
     modification_mode: string;
     generator?: string;
     design_task?: string;
+    native_mode?: string;
 }
 export const isDeNovoModel = (value: unknown): boolean => typeof value === 'string' && DE_NOVO_MODELS.has(value);
 
@@ -24,8 +25,9 @@ export function deNovoSavedValues(
     );
     return {
         ...values,
+        ...(model === 'rfd4_proteina' || model === 'complexa' ? { generator: model, native_mode: mode ?? 'generate' } : {}),
         modification_mode: modificationMode,
-        ...(values.generator === undefined && typeof values.backend === 'string' ? { generator: values.backend } : {}),
+        ...(model !== 'rfd4_proteina' && model !== 'complexa' && values.generator === undefined && typeof values.backend === 'string' ? { generator: values.backend } : {}),
     };
 }
 
@@ -41,6 +43,7 @@ export function deNovoRouteValues(params: URLSearchParams): Record<string, unkno
 export function deNovoNavigation(values: Record<string, unknown>): DeNovoNavigationState {
     return {
         modification_mode: typeof values.modification_mode === 'string' ? values.modification_mode : 'de_novo_design',
+        ...(typeof values.native_mode === 'string' ? { native_mode: values.native_mode } : {}),
         ...(typeof values.generator === 'string' ? { generator: values.generator }
             : typeof values.backend === 'string' ? { generator: values.backend } : {}),
         ...(typeof values.design_task === 'string' ? { design_task: values.design_task } : {}),

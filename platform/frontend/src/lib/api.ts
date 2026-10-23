@@ -87,6 +87,22 @@ export interface CandidateResultSummary {
     reason: { code: string; message: string } | null;
 }
 
+export interface NativeGenerationSettingsInventory {
+    model_id: string;
+    mode?: string;
+    modes?: string[];
+    contract?: string;
+    request_field?: string;
+    request_key?: string;
+    parameter_schema?: import('./bioxpClient').BioXpOperatorJsonSchema;
+    schema?: import('./bioxpClient').BioXpOperatorJsonSchema;
+    limitations?: string[];
+    native_profile_defaults?: Record<string, unknown>;
+}
+
+export const fetchNativeGenerationSettings = (model: 'rfd4_proteina' | 'complexa', mode: string) =>
+    api.get<NativeGenerationSettingsInventory>(`/api/models/${model}/generation-settings`, { params: { mode } });
+
 export interface Job {
     sequence_design?: import('./generalSequenceDesign').GeneralSequenceDesignRequest | null;
     source_structure?: StructureSourceSelection | null;
