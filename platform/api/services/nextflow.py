@@ -2455,6 +2455,14 @@ async def _pin_local_invocation_images(session, job, invocation):
         if not task.cancelled():
             task.exception()
         raise
+    from services.native_generation_sources import selected_model
+    if selected_model(job) == 'rfd4_proteina':
+        from services.rfd4_proteina import resolve_oracle_runtime
+        native_mode = job.mode if job.model_id == 'rfd4_proteina' else 'generate'
+        oracle_runtime = resolve_oracle_runtime(native_mode, invocation.native_parameters,
+            image_environment=receipt['environment'])
+        receipt = {**receipt, 'environment': {**receipt['environment'],
+            'BMS_RFD4_ORACLE_RUNTIME': json.dumps(oracle_runtime, sort_keys=True)}}
     provenance = dict(job.provenance or {})
     retained = dict(provenance.get('runtime_image_references') or {})
     retained[invocation.execution_plan.plan_sha256] = receipt

@@ -404,6 +404,10 @@ def native_checkpoint_dependencies(process: str, params: dict):
     if process == 'RunRFD4Proteina':
         dependencies.append(SelectedDependency('weights:rfd4-proteina', 'weights', 'rfd4-proteina',
             'scripts.lib.rfd4_proteina_contract:selected_dependencies', selector='rfd4_proteina_bundle'))
+        from services.rfd4_proteina import selected_oracle_assets
+        for asset in selected_oracle_assets(params['rfd4_request'].get('mode', 'generate'), params):
+            dependencies.append(SelectedDependency(asset['kind'] + ':' + asset['relative_path'],
+                asset['kind'], asset['relative_path'], 'services.rfd4_proteina:selected_oracle_assets'))
     elif process == 'RunComplexa':
         from scripts.lib.complexa_contract import Request, PROFILES
         request = Request.model_validate(params['complexa_request'])

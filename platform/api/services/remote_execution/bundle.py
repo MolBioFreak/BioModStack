@@ -2072,6 +2072,16 @@ def prepare_remote_bundle(
 
     if binding:
         effective_environment.update(binding["environment"])
+    from services.native_generation_sources import selected_model
+    if selected_model(job) == 'rfd4_proteina':
+        from services.rfd4_proteina import resolve_oracle_runtime
+        # Inventory/worker CAS owners have already resolved the selected bytes.
+        # Do not recursively rewrite retained request provenance/controller state.
+        oracle_assets = {relative: runtime_path_map[str(path)] for path, relative in runtime_assets
+                         if str(path) in runtime_path_map}
+        native_mode = job.mode if job.model_id == 'rfd4_proteina' else 'generate'
+        effective_environment['BMS_RFD4_ORACLE_RUNTIME'] = json.dumps(
+            resolve_oracle_runtime(native_mode, effective_params, resolved_assets=oracle_assets), sort_keys=True)
     # Envelope-bound execution membership, not an assertion of a full Git tree.
     effective_environment['BMS_SOURCE_MEMBERSHIP_POLICY'] = SOURCE_MEMBERSHIP_POLICY
 

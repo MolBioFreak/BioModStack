@@ -108,7 +108,7 @@ async def prepare_native_sources(job, session):
     mode = job.mode if job.model_id == model else 'generate'
     try:
         slots = owner.source_slots_for_params(mode, job.params)
-        if not slots:
+        if not slots and model != 'rfd4_proteina':
             return
         bindings = TypeAdapter(NativeSources).validate_python(job.params.get('native_sources', {}))
         missing = set(slots) - bindings.keys()
