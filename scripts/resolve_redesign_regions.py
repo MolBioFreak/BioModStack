@@ -150,6 +150,62 @@ def parse_manual_ranges(
     return result
 
 
+def parse_author_ranges(value: str, design_chain: str, available: Set[ResidueKey]) -> Set[ResidueKey]:
+    """Resolve author selectors without reducing insertion identities to integers.
+
+    Singletons are exact; ranges are inclusive author-key intervals over actual
+    residues (not invented gap positions). Colon notation also supports numeric
+    chain IDs. Integer-only inputs retain the old interval result.
+    """
+    result: Set[ResidueKey] = set()
+    tokens = [token.strip() for token in str(value or "").split(",") if token.strip()]
+    if not tokens:
+        raise ValueError("manual_ranges mode requires redesign ranges")
+    for token in tokens:
+        chain, span = design_chain, token
+        if ":" in token:
+            chain, span = token.split(":", 1)
+            chain, span = chain.strip() or design_chain, span.strip()
+        elif token[0].isalpha():
+            chain, span = token[0], token[1:]
+        match = re.fullmatch(r"(-?\d+)([A-Za-z]?)(?:-(-?\d+)([A-Za-z]?))?", span)
+        if not match:
+            raise ValueError(f"Invalid redesign range token '{token}'")
+        if chain != design_chain:
+            raise ValueError(f"Manual range '{token}' targets chain '{chain}', but this workflow currently supports a single design chain '{design_chain}'")
+        first, first_ic, last, last_ic = match.groups()
+        start = (int(first), first_ic)
+        if last is None:
+            result.update(key for key in available if key.chain == chain and (key.resnum, key.icode) == start)
+        else:
+            lower, upper = sorted((start, (int(last), last_ic)))
+            result.update(key for key in available if key.chain == chain and lower <= (key.resnum, key.icode) <= upper)
+    if not result:
+        raise ValueError("Manual redesign ranges did not match any residues in the design chain")
+    return result
+
+
+def residue_keys_from_indices(residues: Sequence[ResidueRecord], indices: Iterable[int]) -> Set[ResidueKey]:
+    return {residues[index].key for index in indices}
+
+
+def lower_structure_lines(lines: Sequence[str], mapping: dict) -> List[str]:
+    """Apply the existing RFD3 source-map identity derivative, never coordinates.
+
+    Also used by the merge owner on the original full selected complex, so native
+    sequence masks and the retained context use the same reversible namespace.
+    """
+    lookup = {(a['source']['chain'], int(a['source']['residue']), a['source']['insertion_code']): a['native']
+              for a in mapping['atoms']}
+    result = []
+    for line in lines:
+        if line.startswith(('ATOM', 'HETATM')):
+            native = lookup[(line[21].strip(), int(line[22:26]), line[26].strip())]
+            line = line[:21] + native['chain'] + f"{int(native['residue']):4d}" + ' ' + line[27:]
+        result.append(line)
+    return result
+
+
 def distance(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> float:
     dx = a[0] - b[0]
     dy = a[1] - b[1]
@@ -298,11 +354,11 @@ def main() -> None:
         raise SystemExit(f"Design chain '{design_chain}' not found in {input_pdb}")
 
     design_residues = chains[design_chain]
-    available_resnums = {residue.key.resnum for residue in design_residues}
+    available_keys = {residue.key for residue in design_residues}
     if args.region_mode == "manual_ranges":
-        movable_resnums = parse_manual_ranges(args.redesign_ranges, design_chain, available_resnums)
+        movable_keys = parse_author_ranges(args.redesign_ranges, design_chain, available_keys)
         movable_indices = {
-            index for index, residue in enumerate(design_residues) if residue.key.resnum in movable_resnums
+            index for index, residue in enumerate(design_residues) if residue.key in movable_keys
         }
     else:
         context_residues = [
@@ -316,19 +372,51 @@ def main() -> None:
             cutoff=float(args.interface_cutoff),
             padding=max(0, int(args.region_padding)),
         )
-        movable_resnums = residue_numbers_from_indices(design_residues, movable_indices)
+        movable_keys = residue_keys_from_indices(design_residues, movable_indices)
 
-    sequence_redesign_resnums = set(movable_resnums)
+    sequence_keys = set(movable_keys)
     if str(args.sequence_redesign_ranges or "").strip():
-        sequence_redesign_resnums = parse_manual_ranges(
-            args.sequence_redesign_ranges,
-            design_chain,
-            available_resnums,
-        )
-        outside_movable = sequence_redesign_resnums - movable_resnums
-        if outside_movable:
+        sequence_keys = parse_author_ranges(args.sequence_redesign_ranges, design_chain, available_keys)
+        if sequence_keys - movable_keys:
             raise ValueError("Sequence-redesign ranges must be a subset of coordinate-edit ranges")
 
+    # Dialect-2 integer contigs and sequence native readers cannot express
+    # insertion-coded identities. Reuse the RFD3 source-map owner only for that
+    # branch, retaining the untouched input and an explicit atom-level inverse.
+    source_mapping = None
+    source_regions = None
+    if any(r.key.icode for group in chains.values() for r in group):
+        if __package__:
+            from .rfd3_local_redesign.source_mapping import materialize_source
+        else:
+            from rfd3_local_redesign.source_mapping import materialize_source
+        derivative = Path(args.output_manifest).with_suffix('.native.cif')
+        # A selected CIF may already have been materialized as a single-model
+        # PDB while its request still retains the original MODEL serial. Do not
+        # ask the native map owner to select nonexistent MODEL2 in that derivative.
+        has_models = any(line.startswith('MODEL') for line in input_pdb.read_text(encoding='utf-8').splitlines())
+        source_mapping = materialize_source(
+            input_pdb, derivative, model_serial=resolved_model_number if has_models else None)
+        key_map = {ResidueKey(a['source']['chain'], int(a['source']['residue']), a['source']['insertion_code']):
+                   ResidueKey(a['native']['chain'], int(a['native']['residue']), a['native']['insertion_code'])
+                   for a in source_mapping['atoms']}
+        source_regions = {
+            'design_chain': design_chain,
+            'movable': [r.key.token for r in design_residues if r.key in movable_keys],
+            'sequence_redesign': [r.key.token for r in design_residues if r.key in sequence_keys],
+            'fixed': [r.key.token for group in chains.values() for r in group if r.key not in movable_keys],
+            'sequence_fixed': [r.key.token for group in chains.values() for r in group if r.key not in sequence_keys],
+        }
+        structure_lines = lower_structure_lines(structure_lines, source_mapping)
+        design_chain = key_map[design_residues[0].key].chain
+        context_chains = list(dict.fromkeys(key_map[r.key].chain for c in context_chains for r in chains.get(c, [])))
+        chains = parse_pdb_residues_from_lines(structure_lines)
+        design_residues = chains[design_chain]
+        movable_keys = {key_map[key] for key in movable_keys}
+        sequence_keys = {key_map[key] for key in sequence_keys}
+
+    movable_resnums = {key.resnum for key in movable_keys}
+    sequence_redesign_resnums = {key.resnum for key in sequence_keys}
     fixed_by_chain: Dict[str, Set[int]] = OrderedDict()
     sequence_fixed_by_chain: Dict[str, Set[int]] = OrderedDict()
     movable_by_chain: Dict[str, Set[int]] = OrderedDict()
@@ -378,6 +466,25 @@ def main() -> None:
         "design_chain_length": len(design_residues),
         "rfd3_mode": "monomer_motifscaff",
     }
+    if source_mapping is not None:
+        import hashlib
+        manifest['source_mapping'] = source_mapping
+        manifest['source_regions'] = source_regions
+        # Keep source sequence identity even for coordinate-edit / sequence-fixed
+        # residues. Length-only contig blocks create new ALA residues and erase
+        # that distinction in the actual dialect-2 consumer.
+        manifest['contig_spec'] = f"[{build_spec(design_chain, (r.key.resnum for r in design_residues))}]"
+        design_fixed = fixed_by_chain[design_chain]
+        manifest['native_rfd3'] = {
+            # Explicit empty atom lists matter: an omitted token retains native
+            # default fixed coordinates even when other tokens are selected.
+            'select_fixed_atoms': {
+                **({build_spec(design_chain, design_fixed): 'ALL'} if design_fixed else {}),
+                movable_spec: [],
+            },
+            'select_unfixed_sequence': build_spec(design_chain, sequence_redesign_resnums),
+        }
+        manifest['seed_sha256'] = hashlib.sha256(output_seed_pdb.read_bytes()).hexdigest()
     output_manifest.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
