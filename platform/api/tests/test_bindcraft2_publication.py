@@ -1,8 +1,11 @@
 """Hand-authored publication fixtures; no native GPU acceptance claim."""
+import asyncio
+import copy
 import csv
 import hashlib
 import json
 import shutil
+import threading
 
 import pytest
 from sqlalchemy import select
@@ -201,5 +204,135 @@ async def test_returned_tree_has_same_scientific_readback(tmp_path):
             assert local_receipt['files'] == remote_receipt['files']
             await session.rollback()
             assert not (await session.scalars(select(JobArtifact))).all()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('zero', [False, True])
+async def test_native_readback_scan_keeps_event_loop_responsive(tmp_path, monkeypatch, zero):
+    from sqlalchemy import event
+    from services import bindcraft2_publication as owner
+
+    root = tmp_path / 'native'
+    campaign(root, zero=zero)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'db.sqlite'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    release = threading.Event()
+    task = heartbeat_task = None
+    try:
+        async with factory() as session:
+            job = Job(id='responsive', name='BC2', status='completed', model_id='bindcraft2',
+                      mode='campaign', params={}, output_dir=str(root))
+            session.add(job)
+            await session.flush()
+            assert await ingest_job_results(job.id, str(root), session, commit=False) == (0 if zero else 1)
+            expected_publication, expected_receipt = await read_published_native_results(job, session)
+            sealed_receipt = copy.deepcopy(job.provenance)
+            sealed_bytes = {p.relative_to(root).as_posix(): p.read_bytes()
+                            for p in root.rglob('*') if p.is_file()}
+            loop = asyncio.get_running_loop()
+            loop_thread = threading.get_ident()
+            entered = asyncio.Event()
+            heartbeat = asyncio.Event()
+            scan_threads = []
+            inventory_threads = []
+            sql_threads = []
+            real_reader = owner.read_native_publication
+            real_inventory = owner._inventory
+
+            @event.listens_for(engine.sync_engine, 'before_cursor_execute')
+            def check_sql_thread(*args):
+                sql_threads.append(threading.get_ident())
+                assert threading.get_ident() == loop_thread
+
+            def held_reader(path, **kwargs):
+                scan_threads.append(threading.get_ident())
+                # Fail immediately on the baseline, rather than deadlocking its
+                # event loop on a gate that only that event loop can release.
+                assert threading.get_ident() != loop_thread, 'native scan ran on event-loop thread'
+                loop.call_soon_threadsafe(entered.set)
+                assert release.wait(10), 'test did not release native scan'
+                return real_reader(path, **kwargs)
+
+            def checked_inventory(*args, **kwargs):
+                inventory_threads.append(threading.get_ident())
+                assert threading.get_ident() != loop_thread
+                return real_inventory(*args, **kwargs)
+
+            async def pulse():
+                await entered.wait()
+                await asyncio.sleep(0)
+                heartbeat.set()
+
+            monkeypatch.setattr(owner, 'read_native_publication', held_reader)
+            monkeypatch.setattr(owner, '_inventory', checked_inventory)
+            task = asyncio.create_task(read_published_native_results(job, session))
+            heartbeat_task = asyncio.create_task(pulse())
+            # Propagate the baseline assertion without waiting for the guard.
+            await asyncio.wait({task, heartbeat_task}, timeout=10, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                await task
+                pytest.fail('readback completed before the native scan was released')
+            assert entered.is_set() and heartbeat.is_set()
+            assert not release.is_set()
+            release.set()
+            publication, receipt = await asyncio.wait_for(task, timeout=10)
+            assert scan_threads and inventory_threads == scan_threads
+            assert sql_threads and set(sql_threads) == {loop_thread}
+            assert publication == expected_publication
+            assert receipt == expected_receipt
+            assert job.provenance == sealed_receipt
+            assert len(receipt['candidates']) == (0 if zero else 1)
+            assert len(receipt['native_documents']) == (0 if zero else 2)
+            assert {p.relative_to(root).as_posix(): p.read_bytes()
+                    for p in root.rglob('*') if p.is_file()} == sealed_bytes
+            assert not session.new and not session.dirty and not session.deleted
+    finally:
+        release.set()
+        for pending in (task, heartbeat_task):
+            if pending is not None:
+                if not pending.done():
+                    pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failing_stage', ['read_native_publication', '_inventory'])
+async def test_native_readback_scan_propagates_exception(tmp_path, monkeypatch, failing_stage):
+    from services import bindcraft2_publication as owner
+
+    root = tmp_path / 'native'
+    campaign(root)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'db.sqlite'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            job = Job(id='error', name='BC2', status='completed', model_id='bindcraft2',
+                      mode='campaign', params={}, output_dir=str(root))
+            session.add(job)
+            await session.flush()
+            assert await ingest_job_results(job.id, str(root), session, commit=False) == 1
+            sealed_receipt = copy.deepcopy(job.provenance)
+            real_stage = getattr(owner, failing_stage)
+            error = PublicationError('native scan sentinel')
+
+            def failing_scan(*args, **kwargs):
+                real_stage(*args, **kwargs)
+                raise error
+
+            with monkeypatch.context() as patch:
+                patch.setattr(owner, failing_stage, failing_scan)
+                with pytest.raises(PublicationError) as caught:
+                    await read_published_native_results(job, session)
+            assert caught.value is error
+            assert job.provenance == sealed_receipt
+            assert len((await read_published_native_results(job, session))[1]['candidates']) == 1
+            assert not session.new and not session.dirty and not session.deleted
     finally:
         await engine.dispose()
