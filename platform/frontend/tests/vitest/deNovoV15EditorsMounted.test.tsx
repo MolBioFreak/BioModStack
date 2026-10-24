@@ -1,4 +1,5 @@
 import React, { act, useEffect } from 'react';
+import { createHash } from 'node:crypto';
 import { isolateDeNovoTransport } from './deNovoTransport';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -356,6 +357,110 @@ it('prediction selects exact author/model sequence, clears and reselects ancestr
         pred_method: 'esmfold2', job_name: 'cloned prediction' }} onDraftChange={changed} />);
     expect(changed.mock.lastCall![0].editor_state).toMatchObject({ sequence: 'AGM', source_structure: request.source_structure });
     expect(posts.filter(p => p.url === '/api/jobs')).toHaveLength(1);
+});
+
+// Retained browser counterexample's exact native CIF (historical UI fixture,
+// SHA a1916e81afe2cb0511e68fc3af3c39a8801a665f14fa11ae4fe176a2dfebc5d5).
+const retainedEnsembleCif = `data_ensemble
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.auth_seq_id
+_atom_site.auth_asym_id
+_atom_site.pdbx_PDB_model_num
+ATOM 1 C CA A GLY A ? 1 B 1.000 2.000 3.000 0.5 20.0 12 A 1${' '}
+ATOM 1 C CA A GLY A ? 1 B 9.000 2.000 3.000 0.5 20.0 12 A 2${' '}
+#
+loop_
+_ma_qa_metric.id
+_ma_qa_metric.name
+_ma_qa_metric.type
+_ma_qa_metric.mode
+1 pLDDT pLDDT local
+#
+loop_
+_ma_qa_metric_local.model_id
+_ma_qa_metric_local.label_asym_id
+_ma_qa_metric_local.label_seq_id
+_ma_qa_metric_local.label_comp_id
+_ma_qa_metric_local.metric_id
+_ma_qa_metric_local.metric_value
+1 A 1 GLY 1 0
+#
+`;
+it.each(['native', 'validated'] as const)('unselected multi-MODEL CIF mounts, selects MODEL 2, reopens and prepares only the selected %s consumer', async depth => {
+    const posts = await selectedTransport(); const changed = vi.fn();
+    const exactSource = { ...source, document: { artifact_id: '70e6bea4-3518-5283-a76a-d06550619962' } };
+    const digest = 'a1916e81afe2cb0511e68fc3af3c39a8801a665f14fa11ae4fe176a2dfebc5d5';
+    expect(createHash('sha256').update(retainedEnsembleCif).digest('hex')).toBe(digest);
+    const native = { ...selectedMaterialization, path: 'inputs/retained/ensemble.cif', format: 'cif', sha256: digest,
+        model_number: null, model_numbers: [1, 2], source_structure: { ...exactSource, path: 'inputs/retained/ensemble.cif', expected_sha256: digest } };
+    const consumerPdb = 'ATOM      1  CA AGLY A  12B      9.000   2.000   3.000  0.50 20.00           C  \nTER\nEND\n';
+    const prior = api.defaults.adapter as (config: any) => Promise<any>;
+    api.defaults.adapter = async config => {
+        if (config.url !== '/api/files/materialize-structure') return prior(config);
+        const body = JSON.parse(String(config.data));
+        posts.push({ url: config.url, body });
+        if (body.output_format === 'pdb' && body.model_number == null) throw new Error('Selected CIF has no single PDB-representable model');
+        return { data: body.output_format === 'native' ? native : { ...native, path: 'inputs/retained/model-2.pdb', format: 'pdb', model_number: 2 },
+            status: 200, statusText: 'OK', headers: {}, config };
+    };
+    vi.stubGlobal('fetch', vi.fn(async url => String(url).includes('model-2.pdb')
+        ? { ok: true, text: async () => consumerPdb }
+        : { ok: true, blob: async () => new Blob([retainedEnsembleCif]), json: async () => ({ structures: [], cached: [] }) }));
+    const prepared = await prepareDeNovoContinuation(exactSource, 'redesign');
+    expect(posts).toHaveLength(1);
+    expect(prepared.model_number).toBeUndefined();
+    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={{ ...prepared, execution_depth: depth,
+        redesign_ranges: 'A12B', select_unfixed_sequence: 'A12B', seq_method: 'mpnn', pinned_gpu: 0 }} onDraftChange={changed} />);
+    await waitForViewer();
+    const models = [...container.querySelectorAll<HTMLSelectElement>('select')].find(node => [...node.options].some(option => option.textContent?.includes('Model 2')))!;
+    expect(models, container.textContent ?? '').toBeTruthy();
+    await edit(models, '2');
+    expect(posts).toHaveLength(1); // Mounting/selecting MODEL never prepares or submits.
+    const draft = JSON.parse(JSON.stringify(changed.mock.lastCall![0]));
+    expect(draft).toMatchObject({ model_number: 2, source_structure: native.source_structure, _source_prepared: native,
+        _redesign_source_text: retainedEnsembleCif });
+    await unmount();
+    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={draft} onDraftChange={changed} />);
+    await waitForViewer();
+    expect(changed.mock.lastCall![0].model_number).toBe(2);
+    expect(posts).toHaveLength(1);
+    await click(depth === 'native' ? 'Launch Native RFD3' : 'Launch RFD3 + Sequence + Validation'); await flush();
+    expect(posts.filter(p => p.url === '/api/files/materialize-structure').map(p => p.body)).toEqual([
+        { ...exactSource, output_format: 'native' },
+        { path: native.path, expected_sha256: digest, output_format: 'pdb', model_number: 2 },
+    ]);
+    const request = posts.find(p => p.url === '/api/jobs')?.body;
+    expect(request, container.textContent ?? '').toMatchObject({ source_structure: { ...native.source_structure, model_number: 2 } });
+    expect(request.params).toMatchObject(depth === 'native' ? { input_structure: 'inputs/retained/model-2.pdb' }
+        : { input_pdb: 'inputs/retained/model-2.pdb', model_number: 1 });
+    expect(changed.mock.lastCall![0]._source_prepared).toEqual(native);
+    expect(posts.some(p => p.url === '/api/files/upload')).toBe(false);
+    // A nonrepresentable selected source keeps its native custody/error; never
+    // fall back to uploading the browser's PDB preview or submit another Job.
+    api.defaults.adapter = async config => {
+        if (config.url === '/api/files/materialize-structure') throw new Error('Selected CIF chain/residue identifiers cannot be represented in PDB');
+        return prior(config);
+    };
+    await click(depth === 'native' ? 'Launch Native RFD3' : 'Launch RFD3 + Sequence + Validation'); await flush();
+    expect(container.textContent).toContain('Selected CIF chain/residue identifiers cannot be represented in PDB');
+    expect(posts.filter(p => p.url === '/api/jobs')).toHaveLength(1);
+    expect(changed.mock.lastCall![0]).toMatchObject({ model_number: 2, source_structure: native.source_structure, _source_prepared: native });
 });
 
 it.each(['native', 'validated'] as const)('selected %s Redesign submits retained path, placement and native settings through serialized reopen', async depth => {

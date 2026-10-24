@@ -15,6 +15,37 @@ it('receives only the selected complex roles and leaves identity untouched throu
     expect(materializeExactStructure).toHaveBeenLastCalledWith({ path: 'exact.cif', expected_sha256: 'hash', output_format: 'pdb', model_number: 2 });
     expect(source.document).toEqual({ artifact_id: 'alternate', target_state: 'state2' });
 });
+it('receives an unselected multi-MODEL CIF without attempting a PDB derivative or inventing a MODEL', async () => {
+    const source = { job_id: 'producer', candidate_id: 'candidate-7', document: { artifact_id: 'alternate', target_state: 'state2' } };
+    const native = { ...materialized({ binder_chains: 'B', target_chains: 'A' }),
+        source_structure: { ...source, path: 'exact.cif', expected_sha256: 'hash' }, model_numbers: [1, 2], model_number: null };
+    vi.mocked(materializeExactStructure).mockReset().mockResolvedValueOnce(native);
+    const result = await prepareDeNovoContinuation(source, 'redesign');
+    expect(materializeExactStructure).toHaveBeenCalledExactlyOnceWith({ ...source, output_format: 'native' });
+    expect(result).toMatchObject({ input_structure: 'exact.cif', design_chains: 'B', context_chains: ['A'],
+        source_structure: native.source_structure, _redesign_source: { path: 'exact.cif', sourceStructure: native.source_structure, prepared: native } });
+    expect(result.model_number).toBeUndefined();
+    expect(result._source_prepared).toBe(native);
+    expect(result._source_native_prepared).toBe(native);
+    expect(source).not.toHaveProperty('model_number');
+});
+it.each(['sequence', 'prediction'] as const)('does not prepare a redesign derivative for the inactive %s sibling', async destination => {
+    const native = { ...materialized(), model_numbers: [1, 2], model_number: null };
+    vi.mocked(materializeExactStructure).mockReset().mockResolvedValueOnce(native);
+    const result = await prepareDeNovoContinuation({ path: 'exact.cif' }, destination);
+    expect(materializeExactStructure).toHaveBeenCalledExactlyOnceWith({ path: 'exact.cif', output_format: 'native' });
+    expect(result._source_prepared).toBe(native);
+});
+it('preserves the existing single-model CIF derivative and direct PDB receiving paths', async () => {
+    const native = { ...materialized(), model_number: null, model_numbers: [1] };
+    const pdb = { ...native, path: 'derived.pdb', format: 'pdb' as const };
+    vi.mocked(materializeExactStructure).mockReset().mockResolvedValueOnce(native).mockResolvedValueOnce(pdb);
+    expect(await prepareDeNovoContinuation({ path: 'exact.cif' }, 'redesign')).toMatchObject({ input_structure: 'derived.pdb', _source_prepared: pdb });
+    expect(materializeExactStructure).toHaveBeenLastCalledWith({ path: 'exact.cif', expected_sha256: 'hash', output_format: 'pdb' });
+    vi.mocked(materializeExactStructure).mockReset().mockResolvedValueOnce(pdb);
+    await prepareDeNovoContinuation({ path: 'derived.pdb' }, 'redesign');
+    expect(materializeExactStructure).toHaveBeenCalledTimes(1);
+});
 it('initializes sequence roles and independent monomer roles without borrowing complex roles', () => {
     expect(continuationRoleDefaults(materialized({ binder_chains: 'B', target_chains: 'A' }), 'sequence')).toEqual({ binder_chains: 'B', target_chains: 'A', design_chain: 'B', target_chain: 'A' });
     expect(continuationRoleDefaults(materialized({ binder_chains: 'A', target_chains: '' }), 'redesign')).toEqual({ design_chains: 'A', context_chains: [] });

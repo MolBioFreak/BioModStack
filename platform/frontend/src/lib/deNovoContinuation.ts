@@ -58,7 +58,10 @@ export function nativeSequenceInput(model: string, prepared: StructureMaterializ
 // Materialization retains immutable input only; never submits a scientific Job.
 export async function prepareDeNovoContinuation(source: StructureSourceSelection, destination: DeNovoDestination) {
     const native = await materializeExactStructure({ ...source, output_format: 'native' });
-    const prepared = destination !== 'redesign' || native.format === 'pdb' ? native
+    // The receiving editor already owns MODEL selection. Keep an unselected
+    // ensemble native until then; a PDB-only derivative cannot represent it.
+    const needsModelSelection = native.model_number == null && (native.model_numbers?.length ?? 0) > 1;
+    const prepared = destination !== 'redesign' || native.format === 'pdb' || needsModelSelection ? native
         : await materializeExactStructure({ path: native.path, expected_sha256: native.sha256, output_format: 'pdb', ...(native.model_number == null ? {} : { model_number: native.model_number }) });
     const retainedSource = native.source_structure ?? source;
     const common = { ...continuationRoleDefaults(native, destination), source_structure: retainedSource, _source_prepared: prepared, _source_native_prepared: native };

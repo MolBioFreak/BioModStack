@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { DeNovoNativePreview } from './DeNovoNativePreview';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
-import { completeCurrentLaunchContext, fetchDesigns, fetchJobById, submitJob, uploadImmutableFile, type Design, type Job } from '../lib/api';
+import { completeCurrentLaunchContext, fetchDesigns, fetchJobById, materializeExactStructure, submitJob, uploadImmutableFile, type Design, type Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { Rfd3SourceSelector, type Rfd3SelectedSource } from './Rfd3SourceSelector';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -14,7 +14,7 @@ import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { componentIdFromIndex } from './ligandSelectorData';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
-import { getModelByNumber, parseStructureFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
+import { getModelByNumber, parsePDB, parseStructureFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import {
     getProteinLocalRedesignUiState,
     resolveProteinLocalRedesignSourcePath,
@@ -809,8 +809,21 @@ export function ProteinLocalRedesignTemplate({
     );
 
     const resolveSourceStructurePath = async () => {
-        if (selectedTarget?.prepared && selectedModelNumber === selectedTarget.prepared.model_number) return selectedTarget.prepared.path;
-        if (sourcePath?.toLowerCase().endsWith('.pdb') && !selectedTarget) return sourcePath;
+        const prepared = selectedTarget?.prepared;
+        // Native ensemble custody stays on the selected source. Only now, after
+        // the editor's MODEL selection, prepare the PDB-only consumer input.
+        // Use the native converter rather than the lossy browser preview text.
+        if (prepared && (prepared.format === 'cif' || prepared.format === 'bcif')) {
+            const consumer = await materializeExactStructure({ path: prepared.path, expected_sha256: prepared.sha256,
+                output_format: 'pdb', ...(selectedModelNumber == null ? {} : { model_number: selectedModelNumber }) });
+            const response = await fetch(`/api/files/download/${encodeURIComponent(consumer.path)}`);
+            if (!response.ok) throw new Error(`Failed to load prepared structure (${response.status})`);
+            const parsed = parsePDB(await response.text());
+            // CIF MODEL identity and derived PDB serial are different domains.
+            return { path: consumer.path, modelNumber: parsed.models[0]?.modelNumber };
+        }
+        if (prepared && selectedModelNumber === prepared.model_number) return { path: prepared.path, modelNumber: selectedModelNumber };
+        if (sourcePath?.toLowerCase().endsWith('.pdb') && !selectedTarget) return { path: sourcePath, modelNumber: selectedModelNumber };
         if (!selectedTarget) return null;
         if (!activeModel?.content) {
             return null;
@@ -823,7 +836,7 @@ export function ProteinLocalRedesignTemplate({
         const response = await uploadImmutableFile('inputs/protein_local_redesign', sourceFile, sourceDigest);
         const uploadedPath = response.data?.path || `inputs/protein_local_redesign/${sourceFile.name}`;
         setSourcePath(uploadedPath);
-        return uploadedPath;
+        return { path: uploadedPath, modelNumber: selectedModelNumber };
     };
 
     const submitMutation = useMutation({
@@ -986,7 +999,7 @@ export function ProteinLocalRedesignTemplate({
         return effectiveRanges;
     };
 
-    const buildWorkflowRequest = (resolvedPath: string | null, forProvision = false) => {
+    const buildWorkflowRequest = (resolvedPath: string | null, forProvision = false, consumerModelNumber = selectedModelNumber) => {
         const effectiveRanges = validateWorkflowDraft(forProvision);
         if (!resolvedPath) {
             throw new Error('Failed to determine the source structure path for the workflow.');
@@ -1063,7 +1076,7 @@ export function ProteinLocalRedesignTemplate({
             ...(effectiveSeqMethod === 'fampnn' ? fampnnOverridePayload(fampnnOverrides) : {}),
             params: {
                 input_pdb: resolvedPath,
-                model_number: selectedModelNumber ?? undefined,
+                model_number: consumerModelNumber ?? undefined,
                 design_chains: normalizeChainList(designChain).join(','),
                 context_chains: contextChains.length > 0 ? contextChains.join(',') : null,
                 region_mode: regionMode,
@@ -1099,16 +1112,16 @@ export function ProteinLocalRedesignTemplate({
         try { validateWorkflowDraft(); }
         catch (err: unknown) { setError(err instanceof Error ? err.message : 'Invalid redesign request'); return; }
 
-        let resolvedPath: string | null = null;
+        let resolvedSource: Awaited<ReturnType<typeof resolveSourceStructurePath>> = null;
         try {
-            resolvedPath = await resolveSourceStructurePath();
+            resolvedSource = await resolveSourceStructurePath();
         } catch (err: unknown) {
             setError(err instanceof Error ? err.message : 'Failed to resolve source structure path');
             return;
         }
 
         try {
-            await submitMutation.mutateAsync(buildWorkflowRequest(resolvedPath));
+            await submitMutation.mutateAsync(buildWorkflowRequest(resolvedSource?.path ?? null, false, resolvedSource?.modelNumber));
         } catch (err: unknown) {
             setError(err instanceof Error ? err.message : 'Invalid redesign request');
         }
