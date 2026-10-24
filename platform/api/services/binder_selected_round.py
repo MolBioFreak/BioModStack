@@ -677,9 +677,20 @@ async def md_request(session, root, row, params, placement, request, step_id):
         finally:
             resolved.close()
         saved_source = document['input'].get('source_ref') or {}
-        # An already exact Design authority is the same selected source. Keep
-        # its native spelling so an existing prepared Project intent stays valid.
-        if saved_source.get('kind') != 'design' or saved_source.get('id') != row['ref'].get('design_id'):
+        # Keep the prepared Design spelling only for the same primary document,
+        # selected MODEL and consumed bytes. A Design ID alone does not identify
+        # an alternate document or ensemble member.
+        selected = row['ref']
+        same_design_source = (
+            saved_source.get('kind') == 'design'
+            and saved_source.get('id') == selected.get('design_id')
+            and not selected.get('document')
+            and not selected.get('artifact_id')
+            and not selected.get('target_state')
+            and saved_source.get('model_number') == selected.get('model')
+            and document['input'].get('expected_source_sha256') == sha
+        )
+        if not same_design_source:
             document['input'].update(source_ref=source_ref.model_dump(mode='json'), expected_source_sha256=sha)
     intent = MdNativeLaunchIntent.model_validate(document)
     preview, resolved, _ = await _compile_native_preview(intent, session)
