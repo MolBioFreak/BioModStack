@@ -60,7 +60,7 @@ def write_evaluation_tasks(request, identity, destination):
     return path.resolve()
 
 
-def oracle_environment(request, runtime_bindings):
+def oracle_environment(request, runtime_bindings, *, cache_root=None):
     """Select only the requested official oracle family, through system-owned paths.
 
     OF3 uses AF3Oracle and the official converted-weight provenance reader; BMS
@@ -70,7 +70,7 @@ def oracle_environment(request, runtime_bindings):
     active=set(deps['active_oracle_profiles'])
     selected={profile for profile in active if profile=='af2'}
     for profile in active.intersection({'af3','of3'}):
-        selected.add(request.get('oracle_parameter_family',profile))
+        selected.add(deps.get('oracle_parameter_family') or profile)
     result={}
     for family in selected:
         if family not in runtime_bindings:
@@ -78,9 +78,20 @@ def oracle_environment(request, runtime_bindings):
                 raise ValueError(f'Explicit {family.upper()} oracle requires its selected runtime path binding')
             continue  # Preserve official environment defaults when not explicitly rebound.
         prefix='AF2' if family=='af2' else 'AF3'
-        for suffix in ('IMAGE','JAX_CACHE_DIR','MODEL_DIR'):
+        for suffix in ('IMAGE', 'MODEL_DIR', 'JAX_CACHE_DIR'):
             key=prefix+'_'+suffix
-            result[key]=str(runtime_bindings[family][key])
+            if suffix == 'JAX_CACHE_DIR' and cache_root is not None:
+                # The output belongs to this attempt/task, not shared immutable CAS.
+                path = Path(cache_root).resolve() / family / 'jax'
+                path.mkdir(parents=True, exist_ok=True)
+                result[key] = str(path)
+            elif key in runtime_bindings[family]:
+                result[key]=str(runtime_bindings[family][key])
+    # Foldseek bindings were filtered by the model-owned selected-asset compiler.
+    # They are runtime authority, never an operator path or a family union.
+    for key in ('FOLDSEEK_EXEC', 'CATH_FOLDSEEK_DB', 'CATH_DOMAIN_LIST'):
+        if key in runtime_bindings.get('foldseek', {}):
+            result[key] = str(runtime_bindings['foldseek'][key])
     return result
 
 
@@ -96,7 +107,7 @@ def run(request,bindings,output,*,bundle=None,runtime_identity=None,prepared_inp
     cfg=None
     previous_environment={}
     try:
-        environment=oracle_environment(request,oracle_runtime or {})
+        environment=oracle_environment(request,oracle_runtime or {},cache_root=root/'.cache/oracles')
         previous_environment={key:os.environ.get(key) for key in environment}
         os.environ.update(environment)
         receipt['oracle_environment']=environment
@@ -157,6 +168,7 @@ def main():
               for slot,path in json.loads(Path(args.bindings).read_text()).items()}
     run(payload.get('request',payload),bindings,args.output,bundle=args.bundle,
         runtime_identity=payload.get('runtime_identity'),prepared_inputs=args.prepared_inputs,
-        oracle_runtime=payload.get('oracle_runtime'))
+        oracle_runtime=(json.loads(os.environ['BMS_RFD4_ORACLE_RUNTIME'])
+                        if 'BMS_RFD4_ORACLE_RUNTIME' in os.environ else payload.get('oracle_runtime')))
 
 if __name__=='__main__':main()
