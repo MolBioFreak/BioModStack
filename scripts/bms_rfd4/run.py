@@ -96,6 +96,15 @@ def oracle_environment(request, runtime_bindings, *, cache_root=None):
 
 
 def run(request,bindings,output,*,bundle=None,runtime_identity=None,prepared_inputs=None,config_dir=None,oracle_runtime=None):
+    from bms_rfd4.cache import compile_environment
+    request = normalize_request(request)
+    # rfproteina imports torch/cuEquivariance; cache paths must precede that import.
+    with compile_environment(request, output):
+        return _run(request, bindings, output, bundle=bundle, runtime_identity=runtime_identity,
+                    prepared_inputs=prepared_inputs, config_dir=config_dir, oracle_runtime=oracle_runtime)
+
+
+def _run(request,bindings,output,*,bundle=None,runtime_identity=None,prepared_inputs=None,config_dir=None,oracle_runtime=None):
     import rfproteina
     from omegaconf import OmegaConf
     request=normalize_request(request)

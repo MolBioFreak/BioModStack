@@ -9,16 +9,24 @@ from test_remote_bundle_runtime_gaps import package, compile_native
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('cache_binding', [False, True])
 @pytest.mark.parametrize('model_id,profile,tags', [
     ('rfd4_proteina', 'of3', None), ('rfd4_proteina', 'af2', None),
     ('rfd4_proteina', 'af3', None), ('rfd4_proteina', 'af3', []),
     ('protein_modification_experimental', 'of3', None),
     ('rfd4_proteina', 'af3', ['cath']),
 ])
-async def test_actual_selected_registry_and_remote_bundle(package, tmp_path, monkeypatch, model_id, profile, tags):
+async def test_actual_selected_registry_and_remote_bundle(package, tmp_path, monkeypatch, model_id, profile, tags, cache_binding):
     from services.remote_execution import bundle
     from model_registry import selected_execution_metadata
     roots, _, job, target, _ = package
+    expected_cache = str(Path(target.remote_root) / 'cache')
+    if cache_binding:
+        expected_cache = str(Path(target.remote_root) / "selected binding's cache")
+        target.capabilities = {'critical_runtime_binding': {
+            'paths': {'python': '/fixture/support/venv/bin/python', 'nextflow': '/fixture/nextflow'},
+            'environment': {'XDG_CACHE_HOME': expected_cache, 'BMS_DATA': '/fixture/bound-data'}}}
+        monkeypatch.setattr('services.remote_execution.critical_runtime.selected_support_root', lambda: roots['runtime'])
     p = params(profile, tags=tags)
     assets = assets_on_disk(roots['data'] / 'asset-fixture', p)
     # Install these tiny inert declarations in the *existing* managed roots.
@@ -48,6 +56,9 @@ async def test_actual_selected_registry_and_remote_bundle(package, tmp_path, mon
     assert ('weights:rfd4-oracles/of3' in logical_ids) == (profile == 'of3')
     prepared = bundle.prepare_remote_bundle(job=job, target=target, command=command,
                                            native_invocation=invocation)
+    assert prepared.envelope.environment['XDG_CACHE_HOME'] == expected_cache
+    if cache_binding:
+        assert prepared.envelope.environment['BMS_DATA'] == '/fixture/bound-data'
     runtime = json.loads(prepared.envelope.environment['BMS_RFD4_ORACLE_RUNTIME'])
     if tags == []:
         assert runtime == {}

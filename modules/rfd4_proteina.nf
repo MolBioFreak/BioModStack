@@ -28,10 +28,17 @@ process RunRFD4Proteina {
             key.endsWith('_MODEL_DIR') ? resource.path : resource.parent
         }
     }.unique().collect { value -> '--bind ' + quote(value + ':' + value + ':ro') }.join(' ')
+    def cacheRoot = params.cache_root
+    // Resolve the existing selected-image alias, never hash the SIF at launch.
+    def runtimeImage = new File(image.toString()).canonicalPath
+    def cacheAvailable = cacheRoot && new File(cacheRoot.toString()).isDirectory()
+    def cacheBind = cacheAvailable ? '--bind ' + quote(cacheRoot.toString() + ':/cache') : ''
     """
     set -euo pipefail
     mkdir -p .tmp .cache/matplotlib
     apptainer exec --no-home --nv \
+      --env BMS_RFD4_COMPILE_CACHE_ROOT=${quote(cacheAvailable ? '/cache' : '')} --env BMS_RFD4_RUNTIME_IMAGE=${quote(runtimeImage)} \
+      ${cacheBind} \
       --env TMPDIR="\$PWD/.tmp" --env MPLCONFIGDIR="\$PWD/.cache/matplotlib" \
       --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${params.gpu_id} \
       --env PYTHONPATH=/bms/scripts \

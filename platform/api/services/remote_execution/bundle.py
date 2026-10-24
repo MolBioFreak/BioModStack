@@ -2074,6 +2074,9 @@ def prepare_remote_bundle(
         effective_environment.update(binding["environment"])
     from services.native_generation_sources import selected_model
     if selected_model(job) == 'rfd4_proteina':
+        # The ordinary cache_root owner reads XDG_CACHE_HOME. Keep mutable JIT
+        # files worker-local across attempts, after selected binding overrides.
+        effective_environment.setdefault('XDG_CACHE_HOME', f'{remote_root}/cache')
         from services.rfd4_proteina import resolve_oracle_runtime
         # Inventory/worker CAS owners have already resolved the selected bytes.
         # Do not recursively rewrite retained request provenance/controller state.

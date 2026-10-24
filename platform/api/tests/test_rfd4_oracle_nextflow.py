@@ -51,7 +51,7 @@ def selected_resources(root):
             for family, values in paths.items()}
 
 
-@pytest.mark.parametrize('case', ['inactive', 'retained-selected', 'worker-override', 'empty-override'])
+@pytest.mark.parametrize('case', ['inactive', 'retained-selected', 'worker-override', 'empty-override', 'missing-cache'])
 def test_actual_rfd4_oracle_nextflow_shell(case, tmp_path):
     jar_setting = os.environ.get('BMS_TEST_NEXTFLOW_JAR')
     if not jar_setting:
@@ -94,7 +94,10 @@ print('FIXTURE ONLY: captured shell argv; no container, model or oracle executed
     config.write_text("process.executor='local'\nprocess.cpus=1\nprocess.memory='256 MB'\n"
                       "process.shell=['/bin/bash','-euo','pipefail']\n"
                       "executor.queueSize=1\nexecutor.pollInterval='100 ms'\n")
-    params = {'closure': str(closure), 'out_dir': str(run / 'published'),
+    cache = run / "worker cache's root"
+    if case != 'missing-cache':
+        cache.mkdir()
+    params = {'closure': str(closure), 'out_dir': str(run / 'published'), 'cache_root': str(cache),
               'code_root': str(ROOT), 'weights_root': str(run / 'outer-weights'),
               'container_dir': str(run / 'outer-images'), 'gpu_id': 0,
               'rfd4_proteina_bundle': str(run / 'inert-bundle')}
@@ -151,8 +154,11 @@ print('FIXTURE ONLY: captured shell argv; no container, model or oracle executed
                              'rfd4_closure/bindings.json', '--bundle',
                              str(run / 'inert-bundle'), '--output', 'rfd4_proteina']
         binds = [argv[index + 1] for index, value in enumerate(argv) if value == '--bind']
-        expected = [str(task) + ':' + str(task), str(ROOT / 'scripts') + ':/bms/scripts:ro',
-                    str(run / 'outer-weights') + ':' + str(run / 'outer-weights') + ':ro']
+        expected = ([] if case == 'missing-cache' else [str(cache) + ':/cache']) + [
+            str(task) + ':' + str(task), str(ROOT / 'scripts') + ':/bms/scripts:ro',
+            str(run / 'outer-weights') + ':' + str(run / 'outer-weights') + ':ro']
+        assert 'BMS_RFD4_COMPILE_CACHE_ROOT=' + ('' if case == 'missing-cache' else '/cache') in argv
+        assert 'BMS_RFD4_RUNTIME_IMAGE=' + str(run / 'outer-images/rfd4_proteina.sif') in argv
         selected = []
         for family in runtime.values():
             for key, value in family.items():
