@@ -440,8 +440,8 @@ export function JobSubmission() {
 
     // Dedicated templates should not retain stale clone params once user navigates away.
     const handleDedicatedTemplateBack = () => {
-        const returnTo = searchParams.get('return_to');
-        if (sourceResultReturn(returnTo)) { navigate(returnTo!); return; }
+        const returnTo = sourceResultReturn(searchParams.get('return_to'));
+        if (returnTo) { navigate(returnTo); return; }
         if (selectedTemplateId === 'antibody_denovo') setBinderInitialDraft(binderDraftRef.current);
         setSelectedTemplateId(null);
         setClonedValues(undefined);

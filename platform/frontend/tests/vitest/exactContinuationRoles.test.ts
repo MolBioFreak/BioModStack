@@ -81,3 +81,14 @@ it('cold handoff preserves exact candidate/document and PM query in the safe ret
     expect(sourceResultReturn(href.searchParams.get('return_to'))).toBe(back);
     for (const bad of ['//evil/a', '/\\evil/a', 'https://evil/designs/a', '/designs/a\\x', '/designs/a\n']) expect(sourceResultReturn(bad)).toBeNull();
 });
+it.each(['/bms/', '/lab/tools/', '/'])('receives the exact selected-result return under basename %s without double-prefixing', base => {
+    const route = '/designs/producer?native_candidate=candidate%3A0&artifact_id=alternate&project_id=p#structure';
+    const browserPath = `${base.replace(/\/+$/, '')}${route}`;
+    const received = sourceResultReturn(browserPath, base);
+    expect(received).toBe(route);
+    expect(`${base.replace(/\/+$/, '')}${received}`).toBe(browserPath);
+    expect(sourceResultReturn(route, base)).toBe(route);
+    for (const bad of ['//evil/designs/a', 'https://evil/designs/a', '/bmsx/designs/a', `${base}submit`, `${base}designs/a\\x`]) {
+        expect(sourceResultReturn(bad, base)).toBeNull();
+    }
+});
