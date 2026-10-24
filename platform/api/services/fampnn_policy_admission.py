@@ -137,7 +137,7 @@ def _local_region(params):
     # manifest, generated PDB, correspondence or hash is predicted here.
     from services import aligned_error_utils  # shared scripts import owner
     from resolve_redesign_regions import (select_structure_lines, parse_pdb_residues_from_lines,
-        parse_chain_list, parse_manual_ranges, pick_interface_shell, residue_numbers_from_indices)
+        parse_chain_list, parse_author_ranges, pick_interface_shell, residue_keys_from_indices)
     source = params.get('input_pdb') or params.get('plr_input_pdb')
     def setting(name, default=None):
         ordinary, native = params.get(name), params.get('plr_' + name)
@@ -153,25 +153,25 @@ def _local_region(params):
     if chain not in records:
         raise ValueError('local redesign chain outside input domain')
     residues = records[chain]
-    available = {r.key.resnum for r in residues}
+    available = {r.key for r in residues}
     region_mode = setting('region_mode', 'manual_ranges')
     if region_mode == 'manual_ranges':
-        movable = parse_manual_ranges(setting('redesign_ranges', ''), chain, available)
+        movable = parse_author_ranges(setting('redesign_ranges', ''), chain, available)
     elif region_mode == 'interface_shell':
         context = parse_chain_list(setting('context_chains', ''))
         if not set(context) <= set(records):
             raise ValueError('local redesign context outside input domain')
         indices = pick_interface_shell(residues, [r for c in context for r in records[c]],
             cutoff=float(setting('interface_cutoff', 6.0)), padding=max(0, int(setting('region_padding', 2))))
-        movable = residue_numbers_from_indices(residues, indices)
+        movable = residue_keys_from_indices(residues, indices)
     else:
         raise ValueError('unsupported local redesign region mode')
     sequence = setting('sequence_redesign_ranges', '')
-    selected = parse_manual_ranges(sequence, chain, available) if sequence else movable
+    selected = parse_author_ranges(sequence, chain, available) if sequence else movable
     if not selected <= movable:
         raise ValueError('sequence redesign outside coordinate-edit region')
     domain = [f'{r.key.chain}:{r.key.resnum}:{r.key.icode}' for group in records.values() for r in group]
-    authorized = [f'{r.key.chain}:{r.key.resnum}:{r.key.icode}' for r in residues if r.key.resnum in selected]
+    authorized = [f'{r.key.chain}:{r.key.resnum}:{r.key.icode}' for r in residues if r.key in selected]
     return domain, authorized
 
 

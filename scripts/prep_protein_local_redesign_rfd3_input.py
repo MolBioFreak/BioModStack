@@ -44,6 +44,8 @@ def main() -> None:
         "input": str(seed_pdb),
     }
 
+    if manifest.get("source_mapping") is not None:
+        spec.update(manifest["native_rfd3"])
     output_data = {design_key: spec}
     output_path = Path(args.output)
     output_path.write_text(json.dumps(output_data, indent=2), encoding="utf-8")

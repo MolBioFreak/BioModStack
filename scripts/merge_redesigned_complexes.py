@@ -172,6 +172,9 @@ def main() -> None:
         model_number = None
 
     original_lines = _strip_end_records(_select_structure_lines(complex_pdb, model_number))
+    if manifest.get("source_mapping") is not None:
+        from resolve_redesign_regions import lower_structure_lines
+        original_lines = lower_structure_lines(original_lines, manifest["source_mapping"])
     manifest_enrichment = {
         "protein_local_redesign": {
             "design_chain": design_chain,
@@ -184,6 +187,10 @@ def main() -> None:
             "source_complex_pdb": str(complex_pdb),
         }
     }
+
+    if manifest.get("source_mapping") is not None:
+        manifest_enrichment["protein_local_redesign"]["source_mapping"] = manifest["source_mapping"]
+        manifest_enrichment["protein_local_redesign"]["source_regions"] = manifest["source_regions"]
 
     pdb_paths = sorted(
         path for path in input_dir.glob("*.pdb")
