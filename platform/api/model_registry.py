@@ -295,6 +295,10 @@ def workflow_pack_weight_owners(workflow_id: str) -> dict[str, str]:
     not acquisition owners). Use the native leaf groups, including optional
     Protenix members, without changing the pack's dependency selection.
     """
+    if workflow_id == 'de_novo_design':
+        # This pack includes a heterogeneous generator union, not model-ID groups.
+        # Preserve its existing declared-layout acquisition-owner resolution.
+        return {}
     groups = workflow_pack_weight_groups(workflow_id)
     owners = ({group: group for group in groups} if workflow_id == 'antibody_denovo' else {
         'boltz': 'boltz2', 'esmfold2_fast': 'esmfold2',

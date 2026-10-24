@@ -12,6 +12,12 @@ from test_remote_independent_provisioning import assets
 from test_remote_preloading import store
 
 
+def test_denovo_union_keeps_native_declared_owner_resolution_without_another_pack_projection(monkeypatch):
+    monkeypatch.setattr(model_registry, 'workflow_pack_weight_groups',
+                        lambda *_: pytest.fail('native union leaves already have acquisition ownership'))
+    assert model_registry.workflow_pack_weight_owners('de_novo_design') == {}
+
+
 @pytest.fixture(params=['antibody_denovo', 'structure_prediction'])
 def pack(request, assets, monkeypatch):
     selection = WorkflowPackSelection(kind='workflow_pack', workflow_id=request.param)

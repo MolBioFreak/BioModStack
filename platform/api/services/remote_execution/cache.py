@@ -669,7 +669,7 @@ def independent_plan(selection, *, dependencies=None, publication=None):
         path = (image_reference(ref.relative_path, root)[0].resolve() if ref.kind == 'image'
                 else root / ref.relative_path)
         from .bundle import _selected_weight_members
-        selected = (_selected_weight_members(path, model_id, resolved=resolved) if ref.kind == 'weights' and model_id is not None and path.exists() else None)
+        selected = (_selected_weight_members(path, model_id, resolved=resolved) if ref.kind == 'weights' and path.exists() else None)
         if ((path.is_symlink() and selected is None) or (ref.kind != 'image' and not path.resolve().is_relative_to(root))):
             raise ValueError('Independent runtime asset is not a contained regular asset')
         prefix = {'image': 'containers/', 'weights': 'weights/',
