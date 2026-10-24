@@ -197,6 +197,10 @@ export interface MDArtifact {
 export interface RFD3LocalRedesignReadModel {
     schema: 'bms.rfd3.local-redesign.read-model.v1';
     job_id: string;
+    population?: { requested: number | null; generated: number | null; failed: number | null;
+        missing: number | null; unexpected: number | null; unpaired_artifacts: number | null };
+    execution_status?: string;
+    population_completeness?: 'complete' | 'partial' | 'unknown';
     capabilities: {
         source_structure: boolean;
         candidate_structures: boolean;

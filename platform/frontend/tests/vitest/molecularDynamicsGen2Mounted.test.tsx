@@ -41,6 +41,23 @@ vi.mock('../../src/components/MolstarViewer', () => {
 
 import { MolecularDynamicsTemplate } from '../../src/components/MolecularDynamicsTemplate';
 
+const installDurableMdDetourTransport = (sequenceId: string, draftId: string) => {
+    const get = apiMocks.get.getMockImplementation()!;
+    const post = apiMocks.post.getMockImplementation()!;
+    let snapshot: unknown;
+    apiMocks.get.mockImplementation(async (url: string) => {
+        if (url === `/api/user-sequences/${sequenceId}`) return response({ id:sequenceId, name:'Exact selected sequence', sequence:'ACDEFG', description:null, length:6, organism:null, uniprot_id:null, ncbi_id:null, is_preset:false, created_at:'2026-08-26T00:00:00Z', updated_at:null });
+        if (url === `/api/molecular-dynamics/prediction-detours/${draftId}`) return response(snapshot);
+        return get(url);
+    });
+    apiMocks.post.mockImplementation(async (url: string, body: Record<string, unknown>) => {
+        if (url === '/api/molecular-dynamics/prediction-detours') {
+            expect(body).toMatchObject({ composition:{ source_sequence_id:sequenceId, sequence:'ACDEFG' }, md_draft:{ form:{ jobName:'molecular_dynamics' } } });
+            snapshot = structuredClone(body); return response({ id:draftId });
+        }
+        return post(url, body);
+    });
+};
 const hash = (value: string) => value.repeat(64);
 const profile = {
     schema: 'bms.md.chemistry-profile.v1',
@@ -608,10 +625,11 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
             Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(sequence, 'ACDEFG');
             sequence?.dispatchEvent(new Event('input', { bubbles: true }));
         });
-        await click('Open Structure Prediction');
+        installDurableMdDetourTransport(sequenceId, draftId);
+        await click("Open Structure Prediction");
         await act(async () => {
             await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith(
-                `/submit?template=structure_prediction&source_sequence_id=${sequenceId}&return_template=molecular_dynamics&md_draft_id=${draftId}`,
+                `/submit?template=structure_prediction&source_sequence_id=${sequenceId}&return_template=molecular_dynamics&md_draft_id=${draftId}&md_operation_id=${draftId}`,
             ));
         });
         const stored = JSON.parse(sessionStorage.getItem(`bms.md.gen2.draft.v1:${draftId}`) ?? 'null');
@@ -656,10 +674,11 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
             Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(savedSelect, sequenceId);
             savedSelect?.dispatchEvent(new Event('change', { bubbles: true }));
         });
-        await click('Open Structure Prediction');
+        installDurableMdDetourTransport(sequenceId, draftId);
+        await click("Open Structure Prediction");
         await act(async () => {
             await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith(
-                `/submit?template=structure_prediction&source_sequence_id=${sequenceId}&return_template=molecular_dynamics&md_draft_id=${draftId}`,
+                `/submit?template=structure_prediction&source_sequence_id=${sequenceId}&return_template=molecular_dynamics&md_draft_id=${draftId}&md_operation_id=${draftId}`,
             ));
         });
         expect(apiMocks.post.mock.calls.some(([url]) => url === '/api/user-sequences')).toBe(false);

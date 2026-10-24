@@ -8627,6 +8627,7 @@ async def create_job(
             _md_input_resolver=_md_input_resolver,
             _approved_execution_plan=_approved_execution_plan,
             _trusted_workflow_adapter=True,
+            _bound_launch_context_id=launch_context_id,
         )
     except HTTPException:
         await session.rollback()

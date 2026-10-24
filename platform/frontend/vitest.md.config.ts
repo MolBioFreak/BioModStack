@@ -1,7 +1,13 @@
 import { defineConfig } from 'vitest/config';
+import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
     cacheDir: process.env.BMS_VITE_CACHE_DIR ?? process.env.BMS_SCIENTIFIC_VITE_CACHE,
+    // Root-owned MD cases use the same locked frontend dependencies.
+    resolve: { alias: Object.fromEntries(
+        ['react', 'react-dom', 'react-router-dom', '@tanstack/react-query', 'vitest']
+            .map(name => [name, fileURLToPath(new URL(`./node_modules/${name}`, import.meta.url))]),
+    ) },
     test: {
         environment: 'jsdom',
         setupFiles: ['./tests/vitest/setup.ts'],
@@ -54,6 +60,7 @@ export default defineConfig({
             './tests/vitest/bindcraft2ResultsDashboardMounted.test.tsx',
             './tests/vitest/binderEvidencePollingMounted.test.tsx',
             './tests/vitest/nativeGenerationWorkbenchMounted.test.tsx',
+            ...(process.env.BMS_RECEIVING_PAGE ? ['./tests/vitest/completeReceivingExportsMounted.test.tsx'] : []),
             './tests/vitest/nativeGenerationCohortMounted.test.tsx',
             './tests/vitest/protonPotts*.test.tsx',
             './tests/vitest/sequenceNativeResultsMounted.test.tsx',
@@ -68,6 +75,7 @@ export default defineConfig({
             './tests/vitest/sourceAcquisitionDogfoodMounted.test.tsx',
             './tests/vitest/binderGeneratorRouteMounted.test.tsx',
             './tests/vitest/binderRoundSettingsMounted.test.tsx',
+            './tests/vitest/operationsComposerMounted.test.tsx',
             './tests/vitest/nativeBinderGenerationMounted.test.tsx',
             './tests/vitest/binderSelectedControlsMounted.test.tsx',
             './tests/vitest/binderDiagnosticSelection.test.tsx',
@@ -129,6 +137,7 @@ export default defineConfig({
             './tests/vitest/independentProvisionMounted.test.tsx',
             './tests/vitest/managedRuntimeInventoryMounted.test.tsx',
             './tests/vitest/molecularDynamicsGen2Mounted.test.tsx',
+            '../../scripts/bms_md/test_complete_md_20261023.test.tsx',
             './tests/vitest/molecularDynamicsGen2ShellRoundTrip.test.tsx',
             './tests/vitest/molstarViewerLoadStateMounted.test.tsx',
             './tests/vitest/shapeAuthoringCompletionMounted.test.tsx',

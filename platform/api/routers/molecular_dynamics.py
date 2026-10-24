@@ -22,6 +22,7 @@ from schemas import ExecutionPolicy, JobCreate, JobResponse
 from paths import get_results_dir
 from services.stage_review import resolve_output_dir
 
+from services.md.prediction_detours import MdPredictionDetour, save_prediction_detour, load_prediction_detour
 from services.md.cancel_actuator import cancel_running_md_run
 from services.md.chemistry_catalog import ChemistryCatalogError, get_chemistry_catalog
 from services.md.feature_gate import molecular_dynamics_feature_enabled, require_molecular_dynamics_feature
@@ -66,6 +67,16 @@ from services.md.state import (
 )
 
 router = APIRouter(prefix="/api/molecular-dynamics", tags=["molecular-dynamics"])
+
+
+@router.post("/prediction-detours", status_code=201)
+async def create_prediction_detour(payload: MdPredictionDetour, session: AsyncSession = Depends(get_session)):
+    return {"id": await save_prediction_detour(payload, session)}
+
+
+@router.get("/prediction-detours/{identity}", response_model=MdPredictionDetour, response_model_exclude_unset=True)
+async def read_prediction_detour(identity: str, session: AsyncSession = Depends(get_session)):
+    return await load_prediction_detour(identity, session)
 
 
 @router.get("/native-parameters")
@@ -774,7 +785,33 @@ async def _compile_native_preview(intent: MdNativeLaunchIntent, session: AsyncSe
         raise
 
 
-async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession):
+def _native_md_job_request(request, preview, resolved):
+    """One canonical request builder for standalone and retained round MD."""
+    provenance: dict[str, Any] = {}
+    if resolved is not None:
+        provenance.update(copy.deepcopy(resolved.source_provenance or {}))
+        assert preview.source is not None
+        provenance.update(source_ref=resolved.source_ref.model_dump(mode="json"), source_sha256=preview.source.sha256)
+    provenance["native_input_identity"] = preview.input_identity
+    params = {"md_job_spec": preview.effective_request, "md_source_provenance": provenance,
+              "intent": request.intent.model_dump(mode="json")}
+    if resolved is not None and resolved.design_id is not None:
+        params.update(
+            source_design_id=resolved.design_id, lineage_root_job_id=provenance.get("lineage_root_job_id"),
+            selection_source_job_id=resolved.producer_job_id, selection_source_type="design",
+            source_stage_job_id=resolved.producer_job_id, source_stage_family=provenance.get("source_stage_family"),
+            source_stage_mode=provenance.get("source_stage_mode"), source_selection_count=1,
+        )
+    job_data = JobCreate(
+        name=request.intent.name, model_id="molecular_dynamics", mode="simulate", parent_job_id=None,
+        params=params, launch_context_id=request.intent.launch_context_id,
+        execution_target_id=request.intent.execution_target_id,
+        execution_policy=request.intent.execution_policy,
+    )
+    return job_data
+
+
+async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession, *, round_step=None):
     from routers.jobs import create_job, ApprovedExecutionPlan, TypedMdProjectLaunch
     from component_runtime import canonical_bytes
 
@@ -783,27 +820,10 @@ async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession)
     try:
         if preview.preview_digest != request.preview_digest:
             raise StartingStructureError("MD_LAUNCH_PREVIEW_STALE", "The native launch preview is stale.", status_code=409)
-        provenance: dict[str, Any] = {}
-        if resolved is not None:
-            provenance.update(copy.deepcopy(resolved.source_provenance or {}))
-            assert preview.source is not None
-            provenance.update(source_ref=resolved.source_ref.model_dump(mode="json"), source_sha256=preview.source.sha256)
-        provenance["native_input_identity"] = preview.input_identity
-        params = {"md_job_spec": preview.effective_request, "md_source_provenance": provenance,
-                  "intent": request.intent.model_dump(mode="json")}
-        if resolved is not None and resolved.design_id is not None:
-            params.update(
-                source_design_id=resolved.design_id, lineage_root_job_id=provenance.get("lineage_root_job_id"),
-                selection_source_job_id=resolved.producer_job_id, selection_source_type="design",
-                source_stage_job_id=resolved.producer_job_id, source_stage_family=provenance.get("source_stage_family"),
-                source_stage_mode=provenance.get("source_stage_mode"), source_selection_count=1,
-            )
-        job_data = JobCreate(
-            name=request.intent.name, model_id="molecular_dynamics", mode="simulate", parent_job_id=None,
-            params=params, launch_context_id=request.intent.launch_context_id,
-            execution_target_id=request.intent.execution_target_id,
-            execution_policy=request.intent.execution_policy,
-        )
+        job_data = _native_md_job_request(request, preview, resolved)
+        params = job_data.params
+        if round_step is not None:
+            job_data.binder_round_step = round_step
         kwargs = {"_md_output_creation": {}, "_md_input_resolver": resolver}
         if request.intent.execution_target_id:
             kwargs["_approved_execution_plan"] = ApprovedExecutionPlan(

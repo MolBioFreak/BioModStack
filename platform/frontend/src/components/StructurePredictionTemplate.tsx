@@ -139,6 +139,17 @@ const resolveInitialPrimaryProteinComponent = (initialValues?: Record<string, Un
     return proteinComponents[0];
 };
 
+export const hydrateMdPredictionComposition = (saved?: Record<string, UntypedApiValue>) => {
+    const hydrated = hydrateEsmfold2Document(structuredClone(saved));
+    if (typeof saved?.md_exact_sequence === 'string') {
+        // Use the existing composition owner's selected primary component, not
+        // a backbone or a fabricated binder target. Preserve all other members.
+        const primary = resolveInitialPrimaryProteinComponent(hydrated);
+        if (primary) primary.sequence = saved.md_exact_sequence;
+    }
+    return hydrated;
+};
+
 const MIN_BOLTZ_NO_MSA_RECYCLING_STEPS = 3;
 const MIN_BOLTZ_NO_MSA_SAMPLING_STEPS = 50;
 
@@ -157,7 +168,7 @@ const clampBoltzSamplingSteps = (value: unknown, useMsa: boolean): number => {
 };
 
 export function StructurePredictionTemplate({ onBack, initialValues: savedInitialValues, onDraftChange, onOpenTemplateManager, sourceSequenceId = null, mdDraftId = null, returnTemplate = null }: StructurePredictionTemplateProps) {
-    const initialValues = useMemo(() => hydrateEsmfold2Document(savedInitialValues), [savedInitialValues]);
+    const initialValues = useMemo(() => hydrateMdPredictionComposition(savedInitialValues), [savedInitialValues]);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const boltzModelQuery = useQuery({ queryKey: ['model', 'boltz2'], queryFn: () => fetchModelById('boltz2') });
@@ -458,7 +469,7 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
         if (!launchContextActive && returnTemplate === 'molecular_dynamics' && mdDraftId) {
             const route = new URL(buildMolecularDynamicsPredictionReturnRoute(mdDraftId, jobResponse), window.location.origin);
             const search = new URLSearchParams(window.location.search);
-            for (const key of ['operation_project_id', 'operation_setup_context_id']) {
+            for (const key of ['operation_project_id', 'operation_setup_context_id', 'md_operation_id']) {
                 const value = search.get(key); if (value) route.searchParams.set(key, value);
             }
             navigate(route.pathname + route.search);

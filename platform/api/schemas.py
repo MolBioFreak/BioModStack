@@ -274,7 +274,7 @@ class SelectedRoundStage(BaseModel):
     model_config = ConfigDict(extra='forbid')
     id: str = Field(min_length=1)
     input: SelectedRoundInput
-    kind: Literal['sequence_design', 'maturation', 'prediction']
+    kind: Literal['sequence_design', 'maturation', 'prediction', 'md']
     models: list[SelectedRoundModel] = Field(default_factory=list)
     model_id: Literal['binder_refinement'] | None = None
     mode: Literal['refine'] | None = None
@@ -287,7 +287,7 @@ class SelectedRoundStage(BaseModel):
                 raise ValueError('Maturation uses binder_refinement/refine')
         else:
             allowed = ({'proteinmpnn', 'fampnn', 'caliby_binder', 'protonpottsmpnn', 'caliby_experimental', 'ligandmpnn'}
-                       if self.kind == 'sequence_design' else {'protenix', 'boltz2', 'esmfold2', 'boltz_cp_experimental'})
+                       if self.kind == 'sequence_design' else ({'molecular_dynamics'} if self.kind == 'md' else {'protenix', 'boltz2', 'esmfold2', 'boltz_cp_experimental'}))
             if not self.models or self.model_id or self.mode or self.params:
                 raise ValueError('Design/prediction stages use models')
             if any(m.model_id not in allowed for m in self.models):
@@ -316,6 +316,8 @@ class SelectedRoundPlan(BaseModel):
 
     @model_validator(mode='after')
     def dependencies(self):
+        if self.schema_version == 1 and any(stage.kind == 'md' for stage in self.stages):
+            raise ValueError('MD invocations require plan v2')
         if self.schema_version == 1 and not self.stages:
             raise ValueError('Legacy plans require a stage')
         seen = set()

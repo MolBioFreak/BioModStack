@@ -83,7 +83,13 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
         <div className="space-y-5">
             <section className="rounded-xl border border-slate-700 p-4">
                 <h2 className="text-lg font-semibold text-white">RFD3 local redesign</h2>
-                <p className="mt-2 text-sm text-slate-300">{result.candidates.length} published candidates · Requested: {formatValue(execution.num_designs)} · Status: {requestView.status || '—'}</p>
+                <p className="mt-2 text-sm text-slate-300">{result.candidates.length} published candidates · Requested: {formatValue(result.population?.requested ?? execution.num_designs)} · Execution: {result.execution_status ?? requestView.status ?? 'Unknown'} · Population: {result.population_completeness ?? 'unknown'}</p>
+                {result.population && <p role="status" className="mt-2 text-sm text-slate-300">
+                    Generated: {formatValue(result.population.generated)} · Missing: {formatValue(result.population.missing)} · Failed: {result.population.failed == null ? 'Unknown' : formatValue(result.population.failed)} · Unexpected: {formatValue(result.population.unexpected)} · Unpaired artifacts: {formatValue(result.population.unpaired_artifacts)}
+                </p>}
+                {result.candidates.length === 0 && <p role="status" className="mt-2 text-sm text-slate-300">
+                    No paired candidates were published. Retained source, execution receipt and available artifacts remain below; this does not imply successful execution.
+                </p>}
             </section>
 
             <section className="rounded-2xl border border-slate-700 bg-slate-900/50 p-5">
@@ -117,7 +123,7 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
                         height={560}
                         showSequenceTrack
                         showComplexWorkbench
-                    /> : <p role="status" className="p-4 text-sm text-slate-400">Selected candidate structure is unavailable. Choose another candidate.</p>}
+                    /> : <p role="status" className="p-4 text-sm text-slate-400">{result.candidates.length ? 'Selected candidate structure is unavailable. Choose another candidate.' : 'No paired candidate structure was published.'}</p>}
                 </div>
             </section>
 
