@@ -23,7 +23,8 @@ def _digest(value: object) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def test_write_checkpoint_receipt_validates_latest_gromacs_checkpoint(tmp_path: Path) -> None:
+@pytest.mark.parametrize("native_time", ["5.000000", "-6.988000", "-6.988e+00"])
+def test_write_checkpoint_receipt_validates_latest_gromacs_checkpoint(tmp_path: Path, native_time: str) -> None:
     output = tmp_path / "replica_0"
     old = output / "npt" / "npt.cpt"
     current = output / "production" / "production.cpt"
@@ -46,7 +47,7 @@ def test_write_checkpoint_receipt_validates_latest_gromacs_checkpoint(tmp_path: 
     config_path.write_text(json.dumps(config), encoding="utf-8")
     fake_gmx = tmp_path / "gmx"
     fake_gmx.write_text(
-        "#!/bin/sh\nprintf 'step = 2500\\nt = 5.000000\\n'\n",
+        f"#!/bin/sh\nprintf 'step = 2500\\nt = {native_time}\\n'\n",
         encoding="utf-8",
     )
     fake_gmx.chmod(0o755)
@@ -70,10 +71,15 @@ def test_write_checkpoint_receipt_validates_latest_gromacs_checkpoint(tmp_path: 
         "sha256": hashlib.sha256(current.read_bytes()).hexdigest(),
         "bytes": len(current.read_bytes()),
         "step": 2500,
-        "time_ps": 5.0,
+        "time_ps": float(native_time),
         "execution_plan_sha256": _digest(config),
         "compatibility_key": compatibility,
     }
+    from services.md.pause_actuator import _checkpoint_receipt
+    received, checkpoint_path, relative = _checkpoint_receipt([output])
+    assert received == receipt
+    assert checkpoint_path == current
+    assert relative == "production/production.cpt"
 
 
 def test_write_checkpoint_receipt_rejects_missing_checkpoint(tmp_path: Path) -> None:

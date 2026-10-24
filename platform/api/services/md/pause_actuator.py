@@ -148,7 +148,8 @@ def _checkpoint_receipt(
         raise MdStateError("MD_PAUSE_CHECKPOINT_INVALID", "MD_PAUSE_ACTUATION_FAILED: checkpoint bytes do not match receipt")
     if not isinstance(payload.get("step"), int) or payload["step"] < 0:
         raise MdStateError("MD_PAUSE_CHECKPOINT_INVALID", "MD_PAUSE_ACTUATION_FAILED: checkpoint step is invalid")
-    if not isinstance(payload.get("time_ps"), (int, float)) or payload["time_ps"] < 0:
+    # Native tinit may be negative; checkpoint time is not elapsed duration.
+    if not isinstance(payload.get("time_ps"), (int, float)):
         raise MdStateError("MD_PAUSE_CHECKPOINT_INVALID", "MD_PAUSE_ACTUATION_FAILED: checkpoint time is invalid")
     return payload, checkpoint, relative_path
 
