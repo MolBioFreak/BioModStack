@@ -23,7 +23,7 @@ export function continuationHref(source: StructureSourceSelection, destination: 
         query.set('modification_mode', 'rfd3_local_redesign');
     } else if (destination === 'prediction') query.set('template', 'structure_prediction');
     else { query.set('model', 'proteinmpnn'); query.set('mode', 'design'); }
-    return `/submit?${query}`;
+    return `${import.meta.env.BASE_URL}submit?${query}`;
 }
 
 // Read only the selected materialization's producer document, never Job/input roles.
