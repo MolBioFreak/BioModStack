@@ -19,7 +19,7 @@ process RunRFD4Proteina {
     // Runtime authority is staged separately from the immutable scientific request.
     def runtimeJson = System.getenv('BMS_RFD4_ORACLE_RUNTIME')
     def oracleRuntime = runtimeJson != null ? new groovy.json.JsonSlurper().parseText(runtimeJson) :
-        (new groovy.json.JsonSlurper().parseText(file("${closure}/request.json").text).oracle_runtime ?: [:])
+        (new groovy.json.JsonSlurper().parseText(closure.toRealPath().resolve('request.json').text).oracle_runtime ?: [:])
     def quote = { value -> "'" + value.toString().replace("'", "'\"'\"'") + "'" }
     def oracleBinds = oracleRuntime.values().collectMany { family ->
         family.findAll { key, value -> !key.endsWith('_JAX_CACHE_DIR') }.collect { key, value ->
