@@ -854,6 +854,11 @@ def independent_preview(selection, target, *, compiled_plan=None):
     states = [dict(row, state=known.get((row['name'], row['sha256'], row['size_bytes']), 'unknown'))
               for row in artifacts]
     objects = {(e.role == 'image', e.sha256, e.size_bytes) for e in entries if e.link_target is None}
+    # Cache.weights and managed installation hardlink the 0444 CAS body.
+    # Other immutable modes have one cached copy per digest/mode, shared by
+    # every destination and persistent consumer sublayout. Links are metadata.
+    projections = {(e.sha256, e.size_bytes, e.mode & 0o555) for e in entries
+                   if e.role != 'image' and e.link_target is None and e.mode & 0o555 != 0o444}
     missing = {(e.role == 'image', e.sha256, e.size_bytes) for e, row in zip(entries, states, strict=True)
                if row['state'] != 'verified' and e.link_target is None}
     return ProvisionPreview(selection=selection, preview_sha256=digest,
@@ -865,9 +870,8 @@ def independent_preview(selection, target, *, compiled_plan=None):
         plan_sha256=plan.plan_sha256 if plan else None,
         asset_states=states, inventory_state=inventory_state,
         transfer_bytes=sum(size for _, _, size in missing),
-        # Conservative space estimate: one immutable cache object plus each
-        # non-image installed destination. Images are never copied into releases.
-        storage_bytes=sum(size for _, _, size in objects) + sum(e.size_bytes for e in entries if e.role != 'image' and e.link_target is None)), entries
+        # Persistent payload estimate, not transient upload/scratch or metadata.
+        storage_bytes=sum(size for _, _, size in objects) + sum(size for _, size, _ in projections)), entries
 
 
 def _workflow_source_archive(directory, source_identity):

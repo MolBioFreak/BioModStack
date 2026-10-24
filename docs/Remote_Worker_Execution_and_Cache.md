@@ -75,6 +75,8 @@ This full-family selection includes RFD3, DISCO, La-Proteina, Shape, the existin
 
 The host must have the selected runtime assets available through the existing managed installation owners. The HF broker mirrors their immutable identities rather than selecting a model revision or building an image. Exact BMS workflow source/config travels through the existing source-archive launch/saved-Job preload owner, not a second family manifest. Preparation reports asset installation, not GPU inference acceptance. Missing runtime builds or unexercised model presets remain explicit delivery limitations; this feature adds no scientific readiness gate.
 
+Preview `storage_bytes` estimates persistent selected payloads: one body per image/content namespace and digest, plus one shared copy per non-0444 immutable content mode (`mode & 0555`). Ordinary weight destinations and persistent consumer sublayouts hardlink those bodies; logical aliases and symlinks do not add payload copies. `total_bytes` remains the logical artifact total and `transfer_bytes` remains the deduplicated unverified object total. Metadata, transient uploads, scratch space and backend image derivations are not included in this payload estimate; existing live free-space checks are unchanged.
+
 Independent preparation uses the existing `/provision/catalog`, `/provision/preview` and `/provision` routes. Image scope selects an image; model scope selects its reviewed asset binding; configured `workflow` scope derives dependencies from the typed scientific request. These remain distinct from an input-free whole-workflow pack.
 
 ### Whole Structure workflow preparation

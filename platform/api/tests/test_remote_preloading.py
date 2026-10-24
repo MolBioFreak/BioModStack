@@ -479,7 +479,7 @@ def test_workflow_preview_forwards_shared_plan_and_scrubs_worker_manifest(tmp_pa
     assert preview.plan_sha256 == plan.plan_sha256
     assert preview.asset_states[0].state == 'unknown'
     assert preview.transfer_bytes == asset.stat().st_size
-    assert preview.storage_bytes == 2 * asset.stat().st_size
+    assert preview.storage_bytes == asset.stat().st_size
     manifest = mi.manifest_for(selection, entries, ('a'*40, 'b'*40))
     assert manifest['selection']['kind'] == 'workflow'
     assert len(manifest['selection']['model_id']) == 64
