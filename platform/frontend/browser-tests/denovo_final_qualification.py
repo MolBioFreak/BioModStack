@@ -15,19 +15,36 @@ import time
 REPO=Path(__file__).resolve().parents[3]
 HERE=Path(__file__).parent
 P=argparse.ArgumentParser();P.add_argument('--root',type=Path,required=True);P.add_argument('--evidence',type=Path,required=True)
-P.add_argument('--build',type=Path,default=Path('/home/dalab/.hermes/profiles/fresh/cache/scratch/denovo-complete-parent/phase2/frontend-build-ui-final'))
+P.add_argument('--build',type=Path,required=True)
+P.add_argument('--build-binding',type=Path,required=True,
+               help='Recorded successful production build: source revision/hashes, bundle hashes, command and exit code')
 a=P.parse_args()
 assert a.root.resolve().is_relative_to(Path('/home/dalab/.hermes/profiles/fresh/cache/scratch'))
 assert not a.root.exists(), 'Use a fresh exclusive run root; never overwrite an attempt'
 a.root.mkdir(parents=True);a.evidence.mkdir(parents=True,exist_ok=True)
 assert not list(a.evidence.iterdir()), 'Use fresh evidence directory'
 head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip()
-base='cc1525a5bb5e054284ec17c4eafb537e7ea7104e'
-ui_base='828d3412d4f8c425e30c1fb9286a1a95d3556747'
-assert subprocess.check_output(['git','diff','--name-only',ui_base,base,'--','platform/frontend','schemas'],cwd=REPO,text=True)==''
-index_sha=hashlib.sha256((a.build/'index.html').read_bytes()).hexdigest()
-assert index_sha=='ba055ae0e77e1e6b700ff53ec2b78c02d3617abba0091b9d316aab378c02afe4'
-identity={'head':head,'frozen_product':base,'reused_build_source':ui_base,'build':str(a.build),'index_sha256':index_sha,
+binding_bytes=a.build_binding.read_bytes()
+binding=json.loads(binding_bytes)
+base=binding['source_revision']
+assert subprocess.check_output(['git','rev-parse',base+'^{commit}'],cwd=REPO,text=True).strip()==base
+# Bind all tracked frontend/schema/workspace inputs, not only the changed producer.
+# Browser harness edits do not change the production build.
+source_paths=subprocess.check_output(['git','ls-files','--','platform/frontend','schemas','packages',
+    'package.json','pnpm-lock.yaml','pnpm-workspace.yaml'],cwd=REPO,text=True).splitlines()
+source_paths=[p for p in source_paths if not p.startswith('platform/frontend/browser-tests/')]
+source_hashes={p:hashlib.sha256((REPO/p).read_bytes()).hexdigest() for p in source_paths}
+assert source_hashes==binding['source_hashes'], 'Build inputs differ from supplied binding'
+for p in source_paths:
+    committed=subprocess.check_output(['git','show',base+':'+p],cwd=REPO)
+    assert hashlib.sha256(committed).hexdigest()==source_hashes[p], p
+assert binding['build_exit_code']==0 and binding['command']==['corepack','pnpm','run','build']
+assert Path(binding['build']).resolve()==a.build.resolve()
+bundle_hashes={str(p.relative_to(a.build)):hashlib.sha256(p.read_bytes()).hexdigest() for p in a.build.rglob('*') if p.is_file()}
+assert bundle_hashes==binding['bundle_hashes'], 'Supplied bundle bytes differ'
+index_sha=bundle_hashes['index.html']
+(a.evidence/'build-binding.json').write_bytes(binding_bytes)
+identity={'head':head,'frozen_product':base,'build_binding_sha256':hashlib.sha256(binding_bytes).hexdigest(),'build':str(a.build),'index_sha256':index_sha,
  'scope':'Inert execution ONLY; existing native writer fixtures NOT new scientific results',
  'source_hashes':{str(p.relative_to(REPO)):hashlib.sha256(p.read_bytes()).hexdigest() for p in HERE.glob('denovo_final_*.py')},
  'bundle_hashes':{str(p.relative_to(a.build)):hashlib.sha256(p.read_bytes()).hexdigest() for p in a.build.rglob('*') if p.is_file()},
