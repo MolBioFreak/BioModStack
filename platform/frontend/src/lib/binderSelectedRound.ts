@@ -1,4 +1,5 @@
 import { api, fetchJobById, type Job } from './api';
+import type { MolecularDynamicsNativePreview } from '../components/molecularDynamicsUiState';
 import { submitPreparedSelectedMutation } from './binderContinuation';
 import type { ExecutionPolicy } from './executionPolicy';
 import type { BinderRoundStage } from './binderRound';
@@ -41,7 +42,7 @@ export interface SelectedRound {
     request: SelectedRoundRequest; selection: unknown;
     steps: Array<{ step_id: string; stage_id: string; model_id: string; state: string; job_id?: string;
         parent_step_ids: string[]; outputs: Array<CandidateRef & { label?: string; name?: string }>;
-        request?: Partial<Job>; error?: string; review?: { code?: string; preview_digest?: string } }>;
+        request?: Partial<Job>; md_preview?: MolecularDynamicsNativePreview; md_launch_request?: unknown; error?: string; review?: { code?: string; preview_digest?: string } }>;
 }
 export interface SelectedRoundResponse {
     operation: 'round'; source_job_id: string; root_job_id: string; round_id: string; state: string;

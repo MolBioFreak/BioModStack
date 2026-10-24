@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { BinderMdPreviewReview } from './BinderMdPreviewReview';
+import type { MolecularDynamicsNativePreview } from './molecularDynamicsUiState';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, submitJob, type Job } from '../lib/api';
 import { evidenceText } from '../lib/binderEvidence';
@@ -7,8 +9,8 @@ import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
 
 const control = 'rounded border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-sm';
 
-interface RoundStep { state: string; job_id?: string; error?: string; superseded_by?: string; metadata?: Record<string, unknown>; request?: Partial<Job>; review?: unknown }
-interface RoundReadback { job_id: string; state: string; steps: Record<string, RoundStep>; errors: Record<string, unknown> }
+interface RoundStep { state: string; job_id?: string; error?: string; superseded_by?: string; metadata?: Record<string, unknown>; request?: Partial<Job>; review?: { code?: string; preview_digest?: string } }
+interface RoundReadback { round_id: string; job_id: string; state: string; steps: Record<string, RoundStep>; errors: Record<string, unknown> }
 export function CandidateRoundProgress({ jobId, kind = 'binder' }: { jobId: string; kind?: 'binder' | 'sequence' }) {
     const sequenceOnly = kind === 'sequence';
     const cache = useQueryClient();
@@ -55,7 +57,8 @@ export function CandidateRoundProgress({ jobId, kind = 'binder' }: { jobId: stri
             {step.job_id && <><a className="ml-2 underline" href={`/jobs/${encodeURIComponent(step.job_id)}`}>Open child Job</a><a className="ml-2 underline" href={`/designs/${encodeURIComponent(step.job_id)}`}>Open results</a></>}
             {step.error && <p role="status">{step.error}</p>}
             {step.superseded_by && <p>Retained history; retry step {step.superseded_by}</p>}
-            {step.state === 'review_required' && step.request && <><button className={control} type="button" disabled={busy} onClick={() => void act(step.request)}>Review prepared remote step {id}</button><details><summary>Retained preparation</summary><BindCraft2SettingsReadback value={{ request: step.request, review: step.review }} /></details></>}
+            {step.state === 'review_required' && step.review?.code === 'md_native_preview_approval_required' && <BinderMdPreviewReview rootId={progress.job_id} roundId={progress.round_id} stepId={id} digest={step.review.preview_digest} preview={step.metadata?.md_preview as MolecularDynamicsNativePreview | undefined} launchRequest={step.metadata?.md_launch_request} onApproved={async () => { const readback = await query.refetch(); await cache.invalidateQueries({ queryKey: ['binder-evidence', jobId] }); return readback; }} />}
+            {step.state === 'review_required' && step.review?.code !== 'md_native_preview_approval_required' && step.request && <><button className={control} type="button" disabled={busy} onClick={() => void act(step.request)}>Review prepared remote step {id}</button><details><summary>Retained preparation</summary><BindCraft2SettingsReadback value={{ request: step.request, review: step.review }} /></details></>}
         </div>)}
         {['needs_retry', 'completed_with_errors'].includes(progress.state) && <button className={control} type="button" disabled={busy} onClick={() => void act()}>{sequenceOnly ? 'Retry sequence design' : 'Retry binder round'}</button>}
         {error && <p role="alert">{error}</p>}

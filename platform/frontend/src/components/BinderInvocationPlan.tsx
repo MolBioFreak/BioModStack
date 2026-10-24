@@ -1,4 +1,6 @@
 import { useState, type ReactNode } from 'react';
+import { BinderMdInvocationEditor } from './BinderMdInvocationEditor';
+import { serializeMolecularDynamicsNativeDraft, type MolecularDynamicsNativeDraft } from './molecularDynamicsUiState';
 import { useQueries } from '@tanstack/react-query';
 import { fetchModelById } from '../lib/api';
 import { NativeSetting } from './NativeBinderGeneration';
@@ -11,16 +13,6 @@ import { candidateKey, type CandidateRef, type SelectedRoundModel, type Selected
 const control = 'rounded border p-2 bg-[var(--bg-primary)] max-w-full';
 const kinds = { sequence_design: 'Sequence design', prediction: 'Blind prediction', maturation: 'Maturation', md: 'Molecular dynamics' };
 const models = { sequence_design: ['proteinmpnn', 'fampnn', 'caliby_binder', 'caliby_experimental', 'ligandmpnn', 'protonpottsmpnn'], prediction: ['protenix', 'boltz2', 'esmfold2', 'boltz_cp_experimental'], md: ['molecular_dynamics'] };
-
-function NativeMdIntent({ call, onChange }: { call: SelectedRoundModel; onChange: (params: SelectedRoundModel['params']) => void }) {
-    const [text, setText] = useState(() => JSON.stringify(call.params.intent ?? {}, null, 2));
-    const [error, setError] = useState('');
-    return <div><p>Use the existing MD editor’s native launch intent. Guided input binds this exact selected structure; prepared/compiled system inputs stay explicit. No prediction is required. Chemistry, stages and MDP settings remain owned by MD.</p>
-        <label>Native MD launch intent<textarea aria-label={`Native MD intent ${call.invocation_id}`} value={text} onChange={event => setText(event.target.value)} /></label>
-        <button type="button" onClick={() => { try { const intent = JSON.parse(text); onChange({ ...call.params, intent }); setError(''); } catch { setError('Native MD intent must be JSON.'); } }}>Apply native MD intent</button>
-        {error && <p role="alert">{error}</p>}
-    </div>;
-}
 
 /** One intent editor for initial and selected operations. No lifecycle lives here. */
 export function BinderInvocationPlan({ stages: original, onChange, candidates = [], showAdd = true, renderSettings }: {
@@ -58,7 +50,15 @@ export function BinderInvocationPlan({ stages: original, onChange, candidates = 
                     const id = call.invocation_id!;
                     const catalog = queries[ids.indexOf(call.model_id)]?.data;
                     const modeFields = catalog?.modes?.find(mode => mode.id === call.mode)?.params;
-                    const specialized = renderSettings?.(call, 'selected' in item.stage.input ? candidates : [], params => callPatch(index, id, { params })) ?? (call.model_id === 'molecular_dynamics' ? <NativeMdIntent call={call} onChange={params => callPatch(index, id, { params })} /> : undefined);
+                    const specialized = renderSettings?.(call, 'selected' in item.stage.input ? candidates : [], params => callPatch(index, id, { params })) ?? (call.model_id === 'molecular_dynamics' ? <BinderMdInvocationEditor call={call}
+                        nativeDraft={item.drafts[`${id}:md-active`] as unknown as MolecularDynamicsNativeDraft | undefined}
+                        modeDrafts={Object.fromEntries(['guided', 'prepared', 'compiled'].map(kind => [kind, item.drafts[`${id}:md:${kind}`]])) as Partial<Record<MolecularDynamicsNativeDraft['input']['kind'], MolecularDynamicsNativeDraft>>}
+                        onChange={(params, draft) => patch(index, value => value.stage.kind === 'maturation' ? value : ({ ...value,
+                            drafts: { ...value.drafts, [`${id}:md-active`]: draft },
+                            stage: { ...value.stage, models: value.stage.models.map(other => other.invocation_id === id ? { ...other, params } : other) } }))}
+                        onModeChange={(previous, next) => patch(index, value => value.stage.kind === 'maturation' ? value : ({ ...value,
+                            drafts: { ...value.drafts, [`${id}:md:${previous.input.kind}`]: previous, [`${id}:md-active`]: next },
+                            stage: { ...value.stage, models: value.stage.models.map(other => other.invocation_id === id ? { ...other, params: { ...other.params, intent: serializeMolecularDynamicsNativeDraft(next) } } : other) } }))} /> : undefined);
                     const fields = catalog ? roundCatalogFields(catalog).filter(field => (!modeFields || modeFields.includes(field.name)) && (!roundParameterIsBound(field.name) || ['design_chain', 'target_chain', 'binder_chains', 'target_chains'].includes(field.name)) && !['ensembles', 'structures', 'input_json', 'caliby_request_dir', 'input_path'].includes(field.name)) : [];
                     return <section key={id} aria-label={`Invocation ${id}`} className="border p-3 space-y-2">
                         <h4>{call.model_id} · {id}</h4>

@@ -5,6 +5,7 @@ import type { BinderSelectedControlsProps } from './BinderSelectedControls';
 import type { BinderOperation } from '../lib/binderContinuation';
 import { activeInvocationPlan } from '../lib/binderInvocationPlan';
 import { BinderInvocationPlan } from './BinderInvocationPlan';
+import { BinderMdPreviewReview } from './BinderMdPreviewReview';
 import { readBinderCandidateDocuments } from '../lib/binderContinuation';
 import { candidateKey, fetchSelectedRounds, readRoundStorage, submitSelectedRound, uniqueCandidates, writeRoundStorage, type CandidateRef, type SelectedRoundStage } from '../lib/binderSelectedRound';
 import { ExecutionPolicyControl } from './ExecutionPolicyControl';
@@ -131,7 +132,7 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
             {round?.steps.map(step => <section key={step.step_id} className="rounded border border-[var(--border-color)] p-2"><h4>{labels[step.model_id] ?? step.model_id} · {step.state} · {step.outputs?.length ?? 0} returned</h4>
                 {step.job_id && <button type="button" className={control} onClick={() => onOpenJob(step.job_id!)}>Open results</button>}
                 {step.error && <p role="status">{step.error}</p>}
-                {step.state === 'review_required' && step.review?.code === 'md_native_preview_approval_required' && <button type="button" className={control} disabled={busy} onClick={() => { setBusy(true); void api.post(`/api/binder-continuation/${encodeURIComponent(sourceJobId)}/round/${encodeURIComponent(round!.round_id)}/steps/${encodeURIComponent(step.step_id)}/md-approval`, { preview_digest: step.review!.preview_digest }).then(() => rounds.refetch()).catch(reason => setError(String(reason))).finally(() => setBusy(false)); }}>Approve native MD preview</button>}
+                {step.state === 'review_required' && step.review?.code === 'md_native_preview_approval_required' && <BinderMdPreviewReview rootId={round!.root_job_id} roundId={round!.round_id} stepId={step.step_id} digest={step.review.preview_digest} preview={step.md_preview} launchRequest={step.md_launch_request} onApproved={() => rounds.refetch()} />}
                 {step.state === 'review_required' && step.review?.code !== 'md_native_preview_approval_required' && step.request && <button type="button" className={control} disabled={busy} onClick={() => { setBusy(true); void submitJob(step.request!, { launchContext: Boolean(step.request?.launch_context_id) }).then(() => rounds.refetch()).catch(reason => setError(String(reason))).finally(() => setBusy(false)); }}>Review remote step</button>}
                 {step.outputs?.map((output, index) => <div key={candidateKey(output)}><label><input type="checkbox" aria-label={`Select ${labels[step.model_id] ?? step.model_id} output ${index + 1}`} checked={selection.some(ref => candidateKey(ref) === candidateKey(output))} onChange={event => toggleOutput(output, event.target.checked)} />{output.label ?? output.name ?? `Candidate ${index + 1}`} · {output.kind.replaceAll('_', ' ')}</label><details><summary>Details</summary><BindCraft2SettingsReadback value={output} /></details></div>)}
             </section>)}
