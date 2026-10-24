@@ -145,11 +145,10 @@ params:
     ui_order: 2
   - name: num_designs
     type: integer
-    description: Number of candidates to generate
+    description: Number of candidates to generate; positive native count without a presentation-only cap
     required: false
     default: 8
     minimum: 1
-    maximum: 512
     ui_group: General
     ui_order: 3
   - name: target_lengths

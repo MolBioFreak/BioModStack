@@ -15,7 +15,7 @@ from test_project_setup_job_preparation import isolate_applied_local_policy
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('count', [2, 2.7])
+@pytest.mark.parametrize('count', [2, 2.7, 1001])
 async def test_actual_job_http_insertion(isolated_core, setup_store, isolate_applied_local_policy, count):
     from database import get_session, Job
     from experiment_database import get_experiment_session
@@ -33,7 +33,7 @@ async def test_actual_job_http_insertion(isolated_core, setup_store, isolate_app
         assert response.status_code == 201, response.text
         async with isolated_core() as session:
             job = await session.get(Job, response.json()['id'])
-            assert job.params['num_designs'] == 2
+            assert job.params['num_designs'] == int(count)
             assert job.parent_job_id is None and job.execution_target_id is None
         native = await client.post('/jobs', json=dict(name='RFD4-ingress', model_id='rfd4_proteina',
             mode='generate', execution_target_id=None, params={'rfd4_request': rfd4()}))

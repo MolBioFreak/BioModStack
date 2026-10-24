@@ -53,6 +53,18 @@ def test_project_sequence_descriptors_derive_native_catalog(model_id):
             assert actual.get(key) == expected
 
 
+@pytest.mark.parametrize('capability', ['protein.de_novo.rfd3', 'protein.de_novo.local_redesign'])
+def test_project_redesign_uses_native_request_not_superseded_count_descriptor(capability):
+    from jsonschema import validate
+    from services.protein_project_capabilities import protein_setup_parameter_schema
+
+    schema = protein_setup_parameter_schema(capability)
+    assert schema['x-bms-native-editor-draft'] is True
+    assert 'num_designs' not in schema['properties']
+    request = {'model_id': 'protein_local_redesign', 'mode': 'local_redesign', 'params': {'num_designs': 1001}}
+    validate({'native_job_request': request}, schema)
+
+
 @pytest.mark.parametrize('model_id', ['boltz2', 'esmfold2', 'af2'])
 def test_unknown_nested_settings_diagnostics_are_not_validation(model_id):
     from model_registry import get_registry
