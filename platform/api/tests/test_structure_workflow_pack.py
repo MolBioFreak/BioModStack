@@ -78,15 +78,17 @@ async def test_mounted_preview_without_job_inputs_or_mutation(store, pack_assets
         await controller.close()
 
 
-def test_exact_pack_refs_and_native_optional_members():
+def test_exact_pack_refs_exclude_bulk_templates():
     refs = [(r.kind, r.relative_path) for r in workflow_pack_dependencies('structure_prediction')]
     assert len(refs) == len(set(refs))
     assert {p for k, p in refs if k == 'image'} == {
         'boltz2.sif', 'fold-cp.sif', 'protenix.sif', 'esmfold2.sif', 'frustrampnn.sif'}
-    optional, _ = native_checkpoint_dependencies('ProtenixPredict', {'protenix_use_template': True})
+    anchored, _ = native_checkpoint_dependencies('ProtenixFromComplex', {
+        'protenix_anchor_target': True, 'protenix_use_template': False})
     assert {p for k, p in refs if k == 'weights'} == {
-        'boltz', 'esmfold2', *(d.relative_path for d in optional)}
-    assert ('weights', 'protenix/mmcif') in refs
+        'boltz', 'esmfold2', *(d.relative_path for d in anchored)}
+    assert ('weights', 'protenix/mmcif') not in refs
+    assert ('weights', 'protenix/search_database/pdb_seqres_2022_09_28.fasta') not in refs
     assert get_registry().get_model('frustrampnn') is None
     assert get_registry().get_internal_model_definition('frustrampnn').enabled
     with pytest.raises(ValueError):
@@ -166,7 +168,8 @@ def test_layout_groups_match_native_members_without_rescan(pack_assets, monkeypa
     assert metadata['boltz_native'] == native_boltz
     assert names('boltz_native') < names('boltz')
     assert names('boltz_native_protenix') == names('boltz_native') | names('protenix')
-    assert names('protenix') < names('protenix_anchored') < names('protenix_templates')
+    assert names('protenix') < names('protenix_anchored')
+    assert not any('templates' in name for name in groups)
     for rows in groups.values():
         digest, layout, _ = weight_layout([
             dict(name=e.remote_destination.removeprefix('weights/'), sha256=e.sha256,

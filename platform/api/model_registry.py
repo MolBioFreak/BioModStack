@@ -276,9 +276,9 @@ def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
               'boltz_native': native_boltz,
               'esmfold2_fast': ('esmfold2',), 'esmfold2_full': ('esmfold2',)}
     for name, process, settings in (
-        ('protenix', 'ProtenixPredict', {}),
-        ('protenix_anchored', 'ProtenixFromComplex', {'protenix_anchor_target': True}),
-        ('protenix_templates', 'ProtenixPredict', {'protenix_use_template': True}),
+        ('protenix', 'ProtenixPredict', {'protenix_use_template': False}),
+        ('protenix_anchored', 'ProtenixFromComplex', {
+            'protenix_anchor_target': True, 'protenix_use_template': False}),
     ):
         dependencies, _ = native_checkpoint_dependencies(process, settings)
         members = tuple(d.relative_path for d in dependencies)
@@ -302,7 +302,7 @@ def workflow_pack_weight_owners(workflow_id: str) -> dict[str, str]:
     groups = workflow_pack_weight_groups(workflow_id)
     owners = ({group: group for group in groups} if workflow_id == 'antibody_denovo' else {
         'boltz': 'boltz2', 'esmfold2_fast': 'esmfold2',
-        'protenix_templates': 'protenix',
+        'protenix_anchored': 'protenix',
     })
     return {member: owner for group, owner in owners.items()
             for member in groups[group]}
@@ -351,8 +351,9 @@ def workflow_pack_dependencies(workflow_id: str):
                     if not (model_id == 'protenix' and ref.kind == 'weights'))
     refs.extend(model_image_dependencies('boltz_cp_experimental'))
     refs.extend(model_runtime_dependencies('frustrampnn', internal=True))
-    # The template-capable set contains the ordinary and anchored members.
-    members, _ = native_checkpoint_dependencies('ProtenixPredict', {'protenix_use_template': True})
+    # Retain ordinary weights and target metadata, never the bulk template corpus.
+    members, _ = native_checkpoint_dependencies('ProtenixFromComplex', {
+        'protenix_anchor_target': True, 'protenix_use_template': False})
     refs.extend(members)
     return tuple({(ref.kind, ref.relative_path): ref for ref in refs}.values())
 

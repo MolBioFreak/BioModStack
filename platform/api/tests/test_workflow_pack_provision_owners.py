@@ -12,6 +12,20 @@ from test_remote_independent_provisioning import assets
 from test_remote_preloading import store
 
 
+@pytest.mark.parametrize('workflow_id', ['antibody_denovo', 'structure_prediction'])
+def test_workflow_packs_do_not_select_template_search(workflow_id):
+    groups = model_registry.workflow_pack_weight_groups(workflow_id)
+    assert not any('templates' in name for name in groups)
+    members = {member for group in groups.values() for member in group}
+    assert 'protenix/mmcif' not in members
+    assert not any(member.startswith('protenix/search_database/') for member in members)
+    owners = model_registry.workflow_pack_weight_owners(workflow_id)
+    assert all(owners[member] == 'protenix' for member in members if member.startswith('protenix/'))
+    if workflow_id == 'structure_prediction':
+        assert {'protenix/common/obsolete_to_successor.json',
+                'protenix/common/release_date_cache.json'} <= members
+
+
 def test_denovo_union_keeps_native_declared_owner_resolution_without_another_pack_projection(monkeypatch):
     monkeypatch.setattr(model_registry, 'workflow_pack_weight_groups',
                         lambda *_: pytest.fail('native union leaves already have acquisition ownership'))
@@ -29,6 +43,14 @@ def pack(request, assets, monkeypatch):
             path /= 'fixture.bin'
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(('inert ' + ref.relative_path).encode())
+
+    # Existing optional data must not be swept into an input-free workflow pack.
+    corpus = weights / 'protenix/mmcif/unselected.cif'
+    corpus.parent.mkdir(parents=True, exist_ok=True)
+    corpus.write_text('inert unselected template')
+    seqres = weights / 'protenix/search_database/pdb_seqres_2022_09_28.fasta'
+    seqres.parent.mkdir(parents=True, exist_ok=True)
+    seqres.write_text('>unselected\nAAAA\n')
 
     # Install a real immutable acquisition layout. A None/workflow-ID owner
     # cannot authenticate this alias and must not quietly replace its bytes.
@@ -116,6 +138,7 @@ async def test_mounted_whole_pack_preview_with_pinned_acquisition(store, pack, m
         assert body['blockers'] == [] and body['estimates_complete']
         assert body['scientific_ready'] is False and body['effective_params'] is None
         names = {row['name'] for row in body['artifacts']}
+        assert not any('/mmcif/' in name or '/search_database/' in name for name in names)
         assert all(any(name == ('containers/' if ref.kind == 'image' else 'weights/') + ref.relative_path or
             name.startswith('weights/' + ref.relative_path + '/') for name in names) for ref in refs)
         assert next(row for row in body['artifacts'] if row['name'] == 'weights/boltz/native.ckpt')['sha256'] == obj.parent.name
