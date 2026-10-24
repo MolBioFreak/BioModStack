@@ -267,6 +267,22 @@ def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
     return groups
 
 
+def workflow_pack_weight_owners(workflow_id: str) -> dict[str, str]:
+    """Keep acquisition ownership when projecting a multi-model pack's union.
+
+    Consumer layout names are not always model IDs (and combined layouts are
+    not acquisition owners). Use the native leaf groups, including optional
+    Protenix members, without changing the pack's dependency selection.
+    """
+    groups = workflow_pack_weight_groups(workflow_id)
+    owners = ({group: group for group in groups} if workflow_id == 'antibody_denovo' else {
+        'boltz': 'boltz2', 'esmfold2_fast': 'esmfold2',
+        'protenix_templates': 'protenix',
+    })
+    return {member: owner for group, owner in owners.items()
+            for member in groups[group]}
+
+
 def workflow_pack_dependencies(workflow_id: str):
     """Input-free union of the selected workflow's declared managed assets."""
     groups = workflow_pack_weight_groups(workflow_id)  # closed supported identity

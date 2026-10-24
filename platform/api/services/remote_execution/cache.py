@@ -654,8 +654,13 @@ def independent_plan(selection, *, dependencies=None, publication=None):
     entries = []
     resolved = {}
     refs = _independent_dependencies(selection) if dependencies is None else dependencies
+    from model_registry import workflow_pack_weight_owners
+    weight_owners = (workflow_pack_weight_owners(selection.workflow_id)
+                     if selection.kind == 'workflow_pack' else None)
     publication = hf_assets.publication_index() or {} if publication is None else publication
     for ref in {(r.kind, r.relative_path): r for r in refs}.values():
+        model_id = (weight_owners.get(ref.relative_path) if weight_owners is not None
+                    else selection.model_id)
         if selection.kind == 'image' and ref.kind != 'image':
             continue
         root = (get_container_dir() if ref.kind == 'image' else get_weights_root()).resolve()
@@ -663,11 +668,11 @@ def independent_plan(selection, *, dependencies=None, publication=None):
         path = (image_reference(ref.relative_path, root)[0].resolve() if ref.kind == 'image'
                 else root / ref.relative_path)
         from .bundle import _selected_weight_members
-        selected = (_selected_weight_members(path, selection.model_id, resolved=resolved) if ref.kind == 'weights' and path.exists() else None)
+        selected = (_selected_weight_members(path, model_id, resolved=resolved) if ref.kind == 'weights' and model_id is not None and path.exists() else None)
         if ((path.is_symlink() and selected is None) or (ref.kind != 'image' and not path.resolve().is_relative_to(root))):
             raise ValueError('Independent runtime asset is not a contained regular asset')
         prefix = ('containers/' if ref.kind == 'image' else 'weights/') + ref.relative_path
-        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved, model_id=selection.model_id):
+        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved, model_id=model_id):
             suffix = record.relative_path[len(prefix):].lstrip('/')
             local = resolved.get(('runtime-source', record.relative_path)) or (path / suffix if suffix else path)
             if record.link_target is None and local.is_symlink():
