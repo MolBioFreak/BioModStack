@@ -159,17 +159,28 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
             if (detail.jobId !== jobId) return;
             setSavedRefs(detail.refs);
             const inventory = readRoundStorage<Record<string, NativeCandidateSource>>(jobId, 'native-documents', {});
-            const sources = (detail.refs as CandidateRef[]).flatMap(ref => {
+            const sourceKey = (source: NativeCandidateSource) => candidateKey({
+                kind: 'native_document', job_id: source.job_id, artifact_id: source.artifact_id,
+                ...(source.document?.target_state != null ? { target_state: source.document.target_state } : {}),
+                ...(source.document?.model != null ? { model: source.document.model } : {}),
+            });
+            // Non-replacement round events update only the round-owned refs.
+            // Keep independently selected source documents; remove a mirrored
+            // ref only when it disappears from the round's previous selection.
+            const mirrored = new Set(savedRefs.filter(ref => ref.kind === 'native_document').map(candidateKey));
+            const independent = detail.replace ? [] : readBinderNativeSources(jobId).filter(source => !mirrored.has(sourceKey(source)));
+            const incoming = (detail.refs as CandidateRef[]).flatMap(ref => {
                 if (ref.kind !== 'native_document') return [];
                 return [inventory[candidateKey(ref)] ?? { job_id: ref.job_id, artifact_id: ref.artifact_id,
                     document: { artifact_id: ref.artifact_id, target_state: ref.target_state, model: ref.model } }];
             });
+            const sources = [...new Map([...independent, ...incoming].map(source => [sourceKey(source), source])).values()];
             setSavedSources(sources); writeBinderNativeSources(jobId, sources); onSelectedNativeSourcesChange?.(sources);
             if (detail.replace) { setNativeSelected([]); writeBinderSelection(selectionScope, []); }
         };
         window.addEventListener('bms:binder-round-selection', sync);
         return () => window.removeEventListener('bms:binder-round-selection', sync);
-    }, [jobId, selectionScope, onSelectedNativeSourcesChange]);
+    }, [jobId, selectionScope, onSelectedNativeSourcesChange, savedRefs]);
     const nativeSources = selectedNativeSources ?? savedSources;
     const changeSources = (sources: NativeCandidateSource[]) => {
         const unique = [...new Map(sources.map(source => [JSON.stringify([source.job_id, source.artifact_id, source.document?.target_state, source.document?.model]), source])).values()];

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
 import { ResultsViewer } from '../../src/components/ResultsViewer';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
-import { writeBinderSelection, writeBinderNativeSources } from '../../src/lib/binderContinuation';
+import { writeBinderSelection, writeBinderNativeSources, readBinderNativeSources } from '../../src/lib/binderContinuation';
 import { declaredBinderRoleDefaults } from '../../src/lib/binderSourceRoles';
 import { submitSelectedRound, writeRoundStorage } from '../../src/lib/binderSelectedRound';
 
@@ -119,6 +119,10 @@ it('actual Results parent serializes independent stages and preserves null/false
     expect(sent.round_plan.stages[2].input.stage_id).toBe(sent.round_plan.stages[1].id);
     expect(tree!.root.findAll(node => node.type === 'input' && /^Select Protenix output /.test(node.props['aria-label'] ?? ''))).toHaveLength(33);
     await change('Select Protenix output 33', true);
+    expect(readBinderNativeSources('parent')).toEqual([{ job_id: 'parent', artifact_id: 'native-31' }]);
+    await change('Select Protenix output 33', false);
+    expect(button('Next round (2)')).toBeTruthy();
+    await change('Select Protenix output 33', true);
     await click('Next round (3)'); await click('Queue round');
     await close(); await mount();
     expect(tree!.root.findByProps({ 'aria-label': 'Returned round' }).findAllByType('option')).toHaveLength(2);
@@ -127,6 +131,28 @@ it('actual Results parent serializes independent stages and preserves null/false
     expect(new Set(posts.map(post => post.idempotency_key)).size).toBe(3);
     expect(posts[2].selection.candidate_refs.at(-1)).toEqual({ kind: 'native_sequence', job_id: 'fixture-child', publication_ref: 'fixture-publication', native_output_id: 'sample-32' });
     expect(tree!.root.findByProps({ 'aria-label': 'Returned round' }).findAllByType('option')).toHaveLength(3);
+}, 30000);
+
+it('round ref updates preserve independent native sources, remove mirrored refs and honor explicit replacement', async () => {
+    const source = { job_id: 'parent', artifact_id: 'native-31', document: { ...doc, artifact_id: 'native-31', model: 2 } };
+    writeBinderNativeSources('parent', [source]);
+    await mount(); expect(button('Next round (1)')).toBeTruthy();
+    const update = async (refs: any[], replace = false) => {
+        await act(async () => window.dispatchEvent(new CustomEvent('bms:binder-round-selection', { detail: { jobId: 'parent', refs, replace } })));
+        await flush();
+    };
+    const mirrored = { kind: 'native_document', job_id: 'fixture-child', artifact_id: 'child-doc', model: 3 };
+    await update([mirrored]);
+    expect(button('Next round (2)')).toBeTruthy();
+    expect(readBinderNativeSources('parent')).toHaveLength(2);
+    expect(readBinderNativeSources('parent')[0]).toEqual(source);
+    await update([{ kind: 'native_sequence', job_id: 'fixture-child', publication_ref: 'fixture-publication', native_output_id: 'sequence' }]);
+    expect(button('Next round (2)')).toBeTruthy();
+    expect(readBinderNativeSources('parent')).toEqual([source]);
+    await update([]); expect(button('Next round (1)')).toBeTruthy();
+    expect(readBinderNativeSources('parent')).toEqual([source]);
+    await update([], true); expect(button('Next round (0)')).toBeTruthy();
+    expect(readBinderNativeSources('parent')).toEqual([]);
 }, 30000);
 
 it('actual native Results preserves cross-page mixed selection, exact complex/binder inspection and backend frozen ranking/final sets', async () => {

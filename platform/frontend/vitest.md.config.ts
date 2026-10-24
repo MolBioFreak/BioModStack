@@ -76,6 +76,7 @@ export default defineConfig({
             './tests/vitest/binderGeneratorRouteMounted.test.tsx',
             './tests/vitest/binderRoundSettingsMounted.test.tsx',
             './tests/vitest/operationsComposerMounted.test.tsx',
+            './tests/vitest/denovoMdReviewRepairMounted.test.tsx',
             './tests/vitest/nativeBinderGenerationMounted.test.tsx',
             './tests/vitest/binderSelectedControlsMounted.test.tsx',
             './tests/vitest/binderDiagnosticSelection.test.tsx',
