@@ -33,6 +33,35 @@ def test_exact_path_fields_and_ambiguous_ids(tmp_path):
     assert result['records'][0]['metric_association']['state'] == 'ambiguous'
 
 
+def test_worker_relations_preserve_dataset_task_ambiguity(tmp_path):
+    observer = NativeObserver()
+    observer.events = [{'event': 'native_writer', 'example_id': 'same', 'dataset_name': dataset,
+                        'path': str(tmp_path / f'{dataset}.cif')} for dataset in ('a', 'b')]
+    relation = {'event': 'native_relation', 'role': 'trajectory', 'example_id': 'same',
+                'path': str(tmp_path / 'not-retained.xtc'), 'producer_field': 'transport-only'}
+    observer.events.append(relation)
+    result = publish(tmp_path, {'mode': 'generate'}, {'execution_status': 'completed'}, observer)
+    assert all(not row['relations'] for row in result['records'])
+    assert all(row['ambiguous_relations'][0]['matching_record_count'] == 2 for row in result['records'])
+    relation['dataset_name'] = 'b'
+    result = publish(tmp_path, {'mode': 'generate'}, {'execution_status': 'completed'}, observer)
+    assert not result['records'][0]['relations']
+    assert result['records'][1]['relations'][0]['availability'] == 'not_retained'
+
+
+def test_source_metric_definitions_keep_counts_and_unknown_distinct():
+    from scripts.bms_rfd4.metric_definitions import descriptors
+    raw = {'sse_distribution.num_ss_elements_coi': '0', 'sequence_adherence.n_violations': '0',
+           'sequence_probability_adherence.n_one_conditions': '2', 'unknown.metric': '1'}
+    result = descriptors(raw)
+    assert result['sse_distribution.num_ss_elements_coi']['unit'] == 'regions'
+    assert 'including loop' in result['sse_distribution.num_ss_elements_coi']['description']
+    assert result['sequence_adherence.n_violations']['unit'] == 'residues'
+    assert result['sequence_probability_adherence.n_one_conditions']['unit'] == 'conditions'
+    assert 'unknown.metric' not in result
+    assert raw['sse_distribution.num_ss_elements_coi'] == '0'
+
+
 def test_native_writer_return_seams_do_not_guess_filenames():
     def frame(file, name, values, caller=None):
         return SimpleNamespace(f_code=SimpleNamespace(co_filename=file, co_name=name), f_locals=values, f_back=caller)
@@ -78,11 +107,25 @@ async def test_retained_publication_cold_read(store, tmp_path, monkeypatch):
         row = next(row for row in page['records'] if row.get('document') == record['document'])
         assert row['metrics'] == record['metrics']
         assert row['relations'][0]['role'] == 'input'
-        assert row['relations'][0]['artifact_id']
-        assert row['relations'][0]['sha256']
-        assert row['structures'][1]['relation_role'] == 'input'
+        if row['relations'][0]['availability'] == 'stored':
+            assert row['relations'][0]['artifact_id']
+            assert row['relations'][0]['sha256']
+            assert row['structures'][1]['relation_role'] == 'input'
+        else:
+            assert row['relations'][0]['availability'] == 'not_retained'
+            assert 'artifact_id' not in row['relations'][0]
         assert row['metric_descriptors']['amino_acid_composition.ala_fraction']['unit'] == 'fraction'
         assert (native / record['document']).read_bytes() == (source / record['document']).read_bytes()
+        # Retained search runs contain real checkpoints, but old observations do
+        # not supply ancestry. Verify byte custody without loading pickle/state.
+        import hashlib
+        for artifact in page['artifacts']:
+            if artifact.get('role') == 'sampling_state':
+                relative = Path(artifact['path']).relative_to('collected/rfd4_proteina')
+                original_bytes = (source / relative).read_bytes()
+                assert artifact['sha256'] == hashlib.sha256(original_bytes).hexdigest()
+                assert artifact['artifact_id']
+                assert not any(r.get('role') == 'sampling_state' for r in row.get('relations', []))
         if os.environ.get('BMS_RETAINED_RESULTS_WIRE'):
             Path(os.environ['BMS_RETAINED_RESULTS_WIRE']).write_text(json.dumps(page))
 
@@ -98,8 +141,15 @@ async def test_existing_state_hash_acquisition(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, 'to_allowed_relative', lambda value: str(Path(value).relative_to(tmp_path)))
     async def no_governed(_): return []
     monkeypatch.setattr(files, 'get_governed_ngs_result_roots', no_governed)
-    # Inert transport bytes are never unpickled or passed to an executor.
-    state = tmp_path / 'state.pt'; state.write_bytes(b'inert state custody specimen')
+    # Retained native checkpoint bytes, when supplied, are never unpickled or
+    # executed. Otherwise this is explicitly an inert transport-only specimen.
+    state = tmp_path / 'state.pt'
+    retained_root = Path(os.environ['BMS_RETAINED_RFD4']) if os.environ.get('BMS_RETAINED_RFD4') else None
+    states = []
+    if retained_root:
+        states = [item for item in json.loads((retained_root / 'manifest.json').read_text())['artifacts']
+                  if item.get('role') == 'sampling_state']
+    state.write_bytes((retained_root / states[0]['path']).read_bytes() if states else b'inert state custody specimen')
     digest = hashlib.sha256(state.read_bytes()).hexdigest()
     params = {'rfd4_request': {'input': {'kind': 'unconditional', 'name': 'custody', 'chains': [{'chain_id': 'A', 'min_length': 2, 'max_length': 2}]}, 'resume_slot': 'resume', 'settings': {'metrics_tags': []}},
               'native_sources': {'resume': {'kind': 'file', 'path': 'state.pt', 'expected_sha256': digest}}}

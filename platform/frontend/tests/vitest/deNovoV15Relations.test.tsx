@@ -47,6 +47,16 @@ it.skipIf(!process.env.BMS_RETAINED_RESULTS_WIRE)('mounts real retained publishe
         const link = tree!.root.findAllByType('a').find(node => text(node) === 'Refine with partial diffusion')!;
         const source = JSON.parse(new URL(link.props.href, window.location.origin).searchParams.get('source_structure')!);
         expect(source.document.artifact_id).toBe(record.structures[0].artifact_id);
+        const states = page.artifacts.filter((item: any) => item.role === 'sampling_state');
+        if (states.length) {
+            const select = tree!.root.findByProps({ 'aria-label': 'RFD4 retained state' });
+            expect(select.findAllByType('option').length).toBe(states.length + 1);
+            expect(text(tree!.root.findByProps({ 'aria-label': 'Retained RFD4 sampling state' }))).toContain('Association with this molecule is not reported');
+            await act(async () => select.props.onChange({ target: { value: states[0].artifact_id } }));
+            const continuation = tree!.root.findAllByType('a').find(node => text(node) === 'Continue retained RFD4 state')!;
+            const state = JSON.parse(new URL(continuation.props.href, window.location.origin).searchParams.get('rfd4_state')!);
+            expect(state).toEqual({ path: states[0].source_path, artifact_id: states[0].artifact_id, sha256: states[0].sha256 });
+        }
         const exported = await Promise.all(blobs.map(blob => new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsText(blob); })));
         const payload = exported.map(s => { try { return JSON.parse(s); } catch { return null; } }).find(s => s?.schema === 'bms.native-generation-export.v1' && s.records?.some((row: any) => row.native_record?.relations?.length));
         expect(payload).toBeTruthy();

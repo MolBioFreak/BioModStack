@@ -49,14 +49,18 @@ class NativeObserver:
                 self.events.append({'event': 'native_relation',
                     'role': 'input' if caller_name == '_write_input_cif' else 'trajectory',
                     'path': str(loc['path']), 'example_id': native['example_id'],
-                    'producer_field': caller_name, 'trajectory_key': native.get('traj_key')})
+                    'producer_field': caller_name, 'trajectory_key': native.get('traj_key'),
+                    **{key: native.get('payload', {})[key] for key in ('dataset_name', 'task')
+                       if native.get('payload', {}).get(key) is not None}})
             elif file.endswith('/biotite/structure/io/trajfile.py') and name == 'write' and caller_file.endswith('/rfproteina/metrics/utils/metrics_utils.py') and caller_name == '_write_trajectories_if_present':
                 native = caller.f_locals
                 self.events.append({'event': 'native_relation', 'role': 'trajectory',
                     'path': str(loc['file_name']), 'example_id': native['example_id'],
                     'producer_field': '_write_trajectories_if_present:XTCFile.write',
                     'trajectory_key': native.get('traj_key'), 'format': 'xtc',
-                    'time_semantics': 'native_step_labels_not_physical_time'})
+                    'time_semantics': 'native_step_labels_not_physical_time',
+                    **{key: native.get('payload', {})[key] for key in ('dataset_name', 'task')
+                       if native.get('payload', {}).get(key) is not None}})
             elif file.endswith('/rfproteina/search/beam_search.py') and name=='generate' and isinstance(value,list):
                 # Empty/early-stop path has no final_results and is valid-empty final beam.
                 finals={id(x) for x in loc.get('final_results',[])}
@@ -181,6 +185,9 @@ def publish(root,request,receipt,observer,*,producer_root=None):
             for row in csv.DictReader(f):
                 if row.get('example_id'):
                     metrics_by_id.setdefault(row['example_id'],[]).append(row)
+    relation_records_by_id = {}
+    for record in records:
+        relation_records_by_id.setdefault(record['example_id'], []).append(record)
     for record in records:
         candidates = metrics_by_id.get(record['example_id'], [])
         # Native design keys include dataset/task. Never merge independent rows
@@ -201,6 +208,17 @@ def publish(root,request,receipt,observer,*,producer_root=None):
             exact = event.get('example_id') == record['example_id'] or (
                 record.get('native_example_id') is not None and
                 record['native_example_id'] in event.get('native_example_ids', []))
+            if event.get('example_id') is not None:
+                matches = [candidate for candidate in relation_records_by_id.get(event['example_id'], [])
+                           if all(
+                               event.get(key) is None or candidate.get(key) == event[key]
+                               for key in ('dataset_name', 'task'))]
+                if record not in matches:
+                    continue
+                if len(matches) != 1:
+                    record.setdefault('ambiguous_relations', []).append({**event,
+                        'association_state': 'ambiguous', 'matching_record_count': len(matches)})
+                    continue
             if exact:
                 path = Path(event['path'])
                 try:
