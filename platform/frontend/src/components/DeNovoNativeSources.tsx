@@ -40,8 +40,10 @@ function withModel(source: StructureSourceSelection, model: number | undefined):
     return next;
 }
 
-function NativeSourceRow({ slot, value, onChange, onRemove, onSelection }: {
+function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selectedIdentities, onInspection }: {
     slot: string; value: NativeGenerationSourceBinding; onChange: (value: NativeGenerationSourceBinding) => void;
+    selectedIdentities?: Rfd4NativeSelectionIdentity[];
+    onInspection?: (slot: string, receipt: StructureMaterialization, binding: NativeGenerationSourceBinding) => void;
     onRemove: () => void; onSelection?: (slot: string, receipt: StructureMaterialization, selection: MetricSelection) => void;
 }) {
     const [receipt, setReceipt] = useState<StructureMaterialization>();
@@ -65,7 +67,7 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection }: {
             if (epoch.current !== token) return;
             const retained = result.source_structure ?? source;
             previous.current = JSON.stringify(retained);
-            setReceipt(result); latest.current(retained); setPicking(false); setNativePicking(false); setBrowser(false);
+            setReceipt(result); latest.current(retained); onInspection?.(slot, result, retained); setPicking(false); setNativePicking(false); setBrowser(false);
         } catch (cause) { if (epoch.current === token) setError(cause instanceof Error ? cause.message : String(cause)); }
         finally { if (epoch.current === token) setBusy(false); }
     };
@@ -120,13 +122,16 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection }: {
             {receipt.inspection_error && <p role="status">Native inspection: {receipt.inspection_error}. The retained source is unchanged.</p>}
             {receipt.source_positions?.length ? <NativePositionControls key={`${receipt.path}:${receipt.model_number}`} slot={slot} receipt={receipt} onSelection={selection => onSelection?.(slot, receipt, selection)} /> : null}
             <MolstarViewer structureDocumentId={receipt.path} structureUrl={buildFileDownloadUrl(receipt.format === 'bcif' ? receipt.decoded_path ?? receipt.path : receipt.path)} format={receipt.format === 'bcif' ? 'cif' : receipt.format} height={360}
+                showSequenceTrack controlledResidueSelection residueSelections={selectedIdentities ?? []}
                 onMetricSelection={selection => onSelection?.(slot, receipt, selection)} />
         </>}
     </section>;
 }
 
 /** Bind exact documents to native logical names; never compile their science. */
-export function DeNovoNativeSources({ value, onChange, onSelection }: {
+export function DeNovoNativeSources({ value, onChange, onSelection, selection, onInspection }: {
+    onInspection?: (slot: string, receipt: StructureMaterialization, binding: NativeGenerationSourceBinding) => void;
+    selection?: { slot: string; identities: Rfd4NativeSelectionIdentity[] };
     value: NativeGenerationSourceBindings | undefined;
     onChange: (value: NativeGenerationSourceBindings) => void;
     onSelection?: (slot: string, receipt: StructureMaterialization, selection: MetricSelection) => void;
@@ -135,7 +140,7 @@ export function DeNovoNativeSources({ value, onChange, onSelection }: {
     const [kind, setKind] = useState('structure');
     return <div className="space-y-3" data-native-source-bindings>
         <p className="text-sm">Bind the native request’s source names to exact documents. Annotated inputs keep their native annotations; raw-input preparation remains the selected native operation. File/archive bindings are for resume, adapters and declared assets, not structures.</p>
-        {Object.entries(value ?? {}).map(([slot, binding]) => <NativeSourceRow key={slot} slot={slot} value={binding} onSelection={onSelection}
+        {Object.entries(value ?? {}).map(([slot, binding]) => <NativeSourceRow key={slot} slot={slot} value={binding} onInspection={onInspection} onSelection={onSelection} selectedIdentities={selection?.slot === slot ? selection.identities : []}
             onChange={next => onChange({ ...value, [slot]: next })} onRemove={() => { const next = { ...value }; delete next[slot]; onChange(next); }} />)}
         <div className="flex flex-wrap gap-3"><label>Native source name<input aria-label="Native source name" value={name} onChange={event => setName(event.target.value)} /></label>
             <label>Source kind<select aria-label="Native source kind" value={kind} onChange={event => setKind(event.target.value)}><option value="structure">Structure document</option><option value="file">File or archive</option></select></label>

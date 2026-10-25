@@ -65,10 +65,11 @@ function Conditions({ value, families, visual, onChange }: { value: Record<strin
     </fieldset>;
 }
 
-export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onChange, visual, sourceNames, renderNative, retainedTasks }: {
+export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onChange, visual, sourceNames, renderNative, retainedTasks, sourceChains }: {
     request: Record<string, any>; schema: Schema; mode: string; recipe?: string; onRecipe: (recipe: string) => void;
     onChange: (request: Record<string, any>) => void; visual?: Visual; sourceNames: string[];
     renderNative: (key: string, schema: Schema) => React.ReactNode;
+    sourceChains?: Record<string, string[]>;
     retainedTasks?: Array<{ key: string; label: string }>;
 }) {
     const input = nativeRecord(request.input); const settings = nativeRecord(request.settings);
@@ -78,6 +79,16 @@ export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onC
     const families = Object.keys(conditionSchema?.properties?.conditions?.properties ?? {});
     const examples = Array.isArray(input.examples) ? input.examples : [];
     const exampleChange = (i: number, next: Record<string, any>) => setInput({ ...input, examples: examples.map((e: any, n: number) => n === i ? next : e) });
+    const qualifiedVisual = (example: any) => {
+        if (!visual || !example.sources?.some((s: any) => s.slot === visual.slot)) return undefined;
+        if (example.sources.length === 1) return visual;
+        // Installed loader preserves chain IDs and rejects collisions; never invent
+        // renamed chains or source-index selectors. All source ledgers must be known.
+        const chains = example.sources.map((s: any) => sourceChains?.[s.slot]);
+        if (chains.some((ids: string[] | undefined) => !ids?.length || ids.includes(''))) return undefined;
+        const flattened = chains.flat() as string[];
+        return new Set(flattened).size === flattened.length ? visual : undefined;
+    };
     return <div data-rfd4-task-workspace className="space-y-4 min-w-0">
         {mode !== 'evaluate' && <label>RFD4 task<select aria-label="RFD4 task" value={recipe ?? ''} onChange={e => onRecipe(e.target.value)}><option value="">Retained native request / choose task</option>{RFD4_RECIPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{retainedTasks?.map(({ key, label }) => <option key={key} value={`legacy:${key}`}>Restore retained {label}</option>)}</select></label>}
         {mode === 'evaluate' && <h3>Evaluate annotated outputs</h3>}
@@ -101,9 +112,9 @@ export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onC
                     <button type="button" onClick={() => exampleChange(i, { ...example, sources: example.sources.filter((_: any, n: number) => n !== j) })}>Remove example {i + 1} source {j + 1}</button></div>)}
                 <button type="button" onClick={() => exampleChange(i, { ...example, sources: [...(example.sources ?? []), { slot: '' }] })}>Add source to example {i + 1}</button>
                 <Rfd4Regions value={example.contig} onChange={v => exampleChange(i, patchNative(example, 'contig', v))} />
-                <Conditions value={nativeRecord(example.conditions)} families={families} visual={visual && example.sources?.length === 1 && example.sources[0].slot === visual.slot ? visual : undefined} onChange={v => exampleChange(i, { ...example, conditions: v })} />
-                {visual && example.sources?.length > 1 && <p>Multi-source native chain mapping is not established by this source-local selection. Manual expressions remain available.</p>}
-                <fieldset><legend>Pair conditions (exact representative atoms)</legend>{(example.pair_conditions ?? []).map((pair: any, j: number) => <div key={j} className="flex flex-wrap gap-2">{['left', 'right', 'value'].map(key => <label key={key}>{key}{key === 'value' ? <select aria-label={`Pair ${j + 1} value`} value={pair.value} onChange={e => exampleChange(i, { ...example, pair_conditions: example.pair_conditions.map((p: any, n: number) => n === j ? { ...p, value: e.target.value } : p) })}>{['UNSPECIFIED', 'PAIR', 'LOOP'].map(v => <option key={v}>{v}</option>)}</select> : <><input aria-label={`Pair ${j + 1} ${key}`} value={pair[key]} onChange={e => exampleChange(i, { ...example, pair_conditions: example.pair_conditions.map((p: any, n: number) => n === j ? { ...p, [key]: e.target.value } : p) })} />{visual?.expression && example.sources?.length === 1 && example.sources[0].slot === visual.slot && <button type="button" onClick={() => exampleChange(i, { ...example, pair_conditions: example.pair_conditions.map((p: any, n: number) => n === j ? { ...p, [key]: visual.expression } : p) })}>Use selection for pair {j + 1} {key}</button>}</>}</label>)}<button type="button" onClick={() => exampleChange(i, { ...example, pair_conditions: example.pair_conditions.filter((_: any, n: number) => n !== j) })}>Remove pair {j + 1}</button></div>)}
+                <Conditions value={nativeRecord(example.conditions)} families={families} visual={qualifiedVisual(example)} onChange={v => exampleChange(i, { ...example, conditions: v })} />
+                {visual && example.sources?.length > 1 && !qualifiedVisual(example) && <p>Multi-source native chain mapping is not established by this source-local selection. Manual expressions remain available.</p>}
+                <fieldset><legend>Pair conditions (exact representative atoms)</legend>{(example.pair_conditions ?? []).map((pair: any, j: number) => <div key={j} className="flex flex-wrap gap-2">{['left', 'right', 'value'].map(key => <label key={key}>{key}{key === 'value' ? <select aria-label={`Pair ${j + 1} value`} value={pair.value} onChange={e => exampleChange(i, { ...example, pair_conditions: example.pair_conditions.map((p: any, n: number) => n === j ? { ...p, value: e.target.value } : p) })}>{['UNSPECIFIED', 'PAIR', 'LOOP'].map(v => <option key={v}>{v}</option>)}</select> : <><input aria-label={`Pair ${j + 1} ${key}`} value={pair[key]} onChange={e => exampleChange(i, { ...example, pair_conditions: example.pair_conditions.map((p: any, n: number) => n === j ? { ...p, [key]: e.target.value } : p) })} />{qualifiedVisual(example)?.expression && <button type="button" onClick={() => exampleChange(i, { ...example, pair_conditions: example.pair_conditions.map((p: any, n: number) => n === j ? { ...p, [key]: qualifiedVisual(example)?.expression } : p) })}>Use selection for pair {j + 1} {key}</button>}</>}</label>)}<button type="button" onClick={() => exampleChange(i, { ...example, pair_conditions: example.pair_conditions.filter((_: any, n: number) => n !== j) })}>Remove pair {j + 1}</button></div>)}
                     <button type="button" onClick={() => exampleChange(i, { ...example, pair_conditions: [...(example.pair_conditions ?? []), { left: '', right: '', value: 'UNSPECIFIED' }] })}>Add pair condition</button></fieldset>
                 <button type="button" onClick={() => setInput({ ...input, examples: examples.filter((_: any, n: number) => n !== i) })}>Remove example {i + 1}</button>
             </fieldset>)}<button type="button" onClick={() => setInput({ ...input, examples: [...examples, { name: '', sources: [] }] })}>Add conditioned example</button></>}

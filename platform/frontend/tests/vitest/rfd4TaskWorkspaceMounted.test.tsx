@@ -5,15 +5,17 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { api } from '../../src/lib/api';
+import { Rfd4TaskWorkspace } from '../../src/components/Rfd4TaskWorkspace';
 import { DeNovoNativeGenerationSettings } from '../../src/components/DeNovoNativeGenerationSettings';
 // Isolate launch placement and optional operations, not authoring, sources, schema widgets or HTTP serialization.
 vi.mock('../../src/components/GeneralSequenceDesignSettings', () => ({ GeneralSequenceDesignSettings: () => null }));
 vi.mock('../../src/components/ExecutionTargetPicker', () => ({ ExecutionTargetPicker: () => null }));
 vi.mock('../../src/components/dashboard/IndependentProvisionPanel', () => ({ DE_NOVO_PRELOAD_SELECTION: { kind: 'workflow_pack', workflow_id: 'de_novo_design' } }));
-vi.mock('../../src/components/MolstarViewer', () => ({ default: () => <div data-native-viewer /> }));
+vi.mock('../../src/components/MolstarViewer', () => ({ default: (props: any) => <div data-native-viewer data-linked={props.showSequenceTrack} data-controlled={props.controlledResidueSelection} data-selection={JSON.stringify(props.residueSelections)} /> }));
 const cwd = resolve(process.cwd(), '../..');
-const inventories = JSON.parse(execFileSync('python', ['-c', "import json;from scripts.lib.rfd4_proteina_contract import parameter_schema;from scripts.lib.complexa_contract import parameter_schema as c;print(json.dumps({'rfd4_proteina':{m:{'parameter_schema':parameter_schema(m)} for m in ('generate','evaluate')},'complexa':{m:{'schema':c()} for m in ('generate','evaluate')}}))"], { cwd, encoding: 'utf8', maxBuffer: 16000000 }));
+const inventories = JSON.parse(execFileSync(process.env.BMS_TEST_API_PYTHON ?? 'python', ['-c', "import json,sys;sys.path.insert(0,'platform/api');from services.rfd4_proteina import generation_settings as r;from services.complexa import discovery as c;print(json.dumps({'rfd4_proteina':{m:r(m) for m in ('generate','evaluate')},'complexa':{m:c() for m in ('generate','evaluate')}}))"], { cwd, encoding: 'utf8', maxBuffer: 16000000 }));
 let root: Root | undefined, client: QueryClient, old: typeof api.defaults.adapter, draft: any;
 let wire: any[], unexpected: string[];
 let xhr: ReturnType<typeof vi.spyOn>, fetchSpy: ReturnType<typeof vi.spyOn>;
@@ -77,6 +79,8 @@ it('actual exact source selection explicitly applies independent coordinates/pro
     await vi.waitFor(async () => { await settle(); expect(document.querySelector('[aria-label="Retained residue for target.v2"]')).not.toBeNull(); });
     await edit('Retained residue for target.v2', '0'); await edit('Retained atom for target.v2', '0'); await click('Add exact selection from target.v2');
     expect(draft.rfd4_request.input.examples[0].conditions).toBeUndefined();
+    expect(document.querySelector('[data-native-viewer]')?.getAttribute('data-linked')).toBe('true');
+    expect(JSON.parse(document.querySelector('[data-native-viewer]')!.getAttribute('data-selection')!)).toMatchObject([{ labelAsymId: 'X', authSeqId: 42 }]);
     await click('Use visual selection in new condition'); await edit('Native condition value', 'true'); await click('Apply native condition');
     await edit('Condition family', 'C_SEQ_PROB_CYS'); await edit('Native condition value', '0'); await click('Apply native condition');
     await edit('Native contig', 'X7-7,20-40,/0,X7-7'); await click('Move region 2 earlier'); await click('Add pair condition'); await click('Use selection for pair 1 left'); await click('Use selection for pair 1 right');
@@ -133,6 +137,66 @@ it('ordered generated spans and source fragments directly edit native contig', a
     await edit('Generated minimum', '25'); await edit('Generated maximum', '50'); await click('Append generated region');
     await edit('Source fragment', 'X7-12'); await click('Append source fragment'); await click('Add chain break');
     expect(draft.rfd4_request.input.examples[0].contig).toBe('25-50,X7-12,/0'); await click('Move region 2 earlier'); expect(draft.rfd4_request.input.examples[0].contig).toBe('X7-12,25-50,/0');
+});
+it('Complexa evaluation basket preserves order and exact slots across cold reopen and transport', async () => {
+    await mount('complexa', { complexa_request: { task: 'protein_binder', task_name: 'eval', operation: 'analysis' }, native_sources: { exact: source } });
+    await click('Add evaluation candidate'); await edit('Complexa evaluation slot 1', 'exact');
+    await click('Add evaluation candidate'); await edit('Complexa evaluation slot 2', 'second');
+    await click('Remove evaluation candidate 1');
+    const saved = JSON.parse(JSON.stringify(draft)); await unmount(); await mount('complexa', saved);
+    expect(draft.complexa_request.evaluation_slots).toEqual(['second']); expect(draft.native_sources.exact).toEqual(source);
+    await click('Evaluate and analyze'); const body = wire.find(w => w.url === '/api/jobs').body;
+    expect(normalize(body.params.complexa_request, 'complexa').evaluation_slots).toEqual(['second']);
+});
+it.each(['rfd4_proteina', 'complexa'] as const)('%s shows real native snapshots without default hydration', async model => {
+    const request = model === 'complexa' ? { task: 'AME', reward: null } : { groups: { generation: 'inverse_folding', recycle_strategy: 'thinking_low' }, settings: { seed: 0 } };
+    await mount(model, { [model === 'complexa' ? 'complexa_request' : 'rfd4_request']: request });
+    await click('Native settings'); await disclose('Native profile snapshots');
+    expect(document.body.textContent).toContain(model === 'complexa' ? 'reward_model' : 'independent single-group snapshots');
+    expect(document.body.textContent).toContain('n_recycle');
+    expect(draft[model === 'complexa' ? 'complexa_request' : 'rfd4_request']).toEqual(request);
+});
+it.skipIf(!process.env.BMS_TEST_NATIVE_READBACK)('replays actual installed combined composition through observed backend preview wire without hydration', async () => {
+    const result = JSON.parse(readFileSync(process.env.BMS_TEST_NATIVE_READBACK!, 'utf8'));
+    const adapter = api.defaults.adapter as Function;
+    api.defaults.adapter = async config => {
+        if (config.url?.endsWith('/generation-settings/preview')) {
+            expect(JSON.parse(config.data)).toEqual(result.request); expect(config.params.mode).toBe('generate');
+            return {config,data:result,status:200,statusText:'OK',headers:{}};
+        }
+        return adapter(config);
+    };
+    await mount('rfd4_proteina', {rfd4_request:result.request}); await click('Native settings'); await disclose('Native profile snapshots'); await click('Read selected effective configuration');
+    expect(JSON.parse(document.querySelector('[aria-label="Selected native effective configuration"]')!.textContent!)).toEqual(result.effective_config);
+    expect(draft.rfd4_request).toEqual(result.request);
+    await click('Design'); await edit('Seed','1'); await click('Native settings');
+    expect(document.querySelector('[aria-label="Selected native effective configuration"]')).toBeNull(); expect(document.body.textContent).toContain('Request changed since readback');
+});
+it('native readback failure is observational and does not alter request or run availability', async () => {
+    const adapter = api.defaults.adapter as Function;
+    api.defaults.adapter = async config => {
+        if (config.url?.endsWith('/generation-settings/preview')) throw new Error('Native test unavailable');
+        return adapter(config);
+    };
+    await mount('rfd4_proteina', {rfd4_request:{settings:{seed:0}}}); await click('Native settings'); await disclose('Native profile snapshots'); await click('Read selected effective configuration');
+    expect(document.body.textContent).toContain('Native test unavailable'); expect(draft.rfd4_request).toEqual({settings:{seed:0}});
+    expect([...document.querySelectorAll('button')].find(b=>b.textContent === 'Generate candidates')!.disabled).toBe(false);
+});
+it.each([{ second: ['Y'], adopt: true }, { second: ['X'], adopt: false }, { second: undefined, adopt: false }])('multi-source selection requires known noncolliding native chains: %j', async ({second, adopt}) => {
+    const el = document.createElement('div'); document.body.append(el); root = createRoot(el);
+    await act(async () => root!.render(<Rfd4TaskWorkspace request={{input:{kind:'condition_spec',examples:[{name:'multi',sources:[{slot:'first'},{slot:'second'}]}]}}} schema={inventories.rfd4_proteina.generate.parameter_schema} mode="generate" recipe="motif" onRecipe={() => {}} onChange={() => {}} renderNative={() => null} sourceNames={['first','second']} sourceChains={{first:['X'],...(second ? {second} : {})}} visual={{slot:'first',expression:'chain_id == "X" and res_id == 7'}} />));
+    expect([...document.querySelectorAll('button')].some(b => b.textContent === 'Use visual selection in new condition')).toBe(adopt);
+    expect(document.querySelector('[aria-label="Selection expression"]')).not.toBeNull();
+});
+it('provider catalog searches real schema constructors without activation and retained state slots keep paths', async () => {
+    await mount('rfd4_proteina', { native_sources: { state: { kind: 'file', path: '/retained/search.pt' } }, rfd4_request: {} });
+    await click('Native settings'); await disclose('Metric providers, constructors and native oracles'); await edit('Search native providers and metrics', 'amino_acid');
+    const menu = document.querySelector<HTMLSelectElement>('[aria-label="Provider / metric"]')!;
+    expect(menu.options.length).toBeGreaterThan(1); await edit('Provider / metric', menu.options[1].value);
+    expect(draft.rfd4_request.providers).toBeUndefined();
+    await disclose('Runtime, output and retained assets'); await edit('resume_slot', 'state');
+    expect(document.body.textContent).toContain('/retained/search.pt'); expect(draft.rfd4_request.resume_slot).toBe('state');
+    await click('Omit resume_slot'); expect(draft.rfd4_request.resume_slot).toBeUndefined();
 });
 it('Complexa tasks/counts/reward and authoritative operation survive actual transport', async () => {
     await mount('complexa'); await edit('Complexa task', 'monomer_motif_indexed'); await edit('Native task name', 'indexed'); await edit('nsamples', '3'); await edit('seed', '0'); await edit('Native operation', 'analysis');
