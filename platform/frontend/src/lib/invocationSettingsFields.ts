@@ -13,12 +13,14 @@ export function invocationSettingsFields(catalog: InvocationCatalog, modeId?: st
     const branch = root?.oneOf?.[0] ?? root;
     const resolved = branch?.$ref?.startsWith('#/$defs/') ? root?.$defs?.[branch.$ref.slice(8)] : branch;
     const properties = resolved?.properties ?? {};
-    // The round normalizer admits catalog keys only. Mode-schema-only fields
-    // are not round settings until that existing owner supports them.
-    const names = catalog.params.map(field => field.name);
-    return names.filter(name => !invocationFieldIsBound(name) && !['schema_version', 'task'].includes(name)).map(name => {
+    // Only native chemistry supported by the blind round receiver is added.
+    const chemistry = catalog.id === 'boltz2' ? ['constraints', 'properties'] : catalog.id === 'esmfold2' ? ['covalent_bonds'] : [];
+    const names = [...new Set([...catalog.params.map(field => field.name), ...chemistry.filter(name => properties[name])])];
+    return names.filter(name => !invocationFieldIsBound(name) && !['schema_version', 'task', 'constraint', 'templates', 'distogram_conditioning'].includes(name)).map(name => {
         const original = catalog.params.find(field => field.name === name);
-        const schema = properties[name];
+        const nativeSchema = properties[name];
+        const schema = catalog.id === 'boltz2' && name === 'constraints' && nativeSchema?.items && !Array.isArray(nativeSchema.items)
+            ? { ...nativeSchema, items: nativeSchema.items.oneOf?.find(branch => branch.properties?.bond) ?? nativeSchema.items } : nativeSchema;
         return { ...original, name, type: original?.type ?? (typeof schema?.type === 'string' ? schema.type : 'json'),
             display_applicable: !mode?.params || mode.params.includes(name) || !!schema,
             ...(schema ? { schema: { ...schema, $defs: root?.$defs } } : {}) } as InvocationField;

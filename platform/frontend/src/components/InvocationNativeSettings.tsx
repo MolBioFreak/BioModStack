@@ -8,7 +8,8 @@ import type { NativeBinderParameter } from '../lib/nativeBinderAuthoring';
 import type { SelectedRoundModel } from '../lib/binderSelectedRound';
 
 /** Display discovery defaults, but emit only deliberate sparse edits. */
-export function InvocationNativeSettings({ call, fields, prediction, onChange }: {
+export function InvocationNativeSettings({ call, fields, prediction, onChange, showAdditional = true }: {
+    showAdditional?: boolean;
     call: SelectedRoundModel; fields: NativeBinderParameter[]; prediction: boolean;
     onChange: (params: SelectedRoundModel['params']) => void;
 }) {
@@ -29,8 +30,9 @@ export function InvocationNativeSettings({ call, fields, prediction, onChange }:
         </div>;
     };
     return <div className="min-w-0 space-y-3">
+        {prediction && showAdditional && <p>Blind prediction excludes templates, Protenix pose constraints, Boltz pocket/contact restraints and ESMFold2 distogram conditioning. Native bond chemistry remains model-owned.</p>}
         <div className="grid min-w-0 gap-4 md:grid-cols-2">{groups.primary.map(render)}</div>
         {[...groups.groups].map(([name, parameters]) => <details key={name}><summary>{name}</summary><div className="grid min-w-0 gap-4 md:grid-cols-2">{parameters.map(render)}</div></details>)}
-        {!!Object.keys(call.params).filter(key => !fields.some(f => f.name === key)).length && <details><summary>Additional retained native fields</summary><p>These values remain in the request; source-bound inputs are supplied by the existing adapter.</p><ul>{Object.keys(call.params).filter(key => !fields.some(f => f.name === key)).map(key => <li key={key}><BioXpJsonInput label={key} value={call.params[key]} onChange={value => onChange({ ...call.params, [key]: value })} /></li>)}</ul></details>}
+        {showAdditional && !!Object.keys(call.params).filter(key => !fields.some(f => f.name === key)).length && <details><summary>Additional retained native fields</summary><p>These values remain in the request; source-bound inputs are supplied by the existing adapter.</p><ul>{Object.keys(call.params).filter(key => !fields.some(f => f.name === key)).map(key => <li key={key}><BioXpJsonInput label={key} value={call.params[key]} onChange={value => onChange({ ...call.params, [key]: value })} /></li>)}</ul></details>}
     </div>;
 }

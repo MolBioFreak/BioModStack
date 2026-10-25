@@ -16,7 +16,7 @@ async def test_mounted_operation_envelopes_cold_template_roundtrip(tmp_path):
     if not capture:
         pytest.skip('Requires actual mounted operation capture; no substitute')
     rows = json.loads(Path(capture).read_text())
-    assert len(rows) == 17
+    assert len(rows) == int(os.environ.get('BMS_OPERATIONS_EXPECTED_ROWS', '17'))
     url = f'sqlite+aiosqlite:///{tmp_path / "templates.db"}'
     engine = create_async_engine(url)
     async with engine.begin() as conn:

@@ -77,6 +77,7 @@ export default defineConfig({
             './tests/vitest/binderRoundSettingsMounted.test.tsx',
             './tests/vitest/operationsComposerMounted.test.tsx',
             './tests/vitest/optionalOperationsMounted.test.tsx',
+            './tests/vitest/selectedOptionalOperationsMounted.test.tsx',
             './tests/vitest/rfd4TaskWorkspaceMounted.test.tsx',
             './tests/vitest/complexaNativeSelection.test.ts',
             './tests/vitest/otherDeNovoAuthoringMounted.test.tsx',

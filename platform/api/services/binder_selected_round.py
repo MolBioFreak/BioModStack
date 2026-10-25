@@ -68,6 +68,11 @@ def normalize(request):
             if definition is None or not any(m.id == mode for m in definition.modes):
                 raise ValueError(f'Unsupported model/mode {model}/{mode}')
             known = {field.name for field in definition.params}
+            if stage.kind == 'prediction':
+                # Native chemistry bypasses no source owner: the ordinary model
+                # compiler validates it after exact component binding.
+                known |= {'boltz2': {'constraints', 'properties', 'templates'},
+                          'esmfold2': {'covalent_bonds', 'distogram_conditioning'}}.get(model, set())
             if set(invocation.params) - known:
                 raise ValueError(f'Unknown {model} settings: {sorted(set(invocation.params) - known)}')
             # Roles are operator settings; physical source paths are server-owned.
@@ -88,6 +93,17 @@ def normalize(request):
                 # Final native validation runs after exact source/roles bind.
                 # LigandMPNN's chemistry validator also needs real coordinates.
                 errors = []  # Model owner validates the complete source-bound request.
+            elif model == 'protenix' and stage.kind == 'prediction':
+                # Validate the native field shapes now, but entity/atom references
+                # only after the source owner supplies ordered complex_components.
+                # The ordinary Job/compiler still runs full validate_chemistry.
+                from pydantic import TypeAdapter
+                from scripts.protenix_chemistry import ProtenixChemistry
+                chemistry = {'covalent_bonds', 'constraint'}
+                for key in chemistry & invocation.params.keys():
+                    TypeAdapter(ProtenixChemistry.model_fields[key].annotation).validate_python(invocation.params[key])
+                errors = registry.validate_job_params(model, mode,
+                    {key: value for key, value in invocation.params.items() if key not in chemistry})
             else:
                 errors = registry.validate_job_params(model, mode, invocation.params)
             errors = [e for e in errors if e not in {f'Missing required parameter: {k}'
@@ -572,8 +588,12 @@ def prediction_request(root, row, target, model, params, placement, *, scope='bi
     for key in BLIND_FIXED_PARAMETERS:
         if key in params:
             params[key] = False
-    for key in ('constraint', 'templates', 'template_path', 'initial_guess', 'pocket', 'contact'):
+    for key in ('constraint', 'templates', 'template_path', 'initial_guess', 'pocket', 'contact', 'distogram_conditioning', 'esmf_distogram_conditioning'):
         params.pop(key, None)
+    if model == 'boltz2' and isinstance(params.get('constraints'), list):
+        # Bond chemistry is not pose conditioning. Pocket/contact restraints are.
+        params['constraints'] = [entry for entry in params['constraints']
+                                 if not isinstance(entry, dict) or not ({'pocket', 'contact'} & entry.keys())]
     for component in components:
         for key in ('templatesPath', 'template', 'initial_guess', 'structure', 'coordinates'):
             component.pop(key, None)
