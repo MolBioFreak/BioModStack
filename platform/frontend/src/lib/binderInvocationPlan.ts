@@ -1,4 +1,4 @@
-import type { SelectedRoundModel, SelectedRoundPlan, SelectedRoundStage } from './binderSelectedRound';
+import type { CandidateRef, SelectedRoundModel, SelectedRoundPlan, SelectedRoundStage } from './binderSelectedRound';
 
 export const invocationModes: Record<string, string[]> = {
     proteinmpnn: ['design'], fampnn: ['design', 'binder_design'], caliby_binder: ['design'],
@@ -29,6 +29,34 @@ export function activeInvocationPlan(stages: InvocationDraftStage[]): SelectedRo
 }
 export function newInvocation(model: string, params: SelectedRoundModel['params'] = {}): SelectedRoundModel {
     return { invocation_id: crypto.randomUUID(), model_id: model, mode: invocationModes[model][0], params: structuredClone(params) };
+}
+export function invocationCandidateLabel(ref: CandidateRef): string {
+    if (ref.kind === 'native_document') return `Document ${ref.artifact_id} · MODEL ${ref.model ?? 'native'} · Job ${ref.job_id}`;
+    if (ref.kind === 'native_sequence') return `Sequence ${ref.native_output_id} · Job ${ref.job_id}`;
+    if (ref.kind === 'native_observation') return `Record ${ref.native_record_id} · Job ${ref.job_id}`;
+    return `Design ${ref.design_id} · MODEL ${ref.document?.model ?? 'native'} · Job ${ref.job_id}`;
+}
+export const invocationNames: Record<string, string> = {
+    proteinmpnn: 'ProteinMPNN', fampnn: 'FA-MPNN', caliby_binder: 'Caliby binder',
+    caliby_experimental: 'Caliby experimental', ligandmpnn: 'LigandMPNN', protonpottsmpnn: 'ProtonPottsMPNN',
+    protenix: 'Protenix', boltz2: 'Boltz-2', esmfold2: 'ESMFold2', boltz_cp_experimental: 'Fold-CP experimental',
+    molecular_dynamics: 'Molecular dynamics',
+};
+export function invocationLabel(call: SelectedRoundModel, index: number): string {
+    return `${invocationNames[call.model_id] ?? call.model_id} call ${index + 1} · ${call.mode ?? 'native mode'}`;
+}
+/** Mode history belongs to the call identity, never the model shared by siblings. */
+export function changeInvocationMode(item: InvocationDraftStage, id: string, mode: string): InvocationDraftStage {
+    if (item.stage.kind === 'maturation') return item;
+    const call = item.stage.models.find(value => value.invocation_id === id);
+    if (!call) return item;
+    return { ...item, drafts: { ...item.drafts, [`${id}:${call.mode}`]: structuredClone(call.params) },
+        stage: { ...item.stage, models: item.stage.models.map(value => value.invocation_id === id
+            ? { ...value, mode, params: structuredClone(item.drafts[`${id}:${mode}`] ?? {}) } : value) } };
+}
+export function invocationPlacementLabel(call: SelectedRoundModel): string {
+    return !Object.hasOwn(call, 'execution_target_id') ? 'Inherited round placement'
+        : call.execution_target_id === null ? 'Local (explicit)' : `Remote worker: ${call.execution_target_id}`;
 }
 export interface InitialInvocationDraft {
     enabled: boolean; stages: InvocationDraftStage[];

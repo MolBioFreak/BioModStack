@@ -77,7 +77,7 @@ function LegacyGeneralSequenceDesignSettings({ value, onChange }: {
             <div className="grid gap-3 md:grid-cols-2">{query.data.inputParameters.map(parameter => <div key={parameter.name} data-general-input-setting={parameter.name}>{render(parameter, true)}</div>)}</div>
         </details>}
     </div>;
-    return <ProteinDesignPanel title="Sequence Design"><section aria-label="General generation sequence design" className="space-y-4">
+    return <ProteinDesignPanel title="Optional operations"><section aria-label="General generation sequence design" className="space-y-4">
         <label className="flex items-center gap-2"><input aria-label="Enable sequence design" type="checkbox" checked={request.enabled}
             onChange={event => onChange({ ...draft, sequence_design: { ...request, enabled: event.target.checked } })} />Design sequences for generated candidates</label>
         <p className="text-sm text-[var(--text-secondary)]">{request.enabled ? 'Design sequences for each generated candidate. Structure prediction and sequence validation are separate operations.' : 'Off · generation only. Designer choices and settings below are retained for later.'}</p>
