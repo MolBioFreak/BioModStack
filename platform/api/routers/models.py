@@ -433,6 +433,19 @@ async def read_bindcraft2_campaign_settings(job_id: str, session: AsyncSession =
     return result
 
 
+@router.post('/{model_id}/generation-settings/preview')
+async def preview_generation_settings(model_id: str, request: dict, mode: str = 'generate'):
+    """Observational native readback, independent of admission and preparation."""
+    if model_id != 'rfd4_proteina' or mode not in ('generate', 'evaluate'):
+        raise HTTPException(status_code=404, detail='Model has no native settings preview')
+    from starlette.concurrency import run_in_threadpool
+    from services.rfd4_proteina import preview_settings
+    try:
+        return await run_in_threadpool(preview_settings, mode, request)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get('/{model_id}/generation-settings')
 async def get_generation_settings(model_id: str, mode: str, generator: str | None = None, task: str | None = None):
     """Model-owned initial-generation settings for browser and agent callers."""

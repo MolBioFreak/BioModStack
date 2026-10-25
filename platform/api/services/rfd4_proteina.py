@@ -210,6 +210,26 @@ def source_slots_for_params(mode, params):
     return source_slots(normalize_request(params[REQUEST_FIELD], mode))
 
 
+def preview_settings(mode, request, *, image=None):
+    """Read selected native composition without preparation or model execution."""
+    import subprocess
+    from paths import get_container_dir
+    from services.remote_execution.images import resolve_image
+    request = normalize_request(request, mode)
+    image = Path(image) if image is not None else resolve_image('rfd4_proteina.sif', get_container_dir())
+    script = Path(__file__).resolve().parents[3] / 'scripts' / 'preview_rfd4_settings.py'
+    completed = subprocess.run(
+        ['apptainer', 'exec', '--cleanenv', '--no-home', '--bind',
+         f'{script.parents[1]}:{script.parents[1]}:ro', str(image), 'python', str(script)],
+        input=json.dumps(request, allow_nan=False), text=True, capture_output=True,
+        timeout=120, check=False)
+    if completed.returncode:
+        raise ValueError('Native profile readback unavailable: ' + completed.stderr[-2000:])
+    result = json.loads(completed.stdout)
+    result['runtime_image'] = str(image)
+    return result
+
+
 def generation_settings(mode='generate'):
     from services.native_generation_sources import native_sources_schema, source_slot_schema
     from scripts.lib.rfd4_proteina_contract import _PROFILE

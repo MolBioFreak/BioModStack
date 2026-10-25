@@ -26,7 +26,7 @@ class NoisyGuidance(TypedDict, total=False):
     guidance_start_frac: float
     guidance_end_frac: float
     rescale_phi: float
-    omega_schedule: str
+    omega_schedule: Literal["constant", "linear_decay"]
 
 
 class SequenceSampling(TypedDict, total=False):
@@ -34,7 +34,11 @@ class SequenceSampling(TypedDict, total=False):
     logits_temp: float
     score_temp: float
     mask_stochasticity_strength: float
-    planner_name: str | None
+    planner_name: Literal[
+        "esm2_8M", "esm2_35M", "esm2_150M", "esm2_650M", "esm2_3B", "esm2_15B",
+        "dplm_150M", "dplm_650M", "dplm_3B", "evoflow_650M",
+        "evoflow_650M_Base", "evoflow_650M_calibrated",
+    ] | None
     should_ensure_unmasked_stay: bool
     allow_remasking: bool
     switch_temp: bool

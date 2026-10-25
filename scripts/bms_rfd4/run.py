@@ -11,8 +11,8 @@ from bms_rfd4.inputs import prepare_inputs
 from bms_rfd4.publication import NativeObserver, publish
 
 
-def compose_native(request, config_dir, *, inputs, output, bundle=None, bindings=None):
-    """Native Hydra owns group inheritance; explicit leaves are applied last."""
+def compose_selected_config(request, config_dir, *, bindings=None):
+    """Native Hydra composition, without source acquisition or runtime path binding."""
     from hydra import compose, initialize_config_dir
     from omegaconf import OmegaConf, open_dict
     request=normalize_request(request)
@@ -35,6 +35,15 @@ def compose_native(request, config_dir, *, inputs, output, bundle=None, bindings
             else:node[k]=v
     with open_dict(cfg):
         apply(cfg,native_overlay(request,bindings=bindings))
+    return cfg
+
+
+def compose_native(request, config_dir, *, inputs, output, bundle=None, bindings=None):
+    """Compose at the same owner, then bind execution-owned paths."""
+    from omegaconf import OmegaConf, open_dict
+    request = normalize_request(request)
+    cfg = compose_selected_config(request, config_dir, bindings=bindings)
+    with open_dict(cfg):
         cfg.inputs=str(Path(inputs).resolve())
         cfg.out_dir=str(Path(output).resolve())
         if request['mode']=='generate':
