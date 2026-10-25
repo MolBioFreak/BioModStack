@@ -43,6 +43,34 @@ From repository root with the same evidence root:
 
 Locked dependencies are donor symlinks, not a clean reinstall. This leaf's direct runs bind localhost and refuse execution writes; they were not network-namespace isolated. The separately appearing qualification wrapper is not authored or modified by this leaf.
 
+## Final integrated, namespace-isolated qualification
+
+Superseding the earlier browser-build limitation above, the integration owner built the actual frontend after the placement fix at code commit `4434e081907b27e81ba8d7add08a1f16e3dce5a8`. `tsc -b` and Vite returned zero; build log: `/home/dalab/.hermes/profiles/fresh/cache/scratch/denovo-parent-build-4434e08.log`. Documentation-only commits after that SHA do not change the tested code.
+
+Final evidence root: `/home/dalab/.hermes/profiles/fresh/cache/scratch/dn-parent-final-4434e08/`.
+
+- `mounted.json`: **33 passed, 0 failed, 0 skipped** (11 each: ordinary native HTTP parent, reconciled generation, reconciled source).
+- `persistence.xml`: **2 passed, 0 failed, 0 skipped**, auditing the actual mounted unconditional and MODEL-2 partial Project preparations. The core Jobs count and Project run-group count are both zero.
+- `namespace.json`: actual tested code SHA, namespace identity, and empty network route table. Server, mounted tests and Chrome ran together in `unshare -Urn` with loopback only.
+- `browser-readonly.json`: real built full-shell `/bms/submit` reopened the saved Project, displaying native lengths 73/99; **zero non-read requests and zero external request attempts**. A server-side read-only marker refused all browser-stage mutations. `browser-dom.json`, `browser-events.json` and `browser.png` retain actual rendering/network evidence.
+- `frontend-source-sha256.json` and `build-sha256.json`: source and built-artifact hashes. Locked donor dependencies were reused rather than reinstalled.
+- `process-exits.json`: task-owned namespace server/Chrome were terminated on completion.
+- A separate original-code replay in `denovo-parent-placement-before/baseline.log` confirms `/submit` passes and `/bms/submit` loses the target using the original `6a9b4bd` deNovoAuthoring implementation. Only that module was resolved to its baseline version; mounted parent and HTTP owners stayed real.
+
+The final route cases additionally clone the actual emitted native request after cold Template loading and assert complete native-request equality. The conditioned Project test exercises two real mounted Save clicks, cold reopening, source MODEL/hash and partial-time zero, then actual Prepare. It does not launch anything.
+
+Reproduce the integrated qualification with a new scratch root and an already successful actual Vite build:
+
+```sh
+BMS_PARENT_NETNS="$(readlink /proc/self/ns/net)" \
+BMS_PARENT_LIFECYCLE_ROOT=/home/dalab/.hermes/profiles/fresh/cache/scratch/NEW-isolated-parent \
+BMS_PARENT_BROWSER_BUILD=/absolute/path/to/actual-vite-output \
+unshare -Urn /home/dalab/.cache/bms-remote-worker-complete-venv/bin/python \
+platform/frontend/browser-tests/denovo_parent_lifecycle_qualification.py
+```
+
+This final run does not supersede the unperformed boundaries below or the five failing historical D20 selector cases.
+
 ## Not closure
 
 - Five obsolete D20 cases still fail and need their RFD4 expert-control owner reconciled.
