@@ -105,6 +105,7 @@ const MolstarViewer = lazy(() => import('./MolstarViewer'));
 const StabilityHeatmap = lazy(() => import('./MetricCharts').then(module => ({ default: module.StabilityHeatmap })));
 const BatchComparePane = lazy(() => import('./BatchComparePane').then(module => ({ default: module.BatchComparePane })));
 const DesignComparePane = lazy(() => import('./DesignComparePane').then(module => ({ default: module.DesignComparePane })));
+const NativeBinderComparison = lazy(() => import('./NativeBinderComparison').then(module => ({ default: module.NativeBinderComparison })));
 const DataViewerLanding = lazy(() => import('./DataViewerLanding').then(module => ({ default: module.DataViewerLanding })));
 const AnalyticsDashboard = lazy(() => import('./AnalyticsDashboard').then(module => ({ default: module.AnalyticsDashboard })));
 const StructureViewerPane = lazy(() => import('./StructureViewerPane'));
@@ -8970,13 +8971,16 @@ function ResultsViewerContent() {
                                     )}
 
                                     {/* Compare Designs Pane */}
-                                    {activeTab === 'compare_designs' && (
+                                    {activeTab === 'compare_designs' && <>
                                         <DesignComparePane
                                             designs={designs}
                                             selectedDesignIds={selectedDesignIds}
                                             onSelectedDesignIdsChange={setSelectedDesignIds}
                                         />
-                                    )}
+                                        {activeJob && isRFD3GenerationResultJob(activeJob) && (
+                                            <NativeBinderComparison jobIds={[activeJob.id]} selectedDesignIds={selectedDesignIds} />
+                                        )}
+                                    </>}
 
                                     {/* CHARTS TAB - Full Analytics Dashboard */}
                                     {activeTab === 'charts' && (
