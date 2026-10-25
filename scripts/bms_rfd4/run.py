@@ -143,7 +143,8 @@ def _run(request,bindings,output,*,bundle=None,runtime_identity=None,prepared_in
             task_csv=write_evaluation_tasks(request,identity,root/'prepared/task_mapping.csv')
             if task_csv is not None:cfg.task_csv=str(task_csv)
         (root/'requested.json').write_text(json.dumps(request,indent=2)+'\n')
-        with observer.installed():
+        from bms_rfd4.worker_observation import observe_metrics_workers
+        with observe_metrics_workers(observer, root), observer.installed():
             if request['mode']=='generate':
                 from rfproteina.generate import run_generation
                 run_generation(cfg,job_id=0)

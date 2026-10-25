@@ -50,6 +50,13 @@ class NativeObserver:
                     'role': 'input' if caller_name == '_write_input_cif' else 'trajectory',
                     'path': str(loc['path']), 'example_id': native['example_id'],
                     'producer_field': caller_name, 'trajectory_key': native.get('traj_key')})
+            elif file.endswith('/biotite/structure/io/trajfile.py') and name == 'write' and caller_file.endswith('/rfproteina/metrics/utils/metrics_utils.py') and caller_name == '_write_trajectories_if_present':
+                native = caller.f_locals
+                self.events.append({'event': 'native_relation', 'role': 'trajectory',
+                    'path': str(loc['file_name']), 'example_id': native['example_id'],
+                    'producer_field': '_write_trajectories_if_present:XTCFile.write',
+                    'trajectory_key': native.get('traj_key'), 'format': 'xtc',
+                    'time_semantics': 'native_step_labels_not_physical_time'})
             elif file.endswith('/rfproteina/search/beam_search.py') and name=='generate' and isinstance(value,list):
                 # Empty/early-stop path has no final_results and is valid-empty final beam.
                 finals={id(x) for x in loc.get('final_results',[])}
