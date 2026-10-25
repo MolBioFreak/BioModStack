@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
 import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
+import { nativePlddtLayers, plddtBandColor } from '../structureViewer/metrics/nativeConfidenceLayer';
 import { shapeDocuments, type ShapeDocument } from '../lib/shapeResultsView';
 import ChainDetailsPanel from './ChainDetailsPanel';
 import { parseScientificPae, parseScientificNativeMetric } from '../lib/scientificViewerIdentity';
@@ -239,12 +240,7 @@ function formatStructureValidationName(design: Design | null | undefined): strin
     return readableBase;
 }
 
-function plddtColor(value: number): { r: number; g: number; b: number } {
-    if (value >= 90) return { r: 59, g: 130, b: 246 };
-    if (value >= 70) return { r: 34, g: 211, b: 238 };
-    if (value >= 50) return { r: 250, g: 204, b: 21 };
-    return { r: 249, g: 115, b: 22 };
-}
+const plddtColor = plddtBandColor;
 
 
 const CHAIN_ACCENT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
@@ -596,24 +592,10 @@ export default function StructureViewerPane({
         && !(colorMode === 'cdr' && antibodyStructureUrl) ? selectedDesign.scientific_structure_document : null;
     const nativeResidue = useMemo(()=>parseScientificNativeMetric(residueQuery.data,nativeDocument,'residue_plddt',selectedDesignId ?? undefined),[residueQuery.data,nativeDocument,selectedDesignId]);
     const nativeChains = useMemo(()=>parseScientificNativeMetric(chainQuery.data,nativeDocument,'chain_metrics',selectedDesignId ?? undefined),[chainQuery.data,nativeDocument,selectedDesignId]);
-    const nativeResidueLayer = useMemo<MetricLayer | null>(()=>nativeResidue.status !== 'ok' ? null : ({
-        descriptor:{id:'native-plddt',label:nativeResidue.metric === 'atom_plddt' ? 'Native atom pLDDT' : nativeResidue.metric === 'token_plddt' ? 'Native polymer-residue pLDDT' : 'Native residue pLDDT',dimension:nativeResidue.metric === 'atom_plddt' ? 'atom-scalar' : 'residue-scalar',units:'fraction',direction:'higher_is_better',valueRange:[0,1],projectionPolicy:'direct',normalization:'none',
-            categories: {
-                veryHigh: {label: '≥90', color: '#3b82f6'},
-                confident: {label: '70–<90', color: '#22d3ee'},
-                low: {label: '50–<70', color: '#facc15'},
-                veryLow: {label: '<50', color: '#f97316'},
-            },
-            provenance:{source:'Verified native confidence vector',artifactSha256:nativeResidue.artifactSha256}},
-        // Reuse the established confidence bands for display only; retain native fractions.
-        values:nativeResidue.residues.map((identity,index)=>({identity,value:nativeResidue.values[index],displayColor:plddtColor(nativeResidue.values[index]! * 100)})).filter(entry => nativeResidue.metric !== 'token_plddt' || !(entry.identity.labelAtomId || entry.identity.authAtomId)),
-    } as MetricLayer),[nativeResidue]);
-    const nativeTokenAtomLayer = useMemo<MetricLayer | null>(() => {
-        if (nativeResidue.status !== 'ok' || nativeResidue.metric !== 'token_plddt' || !nativeResidueLayer) return null;
-        return { descriptor: { ...nativeResidueLayer.descriptor, id: 'native-plddt-atoms', label: 'Native atom-token pLDDT', dimension: 'atom-scalar' },
-            values: nativeResidue.residues.flatMap((identity, index) => identity.labelAtomId || identity.authAtomId
-                ? [{ identity, value: nativeResidue.values[index], displayColor: plddtColor(nativeResidue.values[index]! * 100) }] : []) };
-    }, [nativeResidue, nativeResidueLayer]);
+    // Shared native layer owner; the prediction workspace Overview reuses the same projection.
+    const nativeLayers = useMemo(() => nativePlddtLayers(nativeResidue), [nativeResidue]);
+    const nativeResidueLayer = nativeLayers.residue;
+    const nativeTokenAtomLayer = nativeLayers.atomTokens;
     const chainMetrics = useMemo(() => requiresBoundMetrics ? {} : viewerAnalyses?.chainMetrics ?? {}, [requiresBoundMetrics, viewerAnalyses?.chainMetrics]);
     const chainMetricsBusy = viewerAnalyses?.chainMetricsBusy ?? false;
     const onRunChainMetrics = viewerAnalyses?.onRunChainMetrics;

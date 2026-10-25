@@ -108,6 +108,7 @@ const DesignComparePane = lazy(() => import('./DesignComparePane').then(module =
 const DataViewerLanding = lazy(() => import('./DataViewerLanding').then(module => ({ default: module.DataViewerLanding })));
 const AnalyticsDashboard = lazy(() => import('./AnalyticsDashboard').then(module => ({ default: module.AnalyticsDashboard })));
 const StructureViewerPane = lazy(() => import('./StructureViewerPane'));
+const StructurePredictionWorkspace = lazy(() => import('./StructurePredictionWorkspace').then(module => ({ default: module.StructurePredictionWorkspace })));
 const StructurePredictionResults = lazy(() => import('./StructurePredictionResults').then(module => ({ default: module.StructurePredictionResults })));
 const ShapeDocumentInspector = lazy(() => import('./StructureViewerPane').then(module => ({ default: module.ShapeDocumentInspector })));
 const MDResultsPane = lazy(() => import('./MDResultsPane'));
@@ -133,6 +134,7 @@ const REVIEW_TAB_DEFINITIONS = [
 ] as const;
 
 type TabId = typeof REVIEW_TAB_DEFINITIONS[number]['id'];
+const STRUCTURE_PREDICTION_MODELS = new Set(['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental']);
 const MAX_BULK_SELECTION_DESIGNS = 500;
 const SERVER_SORT_FIELDS = new Set<DesignSortField>([
     'name',
@@ -1829,7 +1831,10 @@ function ResultsViewerContent() {
     const exactTargetState = new URLSearchParams(location.search).get('target_state');
     const [localDesignId, setSelectedDesignId] = useState<string>('');
     const selectedDesignId = requestedDesignId || localDesignId;
+    // In-page selections update design_id too; only an externally supplied link opens Structure.
+    const internalDesignSelection = useRef<string | null>(null);
     const selectDesign = useCallback((id: string) => {
+        internalDesignSelection.current = id;
         const params = new URLSearchParams(location.search);
         params.set('design_id', id);
         params.delete('artifact_id'); params.delete('target_state');
@@ -2625,7 +2630,7 @@ function ResultsViewerContent() {
     });
     const selectedDesign = selectedDesignError ? undefined : selectedDesignDetailData ?? designs.find(d => d.id === selectedDesignId);
     useEffect(() => {
-        if (requestedDesignId && selectedDesignDetailData?.id === requestedDesignId && supportsViewerCapability(selectedDesignDetailData, 'structure_viewer')) setActiveTab('structure');
+        if (requestedDesignId && requestedDesignId !== internalDesignSelection.current && selectedDesignDetailData?.id === requestedDesignId && supportsViewerCapability(selectedDesignDetailData, 'structure_viewer')) setActiveTab('structure');
     }, [requestedDesignId, selectedDesignDetailData?.id]);
     const selectedDesignUnsupported = isUnsupportedResult(selectedDesign);
     const selectedDesignUnsupportedReason = getUnsupportedResultReason(selectedDesign);
@@ -2650,7 +2655,12 @@ function ResultsViewerContent() {
     const selectedDesignCanRunContactMap = isAnalyzerAvailable(selectedDesign, 'contact_map');
     const visibleReviewTabs = useMemo(() => {
         const visibleIds = new Set(getVisibleReviewTabs(selectedDesign));
-        return REVIEW_TAB_DEFINITIONS.filter((tab) => visibleIds.has(tab.id));
+        const tabs = REVIEW_TAB_DEFINITIONS.filter((tab) => visibleIds.has(tab.id));
+        // Structure prediction reads inspection-first: Overview → Structure → Charts.
+        const producer = String(selectedDesign?.provenance?.producer_model_id ?? '');
+        if (!STRUCTURE_PREDICTION_MODELS.has(producer)) return tabs;
+        const order: TabId[] = ['overview', 'structure', 'charts', 'table', 'compare_designs', 'compare'];
+        return [...tabs].sort((a, b) => (order.indexOf(a.id) + 1 || 99) - (order.indexOf(b.id) + 1 || 99));
     }, [selectedDesign]);
     const tableReviewCapabilities = useMemo(
         () => orderedDesigns.reduce(
@@ -3212,7 +3222,7 @@ function ResultsViewerContent() {
     }, [currentPage, pageSize, sourceScopedDesigns, useClientSourcePagination]);
     // A validator's producer owns its result semantics, not the enclosing workflow.
     const predictionModelId = String(selectedDesign?.provenance?.producer_model_id ?? activeJob?.model_id ?? '');
-    const predictionDataTable = ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId);
+    const predictionDataTable = STRUCTURE_PREDICTION_MODELS.has(predictionModelId);
     const tableHasNativeConfidence = ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) || tableDesigns.some(canonicalScalars);
     const legacyTableScalars = usePredictionScalars(tableDesigns, activeTab === 'table' && !nativeResults);
     // Inspection uses the selected detail document; table cells stay page-bound.
@@ -5409,6 +5419,19 @@ function ResultsViewerContent() {
         />}
     </>;
 
+    const mdHandoffAvailable = Boolean(activeJob && selectedDesign && activeJob.status === 'completed'                                     && activeJob.model_id !== 'bindcraft2' && !isNativeBinderGeneration(activeJob)                                     && !isAntibodyContext && !hasExplicitBinderTargetRoles(activeJob)                                     && !activeJob.mode.includes('binder') && !activeJob.model_id.includes('binder')                                     && !['blind_pose', 'interface_context'].includes(activeJob.mode)                                     && !activeJob.provenance?.binder_round_request && !activeJob.provenance?.binder_round_step);
+    const mdHandoffButton = (primary = false) => activeJob && selectedDesign ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => selectedDesign && activeJob && navigate(mdRoute({ kind: 'design', job_id: selectedDesign.job_id ?? activeJob.id, design_id: selectedDesign.id,
+                                            document: { ...(selectedCandidateDocuments[selectedDesign.id] ?? {}),
+                                                ...(returnParams.get('model_number') ? { model: Number(returnParams.get('model_number')) } : {}) } }))}
+                                        className={primary ? "spw-button spw-primary" : "rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100 hover:bg-cyan-500/20"}
+                                    >
+                                        Use as MD starting structure
+                                    </button>
+    ) : null;
+
     // Keep the query/selection owner mounted while a lazy workspace loads.
     // Suspending above this owner reconnects its scope-reset effects on reveal.
     return (
@@ -5432,22 +5455,7 @@ function ResultsViewerContent() {
                         <div className="mt-3">{resultModelSelector}</div>
                         {activeJob && (
                             <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-300">
-                                {selectedDesign && activeJob.status === 'completed'
-                                    && activeJob.model_id !== 'bindcraft2' && !isNativeBinderGeneration(activeJob)
-                                    && !isAntibodyContext && !hasExplicitBinderTargetRoles(activeJob)
-                                    && !activeJob.mode.includes('binder') && !activeJob.model_id.includes('binder')
-                                    && !['blind_pose', 'interface_context'].includes(activeJob.mode)
-                                    && !activeJob.provenance?.binder_round_request && !activeJob.provenance?.binder_round_step && (
-                                    <button
-                                        type="button"
-                                        onClick={() => navigate(mdRoute({ kind: 'design', job_id: selectedDesign.job_id ?? activeJob.id, design_id: selectedDesign.id,
-                                            document: { ...(selectedCandidateDocuments[selectedDesign.id] ?? {}),
-                                                ...(returnParams.get('model_number') ? { model: Number(returnParams.get('model_number')) } : {}) } }))}
-                                        className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100 hover:bg-cyan-500/20"
-                                    >
-                                        Use as MD starting structure
-                                    </button>
-                                )}
+                                {mdHandoffAvailable && !(predictionDataTable && activeTab === 'overview') && mdHandoffButton()}
                                 {formatLineagePathSummary(
                                     activeJob.stage_family,
                                     activeJob.stage_mode,
@@ -6777,7 +6785,11 @@ function ResultsViewerContent() {
                                     ) : (
                                         <>
                                     {/* OVERVIEW TAB */}
-                                    {activeTab === 'overview' && ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && <div className="p-4"><StructurePredictionResults summaryOnly modelId={predictionModelId} designs={inspectionDesigns} selectedDesignId={selectedDesignId} onSelectDesign={selectDesign} /></div>}
+                                    {activeTab === 'overview' && predictionDataTable && activeJob && <div className="p-4"><StructurePredictionWorkspace job={activeJob}
+                                        designs={inspectionDesigns} totalDesigns={totalDesigns} selectedDesignId={selectedDesignId} onSelectDesign={selectDesign}
+                                        onOpenStructure={() => setActiveTab('structure')} onCompare={() => setActiveTab('compare_designs')}
+                                        actions={mdHandoffAvailable ? mdHandoffButton(true) : null}
+                                        operationIds={selectedDesignIds} onOperationToggle={(id, checked) => setSelectedDesignIds(ids => checked ? (ids.includes(id) ? ids : [...ids, id]) : ids.filter(item => item !== id))} /></div>}
                                     {activeTab === 'overview' && !['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && overviewStats && (
                                         <div className="p-6 space-y-6">
                                             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
