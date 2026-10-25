@@ -1,17 +1,22 @@
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { invocationSettingsFields } from '../../src/lib/invocationSettingsFields';
 import React, { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, expect, it, vi } from 'vitest';
 import { BinderInvocationPlan } from '../../src/components/BinderInvocationPlan';
-import { activeInvocationPlan, changeInvocationMode, invocationModes, type InvocationDraftStage } from '../../src/lib/binderInvocationPlan';
+import { invocationCandidateLabel, initialInvocationEnvelope, activeInvocationPlan, changeInvocationMode, invocationModes, type InvocationDraftStage } from '../../src/lib/binderInvocationPlan';
 
-vi.mock('../../src/lib/api', () => ({ fetchModelById: async (id: string) => ({ data: { id, params: [
+let actualCatalogs: Record<string, any> | undefined;
+vi.mock('../../src/lib/api', () => ({ fetchModelById: async (id: string) => ({ data: actualCatalogs?.[id] ?? { id, params: [
     { name: 'seed', type: 'integer', default: 7 }, { name: 'verbose', type: 'boolean', default: true },
 ], modes: invocationModes[id].map(id => ({ id, params: ['seed', 'verbose'] })) } }) }));
 vi.mock('../../src/components/ExecutionTargetPicker', () => ({ ExecutionTargetPicker: () => <span>Placement picker</span> }));
 vi.mock('../../src/components/BinderMdInvocationEditor', () => ({ BinderMdInvocationEditor: () => null }));
 let root: Root; let client: QueryClient; let latest: InvocationDraftStage[];
-afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); });
+afterEach(async () => { actualCatalogs = undefined; if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); });
 const make = (model: string, id = model): InvocationDraftStage => ({ enabled: true, drafts: {}, stage: { id: `stage-${id}`, kind: ['protenix', 'boltz2', 'esmfold2', 'boltz_cp_experimental'].includes(model) ? 'prediction' : 'sequence_design', input: { selected: true, scope: 'whole_composition' }, models: [{ invocation_id: id, model_id: model, mode: invocationModes[model][0], params: { seed: 0, verbose: false } }] } });
 async function mount(stages: InvocationDraftStage[], candidates?: any[]) {
     latest = stages; client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -63,6 +68,50 @@ it('selected packing retains ordered repeated exact states and independent Local
     await act(async () => explicit.click());
     expect((activeInvocationPlan(latest).stages[0] as any).models[0]).not.toHaveProperty('execution_target_id');
     expect(document.body.textContent).toContain('Inherited round placement');
+});
+const discovery = JSON.parse(execFileSync(process.env.BMS_SCHEMA_PYTHON ?? 'python', ['-c', "import sys,json,asyncio;sys.path.insert(0,'platform/api');from routers.models import get_model;ids='proteinmpnn fampnn caliby_binder caliby_experimental ligandmpnn protonpottsmpnn protenix boltz2 esmfold2 boltz_cp_experimental'.split();print(json.dumps({i:asyncio.run(get_model(i)) for i in ids}))"], { cwd: resolve(process.cwd(), '../..'), encoding: 'utf8', maxBuffer: 16000000 }));
+const evidence: any[] = [];
+it.each(Object.entries(invocationModes).filter(([id]) => id !== 'molecular_dynamics').flatMap(([id, modes]) => modes.map(mode => [id, mode])))('real discovery %s/%s covers every field without JSON textareas', async (model, mode) => {
+    actualCatalogs = discovery;
+    const stage = make(model); if (stage.stage.kind === 'maturation') throw Error();
+    stage.stage.models[0].mode = mode; stage.stage.models[0].params = {};
+    await mount([stage]);
+    const fields = invocationSettingsFields(discovery[model], mode);
+    const rendered = [...document.querySelectorAll('[data-operation-field]')].map(e => e.getAttribute('data-operation-field'));
+    expect(rendered.sort()).toEqual(fields.map(f => f.name).sort());
+    for (const field of fields) {
+        const node = document.querySelector(`[data-operation-field="${field.name}"]`)!;
+        expect(!!node.querySelector('input, select, button') || !!field.read_only || node.textContent?.includes('off for blind prediction')).toBe(true);
+    }
+    expect(document.querySelector('textarea')).toBeNull();
+    expect(document.body.textContent).not.toContain('typed schema unavailable');
+    expect(activeInvocationPlan(latest).stages[0]).toMatchObject({ models: [{ params: {} }] });
+    const editable = fields.find(f => f.schema && ['integer', 'boolean'].includes(String(f.schema.type)) && Object.hasOwn(f.schema, 'default'));
+    if (editable) await click(`Set explicit ${editable.name}`);
+    const wire = activeInvocationPlan(latest);
+    const normalized = JSON.parse(execFileSync(process.env.BMS_SCHEMA_PYTHON ?? 'python', ['-c', "import sys,json;sys.path.insert(0,'platform/api');from schemas import SelectedRoundRequest;from services.binder_selected_round import normalize;p=json.load(sys.stdin);r=SelectedRoundRequest.model_validate({'operation':'round','source_job_id':'source','idempotency_key':'mounted','selection':{'candidate_refs':[{'kind':'design','job_id':'source','design_id':'selected'}]},'round_plan':p});print(normalize(r).model_dump_json())"], { cwd: resolve(process.cwd(), '../..'), input: JSON.stringify(wire), encoding: 'utf8' }));
+    expect(normalized.round_plan.stages[0].models[0].mode).toBe(mode);
+    evidence.push({ model, mode, fields: fields.map(f => ({ name: f.name, type: f.type, schema: f.schema ?? null, applicable: f.display_applicable })), draft: latest, envelope: initialInvocationEnvelope({ enabled: true, stages: latest }), wire, normalized });
+    if (process.env.BMS_OPERATIONS_EVIDENCE) writeFileSync(process.env.BMS_OPERATIONS_EVIDENCE, JSON.stringify(evidence, null, 2));
+});
+it('real LigandMPNN nested dictionary controls edit zero and survive cold reopen', async () => {
+    actualCatalogs = discovery;
+    const stage = make('ligandmpnn'); if (stage.stage.kind === 'maturation') throw Error();
+    stage.stage.models[0].params = { bias: { A: 0 }, symmetry_residues: [['A1', 'A2']] };
+    await mount([stage]);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="bias.A"]')?.value).toBe('0');
+    await act(async () => { const input = document.querySelector<HTMLInputElement>('[aria-label="bias.A"]')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '2'); input.dispatchEvent(new Event('input', { bubbles: true })); });
+    expect((activeInvocationPlan(latest).stages[0] as any).models[0].params.bias).toEqual({ A: 2 });
+    const saved = JSON.parse(JSON.stringify(latest));
+    await act(async () => root.unmount()); await mount(saved);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="bias.A"]')?.value).toBe('2');
+    expect((activeInvocationPlan(latest).stages[0] as any).models[0].params.symmetry_residues).toEqual([['A1', 'A2']]);
+});
+it('source labels prefer supplied human metadata without changing exact identity', () => {
+    const ref = { kind: 'native_document' as const, job_id: 'owner', artifact_id: 'artifact', target_state: 'Open conformation', model: 2 };
+    expect(invocationCandidateLabel(ref)).toBe('Open conformation · MODEL 2');
+    expect(invocationCandidateLabel(ref, 'Published sample')).toBe('Published sample · MODEL 2');
+    expect(ref.artifact_id).toBe('artifact');
 });
 it('mode draft helper preserves empty/null values and same-model siblings', () => {
     const stage = make('fampnn'); if (stage.stage.kind === 'maturation') throw Error();

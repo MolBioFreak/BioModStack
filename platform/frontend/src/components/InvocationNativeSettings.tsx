@@ -1,5 +1,6 @@
 import type { ComponentProps } from 'react';
-import { BioXpSchemaInput } from './BioXpSchemaInput';
+import { BioXpSchemaInput, schemaEditableValue } from './BioXpSchemaInput';
+import { BioXpJsonInput } from './BioXpOperatorInput';
 import { NativeSetting } from './NativeBinderGeneration';
 import { roundControlGroups, roundControlLabel } from '../lib/binderRoundControls';
 import { blindFixedParameters } from '../lib/binderRound';
@@ -19,8 +20,10 @@ export function InvocationNativeSettings({ call, fields, prediction, onChange }:
         return <div key={field.name} className="min-w-0 space-y-2" data-operation-field={field.name}>
             <p className="text-xs">{explicit ? 'Requested override' : Object.hasOwn(field, 'default') ? 'Inherited native default' : 'Not specified · native owner resolves'}</p>
             {prediction && blindFixedParameters.has(field.name) ? <p>{roundControlLabel(field).label}: off for blind prediction (no generated-pose conditioning).</p>
-                : field.schema && ['array', 'object', 'json'].includes(field.type)
-                    ? <BioXpSchemaInput label={field.name} schema={field.schema} value={effective[field.name]} onChange={value => patch({ [field.name]: value })} fallback={() => <p>Saved native value retained; typed schema unavailable.</p>} />
+                : field.schema
+                    ? <><button type="button" onClick={() => patch({ [field.name]: schemaEditableValue(field.schema!) })}>Set explicit {field.name}</button><BioXpSchemaInput label={field.name} schema={field.schema} value={effective[field.name]} onChange={value => patch({ [field.name]: value })} fallback={(label, value, onChange) => <BioXpJsonInput label={label} value={value} onChange={onChange} />} /></>
+                    : field.type === 'string_list' ? <BioXpSchemaInput label={field.name} schema={{ type: 'array', items: { type: 'string' } }} value={effective[field.name] === undefined ? [] : effective[field.name]} onChange={value => patch({ [field.name]: value })} fallback={(label, value, onChange) => <BioXpJsonInput label={label} value={value} onChange={onChange} />} />
+                    : ['array', 'object', 'json'].includes(field.type) ? <BioXpJsonInput label={field.name} value={effective[field.name]} onChange={value => patch({ [field.name]: value })} />
                     : <NativeSetting parameter={roundControlLabel(field)} values={call.params} displayValues={effective} onPatch={patch} chains={[]} />}
             {explicit && <button type="button" onClick={() => { const params = { ...call.params }; delete params[field.name]; onChange(params); }}>Remove override: {roundControlLabel(field).label}</button>}
         </div>;
@@ -28,6 +31,6 @@ export function InvocationNativeSettings({ call, fields, prediction, onChange }:
     return <div className="min-w-0 space-y-3">
         <div className="grid min-w-0 gap-4 md:grid-cols-2">{groups.primary.map(render)}</div>
         {[...groups.groups].map(([name, parameters]) => <details key={name}><summary>{name}</summary><div className="grid min-w-0 gap-4 md:grid-cols-2">{parameters.map(render)}</div></details>)}
-        {!!Object.keys(call.params).filter(key => !fields.some(f => f.name === key)).length && <details><summary>Additional retained native fields</summary><p>These values remain in the request; source-bound inputs are supplied by the existing adapter.</p><ul>{Object.keys(call.params).filter(key => !fields.some(f => f.name === key)).map(key => <li key={key}>{key} · retained</li>)}</ul></details>}
+        {!!Object.keys(call.params).filter(key => !fields.some(f => f.name === key)).length && <details><summary>Additional retained native fields</summary><p>These values remain in the request; source-bound inputs are supplied by the existing adapter.</p><ul>{Object.keys(call.params).filter(key => !fields.some(f => f.name === key)).map(key => <li key={key}><BioXpJsonInput label={key} value={call.params[key]} onChange={value => onChange({ ...call.params, [key]: value })} /></li>)}</ul></details>}
     </div>;
 }

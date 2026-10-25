@@ -5,7 +5,7 @@ import { useQueries } from '@tanstack/react-query';
 import { fetchModelById } from '../lib/api';
 import { InvocationNativeSettings } from './InvocationNativeSettings';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
-import { roundParameterIsBound, type BinderRoundCatalog } from '../lib/binderRound';
+import { invocationSettingsFields, type InvocationCatalog as BinderRoundCatalog } from '../lib/invocationSettingsFields';
 import { invocationCandidateLabel, changeInvocationMode, invocationLabel, invocationPlacementLabel, invocationDrafts, invocationModes, newInvocation, type InvocationDraftStage } from '../lib/binderInvocationPlan';
 import { candidateKey, type CandidateRef, type SelectedRoundModel, type SelectedRoundStage } from '../lib/binderSelectedRound';
 
@@ -14,8 +14,9 @@ const kinds = { sequence_design: 'Sequence design', prediction: 'Blind predictio
 const models = { sequence_design: ['proteinmpnn', 'fampnn', 'caliby_binder', 'caliby_experimental', 'ligandmpnn', 'protonpottsmpnn'], prediction: ['protenix', 'boltz2', 'esmfold2', 'boltz_cp_experimental'], md: ['molecular_dynamics'] };
 
 /** One intent editor for initial and selected operations. No lifecycle lives here. */
-export function BinderInvocationPlan({ stages: original, onChange, candidates, showAdd = true, renderSettings }: {
+export function BinderInvocationPlan({ stages: original, onChange, candidates, candidateLabels, showAdd = true, renderSettings }: {
     stages: InvocationDraftStage[]; onChange: (value: InvocationDraftStage[]) => void; candidates?: CandidateRef[]; showAdd?: boolean;
+    candidateLabels?: Record<string, string>;
     renderSettings?: (call: SelectedRoundModel, refs: CandidateRef[], change: (params: SelectedRoundModel['params']) => void) => ReactNode;
 }) {
     const selectedBinding = candidates !== undefined;
@@ -51,7 +52,7 @@ export function BinderInvocationPlan({ stages: original, onChange, candidates, s
                 {item.stage.models.map((call, ci) => {
                     const id = call.invocation_id!;
                     const catalog = queries[ids.indexOf(call.model_id)]?.data;
-                    const modeFields = catalog?.modes?.find(mode => mode.id === call.mode)?.params;
+
                     const specialized = renderSettings?.(call, 'selected' in item.stage.input ? exactCandidates : [], params => callPatch(index, id, { params })) ?? (call.model_id === 'molecular_dynamics' ? <BinderMdInvocationEditor call={call}
                         nativeDraft={item.drafts[`${id}:md-active`] as unknown as MolecularDynamicsNativeDraft | undefined}
                         modeDrafts={Object.fromEntries(['guided', 'prepared', 'compiled'].map(kind => [kind, item.drafts[`${id}:md:${kind}`]])) as Partial<Record<MolecularDynamicsNativeDraft['input']['kind'], MolecularDynamicsNativeDraft>>}
@@ -61,7 +62,7 @@ export function BinderInvocationPlan({ stages: original, onChange, candidates, s
                         onModeChange={(previous, next) => patch(index, value => value.stage.kind === 'maturation' ? value : ({ ...value,
                             drafts: { ...value.drafts, [`${id}:md:${previous.input.kind}`]: previous, [`${id}:md-active`]: next },
                             stage: { ...value.stage, models: value.stage.models.map(other => other.invocation_id === id ? { ...other, params: { ...other.params, intent: serializeMolecularDynamicsNativeDraft(next) } } : other) } }))} /> : undefined);
-                    const fields = catalog ? catalog.params.map(field => ({ ...field, display_applicable: !modeFields || modeFields.includes(field.name) })).filter(field => (!roundParameterIsBound(field.name) || ['design_chain', 'target_chain', 'binder_chains', 'target_chains'].includes(field.name)) && !['ensembles', 'structures', 'input_json', 'caliby_request_dir', 'input_path'].includes(field.name)) : [];
+                    const fields = catalog ? invocationSettingsFields(catalog, call.mode) : [];
                     return <section key={id} aria-label={`Invocation ${id}`} className="min-w-0 border p-3 space-y-2">
                         <h4>{invocationLabel(call, ci)}</h4><details><summary>Call identity</summary><p>Stage: {item.stage.id}</p><p>Invocation: {id}</p></details>
                         <label><input type="checkbox" aria-label={`Enable invocation ${id}`} checked={!item.disabledInvocationIds?.includes(id)} onChange={event => patch(index, value => ({ ...value,
@@ -83,8 +84,8 @@ export function BinderInvocationPlan({ stages: original, onChange, candidates, s
                             <p>The first state is primary. Add states in native order; repeated selections remain explicit.</p>
                             {selectedBinding && 'selected' in item.stage.input ? <button type="button" onClick={() => callPatch(index, id, { input_groups: [...call.input_groups ?? [], { ensemble_id: crypto.randomUUID(), states: [] }] })}>Add ensemble</button> : <p>Each produced structure is bound independently by the native adapter. Future outputs are not pooled into an ensemble.</p>}
                             {(call.input_groups ?? []).map((group, gi) => <fieldset key={group.ensemble_id}><legend>Ensemble {gi + 1}</legend>
-                                <select aria-label={`Add state ${gi + 1}`} value="" onChange={event => { if (event.target.value === '') return; const groups = structuredClone(call.input_groups!); groups[gi].states.push({ state_id: crypto.randomUUID(), candidate_ref: exactCandidates[Number(event.target.value)] }); callPatch(index, id, { input_groups: groups }); }}><option value="">Choose exact state</option>{exactCandidates.map((ref, ri) => <option key={candidateKey(ref)} value={ri}>{invocationCandidateLabel(ref)}</option>)}</select>
-                                {group.states.map((state, si) => <div key={state.state_id}>{si === 0 ? 'Primary' : `State ${si + 1}`} · {invocationCandidateLabel(state.candidate_ref)}<details><summary>Exact state identity</summary><code>{candidateKey(state.candidate_ref)}</code></details>
+                                <select aria-label={`Add state ${gi + 1}`} value="" onChange={event => { if (event.target.value === '') return; const groups = structuredClone(call.input_groups!); groups[gi].states.push({ state_id: crypto.randomUUID(), candidate_ref: exactCandidates[Number(event.target.value)] }); callPatch(index, id, { input_groups: groups }); }}><option value="">Choose exact state</option>{exactCandidates.map((ref, ri) => <option key={candidateKey(ref)} value={ri}>{invocationCandidateLabel(ref, candidateLabels?.[candidateKey(ref)])}</option>)}</select>
+                                {group.states.map((state, si) => <div key={state.state_id}>{si === 0 ? 'Primary' : `State ${si + 1}`} · {invocationCandidateLabel(state.candidate_ref, candidateLabels?.[candidateKey(state.candidate_ref)])}<details><summary>Exact state identity</summary><code>{candidateKey(state.candidate_ref)}</code></details>
                                     <button type="button" disabled={si === 0} onClick={() => { const groups = structuredClone(call.input_groups!); [groups[gi].states[si - 1], groups[gi].states[si]] = [groups[gi].states[si], groups[gi].states[si - 1]]; callPatch(index, id, { input_groups: groups }); }}>Move state up</button>
                                     <button type="button" onClick={() => { const groups = structuredClone(call.input_groups!); groups[gi].states.splice(si, 1); callPatch(index, id, { input_groups: groups }); }}>Remove state</button>
                                     {(['fixed_pos_seq', 'fixed_pos_scn', 'fixed_pos_override_seq', 'pos_restrict_aatype', 'symmetry_pos'] as const).map(key => <label key={key}>{key}<input aria-label={`${state.state_id} ${key}`} value={state.settings?.[key] ?? ''} onChange={event => { const groups = structuredClone(call.input_groups!); groups[gi].states[si].settings = { ...state.settings, [key]: event.target.value }; callPatch(index, id, { input_groups: groups }); }} /></label>)}

@@ -30,7 +30,9 @@ export function activeInvocationPlan(stages: InvocationDraftStage[]): SelectedRo
 export function newInvocation(model: string, params: SelectedRoundModel['params'] = {}): SelectedRoundModel {
     return { invocation_id: crypto.randomUUID(), model_id: model, mode: invocationModes[model][0], params: structuredClone(params) };
 }
-export function invocationCandidateLabel(ref: CandidateRef): string {
+export function invocationCandidateLabel(ref: CandidateRef, label?: string): string {
+    const state = ref.kind === 'native_document' ? ref.target_state : ref.kind === 'design' ? ref.document?.target_state : undefined;
+    if (label || state) return `${label || state}${ref.kind === 'native_document' && ref.model != null ? ` · MODEL ${ref.model}` : ref.kind === 'design' && ref.document?.model != null ? ` · MODEL ${ref.document.model}` : ''}`;
     if (ref.kind === 'native_document') return `Document ${ref.artifact_id} · MODEL ${ref.model ?? 'native'} · Job ${ref.job_id}`;
     if (ref.kind === 'native_sequence') return `Sequence ${ref.native_output_id} · Job ${ref.job_id}`;
     if (ref.kind === 'native_observation') return `Record ${ref.native_record_id} · Job ${ref.job_id}`;
