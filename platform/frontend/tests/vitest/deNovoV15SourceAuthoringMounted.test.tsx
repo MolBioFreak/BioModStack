@@ -156,8 +156,8 @@ it('independent task source bindings survive real template save and cold explici
     const binding = { candidate: { kind: 'native_document', job_id: 'producer', artifact_id: 'alternate', target_state: 'state-B', model: 2 }, path: 'inputs/retained-original.cif.gz', output_format: 'native', expected_sha256: 'a'.repeat(64) };
     const request = { task: 'protein_binder', task_name: 'retained', seed: 0, source: { document_id: 'selected' } };
     await mount('complexa', { complexa_request: request, native_sources: { selected: binding } });
-    const tasks = inventories.complexa.schema.properties.task.enum as string[];
-    await edit('task.task', String(tasks.indexOf('ligand_binder')));
+    expect(inventories.complexa.schema.properties.task.enum).toEqual(expect.arrayContaining(['ligand_binder', 'protein_binder']));
+    await edit('Complexa task', 'ligand_binder');
     await click('Template Manager');
     const input = document.querySelector<HTMLInputElement>('input[placeholder="e.g., My Boltz Config"]')!;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Independent source tasks'); input.dispatchEvent(new Event('input', { bubbles: true })); });
@@ -168,7 +168,7 @@ it('independent task source bindings survive real template save and cold explici
     await unmount(); await mount('complexa', { complexa_request: { task: 'ligand_binder', seed: 999 } });
     await click('Template Manager');
     if ([...document.querySelectorAll('button')].some(n => n.textContent?.trim() === '← Back to list')) await click('← Back to list');
-    await click('Load'); await settle(); await edit('task.task', String(tasks.indexOf('protein_binder')));
+    await click('Load'); await settle(); await edit('Complexa task', 'protein_binder');
     await click('Generate candidates');
     expect(requests.find(r => r.url === '/api/jobs' && r.method === 'post')!.body.params).toEqual({ complexa_request: request, native_sources: { selected: binding } });
     expect(requests.some(r => r.url.includes('materialize'))).toBe(false);
@@ -219,16 +219,18 @@ it('exact source atoms enter only the chosen native condition and survive actual
     await mount('rfd4_proteina', { rfd4_request: selectedConditions, native_sources: { selected: { output_format: 'native' } } });
     await sources(); await nativeDocuments(); await choose('alternate');
     await edit('Retained residue for selected', '0'); await edit('Retained atom for selected', '1'); await click('Add exact selection from selected');
-    const select = [...document.querySelectorAll<HTMLInputElement>('input')].find(n => n.getAttribute('aria-label')?.endsWith('.C_CRD.selected[0].select'))!;
-    const name = select.getAttribute('aria-label')!;
-    const adopt = document.querySelector<HTMLButtonElement>(`[aria-label="Use source selection for ${name}"]`)!;
-    expect(adopt).not.toBeNull(); expect(select.value).toBe('manual-coordinates');
-    expect([...document.querySelectorAll('button')].filter(n => n.getAttribute('aria-label')?.includes('.different[0].select'))).toEqual([]);
-    await act(async () => adopt.click());
+    const select = document.querySelector<HTMLInputElement>('[aria-label="C_CRD selected selection 1"]')!;
+    expect(select.value).toBe('manual-coordinates');
+    await edit('Condition family', 'C_CRD'); await edit('Native condition value', 'true');
+    await edit('New condition group', 'fixed');
+    await click('Use visual selection in new condition');
     const expression = '(chain_id == "AA" and res_id == 7 and atom_name == "CB")';
-    expect(select.value).toBe(expression); await click('Generate candidates');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Selection expression"]')!.value).toBe(expression);
+    await click('Apply native condition');
+    expect(select.value).toBe('manual-coordinates'); await click('Generate candidates');
     const wire = requests.find(r => r.url === '/api/jobs' && r.method === 'post')!.body;
-    const expected = structuredClone(selectedConditions); expected.input.examples[0].conditions.C_CRD.selected[0].select = expression;
+    const expected: any = structuredClone(selectedConditions);
+    expected.input.examples[0].conditions.C_CRD.true = [{ select: expression, group: 'fixed' }];
     expect(wire.params.rfd4_request).toEqual(expected);
     const normalized = JSON.parse(execFileSync(process.env.BMS_SCHEMA_PYTHON ?? 'python', ['-c',
         "import sys,json;sys.path.insert(0,'platform/api');from services.rfd4_proteina import normalize_params;p=json.load(sys.stdin);print(json.dumps(normalize_params('generate',p)))",

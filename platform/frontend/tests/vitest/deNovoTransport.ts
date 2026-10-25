@@ -8,6 +8,9 @@ export function isolateDeNovoTransport() {
     const unexpected: string[] = [];
     api.defaults.adapter = async config => {
         const url = config.url ?? '';
+        // This legacy parent fixture deliberately has unavailable discovery.
+        // The real SQLite HTTP parent suite covers successful native discovery.
+        if (url === '/api/models/protein_modification_experimental/generation-settings') throw new Error('Fixture: native discovery unavailable');
         const known: Record<string, unknown> = {
             '/api/system/status': { gpus: [], gpu_error: null },
             '/api/execution-targets': [],

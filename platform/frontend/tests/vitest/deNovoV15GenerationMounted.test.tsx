@@ -78,7 +78,7 @@ it('defaults to one RFD3 editor and one run area after scientific inputs', async
     expect(control('Minimum length').compareDocumentPosition(document.querySelector('[data-execution]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await click('Generate candidates');
     expect(mocks.submit).toHaveBeenCalledOnce();
-    expect(latest(mocks.submit)).toEqual({ name: 'protein_modification', model_id: 'protein_modification_experimental', mode: 'de_novo_design', params: { generator: 'rfd3', generation_mode: 'unconditional_monomer', min_length: 100, max_length: 200, num_designs: 8, seed: 0, dump_trajectories: false } });
+    expect(latest(mocks.submit)).toEqual({ sequence_design: { schema_version: 2, enabled: false, round_plan: { schema_version: 2, stages: [] } }, name: 'protein_modification', model_id: 'protein_modification_experimental', mode: 'de_novo_design', params: { generator: 'rfd3', generation_mode: 'unconditional_monomer', min_length: 100, max_length: 200, num_designs: 8, seed: 0, dump_trajectories: false } });
 });
 
 it('exposes real conditional engines, retains independent goal drafts, and submits only active scientific values', async () => {
@@ -105,7 +105,9 @@ it('exposes real conditional engines, retains independent goal drafts, and submi
     expect(latest(draft).de_novo_drafts['de_novo_design:rfd3:unconditional'].min_length).toBe(111);
     await edit('Goal', 'motif_scaffolding');
     expect(control('Engine').value).toBe('laproteina');
-    expect(control('Samples per length').value).toBe('8');
+    await click('Sampling');
+    expect([...document.querySelectorAll('label')].some(node => node.textContent?.trim() === 'Samples per length')).toBe(false);
+    expect(latest(draft).laproteina_samples_per_length).toBe(8); // Retained unconditional-only control, not motif sampling.
     await edit('Goal', 'ligand_conditioned');
     expect(control('Engine').value).toBe('disco');
     expect(control('Ligand SDF path')).toBeTruthy();
