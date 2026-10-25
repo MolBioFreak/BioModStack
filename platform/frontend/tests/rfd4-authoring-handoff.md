@@ -104,3 +104,20 @@ The API interpreter is required for full discovery imports (plain host Python la
 - No GPU, rental, inference, deployment, push, default/gate/scientific change occurred.
 
 Dependencies were installed privately with `corepack pnpm install --frozen-lockfile --ignore-scripts --offline`; initial npm-ci attempt was unsuitable (pnpm workspace), and bare pnpm was absent. No lockfile changes.
+
+## Saved-condition increment (after 60731cc)
+
+- `1328b95` plus follow-up: retained CIF inspection uses Molstar's real CIF parser and the existing metric-layer/atom-sequence pipeline, not selection highlighting. Scalar atom_site conditions and saved vector idx0/valN payloads retain document, model-local atom index, label/author/atom identity. Optional annotation model_num is honored. Original coordinates are not overwritten or used as saved targets. Readback is explicitly requested per source and stale receipts do not retain layers.
+- Pinned `058a27...` installed classes supplied the checked-in condition metadata; all 29 exported enum-name choices passed its actual `coerce_enum_value`. Boolean choices follow the installed boolean/ground-truth branch, not enum inference. Centroid xyz edits the installed comma-separated grammar. Manual native keys remain editable; no defaults or launch gates were added.
+- Native CPU writer/parser specimen retained group 7 and C_INTCRD `[1,2,3]` while current coordinates were `[91,92,93]`. The committed CIF is this writer output, not an invented producer result. Probe/export scripts remain in active-profile scratch (`rfd4-saved-specimen.py`, `export-rfd4-conditions.py`). No inference ran.
+- Mounted suite now checks actual `projectAtomMetricLayer` output (including explicit palette domain), separate empty temporary selection, absence/NaN, wrong MODEL, model-scoped vector category, enum/manual keys, centroid components and Complexa mixed historical integers/string reopen. `.artifacts/rfd4-saved.xml` retains the run. `tsc -b` succeeds.
+- Actual browser `saved.html` loaded real Molstar and the native writer CIF: selected Saved C_CRDGRP showed `X:1:UNK` value 7 in the atom sequence layer and Molstar reported `Created Overpaint (1 Layers)`. `.artifacts/saved-role-browser.json` retains DOM/log evidence. Separate actual authoring browser showed NONE/DONOR/ACCEPTOR/BOTH from the pinned metadata. This is isolated component/browser qualification, not Project or live API acceptance.
+- Complexa UI consumes string-capable discovery when available and preserves integers as numbers, strings as strings. Backend lane `3a8af73` was inspected, not cherry-picked; its real normalizer preserved `[3,"A42"]`. Installed `49d75dc1` target loader was re-inspected: matches exact `chain_id+res_id` against selected CA atoms, no integer/index inference. Source-to-loaded-target correspondence is not supplied by this receipt, so visual hotspot adoption is not fabricated; historical manual entries remain editable.
+
+### Precise remaining boundaries
+
+- Saved annotations are not unsaved condition-spec expression evaluation. Arbitrary draft-query overlays still need the native preparation owner's projection; JavaScript does not reinterpret the query language.
+- Pair-category overlays and string-category coloring are unfinished; scalar numeric/boolean and vector-presence roles are colored, and retained scalar/vector values are readable. Saved string values are not converted to invented scientific scores.
+- The shared viewer metric adapter does not match MODEL IDs. A selected-model derivative or single-model source is colored; all-model source values remain readable with a specific explanation. This is a viewer implementation boundary, not a new native scientific limitation or launch restriction.
+- Sources without these saved categories genuinely supply no such targets. Missing C_INTCRD is reported by absence, never manufactured from generated coordinates. This is distinct from the unfinished pair/string rendering above.
+- No VHH, chemistry creation, runtime science jobs, deployment or shared backend/source materializer edits.

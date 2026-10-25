@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { api } from '../../src/lib/api';
+import { projectAtomMetricLayer } from '../../src/structureViewer/metrics/metricProjection';
 import { readSavedConditions, savedConditionLayers } from '../../src/lib/rfd4SavedConditions';
 import { Rfd4TaskWorkspace } from '../../src/components/Rfd4TaskWorkspace';
 import { DeNovoNativeGenerationSettings } from '../../src/components/DeNovoNativeGenerationSettings';
@@ -50,11 +51,22 @@ async function click(text: string) { const node = [...document.querySelectorAll<
 async function edit(label: string, value: string) { const node = document.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`); expect(node, label).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), 'value')!.set!.call(node, value); node!.dispatchEvent(new Event(node!.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); }
 async function disclose(text: string) { const node = [...document.querySelectorAll('summary')].find(s => s.textContent?.trim() === text); expect(node, text).toBeTruthy(); await act(async () => { const d = node!.parentElement as HTMLDetailsElement; d.open = true; d.dispatchEvent(new Event('toggle')); }); }
 function normalize(request: unknown, model = 'rfd4', mode = 'generate') { return JSON.parse(execFileSync('python', ['-c', model === 'rfd4' ? "import sys,json;from scripts.lib.rfd4_proteina_contract import normalize_request;print(json.dumps(normalize_request(json.loads(sys.argv[1]),sys.argv[2])))" : "import sys,json;from scripts.lib.complexa_contract import normalize_request;print(json.dumps(normalize_request(json.loads(sys.argv[1]))))", JSON.stringify(request), mode], { cwd, encoding: 'utf8' })); }
+it('Complexa retained token strings and historical integers remain independently editable', async () => {
+    await mount('complexa', { complexa_request: { task: 'protein_binder', source: { document_id: 'target', target_hotspots: [1, 'A1'] } } });
+    expect((document.querySelector('[aria-label="Target hotspot 1"]') as HTMLInputElement).type).toBe('number');
+    expect((document.querySelector('[aria-label="Target hotspot 2"]') as HTMLInputElement).type).toBe('text');
+    await edit('Target hotspot 1', '3'); await edit('Target hotspot 2', 'A42');
+    expect(draft.complexa_request.source.target_hotspots).toEqual([3, 'A42']);
+    const saved = JSON.parse(JSON.stringify(draft)); await unmount(); await mount('complexa', saved);
+    expect(draft.complexa_request.source.target_hotspots).toEqual([3, 'A42']);
+});
 it('saved projection retains native targets, model-local indices and missing payloads', async () => {
     const cif = readFileSync(resolve('tests/fixtures/rfd4-saved-conditions.cif'), 'utf8');
     const rows = await readSavedConditions(cif, 'exact-native', 1);
     expect(rows.find(r => r.family === 'C_INTCRD')?.value).toEqual(['1.0', '2.0', '3.0']);
     expect(rows.find(r => r.family === 'C_CRDGRP')?.value).toBe('7');
+    const groupLayer = savedConditionLayers(rows, 'exact-native').find(l => l.descriptor.label === 'Saved C_CRDGRP')!;
+    expect(projectAtomMetricLayer(groupLayer)).toMatchObject([{ identity: { documentId: 'exact-native', labelAsymId: 'X', labelAtomId: 'UNK' }, color: { r: 249, g: 115, b: 22 } }]);
     expect(await readSavedConditions(cif, 'exact-native', 2)).toEqual([]);
     expect(savedConditionLayers(rows, 'exact-native').find(l => l.descriptor.label === 'Saved C_CRD')?.values[0]).toMatchObject({ value: null, missingness: 'unavailable' });
     const absent = cif.replace(/^_condition_InternalCoordinate_1_atom[^\n]*\n/gm, '');
@@ -69,6 +81,9 @@ it('native enum choices write explicit values without changing manual historical
     expect(draft.rfd4_request.input.examples[0].conditions.C_HB.ACCEPTOR).toEqual([{ select: 'chain_id == "X"' }]);
     await edit('Native condition value', '2'); await click('Apply native condition');
     expect(draft.rfd4_request.input.examples[0].conditions.C_HB['2']).toHaveLength(1);
+    await edit('Condition family', 'C_CENTROID'); await edit('Native condition value', '');
+    await edit('Centroid x', '1'); await edit('Centroid y', '-2'); await edit('Centroid z', '0'); await click('Apply native condition');
+    expect(draft.rfd4_request.input.examples[0].conditions.C_CENTROID['1,-2,0']).toHaveLength(1);
 });
 it('mounted source projects native-writer saved targets separately from selection', async () => {
     const cif = readFileSync(resolve('tests/fixtures/rfd4-saved-conditions.cif'), 'utf8').replace(/(_atom_site\.pdbx_PDB_model_num\s+)1/, '$12');

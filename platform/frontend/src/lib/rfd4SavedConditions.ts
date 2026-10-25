@@ -55,13 +55,15 @@ export function savedConditionLayers(rows: SavedCondition[], documentId: string)
         const entries = rows.filter(r => r.family === family);
         const values: MetricValue<AtomRef>[] = entries.map(row => {
             const vector = Array.isArray(row.value);
-            const value = vector ? (row.value as string[]).every(v => v.trim() !== '' && Number.isFinite(Number(v))) ? 1 : null : Number.isFinite(Number(row.value)) ? Number(row.value) : String(row.value);
+            const value = vector ? (row.value as string[]).every(v => v.trim() !== '' && Number.isFinite(Number(v))) ? 1 : null : /^(true|false)$/i.test(String(row.value)) ? (String(row.value).toLowerCase() === 'true' ? 1 : 0) : Number.isFinite(Number(row.value)) ? Number(row.value) : String(row.value);
             return { identity: row.identity, value, ...(value === null ? { missingness: 'unavailable' as const } : {}) };
         });
+        const domain = values.reduce<[number, number]>((range, row) => typeof row.value === 'number'
+            ? [Math.min(range[0], row.value), Math.max(range[1], row.value)] : range, [0, 1]);
         return { descriptor: { id: `saved:${documentId}:${family}`, label: `Saved ${family}`, dimension: 'atom-scalar' as const,
             units: null, direction: 'neutral' as const, projectionPolicy: 'direct' as const, normalization: 'none' as const,
             description: 'Retained annotation role, independent of temporary selection. Vector coloring indicates saved payload presence; exact targets appear in readback.',
             provenance: { source: 'Retained AtomWorks CIF annotations', sourceVersion: metadata.image_sha256 },
-            palette: { colors: ['#64748b', '#f97316'] } }, values };
+            palette: { colors: ['#64748b', '#f97316'], domain } }, values };
     });
 }
