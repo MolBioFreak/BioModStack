@@ -1263,6 +1263,26 @@ def _input_records(path: Path, prefix: str, *, native_invocation: NativeInvocati
     return records
 
 
+def _file_backed_nextflow_parameters(command):
+    """Transport large native parameter strings without Linux's per-argument limit.
+
+    Nextflow's existing JSON params-file reader preserves string values, including
+    serialized scientific settings. Do not decode/reduce their molecular content.
+    """
+    placed, parameters = [], {}
+    index = 0
+    while index < len(command):
+        value = command[index]
+        if (value.startswith('--') and index + 1 < len(command)
+                and len(command[index + 1].encode('utf-8')) >= 65536):
+            parameters[value[2:]] = command[index + 1]
+            index += 2
+        else:
+            placed.append(value)
+            index += 1
+    return placed, parameters
+
+
 def _write_portable_bindings(*, staging_root: Path, remote_attempt: str,
                             references: list[dict[str, Any]], input_transfers: list[TransferPlan],
                             input_records: list[RemoteFileRecord], remote_runtime: str,
@@ -1990,6 +2010,14 @@ def prepare_remote_bundle(
         position = command.index('--blind_pose_candidate_pdbs') + 1
         translated_command[position] = _rewrite_maturation_pdb_paths(str(command[position]), path_map)
     if translated_command and Path(nextflow_executable).name == "nextflow":
+        translated_command, large_parameters = _file_backed_nextflow_parameters(translated_command)
+        if large_parameters:
+            parameter_file = staging_root / 'large-native-parameters.json'
+            parameter_file.write_text(json.dumps(large_parameters, ensure_ascii=True) + '\n')
+            parameter_destination = f'{remote_attempt}/bundle/inputs/{parameter_file.name}'
+            input_records.append(_record_file(parameter_file, f'inputs/{parameter_file.name}', 'input'))
+            input_transfers.append(TransferPlan(parameter_file, parameter_destination))
+            translated_command.extend(['-params-file', parameter_destination])
         translated_command[0] = binding["paths"]["nextflow"] if binding else f"{remote_root}/runner/nextflow"
     elif translated_command and Path(nextflow_executable).name in {"python", "python3"}:
         translated_command[0] = f"{support_root}/venv/bin/python"
@@ -2005,7 +2033,7 @@ def prepare_remote_bundle(
         # The normal worker authenticates this small manifest as a regular bundle file.
         # This stdlib-only boundary verifies immutable objects and all semantic aliases
         # before exec; no SIF or external symlink is smuggled through file records.
-        translated_command = [binding["paths"]["python"] if binding else "python3",
+        translated_command = [binding["paths"]["python"] if binding else f"{support_root}/venv/bin/python",
                               f"{remote_source}/platform/api/tools/bms_artifact_cache.py",
                               "--root", f"{remote_root}/cache/artifacts/v1",
                               "--execute-runtime", manifest_destination,
