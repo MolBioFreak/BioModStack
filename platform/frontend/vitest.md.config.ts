@@ -132,6 +132,7 @@ export default defineConfig({
             './tests/vitest/candidateRoundProgressMounted.test.tsx',
             './tests/vitest/deNovoRemotePreparationMounted.test.tsx',
             './tests/vitest/deNovoContextInputMounted.test.tsx',
+            './tests/vitest/laProteinaEvaluationMounted.test.tsx',
             './tests/vitest/laProteinaMotifInputMounted.test.tsx',
             './tests/vitest/mdFailedLaunchMounted.test.tsx',
             './tests/vitest/mdQueuePanel.test.tsx',

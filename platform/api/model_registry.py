@@ -123,7 +123,7 @@ INDEPENDENT_RUNTIME_MODELS = frozenset({
     "boltz2", "af2", "proteinmpnn", "unidock", "protein_modification_experimental",
     "caliby_binder", "caliby_experimental", "ligandmpnn", "bindcraft2", "protonpottsmpnn",
     # Fold-CP uses its own image with the native BoltzCP shared Boltz tree.
-    "boltz_cp_experimental", "rfd4_proteina", "complexa",
+    "boltz_cp_experimental", "rfd4_proteina", "complexa", "laproteina",
 })
 
 
@@ -1484,6 +1484,11 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
         from services.ont_ngs_completion import ont_native_result_contract
         result_payload = ont_native_result_contract(model_id, mode, p)
         retrieval_authority = result_payload['native_contract_authority']
+    elif reviewed and workflow == 'laproteina_evaluation':
+        retrieval_authority = 'platform/api/services/rfd4_proteina_results.py:read_published_generation_page'
+        result_payload = {'native_contract_authority': retrieval_authority,
+            'publication_authority': 'platform/api/services/rfd4_proteina_results.py:publish_native_generation',
+            'analysis_contract_id': 'laproteina_evaluation_v1', 'generator_model_id': 'laproteina'}
     elif reviewed and workflow in {'rfd4_proteina', 'complexa'}:
         if workflow == 'rfd4_proteina':
             from scripts.lib.rfd4_proteina_contract import RESULT_CONTRACT

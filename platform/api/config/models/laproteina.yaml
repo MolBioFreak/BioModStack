@@ -1,0 +1,19 @@
+id: laproteina
+name: La-Proteina retained-output evaluation
+version: bms-2
+category: protein_design
+description: Separate native evaluation of retained La-Proteina samples; never generation.
+container: laproteina.sif
+inputs: [yaml, directory]
+outputs: [csv, json]
+modes:
+- id: evaluate
+  name: Evaluate retained outputs
+  description: Preserve original config, sample names and motif tables. Omitted metrics inherit retained configuration.
+  params: [laproteina_evaluation_request]
+params:
+- name: laproteina_evaluation_request
+  type: object
+  label: Native evaluation request
+  description: Typed retained-output evaluation; discover generation-settings for the complete schema.
+  required: true

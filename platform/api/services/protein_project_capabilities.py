@@ -745,6 +745,7 @@ _CAPABILITIES.append(_capability(
 # Native de novo editors persist complete requests; Project does not reconstruct
 # their science. Legacy generator selection remains in params/editor state.
 _NATIVE_GENERATION_SETUPS = {
+    'protein.native.laproteina.evaluate': ('laproteina', 'evaluate', None),
     'protein.de_novo.rfd3': ('protein_modification_experimental', 'de_novo_design', 'rfd3'),
     'protein.de_novo.laproteina': ('protein_modification_experimental', 'de_novo_design', 'laproteina'),
     'protein.de_novo.disco': ('protein_modification_experimental', 'de_novo_design', 'disco'),

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 # source:process -> labels, input declarations, output declarations, helpers, directives
 PROCESS_CONTRACTS = {
+    'modules/laproteina_evaluation.nf:EvaluateLaProteina': (('LaProteina', 'gpu'), ("path closure, stageAs: 'la_evaluation_closure'",), ("path 'laproteina_evaluation', emit: native_outputs",), ('scripts/run_laproteina_inference.py',), ()),
     'modules/rfd4_proteina.nf:RunRFD4Proteina': (('RFD4Proteina', 'gpu'), ("path closure, stageAs: 'rfd4_closure'",), ("path 'rfd4_proteina', emit: native_outputs",), ('scripts/bms_rfd4/run.py',), ()),
     'modules/complexa.nf:RunComplexa': (('Complexa', 'gpu'), ('path request_dir',), ("path 'results', emit: native_results",), ('scripts/run_complexa_inference.py',), ()),
     'modules/af2.nf:RunAF2': (('AF2', 'gpu'), ('tuple val(batch_id), path(pdbs)',), ('tuple path("outputs/*.pdb"), path("*.json"), emit: pdbs_jsons', 'path ("*.json"), emit: json, topic: metadata_ch_fold_seq', 'path "*.log"'), ('scripts/run_af2_initial_guess.py',), ()),
@@ -903,6 +904,9 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
                 a.callback(replica, 'workflows/experimental/molecular_dynamics/orchestrator.nf:MD_SPAWN_REPLICAS/MD_SPAWN_ANALYSIS')
         return True
 
+    if workflow == 'laproteina_evaluation':
+        a.stage('EvaluateLaProteina')
+        return True
     if workflow == 'rfd4_proteina':
         a.stage('RunRFD4Proteina')
         return True

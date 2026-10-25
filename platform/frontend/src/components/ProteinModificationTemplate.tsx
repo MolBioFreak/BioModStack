@@ -1,3 +1,4 @@
+import { LaProteinaEvaluation } from './LaProteinaEvaluation';
 import { DeNovoNativeGenerationSettings } from './DeNovoNativeGenerationSettings';
 import { OtherDeNovoSettings, retainedRfd3Settings } from './OtherDeNovoSettings';
 import { DiscoJobsInput } from './DiscoJobsInput';
@@ -77,7 +78,7 @@ const resolveNavigation = (values?: Record<string, unknown>): DeNovoNavigationSt
     const modification_mode = rawMode === 'rfd3_local_redesign'
         ? 'rfd3_iteration'
         : rawMode === 'rfd3_iteration' || rawMode === 'region_redesign' || rawMode === 'shape_blueprint' ? rawMode : 'de_novo_design';
-    const native = values?.generator === 'rfd4_proteina' || values?.generator === 'complexa';
+    const native = values?.generator === 'rfd4_proteina' || values?.generator === 'complexa' || values?.generator === 'laproteina';
     const nativeMode = native ? { native_mode: typeof values?.native_mode === 'string' ? values.native_mode : 'generate' } : {};
     if (modification_mode !== 'de_novo_design') return { modification_mode, ...(values?.generator === 'rfd4_proteina' ? { generator: 'rfd4_proteina', design_task: 'refine', ...nativeMode } : {}) };
     const engine = values?.generator ?? values?.backend;
@@ -89,7 +90,7 @@ const resolveNavigation = (values?: Record<string, unknown>): DeNovoNavigationSt
     };
 };
 const draftKey = (state: DeNovoNavigationState) => state.modification_mode === 'de_novo_design'
-    ? `${state.modification_mode}:${state.generator}:${state.design_task}${state.generator === 'rfd4_proteina' || state.generator === 'complexa' ? `:${state.native_mode ?? 'generate'}:v1` : ''}` : state.generator === 'rfd4_proteina' ? `${state.modification_mode}:rfd4_proteina:${state.native_mode ?? 'generate'}:v1` : state.modification_mode;
+    ? `${state.modification_mode}:${state.generator}:${state.design_task}${state.generator === 'rfd4_proteina' || state.generator === 'complexa' || state.generator === 'laproteina' && state.native_mode === 'evaluate' ? `:${state.native_mode ?? 'generate'}:v1` : ''}` : state.generator === 'rfd4_proteina' ? `${state.modification_mode}:rfd4_proteina:${state.native_mode ?? 'generate'}:v1` : state.modification_mode;
 
 export function ProteinModificationTemplate({
     onBack, initialValues, requiredPinnedGpu = null, onDraftChange, onNavigationChange, navigationState, runDetails, onOpenTemplateManager, launchContextId,
@@ -169,7 +170,7 @@ export function ProteinModificationTemplate({
                     aria-pressed={mode === card.id} onClick={() => chooseMode(card.id)}
                     className={`rounded-lg border px-4 py-2 text-sm ${mode === card.id ? 'border-[var(--accent-primary)] bg-[var(--bg-tertiary)]' : 'border-[var(--border-primary)]'}`}>{card.label}</button>)}
             </nav>
-            {generator === 'rfd4_proteina' && mode !== 'shape_blueprint' && <label className={labelClass}>Native mode
+            {(generator === 'rfd4_proteina' || generator === 'laproteina') && mode !== 'shape_blueprint' && <label className={labelClass}>Native mode
                 <select aria-label="Native mode" className={fieldClass} value={navigation.native_mode ?? 'generate'} onChange={event => changeNavigation({ ...navigation, native_mode: event.target.value })}>
                     <option value="generate">Generate</option><option value="evaluate">Evaluate</option>
                 </select>
@@ -196,7 +197,8 @@ export function ProteinModificationTemplate({
                         </select>
                     </label>
                 </div>
-                {generator === 'rfd4_proteina' || generator === 'complexa' ? <DeNovoNativeGenerationSettings key={activeKey} model={generator}
+                {generator === 'laproteina' && navigation.native_mode === 'evaluate' ? <LaProteinaEvaluation key={activeKey} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />
+                    : generator === 'rfd4_proteina' || generator === 'complexa' ? <DeNovoNativeGenerationSettings key={activeKey} model={generator}
                     mode={navigation.native_mode ?? 'generate'}
                     initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />
                     : ['rfd3', 'disco', 'laproteina'].includes(generator) ? <GenerationEditor key={activeKey} initialValues={childValues.current.values} generator={generator}
@@ -209,9 +211,9 @@ export function ProteinModificationTemplate({
             {onOpenTemplateManager && <button type="button" className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm"
                 onClick={() => onOpenTemplateManager({
                     currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...navigation, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) },
-                    currentModelId: generator === 'rfd4_proteina' || generator === 'complexa' ? generator : mode === 'rfd3_iteration' && !validatedRedesign ? 'protein_local_redesign' : 'protein_modification_experimental',
+                    currentModelId: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? generator : mode === 'rfd3_iteration' && !validatedRedesign ? 'protein_local_redesign' : 'protein_modification_experimental',
                     baseTemplateId: 'protein_modification_experimental',
-                    currentMode: generator === 'rfd4_proteina' || generator === 'complexa' ? navigation.native_mode ?? 'generate' : mode === 'rfd3_iteration' ? validatedRedesign ? 'region_redesign' : 'rfd3_local_redesign' : mode,
+                    currentMode: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? navigation.native_mode ?? 'generate' : mode === 'rfd3_iteration' ? validatedRedesign ? 'region_redesign' : 'rfd3_local_redesign' : mode,
                 })}>Template Manager</button>}
         </div>
     );

@@ -63,10 +63,18 @@ def publication_model(job):
     return job.model_id
 
 
+def publication_spec(job):
+    if publication_model(job) == 'laproteina' and job.mode == 'evaluate':
+        return ('collected/laproteina_evaluation', 'manifest.json', 'laproteina_evaluation_v1')
+    return PUBLICATIONS[publication_model(job)]
+
+
 def has_native_publication(job, output_path=None):
     model = publication_model(job)
     if model not in PUBLICATIONS:
         return False
+    if model == 'laproteina' and job.mode == 'evaluate':
+        return True
     if model in {'laproteina', 'disco'}:
         # Old Jobs retain their historical PDB/Design receiving path. Presence
         # of the canonical producer index, not a version guess, selects migration.
@@ -138,11 +146,12 @@ async def publish_native_generation(session, job, output_path):
     from services.binder_source_materialization import structure_suffix
 
     model = publication_model(job)
-    prefix, name, contract = PUBLICATIONS[model]
+    prefix, name, contract = publication_spec(job)
     root = publication_root(job, output_path)
     native = root / prefix
     _, raw = _regular(native, name)
-    manifest = (_cad_manifest(native, raw, model) if model in {'laproteina', 'disco'} else json.loads(raw))
+    manifest = (_cad_manifest(native, raw, model) if model in {'laproteina', 'disco'}
+                and contract != 'laproteina_evaluation_v1' else json.loads(raw))
     if manifest.get('contract') != contract or manifest.get('model_id') != model:
         raise ValueError('Native publication producer disagrees')
     attempt = job.retry_count or 0
@@ -207,7 +216,7 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
     if offset < 0 or not 1 <= limit <= 1000:
         raise ValueError('Invalid native page')
     model = publication_model(job)
-    prefix, name, contract = PUBLICATIONS[model]
+    prefix, name, contract = publication_spec(job)
     owner = (
         JobArtifact.owner_job_id == job.id, JobArtifact.attempt == (job.retry_count or 0),
         JobArtifact.logical_path.startswith(prefix + '/'))

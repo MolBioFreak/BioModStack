@@ -32,6 +32,7 @@ TYPED_CORE_JOB_MODELS = {
     "fampnn",
     "frustrampnn",
     "ligandmpnn",
+    "laproteina",
     "rfd4_proteina",
     "complexa",
 }
@@ -78,6 +79,7 @@ PROJECT_NATIVE_OWNER_REGISTRY: dict[str, dict[str, Any]] = {
 for _model, _modes in {
     "boltzgen": ("protein_binder", "nanobody_binder", "peptide_binder", "antibody_binder", "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking"),
     "ppiflow": ("protein_binder", "antibody_binder", "nanobody_binder"),
+    "laproteina": ("evaluate",),
     "rfd4_proteina": ("generate", "evaluate"),
     "complexa": ("generate", "evaluate"),
     "protein_modification_experimental": ("de_novo_design",),

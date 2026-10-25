@@ -1,6 +1,6 @@
 // Navigation metadata only. Native model owners still compile scientific requests.
 export const DE_NOVO_TEMPLATE = 'protein_modification_experimental';
-const DE_NOVO_MODELS = new Set([DE_NOVO_TEMPLATE, 'protein_local_redesign', 'protein_cad_experimental', 'rfd4_proteina', 'complexa']);
+const DE_NOVO_MODELS = new Set([DE_NOVO_TEMPLATE, 'protein_local_redesign', 'protein_cad_experimental', 'rfd4_proteina', 'complexa', 'laproteina']);
 export const DE_NOVO_ROUTE_KEYS = ['modification_mode', 'generator', 'design_task', 'native_mode'] as const;
 export interface DeNovoNavigationState {
     modification_mode: string;
@@ -25,9 +25,9 @@ export function deNovoSavedValues(
     );
     return {
         ...values,
-        ...(model === 'rfd4_proteina' || model === 'complexa' ? { generator: model, native_mode: mode ?? 'generate' } : {}),
+        ...(model === 'rfd4_proteina' || model === 'complexa' || model === 'laproteina' ? { generator: model, native_mode: mode ?? 'generate' } : {}),
         modification_mode: modificationMode,
-        ...(model !== 'rfd4_proteina' && model !== 'complexa' && values.generator === undefined && typeof values.backend === 'string' ? { generator: values.backend } : {}),
+        ...(model !== 'rfd4_proteina' && model !== 'complexa' && model !== 'laproteina' && values.generator === undefined && typeof values.backend === 'string' ? { generator: values.backend } : {}),
     };
 }
 

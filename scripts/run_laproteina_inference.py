@@ -153,6 +153,7 @@ def evaluate_native(request: dict, output_dir: Path, *, prepare_only=False):
     attempt = Path(tempfile.mkdtemp(prefix='evaluation_', dir=output_dir)).resolve()
     samples = attempt / 'samples'
     shutil.copytree(source, samples)
+    shutil.copy2(config_path, attempt / 'original_config.yaml')
     cfg = OmegaConf.load(config_path)
     for key, value in request.get('metrics', {}).items():
         if key not in EVALUATION_CONTROLS:
@@ -172,10 +173,10 @@ def evaluate_native(request: dict, output_dir: Path, *, prepare_only=False):
     # dispatch (which leaves df undefined for codesignability-only requests).
     upstream = Path(os.environ.get('LAPROTEINA_REPO', '/opt/laproteina')).resolve()
     sys.path.insert(0, str(upstream))
-    from proteinfoundation import evaluate
-    evaluate.cfg = cfg
-    evaluate.root_path = str(samples)
     try:
+        from proteinfoundation import evaluate
+        evaluate.cfg = cfg
+        evaluate.root_path = str(samples)
         paths = evaluate.split_by_job(cfg, request['job_id'], is_des=True)
         frame = evaluate.compute_traditional_metrics(cfg.generation.metric, paths,
                                                      request['job_id'], request['ncpus'])
@@ -187,7 +188,29 @@ def evaluate_native(request: dict, output_dir: Path, *, prepare_only=False):
         raise
     finally:
         receipt_path.write_text(json.dumps(receipt, indent=2))
+        publish_evaluation(output_dir, attempt, receipt)
     return receipt
+
+
+def publish_evaluation(output_dir, attempt, receipt):
+    """Register native table observations without inventing structures or scores."""
+    import csv
+    records = []
+    result = attempt / 'results.csv'
+    if result.is_file():
+        with result.open(newline='') as stream:
+            for index, row in enumerate(csv.DictReader(stream)):
+                # CSV values stay native strings; blanks are not zero scores.
+                records.append({'population': 'observation', 'native_row_index': index,
+                    'metrics': row, 'native_record': row,
+                    'result_table': result.relative_to(output_dir).as_posix()})
+    manifest = {'contract': 'laproteina_evaluation_v1', 'model_id': 'laproteina',
+        'records': records, 'execution_status': receipt['execution_status'],
+        'population_completeness': None, 'observation_errors': [], 'receipt': receipt,
+        'scientific_metrics_available': False if not records else None,
+        'artifacts': [{'path': p.relative_to(output_dir).as_posix()}
+            for p in sorted(attempt.rglob('*')) if p.is_file()]}
+    (output_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2))
 
 
 def main() -> None:
@@ -200,7 +223,8 @@ def main() -> None:
     args = parser.parse_args()
     request_path = resolve_input_path(args.request)
     if args.evaluate:
-        print(json.dumps(evaluate_native(json.loads(request_path.read_text()),
+        evaluation = bind_native_document(json.loads(request_path.read_text()), 'laproteina-evaluation', owner=request_path)
+        print(json.dumps(evaluate_native(evaluation,
                                         Path(args.output_dir).resolve(), prepare_only=args.prepare_only)))
         return
     request = bind_native_document(json.loads(request_path.read_text()), "protein-cad", owner=request_path)

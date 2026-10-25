@@ -93,10 +93,10 @@ EVALUATION_CONTROLS = {
 
 def evaluation_schema() -> dict:
     return {"type": "object", "additionalProperties": False,
-            "required": ["source_directory", "config_path", "job_id", "ncpus"],
+            "required": ["samples_slot", "config_slot", "job_id", "ncpus"],
             "properties": {
-                "source_directory": {"type": "string", "description": "Retained native output directory, including motif CSV when applicable."},
-                "config_path": {"type": "string", "description": "Retained composed native generation config."},
+                "samples_slot": {"type": "string", "minLength": 1, "x-native-source-kind": "file", "description": "Retained native sample directory, including motif CSV."},
+                "config_slot": {"type": "string", "minLength": 1, "x-native-source-kind": "file", "description": "Original composed generation configuration."},
                 "job_id": {"type": "integer"}, "ncpus": {"type": "integer"},
                 "metrics": {"type": "object", "additionalProperties": False, "properties": EVALUATION_CONTROLS}}}
 

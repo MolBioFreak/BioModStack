@@ -262,6 +262,9 @@ def native_reference_fields(document, format):
         # and requested_* settings are provenance, never fresh input reads.
         for i, source in enumerate(document.get("native_input_sources", [])):
             yield from field(source, "path", ("native_input_sources", i))
+    elif format == "laproteina-evaluation":
+        for key in ("source_directory", "config_path"):
+            yield from field(document, key, (), "native-snapshot")
     elif format == "protein-cad":
         for section, fields in {"laproteina": ("motif_pdb", "checkpoint_dir", "data_path"),
                                 "disco": ("input_json_path", "compiled_input_json", "ligand_sdf", "checkpoint_path", "hf_cache_path", "cutlass_path")}.items():
@@ -305,6 +308,8 @@ def bind_native_document(document, format, *, owner=None):
 
 def _format(document, path):
     if isinstance(document, dict):
+        if document.get("schema") == "laproteina_evaluation_request_v1":
+            return "laproteina-evaluation"
         if document.get('schema_version') == 1 and 'native_request' in document and 'upstream_commit' in document:
             return 'bc2-compilation'
         if document.get("schema") in {"bms_shape_design_request_v2", "bms_shape_design_request_v3"}:
@@ -335,6 +340,8 @@ def prepared_generation_source_fields(model_id, mode, params):
     Do not reacquire controller sources on replay; only these model-owned input
     slots are superseded. Other parameters retain existing discovery behavior.
     """
+    if model_id == 'laproteina' and params.get('laproteina_evaluation_input_closure'):
+        return {'laproteina_evaluation_request', 'native_sources'}
     rfd4_selected = (model_id == 'rfd4_proteina' or
                      (model_id == 'protein_modification_experimental' and
                       mode == 'de_novo_design' and params.get('generator') == 'rfd4_proteina'))
@@ -572,6 +579,9 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
     generation_model = (params.get('generator')
                         if model_id == 'protein_modification_experimental'
                         and mode == 'de_novo_design' else model_id)
+    if model_id == 'laproteina' and params.get('laproteina_evaluation_input_closure'):
+        visit(params['laproteina_evaluation_input_closure'], None, ('laproteina_evaluation_input_closure',), 'native-snapshot')
+        keys.add('laproteina_evaluation_input_closure')
     if generation_model == 'rfd4_proteina':
         keys.add('rfd4_input_closure')
     elif generation_model == 'complexa':

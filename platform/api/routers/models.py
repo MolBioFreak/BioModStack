@@ -282,6 +282,9 @@ def _frustrampnn_discovery_metadata() -> dict:
 
 def _native_parameter_schema(model_id: str, mode_id: str) -> dict | None:
     """Discovery metadata only; scientific validation stays model-owned."""
+    if model_id == 'laproteina' and mode_id == 'evaluate':
+        from services.laproteina_evaluation import parameter_schema
+        return parameter_schema(mode_id)
     if model_id == 'rfd4_proteina' and mode_id in ('generate', 'evaluate'):
         from services.rfd4_proteina import parameter_schema
         return parameter_schema(mode_id)
@@ -460,11 +463,14 @@ async def get_generation_settings(model_id: str, mode: str, generator: str | Non
             from scripts.lib.rfd3_scientific_settings import scientific_inventory
             return {'model_id': selected, 'mode': task or 'unconditional_monomer',
                     **scientific_inventory()}
+        if selected == 'laproteina' and native_mode == 'evaluate':
+            from services.laproteina_evaluation import generation_settings
+            return generation_settings(native_mode)
         if selected == 'laproteina':
             from scripts.lib.laproteina_contract import settings_schema, evaluation_schema, PROFILES, resolve_profile
             return {'model_id': selected, 'mode': native_mode, 'parameter_schema': settings_schema(),
                     'evaluation_schema': evaluation_schema(),
-                    'evaluation_scope': 'Separate retained-output runner operation; not an implicit generation stage',
+                    'evaluation_scope': 'Separate laproteina/evaluate Job operation; not an implicit generation stage',
                     'profiles': {name: resolve_profile(name) for name in PROFILES}}
         if selected == 'disco':
             from pydantic import TypeAdapter

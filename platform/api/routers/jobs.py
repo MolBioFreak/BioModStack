@@ -6167,6 +6167,12 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
         selected_generator = (job_data.params.get('generator')
             if normalized_model_id == 'protein_modification_experimental' and normalized_mode == 'de_novo_design'
             else normalized_model_id)
+        if selected_generator == 'laproteina' and normalized_model_id == 'laproteina':
+            from services.laproteina_evaluation import normalize_params
+            try:
+                job_data.params = normalize_params(normalized_mode, job_data.params)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         if selected_generator in {'rfd4_proteina', 'complexa'}:
             native_mode = normalized_mode if selected_generator == normalized_model_id else 'generate'
             try:

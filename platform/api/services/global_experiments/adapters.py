@@ -3301,6 +3301,7 @@ class NativeBinderJobResultAdapter:
     _MODES = {
         "bindcraft2": {"campaign", "resume", "score", "rank", "filter", "campaign_output", "archive", "unarchive"},
         "ligandmpnn": {"interface_context"},
+        "laproteina": {"evaluate"},
         "rfd4_proteina": {"generate", "evaluate"},
         "complexa": {"generate", "evaluate"},
         "protein_modification_experimental": {"de_novo_design", "region_redesign"},

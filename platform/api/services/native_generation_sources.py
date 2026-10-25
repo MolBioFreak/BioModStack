@@ -35,7 +35,8 @@ def source_slot_schema(schema, model):
     """Decorate consumed slot fields; scientific schema/defaults remain unchanged."""
     import copy
     from services import rfd4_proteina, complexa
-    owner = rfd4_proteina if model == 'rfd4_proteina' else complexa
+    from services import laproteina_evaluation
+    owner = laproteina_evaluation if model == 'laproteina' else rfd4_proteina if model == 'rfd4_proteina' else complexa
     result = copy.deepcopy(schema)
     def mark(node, kind, container):
         if container:
@@ -94,7 +95,9 @@ async def prepare_native_sources(job, session):
     Retain originals in the public map; record consumed derivatives separately.
     """
     model = selected_model(job)
-    if model not in {'rfd4_proteina', 'complexa'}:
+    if model == 'laproteina' and (job.model_id != 'laproteina' or job.mode != 'evaluate'):
+        return
+    if model not in {'rfd4_proteina', 'complexa', 'laproteina'}:
         return
     from paths import resolve_allowed_path, get_allowed_roots, to_allowed_relative
     from routers.files import (materialize_structure, get_governed_ngs_result_roots,
@@ -104,7 +107,8 @@ async def prepare_native_sources(job, session):
     from scripts.lib.portable_inputs import _contained
     from services import rfd4_proteina, complexa
 
-    owner = rfd4_proteina if model == 'rfd4_proteina' else complexa
+    from services import laproteina_evaluation
+    owner = laproteina_evaluation if model == 'laproteina' else rfd4_proteina if model == 'rfd4_proteina' else complexa
     mode = job.mode if job.model_id == model else 'generate'
     try:
         slots = owner.source_slots_for_params(mode, job.params)

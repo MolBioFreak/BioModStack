@@ -507,6 +507,7 @@ from services.caliby_native import SUPPORTED_MODES as CALIBY_NATIVE_MODES
 from services.ligandmpnn_design import MODES as LIGANDMPNN_DESIGN_MODES
 
 MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
+    ('laproteina', 'evaluate'): 'workflows/laproteina_evaluation.nf',
     ('protonpottsmpnn', 'redesign'): 'workflows/protonpottsmpnn_design.nf',
     **{('bindcraft2', native_mode): 'workflows/bindcraft2.nf'
        for native_mode in ('campaign', *BC2_NATIVE_ACTIONS)},
@@ -605,6 +606,8 @@ def resolve_nextflow_entrypoint(
     selected_generator = ((params or {}).get('generator')
         if normalized_model_id == 'protein_modification_experimental' and normalized_mode == 'de_novo_design'
         else normalized_model_id)
+    if normalized_model_id == 'laproteina' and normalized_mode == 'evaluate':
+        return 'workflows/laproteina_evaluation.nf'
     if selected_generator in {'rfd4_proteina', 'complexa'}:
         if normalized_model_id == selected_generator and normalized_mode not in {'generate', 'evaluate'}:
             raise ValueError(f'Unsupported {selected_generator} mode: {normalized_mode}')
@@ -5301,6 +5304,12 @@ def compile_nextflow_invocation(
         request_key = 'rfd4_request' if selected_generator == 'rfd4_proteina' else 'complexa_request'
         native_parameters[request_key] = deepcopy(params[request_key])
 
+    if model_id == 'laproteina' and mode == 'evaluate':
+        from services.laproteina_evaluation import bind_for_job, REQUEST_FIELD
+        params, native_inputs = bind_for_job(mode, params, output_dir)
+        generated_inputs.extend(native_inputs)
+        native_parameters[REQUEST_FIELD] = deepcopy(params[REQUEST_FIELD])
+
     def bind_fampnn_declaration(command, value) -> None:
         # The same existing producer-owned biological declaration transport is
         # used by public and selected-parent callers; never inline large JSON.
@@ -7126,7 +7135,7 @@ def compile_nextflow_invocation(
              'boltzgen_input_pdb', 'boltzgen_ligand_pdb', 'boltzgen_dna_structure'}},
             sort_keys=True, separators=(',', ':'))
     for key, value in params.items():
-        if key in {'rfd4_request', 'complexa_request', 'md_source_provenance', 'md_job_spec', 'native_sources'}:
+        if key in {'laproteina_evaluation_request', 'rfd4_request', 'complexa_request', 'md_source_provenance', 'md_job_spec', 'native_sources'}:
             # Scientific objects remain typed in the native projection. The MD
             # collector additionally consumes one JSON wire, never flattened keys.
             native_parameters[key] = deepcopy(value)
