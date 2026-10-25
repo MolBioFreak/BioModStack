@@ -160,6 +160,30 @@ def test_managed_file_is_compiler_artifact(tmp_path, compiler_environment, monke
     rebound = load_native_protenix_input(invocation.native_parameters)
     assert rebound[0]['sequences'][0]['ligand']['ligand'] == 'FILE_' + str(destination)
     assert destination.read_text() == 'owned ligand fixture\n'
+    # Exercise the emitted prep program in a separate dependency-complete runtime,
+    # including Nextflow's symlinked document and the immutable source path.
+    import os
+    import subprocess
+    import sys
+    import textwrap
+    module = Path(__file__).resolve().parents[3] / 'modules/protenix.nf'
+    program = module.read_text().split('process PrepProtenixComplex {', 1)[1]
+    program = textwrap.dedent(program.split('    """', 1)[1].split('    """', 1)[0]).strip()
+    assert program.startswith('#!${params.api_python}\n')
+    staged = worker / 'complex_definition.json'
+    staged.symlink_to(Path(invocation.native_parameters['complex_json_path']))
+    program = (program.replace('${params.api_python}', sys.executable)
+        .replace('${params.code_root}', str(module.parent.parent))
+        .replace('${complex_json}', staged.name).replace('${seeds}', '42'))
+    command = worker / 'prep'
+    command.write_text(program + '\n')
+    command.chmod(0o755)
+    result = subprocess.run([str(command)], cwd=worker, env=os.environ.copy(),
+                            text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads((worker / 'protenix_input.json').read_text()) == rebound
+    # Original sealed input stays unchanged; rebinding belongs to the derived input.
+    assert json.loads(staged.read_text())['components'][0]['ligand_file'] == str(source)
     params['complex_components'][0]['ligand_file'] = '/etc/passwd'
     with pytest.raises(ValueError, match='managed file selection'):
         JobCreate(name='bad', model_id='protenix', mode='complex', params=params)

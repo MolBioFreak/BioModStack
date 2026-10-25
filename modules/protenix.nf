@@ -241,7 +241,7 @@ process PrepProtenixComplex {
     script:
     def seeds = params.protenix_seeds != null ? params.protenix_seeds : '42'
     """
-    #!/usr/bin/env python3
+    #!${params.api_python}
     import json, sys
     from pathlib import Path
 
