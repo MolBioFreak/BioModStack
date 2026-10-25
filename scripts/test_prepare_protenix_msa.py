@@ -577,6 +577,15 @@ def test_prepared_file_ligand_identity_uses_exact_portable_binding(tmp_path, mon
     worker = copy.deepcopy(payload)
     worker[0]['sequences'][1]['ligand']['ligand'] = 'FILE_' + str(ligand)
     assert hydrate_prepared_protenix_task(worker, root, digest(original)) == worker
+    # Protenix's installed `scripts` package shadows our namespace in-container.
+    import sys
+    import types
+    with monkeypatch.context() as collision:
+        collision.setitem(sys.modules, 'scripts', types.ModuleType('scripts'))
+        collision.delitem(sys.modules, 'scripts.lib', raising=False)
+        collision.delitem(sys.modules, 'scripts.lib.portable_inputs', raising=False)
+        collision.syspath_prepend(str(Path(__file__).resolve().parent))
+        assert hydrate_prepared_protenix_task(worker, root, digest(original)) == worker
     assert path.read_bytes() == original
     assert payload[0]['sequences'][1]['ligand']['ligand'] == 'FILE_' + source
     changed = copy.deepcopy(worker)

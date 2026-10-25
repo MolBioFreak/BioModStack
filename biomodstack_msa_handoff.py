@@ -106,7 +106,14 @@ def _protenix_task_identity(task: dict) -> list:
             ligand = wrapper.get('ligand', {}).get('ligand')
             if isinstance(ligand, str) and ligand.startswith('FILE_'):
                 import copy
-                from scripts.lib.portable_inputs import resolve_input_path
+                try:
+                    from scripts.lib.portable_inputs import resolve_input_path
+                except ModuleNotFoundError as error:
+                    # Native images can own a regular top-level `scripts`
+                    # package. Direct helper execution already exposes our lib.
+                    if error.name not in {'scripts', 'scripts.lib'}:
+                        raise
+                    from lib.portable_inputs import resolve_input_path
                 wrapper = copy.deepcopy(wrapper)
                 wrapper['ligand']['ligand'] = 'FILE_' + str(resolve_input_path(ligand[5:]))
             identities.append(wrapper)
