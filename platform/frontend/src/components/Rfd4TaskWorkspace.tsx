@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import conditionMetadata from '../lib/rfd4ConditionMetadata.json';
+const conditionTypes: Record<string, { kind: string; values: Record<string, number>; description: string }> = conditionMetadata.conditions;
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
 import { NativeSettingsDisclosure } from './NativeSettingsDisclosure';
 
@@ -57,6 +59,8 @@ function Conditions({ value, families, visual, onChange }: { value: Record<strin
         </div>)))}
         <div className="flex flex-wrap gap-3"><label>Condition family<select aria-label="Condition family" value={family} onChange={e => setFamily(e.target.value)}>{families.map(f => <option key={f}>{f}</option>)}</select></label>
             <label>Native condition value<input aria-label="Native condition value" value={conditionValue} onChange={e => setConditionValue(e.target.value)} /></label>
+            {(conditionTypes[family]?.kind === 'boolean' || conditionTypes[family]?.kind === 'enum') && <label>Known native value<select aria-label="Known native value" value={conditionValue} onChange={e => setConditionValue(e.target.value)}><option value="">Choose explicitly</option>{conditionTypes[family].kind === 'boolean' ? ['true', 'false'].map(v => <option key={v}>{v}</option>) : Object.entries(conditionTypes[family].values).map(([name, code]) => <option key={name} value={name}>{name} ({code})</option>)}{conditionValue && !['true', 'false', ...Object.keys(conditionTypes[family].values)].includes(conditionValue) && <option value={conditionValue}>Manual: {conditionValue}</option>}</select></label>}
+            <p className="text-xs whitespace-pre-wrap">{conditionTypes[family]?.description} {family === 'C_IDX' && 'For false, provide a group label; equal labels share native index offsets.'} {family === 'C_CRDGRP' && 'Use -1 for unknown, 0 for absolute coordinates, or a positive internal group ID. Saved internal targets are separate from current coordinates.'}</p>
             <label>Selection expression<input aria-label="Selection expression" value={expression} onChange={e => setExpression(e.target.value)} /></label>
             <label>New condition group<input aria-label="New condition group" value={group} onChange={e => setGroup(e.target.value)} /></label></div>
         {visual && <><p role="status">{visual.issue ?? `Selected from ${visual.slot}: ${visual.expression}`}</p><button type="button" onClick={() => { if (visual.expression !== undefined) setExpression(visual.expression); }}>Use visual selection in new condition</button></>}

@@ -7,13 +7,14 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { api } from '../../src/lib/api';
+import { readSavedConditions, savedConditionLayers } from '../../src/lib/rfd4SavedConditions';
 import { Rfd4TaskWorkspace } from '../../src/components/Rfd4TaskWorkspace';
 import { DeNovoNativeGenerationSettings } from '../../src/components/DeNovoNativeGenerationSettings';
 // Isolate launch placement and optional operations, not authoring, sources, schema widgets or HTTP serialization.
 vi.mock('../../src/components/GeneralSequenceDesignSettings', () => ({ GeneralSequenceDesignSettings: () => null }));
 vi.mock('../../src/components/ExecutionTargetPicker', () => ({ ExecutionTargetPicker: () => null }));
 vi.mock('../../src/components/dashboard/IndependentProvisionPanel', () => ({ DE_NOVO_PRELOAD_SELECTION: { kind: 'workflow_pack', workflow_id: 'de_novo_design' } }));
-vi.mock('../../src/components/MolstarViewer', () => ({ default: (props: any) => <div data-native-viewer data-linked={props.showSequenceTrack} data-controlled={props.controlledResidueSelection} data-selection={JSON.stringify(props.residueSelections)} /> }));
+vi.mock('../../src/components/MolstarViewer', () => ({ default: (props: any) => <div data-native-viewer data-layers={JSON.stringify(props.metricLayers)} data-linked={props.showSequenceTrack} data-controlled={props.controlledResidueSelection} data-selection={JSON.stringify(props.residueSelections)} /> }));
 const cwd = resolve(process.cwd(), '../..');
 const inventories = JSON.parse(execFileSync(process.env.BMS_TEST_API_PYTHON ?? 'python', ['-c', "import json,sys;sys.path.insert(0,'platform/api');from services.rfd4_proteina import generation_settings as r;from services.complexa import discovery as c;print(json.dumps({'rfd4_proteina':{m:r(m) for m in ('generate','evaluate')},'complexa':{m:c() for m in ('generate','evaluate')}}))"], { cwd, encoding: 'utf8', maxBuffer: 16000000 }));
 let root: Root | undefined, client: QueryClient, old: typeof api.defaults.adapter, draft: any;
@@ -49,6 +50,39 @@ async function click(text: string) { const node = [...document.querySelectorAll<
 async function edit(label: string, value: string) { const node = document.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`); expect(node, label).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), 'value')!.set!.call(node, value); node!.dispatchEvent(new Event(node!.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); }
 async function disclose(text: string) { const node = [...document.querySelectorAll('summary')].find(s => s.textContent?.trim() === text); expect(node, text).toBeTruthy(); await act(async () => { const d = node!.parentElement as HTMLDetailsElement; d.open = true; d.dispatchEvent(new Event('toggle')); }); }
 function normalize(request: unknown, model = 'rfd4', mode = 'generate') { return JSON.parse(execFileSync('python', ['-c', model === 'rfd4' ? "import sys,json;from scripts.lib.rfd4_proteina_contract import normalize_request;print(json.dumps(normalize_request(json.loads(sys.argv[1]),sys.argv[2])))" : "import sys,json;from scripts.lib.complexa_contract import normalize_request;print(json.dumps(normalize_request(json.loads(sys.argv[1]))))", JSON.stringify(request), mode], { cwd, encoding: 'utf8' })); }
+it('saved projection retains native targets, model-local indices and missing payloads', async () => {
+    const cif = readFileSync(resolve('tests/fixtures/rfd4-saved-conditions.cif'), 'utf8');
+    const rows = await readSavedConditions(cif, 'exact-native', 1);
+    expect(rows.find(r => r.family === 'C_INTCRD')?.value).toEqual(['1.0', '2.0', '3.0']);
+    expect(rows.find(r => r.family === 'C_CRDGRP')?.value).toBe('7');
+    expect(await readSavedConditions(cif, 'exact-native', 2)).toEqual([]);
+    expect(savedConditionLayers(rows, 'exact-native').find(l => l.descriptor.label === 'Saved C_CRD')?.values[0]).toMatchObject({ value: null, missingness: 'unavailable' });
+    const absent = cif.replace(/^_condition_InternalCoordinate_1_atom[^\n]*\n/gm, '');
+    expect((await readSavedConditions(absent, 'exact-native')).some(r => r.family === 'C_INTCRD')).toBe(false);
+    const scoped = cif.replace('_condition_InternalCoordinate_1_atom.idx0', '_condition_InternalCoordinate_1_atom.model_num 2\n_condition_InternalCoordinate_1_atom.idx0');
+    expect((await readSavedConditions(scoped, 'exact-native', 1)).some(r => r.family === 'C_INTCRD')).toBe(false);
+});
+it('native enum choices write explicit values without changing manual historical keys', async () => {
+    await mount('rfd4_proteina'); await edit('RFD4 task', 'motif'); await click('Add conditioned example');
+    await edit('Condition family', 'C_HB'); await edit('Known native value', 'ACCEPTOR');
+    await edit('Selection expression', 'chain_id == "X"'); await click('Apply native condition');
+    expect(draft.rfd4_request.input.examples[0].conditions.C_HB.ACCEPTOR).toEqual([{ select: 'chain_id == "X"' }]);
+    await edit('Native condition value', '2'); await click('Apply native condition');
+    expect(draft.rfd4_request.input.examples[0].conditions.C_HB['2']).toHaveLength(1);
+});
+it('mounted source projects native-writer saved targets separately from selection', async () => {
+    const cif = readFileSync(resolve('tests/fixtures/rfd4-saved-conditions.cif'), 'utf8').replace(/(_atom_site\.pdbx_PDB_model_num\s+)1/, '$12');
+    // Keep native writer bytes unchanged apart from selected MODEL fixture binding.
+    fetchSpy.mockImplementation(async () => ({ ok: true, text: async () => cif } as Response));
+    await mount('rfd4_proteina', { native_sources: { exact: source }, rfd4_request: { input: { kind: 'annotated', slots: ['exact'] } } });
+    await disclose('Native sources'); await click('Inspect retained exact'); await click('Read saved conditions for exact');
+    const layers = JSON.parse(document.querySelector('[data-native-viewer]')!.getAttribute('data-layers')!);
+    expect(layers.find((l: any) => l.descriptor.label === 'Saved C_INTCRD').values[0]).toMatchObject({ value: 1, identity: { documentId: source.path, labelAsymId: 'X', atomIndex: 0, modelNumber: 2 } });
+    expect(document.body.textContent).toContain('1.0, 2.0, 3.0');
+    expect(layers.find((l: any) => l.descriptor.label === 'Saved C_CRDGRP').values[0].value).toBe(7);
+    expect(JSON.parse(document.querySelector('[data-native-viewer]')!.getAttribute('data-selection')!)).toEqual([]);
+    expect(draft.rfd4_request.input).toEqual({ kind: 'annotated', slots: ['exact'] });
+});
 it('fresh source-free chains reach actual Axios and native normalization without default hydration', async () => {
     await mount('rfd4_proteina'); await edit('RFD4 task', 'source_free'); await edit('Input name', 'chains');
     await click('Add generated chain'); await edit('Chain 1 ID', 'A'); await edit('Chain 1 min_length', '20'); await edit('Chain 1 max_length', '30');

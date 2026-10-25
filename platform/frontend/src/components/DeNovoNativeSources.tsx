@@ -6,6 +6,7 @@ import MolstarViewer from './MolstarViewer';
 import { DeNovoNativeDocumentPicker } from './DeNovoNativeDocumentPicker';
 import type { MetricSelection } from '../structureViewer/metrics/metricContracts';
 import type { Rfd4NativeSelectionIdentity } from '../lib/rfd4NativeSelection';
+import { readSavedConditions, savedConditionLayers, type SavedCondition } from '../lib/rfd4SavedConditions';
 
 function NativePositionControls({ slot, receipt, onSelection }: { slot: string; receipt: StructureMaterialization; onSelection: (selection: MetricSelection) => void }) {
     const [position, setPosition] = useState('');
@@ -47,6 +48,20 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
     onRemove: () => void; onSelection?: (slot: string, receipt: StructureMaterialization, selection: MetricSelection) => void;
 }) {
     const [receipt, setReceipt] = useState<StructureMaterialization>();
+    const [saved, setSaved] = useState<{ receipt: StructureMaterialization; rows: SavedCondition[] }>();
+    const [savedError, setSavedError] = useState('');
+    const savedRows = saved && saved.receipt === receipt ? saved.rows : [];
+    const inspectSaved = async () => {
+        if (!receipt) return;
+        const token = epoch.current;
+        setSavedError('');
+        try {
+            const response = await fetch(buildFileDownloadUrl(receipt.format === 'bcif' ? receipt.decoded_path ?? receipt.path : receipt.path));
+            if (!response.ok) throw new Error(`Source readback HTTP ${response.status}`);
+            const rows = await readSavedConditions(await response.text(), receipt.path, receipt.model_number ?? undefined);
+            if (epoch.current === token) setSaved({ receipt, rows });
+        } catch (cause) { if (epoch.current === token) setSavedError(String(cause)); }
+    };
     const [picking, setPicking] = useState(false);
     const [nativePicking, setNativePicking] = useState(false);
     const [browser, setBrowser] = useState(false);
@@ -121,7 +136,11 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
             <p className="text-xs">Original {receipt.native_format}; selected {receipt.format}. {receipt.author_residues.length} observed residues. Original bytes and annotations remain retained.</p>
             {receipt.inspection_error && <p role="status">Native inspection: {receipt.inspection_error}. The retained source is unchanged.</p>}
             {receipt.source_positions?.length ? <NativePositionControls key={`${receipt.path}:${receipt.model_number}`} slot={slot} receipt={receipt} onSelection={selection => onSelection?.(slot, receipt, selection)} /> : null}
+            {receipt.format !== 'pdb' && <button type="button" onClick={() => void inspectSaved()}>Read saved conditions for {slot}</button>}
+            {savedError && <p role="status">Saved annotation readback: {savedError}. Source and manual request are unchanged.</p>}
+            {saved?.receipt === receipt && <details><summary>Saved annotation targets and groups ({savedRows.length})</summary><p>Saved roles are metric layers; temporary selection remains separate. These values are retained source annotations, not unsaved request expressions or generated coordinates.</p>{!savedRows.length && <p>No recognized saved condition annotations in this source.</p>}<div className="overflow-auto max-h-64"><table><thead><tr><th>Condition</th><th>Exact source position</th><th>Saved value</th></tr></thead><tbody>{savedRows.map((row, i) => <tr key={i}><td>{row.family}</td><td>{row.identity.documentId} · MODEL {row.identity.modelNumber} · {row.identity.labelAsymId}:{row.identity.labelSeqId} · {row.identity.labelAtomId} · atom {row.identity.atomIndex}</td><td>{Array.isArray(row.value) ? row.value.join(', ') : row.value}</td></tr>)}</tbody></table></div></details>}
             <MolstarViewer structureDocumentId={receipt.path} structureUrl={buildFileDownloadUrl(receipt.format === 'bcif' ? receipt.decoded_path ?? receipt.path : receipt.path)} format={receipt.format === 'bcif' ? 'cif' : receipt.format} height={360}
+                metricLayers={receipt.model_numbers.length === 1 || receipt.model_number != null ? savedConditionLayers(savedRows, receipt.path) : []}
                 showSequenceTrack controlledResidueSelection residueSelections={selectedIdentities ?? []}
                 onMetricSelection={selection => onSelection?.(slot, receipt, selection)} />
         </>}

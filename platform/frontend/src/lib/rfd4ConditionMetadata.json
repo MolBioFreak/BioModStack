@@ -1,0 +1,405 @@
+{
+  "image_sha256": "058a27dff02778cd7304cf8955c73115f6baaa4dfc0202540c73a10a403fa957",
+  "conditions": {
+    "C_SEQ": {
+      "annotation": "condition_sequence_1_residue",
+      "kind": "boolean",
+      "values": {},
+      "description": "",
+      "shape": []
+    },
+    "C_IDX": {
+      "annotation": "condition_index_1_residue",
+      "kind": "boolean",
+      "values": {},
+      "description": "",
+      "shape": []
+    },
+    "C_DIS": {
+      "annotation": "condition_distance_2_atom",
+      "kind": "value",
+      "values": {},
+      "description": "",
+      "shape": []
+    },
+    "C_CRD": {
+      "annotation": "condition_coordinate_1_atom",
+      "kind": "boolean",
+      "values": {},
+      "description": "",
+      "shape": [
+        3
+      ]
+    },
+    "C_CHA": {
+      "annotation": "condition_chain_2_chain",
+      "kind": "boolean",
+      "values": {},
+      "description": "",
+      "shape": []
+    },
+    "C_CTR": {
+      "annotation": "condition_c-terminus_1_residue",
+      "kind": "boolean",
+      "values": {},
+      "description": "",
+      "shape": []
+    },
+    "C_NTR": {
+      "annotation": "condition_n-terminus_1_residue",
+      "kind": "boolean",
+      "values": {},
+      "description": "",
+      "shape": []
+    },
+    "C_SEQ_PROB_ALA": {
+      "annotation": "condition_sequence-probability-ALA_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'ALA'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_ARG": {
+      "annotation": "condition_sequence-probability-ARG_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'ARG'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_ASN": {
+      "annotation": "condition_sequence-probability-ASN_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'ASN'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_ASP": {
+      "annotation": "condition_sequence-probability-ASP_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'ASP'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_CYS": {
+      "annotation": "condition_sequence-probability-CYS_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'CYS'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_GLN": {
+      "annotation": "condition_sequence-probability-GLN_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'GLN'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_GLU": {
+      "annotation": "condition_sequence-probability-GLU_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'GLU'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_GLY": {
+      "annotation": "condition_sequence-probability-GLY_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'GLY'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_HIS": {
+      "annotation": "condition_sequence-probability-HIS_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'HIS'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_ILE": {
+      "annotation": "condition_sequence-probability-ILE_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'ILE'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_LEU": {
+      "annotation": "condition_sequence-probability-LEU_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'LEU'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_LYS": {
+      "annotation": "condition_sequence-probability-LYS_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'LYS'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_MET": {
+      "annotation": "condition_sequence-probability-MET_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'MET'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_PHE": {
+      "annotation": "condition_sequence-probability-PHE_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'PHE'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_PRO": {
+      "annotation": "condition_sequence-probability-PRO_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'PRO'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_SER": {
+      "annotation": "condition_sequence-probability-SER_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'SER'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_THR": {
+      "annotation": "condition_sequence-probability-THR_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'THR'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_TRP": {
+      "annotation": "condition_sequence-probability-TRP_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'TRP'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_TYR": {
+      "annotation": "condition_sequence-probability-TYR_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'TYR'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_VAL": {
+      "annotation": "condition_sequence-probability-VAL_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'VAL'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_A": {
+      "annotation": "condition_sequence-probability-A_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'A'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_C": {
+      "annotation": "condition_sequence-probability-C_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'C'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_G": {
+      "annotation": "condition_sequence-probability-G_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'G'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_U": {
+      "annotation": "condition_sequence-probability-U_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'U'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_DA": {
+      "annotation": "condition_sequence-probability-DA_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'DA'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_DC": {
+      "annotation": "condition_sequence-probability-DC_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'DC'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_DG": {
+      "annotation": "condition_sequence-probability-DG_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'DG'.",
+      "shape": []
+    },
+    "C_SEQ_PROB_DT": {
+      "annotation": "condition_sequence-probability-DT_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Explicit probability conditioning for unified sequence token 'DT'.",
+      "shape": []
+    },
+    "C_HOT": {
+      "annotation": "condition_hotspot_1_atom",
+      "kind": "boolean",
+      "values": {},
+      "description": "Hotspot annotation for protein design.",
+      "shape": []
+    },
+    "C_RAS": {
+      "annotation": "condition_rasa-binned_1_atom",
+      "kind": "enum",
+      "values": {
+        "UNSPECIFIED": 0,
+        "BURIED": 1,
+        "INTERMEDIATE": 2,
+        "EXPOSED": 3
+      },
+      "description": "Conditioning that provides binned RASA values to the model. Zero denotes no conditioning.",
+      "shape": []
+    },
+    "C_SEC": {
+      "annotation": "condition_secondary-structure_1_residue",
+      "kind": "enum",
+      "values": {
+        "NONE": 0,
+        "HELIX": 1,
+        "SHEET": 2,
+        "LOOP": 3,
+        "NON_PROTEIN": 4
+      },
+      "description": "Conditioning that provides secondary structure information to the model.",
+      "shape": []
+    },
+    "C_HB": {
+      "annotation": "condition_hbond_1_atom",
+      "kind": "enum",
+      "values": {
+        "NONE": 0,
+        "DONOR": 1,
+        "ACCEPTOR": 2,
+        "BOTH": 3
+      },
+      "description": "Conditioning that provides hydrogen bond information (donor/acceptor) to the model.",
+      "shape": []
+    },
+    "C_PISTACK": {
+      "annotation": "condition_pistack_1_atom",
+      "kind": "boolean",
+      "values": {},
+      "description": "Conditioning for pi-stacking interactions.",
+      "shape": []
+    },
+    "C_PICATION": {
+      "annotation": "condition_pication_1_atom",
+      "kind": "enum",
+      "values": {
+        "NONE": 0,
+        "AROMATIC": 1,
+        "CATION": 2,
+        "BOTH": 3
+      },
+      "description": "Conditioning for pi-cation interactions (aromatic ring / cation role).",
+      "shape": []
+    },
+    "C_SALT": {
+      "annotation": "condition_saltbridge_1_atom",
+      "kind": "enum",
+      "values": {
+        "NONE": 0,
+        "POSITIVE": 1,
+        "NEGATIVE": 2
+      },
+      "description": "Conditioning for salt bridge interactions.",
+      "shape": []
+    },
+    "C_HPHOB": {
+      "annotation": "condition_hydrophobic_1_atom",
+      "kind": "boolean",
+      "values": {},
+      "description": "Conditioning for hydrophobic contacts.",
+      "shape": []
+    },
+    "C_MCOORD": {
+      "annotation": "condition_metal-coord_1_atom",
+      "kind": "enum",
+      "values": {
+        "NONE": 0,
+        "METAL": 1,
+        "COORDINATING": 2
+      },
+      "description": "Conditioning for metal coordination interactions.",
+      "shape": []
+    },
+    "C_IDXGRP": {
+      "annotation": "condition_index-group_1_token",
+      "kind": "value",
+      "values": {},
+      "description": "Indicates atoms within the same equivalence class of known index offsets.\n\n    Does not differentiate between globally indexed vs unindexed groups (that is annotated in\n    ``C_IDX.mask``). While the default annotation is monotonically increasing by one, this should\n    not be expected to always hold.\n\n    Groups by molecule to ensure that all tokens of one molecule share a group even if they\n    are not contiguous in the atom array.\n    ",
+      "shape": []
+    },
+    "C_CATH": {
+      "annotation": "condition_cath-label_1_residue",
+      "kind": "value",
+      "values": {},
+      "description": "Conditioning that provides cath labels to the model. 'x.x.x.x' is null conditioning.",
+      "shape": []
+    },
+    "C_INTCRD": {
+      "annotation": "condition_InternalCoordinate_1_atom",
+      "kind": "value",
+      "values": {},
+      "description": "Materialized internal-coordinate payload for atoms in non-reserved coordinate groups.\n\n    ``C_CRDGRP`` is the source of truth for membership. These coordinates provide\n    group-local structure without fixing the groups' relative positions or orientations.\n    ",
+      "shape": [
+        3
+      ]
+    },
+    "C_CRDGRP": {
+      "annotation": "condition_CoordinateGroup_1_atom",
+      "kind": "value",
+      "values": {},
+      "description": "Indicates atoms within the same equivalence class of known relative coordinates.",
+      "shape": []
+    },
+    "C_CENTROID": {
+      "annotation": "condition_ChainCentroid_1_atom",
+      "kind": "value",
+      "values": {},
+      "description": "Per-chain centroid xyz (\u00c5, ``(n_atoms, 3)``), broadcast per atom; NaN where unincluded.",
+      "shape": [
+        3
+      ]
+    },
+    "C_BP": {
+      "annotation": "condition_basepair_2_residue",
+      "kind": "enum",
+      "values": {
+        "UNSPECIFIED": 0,
+        "PAIR": 1,
+        "LOOP": 2
+      },
+      "description": "NA secondary-structure pair condition (residue semantics, 2-body sparse storage).",
+      "shape": []
+    },
+    "C_NA_SS_STATE": {
+      "annotation": "condition_na-ss-state_1_residue",
+      "kind": "enum",
+      "values": {
+        "UNSPECIFIED": 0,
+        "PAIR": 1,
+        "LOOP": 2
+      },
+      "description": "Per-residue NA secondary-structure state encoded with ``BasePairEnum``.",
+      "shape": []
+    }
+  }
+}
