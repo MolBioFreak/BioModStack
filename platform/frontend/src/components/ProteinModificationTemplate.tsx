@@ -129,7 +129,7 @@ export function ProteinModificationTemplate({
         const { native_job_request, ...editor } = draft;
         activeRequest.current = Object.hasOwn(draft, 'native_job_request') ? { native_job_request } : {};
         drafts.current[activeKey] = { ...editor, modification_mode: savedMode };
-        callbacks.current.onDraftChange?.({ ...draft, ...navigation, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) });
+        callbacks.current.onDraftChange?.({ ...draft, ...navigation, ...(navigation.generator === 'complexa' && typeof draft.native_mode === 'string' ? { native_mode: draft.native_mode } : {}), modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) });
     }, [activeKey, navigation.modification_mode, navigation.generator, navigation.design_task, navigation.native_mode, savedMode]);
     const changeNavigation = (state: DeNovoNavigationState) => {
         const next = resolveNavigation({ ...state });
@@ -169,7 +169,7 @@ export function ProteinModificationTemplate({
                     aria-pressed={mode === card.id} onClick={() => chooseMode(card.id)}
                     className={`rounded-lg border px-4 py-2 text-sm ${mode === card.id ? 'border-[var(--accent-primary)] bg-[var(--bg-tertiary)]' : 'border-[var(--border-primary)]'}`}>{card.label}</button>)}
             </nav>
-            {(generator === 'rfd4_proteina' || generator === 'complexa') && mode !== 'shape_blueprint' && <label className={labelClass}>Native mode
+            {generator === 'rfd4_proteina' && mode !== 'shape_blueprint' && <label className={labelClass}>Native mode
                 <select aria-label="Native mode" className={fieldClass} value={navigation.native_mode ?? 'generate'} onChange={event => changeNavigation({ ...navigation, native_mode: event.target.value })}>
                     <option value="generate">Generate</option><option value="evaluate">Evaluate</option>
                 </select>
@@ -182,7 +182,7 @@ export function ProteinModificationTemplate({
                             const engine = design_task === 'motif_scaffolding' ? 'laproteina' : design_task === 'unconditional' ? generator : 'disco';
                             changeNavigation({ modification_mode: mode, generator: engine, design_task });
                         }}>
-                            <option value="unconditional">{generator === 'rfd4_proteina' || generator === 'complexa' ? 'Native task (configure below)' : 'Explore new folds'}</option>
+                            <option value="unconditional">{generator === 'rfd4_proteina' || generator === 'complexa' ? 'Model-specific design' : 'Explore new folds'}</option>
                             <option value="dna_conditioned">Design around DNA · DISCO</option>
                             <option value="rna_conditioned">Design around RNA · DISCO</option>
                             <option value="ligand_conditioned">Design around a small molecule · DISCO</option>

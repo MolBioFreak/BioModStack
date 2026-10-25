@@ -1,5 +1,5 @@
 import { loadPredictionOperationDetour } from '../lib/binderSelectedRound';
-import { prepareDeNovoContinuation, continuationRoleDefaults, nativeSequenceInput, sequenceDestinations, type DeNovoDestination } from '../lib/deNovoContinuation';
+import { isDeNovoDestination, prepareDeNovoContinuation, continuationRoleDefaults, nativeSequenceInput, sequenceDestinations, type DeNovoDestination } from '../lib/deNovoContinuation';
 import { sourceResultReturn } from '../lib/sourceResultReturn';
 import { deNovoAuthoringEnvelope, deNovoEditorState } from '../lib/deNovoAuthoring';
 import { materializeExactStructure, type StructureSourceSelection } from '../lib/api';
@@ -287,21 +287,25 @@ export function JobSubmission() {
     } : undefined));
     const continuationSource = searchParams.get('source_structure');
     const continuationDestination = searchParams.get('continuation');
-    const continuationKey = `${continuationDestination}:${continuationSource}`;
+    const continuationState = searchParams.get('rfd4_state');
+    const continuationKey = `${continuationDestination}:${continuationSource}:${continuationState}`;
     const appliedContinuation = useRef<string | null>(null);
     const continuationQuery = useQuery({
         queryKey: ['de-novo-continuation', continuationKey],
-        enabled: Boolean(continuationSource && ['redesign', 'sequence', 'prediction'].includes(continuationDestination || '')
+        enabled: Boolean(continuationSource && isDeNovoDestination(continuationDestination)
             && (!projectSetup.active || (projectSetup.setup && !projectSetup.settings.sequence_continuation))),
         staleTime: Infinity, retry: false,
-        queryFn: () => prepareDeNovoContinuation(JSON.parse(continuationSource!) as StructureSourceSelection, continuationDestination as DeNovoDestination),
+        queryFn: () => prepareDeNovoContinuation(JSON.parse(continuationSource!) as StructureSourceSelection, continuationDestination as DeNovoDestination, continuationState ? JSON.parse(continuationState) : undefined),
     });
     useEffect(() => {
         if (!continuationQuery.data || appliedContinuation.current === continuationKey || (projectSetup.active && (!projectSetup.setup || projectSetup.settings.sequence_continuation))) return;
         appliedContinuation.current = continuationKey;
         const preparedValues = continuationDestination === 'sequence'
             ? { sequence_continuation: true, ...continuationQuery.data, ...nativeSequenceInput(selectedModelId || 'proteinmpnn', continuationQuery.data._source_prepared, continuationQuery.data._source_native_prepared) }
-            : continuationQuery.data;
+            : { ...continuationQuery.data, ...(continuationDestination?.startsWith('rfd4_') ? {
+                native_recipe: continuationDestination === 'rfd4_partial' ? 'partial'
+                    : continuationDestination === 'rfd4_inverse' ? 'inverse' : 'annotated',
+            } : {}) };
         // Saved setup fields (including explicit empty roles) are authored values,
         // not missing defaults. Acquisition must not overwrite them on a cold load.
         const values = projectSetup.active ? { ...preparedValues, ...projectSetup.settings } : preparedValues;
