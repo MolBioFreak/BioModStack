@@ -100,6 +100,15 @@ def _protenix_task_identity(task: dict) -> list:
     identities = []
     for wrapper in task.get('sequences', []):
         if 'proteinChain' not in wrapper:
+            # FILE paths are placement, not chemistry. Compare the exact existing
+            # portable binding on both sides; never ignore ligand identity or
+            # mutate the sealed controller manifest/native task.
+            ligand = wrapper.get('ligand', {}).get('ligand')
+            if isinstance(ligand, str) and ligand.startswith('FILE_'):
+                import copy
+                from scripts.lib.portable_inputs import resolve_input_path
+                wrapper = copy.deepcopy(wrapper)
+                wrapper['ligand']['ligand'] = 'FILE_' + str(resolve_input_path(ligand[5:]))
             identities.append(wrapper)
             continue
         chain = wrapper['proteinChain']

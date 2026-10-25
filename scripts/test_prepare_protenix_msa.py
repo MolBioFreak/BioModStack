@@ -550,6 +550,49 @@ def test_native_adapter_generated_roster_copy_preserves_science():
     assert tasks == original
 
 
+def test_prepared_file_ligand_identity_uses_exact_portable_binding(tmp_path, monkeypatch):
+    import copy
+    import pytest
+    from biomodstack_msa_handoff import digest, hydrate_prepared_protenix_task
+    from scripts.lib.portable_inputs import SCHEMA
+    ligand = tmp_path / 'worker' / 'ligand.sdf'
+    ligand.parent.mkdir()
+    ligand.write_bytes(b'exact retained ligand bytes')
+    source = '/controller/results/protenix_ligands/2.sdf'
+    bindings = tmp_path / 'bindings.json'
+    bindings.write_text(json.dumps({'schema': SCHEMA, 'roots': [str(tmp_path)],
+        'bindings': [{'reference': {'source_path': source, 'sha256': digest(ligand.read_bytes()),
+                                  'size_bytes': ligand.stat().st_size}, 'path': str(ligand)}]}))
+    monkeypatch.setenv('BMS_PORTABLE_INPUT_BINDINGS', str(bindings))
+    payload = [{'name': 'complex', 'sequences': [
+        {'proteinChain': {'sequence': 'ACDE', 'id': ['A'], 'count': 1,
+                          'unpairedMsa': '>q\nACDE\n'}},
+        {'ligand': {'id': ['L'], 'count': 1, 'ligand': 'FILE_' + source}}]}]
+    root = tmp_path / 'prepared'
+    root.mkdir()
+    manifest = {'schema': 'bms.msa-inputs.v1', 'settings': {}, 'artifacts': [], 'model_input': payload}
+    path = root / 'msa-inputs.json'
+    path.write_text(json.dumps(manifest))
+    original = path.read_bytes()
+    worker = copy.deepcopy(payload)
+    worker[0]['sequences'][1]['ligand']['ligand'] = 'FILE_' + str(ligand)
+    assert hydrate_prepared_protenix_task(worker, root, digest(original)) == worker
+    assert path.read_bytes() == original
+    assert payload[0]['sequences'][1]['ligand']['ligand'] == 'FILE_' + source
+    changed = copy.deepcopy(worker)
+    changed[0]['sequences'][1]['ligand']['count'] = 2
+    with pytest.raises(ValueError, match='identity'):
+        hydrate_prepared_protenix_task(changed, root, digest(original))
+    other = ligand.with_name('different.sdf')
+    other.write_bytes(b'other chemistry')
+    changed[0]['sequences'][1]['ligand'].update(count=1, ligand='FILE_' + str(other))
+    with pytest.raises(ValueError, match='identity'):
+        hydrate_prepared_protenix_task(changed, root, digest(original))
+    ligand.write_bytes(b'corrupted')
+    with pytest.raises(ValueError, match='digest/size'):
+        hydrate_prepared_protenix_task(worker, root, digest(original))
+
+
 def test_native_adapter_reordered_entities_cannot_consume_prepared(tmp_path):
     import copy
     import pytest
