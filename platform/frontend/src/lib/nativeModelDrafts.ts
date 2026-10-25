@@ -3,9 +3,11 @@ export type NativeTaskDrafts = Record<string, Request>;
 const object = (value: unknown): Request => value && typeof value === 'object' && !Array.isArray(value) ? value as Request : {};
 
 /** Editor identity only; never normalizes or translates scientific inputs. */
-export function nativeTaskKey(model: string, mode: string, contract: string, request: Request): string {
+export function nativeTaskKey(model: string, mode: string, contract: string, request: Request, recipe?: string): string {
     const task = model === 'rfd4_proteina' ? object(request.input).kind : request.task;
-    return JSON.stringify([model, mode, contract, task ?? null]);
+    // Legacy keys are unchanged. Explicit recipes have independent editor identity,
+    // even when they share condition_spec; this token never enters native science.
+    return JSON.stringify([model, mode, contract, ...(recipe ? ['recipe', recipe] : [task ?? null])]);
 }
 
 export function changeNativeTask(

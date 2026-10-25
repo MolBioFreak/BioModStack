@@ -96,6 +96,7 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection }: {
     return <section className="space-y-3 rounded border border-slate-700 p-3" aria-label={`Native source ${slot}`}>
         <div className="flex flex-wrap items-center gap-3"><strong>{slot}</strong><span>{isFile ? 'Managed file or archive' : 'Exact native structure'}</span>
             <button type="button" onClick={() => { epoch.current++; setBusy(false); onRemove(); }}>Remove source {slot}</button></div>
+        {!isFile && <p className="break-all text-sm">{value.candidate ? `Job ${value.candidate.job_id} · ${value.candidate.kind === 'native_document' ? `document ${value.candidate.artifact_id}` : value.candidate.kind === 'design' ? `design ${value.candidate.design_id}` : value.candidate.kind}` : value.job_id ? `Job ${value.job_id}` : 'Retained source'}{value.model_number !== undefined ? ` · MODEL ${value.model_number}` : ''}</p>}
         {value.path && <p className="break-all text-xs">{value.path}</p>}
         <div className="flex flex-wrap gap-3">
             {!isFile && <button type="button" onClick={() => setPicking(!picking)}>Choose document for {slot}</button>}
@@ -117,7 +118,7 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection }: {
             </select></label>
             <p className="text-xs">Original {receipt.native_format}; selected {receipt.format}. {receipt.author_residues.length} observed residues. Original bytes and annotations remain retained.</p>
             {receipt.inspection_error && <p role="status">Native inspection: {receipt.inspection_error}. The retained source is unchanged.</p>}
-            {receipt.source_positions?.length ? <NativePositionControls key={receipt.path} slot={slot} receipt={receipt} onSelection={selection => onSelection?.(slot, receipt, selection)} /> : null}
+            {receipt.source_positions?.length ? <NativePositionControls key={`${receipt.path}:${receipt.model_number}`} slot={slot} receipt={receipt} onSelection={selection => onSelection?.(slot, receipt, selection)} /> : null}
             <MolstarViewer structureDocumentId={receipt.path} structureUrl={buildFileDownloadUrl(receipt.format === 'bcif' ? receipt.decoded_path ?? receipt.path : receipt.path)} format={receipt.format === 'bcif' ? 'cif' : receipt.format} height={360}
                 onMetricSelection={selection => onSelection?.(slot, receipt, selection)} />
         </>}
