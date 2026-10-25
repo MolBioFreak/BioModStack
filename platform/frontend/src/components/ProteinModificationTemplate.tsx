@@ -1,4 +1,6 @@
-import { DeNovoNativeGenerationSettings, LegacyNativeGenerationControls } from './DeNovoNativeGenerationSettings';
+import { DeNovoNativeGenerationSettings } from './DeNovoNativeGenerationSettings';
+import { OtherDeNovoSettings, retainedRfd3Settings } from './OtherDeNovoSettings';
+import { DiscoJobsInput } from './DiscoJobsInput';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -47,7 +49,7 @@ const DE_NOVO_TASK_OPTIONS: Record<DeNovoBackend, Array<{ value: string; label: 
         { value: 'ligand_conditioned', label: 'Ligand conditioned' },
         { value: 'dna_conditioned', label: 'DNA conditioned' },
         { value: 'rna_conditioned', label: 'RNA conditioned' },
-        { value: 'custom_json', label: 'Custom native JSON' },
+        { value: 'custom_json', label: 'Explicit jobs / native JSON' },
     ],
     laproteina: [
         { value: 'unconditional', label: 'Unconditional' },
@@ -185,7 +187,7 @@ export function ProteinModificationTemplate({
                             <option value="rna_conditioned">Design around RNA · DISCO</option>
                             <option value="ligand_conditioned">Design around a small molecule · DISCO</option>
                             <option value="motif_scaffolding">Scaffold a motif · La-Proteina</option>
-                            <option value="custom_json">Custom native JSON · DISCO</option>
+                            <option value="custom_json">Explicit jobs / native JSON · DISCO</option>
                         </select>
                     </label>
                     <label className={labelClass}>Engine
@@ -240,6 +242,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [motifTaskName, setMotifTaskName] = useState(initialString(initialValues, 'laproteina_motif_task_name', ''));
     const [motifPdb, setMotifPdb] = useState(initialString(initialValues, 'laproteina_motif_pdb', ''));
     const [motifInspection, setMotifInspection] = useState(initialValues.laproteina_motif_inspection as LaProteinaMotifInspection | undefined);
+    const [motifAtomSpec, setMotifAtomSpec] = useState<string | null | undefined>(initialValues.laproteina_motif_atom_spec as string | null | undefined);
     const [motifContig, setMotifContig] = useState(initialString(initialValues, 'laproteina_contig_string', ''));
     const [motifSegmentOrder, setMotifSegmentOrder] = useState(initialString(initialValues, 'laproteina_segment_order', ''));
     const [motifAtomSelectionMode, setMotifAtomSelectionMode] = useState(initialString(initialValues, 'laproteina_atom_selection_mode', 'all_atom'));
@@ -256,13 +259,17 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [nucleicSequence, setNucleicSequence] = useState(initialString(initialValues, 'disco_na_sequence', ''));
     const [nativeControls, setNativeControls] = useState<Record<string, unknown>>(() => Object.fromEntries(
         ['pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json'].filter(key => Object.hasOwn(initialValues, key)).map(key => { let value = initialValues[key]; if (typeof value === 'string') { try { value = JSON.parse(value); } catch { /* Retain invalid saved input for explicit repair. */ } } return [key, value]; })));
+    const [rfd3Settings, setRfd3Settings] = useState(() => retainedRfd3Settings(initialValues));
     const hasNativeJobs = Object.hasOwn(nativeControls, 'pcad_disco_jobs_json');
+    const retainedAlternativeParams = Object.fromEntries(Object.entries(initialValues).filter(([key]) => key.startsWith(`${backend}_`) && key !== 'laproteina_motif_inspection'));
     const [error, setError] = useState<string | null>(null);
     const [sequenceDesign, setSequenceDesign] = useState(() => hydrateGeneralSequenceDesign(initialValues));
 
     const draftJson = JSON.stringify({
+        ...retainedAlternativeParams,
         ...sequenceDesign,
         ...nativeControls,
+        ...rfd3Settings,
         ...Object.fromEntries(['laproteina_checkpoint_dir', 'laproteina_data_path', 'disco_checkpoint_path', 'disco_cutlass_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => [key, initialValues[key]])),
         job_name: jobName,
         num_designs: numDesigns,
@@ -277,6 +284,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         laproteina_motif_task_name: motifTaskName,
         laproteina_motif_pdb: motifPdb,
         laproteina_motif_inspection: motifInspection,
+        laproteina_motif_atom_spec: motifAtomSpec,
         laproteina_contig_string: motifContig,
         laproteina_segment_order: motifSegmentOrder,
         laproteina_atom_selection_mode: motifAtomSelectionMode,
@@ -307,7 +315,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             model_id: 'protein_modification_experimental',
             mode: 'de_novo_design',
             params: {
-                ...nativeControls,
+                ...retainedAlternativeParams,
+                ...Object.fromEntries(Object.entries(nativeControls).filter(([key]) => key.startsWith(`pcad_${backend}_`))),
                 modification_mode: 'de_novo_design',
                 generator: backend,
                 backend,
@@ -321,6 +330,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     laproteina_num_steps: laproteinaSteps,
                     laproteina_motif_task_name: motifTaskName || undefined,
                     laproteina_motif_pdb: motifPdb || undefined,
+                    laproteina_motif_atom_spec: motifAtomSpec,
                     laproteina_contig_string: motifContig || undefined,
                     laproteina_segment_order: motifSegmentOrder || undefined,
                     laproteina_atom_selection_mode: motifAtomSelectionMode,
@@ -381,6 +391,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             model_id: 'protein_modification_experimental',
             mode: 'de_novo_design',
             params: {
+                ...rfd3Settings,
                 generator: 'rfd3',
                 generation_mode: 'unconditional_monomer',
                 min_length: minLength,
@@ -461,7 +472,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             <label className={labelClass}>Requested design count
                 <input className={fieldClass} type="number" min={1} max={512} value={numDesigns} onChange={event => setNumDesigns(editedNumber(event.target.value))} />
             </label>
-            {backend === 'laproteina' && <label className={labelClass}>Samples per length
+            {backend === 'laproteina' && !isMotif && <label className={labelClass}>Samples per length
                 <input className={fieldClass} type="number" min={1} max={512} value={laproteinaSamples} onChange={event => setLaproteinaSamples(editedNumber(event.target.value))} />
                 {isMotif && <span className="block text-xs text-[var(--text-secondary)]">Retained for unconditional sampling; not used for motifs.</span>}
             </label>}
@@ -477,8 +488,9 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     <p className="text-xs text-[var(--text-secondary)]">{countHelp}</p>
                 </ProteinDesignPanel> : isMotif ? <>
                     <LaProteinaMotifInput path={motifPdb} contig={motifContig} segmentOrder={motifSegmentOrder}
-                        initialInspection={motifInspection} onInspectionChange={setMotifInspection} onChange={patch => {
+                        atomSpec={motifAtomSpec} initialInspection={motifInspection} onInspectionChange={setMotifInspection} onChange={patch => {
                         if (patch.path !== undefined) setMotifPdb(patch.path);
+                        if (patch.atomSpec !== undefined) setMotifAtomSpec(patch.atomSpec);
                         if (patch.contig !== undefined) setMotifContig(patch.contig);
                         if (patch.segmentOrder !== undefined) setMotifSegmentOrder(patch.segmentOrder);
                     }} />
@@ -487,8 +499,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                             <label className={labelClass}>Atom selection
                                 <select className={fieldClass} value={motifAtomSelectionMode} onChange={event => setMotifAtomSelectionMode(event.target.value)}>
                                     <option value="all_atom">All atom</option><option value="tip_atoms">Tip atoms</option>
-                                    <option value="backbone">Backbone</option><option value="sidechain">Sidechain</option>
-                                    <option value="ca_only">Cα only</option><option value="random">Random</option>
+                                    <option value="bb3o">Backbone N, Cα, C, O</option><option value="ca">Cα only</option>
+                                    {!['all_atom', 'tip_atoms', 'bb3o', 'ca'].includes(motifAtomSelectionMode) && <option value={motifAtomSelectionMode}>{motifAtomSelectionMode} · retained historical value (not a native mode)</option>}
                                 </select>
                             </label>
                             <label className={labelClass}>Motif minimum length
@@ -513,8 +525,9 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     <DeNovoContextInput task={contextTask} ligandPath={ligandSdf} ligandName={ligandName} nativeJsonPath={discoInputJson} sequence={nucleicSequence} onChange={updateContext} />
                 </ProteinDesignPanel>}
             </div>
+            {generator === 'disco' && <DiscoJobsInput value={nativeControls.pcad_disco_jobs_json} path={discoInputJson} onChange={jobs => setNativeControls(current => { const next = { ...current }; if (jobs === undefined) delete next.pcad_disco_jobs_json; else next.pcad_disco_jobs_json = jobs; return next; })} />}
             <div hidden={section !== 'Sampling'} className="space-y-5">
-                <LegacyNativeGenerationControls model={backend} task={designTask} value={nativeControls} onChange={setNativeControls} />
+                <OtherDeNovoSettings model={generator as 'rfd3' | DeNovoBackend} task={designTask} value={generator === 'rfd3' ? rfd3Settings : nativeControls} onChange={generator === 'rfd3' ? setRfd3Settings : setNativeControls} />
                 {designTask !== 'unconditional' && <ProteinDesignPanel title="Generation" description={countHelp}>{generationControls}</ProteinDesignPanel>}
                 <ProteinDesignPanel title={`${engineName} sampling`}>
                     {generator === 'rfd3' ? <div className="grid gap-4 sm:grid-cols-2">

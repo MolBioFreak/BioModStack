@@ -8,6 +8,8 @@ import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
 import { completeCurrentLaunchContext, fetchDesigns, fetchJobById, materializeExactStructure, submitJob, uploadImmutableFile, type Design, type Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
+import { retainedRfd3Conditions } from './Rfd3AdditionalConditions';
+import { OtherDeNovoSettings, retainedRfd3Settings } from './OtherDeNovoSettings';
 import { Rfd3SourceSelector, type Rfd3SelectedSource } from './Rfd3SourceSelector';
 import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
@@ -325,6 +327,7 @@ export function ProteinLocalRedesignTemplate({
     const [rfd3BatchesPerDesign, setRfd3BatchesPerDesign] = useState(1);
     const [rfd3ExtraConfig, setRfd3ExtraConfig] = useState('');
     const [nativeRedesignMode, setNativeRedesignMode] = useState<NativeRedesignMode>('partial_diffusion');
+    const [nativeSettings, setNativeSettings] = useState(() => ({ ...retainedRfd3Settings(initialValues), ...retainedRfd3Conditions(initialValues) }));
     const [nativeRecallContig, setNativeRecallContig] = useState(() => String(initialValues?.contig ?? ''));
     const [nativeRecallFixedAtoms, setNativeRecallFixedAtoms] = useState<unknown>(() => initialValues?.select_fixed_atoms);
     const [nativeProfileId, setNativeProfileId] = useState('generic_local_redesign_v1');
@@ -384,6 +387,7 @@ export function ProteinLocalRedesignTemplate({
 
     useEffect(() => {
         setHydratedValues(initialValues);
+        setNativeSettings({ ...retainedRfd3Settings(initialValues), ...retainedRfd3Conditions(initialValues) });
         if (!initialValues) return;
         setFampnnOverrides(initialValues.fampnn_analysis_overrides);
         if (typeof initialValues.job_name === 'string') setJobName(initialValues.job_name);
@@ -712,6 +716,7 @@ export function ProteinLocalRedesignTemplate({
         : nativeRedesignMode === initialValues?.redesign_mode && Object.hasOwn(initialValues ?? {}, 'partial_t') ? initialValues?.partial_t : undefined;
     const projectDraftJson = JSON.stringify({
         // Preserve invalid imported requests for explicit repair, never broaden to defaults.
+        ...nativeSettings,
         fampnn_analysis_overrides: fampnnOverrides,
         source_structure: selectedTarget?.sourceStructure, _source_prepared: selectedTarget?.prepared,
         input_structure: sourcePath ?? '', redesign_mode: nativeRedesignMode,
@@ -1017,6 +1022,7 @@ export function ProteinLocalRedesignTemplate({
             }
 
             const nativeParams: Record<string, unknown> = {
+                ...nativeSettings,
                 input_structure: resolvedPath,
                 source_mapping: 'bms.rfd3.source-map.v1',
                 redesign_mode: nativeRedesignMode,
@@ -1442,6 +1448,7 @@ export function ProteinLocalRedesignTemplate({
                     {isNativeLocalRedesign && (
                         <div className="mt-4 space-y-4 rounded-xl border p-4" style={themedInsetStyle}>
                             <div>
+                                <OtherDeNovoSettings sourceConditions model="rfd3" task={nativeRedesignMode} value={nativeSettings} onChange={setNativeSettings} />
                                 <div className="text-sm font-semibold">Native RFD3 controls</div>
                                 <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
                                     RFD3 receives the source-bound coordinate and amino-acid roles selected in Mol* and the linked residue strip.
