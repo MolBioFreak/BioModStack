@@ -9,10 +9,12 @@ export const isNativeBinderGeneration = (job: { model_id: string; mode: string; 
     || (job.model_id === 'ppiflow' && ['protein_binder', 'antibody_binder', 'nanobody_binder'].includes(job.mode))));
 export interface NativeGenerationDocument {
     artifact_id: string; target_state?: string | null; model?: number; logical_path?: string; download_url?: string; primary?: boolean; sha256?: string;
+    relation_role?: string; producer_field?: string;
     binder_chains?: string | string[] | null; target_chains?: string | string[] | null;
 }
 const hasChains = (value: NativeGenerationDocument['binder_chains']) => Array.isArray(value) ? value.length > 0 : typeof value === 'string' && value.trim().length > 0;
 export function nativeDocumentLabel(document: NativeGenerationDocument): string {
+    if (document.relation_role) return `${document.relation_role} · ${document.producer_field ?? 'native relation'}`;
     if (hasChains(document.binder_chains) && hasChains(document.target_chains)) return 'Binder–target complex';
     if (hasChains(document.binder_chains) && Object.prototype.hasOwnProperty.call(document, 'target_chains') && !hasChains(document.target_chains)) return 'Binder only';
     return document.target_state || 'Saved structure';
@@ -49,10 +51,20 @@ export function nativeGenerationMetrics(row: NativeGenerationRecord): Record<str
         }));
     }
     const metrics = row.metrics && typeof row.metrics === 'object' && !Array.isArray(row.metrics) ? row.metrics as Record<string, unknown> : {};
-    return Object.hasOwn(row, 'reward') ? { ...metrics, reward: row.reward } : metrics;
+    const typed = Object.fromEntries(Object.entries(metrics).map(([key, value]) => [key,
+        metricDescriptor(row, key)?.value_type === 'number' && typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : value]));
+    return Object.hasOwn(row, 'reward') ? { ...typed, reward: row.reward } : typed;
 }
 
+function metricDescriptor(row: NativeGenerationRecord | undefined, key: string): Record<string, unknown> | undefined {
+    const descriptors = row?.metric_descriptors;
+    if (!descriptors || typeof descriptors !== 'object' || Array.isArray(descriptors)) return undefined;
+    const value = (descriptors as Record<string, unknown>)[key];
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
 export function nativeGenerationMetricUnit(row: NativeGenerationRecord | undefined, key: string): string | undefined {
+    const declared = metricDescriptor(row, key)?.unit;
+    if (typeof declared === 'string') return declared;
     const block = row?.native_metrics;
     if (!block || typeof block !== 'object' || (block as Record<string, unknown>).producer !== 'boltzgen') return undefined;
     const metrics = (block as Record<string, unknown>).metrics;
@@ -64,6 +76,8 @@ export function nativeGenerationMetricUnit(row: NativeGenerationRecord | undefin
 }
 
 export function nativeGenerationMetricDetail(row: NativeGenerationRecord | undefined, key: string): string | undefined {
+    const declared = metricDescriptor(row, key);
+    if (typeof declared?.description === 'string') return [declared.description, declared.unit, declared.source].filter(Boolean).join(' · ');
     if (key === 'reward' && row?.event) return 'Native search reward; not independent prediction confidence';
     const block = row?.native_metrics;
     if (!block || typeof block !== 'object' || (block as Record<string, unknown>).producer !== 'boltzgen') return undefined;

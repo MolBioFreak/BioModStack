@@ -66,7 +66,7 @@ export function nativeSequenceInput(model: string, prepared: StructureMaterializ
 }
 
 // Materialization retains immutable input only; never submits a scientific Job.
-export async function prepareDeNovoContinuation(source: StructureSourceSelection, destination: DeNovoDestination, state?: { path: string; seed?: number }) {
+export async function prepareDeNovoContinuation(source: StructureSourceSelection, destination: DeNovoDestination, state?: { path: string; sha256?: string; seed?: number }) {
     const native = await materializeExactStructure({ ...source, output_format: 'native' });
     // The receiving editor already owns MODEL selection. Keep an unselected
     // ensemble native until then; a PDB-only derivative cannot represent it.
@@ -78,7 +78,7 @@ export async function prepareDeNovoContinuation(source: StructureSourceSelection
     if (destination.startsWith('rfd4_')) return { ...common,
         generator: 'rfd4_proteina', generator_model_id: 'rfd4_proteina',
         native_mode: destination === 'rfd4_evaluate' ? 'evaluate' : 'generate',
-        native_sources: { selected: retainedSource, ...(destination === 'rfd4_state' && state ? { resume: { kind: 'file', path: state.path } } : {}) },
+        native_sources: { selected: retainedSource, ...(destination === 'rfd4_state' && state ? { resume: { kind: 'file', path: state.path, ...(state.sha256 ? { expected_sha256: state.sha256 } : {}) } } : {}) },
         rfd4_request: { input: { kind: 'annotated', slots: ['selected'] },
             ...(destination === 'rfd4_inverse' ? { groups: { generation: 'inverse_folding' } } : {}),
             ...(destination === 'rfd4_state' && state ? { resume_slot: 'resume', ...(state.seed !== undefined ? { settings: { seed: state.seed } } : {}) } : {}) },

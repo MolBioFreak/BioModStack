@@ -71,8 +71,8 @@ it.skipIf(!process.env.BMS_RESULTS_POPULATION_WIRE)('registered producer page re
         }
         expect(calls.filter(call => call.body).every(call => call.body.output_format === 'native' && call.body.model_number === 2)).toBe(true);
         const source = { job_id: 'job', document: { artifact_id: page.records[0].structures[0].artifact_id }, model_number: 2 };
-        const state = await prepareDeNovoContinuation(source, 'rfd4_state', { path: 'retained/state.pt', seed: 0 });
-        expect(state).toMatchObject({ native_sources: { resume: { kind: 'file', path: 'retained/state.pt' } }, rfd4_request: { resume_slot: 'resume', settings: { seed: 0 } } });
+        const state = await prepareDeNovoContinuation(source, 'rfd4_state', JSON.parse(stateRoute.searchParams.get('rfd4_state')!));
+        expect(state).toMatchObject({ native_sources: { resume: { kind: 'file', path: retained.source_path, expected_sha256: retained.sha256 } }, rfd4_request: { resume_slot: 'resume', settings: { seed: 0 } } });
     } finally {
         await act(async () => tree?.unmount()); client.clear(); api.defaults.adapter = original; vi.restoreAllMocks();
     }

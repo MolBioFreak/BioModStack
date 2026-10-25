@@ -234,6 +234,8 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
         if offset <= position < offset + limit:
             records.append((position, raw))
     needed = {row.get('document') for _, row in records}
+    needed.update(relation.get('document') for _, row in records
+                  for relation in row.get('relations', []))
     from urllib.parse import quote
     from paths import to_allowed_relative
     downloads = {}
@@ -259,7 +261,8 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
         artifacts.append({'path': artifact.logical_path, 'bytes': artifact.bytes, 'download_url': download,
                           'artifact_id': artifact.id, 'sha256': artifact.sha256,
                           'source_path': to_allowed_relative(Path(artifact.storage_path)) if download else None,
-                          'role': member_metadata.get(relative, {}).get('role')})
+                          'role': member_metadata.get(relative, {}).get('role'),
+                          'relations': copy.deepcopy(member_metadata.get(relative, {}).get('relations', []))})
         if relative in needed:
             owned[relative] = artifact
             downloads[artifact.id] = download
@@ -284,6 +287,17 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
         else:
             ref = {'kind': 'native_observation', 'job_id': job.id,
                    'publication_ref': index.id, 'native_record_id': key}
+        for relation in row.get('relations', []):
+            related = owned.get(relation.get('document'))
+            if related is not None:
+                relation.update(artifact_id=related.id, sha256=related.sha256,
+                                download_url=downloads[related.id])
+                from services.binder_source_materialization import structure_suffix
+                if related.id not in {item['artifact_id'] for item in structures} and relation['role'] in {'input', 'refold', 'trajectory'} and structure_suffix(Path(related.logical_path)) in {'.pdb', '.cif', '.mmcif', '.bcif', '.cif.gz', '.mmcif.gz', '.cif.zst', '.mmcif.zst'}:
+                    structures.append({'artifact_id': related.id, 'logical_path': related.logical_path,
+                        'sha256': related.sha256, 'download_url': downloads[related.id],
+                        'primary': False, 'relation_role': relation['role'],
+                        'producer_field': relation['producer_field']})
         row.update(candidate_key=key, candidate_ref=ref, structures=structures)
         row['record_kind'] = 'document' if row.get('document') else 'sequence' if row.get('sequence') or row.get('sequences') else 'observation'
         result.append(row)

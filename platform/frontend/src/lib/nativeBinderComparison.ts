@@ -1,17 +1,18 @@
 import type { Job } from './api';
+import { isRfd3Comparison, fetchRfd3ComparisonPage } from './rfd3Comparison';
 import { bc2Page, fetchBC2Page } from './bindcraft2Results';
 import { fetchNativeBinderGeneration, isNativeBinderGeneration, nativeGenerationMetrics, nativeGenerationMetricUnit, type NativeGenerationRecord, type NativeGenerationPage } from './nativeBinderResults';
 import type { NativeCandidateSource } from './binderContinuation';
 
 /** A view of the native publication, never a replacement Design or numerical store. */
 export interface NativeComparisonSet {
-    job: Pick<Job, 'id' | 'name' | 'model_id' | 'mode'>;
+    job: Pick<Job, 'id' | 'name' | 'model_id' | 'mode'> & { params?: Job['params'] };
     records: NativeGenerationRecord[];
     total: number;
     complete: boolean;
     error?: string;
 }
-export const hasNativeComparison = (job: { model_id: string; mode: string }) => job.model_id === 'bindcraft2' || isNativeBinderGeneration(job);
+export const hasNativeComparison = (job: { model_id: string; mode: string; params?: Job['params'] }) => job.model_id === 'bindcraft2' || isNativeBinderGeneration(job) || isRfd3Comparison(job);
 export const nativeComparisonKey = (jobId: string, record: NativeGenerationRecord, index: number) => JSON.stringify([jobId, record.candidate_key ?? record.design_id ?? `record:${index}`]);
 
 /** Reuse the paginated producer reader; later-page failure leaves earlier evidence usable. */
@@ -33,7 +34,8 @@ export async function readNativeComparison(job: NativeComparisonSet['job'], sign
                         const rest = native.arms.map(arm => arm.name).filter(name => name !== native.arm);
                         arms = [native.arm, ...rest];
                     }
-                } else page = await fetchNativeBinderGeneration(job.id, offset, 100, signal);
+                } else if (isRfd3Comparison(job)) page = await fetchRfd3ComparisonPage(job.id, offset, signal);
+                else page = await fetchNativeBinderGeneration(job.id, offset, 100, signal);
                 if (offset === 0) { armTotal = page.total; total += page.total; }
                 if (page.total !== armTotal) return { job, records, total, complete: false, error: 'The native population changed while loading. Refresh to compare one current population.' };
                 const previousCount = records.length;

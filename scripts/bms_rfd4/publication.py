@@ -32,7 +32,25 @@ class NativeObserver:
         name=frame.f_code.co_name
         loc=frame.f_locals
         try:
-            if file.endswith('/rfproteina/search/beam_search.py') and name=='generate' and isinstance(value,list):
+            caller = getattr(frame, 'f_back', None)
+            caller_file = caller.f_code.co_filename.replace('\\\\', '/') if caller else ''
+            caller_name = caller.f_code.co_name if caller else ''
+            if file.endswith('/torch/serialization.py') and name == 'save' and caller_file.endswith('/rfproteina/search/beam_search.py') and caller_name == 'generate':
+                native = caller.f_locals
+                rank, count = native['rank'], native['nsamples']
+                indices = native['select_indices'][rank * count:(rank + 1) * count].tolist()
+                self.events.append({'event': 'native_relation', 'role': 'sampling_state',
+                    'path': str(native['path']), 'producer_field': 'beam_search.generate:torch.save',
+                    'native_example_ids': [native['checkpoint_design_ids'][int(i)] for i in indices],
+                    'input_ids': list(native['batch_ids']), 'step': native['end_step'], 'beam_rank': rank,
+                    'scope': 'checkpoint_batch'})
+            elif file.endswith('/atomworks/io/utils/io_utils.py') and name == 'to_cif_file' and caller_file.endswith('/rfproteina/metrics/utils/metrics_utils.py') and caller_name in {'_write_input_cif', '_write_trajectories_if_present'}:
+                native = caller.f_locals
+                self.events.append({'event': 'native_relation',
+                    'role': 'input' if caller_name == '_write_input_cif' else 'trajectory',
+                    'path': str(loc['path']), 'example_id': native['example_id'],
+                    'producer_field': caller_name, 'trajectory_key': native.get('traj_key')})
+            elif file.endswith('/rfproteina/search/beam_search.py') and name=='generate' and isinstance(value,list):
                 # Empty/early-stop path has no final_results and is valid-empty final beam.
                 finals={id(x) for x in loc.get('final_results',[])}
                 for result in value:
@@ -92,7 +110,36 @@ class NativeObserver:
         finally:sys.setprofile(previous)
 
 
-def publish(root,request,receipt,observer):
+def native_path_relations(root, metrics, producer_root=None):
+    """Pinned clean_metrics metadata fields, not basename/candidate guesses.
+
+    rfproteina.proteina.clean_metrics preserves input paths and oracle-qualified
+    refold/confidence paths. Keep external/missing references as observations.
+    """
+    relations = []
+    for field, value in metrics.items():
+        role = ('input' if field in ('input_cif_path', 'input_json_path') else
+                'refold' if field.endswith('refolded_structure_path') else
+                'refold_confidence' if field.endswith('confidence_json_path') else None)
+        if role is None or not isinstance(value, str) or not value:
+            continue
+        path = Path(value)
+        path = path if path.is_absolute() else root / path
+        # Lexical containment preserves the actual producer document identity;
+        # custody registration separately verifies any retained symlink bytes.
+        try:
+            relative = path.relative_to(producer_root or root).as_posix()
+            if '..' in Path(relative).parts:
+                raise ValueError('outside publication')
+        except ValueError:
+            relative = None
+        relations.append({'role': role, 'producer_field': field, 'native_path': value,
+                          'document': relative,
+                          'availability': 'stored' if relative is not None and (root / relative).is_file() else 'not_retained'})
+    return relations
+
+
+def publish(root,request,receipt,observer,*,producer_root=None):
     root=Path(root).resolve()
     # Native evaluation writes absolute links into its own retained inputs. Make
     # those same links portable, without rewriting or copying the native CIF.
@@ -106,8 +153,9 @@ def publish(root,request,receipt,observer):
     for event in observer.events:
         if event['event']!='native_writer':continue
         record=dict(event)
-        p=Path(record.pop('path'))
-        record['document']=str(p.relative_to(root))
+        original_path=Path(record.pop('path'))
+        record['document']=str(original_path.relative_to(producer_root or root))
+        p=root / record['document']
         record['emitted']=p.is_file()
         record['availability']='stored' if p.is_file() else 'not_retained'
         records.append(record)
@@ -117,15 +165,45 @@ def publish(root,request,receipt,observer):
             with p.open(newline='') as f:
                 for row in csv.DictReader(f):
                     path=Path(row['designed_structure_path'])
-                    records.append({'example_id':row['example_id'],'population':'evaluated','document':str(path.relative_to(root)),
-                                    'emitted':path.is_file(),'availability':'stored' if path.is_file() else 'missing','metrics':row})
+                    relative=path.relative_to(producer_root or root)
+                    records.append({'example_id':row['example_id'],'population':'evaluated','document':str(relative),
+                                    'emitted':(root / relative).is_file(),'availability':'stored' if (root / relative).is_file() else 'missing','metrics':row})
     metrics_by_id={}
     for p in sorted(root.glob('native/inference_metrics/**/per_example_metrics*.csv')):
         with p.open(newline='') as f:
             for row in csv.DictReader(f):
-                if row.get('example_id'):metrics_by_id.setdefault(row['example_id'],{}).update(row)
+                if row.get('example_id'):
+                    metrics_by_id.setdefault(row['example_id'],[]).append(row)
     for record in records:
-        if record['example_id'] in metrics_by_id:record['metrics']=metrics_by_id[record['example_id']]
+        candidates = metrics_by_id.get(record['example_id'], [])
+        # Native design keys include dataset/task. Never merge independent rows
+        # sharing an example_id or let filesystem ordering choose the winner.
+        candidates = [row for row in candidates if all(
+            not record.get(key) or row.get(key) == record[key]
+            for key in ('dataset_name', 'task'))]
+        if len(candidates) == 1:
+            record['metrics'] = candidates[0]
+        elif candidates:
+            record['metric_association'] = {'state': 'ambiguous', 'native_rows': candidates}
+        record['relations'] = native_path_relations(root, record.get('metrics', {}), producer_root)
+        from .metric_definitions import descriptors
+        record['metric_descriptors'] = descriptors(record.get('metrics', {}))
+        for event in observer.events:
+            if event.get('event') != 'native_relation':
+                continue
+            exact = event.get('example_id') == record['example_id'] or (
+                record.get('native_example_id') is not None and
+                record['native_example_id'] in event.get('native_example_ids', []))
+            if exact:
+                path = Path(event['path'])
+                try:
+                    relative = path.relative_to(producer_root or root).as_posix()
+                except ValueError:
+                    relative = None
+                record['relations'].append({**event, 'document': relative,
+                    'availability': 'stored' if relative is not None and (root / relative).is_file() else 'not_retained'})
+        record['relation_observation'] = {role: ('observed' if any(item['role'] == role for item in record['relations']) else 'not_observed_in_publication')
+            for role in ('input', 'refold', 'trajectory', 'sampling_state')}
     artifacts=[]
     for p in sorted(root.rglob('*')):
         if not p.is_file() or p.name=='manifest.json':continue
@@ -133,8 +211,12 @@ def publish(root,request,receipt,observer):
         role=('metrics' if '/inference_metrics/' in '/'+relative or '/evaluation_metrics/' in '/'+relative else
               'sampling_state' if '/sampling_states/' in '/'+relative else
               'input' if relative.startswith('prepared/') else 'native_artifact')
-        artifacts.append({'path':relative,'role':role,'size_bytes':p.stat().st_size})
+        relations = [event for event in observer.events if event.get('event') == 'native_relation'
+                     and Path(event['path']) == Path(producer_root or root) / relative]
+        artifacts.append({'path':relative,'role':relations[0]['role'] if relations else role,
+                          'relations':relations, 'size_bytes':p.stat().st_size})
     document={'contract':'rfd4_proteina_v1','producer':'BMS','model_id':'rfd4_proteina','mode':request['mode'],
+              'producer_root':str(producer_root or root),
               'request':request,'receipt':receipt,'records':records,'artifacts':artifacts,'events':observer.events,
               'observation_errors':observer.errors,'population_completeness':('partial' if observer.errors else
                   'observed_native_returns' if observer.events or records else 'unobserved'),

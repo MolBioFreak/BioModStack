@@ -10,6 +10,9 @@ export function Rfd4RetainedStateContinuation({ page, source, candidate }: { pag
     const states = page.artifacts?.filter(item => item.role === 'sampling_state') ?? [];
     if (!states.length) return null;
     const state = states.find(item => item.artifact_id === selected);
+    const row = page.records.find(item => item.candidate_key === candidate);
+    const relations = Array.isArray(row?.relations) ? row.relations as Array<{ artifact_id?: string; scope?: string }> : [];
+    const association = relations.find(item => item.artifact_id === selected);
     const href = state?.source_path ? new URL(continuationHref(source, 'rfd4_state'), window.location.origin) : undefined;
     if (href && state) href.searchParams.set('rfd4_state', JSON.stringify({ path: state.source_path, artifact_id: state.artifact_id, sha256: state.sha256, ...(seed.trim() && Number.isSafeInteger(Number(seed)) ? { seed: Number(seed) } : {}) }));
     if (href) {
@@ -21,7 +24,7 @@ export function Rfd4RetainedStateContinuation({ page, source, candidate }: { pag
     }
     return <section aria-label="Retained RFD4 sampling state" className="my-3 space-y-2">
         <h5>Retained sampling state continuation</h5>
-        <p>Choose the native state deliberately. These are publication-level files; association with this molecule is not reported. This opens a new editor, not Jobs resume or interrupted RNG replay.</p>
+        <p>Choose the native state deliberately. {association ? `The producer records an exact ${association.scope ?? 'native'} association. A checkpoint batch is not a final-candidate lineage claim.` : 'Association with this molecule is not reported in this publication; no filename-based association is assumed.'} This opens a new editor, not Jobs resume or interrupted RNG replay.</p>
         <label>Sampling state<select aria-label="RFD4 retained state" value={selected} onChange={event => setSelected(event.target.value)}><option value="">Choose retained state</option>{states.map(state => <option key={state.artifact_id} value={state.artifact_id}>{state.path}</option>)}</select></label>
         <label>Continuation seed<input aria-label="RFD4 continuation seed" type="number" value={seed} onChange={event => setSeed(event.target.value)} /></label>
         {href && <a href={`${href.pathname}${href.search}`}>Continue retained RFD4 state</a>}
