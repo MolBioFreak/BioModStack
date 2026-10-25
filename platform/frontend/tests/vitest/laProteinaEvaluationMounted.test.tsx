@@ -9,6 +9,12 @@ import { resolve } from 'node:path';
 import { ProteinModificationTemplate } from '../../src/components/ProteinModificationTemplate';
 import { deNovoRouteValues, isDeNovoModel } from '../../src/components/deNovoWorkflowRoute';
 import { api } from '../../src/lib/api';
+import { isNativeBinderGeneration } from '../../src/lib/nativeBinderResults';
+
+it('routes pending La evaluation to native readback without relabeling generation', () => {
+    expect(isNativeBinderGeneration({ model_id: 'laproteina', mode: 'evaluate' })).toBe(true);
+    expect(isNativeBinderGeneration({ model_id: 'laproteina', mode: 'generate' })).toBe(false);
+});
 
 it('mounts every native metric and emits an ordinary separate Job request', async () => {
     const schema = process.env.BMS_LA_SCHEMA ? JSON.parse(readFileSync(process.env.BMS_LA_SCHEMA, 'utf8')) : { parameter_schema: JSON.parse(execFileSync('python3', ['-c', `import sys,json; sys.path.insert(0, ${JSON.stringify(resolve('../../scripts'))}); from lib.laproteina_contract import evaluation_schema; print(json.dumps(evaluation_schema()))`], { encoding: 'utf8' })) };
