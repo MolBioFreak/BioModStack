@@ -65,7 +65,7 @@ def selected_oracle_assets(mode, params):
              'family': family, 'environment': prefix + '_MODEL_DIR', 'bind_parent': family == 'af2'},
         ))
     # Apply the installed metric tag rules to selected Foldseek consumers too.
-    tags = set(request['settings'].get('metrics_tags', []))
+    tags = set(request.get('settings', {}).get('metrics_tags', []))
     explicit = {name for checkpoint in (dependencies['search'].get('checkpoints') or {}).values()
                 for name in checkpoint.get('metrics', [])}
     metrics = []
@@ -212,6 +212,21 @@ def source_slots_for_params(mode, params):
 
 def generation_settings(mode='generate'):
     from services.native_generation_sources import native_sources_schema, source_slot_schema
-    return {'native_sources_schema': native_sources_schema(),
+    from scripts.lib.rfd4_proteina_contract import _PROFILE
+    # Readback only: never insert inherited values into the sparse request.
+    profiles = {group: {name: copy.deepcopy(row['effective_generation'])
+                        for name, row in _PROFILE['groups'][group].items()
+                        if 'effective_generation' in row}
+                for group in ('generation', 'recycle_strategy')}
+    return {'native_profile_defaults': {
+                'authority': 'selected image Hydra composition',
+                'runtime_image_sha256': _PROFILE.get('runtime_image_sha256'),
+                'reviewed_source_revision': _PROFILE.get('reviewed_source_revision'),
+                'source_revision': _PROFILE.get('source_revision'),
+                'default_generation': copy.deepcopy(_PROFILE['default_effective_generation']),
+                'generation_by_group': profiles,
+                'scope': 'Each entry changes only its named group; combined selections and explicit overrides are resolved by native Hydra at preparation.',
+            } if mode == 'generate' else None,
+            'native_sources_schema': native_sources_schema(),
             'model_id':MODEL_ID,'mode':mode,'parameter_schema':source_slot_schema(parameter_schema(mode), MODEL_ID),
             'request_field':REQUEST_FIELD,'contract':CONTRACT}

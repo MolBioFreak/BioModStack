@@ -14,7 +14,7 @@ from scripts.lib.complexa_contract import Source
 
 def prepare_source(source: Source, source_path: Path, directory: Path, *, ame: bool) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
-    original = directory / ("original" + source_path.suffix)
+    original = directory / ("original" + "".join(source_path.suffixes))
     shutil.copyfile(source_path, original)
     manifest = {"document_id": source.document_id, "original": str(original),
                 "sha256": hashlib.sha256(original.read_bytes()).hexdigest(),

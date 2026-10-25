@@ -13,8 +13,11 @@ process RunComplexa {
     script:
     // Files/weights/image are system-owned bindings, never scientific JSON paths.
     def quote = { value -> "'" + value.toString().replace("'", "'\"'\"'") + "'" }
-    def source = file("${request_dir}/source.pdb").exists() ? "--source ${quote(request_dir.toString() + '/source.pdb')}" : ''
-    def evaluation = file("${request_dir}/evaluation").exists() ? "--evaluation-directory ${quote(request_dir.toString() + '/evaluation')}" : ''
+    def retained = request_dir.toRealPath()
+    def sourcePointer = retained.resolve('source-path.txt')
+    def sourceName = java.nio.file.Files.exists(sourcePointer) ? sourcePointer.text.trim() : 'source.pdb'
+    def source = java.nio.file.Files.exists(retained.resolve(sourceName)) ? "--source ${quote(request_dir.toString() + '/' + sourceName)}" : ''
+    def evaluation = java.nio.file.Files.exists(retained.resolve('evaluation')) ? "--evaluation-directory ${quote(request_dir.toString() + '/evaluation')}" : ''
     def ag = params.complexa_autoguidance_checkpoint ? "--autoguidance-checkpoint ${quote(params.complexa_autoguidance_checkpoint)}" : ''
     """
     python ${quote(params.code_root + '/scripts/run_complexa_inference.py')} \\

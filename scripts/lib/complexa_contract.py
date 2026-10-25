@@ -276,6 +276,8 @@ class Request(Closed):
     operation: Literal["generate", "design", "evaluate", "analysis"] = "generate"
     task_name: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_.-]+$")
     source: Source | None = None
+    evaluation_slots: list[str] = Field(default_factory=list,
+        description="Exact native PDB documents to evaluate; separate from target/motif source.")
     seed: int = 5
     nsamples: int | None = Field(default=None, ge=1)
     min_length: int | None = Field(default=None, ge=1)

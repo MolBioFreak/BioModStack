@@ -5,7 +5,7 @@ from pathlib import Path
 from scripts.lib.complexa_contract import MODEL_ID, PROFILES, Request, normalize_request, parameter_schema
 
 REQUEST_FIELD = 'complexa_request'
-SOURCE_SLOT_FIELDS = {'document_id': ('structure', None)}
+SOURCE_SLOT_FIELDS = {'document_id': ('structure', None), 'evaluation_slots': ('structure', 'items')}
 
 SUPPORTED_MODES = frozenset({"generate", "evaluate"})
 
@@ -32,7 +32,10 @@ def bind_for_job(mode: str, params: dict, directory):
 
 def source_slots_for_params(mode, params):
     request = normalize_job_request(mode, params[REQUEST_FIELD])
-    return [request['source']['document_id']] if request.get('source') else []
+    slots = [request['source']['document_id']] if request.get('source') else []
+    if request.get('operation') in ('evaluate', 'analysis'):
+        slots.extend(request.get('evaluation_slots', []))
+    return list(dict.fromkeys(slots))
 
 
 def prepare_for_job(mode, params, directory, *, resolved_sources, allowed_roots, source_identities):
@@ -41,10 +44,38 @@ def prepare_for_job(mode, params, directory, *, resolved_sources, allowed_roots,
     destination = Path(directory) / 'complexa'
     request = normalize_job_request(mode, params[REQUEST_FIELD])
     write_request(mode, request, destination)
+    # This is a generated staging directory. Re-preparation must not execute
+    # unselected documents left by a previous basket/source selection.
+    previous_source = destination / 'source-path.txt'
+    if previous_source.exists():
+        # Relative filename written exclusively by this preparation owner.
+        (destination / Path(previous_source.read_text().strip()).name).unlink(missing_ok=True)
+        previous_source.unlink()
+    (destination / 'source.pdb').unlink(missing_ok=True)
+    if (destination / 'evaluation').exists():
+        shutil.rmtree(destination / 'evaluation')
+    retained = {}
+    evaluation_slots = request.get('evaluation_slots', []) if mode == 'evaluate' else []
     for slot in source_slots_for_params(mode, params):
         source = _contained(Path(resolved_sources[slot]), [Path(p).resolve() for p in allowed_roots])
-        shutil.copyfile(source, destination / 'source.pdb')
+        paths = []
+        if (request.get('source') or {}).get('document_id') == slot:
+            relative_source = 'source' + ''.join(source.suffixes)
+            shutil.copyfile(source, destination / relative_source)
+            (destination / 'source-path.txt').write_text(relative_source + '\n')
+            paths.append(relative_source)
+        for index, selected in enumerate(evaluation_slots):
+            if selected != slot:
+                continue
+            evaluation = destination / 'evaluation'
+            evaluation.mkdir(exist_ok=True)
+            # Keep input format honest: a CIF is not made into a PDB by renaming.
+            relative = Path('evaluation') / f'{index:04d}{"".join(source.suffixes)}'
+            shutil.copyfile(source, destination / relative)
+            paths.append(relative.as_posix())
+        retained[slot] = {'identity': source_identities.get(slot), 'paths': paths}
     (destination / 'sources.json').write_text(json.dumps(source_identities, indent=2) + '\n')
+    (destination / 'source-bindings.json').write_text(json.dumps(retained, indent=2) + '\n')
     return {**params, REQUEST_FIELD: request, 'complexa_request_dir': str(destination)}
 
 
