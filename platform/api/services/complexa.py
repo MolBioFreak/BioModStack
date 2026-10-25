@@ -5,7 +5,8 @@ from pathlib import Path
 from scripts.lib.complexa_contract import MODEL_ID, PROFILES, Request, normalize_request, parameter_schema
 
 REQUEST_FIELD = 'complexa_request'
-SOURCE_SLOT_FIELDS = {'document_id': ('structure', None), 'evaluation_slots': ('structure', 'items')}
+SOURCE_SLOT_FIELDS = {'document_id': ('structure', None), 'evaluation_slots': ('structure', 'items'),
+                      'motif_csv_slot': ('file', None)}
 
 SUPPORTED_MODES = frozenset({"generate", "evaluate"})
 
@@ -30,11 +31,19 @@ def bind_for_job(mode: str, params: dict, directory):
     return result, (GeneratedInput(relative.as_posix(), (json.dumps(request, indent=2) + '\n').encode()),)
 
 
-def source_slots_for_params(mode, params):
+def structure_slots_for_params(mode, params):
     request = normalize_job_request(mode, params[REQUEST_FIELD])
     slots = [request['source']['document_id']] if request.get('source') else []
     if request.get('operation') in ('evaluate', 'analysis'):
         slots.extend(request.get('evaluation_slots', []))
+    return list(dict.fromkeys(slots))
+
+
+def source_slots_for_params(mode, params):
+    slots = structure_slots_for_params(mode, params)
+    source = normalize_job_request(mode, params[REQUEST_FIELD]).get('source') or {}
+    if source.get('motif_csv_slot'):
+        slots.append(source['motif_csv_slot'])
     return list(dict.fromkeys(slots))
 
 
@@ -52,6 +61,7 @@ def prepare_for_job(mode, params, directory, *, resolved_sources, allowed_roots,
         (destination / Path(previous_source.read_text().strip()).name).unlink(missing_ok=True)
         previous_source.unlink()
     (destination / 'source.pdb').unlink(missing_ok=True)
+    (destination / 'motif.csv').unlink(missing_ok=True)
     if (destination / 'evaluation').exists():
         shutil.rmtree(destination / 'evaluation')
     retained = {}
@@ -59,6 +69,9 @@ def prepare_for_job(mode, params, directory, *, resolved_sources, allowed_roots,
     for slot in source_slots_for_params(mode, params):
         source = _contained(Path(resolved_sources[slot]), [Path(p).resolve() for p in allowed_roots])
         paths = []
+        if (request.get('source') or {}).get('motif_csv_slot') == slot:
+            shutil.copyfile(source, destination / 'motif.csv')
+            paths.append('motif.csv')
         if (request.get('source') or {}).get('document_id') == slot:
             relative_source = 'source' + ''.join(source.suffixes)
             shutil.copyfile(source, destination / relative_source)

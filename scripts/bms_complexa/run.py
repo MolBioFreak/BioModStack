@@ -15,6 +15,7 @@ from scripts.bms_complexa.publication import publish
 
 def run(request: Request, *, upstream: Path, weights: Path, output: Path,
         source_path: Path | None = None, evaluation_directory: Path | None = None,
+        motif_csv_path: Path | None = None,
         autoguidance_checkpoint: Path | None = None, prepare_only: bool = False) -> dict:
     from omegaconf import OmegaConf
     output = output.resolve()
@@ -29,6 +30,11 @@ def run(request: Request, *, upstream: Path, weights: Path, output: Path,
         if source_path is None:
             raise ValueError("source document must be bound by portable-input owner")
         source = prepare_source(request.source, source_path, native / "source", ame=request.task == "AME")
+        if request.source.motif_csv_slot is not None:
+            # Exact retained table, not a generated replacement or filename guess.
+            target = native / 'source' / 'motif.csv'
+            shutil.copyfile(motif_csv_path, target)
+            source['motif_csv_path'] = str(target.resolve())
     cfg = compose_request(request, upstream.resolve(), native, weights.resolve(),
                           prepared_source=source, evaluation_directory=evaluation_directory,
                           autoguidance_checkpoint=autoguidance_checkpoint)
@@ -92,6 +98,7 @@ def main():
     request = Request.model_validate_json(args.request.read_text())
     run(request, upstream=args.upstream, weights=args.weights, output=args.output,
         source_path=args.source, evaluation_directory=args.evaluation_directory,
+        motif_csv_path=args.request.parent / 'motif.csv' if request.source and request.source.motif_csv_slot else None,
         autoguidance_checkpoint=args.autoguidance_checkpoint, prepare_only=args.prepare_only)
 
 

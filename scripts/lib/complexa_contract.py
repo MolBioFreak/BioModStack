@@ -46,6 +46,9 @@ class Source(Closed):
     atom_selection_mode: Literal["ca", "bb3o", "all_atom", "tip_atoms"] = "all_atom"
     motif_only: bool = False
     segment_order: str | None = None
+    motif_csv_slot: str | None = None
+    padding: bool | None = None  # omitted/null inherits indexed/unindexed profile
+    binder_gen_only: bool | None = None  # omitted/null retains native task profile
 
 class BestOfN(Closed):
     replicas: int = Field(default=2, ge=1)
@@ -180,6 +183,7 @@ class RF3Weights(Closed):
 
 class RF3(Closed):
     normalize_pae: bool = True
+    verbose: bool = False
     reward_weights: RF3Weights = Field(default_factory=RF3Weights)
 
 class TMOL(Closed):

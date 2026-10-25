@@ -121,7 +121,8 @@ async def prepare_native_sources(job, session):
         resolved, identities, retained = {}, {}, {}
         for slot in slots:
             binding = bindings[slot]
-            if model == 'complexa' and isinstance(binding, NativeFileSource):
+            if (model == 'complexa' and isinstance(binding, NativeFileSource)
+                    and slot in complexa.structure_slots_for_params(mode, job.params)):
                 binding = StructureSourceRequest(path=binding.path, expected_sha256=binding.expected_sha256)
             if isinstance(binding, NativeFileSource):
                 path = resolve_allowed_path(binding.path)

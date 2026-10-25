@@ -96,7 +96,9 @@ def compose_request(request: Request, upstream: Path, directory: Path, weights: 
         motif = {"_target_": "proteinfoundation.datasets.gen_dataset.MotifFeatures", **common,
                  "atom_selection_mode": s.atom_selection_mode, "motif_only": s.motif_only,
                  "min_length": request.min_length, "max_length": request.max_length,
-                 "segment_order": s.segment_order, "padding": indexed}
+                 "segment_order": s.segment_order, "padding": indexed if s.padding is None else s.padding}
+        if s.motif_csv_slot is not None:
+            motif['motif_csv_path'] = prepared_source['motif_csv_path']
         spec = prepared_source.get("motif_atom_spec")
         if spec:
             motif["motif_atom_spec"] = spec
@@ -106,10 +108,10 @@ def compose_request(request: Request, upstream: Path, directory: Path, weights: 
             motif["nsamples"] = request.nsamples if request.nsamples is not None else 100
         ligand = {"_target_": "proteinfoundation.datasets.gen_dataset.LigandFeatures", **common,
                   "ligand": prepared_source.get("ligand") or s.ligand, "ligand_only": s.ligand_only,
-                  "SMILES": s.SMILES, "use_bonds_from_file": s.use_bonds_from_file}
+                  "SMILES": s.SMILES, "use_bonds_from_file": s.use_bonds_from_file, "pdb_id": s.pdb_id}
         if request.task == "protein_binder":
             ds.conditional_features = [{"_target_": "proteinfoundation.datasets.gen_dataset.TargetFeatures", **common,
-                "binder_gen_only": True, "input_spec": s.input_spec, "target_hotspots": s.target_hotspots,
+                "binder_gen_only": True if s.binder_gen_only is None else s.binder_gen_only, "input_spec": s.input_spec, "target_hotspots": s.target_hotspots,
                 "binder_center": s.binder_center, "pdb_id": s.pdb_id}]
         elif request.task == "ligand_binder":
             ds.conditional_features = [ligand]
