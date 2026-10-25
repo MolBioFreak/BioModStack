@@ -27,11 +27,13 @@ export interface NativeGenerationRecord extends Record<string, unknown> {
     candidate_ref?: import('./binderSelectedRound').CandidateRef; candidate_key?: string; design_id?: string; structures?: NativeGenerationDocument[];
 }
 export interface NativeGenerationPage {
+    record_counts?: { total: number; observations: number; molecular_records: number; populations: Record<string, number> };
+    native_request?: Record<string, unknown> | null;
     receipt: Record<string, unknown>; records: NativeGenerationRecord[];
     publication: Record<string, unknown>; total: number; offset: number; limit: number;
     model_id?: string; owner_model_id?: string; native_execution_status?: string;
     execution_status?: string; population_completeness?: string; observation_errors?: unknown[]; missingness?: unknown;
-    artifacts?: Array<{ path: string; download_url?: string; bytes?: number }>;
+    artifacts?: Array<{ path: string; download_url?: string; bytes?: number; artifact_id?: string; sha256?: string; source_path?: string | null; role?: string | null }>;
 }
 /** Display-only projection: BoltzGen publishes verified scalar records, PPIFlow publishes flat metrics. */
 export function nativeGenerationMetrics(row: NativeGenerationRecord): Record<string, unknown> {
@@ -46,7 +48,8 @@ export function nativeGenerationMetrics(row: NativeGenerationRecord): Record<str
             return [key, record.state === 'ok' && typeof value === 'number' && Number.isFinite(value) ? value : undefined];
         }));
     }
-    return row.metrics && typeof row.metrics === 'object' && !Array.isArray(row.metrics) ? row.metrics as Record<string, unknown> : {};
+    const metrics = row.metrics && typeof row.metrics === 'object' && !Array.isArray(row.metrics) ? row.metrics as Record<string, unknown> : {};
+    return Object.hasOwn(row, 'reward') ? { ...metrics, reward: row.reward } : metrics;
 }
 
 export function nativeGenerationMetricUnit(row: NativeGenerationRecord | undefined, key: string): string | undefined {
@@ -61,6 +64,7 @@ export function nativeGenerationMetricUnit(row: NativeGenerationRecord | undefin
 }
 
 export function nativeGenerationMetricDetail(row: NativeGenerationRecord | undefined, key: string): string | undefined {
+    if (key === 'reward' && row?.event) return 'Native search reward; not independent prediction confidence';
     const block = row?.native_metrics;
     if (!block || typeof block !== 'object' || (block as Record<string, unknown>).producer !== 'boltzgen') return undefined;
     const metrics = (block as Record<string, unknown>).metrics;
@@ -106,7 +110,7 @@ export function nativeGenerationExport(rows: NativeGenerationRecord[], context: 
         owner_model_id: page?.owner_model_id ?? null, adapter: context.adapter,
         publication: page?.publication ?? null, receipt: page?.receipt ?? null,
         scope: context.scope, filter: context.filter, rank: context.rank,
-        counts: { total_known: page?.total ?? null, loaded: context.loaded, exported: rows.length },
+        counts: { total_known: page?.total ?? null, loaded: context.loaded, exported: rows.length, native_records: page?.record_counts ?? null },
         completeness: { loaded_complete: !!page && context.loaded === page.total && !context.readError && !context.loading,
             loading: context.loading, read_error: context.readError,
             population: page?.population_completeness ?? null, execution_status: page?.execution_status ?? null,

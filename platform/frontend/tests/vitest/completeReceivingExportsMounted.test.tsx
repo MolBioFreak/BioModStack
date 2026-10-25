@@ -63,7 +63,7 @@ it('downloads actual emitted native values with failed-page scope, exact refs an
     for (const value of [envelope, metadata]) {
         expect(value.schema).toBe('bms.native-generation-export.v1');
         expect(value.model_id).toBe('rfd4_proteina');
-        expect(value.counts).toEqual({ total_known: 3, loaded: 1, exported: 1 });
+        expect(value.counts).toEqual({ total_known: 3, loaded: 1, exported: 1, native_records: page.record_counts });
         expect(value.scope).toBe('filtered');
         expect(value.filter).toEqual({ search: '', population: 'all', filters: [], selected_only: false });
         expect(value.rank).toMatchObject({ scope: 'matching', missing: 'last' });
@@ -90,7 +90,7 @@ it('exports a retained zero-yield failed receipt without inventing a candidate',
     const input = JSON.parse(readFileSync(process.env.BMS_RECEIVING_PAGE!.replace('partial.json', 'zero.json'), 'utf8'));
     await mount(<NativeBinderGenerationResults jobId="job" adapter={{ key: 'zero', title: 'Zero', label: () => '', fetchPage: async () => input.page }} />);
     const envelope = JSON.parse(await download('Native JSON', 'download-zero.json'));
-    expect(envelope.counts).toEqual({ total_known: 0, loaded: 0, exported: 0 });
+    expect(envelope.counts).toEqual({ total_known: 0, loaded: 0, exported: 0, native_records: input.page.record_counts });
     expect(envelope.records).toEqual([]);
     expect(envelope.completeness).toMatchObject({ loaded_complete: true, execution_status: 'failed' });
     expect(envelope.receipt.metrics_enabled).toBe(false);

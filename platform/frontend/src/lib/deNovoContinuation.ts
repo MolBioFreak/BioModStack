@@ -1,9 +1,14 @@
 import { materializeExactStructure, type StructureSourceSelection, type StructureMaterialization } from './api';
+import { mountedApplicationBase } from './sourceResultReturn';
 
 
 export type ContinuationRecipe = NonNullable<StructureMaterialization['native_recipe']>;
 
-export type DeNovoDestination = 'redesign' | 'sequence' | 'prediction';
+export type Rfd4Destination = 'rfd4_partial' | 'rfd4_inverse' | 'rfd4_evaluate' | 'rfd4_state';
+export type DeNovoDestination = 'redesign' | 'sequence' | 'prediction' | Rfd4Destination;
+export const rfd4Destinations = ['rfd4_partial', 'rfd4_inverse', 'rfd4_evaluate'] as const;
+export const isDeNovoDestination = (value: string | null): value is DeNovoDestination => ['redesign', 'sequence', 'prediction', ...rfd4Destinations, 'rfd4_state'].includes(value ?? '');
+export const continuationLabel = (destination: DeNovoDestination) => ({ redesign: 'Redesign exact structure', sequence: 'Design sequence from exact structure', prediction: 'Predict exact structure', rfd4_partial: 'Refine with partial diffusion', rfd4_inverse: 'Native inverse folding', rfd4_evaluate: 'Evaluate with RFD4', rfd4_state: 'Continue retained RFD4 state' }[destination]);
 export const sequenceDestinations = [
     ['proteinmpnn', 'design', 'ProteinMPNN design'],
     ['fampnn', 'design', 'FA-MPNN design'],
@@ -21,9 +26,14 @@ export function continuationHref(source: StructureSourceSelection, destination: 
     if (destination === 'redesign') {
         query.set('template', 'protein_modification_experimental');
         query.set('modification_mode', 'rfd3_local_redesign');
+    } else if (destination.startsWith('rfd4_')) {
+        query.set('template', 'protein_modification_experimental');
+        query.set('modification_mode', 'de_novo_design');
+        query.set('generator', 'rfd4_proteina');
+        query.set('native_mode', destination === 'rfd4_evaluate' ? 'evaluate' : 'generate');
     } else if (destination === 'prediction') query.set('template', 'structure_prediction');
     else { query.set('model', 'proteinmpnn'); query.set('mode', 'design'); }
-    return `${import.meta.env.BASE_URL}submit?${query}`;
+    return `${mountedApplicationBase()}submit?${query}`;
 }
 
 // Read only the selected materialization's producer document, never Job/input roles.
@@ -56,7 +66,7 @@ export function nativeSequenceInput(model: string, prepared: StructureMaterializ
 }
 
 // Materialization retains immutable input only; never submits a scientific Job.
-export async function prepareDeNovoContinuation(source: StructureSourceSelection, destination: DeNovoDestination) {
+export async function prepareDeNovoContinuation(source: StructureSourceSelection, destination: DeNovoDestination, state?: { path: string; seed?: number }) {
     const native = await materializeExactStructure({ ...source, output_format: 'native' });
     // The receiving editor already owns MODEL selection. Keep an unselected
     // ensemble native until then; a PDB-only derivative cannot represent it.
@@ -65,6 +75,15 @@ export async function prepareDeNovoContinuation(source: StructureSourceSelection
         : await materializeExactStructure({ path: native.path, expected_sha256: native.sha256, output_format: 'pdb', ...(native.model_number == null ? {} : { model_number: native.model_number }) });
     const retainedSource = native.source_structure ?? source;
     const common = { ...continuationRoleDefaults(native, destination), source_structure: retainedSource, _source_prepared: prepared, _source_native_prepared: native };
+    if (destination.startsWith('rfd4_')) return { ...common,
+        generator: 'rfd4_proteina', generator_model_id: 'rfd4_proteina',
+        native_mode: destination === 'rfd4_evaluate' ? 'evaluate' : 'generate',
+        native_sources: { selected: retainedSource, ...(destination === 'rfd4_state' && state ? { resume: { kind: 'file', path: state.path } } : {}) },
+        rfd4_request: { input: { kind: 'annotated', slots: ['selected'] },
+            ...(destination === 'rfd4_inverse' ? { groups: { generation: 'inverse_folding' } } : {}),
+            ...(destination === 'rfd4_state' && state ? { resume_slot: 'resume', ...(state.seed !== undefined ? { settings: { seed: state.seed } } : {}) } : {}) },
+        _rfd4_continuation: destination,
+    };
     if (destination === 'sequence') return { ...common, ...nativeSequenceInput('proteinmpnn', prepared) };
     if (destination === 'redesign') return { ...common, input_structure: prepared.path,
         model_number: prepared.model_number ?? source.model_number,

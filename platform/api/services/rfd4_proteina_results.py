@@ -223,8 +223,14 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
     manifest = index.provenance['native_generation_manifest']
     records = []
     total = 0
+    populations = {}
+    observations = 0
     for position, raw in enumerate(_records(manifest, model)):
         total += 1
+        population = raw.get('population', 'unreported')
+        populations[population] = populations.get(population, 0) + 1
+        if not raw.get('document') and not raw.get('sequence') and not raw.get('sequences'):
+            observations += 1
         if offset <= position < offset + limit:
             records.append((position, raw))
     needed = {row.get('document') for _, row in records}
@@ -233,6 +239,7 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
     downloads = {}
     owned = {}
     artifacts = []
+    member_metadata = {member['path']: member for member in manifest.get('artifacts', [])}
     seen = set()
     # Verify the full custody inventory, but do not instantiate/copy every
     # JobArtifact (each index can contain large model-owned metadata). Stream
@@ -249,7 +256,10 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
             download = '/api/files/download/' + quote(to_allowed_relative(Path(artifact.storage_path)), safe='/')
         except ValueError:
             download = None
-        artifacts.append({'path': artifact.logical_path, 'bytes': artifact.bytes, 'download_url': download})
+        artifacts.append({'path': artifact.logical_path, 'bytes': artifact.bytes, 'download_url': download,
+                          'artifact_id': artifact.id, 'sha256': artifact.sha256,
+                          'source_path': to_allowed_relative(Path(artifact.storage_path)) if download else None,
+                          'role': member_metadata.get(relative, {}).get('role')})
         if relative in needed:
             owned[relative] = artifact
             downloads[artifact.id] = download
@@ -275,6 +285,7 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
             ref = {'kind': 'native_observation', 'job_id': job.id,
                    'publication_ref': index.id, 'native_record_id': key}
         row.update(candidate_key=key, candidate_ref=ref, structures=structures)
+        row['record_kind'] = 'document' if row.get('document') else 'sequence' if row.get('sequence') or row.get('sequences') else 'observation'
         result.append(row)
     return {'receipt': copy.deepcopy(manifest.get('receipt', {})), 'publication': copy.deepcopy(receipt),
             'model_id': model, 'owner_model_id': job.model_id, 'execution_status': job.status,
@@ -283,6 +294,9 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
             'observation_errors': manifest.get('observation_errors', []),
             'missingness': manifest.get('missingness'), 'records': result,
             'offset': offset, 'limit': limit, 'total': total,
+            'record_counts': {'total': total, 'observations': observations,
+                              'molecular_records': total - observations, 'populations': populations},
+            'native_request': copy.deepcopy(manifest.get('request')),
             'artifacts': artifacts}
 
 
