@@ -15,6 +15,8 @@ def obj(properties):
     return {'type': 'object', 'additionalProperties': False, 'properties': properties}
 
 def schema(value, path=''):
+    if isinstance(value, tuple):
+        value = list(value)
     if isinstance(value, dict):
         return obj({k: schema(v, f'{path}.{k}'.strip('.')) for k, v in value.items() if k != 'defaults'})
     kind = {bool:'boolean', int:'integer', float:'number', str:'string', list:'array', type(None):'null'}[type(value)]
@@ -88,6 +90,8 @@ def main(source, image_sha256=None):
         if node is None:return None
         if isinstance(node,ast.Constant) and node.value is None:return {'type':'null'}
         if isinstance(node,ast.Name):
+            if node.id == 'SymmetryLevel':
+                return {'type':'string', 'enum':['atom','subunit']}
             typ={'str':'string','int':'integer','float':'number','bool':'boolean','Path':'string'}.get(node.id)
             return {'type':typ} if typ else None
         if isinstance(node,ast.BinOp) and isinstance(node.op,ast.BitOr):
@@ -126,7 +130,7 @@ def main(source, image_sha256=None):
                 typed=annotation(arg.annotation)
                 try: val=ast.literal_eval(default) if default is not None else None
                 except (ValueError,TypeError):val=None
-                if not isinstance(val,(str,int,float,bool,list,dict,type(None))):continue
+                if not isinstance(val,(str,int,float,bool,list,tuple,dict,type(None))):continue
                 s=schema(val,arg.arg)
                 if typed:
                     s={k:v for k,v in s.items() if k not in ('type','items','properties','additionalProperties')}

@@ -49,6 +49,7 @@ def _settings(mode):
     p=s['properties']
     p['generation']['properties']['n_recycle_schedule']['default']=copy.deepcopy(_PROFILE['default_effective_generation']['n_recycle_schedule'])
     p['generation']['properties']['n_recycle_schedule']['x-default-applicability']='omitted groups: inference_base + thinking_medium'
+    p['global_prefix'] = nullable(S)
     p['subset_to_examples']={'anyOf':[S,array(S),{'type':'null'}],'x-ui-control':'table','default':None}
     p['search']=obj({'checkpoints':{**nullable(table(CHECKPOINT)),'default':None},'beam_width':{**I,'default':4},'n_branch':{**I,'default':4},
         'save_rollouts':{**B,'default':False},'save_criteria':{**nullable(table(THRESHOLD)),'default':None},

@@ -218,11 +218,14 @@ def preview_settings(mode, request, *, image=None):
     request = normalize_request(request, mode)
     image = Path(image) if image is not None else resolve_image('rfd4_proteina.sif', get_container_dir())
     script = Path(__file__).resolve().parents[3] / 'scripts' / 'preview_rfd4_settings.py'
-    completed = subprocess.run(
-        ['apptainer', 'exec', '--cleanenv', '--no-home', '--bind',
-         f'{script.parents[1]}:{script.parents[1]}:ro', str(image), 'python', str(script)],
-        input=json.dumps(request, allow_nan=False), text=True, capture_output=True,
-        timeout=120, check=False)
+    try:
+        completed = subprocess.run(
+            ['apptainer', 'exec', '--cleanenv', '--no-home', '--bind',
+             f'{script.parents[1]}:{script.parents[1]}:ro', str(image), 'python', str(script)],
+            input=json.dumps(request, allow_nan=False), text=True, capture_output=True,
+            timeout=120, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError('Native profile readback timed out; execution admission is unchanged') from exc
     if completed.returncode:
         raise ValueError('Native profile readback unavailable: ' + completed.stderr[-2000:])
     result = json.loads(completed.stdout)
@@ -245,8 +248,11 @@ def generation_settings(mode='generate'):
                 'source_revision': _PROFILE.get('source_revision'),
                 'default_generation': copy.deepcopy(_PROFILE['default_effective_generation']),
                 'generation_by_group': profiles,
-                'scope': 'Each entry changes only its named group; combined selections and explicit overrides are resolved by native Hydra at preparation.',
+                'scope': 'Independent snapshots only. Resolve arbitrary combined selections and explicit overrides through native_settings_preview; do not merge these snapshots in the browser.',
             } if mode == 'generate' else None,
+            'native_settings_preview': {'method': 'POST',
+                'path': f'/api/models/{MODEL_ID}/generation-settings/preview?mode={mode}',
+                'body': 'native request (not JobCreate)', 'admission_dependency': False},
             'native_sources_schema': native_sources_schema(),
             'model_id':MODEL_ID,'mode':mode,'parameter_schema':source_slot_schema(parameter_schema(mode), MODEL_ID),
             'request_field':REQUEST_FIELD,'contract':CONTRACT}

@@ -17,11 +17,11 @@ class NoisyGuidance(TypedDict, total=False):
     enabled: bool
     guide_struct: bool
     omega_struct: float
-    uncond_seq_time_mode: str
+    uncond_seq_time_mode: Literal["fixed", "offset", "proportional"]
     uncond_seq_time: float
     guide_seq: bool
     omega_seq: float
-    uncond_struct_time_mode: str
+    uncond_struct_time_mode: Literal["fixed", "offset", "proportional"]
     uncond_struct_time: float
     guidance_start_frac: float
     guidance_end_frac: float

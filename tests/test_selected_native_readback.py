@@ -38,7 +38,7 @@ def test_installed_selected_profiles(generation, recycle):
         pytest.skip('Selected installed image required')
     r = {'input': {'kind': 'unconditional', 'name': 'preview', 'chains': [{'chain_id': 'A', 'min_length': 40, 'max_length': 40}]},
          'groups': {'generation': generation, 'recycle_strategy': recycle},
-         'settings': {'seed': 0, 'generation': {'args': {'nsteps': 37}, 'n_recycle_schedule': None}}}
+         'settings': {'seed': 0, 'global_prefix': '', 'generation': {'args': {'nsteps': 37}, 'n_recycle_schedule': None}}}
     original = copy.deepcopy(r)
     done = subprocess.run(['apptainer','exec','--cleanenv','--bind', f'{ROOT}:{ROOT}:ro', image,
                            'python',str(ROOT/'scripts/preview_rfd4_settings.py')], input=json.dumps(r), text=True, capture_output=True)
@@ -50,5 +50,51 @@ def test_installed_selected_profiles(generation, recycle):
     assert effective['generation']['args']['nsteps'] == 37
     assert effective['generation']['n_recycle_schedule'] is None
     assert effective['seed'] == 0
+    assert effective['global_prefix'] == ''
     assert effective['generation']['args']['inverse_folding'] == (generation == 'inverse_folding')
     assert effective['out_dir'] is None
+
+
+def test_installed_metric_tuple_defaults_and_explicit_symmetry():
+    image = os.environ.get('BMS_TEST_RFD4_IMAGE')
+    if not image:
+        pytest.skip('Selected RFD4 image required')
+    r = {'input': {'kind':'unconditional','name':'metric','chains':[{'chain_id':'A','min_length':40,'max_length':40}]},
+         'metric_extensions': [
+             {'name':'rmsd_exact','section':'inline_metrics','implementation':'rfproteina.metrics.gt_structure_comparison.StructureComparisonMetric','kwargs':{'resolve_symmetry':[]}},
+             {'name':'lddt_atom','section':'inline_metrics','implementation':'rfproteina.metrics.lddt_metric.AllAtomLDDT','kwargs':{'resolve_symmetry':['atom']}}]}
+    done = subprocess.run(['apptainer','exec','--cleanenv','--bind',f'{ROOT}:{ROOT}:ro',image,'python',str(ROOT/'scripts/preview_rfd4_settings.py')], input=json.dumps(r), text=True, capture_output=True)
+    assert done.returncode == 0, done.stderr
+    metrics = json.loads(done.stdout)['effective_config']['metrics']['inline_metrics']
+    assert metrics['rmsd_exact']['resolve_symmetry'] == []
+    assert metrics['lddt_atom']['resolve_symmetry'] == ['atom']
+
+
+def test_installed_rfd3_symmetry_schema_and_skip_existing():
+    image = os.environ.get('BMS_TEST_FOUNDRY_IMAGE')
+    if not image:
+        pytest.skip('Selected Foundry image required')
+    code = '''
+import ast, json
+from pathlib import Path
+from typing import Optional
+from pydantic import BaseModel, ConfigDict, Field
+import yaml
+root = Path('/usr/local/lib/python3.12/dist-packages/rfd3')
+tree = ast.parse((root/'inference/symmetry/symmetry_utils.py').read_text())
+node = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'SymmetryConfig')
+exec(compile(ast.Module(body=[node],type_ignores=[]), '<installed SymmetryConfig>', 'exec'))
+value = SymmetryConfig(id='C3', is_symmetric_motif=False, extra_native=0)
+print(json.dumps({'schema': SymmetryConfig.model_json_schema(), 'value':value.model_dump(),
+ 'skip_existing':yaml.safe_load((root/'configs/inference_engine/rfdiffusion3.yaml').read_text())['skip_existing']}))
+'''
+    done = subprocess.run(['apptainer','exec','--cleanenv',image,'python','-c',code], text=True, capture_output=True)
+    assert done.returncode == 0, done.stderr
+    native = json.loads(done.stdout)
+    from lib.rfd3_scientific_settings import scientific_inventory
+    inventory = scientific_inventory()
+    props = inventory['conditioning']['symmetry']['properties']
+    assert set(props) == set(native['schema']['properties'])
+    assert {k:v['default'] for k,v in props.items()} == {k:v['default'] for k,v in native['schema']['properties'].items()}
+    assert native['value']['extra_native'] == 0
+    assert native['skip_existing'] == inventory['execution']['skip_existing']['default']
