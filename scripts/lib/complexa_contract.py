@@ -33,7 +33,9 @@ class Source(Closed):
     # Bound by existing StructureSourceRequest/portable-input owner, never a URL/path.
     document_id: str = Field(min_length=1)
     input_spec: str | None = None
-    target_hotspots: list[int] | None = None
+    target_hotspots: list[str | int] | None = Field(default=None, description=(
+        "Native chain+residue tokens, e.g. A1. Historical integers are preserved unchanged; "
+        "the selected native parser does not match integers to residues. No index conversion is inferred."))
     binder_center: tuple[float, float, float] | None = None
     pdb_id: str | None = None
     ligand: str | list[str] | None = None
@@ -268,7 +270,47 @@ class Filter(Closed):
     dedup_sequence: bool = True
     reward_threshold: float | None = None
 
+class Threshold(Closed):
+    # Native parse_threshold_spec aliases; exclude_unset keeps native defaults.
+    threshold: float | None = None
+    value: float | None = None
+    op: str | None = None
+    operator: str | None = None
+    scale: float | None = None
+    column_prefix: str | None = None
+
+ThresholdSpec = float | Threshold | tuple[float] | tuple[float, str] | tuple[float, str, float] | tuple[float, str, float, str]
+ModelThresholds = dict[str, dict[str, ThresholdSpec]]
+
+class SuccessCriterion(Closed):
+    column: str
+    threshold: float
+    op: str
+
+class MotifBinderThresholds(Closed):
+    binder: dict[str, ThresholdSpec] = Field(default_factory=dict)
+    motif: list[SuccessCriterion] = Field(default_factory=list)
+
 class Analysis(Closed):
+    # Analysis-only native consumers: these do not gate generation/publication.
+    allatom_codesignability_thresholds: ModelThresholds | None = None
+    ca_codesignability_thresholds: ModelThresholds | None = None
+    designability_thresholds: ModelThresholds | None = None
+    codesignability_thresholds: ModelThresholds | None = None
+    motif_region_designability_thresholds: ModelThresholds | None = None
+    motif_region_codesignability_thresholds: ModelThresholds | None = None
+    motif_rmsd_thresholds: dict[str, float | Threshold] | None = None
+    motif_seq_rec_threshold: Threshold | None = None
+    success_thresholds: dict[str, ThresholdSpec] | None = None
+    motif_binder_success_thresholds: MotifBinderThresholds | None = None
+    motif_success_criteria: list[SuccessCriterion] | None = None
+    sequence_types: list[str] | None = None
+    folding_model: str | None = None
+    mmseqs_coverage: float | None = None
+    mmseqs_min_seq_id: float | None = None
+    compute_residue_type_distribution: bool | None = None
+    compute_timing: bool | None = None
+    require_all_thresholds: bool | None = None
     limit: int | None = None
     analysis_modes: list[Literal["binder", "monomer", "motif", "motif_binder"]] | None = None
     compute_diversity: bool | None = None

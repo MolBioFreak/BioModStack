@@ -548,7 +548,7 @@ def _build_native_spec(
             partial_t, "partial_t", default=2.0 if mode == "partial_diffusion" else None
         )
 
-    for field in ("symmetry", "infer_ori_strategy", "plddt_enhanced", "is_non_loopy", "redesign_motif_sidechains"):
+    for field in ("symmetry", "infer_ori_strategy", "plddt_enhanced", "is_non_loopy", "redesign_motif_sidechains", "extra", "dialect"):
         if field in params:
             native.update(conditioning_settings({field: params[field]}))
 

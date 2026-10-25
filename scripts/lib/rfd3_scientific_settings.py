@@ -181,6 +181,10 @@ CONDITION_FIELDS = {
                            "description": "Native contig/ligand names not to symmetrize."},
         "is_symmetric_motif": {"type": "boolean", "default": True},
     }, "additionalProperties": True},
+    "extra": {"type": "object", "additionalProperties": True,
+              "description": "Native output metadata, not conditioning features; runtime adds task/example identifiers."},
+    "dialect": {"type": "integer",
+                "description": "Native parser dispatch: values below 2 select legacy schema; otherwise release schema. Not a sampling option."},
     "ligand": {"type": "string"},
     "length": {"type": "string"},
     "ori_token": {"type": "vector3"},
@@ -218,6 +222,14 @@ def conditioning_settings(raw):
             # Native SymmetryConfig permits additional options; do not invent a
             # second group/applicability policy here. Its parser is authoritative.
             result[key] = dict(value)
+        elif kind == "object":
+            if not isinstance(value, Mapping):
+                raise ValueError(f"{key} requires a metadata object")
+            result[key] = dict(value)
+        elif key == "dialect":
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError("dialect requires an integer")
+            result[key] = value
         elif kind == "vector3":
             if not isinstance(value, list) or len(value) != 3:
                 raise ValueError(f"{key} requires three coordinates")
