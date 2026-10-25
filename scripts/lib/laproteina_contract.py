@@ -78,6 +78,29 @@ def settings_schema() -> dict:
                            for key, spec in (CONTROLS | MOTIF_CONTROLS).items()}}
 
 
+EVALUATION_CONTROLS = {
+    **{key: {"type": "boolean"} for key in (
+        "compute_designability", "compute_codesignability", "compute_co_sequence_recovery",
+        "designability_motif_eval", "codesignability_motif_eval", "compute_motif_rmsd",
+        "keep_folding_outputs")},
+    **{key: {"type": "array", "items": {"type": "string", "enum": ["ca", "bb3o", "all_atom"]}}
+       for key in ("designability_modes", "codesignability_modes", "motif_rmsd_modes")},
+    # The pin mentions other models, but only imports/implements run_esmfold.
+    **{key: {"type": "array", "items": {"type": "string", "enum": ["esmfold"]}}
+       for key in ("designability_folding_models", "codesignability_folding_models")},
+}
+
+
+def evaluation_schema() -> dict:
+    return {"type": "object", "additionalProperties": False,
+            "required": ["source_directory", "config_path", "job_id", "ncpus"],
+            "properties": {
+                "source_directory": {"type": "string", "description": "Retained native output directory, including motif CSV when applicable."},
+                "config_path": {"type": "string", "description": "Retained composed native generation config."},
+                "job_id": {"type": "integer"}, "ncpus": {"type": "integer"},
+                "metrics": {"type": "object", "additionalProperties": False, "properties": EVALUATION_CONTROLS}}}
+
+
 def cad_parameter_definitions() -> list[dict]:
     """Additive typed catalog leaves for the existing CAD model registry.
 

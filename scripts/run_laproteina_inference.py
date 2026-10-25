@@ -138,14 +138,71 @@ def collect_outputs(request: dict, invocation: dict, output_dir: Path, native_re
     return manifest
 
 
+def evaluate_native(request: dict, output_dir: Path, *, prepare_only=False):
+    """Separate native evaluation of retained outputs; never invokes generation.
+
+    Preserve native filenames and motif tables in a private copy, because the
+    native evaluator creates per-sample folding directories beside its inputs.
+    """
+    import hashlib
+    from omegaconf import OmegaConf
+    from lib.laproteina_contract import EVALUATION_CONTROLS
+    source = Path(request['source_directory']).resolve()
+    config_path = Path(request['config_path']).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    attempt = Path(tempfile.mkdtemp(prefix='evaluation_', dir=output_dir)).resolve()
+    samples = attempt / 'samples'
+    shutil.copytree(source, samples)
+    cfg = OmegaConf.load(config_path)
+    for key, value in request.get('metrics', {}).items():
+        if key not in EVALUATION_CONTROLS:
+            raise ValueError(f'Unsupported native evaluation control: {key}')
+        OmegaConf.update(cfg, 'generation.metric.' + key, value, merge=False, force_add=True)
+    OmegaConf.save(cfg, attempt / 'effective_config.yaml')
+    receipt = {'operation': 'evaluate', 'source_revision': SOURCE_REVISION,
+               'requested': request, 'effective_config': OmegaConf.to_container(cfg, resolve=False),
+               'source_config_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
+               'source_directory': str(source), 'consumed_directory': str(samples),
+               'execution_status': 'prepared'}
+    receipt_path = attempt / 'evaluation.json'
+    receipt_path.write_text(json.dumps(receipt, indent=2))
+    if prepare_only:
+        return receipt
+    # Use the actual native function, not CLI main's compute_designability-only
+    # dispatch (which leaves df undefined for codesignability-only requests).
+    upstream = Path(os.environ.get('LAPROTEINA_REPO', '/opt/laproteina')).resolve()
+    sys.path.insert(0, str(upstream))
+    from proteinfoundation import evaluate
+    evaluate.cfg = cfg
+    evaluate.root_path = str(samples)
+    try:
+        paths = evaluate.split_by_job(cfg, request['job_id'], is_des=True)
+        frame = evaluate.compute_traditional_metrics(cfg.generation.metric, paths,
+                                                     request['job_id'], request['ncpus'])
+        result = attempt / 'results.csv'
+        frame.to_csv(result, index=False)
+        receipt.update(execution_status='completed', result_path=str(result), sample_count=len(paths))
+    except Exception:
+        receipt['execution_status'] = 'failed'
+        raise
+    finally:
+        receipt_path.write_text(json.dumps(receipt, indent=2))
+    return receipt
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", required=True)
     parser.add_argument("--input-dir", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--prepare-only", action="store_true", help="CPU-only native Hydra composition; no weights loaded")
+    parser.add_argument("--evaluate", action="store_true", help="Evaluate retained native outputs; no generation")
     args = parser.parse_args()
     request_path = resolve_input_path(args.request)
+    if args.evaluate:
+        print(json.dumps(evaluate_native(json.loads(request_path.read_text()),
+                                        Path(args.output_dir).resolve(), prepare_only=args.prepare_only)))
+        return
     request = bind_native_document(json.loads(request_path.read_text()), "protein-cad", owner=request_path)
     output_dir = Path(args.output_dir).resolve()
     invocation = _configure_laproteina(request, output_dir)

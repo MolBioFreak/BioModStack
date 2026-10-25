@@ -461,8 +461,10 @@ async def get_generation_settings(model_id: str, mode: str, generator: str | Non
             return {'model_id': selected, 'mode': task or 'unconditional_monomer',
                     **scientific_inventory()}
         if selected == 'laproteina':
-            from scripts.lib.laproteina_contract import settings_schema, PROFILES, resolve_profile
+            from scripts.lib.laproteina_contract import settings_schema, evaluation_schema, PROFILES, resolve_profile
             return {'model_id': selected, 'mode': native_mode, 'parameter_schema': settings_schema(),
+                    'evaluation_schema': evaluation_schema(),
+                    'evaluation_scope': 'Separate retained-output runner operation; not an implicit generation stage',
                     'profiles': {name: resolve_profile(name) for name in PROFILES}}
         if selected == 'disco':
             from pydantic import TypeAdapter
