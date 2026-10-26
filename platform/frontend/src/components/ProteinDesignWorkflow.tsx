@@ -21,10 +21,15 @@ export const themedInputStyle: CSSProperties = {
 export function ProteinDesignSections({ label, sections, active, onChange }: {
     label: string; sections: readonly string[]; active: string; onChange: (section: string) => void;
 }) {
-    return <nav aria-label={label} className="flex flex-wrap gap-2" data-bms-protein-design-sections>
-        {sections.map(item => <button key={item} type="button" aria-pressed={active === item}
-            onClick={() => onChange(item)} className="rounded-lg border px-3 py-2 text-sm"
-            style={active === item ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}>{item}</button>)}
+    return <nav aria-label={label} data-bms-protein-design-sections>
+        <select aria-label={label} className="sm:hidden w-full rounded-lg bg-[var(--bg-tertiary)] px-3 py-2 text-sm" value={active} onChange={event => onChange(event.target.value)}>
+            {sections.map(item => <option key={item} value={item}>{item}</option>)}
+        </select>
+        <div className="hidden sm:flex flex-wrap gap-2">
+            {sections.map(item => <button key={item} type="button" aria-pressed={active === item}
+                onClick={() => onChange(item)} className="rounded-lg px-3 py-1.5 text-sm"
+                style={active === item ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}>{item}</button>)}
+        </div>
     </nav>;
 }
 

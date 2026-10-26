@@ -41,13 +41,14 @@ function withModel(source: StructureSourceSelection, model: number | undefined):
     return next;
 }
 
-function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selectedIdentities, onInspection }: {
+function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selectedIdentities, onInspection, initialReceipt }: {
     slot: string; value: NativeGenerationSourceBinding; onChange: (value: NativeGenerationSourceBinding) => void;
     selectedIdentities?: Rfd4NativeSelectionIdentity[];
+    initialReceipt?: StructureMaterialization;
     onInspection?: (slot: string, receipt: StructureMaterialization, binding: NativeGenerationSourceBinding) => void;
     onRemove: () => void; onSelection?: (slot: string, receipt: StructureMaterialization, selection: MetricSelection) => void;
 }) {
-    const [receipt, setReceipt] = useState<StructureMaterialization>();
+    const [receipt, setReceipt] = useState<StructureMaterialization | undefined>(initialReceipt);
     const [saved, setSaved] = useState<{ receipt: StructureMaterialization; rows: SavedCondition[] }>();
     const [savedError, setSavedError] = useState('');
     const savedRows = saved && saved.receipt === receipt ? saved.rows : [];
@@ -127,25 +128,63 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
             if (isFile) { epoch.current++; onChange({ kind: 'file', path }); setBrowser(false); }
             else void acquire({ path, output_format: 'native' });
         }} />}
-        {busy && <p role="status">Preparing selected native document…</p>}
+        {busy && <p role="status">Loading structure…</p>}
         {error && <p role="alert">{error}</p>}
         {receipt && !isFile && <>
             <label>Source MODEL<select aria-label={`Source MODEL for ${slot}`} value={receipt.model_number ?? ''} onChange={event => void acquire(withModel(value, event.target.value === '' ? undefined : Number(event.target.value)))}>
                 <option value="">Retain native models</option>{receipt.model_numbers.map(number => <option key={number} value={number}>{number}</option>)}
             </select></label>
-            <p className="text-xs">Original {receipt.native_format}; selected {receipt.format}. {receipt.author_residues.length} observed residues. Original bytes and annotations remain retained.</p>
+            <p className="text-xs">{receipt.author_residues.length} residues · {receipt.native_format}</p>
             {receipt.inspection_error && <p role="status">Native inspection: {receipt.inspection_error}. The retained source is unchanged.</p>}
             {receipt.source_positions?.length ? <NativePositionControls key={`${receipt.path}:${receipt.model_number}`} slot={slot} receipt={receipt} onSelection={selection => onSelection?.(slot, receipt, selection)} /> : null}
-            {receipt.model_numbers.length > 1 && receipt.model_number == null && <p>All-model saved values remain readable below. The current viewer metric adapter has no model-specific coloring; select a source MODEL to display its saved roles without conflating models. Manual requests are unchanged.</p>}
+            {receipt.model_numbers.length > 1 && receipt.model_number == null && <p>Select a MODEL to view its saved condition colors. All-model annotations remain available below.</p>}
             {receipt.format !== 'pdb' && <button type="button" onClick={() => void inspectSaved()}>Read saved conditions for {slot}</button>}
             {savedError && <p role="status">Saved annotation readback: {savedError}. Source and manual request are unchanged.</p>}
-            {saved?.receipt === receipt && <details><summary>Saved annotation targets and groups ({savedRows.length})</summary><p>Saved roles are metric layers; temporary selection remains separate. These values are retained source annotations, not unsaved request expressions or generated coordinates.</p>{!savedRows.length && <p>No recognized saved condition annotations in this source.</p>}<div className="overflow-auto max-h-64"><table><thead><tr><th>Condition</th><th>Exact source position</th><th>Saved value</th></tr></thead><tbody>{savedRows.map((row, i) => <tr key={i}><td>{row.family}</td><td>{row.identity.documentId} · MODEL {row.identity.modelNumber} · {row.identity.labelAsymId}:{row.identity.labelSeqId} · {row.identity.labelAtomId} · atom {row.identity.atomIndex}</td><td>{Array.isArray(row.value) ? row.value.join(', ') : row.value}</td></tr>)}</tbody></table></div></details>}
+            {saved?.receipt === receipt && <details><summary>Saved annotation targets and groups ({savedRows.length})</summary><p>Saved annotations are shown separately from your current selection.</p>{!savedRows.length && <p>No recognized saved condition annotations in this source.</p>}<div className="overflow-auto max-h-64"><table><thead><tr><th>Condition</th><th>Exact source position</th><th>Saved value</th></tr></thead><tbody>{savedRows.map((row, i) => <tr key={i}><td>{row.family}</td><td>{row.identity.documentId} · MODEL {row.identity.modelNumber} · {row.identity.labelAsymId}:{row.identity.labelSeqId} · {row.identity.labelAtomId} · atom {row.identity.atomIndex}</td><td>{Array.isArray(row.value) ? row.value.join(', ') : row.value}</td></tr>)}</tbody></table></div></details>}
             <MolstarViewer structureDocumentId={receipt.path} structureUrl={buildFileDownloadUrl(receipt.format === 'bcif' ? receipt.decoded_path ?? receipt.path : receipt.path)} format={receipt.format === 'bcif' ? 'cif' : receipt.format} height={360}
                 metricLayers={receipt.model_numbers.length === 1 || receipt.model_number != null ? savedConditionLayers(savedRows, receipt.path) : []}
                 showSequenceTrack controlledResidueSelection residueSelections={selectedIdentities ?? []}
                 onMetricSelection={selection => onSelection?.(slot, receipt, selection)} />
         </>}
     </section>;
+}
+
+/** Task-facing acquisition; the existing row owns materialization and stale reads. */
+export function NativeSourceInput({ label, value, bindings, onChange, onAcquire, onInspection, inspection }: {
+    label: string; value: string; bindings: NativeGenerationSourceBindings | undefined;
+    onChange: (slot: string) => void;
+    onAcquire: (source: NativeGenerationSourceBinding) => string;
+    inspection?: StructureMaterialization;
+    onInspection?: (slot: string, receipt: StructureMaterialization, binding: NativeGenerationSourceBinding) => void;
+}) {
+    const [open, setOpen] = useState(false);
+    const committedSlot = useRef<string | undefined>(undefined);
+    const latest = useRef({ onAcquire, onInspection }); latest.current = { onAcquire, onInspection };
+    const binding = bindings?.[value];
+    const structureBindings = Object.entries(bindings ?? {}).filter(([, source]) => !fileBinding(source));
+    const displayName = (slot: string, source: NativeGenerationSourceBinding) => {
+        const path = source.path?.split(/[\\/]/).filter(Boolean).at(-1);
+        const model = !fileBinding(source) ? source.model_number ?? source.document?.model ?? (source.candidate?.kind === 'native_document' ? source.candidate.model : source.candidate?.kind === 'design' ? source.candidate.document?.model : undefined) : undefined;
+        return `${path ?? slot}${model != null ? ` · MODEL ${model}` : ''}`;
+    };
+    return <div className="space-y-2 min-w-0" data-native-source-input>
+        <div className="flex flex-wrap items-end gap-2">
+            <label>{label}<select aria-label={label} value={value} onChange={event => { setOpen(false); onChange(event.target.value); }}>
+                <option value="">Use existing input</option>
+                {value && !structureBindings.some(([slot]) => slot === value) && <option value={value}>{value} · not bound</option>}
+                {structureBindings.map(([slot, source]) => <option key={slot} value={slot}>{displayName(slot, source)}</option>)}
+            </select></label>
+            <button type="button" aria-label={`Choose structure for ${label}`} onClick={() => { committedSlot.current = undefined; setOpen(true); }}>Choose structure</button>
+            {binding && !fileBinding(binding) && <button type="button" aria-label={`Inspect structure for ${label}`} onClick={() => setOpen(!open)}>Inspect</button>}
+        </div>
+        {open && <div className="space-y-2" role="group" aria-label={`Choose structure for ${label}`}>
+            <button type="button" onClick={() => setOpen(false)}>{binding ? 'Close' : 'Cancel'}</button>
+            <NativeSourceRow slot={value || label} value={binding && !fileBinding(binding) ? binding : { output_format: 'native' }} initialReceipt={inspection}
+                onChange={source => { committedSlot.current = latest.current.onAcquire(source); if (!value) setOpen(false); }}
+                onRemove={() => setOpen(false)}
+                onInspection={(_slot, receipt, source) => latest.current.onInspection?.(committedSlot.current ?? value, receipt, source)} />
+        </div>}
+    </div>;
 }
 
 /** Bind exact documents to native logical names; never compile their science. */
@@ -159,12 +198,11 @@ export function DeNovoNativeSources({ value, onChange, onSelection, selection, o
     const [name, setName] = useState('');
     const [kind, setKind] = useState('structure');
     return <div className="space-y-3" data-native-source-bindings>
-        <p className="text-sm">Bind the native request’s source names to exact documents. Annotated inputs keep their native annotations; raw-input preparation remains the selected native operation. File/archive bindings are for resume, adapters and declared assets, not structures.</p>
         {Object.entries(value ?? {}).map(([slot, binding]) => <NativeSourceRow key={slot} slot={slot} value={binding} onInspection={onInspection} onSelection={onSelection} selectedIdentities={selection?.slot === slot ? selection.identities : []}
             onChange={next => onChange({ ...value, [slot]: next })} onRemove={() => { const next = { ...value }; delete next[slot]; onChange(next); }} />)}
-        <div className="flex flex-wrap gap-3"><label>Native source name<input aria-label="Native source name" value={name} onChange={event => setName(event.target.value)} /></label>
-            <label>Source kind<select aria-label="Native source kind" value={kind} onChange={event => setKind(event.target.value)}><option value="structure">Structure document</option><option value="file">File or archive</option></select></label>
+        <details><summary>Advanced source bindings</summary><div className="flex flex-wrap gap-3"><label>Native source name<input aria-label="Native source name" value={name} onChange={event => setName(event.target.value)} /></label>
+            <label>Source kind<select aria-label="Native source kind" value={kind} onChange={event => setKind(event.target.value)}><option value="structure">Structure document</option><option value="file">Files and archives</option></select></label>
             <button type="button" disabled={Object.hasOwn(value ?? {}, name)} onClick={() => { onChange({ ...value, [name]: kind === 'file' ? { kind: 'file', path: '' } : { output_format: 'native' } }); setName(''); }}>Add native source</button>
-        </div>
+        </div></details>
     </div>;
 }

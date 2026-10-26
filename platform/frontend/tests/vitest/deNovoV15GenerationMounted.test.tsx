@@ -73,7 +73,7 @@ it('defaults to one RFD3 editor and one run area after scientific inputs', async
     expect([...document.querySelectorAll('nav[aria-label="Generation sections"] button')].map(el => el.textContent)).toEqual(['Design', 'Sampling', 'Sequence Design']);
     expect(document.querySelectorAll('[data-execution]')).toHaveLength(1);
     expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);
-    expect([...document.querySelectorAll('h2')].filter(el => el.textContent === 'De Novo Protein Design')).toHaveLength(1);
+    expect([...document.querySelectorAll('h2')].filter(el => el.textContent === 'Protein design')).toHaveLength(1);
     expect(document.body.textContent).not.toContain('backup');
     expect(control('Minimum length').compareDocumentPosition(document.querySelector('[data-execution]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await click('Generate candidates');
@@ -240,4 +240,28 @@ it('shares job intent only with untouched engine drafts and preserves explicit n
     await act(async () => root.unmount()); document.body.replaceChildren();
     await render({ initialValues: saved }); await edit('Job name', 'Native replay'); await click('Generate candidates');
     expect(latest(mocks.submit).params).toMatchObject({ disco_checkpoint_path: '/retained/checkpoint.pt', disco_use_deepspeed_evo_attention: false });
+});
+
+it('fresh motif goal uses its compatible profile and retains an explicitly changed profile through task switches and cold reopen', async () => {
+    const draft = vi.fn(); await render({ onDraftChange: draft });
+    await edit('Goal', 'motif_scaffolding');
+    expect(control('La-Proteina preset').value).toBe('motif_idx_aa');
+    expect(latest(draft).laproteina_preset).toBe('motif_idx_aa');
+    await edit('La-Proteina preset', 'motif_uidx_tip');
+    await edit('Goal', 'unconditional');
+    expect(control('La-Proteina preset').value).toBe('ucond_tri');
+    await edit('Goal', 'motif_scaffolding');
+    expect(control('La-Proteina preset').value).toBe('motif_uidx_tip');
+    const saved = JSON.parse(JSON.stringify(latest(draft)));
+    await act(async () => root.unmount()); document.body.replaceChildren();
+    await render({ initialValues: saved, onDraftChange: draft });
+    expect(control('La-Proteina preset').value).toBe('motif_uidx_tip');
+});
+it('saved incompatible motif profile stays literal and editable instead of claiming a native fallback', async () => {
+    const draft = vi.fn(); await render({ initialValues: { generator: 'laproteina', design_task: 'motif_scaffolding', laproteina_preset: 'ucond_tri' }, onDraftChange: draft });
+    expect(control('La-Proteina preset').value).toBe('ucond_tri');
+    expect(latest(draft).laproteina_preset).toBe('ucond_tri');
+    expect(document.body.textContent).not.toContain('native fallback');
+    await edit('La-Proteina preset', 'motif_idx_tip');
+    expect(latest(draft).laproteina_preset).toBe('motif_idx_tip');
 });

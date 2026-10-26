@@ -70,13 +70,15 @@ function Conditions({ value, families, visual, onChange }: { value: Record<strin
     </fieldset>;
 }
 
-export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onChange, visual, sourceNames, renderNative, retainedTasks, sourceChains }: {
+export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onChange, visual, sourceNames, renderNative, renderSource, retainedTasks, sourceChains }: {
     request: Record<string, any>; schema: Schema; mode: string; recipe?: string; onRecipe: (recipe: string) => void;
     onChange: (request: Record<string, any>) => void; visual?: Visual; sourceNames: string[];
     renderNative: (key: string, schema: Schema) => React.ReactNode;
+    renderSource?: (label: string, value: string, onChange: (slot: string) => void) => React.ReactNode;
     sourceChains?: Record<string, string[]>;
     retainedTasks?: Array<{ key: string; label: string }>;
 }) {
+    const sourceControl = (label: string, value: string, change: (slot: string) => void) => renderSource?.(label, value, change) ?? <label>{label}<input aria-label={label} list="rfd4-source-names" value={value} onChange={event => change(event.target.value)} /></label>;
     const input = nativeRecord(request.input); const settings = nativeRecord(request.settings);
     const setInput = (next: Record<string, any>) => onChange({ ...request, input: next });
     const setSetting = (key: string, value: unknown) => onChange({ ...request, settings: patchNative(settings, key, value) });
@@ -97,7 +99,7 @@ export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onC
     return <div data-rfd4-task-workspace className="space-y-4 min-w-0">
         {mode !== 'evaluate' && <label>RFD4 task<select aria-label="RFD4 task" value={recipe ?? ''} onChange={e => onRecipe(e.target.value)}><option value="">Retained native request / choose task</option>{RFD4_RECIPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{retainedTasks?.map(({ key, label }) => <option key={key} value={`legacy:${key}`}>Restore retained {label}</option>)}</select></label>}
         {mode === 'evaluate' && <h3>Evaluate annotated outputs</h3>}
-        <p>Task recipes organize independent drafts. They do not add hotspots, fixed sequence, oracle choices or sampling defaults.</p>
+        {input.kind === 'condition_spec' && <p>Choose a source, select residues, then apply a condition.</p>}
         {input.kind === 'unconditional' && <fieldset><legend>Generated chains</legend>
             <label>Input name<input aria-label="Input name" value={input.name ?? ''} onChange={e => setInput({ ...input, name: e.target.value })} /></label>
             {(input.chains ?? []).map((chain: any, i: number) => <div key={i} className="flex flex-wrap gap-3"><label>Chain ID<input aria-label={`Chain ${i + 1} ID`} value={chain.chain_id ?? ''} onChange={e => setInput({ ...input, chains: input.chains.map((c: any, n: number) => n === i ? { ...c, chain_id: e.target.value } : c) })} /></label>
@@ -105,17 +107,17 @@ export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onC
                 <button type="button" onClick={() => setInput({ ...input, chains: input.chains.filter((_: any, n: number) => n !== i) })}>Remove chain {i + 1}</button></div>)}
             <button type="button" onClick={() => setInput({ ...input, chains: [...(input.chains ?? []), { chain_id: '' }] })}>Add generated chain</button>
         </fieldset>}
-        {(input.kind === 'annotated' || mode === 'evaluate') && <fieldset><legend>Annotated source basket</legend><p>Original saved targets and annotations are retained. No chemistry creation or annotation cleanup is implied.</p>
-            {(input.slots ?? []).map((slot: string, i: number) => <div key={i}><input aria-label={`Annotated slot ${i + 1}`} list="rfd4-source-names" value={slot} onChange={e => setInput({ ...input, slots: input.slots.map((s: string, n: number) => n === i ? e.target.value : s) })} /><button type="button" onClick={() => setInput({ ...input, slots: input.slots.filter((_: string, n: number) => n !== i) })}>Remove annotated slot {i + 1}</button></div>)}
-            <button type="button" onClick={() => setInput({ ...input, kind: 'annotated', slots: [...(input.slots ?? []), ''] })}>Add annotated slot</button>
+        {(input.kind === 'annotated' || mode === 'evaluate') && <fieldset><legend>Annotated source basket</legend><p>Uses the structure’s saved annotations.</p>
+            {(input.slots ?? []).map((slot: string, i: number) => <div key={i}>{sourceControl(`Annotated source ${i + 1}`, slot, next => setInput({ ...input, slots: input.slots.map((s: string, n: number) => n === i ? next : s) }))}<button type="button" onClick={() => setInput({ ...input, slots: input.slots.filter((_: string, n: number) => n !== i) })}>Remove annotated slot {i + 1}</button></div>)}
+            {renderSource ? renderSource('Add annotated source', '', slot => { if (slot !== '') setInput({ ...input, kind: 'annotated', slots: [...(input.slots ?? []), slot] }); }) : <button type="button" onClick={() => setInput({ ...input, kind: 'annotated', slots: [...(input.slots ?? []), ''] })}>Add annotated slot</button>}
         </fieldset>}
-        {input.kind === 'condition_spec' && <><p>Each example has one native parse policy. Multiple input frames are not merged or reinterpreted by this editor.</p>
+        {input.kind === 'condition_spec' && <><p>Each example keeps its source structures and parsing choices.</p>
             {examples.map((example: any, i: number) => <fieldset key={i} className="border rounded p-3 space-y-3"><legend>Example {i + 1}</legend>
                 <label>Example name<input aria-label={`Example ${i + 1} name`} value={example.name ?? ''} onChange={e => exampleChange(i, { ...example, name: e.target.value })} /></label>
-                {(example.sources ?? []).map((source: any, j: number) => <div key={j}><label>Source slot<input aria-label={`Example ${i + 1} source ${j + 1}`} list="rfd4-source-names" value={source.slot} onChange={e => exampleChange(i, { ...example, sources: example.sources.map((s: any, n: number) => n === j ? { ...s, slot: e.target.value } : s) })} /></label>
+                {(example.sources ?? []).map((source: any, j: number) => <div key={j}>{sourceControl(`Example ${i + 1} source ${j + 1}`, source.slot, next => exampleChange(i, { ...example, sources: example.sources.map((s: any, n: number) => n === j ? { ...s, slot: next } : s) }))}
                     <label>Parse policy<select aria-label={`Example ${i + 1} source ${j + 1} policy`} value={source.input_as_annotated_cif === undefined ? '' : String(source.input_as_annotated_cif)} onChange={e => exampleChange(i, { ...example, sources: example.sources.map((s: any, n: number) => n === j ? patchNative(s, 'input_as_annotated_cif', e.target.value === '' ? undefined : e.target.value === 'true') : s) })}><option value="">Inherit native policy</option><option value="true">Preserve annotated CIF</option><option value="false">Fresh native parsing</option></select></label>
                     <button type="button" onClick={() => exampleChange(i, { ...example, sources: example.sources.filter((_: any, n: number) => n !== j) })}>Remove example {i + 1} source {j + 1}</button></div>)}
-                <button type="button" onClick={() => exampleChange(i, { ...example, sources: [...(example.sources ?? []), { slot: '' }] })}>Add source to example {i + 1}</button>
+                {renderSource ? renderSource(`Add structure to example ${i + 1}`, '', slot => { if (slot !== '') exampleChange(i, { ...example, sources: [...(example.sources ?? []), { slot }] }); }) : <button type="button" onClick={() => exampleChange(i, { ...example, sources: [...(example.sources ?? []), { slot: '' }] })}>Add source to example {i + 1}</button>}
                 <Rfd4Regions value={example.contig} onChange={v => exampleChange(i, patchNative(example, 'contig', v))} />
                 <Conditions value={nativeRecord(example.conditions)} families={families} visual={qualifiedVisual(example)} onChange={v => exampleChange(i, { ...example, conditions: v })} />
                 {visual && example.sources?.length > 1 && !qualifiedVisual(example) && <p>Multi-source native chain mapping is not established by this source-local selection. Manual expressions remain available.</p>}
@@ -128,6 +130,6 @@ export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onC
         {recipe === 'partial' && <fieldset><legend>Partial diffusion</legend><p>Trajectory-tail fraction counts the tail of integration steps; backbone and latent partial times are separate native controls. No fraction is chosen automatically.</p>{['partial_trajectory_fraction_steps', 'partial_t_backbone', 'partial_t_latent'].map(key => <NativeNumber key={key} label={key} value={settings.generation?.args?.[key]} onChange={v => setSetting('generation', { ...nativeRecord(settings.generation), args: patchNative(nativeRecord(settings.generation?.args), key, v) })} />)}</fieldset>}
         {recipe === 'inverse' && <p>Native inverse folding uses the selected annotated backbone with independent latent sampling. This is not fixed-sequence sidechain packing.</p>}
         {mode === 'evaluate' && <fieldset><legend>Evaluation task labels</legend>{(request.evaluation_tasks ?? []).map((row: any, i: number) => <div key={i} className="flex flex-wrap gap-2">{['slot', 'task'].map(key => <label key={key}>{key}<input aria-label={`Evaluation ${i + 1} ${key}`} list={key === 'slot' ? 'rfd4-source-names' : undefined} value={row[key] ?? ''} onChange={e => onChange({ ...request, evaluation_tasks: request.evaluation_tasks.map((r: any, n: number) => n === i ? { ...r, [key]: e.target.value } : r) })} /></label>)}<button type="button" onClick={() => onChange({ ...request, evaluation_tasks: request.evaluation_tasks.filter((_: any, n: number) => n !== i) })}>Remove evaluation task {i + 1}</button></div>)}<button type="button" onClick={() => onChange({ ...request, evaluation_tasks: [...(request.evaluation_tasks ?? []), { slot: '', task: '' }] })}>Add evaluation task</button><button type="button" onClick={() => onChange(patchNative(request, 'evaluation_tasks', undefined))}>Inherit evaluation task labels</button></fieldset>}
-        <NativeSettingsDisclosure summary={<span>Native input compatibility and global conditions</span>}>{() => schema.properties?.input && renderNative('input', schema.properties.input)}</NativeSettingsDisclosure>
+        <NativeSettingsDisclosure summary={<span>Advanced input and global conditions</span>}>{() => schema.properties?.input && renderNative('input', schema.properties.input)}</NativeSettingsDisclosure>
     </div>;
 }

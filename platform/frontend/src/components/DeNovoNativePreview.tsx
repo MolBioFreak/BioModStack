@@ -37,10 +37,10 @@ export function DeNovoNativePreview({ request }: { request: Partial<Job> }) {
     const requested = new Map(rows(preview?.native_review?.requested ?? preview?.plan.requested_json));
     const effective = new Map(rows(preview?.native_review?.native_request ?? preview?.plan.effective_json));
     return <section aria-label="Native effective settings">
-        <button type="button" disabled={pending === generation.current.number} onClick={() => void inspect()}>Preview effective native settings</button>
-        <p className="text-xs">Uses the existing server compiler. Does not run inference, contact scientific providers, or change the requested settings.</p>
-        {current?.error && <p role="status">Preview unavailable: {current.error}. Your request is retained.</p>}
-        {result && !current && <p role="status">Request changed; the earlier preview is not current.</p>}
+        <button type="button" disabled={pending === generation.current.number} onClick={() => void inspect()}>Preview settings</button>
+        <p className="text-xs">Does not run a model.</p>
+        {current?.error && <p role="status">Preview unavailable: {current.error}</p>}
+        {result && !current && <p role="status">Settings changed. Refresh preview.</p>}
         {preview && <>
             {(preview.blockers ?? []).map((row, index) => <p key={index}>{row.reason}</p>)}
             {(preview.deferred_preparation ?? []).map(text => <p key={text}>Deferred preparation: {text}</p>)}

@@ -1080,6 +1080,38 @@ textarea:focus {
   outline-offset: 2px;
 }
 
+/* De novo actions use filled/tonal states, never permanent white outlines.
+   Keep this scoped to the workflow and its native result controls. */
+:is([data-bms-de-novo-form], [data-native-de-novo], .bms-binder-results) button:not(.msp-plugin button) {
+  border-color: transparent !important;
+  outline: none;
+  box-shadow: none;
+  border-radius: .5rem;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+:is([data-bms-de-novo-form], [data-native-de-novo], .bms-binder-results) button:not(.msp-plugin button):hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--accent-primary) 15%, var(--bg-tertiary));
+}
+:is([data-bms-de-novo-form], [data-native-de-novo], .bms-binder-results) button:not(.msp-plugin button):disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+:is([data-bms-de-novo-form], [data-native-de-novo], .bms-binder-results) button[aria-pressed="true"] {
+  background-color: color-mix(in srgb, var(--accent-primary) 22%, var(--bg-tertiary));
+  color: var(--accent-primary);
+}
+:is([data-bms-de-novo-form], [data-native-de-novo], .bms-binder-results) button:not(.msp-plugin button):focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+[data-bms-de-novo-form] [data-de-novo-context] > label {
+  min-width: 0;
+}
+[data-bms-de-novo-form] [data-bms-protein-design-sections] {
+  margin-block: .75rem;
+}
+
 /* Own BMS form sizing explicitly rather than relying on the layered reset
    and inherited third-party styles. A 100% content-box input crosses gutters. */
 .bms-model-parameter :is(input, select, textarea),

@@ -82,6 +82,7 @@ export default defineConfig({
             './tests/vitest/complexaNativeSelection.test.ts',
             './tests/vitest/otherDeNovoAuthoringMounted.test.tsx',
             './tests/vitest/otherDeNovoLaAtomsMounted.test.tsx',
+            './tests/vitest/deNovoGap*.test.tsx',
             ...(process.env.BMS_RESULTS_POPULATION_WIRE ? ['./tests/vitest/deNovoV15ResultsPopulations.test.tsx'] : []),
             './tests/vitest/denovoMdReviewRepairMounted.test.tsx',
             './tests/vitest/nativeBinderGenerationMounted.test.tsx',

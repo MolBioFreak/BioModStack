@@ -87,7 +87,7 @@ async function edit(label: string, value: string) {
     await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), 'value')!.set!.call(node, value); node.dispatchEvent(new Event(node.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); });
 }
 async function sources() {
-    const summary = [...document.querySelectorAll('summary')].find(n => n.textContent === 'Native sources')!;
+    const summary = [...document.querySelectorAll('summary')].find(n => n.textContent === 'Input structures')!;
     await act(async () => { const details = summary.parentElement as HTMLDetailsElement; details.open = true; details.dispatchEvent(new Event('toggle')); });
 }
 async function nativeDocuments() {
@@ -176,7 +176,7 @@ it('independent task source bindings survive real template save and cold explici
 it('visited source disclosure keeps its inspector without reacquiring source bytes', async () => {
     await mount(); await sources(); await nativeDocuments(); await choose('alternate');
     const count = requests.filter(r => r.url.includes('materialize')).length;
-    const details = [...document.querySelectorAll('summary')].find(n => n.textContent === 'Native sources')!.parentElement as HTMLDetailsElement;
+    const details = [...document.querySelectorAll('summary')].find(n => n.textContent === 'Input structures')!.parentElement as HTMLDetailsElement;
     const viewer = document.querySelector('[data-viewer-url]'); expect(viewer).not.toBeNull();
     await act(async () => { details.open = false; details.dispatchEvent(new Event('toggle')); });
     await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')); });
@@ -185,7 +185,7 @@ it('visited source disclosure keeps its inspector without reacquiring source byt
 });
 it('native preview is explicit, retains requested values, and never gates Generate on its diagnostics', async () => {
     await mount(); expect(requests.some(r => r.url.includes('execution-plan'))).toBe(false);
-    await click('Preview effective native settings'); expect(document.body.textContent).toContain('Fixture runtime absent');
+    await click('Preview settings'); expect(document.body.textContent).toContain('Fixture runtime absent');
     await click('Generate candidates');
     const posts = requests.filter(r => r.method === 'post');
     expect(posts.find(r => r.url.includes('execution-plan'))!.body.params).toEqual(posts.find(r => r.url === '/api/jobs')!.body.params);
@@ -193,13 +193,13 @@ it('native preview is explicit, retains requested values, and never gates Genera
 });
 it('A to B to A cannot revive an older native preview response', async () => {
     const releases: Array<(value: any) => void> = []; previewer = () => new Promise(resolve => releases.push(resolve));
-    await mount(); await click('Preview effective native settings');
+    await mount(); await click('Preview settings');
     const name = () => document.querySelector<HTMLInputElement>('input[placeholder="Run name"]') ?? [...document.querySelectorAll<HTMLInputElement>('input')].find(n => n.value === 'Source authoring')!;
     const changeName = async (value: string) => { const node = name(); await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(node, value); node.dispatchEvent(new Event('input', { bubbles: true })); }); };
     await changeName('B');
     const node = [...document.querySelectorAll<HTMLInputElement>('input')].find(n => n.value === 'B')!;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(node, 'Source authoring'); node.dispatchEvent(new Event('input', { bubbles: true })); });
-    await click('Preview effective native settings');
+    await click('Preview settings');
     const previews = requests.filter(r => r.url.includes('execution-plan')).map(r => r.body);
     await act(async () => releases[1]({ ...preview(previews[1]), native_review: { ...preview(previews[1]).native_review, native_overlay: { marker: 'new-result' } } }));
     await act(async () => releases[0]({ ...preview(previews[0]), native_review: { ...preview(previews[0]).native_review, native_overlay: { marker: 'stale-result' } } }));
@@ -245,4 +245,62 @@ it('unsupported copy observations leave manually authored conditions and Generat
     expect(document.body.textContent).toContain('Assembly/copy identity has no qualified native source mapping');
     await click('Generate candidates');
     expect(requests.find(r => r.url === '/api/jobs' && r.method === 'post')!.body.params.rfd4_request).toEqual(selectedConditions);
+});
+
+async function clickAria(label: string) {
+    const button = document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+    expect(button, label).not.toBeNull();
+    await act(async () => button!.click()); await settle();
+}
+async function chooseInlineFile() {
+    await clickAria('Choose structure for Add annotated source');
+    await click('Browse native file for Add annotated source');
+    await vi.waitFor(async () => { await settle(); expect(document.body.textContent).toContain('annotated.bcif.gz'); });
+    await act(async () => [...document.querySelectorAll('span')].find(node => node.textContent === 'annotated.bcif.gz')!.click());
+    await settle();
+}
+it('task-row acquisition binds a structure without a named empty slot, retains MODEL and cold template settings', async () => {
+    await mount('rfd4_proteina', { rfd4_request: { input: { kind: 'annotated', slots: [] }, settings: { seed: 0 } } });
+    expect(requests.some(row => row.url.includes('materialize'))).toBe(false);
+    expect(document.querySelector('[aria-label="Native source name"]')).toBeNull();
+    await chooseInlineFile();
+    await vi.waitFor(() => expect(document.querySelector<HTMLSelectElement>('[aria-label="Annotated source 1"]')?.value).toBe('input_1'));
+    await clickAria('Inspect structure for Annotated source 1');
+    expect(requests.filter(row => row.url.includes('materialize'))).toHaveLength(1);
+    await edit('Source MODEL for input_1', '2'); await settle();
+    await click('Template Manager');
+    const name = document.querySelector<HTMLInputElement>('input[placeholder="e.g., My Boltz Config"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Task source MODEL 2'); name.dispatchEvent(new Event('input', { bubbles: true })); });
+    await click('Save Template'); await vi.waitFor(() => expect(saved).toHaveLength(1));
+    const original = saved[0].params.native_job_request.params;
+    expect(original.rfd4_request.input.slots).toEqual(['input_1']);
+    expect(original.native_sources.input_1).toMatchObject({ model_number: 2, expected_sha256: 'a'.repeat(64), path: 'inputs/structure-uploaded/original.cif.gz' });
+    await unmount(); await mount(); await click('Template Manager');
+    if ([...document.querySelectorAll('button')].some(node => node.textContent?.trim() === '← Back to list')) await click('← Back to list');
+    await click('Load'); await settle(); await click('Generate candidates');
+    expect(requests.find(row => row.url === '/api/jobs' && row.method === 'post')!.body.params).toEqual(original);
+    expect(requests.filter(row => row.url.includes('materialize'))).toHaveLength(2);
+});
+it('cancelling a task-row picker while materialization is pending creates neither binding nor source row', async () => {
+    let release!: (value: any) => void;
+    materializer = body => new Promise(resolve => { release = value => resolve(value ?? receipt(body)); });
+    await mount('rfd4_proteina', { rfd4_request: { input: { kind: 'annotated', slots: [] } } });
+    await chooseInlineFile();
+    const group = document.querySelector('[role="group"][aria-label="Choose structure for Add annotated source"]')!;
+    const cancel = [...group.querySelectorAll('button')].find(node => node.textContent === 'Cancel')!;
+    await act(async () => cancel.click()); await act(async () => release(null)); await settle();
+    await click('Generate candidates');
+    const params = requests.find(row => row.url === '/api/jobs' && row.method === 'post')!.body.params;
+    expect(params.rfd4_request.input.slots).toEqual([]);
+    expect(params).not.toHaveProperty('native_sources');
+    expect(document.querySelector('[aria-label="Annotated source 1"]')).toBeNull();
+});
+it('using an existing input binds the task without materialization or renaming shared source names', async () => {
+    const source = { path: 'inputs/original.cif.gz', expected_sha256: 'a'.repeat(64), model_number: 2, output_format: 'native' };
+    await mount('rfd4_proteina', { rfd4_request: { input: { kind: 'annotated', slots: [] } }, native_sources: { retained_name: source } });
+    await edit('Add annotated source', 'retained_name'); await settle(); await click('Generate candidates');
+    const params = requests.find(row => row.url === '/api/jobs' && row.method === 'post')!.body.params;
+    expect(params.rfd4_request.input.slots).toEqual(['retained_name']);
+    expect(params.native_sources).toEqual({ retained_name: source });
+    expect(requests.some(row => row.url.includes('materialize'))).toBe(false);
 });

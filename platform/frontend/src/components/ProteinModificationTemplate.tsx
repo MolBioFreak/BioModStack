@@ -159,43 +159,44 @@ export function ProteinModificationTemplate({
     // Keep the hydration object stable while a child reports changes.
     const childValues = useRef<{ key: string; values: Record<string, unknown> } | null>(null);
     if (childValues.current?.key !== activeKey) childValues.current = { key: activeKey, values: drafts.current[activeKey] ?? {} };
+    const nativeModeControl = (generator === 'rfd4_proteina' || generator === 'laproteina') && mode !== 'shape_blueprint' ? <label className={labelClass}>Operation
+        <select aria-label="Native mode" className={fieldClass} value={navigation.native_mode ?? 'generate'} onChange={event => changeNavigation({ ...navigation, native_mode: event.target.value })}>
+            <option value="generate">Generate</option><option value="evaluate">Evaluate</option>
+        </select>
+    </label> : null;
     return (
-        <div className="space-y-6 text-[var(--text-primary)]" data-bms-de-novo-form="complete">
+        <div className="space-y-3 text-[var(--text-primary)]" data-bms-de-novo-form="complete">
             <div className="flex items-center gap-3">
-                <button type="button" onClick={onBack} className="rounded-lg border border-[var(--border-primary)] px-3 py-1.5 text-sm">Back</button>
-                <h2 className="text-2xl font-semibold">De Novo Protein Design</h2>
+                <button type="button" onClick={onBack} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">Back</button>
+                <h2 className="text-lg font-semibold">Protein design</h2>
             </div>
             <nav aria-label="Design task" className="flex flex-wrap gap-2">
                 {DE_NOVO_MODIFICATION_MODE_CARDS.map(card => <button type="button" key={card.id}
                     aria-pressed={mode === card.id} onClick={() => chooseMode(card.id)}
-                    className={`rounded-lg border px-4 py-2 text-sm ${mode === card.id ? 'border-[var(--accent-primary)] bg-[var(--bg-tertiary)]' : 'border-[var(--border-primary)]'}`}>{card.label}</button>)}
+                    className={`rounded-lg px-3 py-1.5 text-sm ${mode === card.id ? 'bg-[var(--bg-tertiary)] text-[var(--accent-primary)]' : ''}`}>{card.label}</button>)}
             </nav>
-            {(generator === 'rfd4_proteina' || generator === 'laproteina') && mode !== 'shape_blueprint' && <label className={labelClass}>Native mode
-                <select aria-label="Native mode" className={fieldClass} value={navigation.native_mode ?? 'generate'} onChange={event => changeNavigation({ ...navigation, native_mode: event.target.value })}>
-                    <option value="generate">Generate</option><option value="evaluate">Evaluate</option>
-                </select>
-            </label>}
             {mode === 'de_novo_design' ? <>
-                <div className="grid gap-4 sm:grid-cols-2">
-                    <label className={labelClass}>Goal
+                <div className="grid grid-cols-2 gap-3 lg:grid-cols-3" data-de-novo-context>
+                    {!['rfd4_proteina', 'complexa'].includes(generator) && <label className={labelClass}>Goal
                         <select className={fieldClass} value={task} onChange={event => {
                             const design_task = event.target.value;
                             const engine = design_task === 'motif_scaffolding' ? 'laproteina' : design_task === 'unconditional' ? generator : 'disco';
                             changeNavigation({ modification_mode: mode, generator: engine, design_task });
                         }}>
-                            <option value="unconditional">{generator === 'rfd4_proteina' || generator === 'complexa' ? 'Model-specific design' : 'Explore new folds'}</option>
+                            <option value="unconditional">Explore new folds</option>
                             <option value="dna_conditioned">Design around DNA · DISCO</option>
                             <option value="rna_conditioned">Design around RNA · DISCO</option>
                             <option value="ligand_conditioned">Design around a small molecule · DISCO</option>
                             <option value="motif_scaffolding">Scaffold a motif · La-Proteina</option>
                             <option value="custom_json">Explicit jobs / native JSON · DISCO</option>
                         </select>
-                    </label>
+                    </label>}
                     <label className={labelClass}>Engine
                         <select className={fieldClass} value={generator} onChange={event => changeNavigation({ modification_mode: mode, generator: event.target.value, design_task: 'unconditional' })}>
                             {(task === 'unconditional' ? ['rfd3', 'disco', 'laproteina', 'rfd4_proteina', 'complexa'] : [generator]).map(engine => <option key={engine} value={engine}>{engine === 'rfd3' ? 'RFD3' : engine === 'disco' ? 'DISCO' : engine === 'laproteina' ? 'La-Proteina' : engine === 'rfd4_proteina' ? 'RFD4-Proteina' : engine === 'complexa' ? 'Complexa' : engine}</option>)}
                         </select>
                     </label>
+                    {nativeModeControl}
                 </div>
                 {generator === 'laproteina' && navigation.native_mode === 'evaluate' ? <LaProteinaEvaluation key={activeKey} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />
                     : generator === 'rfd4_proteina' || generator === 'complexa' ? <DeNovoNativeGenerationSettings key={activeKey} model={generator}
@@ -203,7 +204,7 @@ export function ProteinModificationTemplate({
                     initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />
                     : ['rfd3', 'disco', 'laproteina'].includes(generator) ? <GenerationEditor key={activeKey} initialValues={childValues.current.values} generator={generator}
                     designTask={task} runDetails={runDetails} onDraftChange={reportDraft} /> : <p role="alert">No native editor registered for {generator}. Retained settings have not been translated to another engine.</p>}
-            </> : mode === 'rfd3_iteration' ? <><label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} /> : <ProteinLocalRedesignTemplate key={activeKey} embedded
+            </> : mode === 'rfd3_iteration' ? <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} /> : <ProteinLocalRedesignTemplate key={activeKey} embedded
                 onBack={onBack} initialValues={childValues.current.values}
                 submissionModelId={validatedRedesign ? 'protein_modification_experimental' : 'protein_local_redesign'}
                 requiredPinnedGpu={requiredPinnedGpu} runDetails={runDetails} onDraftChange={reportDraft} />}</>
@@ -238,7 +239,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [seed, setSeed] = useState(initialNumber(initialValues, 'seed', 0));
     const [dumpTrajectories, setDumpTrajectories] = useState(initialValues?.dump_trajectories === true);
     const [targetLengths, setTargetLengths] = useState(initialString(initialValues, 'target_lengths', '100,200'));
-    const [laproteinaPreset, setLaproteinaPreset] = useState(initialString(initialValues, 'laproteina_preset', 'ucond_tri'));
+    const [laproteinaPreset, setLaproteinaPreset] = useState(initialString(initialValues, 'laproteina_preset', designTask === 'motif_scaffolding' ? 'motif_idx_aa' : 'ucond_tri'));
     const [laproteinaSamples, setLaproteinaSamples] = useState(initialNumber(initialValues, 'laproteina_samples_per_length', 8));
     const [laproteinaSteps, setLaproteinaSteps] = useState(initialNumber(initialValues, 'laproteina_num_steps', 400));
     const [motifTaskName, setMotifTaskName] = useState(initialString(initialValues, 'laproteina_motif_task_name', ''));
@@ -456,6 +457,12 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const nativePresets = isMotif
         ? [['motif_idx_aa', 'Motif indexed all-atom'], ['motif_idx_tip', 'Motif indexed tip-atoms'], ['motif_uidx_aa', 'Motif unindexed all-atom'], ['motif_uidx_tip', 'Motif unindexed tip-atoms']]
         : [['ucond_tri', 'Unconditional (triangular)'], ['ucond_notri', 'Unconditional'], ['ucond_notri_long', 'Unconditional long']];
+    const presetControl = <label className={labelClass}>Preset
+        <select className={fieldClass} aria-label="La-Proteina preset" value={laproteinaPreset} onChange={event => setLaproteinaPreset(event.target.value)}>
+            {!nativePresets.some(([value]) => value === laproteinaPreset) && <option value={laproteinaPreset}>{laproteinaPreset} · saved, incompatible with this task</option>}
+            {nativePresets.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+    </label>;
     const generationControls = <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {generator === 'rfd3' ? <>
             <label className={labelClass}>Minimum length
@@ -498,6 +505,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     }} />
                     <ProteinDesignPanel title="Motif conditioning">
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                            {presetControl}
                             <label className={labelClass}>Atom selection
                                 <select className={fieldClass} value={motifAtomSelectionMode} onChange={event => setMotifAtomSelectionMode(event.target.value)}>
                                     <option value="all_atom">All atom</option><option value="tip_atoms">Tip atoms</option>
@@ -540,14 +548,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                             <input type="checkbox" checked={dumpTrajectories} onChange={event => setDumpTrajectories(event.target.checked)} />Dump trajectories
                         </label>
                     </div> : backend === 'laproteina' ? <div className="grid gap-4 sm:grid-cols-2">
-                        <label className={labelClass}>Preset
-                            <select className={fieldClass} value={laproteinaPreset} onChange={event => setLaproteinaPreset(event.target.value)}>
-                                {!nativePresets.some(([value]) => value === laproteinaPreset) && <option value={laproteinaPreset}>
-                                    {laproteinaPreset} · native fallback: {isMotif ? 'motif indexed all-atom' : 'unconditional triangular'}
-                                </option>}
-                                {nativePresets.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                            </select>
-                        </label>
+                        {!isMotif && presetControl}
                         <label className={labelClass}>Sampling steps
                             <input className={fieldClass} type="number" min={50} max={2000} value={laproteinaSteps} onChange={event => setLaproteinaSteps(editedNumber(event.target.value))} />
                         </label>
