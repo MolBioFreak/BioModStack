@@ -44,6 +44,31 @@ from services.ont_raw_signal import (
     _prepare_confined_directory,
 )
 
+# Linux sun_path holds 108 bytes including the terminating NUL.
+_UNIX_SOCKET_PATH_MAX = 107
+
+
+def _bind_unix_socket(server: socket.socket, socket_path: Path) -> None:
+    """Bind ``socket_path`` even when its absolute path exceeds sun_path.
+
+    The socket file must stay in the stage directory because the container
+    reaches it through that bind mount. Long staging roots are bound through
+    the parent directory's /proc/self/fd entry, which keeps the socket at its
+    real location without changing the process-wide working directory.
+    """
+    if len(os.fsencode(str(socket_path))) <= _UNIX_SOCKET_PATH_MAX:
+        server.bind(str(socket_path))
+        return
+    directory_fd = os.open(socket_path.parent, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        short_path = f"/proc/self/fd/{directory_fd}/{socket_path.name}"
+        if len(os.fsencode(short_path)) > _UNIX_SOCKET_PATH_MAX:
+            raise OSError(f"AF_UNIX socket name is too long: {socket_path.name}")
+        server.bind(short_path)
+    finally:
+        os.close(directory_fd)
+
+
 logger = logging.getLogger(__name__)
 RAW_SIGNAL_WAVEFORM_RUNTIME_TIMEOUT_SECONDS = 120.0
 RAW_SIGNAL_CHILD_TERMINATE_GRACE_SECONDS = 5.0
@@ -198,7 +223,7 @@ class OntRawSignalWorker:
             socket_path = Path(fd_socket)
             socket_path.unlink(missing_ok=True)
             descriptor_server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            descriptor_server.bind(str(socket_path))
+            _bind_unix_socket(descriptor_server, socket_path)
             descriptor_server.listen(1)
             descriptor_server.settimeout(0.5)
 

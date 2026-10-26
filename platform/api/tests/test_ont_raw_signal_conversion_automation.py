@@ -1089,6 +1089,59 @@ async def test_execute_cancellation_terminates_and_reaps_child(
 
 
 @pytest.mark.asyncio
+async def test_execute_transfers_descriptors_from_stage_path_longer_than_sun_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage = tmp_path.joinpath(*(["long-staging-root-segment"] * 6), "ont-raw-job-0123456789abcdef", "attempt-2")
+    stage.mkdir(parents=True)
+    fd_socket = stage / "source-fd.sock"
+    assert len(os.fsencode(str(fd_socket))) > 107
+    source = tmp_path / "source.pod5"
+    source.write_bytes(b"pod5-source")
+    source_fd = os.open(source, os.O_RDONLY)
+    received: list[bytes] = []
+
+    async def fake_create(*_args, **_kwargs):
+        class Child:
+            returncode: int | None = None
+
+            async def communicate(self):
+                def receive() -> None:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                        directory_fd = os.open(stage, os.O_PATH | os.O_DIRECTORY)
+                        try:
+                            client.connect(f"/proc/self/fd/{directory_fd}/{fd_socket.name}")
+                        finally:
+                            os.close(directory_fd)
+                        _message, ancillary, _flags, _address = client.recvmsg(
+                            1, socket.CMSG_SPACE(array.array("i", [0]).itemsize)
+                        )
+                        fds = array.array("i")
+                        fds.frombytes(ancillary[0][2])
+                        with os.fdopen(fds[0], "rb") as handle:
+                            received.append(handle.read())
+
+                await asyncio.to_thread(receive)
+                self.returncode = 0
+                return b"", b""
+
+        return Child()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    monkeypatch.setattr(ont_raw_signal_worker, "source_lease_break_requested", lambda: False)
+    worker = OntRawSignalWorker(lambda: None)
+    try:
+        receipt = await worker._execute(
+            ["fake"], "job", "claim", source_fds=[source_fd], fd_socket=str(fd_socket)
+        )
+    finally:
+        os.close(source_fd)
+    assert receipt["returncode"] == 0
+    assert received == [b"pod5-source"]
+    assert not fd_socket.exists()
+
+
+@pytest.mark.asyncio
 async def test_waveform_runtime_timeout_terminates_and_reaps_child(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
