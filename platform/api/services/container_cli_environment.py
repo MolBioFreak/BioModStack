@@ -5,6 +5,11 @@ import os
 from pathlib import Path
 
 
+def container_user_namespace_args(runtime: str) -> list[str]:
+    """Keep host-owned outputs and broker sockets accessible in rootless Podman."""
+    return ["--userns=keep-id"] if runtime == "podman" and os.getuid() != 0 else []
+
+
 def container_cli_environment() -> dict[str, str]:
     """Minimal host-client context; container mounts/network remain command-owned.
 

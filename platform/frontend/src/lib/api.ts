@@ -5764,6 +5764,13 @@ export const fetchOntExternalPod5Candidates = () =>
     apiData(api.get<{ candidates: OntExternalPod5Candidate[] }>(
         '/api/ont/raw-signal/external-pod5-candidates',
     ));
+export const importOntRawSignalUpload = (request: {
+    file_path: string;
+    format: 'pod5' | 'slow5' | 'blow5';
+    index_file_path: string | null;
+    experiment_group: string;
+    sample_id: string | null;
+}) => apiData(api.post<OntExternalPod5Registration>('/api/ont/raw-signal/import', request));
 export const registerOntExternalPod5Candidate = (
     candidateId: string,
     experimentGroup: string,

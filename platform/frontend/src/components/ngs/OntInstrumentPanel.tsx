@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import {
@@ -15,6 +15,8 @@ import {
     requestOntBlow5Preparation,
     requestOntRawSignalWaveform,
     registerOntExternalPod5Candidate,
+    importOntRawSignalUpload,
+    uploadFile,
     fetchOntProtocolOptions,
     requestMk1dReconnect,
     startOntRunIntent,
@@ -34,6 +36,7 @@ const RAW_WAVEFORM_POLL_ATTEMPTS = 130;
 
 interface OntInstrumentPanelProps {
     onAnalyzeExistingData: () => void;
+    rawSignalOnly?: boolean;
 }
 
 interface SelectedRunGeneration {
@@ -120,7 +123,7 @@ function runSelectionKey(run: { run_id: string; observed_generation: number }): 
     return `${run.run_id}\u0000${run.observed_generation}`;
 }
 
-export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanelProps) {
+export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = false }: OntInstrumentPanelProps) {
     const {
         workspaceId,
         globalExperimentId,
@@ -131,6 +134,8 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
     const location = useLocation();
     const queryClient = useQueryClient();
     const exactDomainExperimentId = selectedDomainExperiment?.domain_experiment_id ?? null;
+    const currentDomainId = useRef(exactDomainExperimentId);
+    currentDomainId.current = exactDomainExperimentId;
     const requestedRunGeneration = useMemo<SelectedRunGeneration | null>(() => {
         const params = new URLSearchParams(location.search);
         const runId = params.get('run_id')?.trim() ?? '';
@@ -161,6 +166,11 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
     const [sampleSelection, setSampleSelection] = useState<{ domainId: string; sampleId: string } | null>(null);
     const [selectedRunGeneration, setSelectedRunGeneration] = useState<SelectedRunGeneration | null>(null);
     const [selectedExternalPod5CandidateId, setSelectedExternalPod5CandidateId] = useState('');
+    const [rawUpload, setRawUpload] = useState<File | null>(null);
+    const [rawIndexUpload, setRawIndexUpload] = useState<File | null>(null);
+    const uploadedRawFiles = useRef(new Map<File, string>());
+    const rawUploadDirectory = useRef('');
+    if (!rawUploadDirectory.current) rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`;
     const [rawSignalPreference, setRawSignalPreference] = useState<OntRawSignalPreference>('auto');
     const [waveformReadId, setWaveformReadId] = useState('');
     const [waveform, setWaveform] = useState<OntRawSignalWaveform | null>(null);
@@ -175,6 +185,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
     const deviceStatus = useQuery({
         queryKey: ['ont-device-status'],
         queryFn: async () => (await fetchOntDeviceStatus()).data,
+        enabled: !rawSignalOnly,
         refetchInterval: (query) => jobPollingInterval(10000, query),
     });
     const data = deviceStatus.isError ? undefined : deviceStatus.data;
@@ -185,7 +196,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
     const protocolOptions = useQuery({
         queryKey: ['ont-protocol-options', selectedPositionForQuery],
         queryFn: async () => (await fetchOntProtocolOptions(selectedPositionForQuery)).data,
-        enabled: Boolean(selectedPositionForQuery),
+        enabled: !rawSignalOnly && Boolean(selectedPositionForQuery),
         refetchInterval: (query) => jobPollingInterval(10000, query),
     });
     const instrumentEvidenceError = deviceStatus.isError || protocolOptions.isError;
@@ -315,6 +326,10 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         ),
         enabled: effectiveSelectedRunGeneration !== null,
         retry: false,
+        refetchInterval: (query) => query.state.data?.representations.some((item) => item.format === 'blow5' && item.state === 'ready')
+            ? false
+            : query.state.data?.representations.some((item) => item.format === 'pod5' || item.format === 'blow5')
+                ? jobPollingInterval(2000, query) : false,
     });
 
     const refreshDurableRuns = (run?: OntInstrumentRun) => {
@@ -347,6 +362,47 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         },
         onError: (error) => setMessage(errorMessage(error, 'Existing POD5 registration failed.')),
     });
+
+    const importRawSignal = useMutation({
+        onMutate: () => ({ domainId: exactDomainExperimentId }),
+        mutationFn: async () => {
+            if (!exactDomainExperimentId || !rawUpload) throw new Error('Choose a Project and a raw-signal file.');
+            const format = rawUpload.name.split('.').pop()?.toLowerCase();
+            if (format !== 'pod5' && format !== 'slow5' && format !== 'blow5') throw new Error('Select POD5, SLOW5 or BLOW5.');
+            if (format === 'blow5' && !rawIndexUpload) throw new Error('Select the matching BLOW5 index.');
+            const directory = rawUploadDirectory.current;
+            const uploaded = uploadedRawFiles.current;
+            const upload = async (file: File, name: string) => {
+                let path = uploaded.get(file);
+                if (!path) {
+                    path = (await uploadFile(directory, new File([file], name))).data.path;
+                    uploaded.set(file, path);
+                }
+                return path;
+            };
+            const name = `source.${format}`;
+            return importOntRawSignalUpload({
+                file_path: await upload(rawUpload, name), format,
+                index_file_path: format === 'blow5' && rawIndexUpload ? await upload(rawIndexUpload, name + '.idx') : null,
+                experiment_group: exactDomainExperimentId, sample_id: selectedSample?.id ?? null,
+            });
+        },
+        onSuccess: (registration, _variables, context) => {
+            void queryClient.invalidateQueries({ queryKey: ['ont-instrument-runs', context?.domainId] });
+            if (currentDomainId.current !== context?.domainId) return;
+            setSelectedRunGeneration({ runId: registration.run_id, observedGeneration: registration.observed_generation });
+            setMessage('Raw-signal source registered. Its validation and readiness are shown below.');
+        },
+    });
+
+    useEffect(() => {
+        setRawUpload(null);
+        setRawIndexUpload(null);
+        setMessage('');
+        importRawSignal.reset();
+        uploadedRawFiles.current = new Map();
+        rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`;
+    }, [exactDomainExperimentId, importRawSignal.reset]);
 
     const prepareBlow5 = useMutation({
         mutationFn: async (sourceRepresentationId: string) => {
@@ -452,6 +508,8 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
 
     return (
         <section className="space-y-5 rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 shadow-lg shadow-black/10">
+            {rawSignalOnly ? <div className="space-y-2 text-[var(--text-primary)]"><h2 className="text-xl font-semibold">Raw signal tools</h2><p className="text-sm text-[var(--text-secondary)]">POD5 and indexed BLOW5: source registration, SLOW5tools conversion, read lookup and waveform inspection. Open an alignment result’s Read &amp; Signal Workbench for Squigualiser views, mapping, calibration and Squigulator ideal trace comparison.</p><button type="button" onClick={onAnalyzeExistingData} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--accent-primary)]">Open data analysis</button></div> : null}
+            {!rawSignalOnly ? <>
             <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
@@ -610,6 +668,19 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                 </div>
             </div>
 
+            </> : null}
+            <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4 text-[var(--text-primary)]">
+                <h3 className="text-sm font-semibold">Import raw signal</h3>
+                <p className="text-xs text-[var(--text-secondary)]">Register POD5, SLOW5 or indexed BLOW5 in the selected Project. File provenance and validation stay in the ONT ledger. SLOW5 is retained as source data; waveform and Squigualiser views use validated indexed BLOW5.</p>
+                {!exactDomainExperimentId ? <p role="status" className="text-sm text-[var(--text-secondary)]">Choose a Project to import raw signal.</p> : null}
+                <fieldset disabled={importRawSignal.isPending} className="grid gap-3 sm:grid-cols-2">
+                    <label className="text-xs">Raw-signal file<input key={exactDomainExperimentId ?? 'no-project'} aria-label="Raw-signal file" type="file" accept=".pod5,.slow5,.blow5" onChange={(e) => { setRawUpload(e.target.files?.[0] ?? null); setRawIndexUpload(null); uploadedRawFiles.current.clear(); rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`; }} className="mt-1 block w-full text-sm" /></label>
+                    {rawUpload?.name.toLowerCase().endsWith('.blow5') ? <label className="text-xs">Matching BLOW5 index<input aria-label="BLOW5 index" type="file" accept=".idx" onChange={(e) => { setRawIndexUpload(e.target.files?.[0] ?? null); uploadedRawFiles.current = new Map(); rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`; }} className="mt-1 block w-full text-sm" /></label> : null}
+                </fieldset>
+                <button type="button" disabled={!exactDomainExperimentId || !rawUpload || importRawSignal.isPending || (rawUpload.name.toLowerCase().endsWith('.blow5') && !rawIndexUpload)} onClick={() => importRawSignal.mutate()} className="rounded-lg border border-[var(--accent-primary)] px-3 py-2 text-sm font-semibold text-[var(--accent-primary)] disabled:opacity-50">{importRawSignal.isPending ? 'Importing raw signal…' : 'Import raw signal'}</button>
+                {importRawSignal.isError ? <p role="alert" className="text-sm text-[var(--text-primary)]">{errorMessage(importRawSignal.error, 'Raw-signal import failed.')}</p> : null}
+                {importRawSignal.isSuccess ? <p role="status" className="text-sm text-[var(--text-secondary)]">{message}</p> : null}
+            </div>
             <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
                 <div>
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Register existing POD5</h3>

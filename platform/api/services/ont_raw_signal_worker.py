@@ -42,6 +42,7 @@ from services.ont_raw_signal import (
     transition_derivation,
     _assert_publication_directory_identity,
     _prepare_confined_directory,
+    _open_absolute_directory_nofollow,
 )
 
 logger = logging.getLogger(__name__)
@@ -198,7 +199,16 @@ class OntRawSignalWorker:
             socket_path = Path(fd_socket)
             socket_path.unlink(missing_ok=True)
             descriptor_server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            descriptor_server.bind(str(socket_path))
+            parent_fd = _open_absolute_directory_nofollow(socket_path.parent)
+            try:
+                # Linux limits sockaddr_un, not the backing directory's path.
+                # The container connects through its short /stage or /output mount.
+                descriptor_server.bind(f"/proc/self/fd/{parent_fd}/{socket_path.name}")
+            except BaseException:
+                descriptor_server.close()
+                raise
+            finally:
+                os.close(parent_fd)
             descriptor_server.listen(1)
             descriptor_server.settimeout(0.5)
 

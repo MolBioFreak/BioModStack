@@ -394,6 +394,15 @@ class OntExternalPod5CandidateRequest(BaseModel):
     sample_id: str | None = Field(default=None, max_length=255)
 
 
+class OntRawSignalUploadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file_path: str = Field(min_length=1, max_length=512)
+    format: Literal["pod5", "slow5", "blow5"]
+    index_file_path: str | None = Field(default=None, max_length=512)
+    experiment_group: str = Field(min_length=1, max_length=255)
+    sample_id: str | None = Field(default=None, max_length=255)
+
+
 class OntRawSignalDerivationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -868,6 +877,24 @@ async def ont_register_external_pod5_candidate(
     finally:
         if session.in_transaction():
             await session.rollback()
+
+
+@router.post("/raw-signal/import", status_code=201)
+async def ont_import_uploaded_raw_signal(
+    request: OntRawSignalUploadRequest,
+    session: AsyncSession = Depends(get_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
+) -> dict[str, Any]:
+    try:
+        result = await ont_raw_signal.import_uploaded_raw_signal(
+            session, domain_session, **request.model_dump(),
+        )
+        await session.commit()
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="raw-signal upload not found") from exc
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/raw-signal/external-runs", status_code=201)

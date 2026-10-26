@@ -2510,17 +2510,27 @@ def test_source_read_lease_blocks_in_place_writer_until_cleanup(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_worker_transfers_exact_source_descriptor_and_cleans_socket(tmp_path: Path) -> None:
+@pytest.mark.parametrize("long_stage_path", [False, True])
+async def test_worker_transfers_exact_source_descriptor_and_cleans_socket(tmp_path: Path, long_stage_path: bool) -> None:
     source_path = tmp_path / "source.pod5"
     source_path.write_bytes(b"selected-inode")
     root_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
     source_fd = os.open(source_path, os.O_RDONLY)
     socket_dir = tempfile.TemporaryDirectory(prefix="ont-fd-")
-    socket_path = Path(socket_dir.name) / "s"
+    socket_root = Path(socket_dir.name)
+    if long_stage_path:
+        socket_root = socket_root / ("stage-" + "a" * 100)
+        socket_root.mkdir()
+    socket_path = socket_root / "s"
+    assert (len(os.fsencode(socket_path)) > 107) == long_stage_path
     script = """
 import array, os, socket, sys
 connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-connection.connect(sys.argv[1])
+parent_fd = os.open(os.path.dirname(sys.argv[1]), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    connection.connect(f'/proc/self/fd/{parent_fd}/{os.path.basename(sys.argv[1])}')
+finally:
+    os.close(parent_fd)
 _, ancillary, _, _ = connection.recvmsg(1, socket.CMSG_SPACE(2 * array.array('i').itemsize))
 received = array.array('i')
 for level, kind, data in ancillary:
@@ -2606,8 +2616,9 @@ def test_raw_runtime_identity_is_bound_to_checked_in_policy_and_rejects_env_drif
         ont_raw_signal.raw_signal_runtime_identity()
 
 
+@pytest.mark.parametrize("runtime,prefix", [("docker", "sha256:"), ("podman", ""), ("podman", "sha256:")])
 def test_raw_runtime_admission_inspects_exact_local_image_id(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, runtime: str, prefix: str,
 ) -> None:
     inspected: list[list[str]] = []
     monkeypatch.setenv("HOME", "/operator/home")
@@ -2620,11 +2631,19 @@ def test_raw_runtime_admission_inspects_exact_local_image_id(
         assert _kwargs["env"]["XDG_RUNTIME_DIR"] == "/run/user/1000"
         assert "BMS_SUDO_PASSWORD" not in _kwargs["env"]
         inspected.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout="sha256:" + "a" * 64 + "\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout=prefix + "a" * 64 + "\n", stderr="")
 
     monkeypatch.setattr(ont_raw_signal.subprocess, "run", inspect)
-    ont_raw_signal.assert_local_raw_runtime_image("docker", "sha256:" + "a" * 64)
-    assert inspected == [["docker", "image", "inspect", "--format", "{{.Id}}", "sha256:" + "a" * 64]]
+    ont_raw_signal.assert_local_raw_runtime_image(runtime, "sha256:" + "a" * 64)
+    assert inspected == [[runtime, "image", "inspect", "--format", "{{.Id}}", "sha256:" + "a" * 64]]
+
+
+@pytest.mark.parametrize("observed", ["b" * 64, "a" * 63, "sha256:" + "b" * 64, "mutable:tag"])
+def test_raw_runtime_admission_rejects_diverged_podman_identity(monkeypatch: pytest.MonkeyPatch, observed: str) -> None:
+    monkeypatch.setattr(ont_raw_signal.shutil, "which", lambda runtime: f"/usr/bin/{runtime}")
+    monkeypatch.setattr(ont_raw_signal.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(command, 0, stdout=observed, stderr=""))
+    with pytest.raises(RuntimeError, match="absent or diverged"):
+        ont_raw_signal.assert_local_raw_runtime_image("podman", "sha256:" + "a" * 64)
 
 
 def test_every_raw_container_command_uses_pull_never(

@@ -1,6 +1,6 @@
 import { api } from './api';
 
-export const NGS_DATA_FORMATS = { fastq: 'FASTQ', pod5: 'POD5', bam: 'BAM / CRAM', fasta: 'FASTA', results: 'Analysis results', other: 'Other' } as const;
+export const NGS_DATA_FORMATS = { fastq: 'FASTQ', pod5: 'POD5', slow5: 'SLOW5', blow5: 'BLOW5', bam: 'BAM / CRAM', fasta: 'FASTA', results: 'Analysis results', other: 'Other' } as const;
 export const NGS_USE_CASES = { sequence_identity: 'Sequence identity confirmation', clone_selection: 'Clone selection', plasmid_screening: 'Plasmid screening', plasmid_onboarding: 'New plasmid onboarding', transcriptomics: 'Transcriptomics / RNA', genomic_sequencing: 'Genomic sequencing', other: 'Other' } as const;
 export const NGS_RECORD_STAGES = { planned: 'Planned', acquired: 'Raw data acquired', basecalled: 'Basecalled reads', analysing: 'Analysis in progress', review: 'Ready for review', complete: 'Complete (operator recorded)' } as const;
 export interface NgsDataFile { name: string; path: string; size: number }
