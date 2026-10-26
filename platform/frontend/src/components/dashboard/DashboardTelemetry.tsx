@@ -43,9 +43,11 @@ export function DashboardTelemetry({ jobs = [] }: { jobs?: Pick<Job, 'id' | 'mod
     const [selectedTargetId, setSelectedTargetId] = useState<string>('');
     const activeTargets = targetsQuery.isError ? []
         : (targetsQuery.data?.data ?? []).filter((target) => target.active);
+    // Default the display to one available worker even when several are attached.
+    // This selection does not choose a worker for scientific execution.
     const activeVastTarget = selectedTargetId
         ? activeTargets.find((target) => target.id === selectedTargetId)
-        : activeTargets.length === 1 ? activeTargets[0] : undefined;
+        : activeTargets[0];
     const activeVastLabel = activeVastTarget?.name?.trim() || (
         activeVastTarget ? `Instance ${activeVastTarget.provider_instance_id}` : 'Active Vast'
     );

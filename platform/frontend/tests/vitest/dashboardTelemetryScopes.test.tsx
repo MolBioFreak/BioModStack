@@ -11,7 +11,8 @@ vi.mock('../../src/components/InfraLiveTelemetry', () => ({
 }));
 
 vi.mock('../../src/components/RemoteGpuTelemetry', () => ({
-    RemoteGpuTelemetry: () => <div data-testid="remote-telemetry">Remote telemetry panel</div>,
+    RemoteGpuTelemetry: ({ executionTargetId }: { executionTargetId: string }) =>
+        <div data-testid="remote-telemetry" data-target-id={executionTargetId}>Remote telemetry panel</div>,
 }));
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
@@ -97,6 +98,56 @@ describe('Dashboard telemetry source tabs', () => {
 
         await act(async () => root.unmount());
         client.clear();
+    });
+
+    it.each(['initial pair', 'second worker attached'])('keeps remote tabs visible with two workers: %s', async (scenario) => {
+        const secondTarget = { ...readyTarget, id: 'vast:456', provider_instance_id: '456', name: 'Remote A6000' };
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        client.setQueryData(['remote-provision-catalog'], []);
+        client.setQueryData(['execution-targets'], response(scenario === 'initial pair' ? [readyTarget, secondTarget] : [readyTarget]));
+        api.defaults.adapter = async config => {
+            if (config.method === 'get' && ['/api/execution-targets/vast%3A123/runtime-inventory', '/api/execution-targets/vast%3A456/runtime-inventory'].includes(config.url ?? '')) return response(null);
+            return unexpected(config);
+        };
+        const container = document.createElement('div');
+        document.body.append(container);
+        const root = createRoot(container);
+        const tabs = () => [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+        const remoteTargetId = () => container.querySelector('[data-testid="remote-telemetry"]')?.getAttribute('data-target-id');
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><DashboardTelemetry /></QueryClientProvider>));
+            expect(tabs().map(tab => tab.textContent?.trim())).toEqual(['Local', 'Vast · Remote 4090', 'Combined']);
+            expect(container.querySelector<HTMLSelectElement>('[aria-label="Telemetry worker"]')?.value).toBe('vast:123');
+            await act(async () => tabs()[1]!.click());
+            expect(remoteTargetId()).toBe('vast:123');
+            if (scenario === 'second worker attached') {
+                await act(async () => {
+                    client.setQueryData(['execution-targets'], response([readyTarget, secondTarget]));
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                });
+                expect(tabs()[1]?.getAttribute('aria-selected')).toBe('true');
+                expect(remoteTargetId()).toBe('vast:123');
+            }
+            await act(async () => {
+                const selector = container.querySelector<HTMLSelectElement>('[aria-label="Telemetry worker"]')!;
+                selector.value = 'vast:456';
+                selector.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+            expect(tabs()[1]?.textContent?.trim()).toBe('Vast · Remote A6000');
+            expect(remoteTargetId()).toBe('vast:456');
+            await act(async () => tabs()[2]!.click());
+            expect(container.querySelector('[data-testid="local-telemetry"]')).toBeTruthy();
+            expect(remoteTargetId()).toBe('vast:456');
+            // Polling/reordering must preserve the explicitly selected worker.
+            await act(async () => {
+                client.setQueryData(['execution-targets'], response([secondTarget, readyTarget]));
+                await new Promise(resolve => setTimeout(resolve, 0));
+            });
+            expect(tabs()[2]?.getAttribute('aria-selected')).toBe('true');
+            expect(remoteTargetId()).toBe('vast:456');
+            // Tab and selector navigation issue reads only, never preload/launch mutations.
+            expect(unexpectedRequests).toEqual([]);
+        } finally { await act(async () => root.unmount()); client.clear(); }
     });
 
     it('mounts saved recipes under the selected worker; preload is click-only and persisted progress survives refresh', async () => {
