@@ -19,6 +19,7 @@ export function Rfd4RetainedStateContinuation({ page, source, candidate }: { pag
         const back = new URL(window.location.href);
         if (candidate) back.searchParams.set('native_candidate', candidate);
         if (source.document?.artifact_id) back.searchParams.set('artifact_id', source.document.artifact_id);
+        if (source.document?.target_state != null) back.searchParams.set('target_state', source.document.target_state); else back.searchParams.delete('target_state');
         if (source.model_number != null) back.searchParams.set('model_number', String(source.model_number));
         href.searchParams.set('return_to', `${back.pathname}${back.search}${back.hash}`);
     }

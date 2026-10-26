@@ -65,7 +65,7 @@ export interface Props {
 }
 type View = 'candidates' | 'dashboard' | 'analytics' | 'table' | 'structure';
 type Filter = { key: string; kind: 'range' | 'missing' | 'null' | 'nonNumeric'; min: string; max: string };
-const control = 'rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)] disabled:opacity-50';
+const control = 'rounded-lg border-0 bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)] disabled:opacity-50';
 const panel = 'min-w-0 rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)]';
 const values = nativeGenerationMetrics;
 const rowKey = (row: NativeGenerationRecord, index: number) => row.candidate_key ?? row.design_id ?? `record:${index}`;
@@ -149,7 +149,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         }
         writeRoundStorage(jobId, 'native-documents', inventory);
     }, [jobId, rows]);
-    const cohort = useMemo<CohortRow[]>(() => rows.map((item, i) => ({ id: rowKey(item, i), label: adapter?.label(item) ?? (rfd4 ? String(item.example_id ?? (item.record_kind === 'observation' ? item.event ?? 'Observation' : item.candidate_key ?? 'Native record')) : `Candidate ${i + 1}`), values: values(item) })), [rows, adapter, rfd4]);
+    const cohort = useMemo<CohortRow[]>(() => rows.map((item, i) => ({ id: rowKey(item, i), label: adapter?.label(item) ?? (rfd4 ? String(item.label ?? (item.record_kind === 'observation' ? item.event ?? 'Observation' : `Candidate ${i + 1}`)) : `Candidate ${i + 1}`), values: values(item) })), [rows, adapter, rfd4]);
     const keys = useMemo(() => metricKeys(cohort), [cohort]);
     const numericKeys = useMemo(() => numericMetricKeys(cohort), [cohort]);
     const label = (key: string) => { const nativeLabel = adapter?.metricLabel?.(key); if (nativeLabel) return nativeLabel; const unit = rows.map(item => nativeGenerationMetricUnit(item, key)).find(Boolean); return `${describeCohortMetric(key, keys).label}${unit ? ` (${unit})` : ''}`; };
@@ -266,6 +266,15 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const document = explicit
         ? documents.find(doc => (requestedArtifact == null || doc.artifact_id === requestedArtifact) && (requestedState == null || doc.target_state === requestedState))
         : documents.find(doc => doc.primary) ?? (row ? adapter?.preferredDocument?.(row) : undefined) ?? (row?.design_id || documents.length === 1 ? documents[0] : undefined);
+    // One MODEL authority for every continuation of the inspected molecule.
+    const requestedModel = new URLSearchParams(window.location.search).get('model_number');
+    const nativeRef = row?.candidate_ref;
+    const sourceModel = document?.model ?? (requestedModel ? Number(requestedModel) : nativeRef?.kind === 'design' ? nativeRef.document?.model : nativeRef?.kind === 'native_document' ? nativeRef.model : undefined);
+    const continuationSource = document ? { job_id: jobId,
+        ...(row?.design_id ? { design_id: row.design_id } : {}),
+        document: { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}) },
+        ...(sourceModel != null ? { model_number: sourceModel } : {}),
+    } : undefined;
     const inspect = (item: NativeGenerationRecord, doc?: NativeGenerationDocument) => {
         const exact = doc ?? item.structures?.find(value => value.primary) ?? adapter?.preferredDocument?.(item) ?? (item.structures?.length === 1 ? item.structures[0] : undefined);
         setLocal({ scope, key: rowKey(item, rows.indexOf(item)), document: exact });
@@ -441,13 +450,11 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                             {document?.download_url ? <NativeDocumentWorkbench key={`${document.artifact_id}:${document.target_state}:${document.download_url}`} jobId={jobId} document={document} collapsed={!viewerToolsOpen} /> : <p role="status">{explicit ? 'Requested native document is unavailable. The Design primary structure is not substituted.' : documents.some(doc => doc.download_url) ? 'Choose a saved structure above to inspect this candidate.' : 'No downloadable native structure was published for this record.'}</p>}
                         </div>}
                         </div>{adapter?.related?.(row)}</div>
+                        <details className="my-2 text-xs"><summary>Candidate details</summary><label className="block">Exact candidate identifier<input className="block w-full" aria-label="Exact candidate identifier" readOnly value={String(row.candidate_key ?? row.native_input_id ?? '')} onFocus={event => event.target.select()} /></label></details>
                         <NativeGeneratedSequences row={row} />
-                        {rfd4 && document && <Rfd4RetainedStateContinuation key={document.artifact_id} candidate={activeId ?? undefined} page={page} source={{ job_id: jobId, document: { artifact_id: document.artifact_id, target_state: document.target_state ?? undefined }, expected_sha256: document.sha256, ...(document.model != null ? { model_number: document.model } : new URLSearchParams(window.location.search).has('model_number') ? { model_number: Number(new URLSearchParams(window.location.search).get('model_number')) } : {}) }} />}
+                        {rfd4 && continuationSource && <Rfd4RetainedStateContinuation key={document!.artifact_id} candidate={activeId ?? undefined} page={page} source={{ ...continuationSource, expected_sha256: document!.sha256 }} />}
                         {document?.artifact_id && <nav aria-label="Continue exact native document">{(rfd4 ? [...rfd4Destinations, 'redesign', 'sequence', 'prediction'] as const : ['redesign', 'sequence', 'prediction'] as const).map(destination => {
-                            const requestedModel = new URLSearchParams(window.location.search).get('model_number');
-                            const nativeRef = row.candidate_ref;
-                            const model = document.model ?? (requestedModel ? Number(requestedModel) : nativeRef?.kind === 'design' ? nativeRef.document?.model : nativeRef?.kind === 'native_document' ? nativeRef.model : undefined);
-                            const href = new URL(continuationHref({ job_id: jobId, ...(model != null ? { model_number: model } : {}), ...(row.design_id ? { design_id: row.design_id } : {}), document: { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}) } }, destination), window.location.origin);
+                            const href = new URL(continuationHref(continuationSource!, destination), window.location.origin);
                             const back = new URL(href.searchParams.get('return_to')!, window.location.origin);
                             back.searchParams.set('native_candidate', activeId!); back.searchParams.set('artifact_id', document.artifact_id);
                             if (document.target_state != null) back.searchParams.set('target_state', document.target_state); else back.searchParams.delete('target_state');
@@ -456,10 +463,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                             href.searchParams.set('return_to', `${back.pathname}${back.search}${back.hash}`);
                             return <a className="mr-3 underline" key={destination} href={`${href.pathname}${href.search}`}>{continuationLabel(destination)}</a>;
                         })}<button className="underline" type="button" onClick={() => {
-                            const requestedModel = new URLSearchParams(window.location.search).get('model_number');
-                            const nativeRef = row.candidate_ref;
-                            const model = requestedModel ? Number(requestedModel) : nativeRef?.kind === 'design' ? nativeRef.document?.model : nativeRef?.kind === 'native_document' ? nativeRef.model : undefined;
-                            const selected = { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}), ...(model != null ? { model } : {}) };
+                            const selected = { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}), ...(sourceModel != null ? { model: sourceModel } : {}) };
                             const ref: CandidateRef = row.design_id ? { kind: 'design', job_id: jobId, design_id: row.design_id, document: selected } : { kind: 'native_document', job_id: jobId, ...selected };
                             const back = new URL(window.location.href);
                             back.searchParams.set('native_candidate', activeId!); back.searchParams.set('artifact_id', document.artifact_id);
