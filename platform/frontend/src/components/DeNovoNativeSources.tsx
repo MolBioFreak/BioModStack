@@ -18,9 +18,9 @@ function NativePositionControls({ slot, receipt, onSelection }: { slot: string; 
     const integer = (value: unknown) => (typeof value === 'number' || typeof value === 'string' && /^-?\d+$/.test(value)) && Number.isSafeInteger(Number(value)) ? Number(value) : undefined;
     return <div className="space-y-2">
         <label>Retained source position<select aria-label={`Retained residue for ${slot}`} value={position} onChange={event => { setPosition(event.target.value); setAtom(''); }}>
-            <option value="">Choose exact residue</option>{positions.map((row, i) => <option key={i} value={i}>MODEL {String(row.model_number)} · label {String(row.label_asym_id)}:{String(row.label_seq_id)} · author {String(row.auth_asym_id)}:{String(row.auth_seq_id)}{text(row.pdbx_PDB_ins_code)} · {String(row.label_comp_id)}</option>)}
+            <option value="">Choose exact residue</option>{positions.map((row, i) => <option key={i} value={i}>MODEL {String(row.model_number)} · {text(row.label_asym_id) && integer(row.label_seq_id) !== undefined ? `label ${row.label_asym_id}:${row.label_seq_id} · ` : ''}author {text(row.auth_asym_id)?.trim() || '(blank)'}:{String(row.auth_seq_id)}{text(row.pdbx_PDB_ins_code)} · {text(row.label_comp_id) ?? text(row.component_id) ?? 'residue'}</option>)}
         </select></label>
-        {selected && <><label>Native atom<select aria-label={`Retained atom for ${slot}`} value={atom} onChange={event => setAtom(event.target.value)}><option value="">Whole residue</option>{atoms.map((row, i) => <option key={i} value={i}>{String(row.label_atom_id)} · author {String(row.auth_atom_id)} · {String(row.type_symbol)}</option>)}</select></label>
+        {selected && <><label>Native atom<select aria-label={`Retained atom for ${slot}`} value={atom} onChange={event => setAtom(event.target.value)}><option value="">Whole residue</option>{atoms.map((row, i) => <option key={i} value={i}>{text(row.label_atom_id) ?? text(row.auth_atom_id) ?? 'Atom'}{text(row.label_atom_id) && text(row.auth_atom_id) && row.label_atom_id !== row.auth_atom_id ? ` · author ${row.auth_atom_id}` : ''} · {String(row.type_symbol)}</option>)}</select></label>
             <button type="button" onClick={() => {
                 const selectedAtom = atom === '' ? undefined : atoms[Number(atom)];
                 const identity: Rfd4NativeSelectionIdentity = { documentId: receipt.path,
@@ -41,12 +41,13 @@ function withModel(source: StructureSourceSelection, model: number | undefined):
     return next;
 }
 
-function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selectedIdentities, onInspection, initialReceipt }: {
+function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selectedIdentities, onInspection, initialReceipt, compact = false }: {
     slot: string; value: NativeGenerationSourceBinding; onChange: (value: NativeGenerationSourceBinding) => void;
     selectedIdentities?: Rfd4NativeSelectionIdentity[];
     initialReceipt?: StructureMaterialization;
     onInspection?: (slot: string, receipt: StructureMaterialization, binding: NativeGenerationSourceBinding) => void;
-    onRemove: () => void; onSelection?: (slot: string, receipt: StructureMaterialization, selection: MetricSelection) => void;
+    compact?: boolean;
+    onRemove?: () => void; onSelection?: (slot: string, receipt: StructureMaterialization, selection: MetricSelection) => void;
 }) {
     const [receipt, setReceipt] = useState<StructureMaterialization | undefined>(initialReceipt);
     const [saved, setSaved] = useState<{ receipt: StructureMaterialization; rows: SavedCondition[] }>();
@@ -90,7 +91,7 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
     const select = async (source: SelectedTarget | null) => {
         const token = ++epoch.current;
         setReceipt(undefined); setError(''); setBusy(false);
-        if (!source) { onRemove(); return; }
+        if (!source) { onRemove?.(); setPicking(false); return; }
         try {
             let selection: StructureSourceSelection;
             if (source.materialization?.source_structure) selection = source.materialization.source_structure;
@@ -112,15 +113,16 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
     };
     const isFile = fileBinding(value);
     return <section className="space-y-3 rounded border border-slate-700 p-3" aria-label={`Native source ${slot}`}>
-        <div className="flex flex-wrap items-center gap-3"><strong>{slot}</strong><span>{isFile ? 'Managed file or archive' : 'Exact native structure'}</span>
-            <button type="button" onClick={() => { epoch.current++; setBusy(false); onRemove(); }}>Remove source {slot}</button></div>
+        {!compact && <div className="flex flex-wrap items-center gap-3"><strong>{slot}</strong><span>{isFile ? 'Managed file or archive' : 'Exact native structure'}</span>
+            {onRemove && <button type="button" onClick={() => { epoch.current++; setBusy(false); onRemove(); }}>Remove source {slot}</button>}</div>}
+        {(value.path || !isFile && (value.candidate || value.job_id || value.design_id)) && <details><summary>Source details</summary>
         {!isFile && <p className="break-all text-sm">{value.candidate ? `Job ${value.candidate.job_id} · ${value.candidate.kind === 'native_document' ? `document ${value.candidate.artifact_id}` : value.candidate.kind === 'design' ? `design ${value.candidate.design_id}` : value.candidate.kind}` : value.job_id ? `Job ${value.job_id}` : 'Retained source'}{value.model_number !== undefined ? ` · MODEL ${value.model_number}` : ''}</p>}
-        {value.path && <p className="break-all text-xs">{value.path}</p>}
+        {value.path && <p className="break-all text-xs">{value.path}</p>}</details>}
         <div className="flex flex-wrap gap-3">
-            {!isFile && <button type="button" onClick={() => setPicking(!picking)}>Choose document for {slot}</button>}
-            {!isFile && <button type="button" onClick={() => setNativePicking(!nativePicking)}>Choose native result for {slot}</button>}
-            <button type="button" onClick={() => setBrowser(true)}>Browse {isFile ? 'file or archive' : 'native file'} for {slot}</button>
-            {!isFile && (value.path || value.candidate || value.design_id) && <button type="button" onClick={() => void acquire(value)}>Inspect retained {slot}</button>}
+            {!isFile && <button type="button" aria-label={`Choose document for ${slot}`} onClick={() => setPicking(!picking)}>{compact ? 'Choose document' : `Choose document for ${slot}`}</button>}
+            {!isFile && <button type="button" aria-label={`Choose native result for ${slot}`} onClick={() => setNativePicking(!nativePicking)}>{compact ? 'From results' : `Choose native result for ${slot}`}</button>}
+            <button type="button" aria-label={`Browse ${isFile ? 'file or archive' : 'native file'} for ${slot}`} onClick={() => setBrowser(true)}>{compact ? 'Browse files' : `Browse ${isFile ? 'file or archive' : 'native file'} for ${slot}`}</button>
+            {!isFile && (value.path || value.candidate || value.design_id) && <button type="button" aria-label={`Inspect retained ${slot}`} onClick={() => void acquire(value)}>{compact ? 'Reload preview' : `Inspect retained ${slot}`}</button>}
         </div>
         {picking && !isFile && <TargetAntigenSelector requiredFormat="native" label={`Native document for ${slot}`} onSelect={source => void select(source)} />}
         {nativePicking && !isFile && <DeNovoNativeDocumentPicker onSelect={source => void acquire(source)} />}
@@ -167,24 +169,24 @@ export function NativeSourceInput({ label, value, bindings, onChange, onAcquire,
     const displayName = (slot: string, source: NativeGenerationSourceBinding) => {
         const path = source.path?.split(/[\\/]/).filter(Boolean).at(-1);
         const model = !fileBinding(source) ? source.model_number ?? source.document?.model ?? (source.candidate?.kind === 'native_document' ? source.candidate.model : source.candidate?.kind === 'design' ? source.candidate.document?.model : undefined) : undefined;
-        return `${path ?? slot}${model != null ? ` · MODEL ${model}` : ''}`;
+        const name = path && !/^native\.(?:pdb|cif|mmcif|bcif)(?:\.gz)?$/i.test(path) ? path : `Structure ${structureBindings.findIndex(([name]) => name === slot) + 1}`;
+        return `${name}${model != null ? ` · MODEL ${model}` : ''}`;
     };
     return <div className="space-y-2 min-w-0" data-native-source-input>
         <div className="flex flex-wrap items-end gap-2">
-            <label>{label}<select aria-label={label} value={value} onChange={event => { setOpen(false); onChange(event.target.value); }}>
+            <label>{label}{(value || structureBindings.length > 0) && <select aria-label={label} value={value} onChange={event => { setOpen(false); onChange(event.target.value); }}>
                 <option value="">Use existing input</option>
                 {value && !structureBindings.some(([slot]) => slot === value) && <option value={value}>{value} · not bound</option>}
                 {structureBindings.map(([slot, source]) => <option key={slot} value={slot}>{displayName(slot, source)}</option>)}
-            </select></label>
+            </select>}</label>
             <button type="button" aria-label={`Choose structure for ${label}`} onClick={() => { committedSlot.current = undefined; setOpen(true); }}>Choose structure</button>
             {binding && !fileBinding(binding) && <button type="button" aria-label={`Inspect structure for ${label}`} onClick={() => setOpen(!open)}>Inspect</button>}
         </div>
         {open && <div className="space-y-2" role="group" aria-label={`Choose structure for ${label}`}>
             <button type="button" onClick={() => setOpen(false)}>{binding ? 'Close' : 'Cancel'}</button>
-            <NativeSourceRow slot={value || label} value={binding && !fileBinding(binding) ? binding : { output_format: 'native' }} initialReceipt={inspection} selectedIdentities={selectedIdentities}
+            <NativeSourceRow compact slot={value || label} value={binding && !fileBinding(binding) ? binding : { output_format: 'native' }} initialReceipt={inspection} selectedIdentities={selectedIdentities}
                 onSelection={onSelection ? (_slot, receipt, selection) => onSelection(committedSlot.current ?? value, receipt, selection) : undefined}
                 onChange={source => { committedSlot.current = latest.current.onAcquire(source); if (!value) setOpen(false); }}
-                onRemove={() => setOpen(false)}
                 onInspection={(_slot, receipt, source) => latest.current.onInspection?.(committedSlot.current ?? value, receipt, source)} />
         </div>}
     </div>;

@@ -79,7 +79,7 @@ async function mount(model = 'rfd4_proteina', params: any = { rfd4_request: { in
     await vi.waitFor(async () => { await settle(); expect(document.querySelector('[data-native-de-novo] fieldset')).not.toBeNull(); });
 }
 async function click(text: string) {
-    const node = [...document.querySelectorAll<HTMLButtonElement>('button')].find(n => !n.closest('[hidden]') && n.textContent?.trim() === text);
+    const node = [...document.querySelectorAll<HTMLButtonElement>('button')].find(n => !n.closest('[hidden]') && (n.textContent?.trim() === text || n.getAttribute('aria-label') === text));
     expect(node, text).toBeTruthy(); await act(async () => node!.click()); await settle();
 }
 async function edit(label: string, value: string) {
@@ -303,4 +303,20 @@ it('using an existing input binds the task without materialization or renaming s
     expect(params.rfd4_request.input.slots).toEqual(['retained_name']);
     expect(params.native_sources).toEqual({ retained_name: source });
     expect(requests.some(row => row.url.includes('materialize'))).toBe(false);
+});
+it('compact source inspection preserves author-only PDB identity without undefined labels or a false remove action', async () => {
+    materializer = async body => ({ ...receipt(body), format: 'pdb', native_format: 'pdb', model_number: 2,
+        source_positions: [{ model_number: 2, auth_asym_id: ' ', auth_seq_id: '0', component_id: 'ACE', atoms: [{ auth_atom_id: 'CH3', type_symbol: 'C', model_atom_index: 0 }] }] });
+    await mount('rfd4_proteina', { rfd4_request: { input: { kind: 'annotated', slots: ['selected'] } }, native_sources: { selected: { path: 'inputs/native.pdb', model_number: 2, output_format: 'native' } } });
+    await clickAria('Inspect structure for Annotated source 1'); await click('Inspect retained selected');
+    const group = document.querySelector('[role="group"][aria-label="Choose structure for Annotated source 1"]')!;
+    expect(group.textContent).not.toContain('Remove source');
+    expect(group.textContent).not.toContain('undefined');
+    expect(group.textContent).toContain('author (blank):0'); expect(group.textContent).toContain('ACE');
+    await edit('Retained residue for selected', '0'); await click('Add exact selection from selected');
+    expect(document.body.textContent).toContain('Native label residue mapping is unavailable');
+    await click('Generate candidates');
+    const wire = requests.find(row => row.url === '/api/jobs' && row.method === 'post')!.body;
+    expect(wire.params.native_sources.selected.model_number).toBe(2);
+    expect(wire.params.rfd4_request.input).toEqual({ kind: 'annotated', slots: ['selected'] });
 });

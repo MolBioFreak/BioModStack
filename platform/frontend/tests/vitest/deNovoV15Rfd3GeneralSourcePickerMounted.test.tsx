@@ -49,7 +49,7 @@ async function mount(initial: Record<string, unknown> = {}) {
     await settle();
 }
 async function click(text: string) {
-    const node = [...document.querySelectorAll<HTMLElement>('button,summary')].find(node => node.textContent === text && !node.closest('[hidden]'));
+    const node = [...document.querySelectorAll<HTMLElement>('button,summary')].find(node => (node.textContent === text || node.getAttribute('aria-label') === text) && !node.closest('[hidden]'));
     expect(node, text).toBeTruthy(); await act(async () => node!.click()); await settle();
 }
 async function labeledClick(label: string) {
