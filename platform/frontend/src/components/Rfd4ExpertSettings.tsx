@@ -91,7 +91,7 @@ export function Rfd4ExpertSettings({ request, schema, onChange, fileSlots = {} }
                 <p>From selected profile</p>
                 <button type="button" aria-label={`Set override for ${label}`} onClick={() => changeLeaf(path, kind === 'array' ? [] : {})}>Set override</button>
             </fieldset> : <BioXpSchemaInput label={label} nativeLabels schema={child} rootSchema={schema} path={path} value={value} onChange={v => changeLeaf(path, v)} fallback={() => value === undefined ? <p>From selected profile</p> : <p>Retained value does not match this schema.</p>} />}
-            {kind && value !== undefined && <button type="button" aria-label={`Use profile value for ${label}`} onClick={() => changeLeaf(path, undefined)}>Use profile value</button>}
+            {value !== undefined && <button type="button" aria-label={`Use profile value for ${label}`} onClick={() => changeLeaf(path, undefined)}>Use profile value</button>}
         </div>;
     };
     const section = (title: string, content: () => React.ReactNode) => <NativeSettingsDisclosure key={title} summary={<span>{title}</span>}>{content}</NativeSettingsDisclosure>;
