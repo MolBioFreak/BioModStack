@@ -118,7 +118,9 @@ def bind_operation(mode: str, params: dict, groups: list[dict]) -> dict:
     if mode == 'ensemble_design':
         bound['ensembles'] = groups
     elif mode == 'sidechain_pack':
-        bound['structures'] = [state for group in groups for state in group['states']]
+        # Constraints remain in the saved design draft, not the packing wire.
+        bound['structures'] = [{'state_id': state['state_id'], 'path': state['path']}
+                               for group in groups for state in group['states']]
     return normalize_request(mode, bound)
 
 

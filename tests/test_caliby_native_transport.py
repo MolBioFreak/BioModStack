@@ -98,8 +98,20 @@ def run_sidechain_packing(*, model, data_cfg, sampling_cfg, pdb_paths, device, o
                       potts_rejection_step=False, potts_only_cond=False,
                       potts_sweeps=11, potts_proposal="chromatic")
     else:
-        params.update(structures=states[:2], packer_model_name="caliby_packer_030")
-    request = contract.normalize_request(mode, params)
+        # Legacy selected packing drafts retain ensemble constraints. The one
+        # binding owner projects them away without mutating saved design state.
+        for state in states[:2]:
+            state.update(fixed_pos_seq='A1', fixed_pos_scn='A2',
+                         fixed_pos_override_seq='A3:G', pos_restrict_aatype='A4:AV',
+                         symmetry_pos='A5,B5')
+        params.update(packer_model_name="caliby_packer_030")
+    if mode == 'sidechain_pack':
+        original = json.loads(json.dumps(states[:2]))
+        request = contract.bind_operation(mode, params, [{'ensemble_id': 'retained', 'states': states[:2]}])
+        assert states[:2] == original
+        assert all(set(s) == {'state_id', 'path'} for s in request['structures'])
+    else:
+        request = contract.normalize_request(mode, params)
     request_json = tmp_path / "normalized.json"
     request_json.write_text(json.dumps(request))
     prepared = tmp_path / "prepared input"
@@ -115,7 +127,8 @@ def run_sidechain_packing(*, model, data_cfg, sampling_cfg, pdb_paths, device, o
     binary.mkdir()
     cache = tmp_path / "cache"
     cache.mkdir()
-    binds = str(cache) + ":/cache," + str(checkpoint.parent.parent) + ":/weights/caliby/model_params"
+    binds = ','.join((str(cache) + ':/cache', str(checkpoint.parent.parent) + ':/weights/caliby/model_params',
+                      str(REPO) + ':' + str(REPO) + ':ro', str(tmp_path) + ':' + str(tmp_path)))
     (binary / "python3").write_text("#!/bin/sh\nexec apptainer exec --bind " + shlex.quote(binds) + " --env " + shlex.quote("PYTHONPATH=" + str(fixture)) + " " + shlex.quote(str(image)) + ' python "$@"\n')
     (binary / "python3").chmod(0o755)
     config = tmp_path / "fixture.config"

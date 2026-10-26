@@ -594,6 +594,72 @@ def _record_ids(value: str | list[str], used_ids: set[str]) -> None:
         used_ids.add(chain_id)
 
 
+def native_covalent_bonds(bonds, inputs, *, seed=None):
+    """Lower source recipe endpoints using the installed native atom inventory.
+
+    Authored ESM endpoints are already native and remain literal. Source entity
+    ordinals refer to the ordered components, not native deduplicated entities.
+    This runs beside native deserialization, where CCD/tokenization is available;
+    the API must not guess atom order from PDB order or a residue-name table.
+    """
+    if not any('left_entity' in bond for bond in bonds):
+        return bonds
+    from collections import defaultdict
+    from types import SimpleNamespace
+    from esm.models.esmfold2.prepare_input import build_chains_from_input
+    from esm.utils.structure.input_builder import StructurePredictionInput
+
+    def endpoints(bond, side):
+        item = inputs[bond[side + '_entity'] - 1]
+        ids = list(iter_chain_ids(item.id))
+        copy = bond.get(side + '_copy')
+        if copy is not None:
+            ids = [ids[copy - 1]]
+        return [(chain, bond[side + '_position'] - 1, bond[side + '_atom']) for chain in ids]
+
+    pairs = []
+    for bond in bonds:
+        if 'left_entity' in bond:
+            pairs.extend(zip(endpoints(bond, 'left'), endpoints(bond, 'right'), strict=True))
+    # Native CCD tokenization treats covalently attached ligands differently.
+    # Supply chain membership, not invented endpoint indices, for this inventory.
+    membership = [SimpleNamespace(chain_id1=a[0], chain_id2=b[0]) for a, b in pairs]
+    membership.extend(SimpleNamespace(chain_id1=b['chain_id1'], chain_id2=b['chain_id2'])
+                      for b in bonds if 'left_entity' not in b)
+    chains, tokens, atoms = build_chains_from_input(
+        StructurePredictionInput(sequences=inputs, covalent_bonds=membership), seed)
+    chain_ids = {chain.asym_id: chain.chain_id for chain in chains}
+    inventory = defaultdict(list)
+    for atom in atoms:
+        if atom.is_valid and atom.token_index < len(tokens):
+            token = tokens[atom.token_index]
+            inventory[(chain_ids[token.asym_id], token.residue_index)].append(atom.name)
+
+    def lower(endpoint, suffix):
+        chain, residue, name = endpoint
+        names = inventory[(chain, residue)]
+        # Protenix numeric SMILES endpoints are atom-map numbers, not indices.
+        # Native ESM tokenization preserves RDKit heavy-atom order.
+        if isinstance(name, int) or (isinstance(name, str) and name.isdigit()):
+            from rdkit import Chem
+            item = next(item for item in inputs if chain in list(iter_chain_ids(item.id)))
+            mol = Chem.RemoveHs(Chem.MolFromSmiles(item.smiles))
+            index, = [atom.GetIdx() for atom in mol.GetAtoms() if atom.GetAtomMapNum() == int(name)]
+            names[index]  # Verify membership in the native heavy-atom inventory.
+        else:
+            index = names.index(name)
+        return {f'chain_id{suffix}': chain, f'res_idx{suffix}': residue, f'atom_idx{suffix}': index}
+
+    result = []
+    for bond in bonds:
+        if 'left_entity' not in bond:
+            result.append(bond)
+        else:
+            result.extend({**lower(a, 1), **lower(b, 2)} for a, b in
+                          zip(endpoints(bond, 'left'), endpoints(bond, 'right'), strict=True))
+    return result
+
+
 def build_structure_prediction_input(
     args: argparse.Namespace,
     *,
@@ -838,6 +904,9 @@ def build_structure_prediction_input(
         )
     if conditioning:
         from esm.utils.structure.input_builder import deserialize_structure_prediction_input
+        if 'covalent_bonds' in conditioning:
+            conditioning['covalent_bonds'] = native_covalent_bonds(
+                conditioning['covalent_bonds'], inputs, seed=args.seed)
         native = deserialize_structure_prediction_input({'sequences': [], **conditioning})
         return StructurePredictionInput(sequences=inputs, covalent_bonds=native.covalent_bonds,
             distogram_conditioning=native.distogram_conditioning), manifest_components

@@ -88,6 +88,10 @@ def normalize(request):
                         if f.default is not None and f.name not in bound}
             if stage.kind == 'prediction':
                 defaults.update({key: False for key in BLIND_FIXED_PARAMETERS if key in known})
+            # Omission is source inheritance, not an authored empty override.
+            # Keep it sparse across normalization and retained-plan replay.
+            if stage.kind == 'prediction':
+                defaults.pop('covalent_bonds', None)
             invocation.params = {**defaults, **invocation.params}
             if model in {'protonpottsmpnn', 'ligandmpnn'}:
                 # Final native validation runs after exact source/roles bind.
@@ -566,11 +570,42 @@ def prediction_request(root, row, target, model, params, placement, *, scope='bi
             binder = source_components(row['path'], row['binder_chains'], 'binder')
     bonds = deepcopy(row.get('covalent_bonds', [])) if scope == 'whole_composition' else []
     if selected_chains is not None:
-        indices = [i for i, component in enumerate(binder, 1) if component['id'] in selected_chains]
-        remap = {old: new for new, old in enumerate(indices, 1)}
-        binder = [component for i, component in enumerate(binder, 1) if i in remap]
-        bonds = [{**bond, 'left_entity': remap[bond['left_entity']], 'right_entity': remap[bond['right_entity']]}
-                 for bond in bonds if bond['left_entity'] in remap and bond['right_entity'] in remap]
+        remap, copies, selected = {}, {}, []
+        for old, component in enumerate(binder, 1):
+            ids = component.get('copy_ids') or component['id']
+            ids = ids if isinstance(ids, list) else [ids]
+            whole = isinstance(component['id'], str) and component['id'] in selected_chains
+            kept = [i for i, chain in enumerate(ids, 1) if whole or chain in selected_chains]
+            if not kept:
+                continue
+            remap[old] = len(selected) + 1
+            copies[old] = ({i: i for i in range(1, max(component.get('count', 1), len(ids)) + 1)}
+                           if whole else {i: new for new, i in enumerate(kept, 1)})
+            if len(kept) != len(ids):
+                component = {**component, 'copy_ids': [ids[i - 1] for i in kept], 'count': len(kept)}
+                if isinstance(component['id'], list):
+                    component['id'] = component['copy_ids']
+            selected.append(component)
+        selected_bonds = []
+        for bond in bonds:
+            left, right = bond['left_entity'], bond['right_entity']
+            if left not in remap or right not in remap:
+                continue
+            def source_copies(entity, side):
+                value = bond.get(side + '_copy')
+                component = binder[entity - 1]
+                ids = component.get('copy_ids') or component['id']
+                count = max(component.get('count', 1), len(ids) if isinstance(ids, list) else 1)
+                return [value] if value is not None else range(1, count + 1)
+            if all(bond.get(side + '_copy') is None for side in ('left', 'right')) and all(
+                    list(copies[e]) == list(source_copies(e, side)) for e, side in ((left, 'left'), (right, 'right'))):
+                selected_bonds.append({**bond, 'left_entity': remap[left], 'right_entity': remap[right]})
+                continue
+            for lc, rc in zip(source_copies(left, 'left'), source_copies(right, 'right')):
+                if lc in copies[left] and rc in copies[right]:
+                    selected_bonds.append({**bond, 'left_entity': remap[left], 'right_entity': remap[right],
+                                           'left_copy': copies[left][lc], 'right_copy': copies[right][rc]})
+        binder, bonds = selected, selected_bonds
     targets = deepcopy((target or {}).get('components') or [])
     if not targets and scope != 'whole_composition':
         raise ValueError('No independently declared target components are available')
@@ -597,7 +632,7 @@ def prediction_request(root, row, target, model, params, placement, *, scope='bi
     for component in components:
         for key in ('templatesPath', 'template', 'initial_guess', 'structure', 'coordinates'):
             component.pop(key, None)
-    if bonds:
+    if 'covalent_bonds' not in params and bonds:
         params['covalent_bonds'] = bonds
     params.update(complex_components=components,
         sequence=('' if model == 'esmfold2' else ':').join(c.get('sequence', '') for c in components if c.get('type') == 'protein'),
