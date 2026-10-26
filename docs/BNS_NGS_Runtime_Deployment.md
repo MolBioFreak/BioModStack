@@ -5,7 +5,9 @@ The full BMS reference for this runtime audit is upstream `test` commit
 `8348ec0b01c36ab212a2f75b9209951e627104b5`. The native NGS workflows, signal
 workbench, model locks, scientific controls and shared persistence remain the
 BMS implementations. Their scientific readiness and hardware admission gates
-remain authoritative.
+remain authoritative. Rechecking upstream `test` at
+`366cdc0dd8f703dce0cb2508938f61bcc67a6dbe` on 2026-10-26 found no newer
+changes in the audited NGS runtime paths.
 
 ## Runtime inventory
 
@@ -74,6 +76,23 @@ and the offline two-track comparison renderer. All nine Dorado model aggregates
 and all five Medaka archive hashes matched their locks. CPU native basecalling
 checks covered DNA, RNA and modified bases. These checks qualify those receiving
 paths; they do not replace every workflow's governed live acceptance.
+
+Managed-service acceptance also exercised native upload and external source
+registration, POD5 conversion by the running worker, external indexed BLOW5
+validation, and waveform retrieval of all 2,552 samples in the recorded-read
+fixture. External source provenance remains distinct from MinKNOW acquisition
+receipts. The descriptor broker supports long deployment paths without changing
+the persistent staging root or relaxing file confinement.
+
+A saved MolBio revision issued the immutable reference receipt for a synthetic
+12-read FASTQ job through the native prepare/preview/submit API. The managed CPU
+workflow completed alignment, dimer analysis, Bayesian consensus, IGV reporting
+and construct verification. Its observed consensus matched all 2,746 expected
+bases. The scientific verdict remained **REVIEW**, correctly retaining depth,
+strand-balance and topology limitations of this synthetic fixture. Workflow
+completion is not biological acceptance. Mounted UI tests, TypeScript checking
+and production compilation passed; these checks are not browser click-through
+or physical instrument acceptance.
 
 BMS's governed Dorado execution currently requires its CUDA device and VRAM
 policy. A native CPU Dorado smoke check does not prove that BMS submits CPU

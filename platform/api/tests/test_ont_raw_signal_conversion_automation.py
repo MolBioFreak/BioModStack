@@ -2563,17 +2563,27 @@ def test_source_read_lease_blocks_in_place_writer_until_cleanup(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_worker_transfers_exact_source_descriptor_and_cleans_socket(tmp_path: Path) -> None:
+@pytest.mark.parametrize("long_stage_path", [False, True])
+async def test_worker_transfers_exact_source_descriptor_and_cleans_socket(tmp_path: Path, long_stage_path: bool) -> None:
     source_path = tmp_path / "source.pod5"
     source_path.write_bytes(b"selected-inode")
     root_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
     source_fd = os.open(source_path, os.O_RDONLY)
     socket_dir = tempfile.TemporaryDirectory(prefix="ont-fd-")
-    socket_path = Path(socket_dir.name) / "s"
+    socket_root = Path(socket_dir.name)
+    if long_stage_path:
+        socket_root = socket_root / ("stage-" + "a" * 100)
+        socket_root.mkdir()
+    socket_path = socket_root / "s"
+    assert (len(os.fsencode(socket_path)) > 107) == long_stage_path
     script = """
 import array, os, socket, sys
 connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-connection.connect(sys.argv[1])
+parent_fd = os.open(os.path.dirname(sys.argv[1]), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    connection.connect(f'/proc/self/fd/{parent_fd}/{os.path.basename(sys.argv[1])}')
+finally:
+    os.close(parent_fd)
 _, ancillary, _, _ = connection.recvmsg(1, socket.CMSG_SPACE(2 * array.array('i').itemsize))
 received = array.array('i')
 for level, kind, data in ancillary:
