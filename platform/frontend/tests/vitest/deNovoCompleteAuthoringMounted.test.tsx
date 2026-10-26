@@ -79,12 +79,6 @@ async function edit(label: string, value: string) {
     expect(node, label).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), 'value')!.set!.call(node, value); node!.dispatchEvent(new Event(node!.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); });
 }
 const nativeRequest = { input: { kind: 'unconditional', name: 'n', chains: [{ chain_id: 'A', min_length: 73, max_length: 99 }] }, settings: { seed: 0, delete_failing_pre_oracle: false, search: { checkpoints: null, save_states: false } } };
-async function disclose(name: string) {
-    await click('Native settings');
-    const summary = [...document.querySelectorAll('summary')].find(node => node.textContent?.trim().toLowerCase() === name.toLowerCase());
-    expect(summary, name).toBeTruthy();
-    await act(async () => { const details = summary!.parentElement as HTMLDetailsElement; details.open = true; details.dispatchEvent(new Event('toggle')); });
-}
 async function openGroup(title: string) {
     const summary = [...document.querySelectorAll('summary')].find(node => node.textContent?.trim() === title);
     expect(summary, title).toBeTruthy();
@@ -104,30 +98,30 @@ const d20 = { input: { kind: 'unconditional', name: 'd20', chains: [{ chain_id: 
     generation: { args: { nsteps: 20, partial_t_backbone: 0, partial_t_latent: null, inverse_folding: false }, model: { bb_ca: { schedule: { mode: 'log', p: 2 } }, local_latents: { schedule: { mode: 'power', p: 3 } } } },
     search: { checkpoints: null, save_states: false }, delete_failing_pre_oracle: false, metrics_tags: [],
 } };
-it('D20 renders typed Sampling and nested Runtime acceleration without another navigation destination or eager expert bodies', async () => {
+it('D20 renders typed integration and runtime controls in Native settings without eager expert bodies', async () => {
     await mount('rfd4_proteina', 'generate', d20);
-    expect(document.querySelector('[data-rfd4-sampling]')).toBeNull();
-    await disclose('Sampling');
-    expect(document.querySelector('[data-rfd4-sampling]')).not.toBeNull();
-    expect(document.querySelector('[aria-label="settings.settings.inference_backend"]')).toBeNull();
-    await openGroup('Runtime acceleration');
-    expect(document.querySelector('[aria-label="settings.settings.inference_backend"]')?.tagName).toBe('SELECT');
-    expect(document.body.textContent).toContain('CUDA 13');
-    expect(document.querySelector('[aria-label="settings.settings.generation.args.nsteps"]')).toBeNull();
+    expect(document.querySelector('[aria-label="inference_backend"]')).toBeNull();
+    await click('Native settings');
+    expect(document.querySelector('[data-rfd4-expert]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="inference_backend"]')).toBeNull();
+    await openGroup('Runtime, output and retained assets');
+    expect(document.querySelector('[aria-label="inference_backend"]')?.tagName).toBe('SELECT');
+    expect(document.body.textContent).toContain('Native/BioIR incompatibilities remain native validation');
+    expect(document.querySelector('[aria-label="Integration arguments.nsteps"]')).toBeNull();
     expect(document.querySelector('textarea')).toBeNull();
-    const runtime = [...document.querySelectorAll('summary')].find(node => node.textContent === 'Runtime acceleration')!;
-    expect(runtime.closest('[data-rfd4-sampling]')).not.toBeNull();
-    await openGroup('Sampling controls');
-    expect(document.querySelector<HTMLInputElement>('[aria-label="settings.settings.generation.args.nsteps"]')?.type).toBe('number');
-    expect(document.querySelector<HTMLInputElement>('[aria-label="settings.settings.generation.args.partial_t_backbone"]')?.value).toBe('0');
+    const runtime = [...document.querySelectorAll('summary')].find(node => node.textContent === 'Runtime, output and retained assets')!;
+    expect(runtime.closest('[data-rfd4-expert]')).not.toBeNull();
+    await openGroup('Integration and partial / inverse sampling');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Integration arguments.nsteps"]')?.type).toBe('number');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Integration arguments.partial_t_backbone"]')?.value).toBe('0');
     await click('Generate candidates');
     expect(requests.find(r => r.url === '/api/jobs')!.body.params.rfd4_request).toEqual(d20);
     if (process.env.BMS_UI_EVIDENCE_DIR) writeFileSync(resolve(process.env.BMS_UI_EVIDENCE_DIR, 'D20-rendered.html'), document.body.innerHTML);
 });
 it('native to BioIR to native retains all requested expert values across serialized cold Load after populated navigation', async () => {
-    await mount('rfd4_proteina', 'generate', d20); await disclose('Sampling'); await openGroup('Runtime acceleration');
-    await edit('settings.settings.inference_backend', '1');
-    await edit('settings.settings.bioir.dtype', 'float32');
+    await mount('rfd4_proteina', 'generate', d20); await click('Native settings'); await openGroup('Runtime, output and retained assets');
+    await edit('inference_backend', '1');
+    await edit('bioir.dtype', 'float32');
     await saveTemplate();
     const expected = structuredClone(d20); expected.settings.inference_backend = 'bioir'; expected.settings.bioir.dtype = 'float32';
     expect(saved[0].params.native_job_request.params.rfd4_request).toEqual(expected);
@@ -144,10 +138,10 @@ it('native to BioIR to native retains all requested expert values across seriali
     await click('Template Manager'); await click('← Back to list'); await click('Load'); await settle();
     await vi.waitFor(async () => { await settle(); expect(document.querySelector('[data-native-de-novo="rfd4_proteina"]')).not.toBeNull(); });
     expect(sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
-    await disclose('Sampling'); await openGroup('Runtime acceleration');
-    expect(document.querySelector<HTMLInputElement>('[aria-label="settings.settings.bioir.dtype"]')?.value).toBe('float32');
-    await edit('settings.settings.inference_backend', '0');
-    await openGroup('Sampling controls'); await edit('settings.settings.generation.model.local_latents.schedule.p', '4');
+    await click('Native settings'); await openGroup('Runtime, output and retained assets');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="bioir.dtype"]')?.value).toBe('float32');
+    await edit('inference_backend', '0');
+    await openGroup('Sequence latent schedule and simulation'); await edit('local_latents.schedule.p', '4');
     expected.settings.inference_backend = 'native'; expected.settings.generation.model.local_latents.schedule.p = 4;
     await click('Generate candidates');
     const wire = requests.find(r => r.url === '/api/jobs')!.body;
@@ -156,10 +150,10 @@ it('native to BioIR to native retains all requested expert values across seriali
     expect(normalized.settings).toEqual(expected.settings);
 });
 it('grouped edits preserve omitted settings and explicit false zero null empty without adding defaults or metadata', async () => {
-    await mount('rfd4_proteina', 'generate', d20); await disclose('Sampling');
-    await openGroup('Runtime acceleration');
-    await edit('settings.settings.precision presence', 'omitted');
-    await openGroup('Sampling controls'); await edit('settings.settings.generation.args.nsteps', '21');
+    await mount('rfd4_proteina', 'generate', d20); await click('Native settings');
+    await openGroup('Runtime, output and retained assets');
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Use profile value for precision"]')!.click());
+    await openGroup('Integration and partial / inverse sampling'); await edit('Integration arguments.nsteps', '21');
     await click('Generate candidates');
     const expected: any = structuredClone(d20); delete expected.settings.precision; expected.settings.generation.args.nsteps = 21;
     const wire = requests.find(r => r.url === '/api/jobs')!.body;
@@ -186,26 +180,41 @@ it('each leaf of the selected native settings schema has a typed mounted control
         if (selected.default != null) return selected.default;
         return selected.type === 'boolean' ? false : ['integer', 'number'].includes(selected.type) ? 0 : '';
     }
+    function controlLabel(path: string) {
+        return path.replace(/^settings\.settings\.generation\.args/, 'Integration arguments')
+            .replace(/^settings\.settings\.generation\.model\./, '')
+            .replace(/^settings\.settings\.generation\.dataset/, 'Dataset transforms')
+            .replace(/^settings\.settings\.generation\./, '')
+            .replace(/^settings\.settings\.search\.checkpoints\.([^.]+(?:\.[^.]+)?)\./, 'Checkpoint $1.')
+            .replace(/^settings\.settings\.search\./, '')
+            .replace(/^settings\.settings\.(num_replicates|batch_size|seed)$/, 'Requested $1')
+            .replace(/^settings\.settings\./, '');
+    }
     const settings = populated(schema, 'settings.settings');
-    await mount('rfd4_proteina', 'generate', { ...d20, settings }); await disclose('Sampling');
-    for (const title of ['Sampling controls', 'Runtime acceleration', 'Search, checkpoints and continuation', 'Output and retention', 'Other native settings']) await openGroup(title);
+    await mount('rfd4_proteina', 'generate', { ...d20, settings }); await click('Native settings');
+    for (const title of ['Profiles and recycling', 'Integration and partial / inverse sampling', 'Backbone schedule and simulation', 'Sequence latent schedule and simulation', 'Search checkpoint timeline', 'Guidance and dataset transforms', 'Runtime, output and retained assets', 'Primary amount overrides']) await openGroup(title);
     for (const label of leaves) {
-        const control = [...document.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[aria-label]')].find(node => node.getAttribute('aria-label') === label);
-        expect(control, label).toBeTruthy(); expect(['INPUT', 'SELECT']).toContain(control!.tagName);
+        const control = [...document.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[aria-label]')].find(node => node.getAttribute('aria-label') === controlLabel(label));
+        expect(control, `${label} → ${controlLabel(label)}`).toBeTruthy(); expect(['INPUT', 'SELECT']).toContain(control!.tagName);
     }
     await click('Generate candidates');
     expect(requests.find(r => r.url === '/api/jobs')!.body.params.rfd4_request.settings).toEqual(settings);
     if (process.env.BMS_UI_EVIDENCE_DIR) writeFileSync(resolve(process.env.BMS_UI_EVIDENCE_DIR, 'D20-selected-native-leaf-inventory.json'), JSON.stringify({ scope: 'All settings leaves for the selected non-null schema variants; schema-rendering fixture, not a native execution recipe', leaves }, null, 2));
 });
-it('every current settings property has exactly one mounted native presence control after all presentation groups open', async () => {
-    await mount('rfd4_proteina', 'generate', { ...d20, settings: {} }); await disclose('Sampling');
-    for (const title of ['Sampling controls', 'Runtime acceleration', 'Search, checkpoints and continuation', 'Output and retention', 'Other native settings']) await openGroup(title);
+it('every current settings property has its mounted native override control without hydration', async () => {
+    await mount('rfd4_proteina', 'generate', { ...d20, settings: {} }); await click('Native settings');
+    for (const title of ['Profiles and recycling', 'Integration and partial / inverse sampling', 'Backbone schedule and simulation', 'Sequence latent schedule and simulation', 'Search checkpoint timeline', 'Guidance and dataset transforms', 'Runtime, output and retained assets', 'Primary amount overrides']) await openGroup(title);
     const settings = inventories.rfd4_proteina.generate.parameter_schema.properties.settings;
     const inventory: string[] = [];
     for (const key of Object.keys(settings.properties)) {
-        const label = `settings.settings.${key} presence`;
-        expect([...document.querySelectorAll('[aria-label]')].filter(node => node.getAttribute('aria-label') === label), label).toHaveLength(1);
-        inventory.push(label);
+        const labels = key === 'generation' ? ['Set override for Integration arguments', 'Set override for bb_ca', 'Set override for local_latents', 'Set override for Dataset transforms']
+            : key === 'search' ? ['Integration step']
+            : ['num_replicates', 'batch_size', 'seed'].includes(key) ? [`Requested ${key}`]
+            : [[settings.properties[key], ...(settings.properties[key].anyOf ?? []), ...(settings.properties[key].oneOf ?? [])].some((child: any) => ['object', 'array'].includes(child.type) || child.properties || child.items) ? `Set override for ${key}` : key];
+        for (const label of labels) {
+            expect([...document.querySelectorAll('[aria-label]')].filter(node => node.getAttribute('aria-label') === label), `${key}: ${label}`).toHaveLength(1);
+            inventory.push(label);
+        }
     }
     await click('Generate candidates');
     expect(requests.find(r => r.url === '/api/jobs')!.body.params.rfd4_request.settings).toEqual({});

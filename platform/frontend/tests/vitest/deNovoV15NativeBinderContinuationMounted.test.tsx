@@ -48,6 +48,8 @@ it('retains checked metrics-only records and rejected saved molecules across pag
     await close(); await mount('trajectory');
     expect(tree.root.findByProps({ 'aria-label': 'Select missing' }).props.checked).toBe(false);
     await close(); await mount();
+    expect(tree.root.findByProps({ 'aria-label': 'Select page-23' }).props.checked).toBe(true);
+    await act(async () => button('Previous native records').props.onClick());
     expect(tree.root.findByProps({ 'aria-label': 'Select missing' }).props.checked).toBe(true);
     expect(tree.root.findByProps({ 'aria-label': 'Select rejected' }).props.checked).toBe(true);
     expect(readBinderNativeSources('other')).toEqual([]);

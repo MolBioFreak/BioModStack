@@ -90,7 +90,7 @@ it('mounted source projects native-writer saved targets separately from selectio
     // Keep native writer bytes unchanged apart from selected MODEL fixture binding.
     fetchSpy.mockImplementation(async () => ({ ok: true, text: async () => cif } as Response));
     await mount('rfd4_proteina', { native_sources: { exact: source }, rfd4_request: { input: { kind: 'annotated', slots: ['exact'] } } });
-    await disclose('Native sources'); await click('Inspect retained exact'); await click('Read saved conditions for exact');
+    await disclose('Input structures'); await click('Inspect retained exact'); await click('Read saved conditions for exact');
     const layers = JSON.parse(document.querySelector('[data-native-viewer]')!.getAttribute('data-layers')!);
     expect(layers.find((l: any) => l.descriptor.label === 'Saved C_INTCRD').values[0]).toMatchObject({ value: 1, identity: { documentId: source.path, labelAsymId: 'X', atomIndex: 0, modelNumber: 2 } });
     expect(document.body.textContent).toContain('1.0, 2.0, 3.0');
@@ -124,7 +124,7 @@ it('same-kind recipes retain source identity, explicit clears and zero through s
 });
 it('actual exact source selection explicitly applies independent coordinates/probability, regions and pairs', async () => {
     await mount('rfd4_proteina', { native_recipe: 'motif', native_sources: { 'target.v2': source }, rfd4_request: { input: { kind: 'condition_spec', examples: [{ name: 'motif', sources: [{ slot: 'target.v2', input_as_annotated_cif: true }] }] } } });
-    await disclose('Native sources'); await click('Inspect retained target.v2');
+    await disclose('Input structures'); await click('Inspect retained target.v2');
     await vi.waitFor(async () => { await settle(); expect(document.querySelector('[aria-label="Retained residue for target.v2"]')).not.toBeNull(); });
     await edit('Retained residue for target.v2', '0'); await edit('Retained atom for target.v2', '0'); await click('Add exact selection from target.v2');
     expect(draft.rfd4_request.input.examples[0].conditions).toBeUndefined();
@@ -139,14 +139,18 @@ it('actual exact source selection explicitly applies independent coordinates/pro
     expect(body.params.native_sources['target.v2']).toEqual(source); expect(normalize(body.params.rfd4_request)).toMatchObject(body.params.rfd4_request);
 });
 it.each(['partial', 'inverse'])('%s has separate annotated task and exact native request', async recipe => {
-    await mount('rfd4_proteina'); await edit('RFD4 task', recipe); await click('Add annotated slot'); await edit('Annotated slot 1', 'saved.targets');
+    await mount('rfd4_proteina'); await edit('RFD4 task', recipe);
+    const authored = JSON.parse(JSON.stringify(draft)); await unmount();
+    // Attach retained custody to the authored task, not an empty symbolic slot.
+    await mount('rfd4_proteina', { ...authored, native_sources: { 'saved.targets': source } });
+    await edit('Add annotated source', 'saved.targets');
     if (recipe === 'partial') { await edit('partial_trajectory_fraction_steps', '0.25'); await edit('partial_t_backbone', '0'); await edit('partial_t_latent', '0.5'); }
     await click('Generate candidates'); const request = wire.find(w => w.url === '/api/jobs').body.params.rfd4_request;
     expect(request.input).toEqual({ kind: 'annotated', slots: ['saved.targets'] }); expect(normalize(request)).toMatchObject(request);
     if (recipe === 'inverse') expect(request.groups).toEqual({ generation: 'inverse_folding' }); else expect(request.settings.generation.args).toEqual({ partial_trajectory_fraction_steps: 0.25, partial_t_backbone: 0, partial_t_latent: 0.5 });
 });
 it('fresh evaluation basket and retained task labels reach evaluate transport without sampling defaults', async () => {
-    await mount('rfd4_proteina', { rfd4_request: { evaluation_tasks: [{ slot: 'exact', task: 'enzyme' }] } }, 'evaluate'); await click('Add annotated slot'); await edit('Annotated slot 1', 'exact'); await click('Evaluate candidates');
+    await mount('rfd4_proteina', { native_sources: { exact: source }, rfd4_request: { evaluation_tasks: [{ slot: 'exact', task: 'enzyme' }] } }, 'evaluate'); await edit('Add annotated source', 'exact'); await click('Evaluate candidates');
     const body = wire.find(w => w.url === '/api/jobs').body; expect(body.mode).toBe('evaluate'); expect(body.params.rfd4_request.settings).toBeUndefined(); expect(normalize(body.params.rfd4_request, 'rfd4', 'evaluate').evaluation_tasks).toEqual([{ slot: 'exact', task: 'enzyme' }]);
 });
 it('checkpoint timeline edits sparse actual native search and explicit empty state', async () => {
@@ -159,7 +163,7 @@ it('checkpoint timeline edits sparse actual native search and explicit empty sta
 it('Complexa separate motif/ligand adoption retains author insertion identity and inactive reward across reopen', async () => {
     const reward = { tmol: { enable_hbond: false, elec_weight: 0 }, tmol_weight: 0 };
     await mount('complexa', { native_sources: { 'target.v2': source }, complexa_request: { task: 'AME', task_name: 'ame', source: { document_id: 'target.v2' }, reward } });
-    await disclose('Native sources'); await click('Inspect retained target.v2');
+    await disclose('Input structures'); await click('Inspect retained target.v2');
     await vi.waitFor(async () => { await settle(); expect(document.querySelector('[aria-label="Retained residue for target.v2"]')).not.toBeNull(); });
     await edit('Retained residue for target.v2', '0'); await edit('Retained atom for target.v2', '0'); await click('Add exact selection from target.v2');
     expect(draft.complexa_request.source.motif_atoms).toBeUndefined(); await click('Apply selection to motif atoms');
@@ -188,9 +192,9 @@ it('ordered generated spans and source fragments directly edit native contig', a
     expect(draft.rfd4_request.input.examples[0].contig).toBe('25-50,X7-12,/0'); await click('Move region 2 earlier'); expect(draft.rfd4_request.input.examples[0].contig).toBe('X7-12,25-50,/0');
 });
 it('Complexa evaluation basket preserves order and exact slots across cold reopen and transport', async () => {
-    await mount('complexa', { complexa_request: { task: 'protein_binder', task_name: 'eval', operation: 'analysis' }, native_sources: { exact: source } });
-    await click('Add evaluation candidate'); await edit('Complexa evaluation slot 1', 'exact');
-    await click('Add evaluation candidate'); await edit('Complexa evaluation slot 2', 'second');
+    await mount('complexa', { complexa_request: { task: 'protein_binder', task_name: 'eval', operation: 'analysis' }, native_sources: { exact: source, second: { ...source, path: '/retained/second.cif' } } });
+    await edit('Add evaluation candidate', 'exact');
+    await edit('Add evaluation candidate', 'second');
     await click('Remove evaluation candidate 1');
     const saved = JSON.parse(JSON.stringify(draft)); await unmount(); await mount('complexa', saved);
     expect(draft.complexa_request.evaluation_slots).toEqual(['second']); expect(draft.native_sources.exact).toEqual(source);
@@ -200,7 +204,7 @@ it('Complexa evaluation basket preserves order and exact slots across cold reope
 it.each(['rfd4_proteina', 'complexa'] as const)('%s shows real native snapshots without default hydration', async model => {
     const request = model === 'complexa' ? { task: 'AME', reward: null } : { groups: { generation: 'inverse_folding', recycle_strategy: 'thinking_low' }, settings: { seed: 0 } };
     await mount(model, { [model === 'complexa' ? 'complexa_request' : 'rfd4_request']: request });
-    await click('Native settings'); await disclose('Native profile snapshots');
+    await click('Native settings'); await disclose('Profile reference');
     expect(document.body.textContent).toContain(model === 'complexa' ? 'reward_model' : 'independent single-group snapshots');
     expect(document.body.textContent).toContain('n_recycle');
     expect(draft[model === 'complexa' ? 'complexa_request' : 'rfd4_request']).toEqual(request);
@@ -215,7 +219,7 @@ it.skipIf(!process.env.BMS_TEST_NATIVE_READBACK)('replays actual installed combi
         }
         return adapter(config);
     };
-    await mount('rfd4_proteina', {rfd4_request:result.request}); await click('Native settings'); await disclose('Native profile snapshots'); await click('Read selected effective configuration');
+    await mount('rfd4_proteina', {rfd4_request:result.request}); await click('Native settings'); await disclose('Profile reference'); await click('Read selected effective configuration');
     expect(JSON.parse(document.querySelector('[aria-label="Selected native effective configuration"]')!.textContent!)).toEqual(result.effective_config);
     expect(draft.rfd4_request).toEqual(result.request);
     await click('Design'); await edit('Seed','1'); await click('Native settings');
@@ -227,7 +231,7 @@ it('native readback failure is observational and does not alter request or run a
         if (config.url?.endsWith('/generation-settings/preview')) throw new Error('Native test unavailable');
         return adapter(config);
     };
-    await mount('rfd4_proteina', {rfd4_request:{settings:{seed:0}}}); await click('Native settings'); await disclose('Native profile snapshots'); await click('Read selected effective configuration');
+    await mount('rfd4_proteina', {rfd4_request:{settings:{seed:0}}}); await click('Native settings'); await disclose('Profile reference'); await click('Read selected effective configuration');
     expect(document.body.textContent).toContain('Native test unavailable'); expect(draft.rfd4_request).toEqual({settings:{seed:0}});
     expect([...document.querySelectorAll('button')].find(b=>b.textContent === 'Generate candidates')!.disabled).toBe(false);
 });

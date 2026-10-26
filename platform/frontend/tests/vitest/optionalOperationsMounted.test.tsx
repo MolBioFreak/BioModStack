@@ -30,7 +30,7 @@ async function click(text: string) { await act(async () => { const button = [...
 it('mounted repeated calls emit exact predecessor and disabled drafts survive serialized reopen', async () => {
     const first = make('fampnn', 'one'); const second = make('fampnn', 'two'); const predict = make('esmfold2');
     await mount([first, second, predict]);
-    expect(document.body.textContent).toContain('Future generated outputs');
+    expect(document.body.textContent).toContain('Original generated outputs');
     await change('[aria-label="Stage 3 input"]', 'stage-one:one');
     await change('[aria-label="Mode one"]', 'binder_design');
     await change('[aria-label="Mode one"]', 'design');
@@ -39,14 +39,14 @@ it('mounted repeated calls emit exact predecessor and disabled drafts survive se
     expect(wire.stages).toHaveLength(2); expect(wire.stages[1].input).toEqual({ stage_id: 'stage-one', invocation_id: 'one', scope: 'whole_composition' });
     expect(saved[1].stage.models[0].params).toEqual({ seed: 0, verbose: false });
     expect(saved[0].stage.models[0].params).toEqual({ seed: 0, verbose: false });
-    expect(document.querySelector('[aria-label="Stage 3 input"]')!.textContent).toContain('Stage 1 · FA-MPNN call 1');
+    expect((document.querySelector('[aria-label="Stage 3 input"]') as HTMLSelectElement).value).toBe('stage-one:one');
     await act(async () => root.unmount()); await mount(saved);
     expect(document.querySelector<HTMLInputElement>('[aria-label="Enable invocation two"]')!.checked).toBe(false);
     expect(activeInvocationPlan(latest)).toEqual(wire);
 });
 it.each(Object.keys(invocationModes).filter(id => id !== 'molecular_dynamics'))('%s exposes every declared mode and sparse native controls', async model => {
     await mount([make(model)]);
-    expect([...document.querySelectorAll(`[aria-label="Mode ${model}"] option`)].map(e => e.textContent)).toEqual(invocationModes[model]);
+    expect([...document.querySelectorAll(`[aria-label="Mode ${model}"] option`)].map(e => (e as HTMLOptionElement).value)).toEqual(invocationModes[model]);
     expect(document.body.textContent).toContain('Requested override');
     await click('Remove override: Prediction seed');
     expect(activeInvocationPlan(latest).stages[0]).toMatchObject({ models: [{ params: { verbose: false } }] });
@@ -63,8 +63,8 @@ it('selected packing retains ordered repeated exact states and independent Local
     expect(call.input_groups[0].states.map((s: any) => s.candidate_ref.model)).toEqual([2, 1, 2]);
     expect(call.execution_target_id).toBeNull(); expect(call.params).not.toHaveProperty('binder_chains');
     expect(document.body.textContent).toContain('Local (explicit)');
-    expect(document.body.textContent).toContain('Exact selected outputs');
-    const explicit = [...document.querySelectorAll('label')].find(label => label.textContent?.includes('Explicit placement'))!.querySelector<HTMLInputElement>('input')!;
+    expect(document.body.textContent).toContain('Selected results');
+    const explicit = [...document.querySelectorAll('label')].find(label => label.textContent?.includes('Choose run location'))!.querySelector<HTMLInputElement>('input')!;
     await act(async () => explicit.click());
     expect((activeInvocationPlan(latest).stages[0] as any).models[0]).not.toHaveProperty('execution_target_id');
     expect(document.body.textContent).toContain('Inherited round placement');

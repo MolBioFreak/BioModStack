@@ -50,7 +50,7 @@ it('RFD3 uses its own inventory, preserves saved sampler values and submits them
 it('all current settings are reachable in model-specific sections without filling sparse requests', async () => {
     const changed = vi.fn(); await render(<OtherDeNovoSettings model="laproteina" task="motif_scaffolding" value={{}} onChange={changed} />);
     for (const title of ['Backbone sampler', 'Local latent sampler', 'Motif overrides', 'Sampling and outputs']) await click(title);
-    for (const field of Object.keys(inventories.laproteina.parameter_schema.properties)) expect(document.body.textContent).toContain(field);
+    for (const field of Object.keys(inventories.laproteina.parameter_schema.properties)) expect(document.querySelector(`[data-native-setting="${field}"], [title="${field}"]`), field).not.toBeNull();
     expect(changed).not.toHaveBeenCalled();
     for (const profile of Object.keys(inventories.laproteina.profiles)) expect(document.body.textContent).toContain(profile);
 });
@@ -59,8 +59,8 @@ it.each(['rfd3', 'disco'] as const)('%s discovers the complete current settings 
     await render(<OtherDeNovoSettings model={model} task="unconditional" value={value} onChange={changed} />);
     for (const summary of [...document.querySelectorAll('summary')]) await click(summary.textContent!);
     const fields = model === 'rfd3' ? inventories.rfd3.execution : inventories.disco.parameter_schema.properties;
-    for (const name of Object.keys(fields).filter(name => name !== 'dump_trajectories')) expect(document.body.textContent).toContain(name);
-    if (model === 'rfd3') for (const name of Object.keys(fields.inference_sampler.properties)) expect(document.body.textContent).toContain(name);
+    for (const name of Object.keys(fields).filter(name => name !== 'dump_trajectories')) expect(document.querySelector(`[data-native-setting="${name}"], [title="${name}"], [aria-label="inference_sampler.${name} presence"]`), name).not.toBeNull();
+    if (model === 'rfd3') for (const name of Object.keys(fields.inference_sampler.properties)) expect(document.querySelector(`[data-native-setting="${name}"], [title="${name}"], [aria-label="inference_sampler.${name} presence"]`), name).not.toBeNull();
     expect(changed).not.toHaveBeenCalled();
 });
 it('native La modes replace invalid menu choices while preserving an explicit historical saved token', async () => {

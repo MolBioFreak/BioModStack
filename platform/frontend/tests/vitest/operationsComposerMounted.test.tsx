@@ -46,9 +46,9 @@ it('authors MD as an independent ordinary operation without inventing chemistry 
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => root!.render(<QueryClientProvider client={client}><Form /></QueryClientProvider>));
-    const press = async (text: string) => { const button = [...host.querySelectorAll('button')].find(node => node.textContent === text)!; expect(button).toBeTruthy(); await act(async () => button.click()); };
-    await press('Add Molecular dynamics'); await press('Add molecular_dynamics call');
-    await press('molecular_dynamics settings');
+    const press = async (text: string) => { const button = [...host.querySelectorAll('button')].filter(node => node.textContent === text).at(-1)!; expect(button).toBeTruthy(); await act(async () => button.click()); };
+    await press('Add Molecular dynamics'); await press('Add Molecular dynamics');
+    await press('Molecular dynamics settings');
     const native = host.querySelector<HTMLElement>('[aria-label="Native GROMACS settings"]')!;
     expect(native).toBeTruthy();
     const change = async (label: string, value: string, scope: ParentNode = host) => {

@@ -88,7 +88,8 @@ async function disclose(name: string) {
 it('native tuple controls retain order and typed numbers through the actual parent request', async () => {
     const request = { task: 'protein_binder', task_name: 'tuple-fixture', source: { document_id: 'exact-document', binder_center: [1, 0, -2] } };
     await mount('complexa', 'generate', request);
-    await disclose('source');
+    const summary = [...document.querySelectorAll('summary')].find(node => node.textContent === 'Advanced source settings')!;
+    await act(async () => { const details = summary.parentElement as HTMLDetailsElement; details.open = true; details.dispatchEvent(new Event('toggle')); });
     const control = document.querySelector<HTMLInputElement>('[aria-label="source.source.binder_center[1]"]');
     expect(control?.type).toBe('number');
     await edit('source.source.binder_center[1]', '2.5');
@@ -100,8 +101,8 @@ it('native metric name/cutoff tuples use their per-position schemas instead of a
     const choice = inventories.rfd4_proteina.generate.parameter_schema.properties.metric_extensions.items.oneOf.find((candidate: any) => candidate.properties.kwargs.properties.term_cutoffs);
     const metric = { name: 'explicit-cutoff', section: 'inline_metrics', implementation: choice.properties.implementation.const, kwargs: { term_cutoffs: { contact: ['ljatr', 0] } } };
     await mount('rfd4_proteina', 'generate', { ...nativeRequest, metric_extensions: [metric] });
-    await disclose('Metric extensions');
-    const label = 'metric_extensions.metric_extensions[0].kwargs.term_cutoffs.contact';
+    await disclose('Metric providers, constructors and native oracles');
+    const label = 'metric_extensions[0].kwargs.term_cutoffs.contact';
     expect(document.querySelector<HTMLInputElement>(`[aria-label="${label}[0]"]`)?.type).toBe('text');
     expect(document.querySelector<HTMLInputElement>(`[aria-label="${label}[1]"]`)?.type).toBe('number');
     await edit(`${label}[1]`, '-0.25');
@@ -111,8 +112,7 @@ it('native metric name/cutoff tuples use their per-position schemas instead of a
 it('Complexa task drafts survive template storage and cold load without entering the scientific request', async () => {
     const request = { task: 'protein_binder', task_name: '', seed: 0, reward: null, source: { document_id: 'selected-native-model', ligand_only: false } };
     await mount('complexa', 'generate', request);
-    const tasks = inventories.complexa.generate.schema.properties.task.enum as string[];
-    await edit('task.task', String(tasks.indexOf('ligand_binder')));
+    await edit('Complexa task', 'ligand_binder');
     await click('Template Manager');
     const name = document.querySelector<HTMLInputElement>('input[placeholder="e.g., My Boltz Config"]')!;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Independent native tasks'); name.dispatchEvent(new Event('input', { bubbles: true })); });
@@ -122,7 +122,7 @@ it('Complexa task drafts survive template storage and cold load without entering
     expect(Object.values(saved[0].params.editor_state.native_task_drafts)).toContainEqual(request);
     await unmount(); await mount('complexa');
     await click('Template Manager'); await click('← Back to list'); await click('Load');
-    await edit('task.task', String(tasks.indexOf('protein_binder')));
+    await edit('Complexa task', 'protein_binder');
     await click('Generate candidates');
     expect(requests.find(r => r.url === '/api/jobs')!.body.params).toEqual({ complexa_request: request });
 });
@@ -139,11 +139,11 @@ it('real JobSubmission clone submits the exact RFD4 request through Axios, with 
 });
 it('native mode drafts survive Generate → Evaluate → Generate and typed explicit clears', async () => {
     await mount('rfd4_proteina', 'generate', nativeRequest);
-    await edit('input.input.name', '');
+    await edit('Input name', '');
     await edit('Native mode', 'evaluate'); await settle();
-    expect(document.querySelector('[aria-label="input.input.name"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Input name"]')).toBeNull();
     await edit('Native mode', 'generate'); await settle();
-    expect((document.querySelector('[aria-label="input.input.name"]') as HTMLInputElement).value).toBe('');
+    expect((document.querySelector('[aria-label="Input name"]') as HTMLInputElement).value).toBe('');
     await click('Generate candidates');
     expect(requests.find(r => r.url === '/api/jobs')!.body.params.rfd4_request.input.name).toBe('');
 });
@@ -159,7 +159,7 @@ it('RFD4 Evaluate clone emits its native mode and exact annotated slot request w
 });
 it.each(['rfd4_proteina', 'complexa'])('fresh %s route uses its real typed inventory and no other native inventory', async model => {
     await mount(model);
-    expect(document.querySelector('[aria-label="input.input presence"]') ?? document.querySelector('[aria-label="task.task presence"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="RFD4 task"]') ?? document.querySelector('[aria-label="Complexa task"]')).not.toBeNull();
     expect(requests.filter(r => /generation-settings$/.test(r.url))).toHaveLength(1);
     expect(document.querySelector('textarea')).toBeNull();
 });
@@ -178,7 +178,7 @@ it('Template Manager saves, reads back and cold loads exact native intent despit
     await mount('rfd4_proteina');
     await click('Template Manager'); await click('← Back to list'); await click('Load');
     expect(sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
-    expect((document.querySelector('[aria-label="input.input.name"]') as HTMLInputElement).value).toBe('n');
+    expect((document.querySelector('[aria-label="Input name"]') as HTMLInputElement).value).toBe('n');
     await click('Generate candidates');
     expect(requests.filter(r => r.url === '/api/jobs').at(-1)!.body.params).toEqual({ rfd4_request: nativeRequest });
 });
@@ -199,14 +199,14 @@ it('actual Project parent saves twice and cold hydrates the saved native request
     const route = '&project_id=project-fixture&setup_context_id=setup-fixture';
     sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'ambient-remote');
     await mount('rfd4_proteina', 'generate', undefined, route);
-    expect((document.querySelector('[aria-label="input.input.name"]') as HTMLInputElement).value).toBe('n');
-    await edit('input.input.name', 'second-save'); await click('Save draft');
+    expect((document.querySelector('[aria-label="Input name"]') as HTMLInputElement).value).toBe('n');
+    await edit('Input name', 'second-save'); await click('Save draft');
     await vi.waitFor(() => expect(project.generation).toBe(2));
     await click('Save draft'); await vi.waitFor(() => expect(project.generation).toBe(3));
     expect(project.draft).toMatchObject({ editor_state: { execution_target_id: null }, native_job_request: { execution_target_id: null, params: { rfd4_request: { input: { name: 'second-save' } } } } });
     await unmount(); sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'ambient-remote');
     await mount('rfd4_proteina', 'generate', undefined, route);
-    expect((document.querySelector('[aria-label="input.input.name"]') as HTMLInputElement).value).toBe('second-save');
+    expect((document.querySelector('[aria-label="Input name"]') as HTMLInputElement).value).toBe('second-save');
     expect(sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
     expect(requests.some(r => r.url === '/api/jobs')).toBe(false);
 });
