@@ -73,7 +73,10 @@ def normalize_generation_params(
     params: Mapping[str, Any], *, job_name: str
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
     raw = dict(params)
-    envelope = {key: raw.pop(key) for key in ('workflow_adapter', 'frustrampnn_requiredness') if key in raw}
+    envelope = {key: raw.pop(key) for key in (
+        'workflow_adapter', 'frustrampnn_requiredness',
+        '_global_resource_admission', '_global_dispatch_authority',
+    ) if key in raw}
     if 'rfd3_generation_request' in raw:
         retained = raw['rfd3_generation_request']
         if not isinstance(retained, dict) or request_sha256(retained) != raw.get('rfd3_generation_request_sha256'):

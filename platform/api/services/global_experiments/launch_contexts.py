@@ -1269,6 +1269,21 @@ async def validate_bound_job(
                         base_job_params.get(key, 1 if key == "num_parallel_jobs" else object()) == value
                         for key, value in effective.items()
                     )
+        if (not params_match and job.model_id == "protein_modification_experimental"
+                and job.mode == "de_novo_design"
+                and expected_job_params.get("generator") == "rfd3"):
+            # The native owner binds request/job IDs, digest and destination at
+            # insertion. Compare with that same pure binding, not the unbound
+            # Plan template and not an identity-stripped scientific projection.
+            from services.rfd3_generation import bind_generation_request, GenerationContractError
+            try:
+                effective, _ = bind_generation_request(
+                    expected_job_params, output_dir=job.output_dir, job_id=job.id)
+            except (GenerationContractError, TypeError, ValueError):
+                effective = None
+            if effective is not None:
+                params_match = all(key in base_job_params and base_job_params[key] == value
+                                   for key, value in effective.items())
         if not params_match and job.model_id == "boltzgen":
             from services.boltzgen_request_compatibility import (
                 BOLTZGEN_GENERATION_PROTOCOLS, compile_boltzgen_settings,
