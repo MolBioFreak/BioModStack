@@ -18,6 +18,7 @@ import { buildComplexaNativeSelection } from '../lib/complexaNativeSelection';
 import { Rfd4TaskWorkspace, rfd4RecipeRequest } from './Rfd4TaskWorkspace';
 import { Rfd4ExpertSettings, NativeProfileSnapshot } from './Rfd4ExpertSettings';
 import { ComplexaTaskWorkspace } from './ComplexaTaskWorkspace';
+import type { MetricSelection } from '../structureViewer/metrics/metricContracts';
 
 const record = (value: unknown): Record<string, any> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 
@@ -127,8 +128,14 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         setRecipe(legacyKey ? undefined : nextRecipe); setVisual(undefined);
     };
     const sourceSequence = useRef(0);
+    const selectSource = (slot: string, receipt: StructureMaterialization, selection: MetricSelection) => {
+        const identities = selection.identities.flatMap(identity => 'first' in identity && 'second' in identity ? [identity.first, identity.second] : [identity]) as Rfd4NativeSelectionIdentity[];
+        const binding = JSON.stringify(nativeDraft.sources?.[slot]);
+        setVisual(previous => ({ slot, receipt, binding, identities: [...(previous?.slot === slot && previous.receipt.path === receipt.path && previous.binding === binding ? previous.identities : []), ...identities] }));
+    };
     const renderSource = (label: string, value: string, onChange: (slot: string) => void) => <NativeSourceInput
         key={label} label={label} value={value} bindings={nativeDraft.sources} onChange={onChange}
+        onSelection={selectSource} selectedIdentities={currentVisual?.slot === value ? currentVisual.identities : []}
         inspection={inspections[value]?.binding === JSON.stringify(nativeDraft.sources?.[value]) ? inspections[value]?.receipt : undefined}
         onAcquire={source => {
             // A task's existing source name keeps its shared references. New
@@ -172,20 +179,16 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         <ProteinDesignSections label="Generation sections" sections={['Design', 'Native settings', 'Optional operations']} active={section} onChange={setSection} />
         {inventory.isPending && <p role="status">Loading settings…</p>}
         {inventory.error && <p role="alert">{inventory.error.message}. Saved native values are retained.</p>}
-        <div hidden={section !== 'Design'}><ProteinDesignPanel title="Design">
-            {<NativeSettingsDisclosure summary={<span>Input structures</span>}>{() => <DeNovoNativeSources onInspection={(slot, receipt, binding) => setInspections(previous => ({ ...previous, [slot]: { receipt, binding: JSON.stringify(binding) } }))} selection={currentVisual} value={nativeDraft.sources} onChange={sources => setNativeDraft(previous => ({ ...previous, sources }))}
-                onSelection={(slot, receipt, selection) => {
-                    const identities = selection.identities.flatMap(identity => 'first' in identity && 'second' in identity ? [identity.first, identity.second] : [identity]) as Rfd4NativeSelectionIdentity[];
-                    const binding = JSON.stringify(nativeDraft.sources?.[slot]);
-                    setVisual(previous => ({ slot, receipt, binding, identities: [...(previous?.slot === slot && previous.receipt.path === receipt.path && previous.binding === binding ? previous.identities : []), ...identities] }));
-                }} />}</NativeSettingsDisclosure>}
-            {currentVisual && model === 'rfd4_proteina' && <div role="status"><p>{visualResult?.issue ?? `Native source query from ${currentVisual.slot}: ${visualResult?.expression}`}</p><p>Select the destination condition below. Coordinates, grouped/internal coordinates and sequence conditions remain independent; no role is assigned until you choose it.</p><button type="button" onClick={() => setVisual(undefined)}>Clear visual selection</button></div>}
+        <div hidden={section !== 'Design'}><ProteinDesignPanel title="Design" showTitle={false}>
+            {currentVisual && model === 'rfd4_proteina' && <div role="status"><p>{visualResult?.issue ?? `Native source query from ${currentVisual.slot}: ${visualResult?.expression}`}</p><p>Apply the selection to a condition below.</p><button type="button" onClick={() => setVisual(undefined)}>Clear visual selection</button></div>}
             {schema && (model === 'rfd4_proteina' ? <Rfd4TaskWorkspace request={request} schema={schema} mode={mode} recipe={recipe} onRecipe={changeRecipe} onChange={changeRequest} renderNative={renderField} renderSource={renderSource} sourceNames={Object.keys(nativeDraft.sources ?? {})}
                 sourceChains={Object.fromEntries(Object.entries(inspections).filter(([slot, item]) => item.binding === JSON.stringify(nativeDraft.sources?.[slot]) && !item.receipt.inspection_error && !!item.receipt.source_positions?.length).map(([slot, item]) => [slot, [...new Set(item.receipt.source_positions!.map(row => String(row.label_asym_id ?? '')))]]))}
                 retainedTasks={Object.entries(nativeDraft.inactive).filter(([key]) => { try { const parts = JSON.parse(key); return parts[0] === model && parts[1] === mode && parts[2] === contract && parts[3] !== 'recipe'; } catch { return false; } }).map(([key, value]) => ({ key, label: String(record(value.input).kind ?? 'native request') }))}
                 visual={currentVisual ? { slot: currentVisual.slot, ...visualResult } : undefined} /> : <ComplexaTaskWorkspace request={request} schema={schema} onChange={changeRequest} onTask={task => patch('task', task)} renderNative={renderField} renderSource={renderSource} sourceNames={Object.keys(nativeDraft.sources ?? {})}
                 controlDraft={record(controlDrafts[nativeTaskKey(model, mode, contract, request)])} onControlDraft={value => setControlDrafts(previous => ({ ...previous, [nativeTaskKey(model, mode, contract, request)]: value }))}
                 visual={currentVisual ? { slot: currentVisual.slot, ...buildComplexaNativeSelection(currentVisual.identities, { ...currentVisual.receipt, documentId: currentVisual.receipt.path }) } : undefined} />)}
+            {<NativeSettingsDisclosure summary={<span>Input structures</span>}>{() => <DeNovoNativeSources onInspection={(slot, receipt, binding) => setInspections(previous => ({ ...previous, [slot]: { receipt, binding: JSON.stringify(binding) } }))} selection={currentVisual} value={nativeDraft.sources} onChange={sources => setNativeDraft(previous => ({ ...previous, sources }))}
+                onSelection={selectSource} />}</NativeSettingsDisclosure>}
             {inventory.data?.limitations?.map(text => <p key={text} className="text-sm">{text}</p>)}
             <DeNovoNativePreview request={payload as Partial<Job>} />
         </ProteinDesignPanel></div>

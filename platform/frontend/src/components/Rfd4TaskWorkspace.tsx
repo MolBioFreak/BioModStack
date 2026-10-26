@@ -97,7 +97,7 @@ export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onC
         return new Set(flattened).size === flattened.length ? visual : undefined;
     };
     return <div data-rfd4-task-workspace className="space-y-4 min-w-0">
-        {mode !== 'evaluate' && <label>RFD4 task<select aria-label="RFD4 task" value={recipe ?? ''} onChange={e => onRecipe(e.target.value)}><option value="">Retained native request / choose task</option>{RFD4_RECIPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{retainedTasks?.map(({ key, label }) => <option key={key} value={`legacy:${key}`}>Restore retained {label}</option>)}</select></label>}
+        {mode !== 'evaluate' && <label>RFD4 task<select aria-label="RFD4 task" value={recipe ?? ''} onChange={e => onRecipe(e.target.value)}><option value="">{Object.keys(request).length ? 'Saved task / choose another' : 'Choose task'}</option>{RFD4_RECIPES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{retainedTasks?.map(({ key, label }) => <option key={key} value={`legacy:${key}`}>Restore retained {label}</option>)}</select></label>}
         {mode === 'evaluate' && <h3>Evaluate annotated outputs</h3>}
         {input.kind === 'condition_spec' && <p>Choose a source, select residues, then apply a condition.</p>}
         {input.kind === 'unconditional' && <fieldset><legend>Generated chains</legend>

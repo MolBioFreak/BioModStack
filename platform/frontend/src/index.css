@@ -1087,6 +1087,8 @@ textarea:focus {
   outline: none;
   box-shadow: none;
   border-radius: .5rem;
+  min-height: 32px;
+  padding: .375rem .625rem;
   background-color: var(--bg-tertiary);
   color: var(--text-primary);
 }
@@ -1097,9 +1099,10 @@ textarea:focus {
   opacity: .5;
   cursor: not-allowed;
 }
-:is([data-bms-de-novo-form], [data-native-de-novo], .bms-binder-results) button[aria-pressed="true"] {
-  background-color: color-mix(in srgb, var(--accent-primary) 22%, var(--bg-tertiary));
-  color: var(--accent-primary);
+:is([data-bms-de-novo-form], [data-native-de-novo], .bms-binder-results) button:is([aria-pressed="true"], [aria-selected="true"]):not(.msp-plugin button) {
+  background-color: color-mix(in srgb, var(--accent-primary) 22%, var(--bg-tertiary)) !important;
+  color: var(--accent-primary) !important;
+  font-weight: 600;
 }
 :is([data-bms-de-novo-form], [data-native-de-novo], .bms-binder-results) button:not(.msp-plugin button):focus-visible {
   outline: 2px solid var(--accent-primary);

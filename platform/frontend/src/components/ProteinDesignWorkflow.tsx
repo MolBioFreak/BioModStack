@@ -33,11 +33,11 @@ export function ProteinDesignSections({ label, sections, active, onChange }: {
     </nav>;
 }
 
-export function ProteinDesignPanel({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
+export function ProteinDesignPanel({ title, description, children, showTitle = true }: { title: string; description?: ReactNode; children: ReactNode; showTitle?: boolean }) {
     return <section aria-label={title} className="min-w-0 space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
-        <header><h2 className="text-lg font-semibold">{title}</h2>
+        {(showTitle || description) && <header>{showTitle && <h2 className="text-lg font-semibold">{title}</h2>}
             {description && <div className="mt-1 text-sm text-[var(--text-secondary)]">{description}</div>}
-        </header>
+        </header>}
         {children}
     </section>;
 }

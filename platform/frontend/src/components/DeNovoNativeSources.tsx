@@ -136,25 +136,27 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
             </select></label>
             <p className="text-xs">{receipt.author_residues.length} residues · {receipt.native_format}</p>
             {receipt.inspection_error && <p role="status">Native inspection: {receipt.inspection_error}. The retained source is unchanged.</p>}
-            {receipt.source_positions?.length ? <NativePositionControls key={`${receipt.path}:${receipt.model_number}`} slot={slot} receipt={receipt} onSelection={selection => onSelection?.(slot, receipt, selection)} /> : null}
+            {onSelection && receipt.source_positions?.length ? <NativePositionControls key={`${receipt.path}:${receipt.model_number}`} slot={slot} receipt={receipt} onSelection={selection => onSelection?.(slot, receipt, selection)} /> : null}
             {receipt.model_numbers.length > 1 && receipt.model_number == null && <p>Select a MODEL to view its saved condition colors. All-model annotations remain available below.</p>}
             {receipt.format !== 'pdb' && <button type="button" onClick={() => void inspectSaved()}>Read saved conditions for {slot}</button>}
             {savedError && <p role="status">Saved annotation readback: {savedError}. Source and manual request are unchanged.</p>}
             {saved?.receipt === receipt && <details><summary>Saved annotation targets and groups ({savedRows.length})</summary><p>Saved annotations are shown separately from your current selection.</p>{!savedRows.length && <p>No recognized saved condition annotations in this source.</p>}<div className="overflow-auto max-h-64"><table><thead><tr><th>Condition</th><th>Exact source position</th><th>Saved value</th></tr></thead><tbody>{savedRows.map((row, i) => <tr key={i}><td>{row.family}</td><td>{row.identity.documentId} · MODEL {row.identity.modelNumber} · {row.identity.labelAsymId}:{row.identity.labelSeqId} · {row.identity.labelAtomId} · atom {row.identity.atomIndex}</td><td>{Array.isArray(row.value) ? row.value.join(', ') : row.value}</td></tr>)}</tbody></table></div></details>}
             <MolstarViewer structureDocumentId={receipt.path} structureUrl={buildFileDownloadUrl(receipt.format === 'bcif' ? receipt.decoded_path ?? receipt.path : receipt.path)} format={receipt.format === 'bcif' ? 'cif' : receipt.format} height={360}
                 metricLayers={receipt.model_numbers.length === 1 || receipt.model_number != null ? savedConditionLayers(savedRows, receipt.path) : []}
-                showSequenceTrack controlledResidueSelection residueSelections={selectedIdentities ?? []}
+                showSequenceTrack controlledResidueSelection={!!onSelection} residueSelections={selectedIdentities ?? []}
                 onMetricSelection={selection => onSelection?.(slot, receipt, selection)} />
         </>}
     </section>;
 }
 
 /** Task-facing acquisition; the existing row owns materialization and stale reads. */
-export function NativeSourceInput({ label, value, bindings, onChange, onAcquire, onInspection, inspection }: {
+export function NativeSourceInput({ label, value, bindings, onChange, onAcquire, onInspection, inspection, onSelection, selectedIdentities }: {
     label: string; value: string; bindings: NativeGenerationSourceBindings | undefined;
     onChange: (slot: string) => void;
     onAcquire: (source: NativeGenerationSourceBinding) => string;
     inspection?: StructureMaterialization;
+    onSelection?: (slot: string, receipt: StructureMaterialization, selection: MetricSelection) => void;
+    selectedIdentities?: Rfd4NativeSelectionIdentity[];
     onInspection?: (slot: string, receipt: StructureMaterialization, binding: NativeGenerationSourceBinding) => void;
 }) {
     const [open, setOpen] = useState(false);
@@ -179,7 +181,8 @@ export function NativeSourceInput({ label, value, bindings, onChange, onAcquire,
         </div>
         {open && <div className="space-y-2" role="group" aria-label={`Choose structure for ${label}`}>
             <button type="button" onClick={() => setOpen(false)}>{binding ? 'Close' : 'Cancel'}</button>
-            <NativeSourceRow slot={value || label} value={binding && !fileBinding(binding) ? binding : { output_format: 'native' }} initialReceipt={inspection}
+            <NativeSourceRow slot={value || label} value={binding && !fileBinding(binding) ? binding : { output_format: 'native' }} initialReceipt={inspection} selectedIdentities={selectedIdentities}
+                onSelection={onSelection ? (_slot, receipt, selection) => onSelection(committedSlot.current ?? value, receipt, selection) : undefined}
                 onChange={source => { committedSlot.current = latest.current.onAcquire(source); if (!value) setOpen(false); }}
                 onRemove={() => setOpen(false)}
                 onInspection={(_slot, receipt, source) => latest.current.onInspection?.(committedSlot.current ?? value, receipt, source)} />
