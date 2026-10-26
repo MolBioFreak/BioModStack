@@ -4578,11 +4578,9 @@ async def _ingest_rfd3_generation_manifest(
                 num_helices=metrics["helix_count"],
                 num_strands=metrics["strand_count"],
                 rfd_rog=metrics["radius_of_gyration"],
-                chain_metrics={
-                    "residue_count": metrics["residue_count"],
-                    "chain_count": metrics["chain_count"],
-                    "accepted": candidate["accepted"],
-                },
+                # Whole-candidate values remain in native provenance below;
+                # they are not per-chain confidence records.
+                chain_metrics=None,
                 provenance={
                     "schema": "bms.rfd3.generation.candidate-provenance.v1",
                     "request_id": manifest["request_id"],

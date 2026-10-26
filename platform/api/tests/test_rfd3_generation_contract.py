@@ -244,7 +244,8 @@ def test_result_manifest_is_hash_bound_and_projects_exact_statistics(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_generation_manifest_ingests_and_reopens_as_typed_results(tmp_path: Path) -> None:
+@pytest.mark.parametrize("legacy_chain_metrics", [False, True])
+async def test_generation_manifest_ingests_and_reopens_as_typed_results(tmp_path: Path, legacy_chain_metrics: bool) -> None:
     job_id = "job-rfd3-general-ingest"
     output = tmp_path / "job"
     artifact_root = output / "run" / "rfd3"
@@ -335,6 +336,24 @@ async def test_generation_manifest_ingests_and_reopens_as_typed_results(tmp_path
             design = (await session.execute(select(Design).where(Design.job_id == job_id))).scalar_one()
             assert design.review_profile_id == "de_novo_generation_v1"
             assert design.rfd_rog == 15.5
+            assert design.chain_metrics is None
+            legacy = {"residue_count": 112, "chain_count": 1, "accepted": True,
+                      "A": {"type": "protein", "length": 112, "avg_plddt": None, "plddt": None, "residue_numbers": None}}
+            if legacy_chain_metrics:
+                design.chain_metrics = legacy
+                await session.commit()
+            from routers.designs import get_design
+            detail = await get_design(design.id, session=session)
+            assert detail.provenance["metrics"] == manifest["candidates"][0]["metrics"]
+            assert detail.provenance["accepted"] is True
+            assert detail.rfd_rog == 15.5
+            if legacy_chain_metrics:
+                assert set(detail.chain_metrics) == {"A"}
+                assert detail.chain_metrics["A"].length == 112
+                await session.refresh(design)
+                assert design.chain_metrics == legacy  # readback never rewrites retained evidence
+            else:
+                assert detail.chain_metrics is None
             read_model = await get_rfd3_generation_result(job_id, session)
             assert read_model["schema"] == "bms.rfd3.generation.read-model.v1"
             assert read_model["counts"] == {"requested": 1, "generated": 1, "accepted": 1}

@@ -2153,6 +2153,14 @@ def _design_to_response(
     if design.producer_model_id:
         provenance["producer_model_id"] = design.producer_model_id
     data["provenance"] = provenance or None
+    if data.get("artifact_class") == "rfd3_general_generation" and isinstance(data.get("chain_metrics"), dict):
+        # Earlier RFD3 imports duplicated these candidate-level values here.
+        # Their original metrics/acceptance remain in native provenance; do not
+        # present them as chains or rewrite retained rows during a read.
+        data["chain_metrics"] = {
+            key: value for key, value in data["chain_metrics"].items()
+            if key not in {"residue_count", "chain_count", "accepted"} or isinstance(value, dict)
+        } or None
     return DesignResponse.model_validate(data)
 
 
