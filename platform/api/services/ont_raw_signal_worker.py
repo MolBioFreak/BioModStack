@@ -45,6 +45,28 @@ from services.ont_raw_signal import (
     _open_absolute_directory_nofollow,
 )
 
+# Linux sun_path holds 108 bytes including the terminating NUL.
+_UNIX_SOCKET_PATH_MAX = 107
+
+
+def _bind_unix_socket(server: socket.socket, socket_path: Path) -> None:
+    """Bind ``socket_path`` even when its absolute path exceeds sun_path.
+
+    The socket file must stay in the stage directory because the container
+    reaches it through that bind mount. Bind through a confined parent
+    directory handle for short and long roots alike, without following
+    symlinks or changing the process-wide working directory.
+    """
+    directory_fd = _open_absolute_directory_nofollow(socket_path.parent)
+    try:
+        short_path = f"/proc/self/fd/{directory_fd}/{socket_path.name}"
+        if len(os.fsencode(short_path)) > _UNIX_SOCKET_PATH_MAX:
+            raise OSError(f"AF_UNIX socket name is too long: {socket_path.name}")
+        server.bind(short_path)
+    finally:
+        os.close(directory_fd)
+
+
 logger = logging.getLogger(__name__)
 RAW_SIGNAL_WAVEFORM_RUNTIME_TIMEOUT_SECONDS = 120.0
 RAW_SIGNAL_CHILD_TERMINATE_GRACE_SECONDS = 5.0
@@ -199,18 +221,13 @@ class OntRawSignalWorker:
             socket_path = Path(fd_socket)
             socket_path.unlink(missing_ok=True)
             descriptor_server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            parent_fd = _open_absolute_directory_nofollow(socket_path.parent)
             try:
-                # Linux limits sockaddr_un, not the backing directory's path.
-                # The container connects through its short /stage or /output mount.
-                descriptor_server.bind(f"/proc/self/fd/{parent_fd}/{socket_path.name}")
+                _bind_unix_socket(descriptor_server, socket_path)
+                descriptor_server.listen(1)
+                descriptor_server.settimeout(0.5)
             except BaseException:
                 descriptor_server.close()
                 raise
-            finally:
-                os.close(parent_fd)
-            descriptor_server.listen(1)
-            descriptor_server.settimeout(0.5)
 
             def send_descriptors() -> None:
                 try:
