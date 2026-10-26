@@ -1157,21 +1157,6 @@ async def create_external_run_registration(
         if source_artifact_override is not None
         else _file_artifact(source_path, f"{run_id}:source", kind=format)
     )
-    terminal_manifest = {
-        "schema": "bms.ont.instrument-terminal-artifacts.v1",
-        "schema_version": 1,
-        "run_id": run_id,
-        "minknow_run_id_sha256": hashlib.sha256(b"").hexdigest(),
-        "terminal_state": "completed",
-        "observed_generation": 1,
-        "domain_context": domain_context,
-        "artifacts": [{
-            "kind": format,
-            "path": str(source_path),
-            "bytes": source_artifact["bytes"],
-            "sha256": source_artifact["sha256"],
-        }],
-    }
     run = OntInstrumentRun(
         id=run_id,
         position_id="external",
@@ -1195,8 +1180,8 @@ async def create_external_run_registration(
         output_files={"fastq": [], "pod5": [], "bam": []},
         handoff_ready=False,
         last_minknow_payload=marker,
-        terminal_artifact_manifest=terminal_manifest,
-        terminal_artifact_manifest_sha256=_digest(terminal_manifest),
+        # External source custody is sealed by its registration and representation
+        # manifests. It is not a MinKNOW terminal acquisition receipt.
         created_at=now,
     )
     event = OntInstrumentRunEvent(

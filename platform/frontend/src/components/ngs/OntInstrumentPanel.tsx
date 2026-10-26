@@ -326,6 +326,10 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
         ),
         enabled: effectiveSelectedRunGeneration !== null,
         retry: false,
+        refetchInterval: (query) => query.state.data?.representations.some((item) => item.format === 'blow5' && item.state === 'ready')
+            ? false
+            : query.state.data?.representations.some((item) => item.format === 'pod5' || item.format === 'blow5')
+                ? jobPollingInterval(2000, query) : false,
     });
 
     const refreshDurableRuns = (run?: OntInstrumentRun) => {
