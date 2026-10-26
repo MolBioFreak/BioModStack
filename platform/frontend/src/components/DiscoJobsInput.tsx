@@ -38,10 +38,11 @@ export function DiscoJobsInput({ value, path, sourcePath, onChange }: { value: u
         {path && <button type="button" disabled={loading} onClick={importFile}>Import into editor</button>}
         {loading && <button type="button" onClick={cancel}>Cancel import</button>}
         {error && <p role="alert">Import failed; existing input unchanged: {error}</p>}
-        {sourcePath && <p>Imported document owner: {sourcePath}. Relative FILE_ references remain relative to this original document, independently of the selected file.</p>}
-        <p>File selection alone does not import. Import replaces the explicit editor override; it never edits the original file.</p>
-        <p role="status">Active input: {discoInputAuthority(value, path)}. Explicit jobs override the native JSON file, which overrides task shorthand. Clearing this override restores the retained file or shorthand.</p>
-        <p className="text-sm">Protein “-” masks request sequence design. Each explicit DNA/RNA row is one strand: no reverse complement is added. Entity, copy and residue positions are one-based. Bond atom names and integer atom maps are different native types; integer-map runtime support is not qualified.</p>
+        {sourcePath && <details><summary>Imported source: {sourcePath.split(/[\\/]/).at(-1)}</summary><p className="break-all">{sourcePath}</p><p>Relative FILE_ references use this original document’s directory.</p></details>}
+        {path && <p>Import replaces the jobs below. The original file is unchanged.</p>}
+        <p role="status">Active input: {discoInputAuthority(value, path)}.</p>
+        <details><summary>Input rules</summary><p>Explicit jobs override the JSON file, which overrides task shorthand. Clear the override to use the file or shorthand again.</p>
+        <p className="text-sm">Protein “-” masks request sequence design. Each explicit DNA/RNA row is one strand: no reverse complement is added. Entity, copy and residue positions are one-based. Bond atom names and integer atom maps are different native types; integer-map runtime support is not qualified.</p></details>
         {value !== undefined && !Array.isArray(value) && <p>Retained native input: {JSON.stringify(value)}. Adding a job deliberately replaces it.</p>}
         {jobs.map((job, ji) => !job || typeof job !== 'object' ? <p key={ji}>Retained invalid job: {JSON.stringify(job)}</p> : <fieldset key={ji} className="space-y-3 rounded border p-3"><legend>Job {ji + 1}</legend>
             <label>Job name<input aria-label={`DISCO job ${ji + 1} name`} className={field} value={job.name ?? ''} onChange={e => update(ji, { ...job, name: e.target.value })} /></label>
@@ -65,7 +66,7 @@ export function DiscoJobsInput({ value, path, sourcePath, onChange }: { value: u
                 const key = `${side}_${part}`; const patch = (next: unknown) => update(ji, { ...job, covalent_bonds: job.covalent_bonds.map((b: DiscoRow, i: number) => { if (i !== bi) return b; const row = { ...b }; if (next === undefined) delete row[key]; else row[key] = next; return row; }) });
                 return <label key={key} className="block">{key}{part === 'atom' && <select aria-label={`${side} atom type`} value={typeof bond[key] === 'number' ? 'integer' : 'name'} onChange={e => patch(e.target.value === 'integer' ? 0 : '')}><option value="name">Atom name</option><option value="integer">Integer map</option></select>}<input className={field} aria-label={`Bond ${bi + 1} ${key}`} type={part !== 'atom' || typeof bond[key] === 'number' ? 'number' : 'text'} value={bond[key] ?? ''} onChange={e => patch(e.target.value === '' && part === 'copy' ? undefined : part !== 'atom' || typeof bond[key] === 'number' ? e.target.value === '' ? '' : Number(e.target.value) : e.target.value)} /></label>;
             })}</div>)}<button type="button" onClick={() => update(ji, { ...job, covalent_bonds: job.covalent_bonds.filter((_: unknown, i: number) => i !== bi) })}>Remove bond {bi + 1}</button></fieldset>)}
-            <p className="text-xs">Removing an entity explicitly removes bonds touching that entity and remaps remaining valid references; reorder remaps valid entity references. Unresolved references remain native-owner validation, not a new launch gate.</p>
+            <p className="text-xs">Removing an entity also removes its bonds. Reordering updates bond references.</p>
             <button type="button" onClick={() => update(ji, { ...job, covalent_bonds: [...(job.covalent_bonds ?? []), {}] })}>Add bond</button>
             {ji > 0 && <button type="button" onClick={() => { const next = [...jobs]; [next[ji - 1], next[ji]] = [next[ji], next[ji - 1]]; onChange(next); }}>Move job {ji + 1} up</button>}
             <button type="button" onClick={() => onChange(jobs.filter((_, i) => i !== ji))}>Remove job {ji + 1}</button>

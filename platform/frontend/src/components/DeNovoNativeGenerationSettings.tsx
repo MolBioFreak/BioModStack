@@ -189,7 +189,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
                 visual={currentVisual ? { slot: currentVisual.slot, ...buildComplexaNativeSelection(currentVisual.identities, { ...currentVisual.receipt, documentId: currentVisual.receipt.path }) } : undefined} />)}
             {<NativeSettingsDisclosure summary={<span>Input structures</span>}>{() => <DeNovoNativeSources onInspection={(slot, receipt, binding) => setInspections(previous => ({ ...previous, [slot]: { receipt, binding: JSON.stringify(binding) } }))} selection={currentVisual} value={nativeDraft.sources} onChange={sources => setNativeDraft(previous => ({ ...previous, sources }))}
                 onSelection={selectSource} />}</NativeSettingsDisclosure>}
-            {inventory.data?.limitations?.map(text => <p key={text} className="text-sm">{text}</p>)}
+            {!!inventory.data?.limitations?.length && <NativeSettingsDisclosure summary={<span>Model limits</span>}>{() => inventory.data?.limitations?.map(text => <p key={text} className="text-sm">{text}</p>)}</NativeSettingsDisclosure>}
             <DeNovoNativePreview request={payload as Partial<Job>} />
         </ProteinDesignPanel></div>
         <div hidden={section !== 'Native settings'}><ProteinDesignPanel title="Native settings" description="Unchanged settings use the selected profile.">
