@@ -19,7 +19,7 @@ export function DiscoJobsInput({ value, path, sourcePath, onChange }: { value: u
         const before = current.current;
         setLoading(true); setError('');
         try {
-            const response = await api.get<{ text: string; source_path: string }>(`/files/disco-jobs/${encodeURIComponent(path)}`, { signal: controller.signal });
+            const response = await api.get<{ text: string; source_path: string }>(`/api/files/disco-jobs/${encodeURIComponent(path)}`, { signal: controller.signal });
             const jobs = parseDiscoJobs(response.data.text);
             if (!controller.signal.aborted && current.current.path === before.path && current.current.value === before.value)
                 onChange(jobs, response.data.source_path);
