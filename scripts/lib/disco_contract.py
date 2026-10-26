@@ -194,6 +194,79 @@ def native_overrides(settings: NativeSettings) -> list[str]:
     return result
 
 
+# Read against the adopted cogen inference loop, PathPlanningSequenceSampling,
+# noise scheduler and runner/inference.py. No constructor/reference defaults are
+# advertised here as resolved experiment/effort values.
+_SETTINGS_HELP = {
+    "experiment": ("Experiment profile", "experiment", "Select the native designable or diverse configuration group."),
+    "effort": ("Sampling effort", "effort", "Select native fast or max configuration; explicit leaf overrides are applied afterward."),
+    "use_deepspeed_evo_attention": ("DeepSpeed attention", "use_deepspeed_evo_attention", "Select the native DeepSpeed Evoformer attention implementation."),
+    "seeds": ("Random seeds", "seeds", "Explicit integer seed or ordered seed list. A nonempty list or scalar seed takes precedence over the seed count."),
+    "num_inference_seeds": ("Seed count", "num_inference_seeds", "Generate integer seeds from zero through count minus one when no explicit seeds are supplied; null leaves the native seeds list in effect."),
+    "N_step": ("Diffusion steps", "sample_diffusion.N_step", "Number of structural diffusion integration steps."),
+    "N_cycle": ("Trunk cycles", "model.N_cycle", "Number of native model trunk recycling cycles."),
+    "noise_scale_lambda": ("Structural noise multiplier", "sample_diffusion.noise_scale_lambda", "Dimensionless multiplier of structural Gaussian noise during initialization and stochastic updates."),
+    "gamma0": ("Structural churn", "sample_diffusion.gamma0", "Dimensionless noise-increase factor used above the native gamma_min threshold."),
+    "rho": ("Noise-schedule exponent", "inference_noise_scheduler.rho", "Dimensionless exponent shaping interpolation between the native minimum and maximum structural noise levels."),
+    "n_seq_duplicates_per_structure": ("Sequences per structure", "n_seq_duplicates_per_structure", "Number of sequence copies sampled with a shared structure."),
+    "need_atom_confidence": ("Atom confidence", "need_atom_confidence", "Request the native atom-confidence calculation."),
+    "deterministic": ("Deterministic kernels", "deterministic", "Request native deterministic execution settings; this is not a cross-device reproducibility guarantee."),
+    "output_format": ("Output format", "output_format", "Null uses the native general writer; unconditional_monomer_protein uses the monomer protein writer."),
+}
+_GUIDANCE_HELP = {
+    "enabled": ("Enable cross-modal guidance", "Enable noisy cross-modal guidance; native inverse folding bypasses it."),
+    "guide_struct": ("Guide structure", "Use the more-noised sequence branch to guide structural denoising."),
+    "omega_struct": ("Structure guidance weight", "Dimensionless structural guidance weight; one leaves the conditional prediction unchanged."),
+    "guide_seq": ("Guide sequence", "Use the more-noised structure branch to guide sequence predictions."),
+    "omega_seq": ("Sequence guidance weight", "Dimensionless sequence guidance weight; one leaves the conditional prediction unchanged."),
+    "uncond_seq_time_mode": ("Sequence noise mode", "fixed uses an absolute noise fraction; offset shifts scheduler time; proportional multiplies current noise. Sequence remasking uses the configured fraction for fixed/offset and multiplies the current masked fraction for proportional."),
+    "uncond_seq_time": ("Sequence noise value", "Noise fraction for fixed, scheduler-time offset for offset, or dimensionless multiplier for proportional. Also controls the guidance branch's sequence remasking fraction."),
+    "uncond_struct_time_mode": ("Structure noise mode", "fixed uses an absolute noise fraction; offset shifts scheduler time toward noise; proportional multiplies current sigma."),
+    "uncond_struct_time": ("Structure noise value", "Noise fraction (zero clean, one fully noised) for fixed; scheduler-time offset for offset; dimensionless sigma multiplier for proportional."),
+    "guidance_start_frac": ("Guidance start", "Fraction of the native noise schedule at which guidance begins."),
+    "guidance_end_frac": ("Guidance end", "Fraction of the native noise schedule at which guidance ends."),
+    "rescale_phi": ("Guidance rescaling mix", "Dimensionless interpolation weight between standard-deviation-rescaled and unrescaled guided structural predictions; zero skips rescaling."),
+    "omega_schedule": ("Guidance weight schedule", "Keep guidance weights constant or decay them linearly toward one."),
+}
+_SEQUENCE_HELP = {
+    "score_type": ("Mask ranking", "Rank mask candidates by sampled-token log probability or random log scores."),
+    "logits_temp": ("Token temperature", "Dimensionless temperature applied to amino-acid logits before categorical sampling."),
+    "score_temp": ("Score temperature (retained)", "The adopted path-planning constructor stores this value but its step does not read it; no sampling effect is claimed."),
+    "mask_stochasticity_strength": ("Unmasked-position score scale", "Dimensionless multiplier of ranking scores for already unmasked positions before selecting the lowest-scored positions to mask."),
+    "planner_name": ("Sequence planner", "Optional native registered masked language model for planning logits; null disables the planner."),
+    "should_ensure_unmasked_stay": ("Reuse unmasked confidence", "For confidence ranking, reuse cached likelihoods at already unmasked positions."),
+    "allow_remasking": ("Remasking diagnostic flag", "The adopted step uses this flag in its remasking diagnostic; it does not gate the masking update. No change in sampling is claimed."),
+    "switch_temp": ("Late temperature switch", "Use the configured token temperature while sequence time is above 0.2, then the native 0.1 temperature."),
+    "entropy_adaptive_temp": ("Entropy-adaptive temperature", "Scale token temperature per position using entropy of the raw amino-acid logits."),
+    "entropy_adaptive_beta": ("Entropy temperature strength", "Dimensionless coefficient in 1 + beta * time^power * (log(20)-entropy)/log(20); used when adaptive temperature is enabled."),
+    "entropy_adaptive_anneal_power": ("Entropy annealing power", "Exponent of sequence time multiplying the adaptive-temperature coefficient."),
+    "power": ("Sequence noise exponent", "Dimensionless power of the polynomial sequence-noise schedule."),
+}
+
+
+def settings_schema() -> dict:
+    """Enrich the existing typed schema without changing accepted values."""
+    from pydantic import TypeAdapter
+    schema = TypeAdapter(NativeSettings).json_schema()
+
+    def annotate(leaf, title, native, effect, applicability):
+        leaf.update(title=title, description=f"{effect} {applicability} Native: {native}.")
+        leaf.update({"x-native-key": native, "x-applicability": applicability,
+                     "x-default-source": "selected native composition; not resolved by discovery"})
+
+    for key, (title, native, effect) in _SETTINGS_HELP.items():
+        annotate(schema['properties'][key], title, native, effect, "DISCO generation.")
+    for group, type_name, definitions, prefix, applicability in (
+        ('noisy_guidance', 'NoisyGuidance', _GUIDANCE_HELP, 'sample_diffusion.noisy_guidance', 'Active only when noisy guidance is enabled and the native guidance window/branch applies.'),
+        ('sequence_sampling', 'SequenceSampling', _SEQUENCE_HELP, 'sequence_sampling_strategy', 'Native path-planning sequence sampling.'),
+    ):
+        schema['properties'][group]['title'] = 'Cross-modal guidance' if group == 'noisy_guidance' else 'Sequence sampling'
+        for key, (title, effect) in definitions.items():
+            native = prefix + ('.sequence_noise_scheduler.power' if key == 'power' else '.' + key)
+            annotate(schema['$defs'][type_name]['properties'][key], title, native, effect, applicability)
+    return schema
+
+
 _HEADER = re.compile(r">cogen_seq (\d+)")
 _CHAIN = re.compile(r"CHAIN (\S+) type=(protein|dna|rna) mode=(design|fixed) seq=(\S*)")
 _PROTEIN = re.compile(r"[ACDEFGHIKLMNPQRSTVWYX-]+")

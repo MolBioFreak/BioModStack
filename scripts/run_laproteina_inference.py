@@ -61,6 +61,14 @@ def _configure_laproteina(request: dict, output_dir: Path) -> dict:
             OmegaConf.update(cfg, "generation.dataset.motif_dict_cfg." + motif_name, motif, merge=False, force_add=True)
         elif motif_name not in cfg.generation.dataset.motif_dict_cfg:
             raise ValueError(f"La-Proteina motif task not found: {motif_name}")
+        else:
+            # Only sparse authored native fields override a named task. Historical
+            # primary UI defaults are not evidence of an authored override.
+            motif = OmegaConf.to_container(cfg.generation.dataset.motif_dict_cfg[motif_name], resolve=False)
+            for key in request.get("native_settings_fields", {}).get("laproteina", []):
+                if key in MOTIF_CONTROLS and key in settings:
+                    motif[key] = settings[key]
+            OmegaConf.update(cfg, "generation.dataset.motif_dict_cfg." + motif_name, motif, merge=False, force_add=True)
     # Native defaults and LD3 overrides are already composed; explicit controls
     # therefore win over profile values rather than being shadowed by _self_.
     config_name = "inference_bms"

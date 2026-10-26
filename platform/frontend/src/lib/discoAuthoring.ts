@@ -1,4 +1,11 @@
 export type DiscoRow = Record<string, any>;
+/** Parse only the ordered document shape; native science stays native-owned. */
+export function parseDiscoJobs(text: string): DiscoRow[] {
+    const jobs: unknown = JSON.parse(text);
+    if (!Array.isArray(jobs) || jobs.some(job => !job || typeof job !== 'object' || Array.isArray(job)))
+        throw new Error('Expected a native ordered array of DISCO job records');
+    return jobs;
+}
 export const discoEntityKinds = ['proteinChain', 'dnaSequence', 'rnaSequence', 'ligand', 'ion'] as const;
 /** Reorder entities and their one-based bond references together, never alter strands. */
 export function moveDiscoEntity(job: DiscoRow, from: number, to: number): DiscoRow {

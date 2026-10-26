@@ -54,6 +54,7 @@ process PrepProteinCadRequest {
         --disco-cutlass-path "${params.pcad_disco_cutlass_path ?: params.disco_cutlass_path ?: ''}" \\
         --laproteina-settings-json ${jsonArg(params.pcad_laproteina_settings_json, '{}')} \\
         --disco-settings-json ${jsonArg(params.pcad_disco_settings_json, '{}')} \\
+        --disco-jobs-source-path ${jsonArg(params.pcad_disco_jobs_source_path, '')} \\
         --disco-jobs-json ${jsonArg(params.pcad_disco_jobs_json, 'null')} \\
         --output protein_cad_request.json \\
         --input-dir protein_cad_inputs

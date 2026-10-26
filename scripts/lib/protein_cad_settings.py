@@ -22,7 +22,15 @@ def settings_projection(params):
     for model, fields in [('laproteina', CONTROLS | MOTIF_CONTROLS),
                           ('disco', NativeSettings.__annotations__)]:
         settings = {}
+        # Named motifs inherit their composed dictionary. Old primary form
+        # defaults are not authored native overrides; deliberate edits use
+        # the sparse native map merged below. Custom-source transport keeps
+        # the historical primary projection.
+        named_motif = (params.get('laproteina_motif_task_name', params.get('pcad_laproteina_motif_task_name'))
+                       and not params.get('laproteina_motif_pdb', params.get('pcad_laproteina_motif_pdb')))
         for field in fields:
+            if model == 'laproteina' and field in MOTIF_CONTROLS and named_motif:
+                continue
             key = model + '_' + field
             if key not in params and 'pcad_' + key in params:
                 key = 'pcad_' + key

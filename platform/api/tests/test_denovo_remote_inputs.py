@@ -146,7 +146,10 @@ def test_compiled_scalar_input_alias_offline(roots, tmp_path, monkeypatch, backe
     source = roots['inputs'] / ('fixture.sdf' if backend == 'disco' else 'fixture.pdb')
     content = b'inert scalar transport fixture\r\n'
     source.write_bytes(content)
-    invocation = compile_cad(roots, {'backend': backend, key: str(source)}, public_model)
+    params = {'backend': backend, key: str(source)}
+    if backend == 'disco':
+        params['design_task'] = 'ligand_conditioned'  # Exercise the active shorthand, not an inactive unconditional draft.
+    invocation = compile_cad(roots, params, public_model)
     assert invocation.native_parameters['pcad_' + key] == str(source)
     assert key not in invocation.native_parameters
     assert {r['source_path'] for r in discover(roots, invocation, invocation.native_parameters)} == {str(source)}

@@ -71,11 +71,49 @@ MOTIF_CONTROLS = {
 }
 
 
+# Meaning authority: pinned product_space_flow_matcher.get_schedule/get_gt,
+# rdn_flow_matcher.simulation_step, gen_dataset and motif_utils.parse_motif.
+_CONTROL_HELP = {
+    "seed": ("Random seed", "Integer seed for native generation."),
+    "num_steps": ("Integration steps", "Number of vector-field/score integration steps."),
+    "self_cond": ("Self-conditioning", "Feed the preceding clean-sample prediction back to the network."),
+    "save_trajectory_every": ("Trajectory interval", "Retain post-step states every N integration steps; zero disables retention."),
+    "max_nsamples_per_batch": ("Samples per batch", "Maximum samples grouped into one native generation batch; does not change the requested total."),
+    "schedule_mode": ("Time-grid schedule", "Partition the unit time interval uniformly, by a power, or logarithmically."),
+    "schedule_p": ("Time-grid exponent", "Dimensionless shape parameter for power/log schedules; unused by uniform scheduling."),
+    "gt_mode": ("Noise-injection schedule", "Select the native g(t) function used by stochastic integration."),
+    "gt_p": ("Noise-injection parameter", "Dimensionless p parameter of the selected native g(t) function."),
+    "gt_clamp_val": ("Noise-injection ceiling", "Upper clamp on g(t); null removes the upper clamp."),
+    "sampling_mode": ("Integration method", "vf: vector-field ODE; sc: stochastic score sampling; vf_ss: score-scaled ODE; vf_ss_sc_sn: score-scaled ODE with stochastic noise. Native endpoint switches still apply."),
+    "sc_scale_noise": ("Stochastic noise scale", "Dimensionless factor inside sqrt(2*g(t)*scale*dt); used by sc and the interior of vf_ss_sc_sn, not plain vf."),
+    "sc_scale_score": ("Score scale", "Dimensionless multiplier of the predicted score in score-scaled ODE updates; native endpoint branches can use their own fixed scale."),
+    "t_lim_ode": ("Late ODE switch", "Unit-interval time threshold above which sc and vf_ss_sc_sn switch to the native late ODE branch."),
+    "t_lim_ode_below": ("Early stochastic switch", "Unit-interval time threshold below which vf_ss and vf_ss_sc_sn use the native early stochastic branch."),
+    "center_every_step": ("Center each step", "Subtract the masked mean after each integration update for this modality."),
+    "motif_atom_spec": ("Motif atoms", "Atom-level selectors, for example A64: [O, CG]; overrides residue/range extraction. Null uses contig-based extraction."),
+    "contig_string": ("Motif contig", "Native residue ranges and scaffold segments, for example A1-7/A28-79; used when motif_atom_spec is null or omitted."),
+    "segment_order": ("Segment order", "Native segment-order string retained in the motif CSV for residue/range extraction."),
+    "atom_selection_mode": ("Motif atom selection", "ca selects CA; bb3o selects N/CA/C/O; all_atom selects available atoms; tip_atoms selects sidechain tips. Unused with motif_atom_spec."),
+    "motif_min_length": ("Minimum motif/scaffold length", "Lower residue-count bound passed to the native motif parser; null leaves that bound unset."),
+    "motif_max_length": ("Maximum motif/scaffold length", "Upper residue-count bound passed to the native motif parser; null leaves that bound unset."),
+}
+
+
 def settings_schema() -> dict:
-    """Native advanced settings; the existing CAD owner owns source/path fields."""
-    return {"type": "object", "additionalProperties": False,
-            "properties": {key: {k: v for k, v in spec.items() if k in {"type", "enum"}}
-                           for key, spec in (CONTROLS | MOTIF_CONTROLS).items()}}
+    """Typed meanings, not fabricated resolved profile defaults."""
+    properties = {}
+    for key, spec in (CONTROLS | MOTIF_CONTROLS).items():
+        modality = next((prefix for prefix in ("bb_ca_", "local_latents_") if key.startswith(prefix)), "")
+        title, help_text = _CONTROL_HELP[key[len(modality):]]
+        if modality:
+            title = ("Backbone · " if modality == "bb_ca_" else "Local latents · ") + title
+        applicability = ("Motif scaffolding: custom source or explicitly authored named-task override. Omitted named-task fields retain the composed motif dictionary."
+                         if key in MOTIF_CONTROLS else "Unconditional and motif generation.")
+        properties[key] = {**{k: v for k, v in spec.items() if k in {"type", "enum"}},
+                           "title": title, "description": f"{help_text} {applicability} Native: {spec['native']}.",
+                           "x-native-key": spec["native"], "x-applicability": applicability,
+                           "x-default-source": "selected native composition; not resolved by discovery"}
+    return {"type": "object", "additionalProperties": False, "properties": properties}
 
 
 EVALUATION_CONTROLS = {

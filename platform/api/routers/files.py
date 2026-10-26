@@ -569,6 +569,12 @@ async def download_file(
     governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
 ):
     """Download a file from allowed directories."""
+    full_path = _download_source(file_path, governed_roots)
+    return _serve_file_response(full_path, request, as_attachment=True)
+
+
+def _download_source(file_path: str, governed_roots: tuple[Path, ...]) -> Path:
+    """Shared managed-file read authority, including governed artifact exclusions."""
     try:
         lexical_path = _allowed_lexical_path(file_path)
         if _under_persisted_ngs_root(lexical_path, governed_roots):
@@ -586,7 +592,26 @@ async def download_file(
         raise HTTPException(status_code=400, detail="Path is not a file")
     _reject_governed_ngs_artifact(full_path)
     
-    return _serve_file_response(full_path, request, as_attachment=True)
+    return full_path
+
+
+@router.get("/disco-jobs/{file_path:path}")
+async def read_disco_jobs(
+    file_path: str,
+    governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
+):
+    """Explicit editor import; retain literal FILE_ paths and their checked owner.
+
+    This is not admission or molecular validation. The original document is never
+    rewritten; ordinary native closure discovery retains its bytes and ligands.
+    """
+    from starlette.concurrency import run_in_threadpool
+    source = _download_source(file_path, governed_roots)
+    try:
+        text = await run_in_threadpool(source.read_text, encoding="utf-8")
+        return {"text": text, "source_path": str(source)}
+    except (OSError, UnicodeError) as exc:
+        raise HTTPException(422, "Could not read native DISCO document") from exc
 
 
 @router.get("/stream/{file_path:path}")

@@ -514,7 +514,7 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
     # The CAD compiler consumes the public names and emits pcad_* slots.
     # Discover the same immutable documents after compilation so nested FILE_
     # references reach the existing portable binding owner, not a JSON rewrite.
-    keys.update({'pcad_laproteina_motif_pdb', 'pcad_disco_input_json_path',
+    keys.update({'pcad_laproteina_motif_pdb', 'pcad_disco_input_json_path', 'pcad_disco_jobs_source_path',
                  'pcad_disco_ligand_sdf'})
     if model_id in {'antibody_denovo', 'template_antibody_denovo'} and mode in {
             'antibody_denovo_pipeline', 'antibody_refinement_pipeline'}:
@@ -602,9 +602,36 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
     keys.difference_update(prepared_generation_source_fields(model_id, mode, params))
     if model_id == "nanopore":
         keys.update({"fastq_path", "reference_fasta", "bam_path"})
+    # Explicit editor jobs retain their original document owner separately from
+    # the reversible selected-file fallback. Discover edited/new FILE_ members too.
+    jobs = params.get('pcad_disco_jobs_json', params.get('disco_jobs'))
+    disco_selected = (model_id == 'protein_cad_experimental' or (
+        model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
+    )) and params.get('pcad_backend', params.get('backend', params.get('generator', 'disco'))) == 'disco'
+    if disco_selected and isinstance(jobs, str):
+        jobs = json.loads(jobs)
+    if disco_selected:
+        fallbacks = {'pcad_disco_input_json_path', 'disco_input_json_path'}
+        ligands = {'pcad_disco_ligand_sdf', 'disco_ligand_sdf'}
+        keys.discard('pcad_disco_jobs_source_path')
+        if jobs is not None:
+            keys.difference_update(fallbacks | ligands)
+            if params.get('pcad_disco_jobs_source_path'):
+                # Retain original bytes, but edited jobs alone own active FILE_
+                # dependencies; removed original rows must not be enumerated.
+                visit(params['pcad_disco_jobs_source_path'], None,
+                      ('pcad_disco_jobs_source_path',), 'native-snapshot')
+        elif any(params.get(key) for key in fallbacks):
+            keys.difference_update(ligands)
+        elif params.get('pcad_task', params.get('design_task', params.get('task'))) != 'ligand_conditioned':
+            keys.difference_update(ligands)
     for key in sorted(keys & params.keys()):
         if params[key]:
             visit(params[key], None, (key,))
+    if jobs is not None and disco_selected:
+        owner = params.get('pcad_disco_jobs_source_path') or None
+        for selector, value, role in native_reference_fields(jobs, 'disco-json'):
+            visit(value, owner, ('pcad_disco_jobs_json', *selector), role)
     custody = params.get('ont_input_provenance') or {}
     if model_id == 'nanopore' and custody.get('source') == 'managed_fastq_launch_snapshot':
         received = next((record for record in records if record['selector'] == ['fastq_path']), None)

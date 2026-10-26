@@ -1,15 +1,45 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { api } from '../lib/api';
+import { parseDiscoJobs } from '../lib/discoAuthoring';
 import { FileBrowser } from './FileBrowser';
 import { discoEntityKinds, discoInputAuthority, moveDiscoEntity, removeDiscoEntity, type DiscoRow } from '../lib/discoAuthoring';
 const field = 'w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2';
 /** Native ordered records, not a molecule translator. Unknown imported fields survive edits. */
-export function DiscoJobsInput({ value, path, onChange }: { value: unknown; path: string; onChange: (value: unknown) => void }) {
+export function DiscoJobsInput({ value, path, sourcePath, onChange }: { value: unknown; path: string; sourcePath?: string; onChange: (value: unknown, sourcePath?: string) => void }) {
+    const request = useRef<AbortController | null>(null);
+    const current = useRef({ value, path });
+    current.current = { value, path };
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
+    const cancel = () => { request.current?.abort(); request.current = null; setLoading(false); };
+    useEffect(() => { cancel(); setError(''); return () => request.current?.abort(); }, [path, value]);
+    const importFile = async () => {
+        cancel();
+        const controller = new AbortController(); request.current = controller;
+        const before = current.current;
+        setLoading(true); setError('');
+        try {
+            const response = await api.get<{ text: string; source_path: string }>(`/files/disco-jobs/${encodeURIComponent(path)}`, { signal: controller.signal });
+            const jobs = parseDiscoJobs(response.data.text);
+            if (!controller.signal.aborted && current.current.path === before.path && current.current.value === before.value)
+                onChange(jobs, response.data.source_path);
+        } catch (cause) {
+            if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not import native jobs');
+        } finally {
+            if (request.current === controller) { request.current = null; setLoading(false); }
+        }
+    };
     const [file, setFile] = useState<{ job: number; entity: number }>();
     const jobs = Array.isArray(value) ? value as DiscoRow[] : [];
     const update = (index: number, job: DiscoRow) => onChange(jobs.map((item, i) => i === index ? job : item));
     const entityUpdate = (ji: number, ei: number, entity: DiscoRow) => update(ji, { ...jobs[ji], sequences: jobs[ji].sequences.map((row: DiscoRow, i: number) => i === ei ? entity : row) });
     return <section aria-label="DISCO ordered jobs" className="space-y-3">
         <h3 className="font-semibold">Ordered jobs and molecular entities</h3>
+        {path && <button type="button" disabled={loading} onClick={importFile}>Import into editor</button>}
+        {loading && <button type="button" onClick={cancel}>Cancel import</button>}
+        {error && <p role="alert">Import failed; existing input unchanged: {error}</p>}
+        {sourcePath && <p>Imported document owner: {sourcePath}. Relative FILE_ references remain relative to this original document, independently of the selected file.</p>}
+        <p>File selection alone does not import. Import replaces the explicit editor override; it never edits the original file.</p>
         <p role="status">Active input: {discoInputAuthority(value, path)}. Explicit jobs override the native JSON file, which overrides task shorthand. Clearing this override restores the retained file or shorthand.</p>
         <p className="text-sm">Protein “-” masks request sequence design. Each explicit DNA/RNA row is one strand: no reverse complement is added. Entity, copy and residue positions are one-based. Bond atom names and integer atom maps are different native types; integer-map runtime support is not qualified.</p>
         {value !== undefined && !Array.isArray(value) && <p>Retained native input: {JSON.stringify(value)}. Adding a job deliberately replaces it.</p>}

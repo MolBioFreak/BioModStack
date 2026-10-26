@@ -6777,6 +6777,21 @@ def compile_nextflow_invocation(
                     params[dest_key] = params[src_key]
                 params.pop(src_key, None)
 
+        # Managed browser aliases are controller names, not task-relative files.
+        # Preserve historical absolute/path-only inputs and native FILE_ literals.
+        from paths import get_allowed_roots, resolve_allowed_path
+        disco_jobs = params.get('pcad_disco_jobs_json')
+        if params.get('pcad_backend') == 'disco' and isinstance(disco_jobs, str):
+            disco_jobs = json.loads(disco_jobs)
+        active_disco_paths = (('pcad_disco_jobs_source_path',) if disco_jobs is not None
+                              else ('pcad_disco_input_json_path',) if params.get('pcad_disco_input_json_path')
+                              else ('pcad_disco_ligand_sdf',) if params.get('pcad_task') == 'ligand_conditioned'
+                              else ())
+        for key in active_disco_paths if params.get('pcad_backend') == 'disco' else ():
+            value = params.get(key)
+            if isinstance(value, str) and value.lstrip('/').split('/')[0] in get_allowed_roots():
+                params[key] = str(resolve_allowed_path(value))
+
         if 'pcad_num_designs' in params and 'rfd_num_designs' not in params:
             params['rfd_num_designs'] = params['pcad_num_designs']
         if not params.get('rfd_mode'):
