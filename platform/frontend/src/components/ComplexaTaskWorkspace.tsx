@@ -45,7 +45,7 @@ export function ComplexaTaskWorkspace({ request, schema, onChange, onTask, rende
                 {renderSource ? renderSource(`Candidate ${i + 1}`, slot, value => onChange({ ...request, evaluation_slots: request.evaluation_slots.map((s: string, j: number) => i === j ? value : s) })) : <label>Candidate {i + 1}<input aria-label={`Complexa evaluation slot ${i + 1}`} list="complexa-source-names" value={slot} onChange={e => onChange({ ...request, evaluation_slots: request.evaluation_slots.map((s: string, j: number) => i === j ? e.target.value : s) })} /></label>}
                 <button type="button" onClick={() => onChange({ ...request, evaluation_slots: request.evaluation_slots.filter((_: string, j: number) => i !== j) })}>Remove evaluation candidate {i + 1}</button>
             </div>)}
-            <button type="button" onClick={() => onChange({ ...request, evaluation_slots: [...(request.evaluation_slots ?? []), ''] })}>Add evaluation candidate</button>
+            {renderSource ? renderSource('Add evaluation candidate', '', slot => { if (slot !== '') onChange({ ...request, evaluation_slots: [...(request.evaluation_slots ?? []), slot] }); }) : <button type="button" onClick={() => onChange({ ...request, evaluation_slots: [...(request.evaluation_slots ?? []), ''] })}>Add evaluation candidate</button>}
             <button type="button" onClick={() => onChange(patchNative(request, 'evaluation_slots', undefined))}>Omit evaluation basket</button>
         </fieldset>}
         <label>Task name<input aria-label="Native task name" value={request.task_name ?? ''} onChange={e => onChange({ ...request, task_name: e.target.value })} /></label>

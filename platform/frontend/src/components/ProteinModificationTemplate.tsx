@@ -1,13 +1,14 @@
 import { LaProteinaEvaluation } from './LaProteinaEvaluation';
 import { DeNovoNativeGenerationSettings } from './DeNovoNativeGenerationSettings';
-import { OtherDeNovoSettings, retainedRfd3Settings } from './OtherDeNovoSettings';
+import { OtherDeNovoSettings, retainedRfd3Draft, useRfd3GenerationBounds } from './OtherDeNovoSettings';
 import { DiscoJobsInput } from './DiscoJobsInput';
+import { NativeSourceInput } from './DeNovoNativeSources';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { completeCurrentLaunchContext, submitJob, type Job } from '../lib/api';
+import { completeCurrentLaunchContext, submitJob, type StructureMaterialization, type Job } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 import ShapeBlueprintTemplate from './ShapeBlueprintTemplate';
@@ -261,9 +262,26 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [ligandName, setLigandName] = useState(initialString(initialValues, 'disco_ligand_name', ''));
     const [nucleicSequence, setNucleicSequence] = useState(initialString(initialValues, 'disco_na_sequence', ''));
     const [nativeControls, setNativeControls] = useState<Record<string, unknown>>(() => Object.fromEntries(
-        ['pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json'].filter(key => Object.hasOwn(initialValues, key)).map(key => { let value = initialValues[key]; if (typeof value === 'string') { try { value = JSON.parse(value); } catch { /* Retain invalid saved input for explicit repair. */ } } return [key, value]; })));
-    const [rfd3Settings, setRfd3Settings] = useState(() => retainedRfd3Settings(initialValues));
+        ['pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => { let value = initialValues[key]; if (key.endsWith('_json') && typeof value === 'string') { try { value = JSON.parse(value); } catch { /* Retain invalid saved input for explicit repair. */ } } return [key, value]; })));
+    const [rfd3Settings, setRfd3Settings] = useState(() => retainedRfd3Draft(initialValues));
+    const [rfd3SourceInspection, setRfd3SourceInspection] = useState<{ receipt: StructureMaterialization; path: string; model?: number }>();
+    const rfd3Source = typeof rfd3Settings.input_structure === 'string' && rfd3Settings.input_structure ? {
+        path: rfd3Settings.input_structure, output_format: 'native' as const,
+        ...(typeof rfd3Settings.source_model === 'number' ? { model_number: rfd3Settings.source_model } : {}),
+    } : undefined;
+    const clearRfd3Source = () => setRfd3Settings(previous => {
+        const next = { ...previous }; delete next.input_structure; delete next.source_model; delete next.source_mapping; return next;
+    });
+    const rfd3Bounds = useRfd3GenerationBounds(generator === 'rfd3');
+    const rfd3LengthsInvalid = Number(minLength) > Number(maxLength) ||
+        [minLength, maxLength].some((value, index) => {
+            const bound = rfd3Bounds?.[index === 0 ? 'min_length' : 'max_length'];
+            return (bound?.minimum != null && Number(value) < bound.minimum) || (bound?.maximum != null && Number(value) > bound.maximum);
+        });
     const hasNativeJobs = Object.hasOwn(nativeControls, 'pcad_disco_jobs_json');
+    const effectiveLaMotif = { motif_task_name: motifTaskName, motif_pdb: motifPdb, contig_string: motifContig, ...(nativeControls.pcad_laproteina_settings_json && typeof nativeControls.pcad_laproteina_settings_json === 'object' && !Array.isArray(nativeControls.pcad_laproteina_settings_json) ? nativeControls.pcad_laproteina_settings_json as Record<string, unknown> : {}) };
+    const hasEffectiveLaMotif = Boolean(effectiveLaMotif.motif_task_name || (effectiveLaMotif.motif_pdb && effectiveLaMotif.contig_string));
+    const authorLaMotif = (key: string, value: unknown) => setNativeControls(current => ({ ...current, pcad_laproteina_settings_json: { ...(current.pcad_laproteina_settings_json && typeof current.pcad_laproteina_settings_json === 'object' && !Array.isArray(current.pcad_laproteina_settings_json) ? current.pcad_laproteina_settings_json as Record<string, unknown> : {}), [key]: value } }));
     const retainedAlternativeParams = Object.fromEntries(Object.entries(initialValues).filter(([key]) => key.startsWith(`${backend}_`) && key !== 'laproteina_motif_inspection'));
     const [error, setError] = useState<string | null>(null);
     const [sequenceDesign, setSequenceDesign] = useState(() => hydrateGeneralSequenceDesign(initialValues));
@@ -368,7 +386,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             setError(`The ${backend === 'disco' ? 'DISCO' : 'La-Proteina'} backend does not support the selected design task.`);
             return;
         }
-        if (backend === 'laproteina' && designTask === 'motif_scaffolding' && !(motifTaskName.trim() || (motifPdb.trim() && motifContig.trim()))) {
+        if (backend === 'laproteina' && designTask === 'motif_scaffolding' && !hasEffectiveLaMotif) {
             setError('La-Proteina motif scaffolding requires an upstream motif task or a motif PDB with a contig string.');
             return;
         }
@@ -394,9 +412,9 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             model_id: 'protein_modification_experimental',
             mode: 'de_novo_design',
             params: {
+                generation_mode: 'unconditional_monomer',
                 ...rfd3Settings,
                 generator: 'rfd3',
-                generation_mode: 'unconditional_monomer',
                 min_length: minLength,
                 max_length: maxLength,
                 num_designs: numDesigns,
@@ -411,8 +429,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             setError('Job name is required.');
             return;
         }
-        if (Number(minLength) < 40 || Number(minLength) > 600 || Number(maxLength) < 40 || Number(maxLength) > 600 || Number(minLength) > Number(maxLength)) {
-            setError('Lengths must be between 40 and 600, with minimum no greater than maximum.');
+        if (rfd3LengthsInvalid) {
+            setError(`Lengths must follow current public admission (${rfd3Bounds?.min_length.minimum ?? 'not reported'}–${rfd3Bounds?.max_length.maximum ?? 'not reported'}), with minimum no greater than maximum.`);
             return;
         }
         if (!Number.isInteger(numDesigns) || Number(numDesigns) < 1) {
@@ -428,8 +446,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     };
 
     const workflowRequest = generator === 'rfd3'
-        ? (jobName.trim() && Number(minLength) >= 40 && Number(maxLength) <= 600 && Number(minLength) <= Number(maxLength) && Number.isInteger(numDesigns) && Number(numDesigns) >= 1 && Number.isInteger(seed) && Number(seed) >= 0 ? buildDeNovoWorkflowRequest() : null)
-        : (jobName.trim() && Number(numDesigns) >= 1 && targetLengths.trim() && DE_NOVO_TASK_OPTIONS[backend].some(option => option.value === designTask) && (backend !== 'laproteina' || designTask !== 'motif_scaffolding' || motifTaskName.trim() || (motifPdb.trim() && motifContig.trim())) && (backend !== 'disco' || hasNativeJobs || (designTask !== 'custom_json' || discoInputJson.trim()) && (designTask !== 'ligand_conditioned' || ligandSdf.trim()) && (!['dna_conditioned', 'rna_conditioned'].includes(designTask) || nucleicSequence.trim())) ? buildAlternativeWorkflowRequest() : null);
+        ? (jobName.trim() && !rfd3LengthsInvalid && Number.isInteger(numDesigns) && Number(numDesigns) >= 1 && Number.isInteger(seed) && Number(seed) >= 0 ? buildDeNovoWorkflowRequest() : null)
+        : (jobName.trim() && Number(numDesigns) >= 1 && targetLengths.trim() && DE_NOVO_TASK_OPTIONS[backend].some(option => option.value === designTask) && (backend !== 'laproteina' || designTask !== 'motif_scaffolding' || hasEffectiveLaMotif) && (backend !== 'disco' || hasNativeJobs || (designTask !== 'custom_json' || discoInputJson.trim()) && (designTask !== 'ligand_conditioned' || ligandSdf.trim()) && (!['dna_conditioned', 'rna_conditioned'].includes(designTask) || nucleicSequence.trim())) ? buildAlternativeWorkflowRequest() : null);
     const workflowRequestJson = JSON.stringify(workflowRequest);
     useEffect(() => {
         const values = JSON.parse(draftJson) as Record<string, unknown>;
@@ -466,10 +484,10 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const generationControls = <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {generator === 'rfd3' ? <>
             <label className={labelClass}>Minimum length
-                <input className={fieldClass} type="number" min={40} max={600} value={minLength} onChange={event => setMinLength(editedNumber(event.target.value))} />
+                <input className={fieldClass} type="number" min={rfd3Bounds?.min_length.minimum} max={rfd3Bounds?.min_length.maximum} value={minLength} onChange={event => setMinLength(editedNumber(event.target.value))} />
             </label>
             <label className={labelClass}>Maximum length
-                <input className={fieldClass} type="number" min={40} max={600} value={maxLength} onChange={event => setMaxLength(editedNumber(event.target.value))} />
+                <input className={fieldClass} type="number" min={rfd3Bounds?.max_length.minimum} max={rfd3Bounds?.max_length.maximum} value={maxLength} onChange={event => setMaxLength(editedNumber(event.target.value))} />
             </label>
             <label className={labelClass}>Number of designs
                 <input className={fieldClass} type="number" min={1} value={numDesigns} onChange={event => setNumDesigns(editedNumber(event.target.value))} />
@@ -492,32 +510,47 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             <ProteinDesignSections label="Generation sections" sections={[inputSection, 'Sampling', 'Sequence Design']} active={section} onChange={setSection} />
             {/* Section navigation is presentation only. Source tools and viewers stay mounted. */}
             <div hidden={section !== inputSection} className="space-y-5">
-                {designTask === 'unconditional' ? <ProteinDesignPanel title="Generation" description="Generate new protein candidates without a source structure.">
+                {designTask === 'unconditional' ? <ProteinDesignPanel title="Generation" description="Generate new protein candidates.">
                     {generationControls}
                     <p className="text-xs text-[var(--text-secondary)]">{countHelp}</p>
+                    {generator === 'rfd3' && <details><summary>Input structure (optional)</summary>
+                        <NativeSourceInput label="RFD3 input structure" value={rfd3Source ? 'input' : ''} bindings={rfd3Source ? { input: rfd3Source } : undefined}
+                            onChange={slot => { if (slot === '') clearRfd3Source(); }}
+                            onAcquire={source => {
+                                if (!('kind' in source)) setRfd3Settings(previous => {
+                                    const next: Record<string, unknown> = { ...previous, input_structure: source.path };
+                                    if (source.model_number == null) delete next.source_model; else next.source_model = source.model_number;
+                                    return next;
+                                });
+                                return 'input';
+                            }}
+                            inspection={rfd3SourceInspection?.path === rfd3Source?.path && rfd3SourceInspection?.model === rfd3Source?.model_number ? rfd3SourceInspection?.receipt : undefined}
+                            onInspection={(_slot, receipt, source) => { if (!('kind' in source)) setRfd3SourceInspection({ receipt, path: source.path ?? '', model: source.model_number }); }} />
+                        {rfd3Source && <button type="button" onClick={clearRfd3Source}>Clear input structure</button>}
+                    </details>}
                 </ProteinDesignPanel> : isMotif ? <>
                     <LaProteinaMotifInput path={motifPdb} contig={motifContig} segmentOrder={motifSegmentOrder}
                         atomSpec={motifAtomSpec} initialInspection={motifInspection} onInspectionChange={setMotifInspection} onChange={patch => {
                         if (patch.path !== undefined) setMotifPdb(patch.path);
-                        if (patch.atomSpec !== undefined) setMotifAtomSpec(patch.atomSpec);
-                        if (patch.contig !== undefined) setMotifContig(patch.contig);
-                        if (patch.segmentOrder !== undefined) setMotifSegmentOrder(patch.segmentOrder);
+                        if (patch.atomSpec !== undefined) { setMotifAtomSpec(patch.atomSpec); authorLaMotif('motif_atom_spec', patch.atomSpec); }
+                        if (patch.contig !== undefined) { setMotifContig(patch.contig); authorLaMotif('contig_string', patch.contig); }
+                        if (patch.segmentOrder !== undefined) { setMotifSegmentOrder(patch.segmentOrder); authorLaMotif('segment_order', patch.segmentOrder); }
                     }} />
                     <ProteinDesignPanel title="Motif conditioning">
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                             {presetControl}
                             <label className={labelClass}>Atom selection
-                                <select className={fieldClass} value={motifAtomSelectionMode} onChange={event => setMotifAtomSelectionMode(event.target.value)}>
+                                <select className={fieldClass} value={motifAtomSelectionMode} onChange={event => { setMotifAtomSelectionMode(event.target.value); authorLaMotif('atom_selection_mode', event.target.value); }}>
                                     <option value="all_atom">All atom</option><option value="tip_atoms">Tip atoms</option>
                                     <option value="bb3o">Backbone N, Cα, C, O</option><option value="ca">Cα only</option>
                                     {!['all_atom', 'tip_atoms', 'bb3o', 'ca'].includes(motifAtomSelectionMode) && <option value={motifAtomSelectionMode}>{motifAtomSelectionMode} · retained historical value (not a native mode)</option>}
                                 </select>
                             </label>
                             <label className={labelClass}>Motif minimum length
-                                <input className={fieldClass} type="number" min={1} max={2000} value={motifMinLength} onChange={event => setMotifMinLength(event.target.value)} placeholder="From target lengths" />
+                                <input className={fieldClass} type="number" min={1} max={2000} value={motifMinLength} onChange={event => { setMotifMinLength(event.target.value); authorLaMotif('motif_min_length', event.target.value === '' ? null : Number(event.target.value)); }} placeholder="From target lengths" />
                             </label>
                             <label className={labelClass}>Motif maximum length
-                                <input className={fieldClass} type="number" min={1} max={2000} value={motifMaxLength} onChange={event => setMotifMaxLength(event.target.value)} placeholder="From target lengths" />
+                                <input className={fieldClass} type="number" min={1} max={2000} value={motifMaxLength} onChange={event => { setMotifMaxLength(event.target.value); authorLaMotif('motif_max_length', event.target.value === '' ? null : Number(event.target.value)); }} placeholder="From target lengths" />
                             </label>
                         </div>
                         <details className="rounded-lg border p-3" style={themedInsetStyle}>
@@ -535,9 +568,9 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     <DeNovoContextInput task={contextTask} ligandPath={ligandSdf} ligandName={ligandName} nativeJsonPath={discoInputJson} sequence={nucleicSequence} onChange={updateContext} />
                 </ProteinDesignPanel>}
             </div>
-            {generator === 'disco' && <DiscoJobsInput value={nativeControls.pcad_disco_jobs_json} path={discoInputJson} onChange={jobs => setNativeControls(current => { const next = { ...current }; if (jobs === undefined) delete next.pcad_disco_jobs_json; else next.pcad_disco_jobs_json = jobs; return next; })} />}
+            {generator === 'disco' && <DiscoJobsInput value={nativeControls.pcad_disco_jobs_json} path={discoInputJson} sourcePath={nativeControls.pcad_disco_jobs_source_path as string | undefined} onChange={(jobs, sourcePath) => setNativeControls(current => { const next = { ...current }; if (jobs === undefined) { delete next.pcad_disco_jobs_json; delete next.pcad_disco_jobs_source_path; } else { next.pcad_disco_jobs_json = jobs; if (sourcePath !== undefined) next.pcad_disco_jobs_source_path = sourcePath; } return next; })} />}
             <div hidden={section !== 'Sampling'} className="space-y-5">
-                <OtherDeNovoSettings model={generator as 'rfd3' | DeNovoBackend} task={designTask} value={generator === 'rfd3' ? rfd3Settings : nativeControls} onChange={generator === 'rfd3' ? setRfd3Settings : setNativeControls} />
+                <OtherDeNovoSettings generalConditions={generator === 'rfd3'} model={generator as 'rfd3' | DeNovoBackend} task={generator === 'rfd3' ? 'unconditional_monomer' : designTask} value={generator === 'rfd3' ? rfd3Settings : nativeControls} onChange={generator === 'rfd3' ? setRfd3Settings : setNativeControls} />
                 {designTask !== 'unconditional' && <ProteinDesignPanel title="Generation" description={countHelp}>{generationControls}</ProteinDesignPanel>}
                 <ProteinDesignPanel title={`${engineName} sampling`}>
                     {generator === 'rfd3' ? <div className="grid gap-4 sm:grid-cols-2">

@@ -44,7 +44,7 @@ export function LegacyNativeGenerationControls({ model, task, value, onChange }:
                 <p>Explicit native entities are ordered strands/copies. DNA does not add a reverse complement here. Legacy DNA shorthand retains its two-strand meaning. Effort fast stays fast; max is a recommendation, not a forced change.</p>
                 <BioXpSchemaInput label="Explicit DISCO jobs" nativeLabels schema={inventory.data.input_schema}
                     rootSchema={inventory.data.input_schema} value={value.pcad_disco_jobs_json}
-                    onChange={jobs => { const next = { ...value }; if (jobs === undefined) delete next.pcad_disco_jobs_json; else next.pcad_disco_jobs_json = jobs; onChange(next); }}
+                    onChange={jobs => { const next = { ...value }; if (jobs === undefined) { delete next.pcad_disco_jobs_json; delete next.pcad_disco_jobs_source_path; } else next.pcad_disco_jobs_json = jobs; onChange(next); }}
                     fallback={() => <p>Saved native jobs retained.</p>} />
             </>}
         </div>}
