@@ -5,14 +5,26 @@ import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
 import { Rfd3AdditionalConditions } from './Rfd3AdditionalConditions';
 import { NativeSettingsDisclosure } from './NativeSettingsDisclosure';
 
-export const rfd3ExecutionKeys = ['diffusion_batch_size', 'inference_sampler', 'low_memory_mode', 'cleanup_guideposts', 'cleanup_virtual_atoms', 'read_sequence_from_sequence_head', 'align_trajectory_structures', 'dump_prediction_metadata_json', 'write_full_json'] as const;
+export const rfd3ExecutionKeys = ['diffusion_batch_size', 'inference_sampler', 'skip_existing', 'low_memory_mode', 'cleanup_guideposts', 'cleanup_virtual_atoms', 'read_sequence_from_sequence_head', 'align_trajectory_structures', 'dump_prediction_metadata_json', 'write_full_json'] as const;
 export function retainedRfd3Settings(value: Record<string, unknown> = {}) {
     return Object.fromEntries(rfd3ExecutionKeys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
 }
 
+// General generation owns nested conditioning and exact source selectors, not
+// flat redesign conditions. Keep this finite projection separate from execution.
+export function retainedRfd3Draft(value: Record<string, unknown> = {}) {
+    const keys = ['conditioning', 'input_structure', 'source_mapping', 'source_model', 'generation_mode'];
+    return { ...retainedRfd3Settings(value), ...Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])) };
+}
+export function useRfd3GenerationBounds(enabled: boolean) {
+    return useQuery({ queryKey: ['other-denovo-settings', 'rfd3', 'unconditional_monomer'], enabled,
+        queryFn: async () => (await api.get<{ generation: Record<string, Schema> }>('/api/models/protein_modification_experimental/generation-settings', { params: { mode: 'de_novo_design', generator: 'rfd3', task: 'unconditional_monomer' } })).data,
+        staleTime: 60_000, retry: false }).data?.generation;
+}
+
 /** Presentation groups only. Types and scientific defaults come from the current model owner. */
-export function OtherDeNovoSettings({ model, task, value, onChange, sourceConditions = false }: {
-    sourceConditions?: boolean;
+export function OtherDeNovoSettings({ model, task, value, onChange, sourceConditions = false, generalConditions = false }: {
+    sourceConditions?: boolean; generalConditions?: boolean;
     model: 'rfd3' | 'laproteina' | 'disco'; task: string; value: Record<string, unknown>;
     onChange: (value: Record<string, unknown>) => void;
 }) {
@@ -41,18 +53,24 @@ export function OtherDeNovoSettings({ model, task, value, onChange, sourceCondit
         const label = group(field); groups.set(label, [...(groups.get(label) ?? []), [field, typedSchema]]);
     }
     return <section aria-label={`${model} native settings`} className="space-y-3">
-        <p className="text-sm">Native overrides are sparse; omitted values inherit native configuration. Explicit overrides take precedence over primary controls. False, zero and null remain distinct from omission.</p>
+        <p className="text-sm">Unchanged settings use the selected profile.</p>
+        {model !== 'rfd3' && Object.keys(object).length > 0 && <p className="text-sm">Explicit overrides take precedence over primary controls where applicable.</p>}
         {inventory.error && <p role="status">Settings discovery failed: {inventory.error.message}. Retained values are unchanged.</p>}
         {settings != null && (typeof settings !== 'object' || Array.isArray(settings)) && <p role="status">Retained non-object settings: {JSON.stringify(settings)}. Edit a setting only to deliberately replace this value.</p>}
         {[...groups].map(([title, fields]) => <NativeSettingsDisclosure key={title} summary={title}>{() => <div className="space-y-3">{fields.map(([field, schema]) => {
             const definition = inventory.data?.execution?.[field];
             return <div key={field}>
-                {definition?.authority === 'profile' ? <p>{field}: {JSON.stringify(object[field] ?? definition.default)} · profile-owned; retained explicit value is unchanged.</p> : <BioXpSchemaInput label={field} nativeLabels schema={schema} rootSchema={root} value={object[field]} onChange={next => patch(field, next)} fallback={() => <p>Retained {field}: {JSON.stringify(object[field])}</p>} />}
+                {definition?.authority === 'profile' ? <p>{field}: {JSON.stringify(object[field] ?? definition.default)} · profile-owned; retained explicit value is unchanged.</p> : <BioXpSchemaInput label={schema.title ? `${schema.title} (${field})` : field} nativeLabels schema={schema} rootSchema={root} value={object[field]} onChange={next => patch(field, next)} fallback={() => <p>Retained {field}: {JSON.stringify(object[field])}</p>} />}
                 {definition?.default_source && <p className="text-xs">Inherited reference: {JSON.stringify(definition.default)} · {definition.default_source}</p>}
                 {Object.hasOwn(object, field) && definition?.authority !== 'profile' && <button type="button" onClick={() => patch(field, undefined)}>Inherit {field}</button>}
             </div>;
         })}</div>}</NativeSettingsDisclosure>)}
-        {sourceConditions && inventory.data?.conditioning && <Rfd3AdditionalConditions definitions={inventory.data.conditioning} value={value} onChange={onChange} />}
+        {sourceConditions && !generalConditions && inventory.data?.conditioning && <Rfd3AdditionalConditions definitions={inventory.data.conditioning} value={value} onChange={onChange} />}
+        {generalConditions && model === 'rfd3' && inventory.data?.conditioning && <>
+            {Object.hasOwn(value, 'conditioning') && (value.conditioning === null || typeof value.conditioning !== 'object' || Array.isArray(value.conditioning)) && <p role="status">Retained conditioning: {JSON.stringify(value.conditioning)}. Editing a condition replaces this value.</p>}
+            <Rfd3AdditionalConditions general definitions={inventory.data.conditioning} value={value.conditioning && typeof value.conditioning === 'object' && !Array.isArray(value.conditioning) ? value.conditioning as Record<string, unknown> : {}} onChange={conditioning => onChange({ ...value, conditioning })} />
+            {Object.hasOwn(value, 'conditioning') && <button type="button" onClick={() => { const next = { ...value }; delete next.conditioning; onChange(next); }}>Omit conditioning</button>}
+        </>}
         {model === 'laproteina' && inventory.data?.profiles && <details><summary>Native checkpoint pairs (generation, not evaluation)</summary>{Object.entries(inventory.data.profiles).map(([name, profile]) => <p key={name}>{name} · {profile.task} · {profile.ld} / {profile.ae}</p>)}</details>}
     </section>;
 }

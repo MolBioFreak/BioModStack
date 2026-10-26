@@ -461,8 +461,22 @@ async def get_generation_settings(model_id: str, mode: str, generator: str | Non
         native_mode = task or ('generate' if selected != model_id else mode)
         if selected == 'rfd3':
             from scripts.lib.rfd3_scientific_settings import scientific_inventory
-            return {'model_id': selected, 'mode': task or 'unconditional_monomer',
-                    **scientific_inventory()}
+            inventory = scientific_inventory()
+            public = {param.name: param.model_dump() for param in model.params}
+            # Catalog validation is the public admission owner. Native positive
+            # lengths and task labels remain separately scoped observations.
+            generation = {key: {**definition, **{name: public[key][name]
+                          for name in ('minimum', 'maximum', 'default')
+                          if public[key].get(name) is not None},
+                          'scope': 'current public admission (not native physical limits)'}
+                          for key, definition in inventory['generation'].items()}
+            return {**inventory, 'model_id': selected,
+                    'mode': task or public['generation_mode']['default'],
+                    'native_tasks': inventory['tasks'],
+                    'tasks': public['generation_mode']['enum'],
+                    'generation_mode': {key: public['generation_mode'][key]
+                                        for key in ('type', 'default', 'enum')},
+                    'native_generation': inventory['generation'], 'generation': generation}
         if selected == 'laproteina' and native_mode == 'evaluate':
             from services.laproteina_evaluation import generation_settings
             return generation_settings(native_mode)
