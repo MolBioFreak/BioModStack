@@ -18,7 +18,7 @@ from experiment_models import (
     ExperimentExternalEntityReceipt,
     ExperimentRevision,
 )
-from experiment_services import NotFound, ValidationFailure
+from experiment_services import NotFound, ValidationFailure, canonical_json, sha256_text
 
 
 async def _dataset(session: AsyncSession, project_id: str, dataset_id: str, revision_id: str):
@@ -60,6 +60,100 @@ def _statement(project_id: str, revision_id: str):
             .order_by(member.ordinal))
 
 
+async def _ancestry(session, dataset_id, revision, row):
+    """Validate each claimed link against immutable revision and member evidence.
+
+    This establishes consistency, not who authored a declaration: the generic
+    Dataset writer can create an indistinguishable, fully consistent wrapper.
+    """
+    seen = set()
+    depth = 0
+    path = []
+    try:
+        while True:
+            key = (revision.resource_id, row.ordinal)
+            if key in seen:
+                raise ValueError("ancestry_cycle")
+            seen.add(key)
+            path.append(revision.resource_id)
+            payload = json.loads(revision.canonical_payload)
+            if (canonical_json(payload) != revision.canonical_payload or
+                    sha256_text(revision.canonical_payload) != revision.payload_sha256):
+                raise ValueError("invalid_revision_hash")
+            members = payload.get("members")
+            if not isinstance(members, list) or row.ordinal >= len(members):
+                raise ValueError("member_not_in_revision")
+            item = members[row.ordinal]
+            if not isinstance(item, dict):
+                raise ValueError("invalid_member")
+            value = item.get("value", item)
+            value_json = canonical_json(value)
+            if (row.value_json != value_json or row.role != str(item.get("role") or "member") or
+                    row.semantic_identity != str(item.get("identity") or f"member:{row.ordinal}") or
+                    row.content_sha256 != str(item.get("content_sha256") or sha256_text(value_json)) or
+                    row.media_type != item.get("media_type")):
+                raise ValueError("member_projection_mismatch")
+            if not isinstance(value, dict) or value.get("schema") != "bms.dataset-derived-member.v1":
+                return {"status": "resolved", "basis": "validated_declaration_chain", "depth": depth, "_path": path,
+                        "occurrence": {"dataset_id": dataset_id, "revision_id": revision.resource_id,
+                                       "revision_sha256": revision.payload_sha256, "ordinal": row.ordinal,
+                                       "member_sha256": row.content_sha256}}
+            origin = value.get("origin")
+            if (set(value) != {"schema", "source_value", "origin"} or not isinstance(origin, dict) or
+                    set(origin) != {"revision_id", "revision_sha256", "ordinal", "member_sha256"} or
+                    not isinstance(origin["revision_id"], str) or type(origin["ordinal"]) is not int or origin["ordinal"] < 0):
+                raise ValueError("invalid_origin_declaration")
+            parent = await session.get(ExperimentRevision, origin["revision_id"])
+            if (parent is None or parent.subject_id != dataset_id or parent.revision_number >= revision.revision_number or
+                    parent.payload_sha256 != origin["revision_sha256"]):
+                raise ValueError("origin_revision_mismatch")
+            source = (await session.execute(select(ExperimentDatasetRevisionMember).where(
+                ExperimentDatasetRevisionMember.revision_id == parent.resource_id,
+                ExperimentDatasetRevisionMember.ordinal == origin["ordinal"]))).scalar_one_or_none()
+            if (source is None or source.content_sha256 != origin["member_sha256"] or
+                    source.role != row.role or source.semantic_identity != row.semantic_identity or
+                    source.media_type != row.media_type or canonical_json(value["source_value"]) != source.value_json):
+                raise ValueError("origin_member_mismatch")
+            revision, row = parent, source
+            depth += 1
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        return {"status": "unknown", "reason": str(exc)}
+
+
+async def _render_with_ancestry(session, dataset_id, revision, rows):
+    # Check the complete roster at each traversed revision, not only the page
+    # or selected subset. Two descendants of one root cannot be paired safely.
+    cache = {}
+    async def roster(rev):
+        if rev.resource_id not in cache:
+            members = (await session.execute(select(ExperimentDatasetRevisionMember).where(
+                ExperimentDatasetRevisionMember.revision_id == rev.resource_id))).scalars().all()
+            values = {m.ordinal: await _ancestry(session, dataset_id, rev, m) for m in members}
+            counts = {}
+            for value in values.values():
+                if value["status"] == "resolved":
+                    key = canonical_json(value["occurrence"])
+                    counts[key] = counts.get(key, 0) + 1
+            cache[rev.resource_id] = (values, counts)
+        return cache[rev.resource_id]
+    values, _ = await roster(revision)
+    result = []
+    for row, receipt in rows:
+        item = _render(row, receipt)
+        ancestry = dict(values[row.ordinal])
+        if ancestry["status"] == "resolved":
+            key = canonical_json(ancestry["occurrence"])
+            for revision_id in ancestry.pop("_path"):
+                ancestor_revision = await session.get(ExperimentRevision, revision_id)
+                _, counts = await roster(ancestor_revision)
+                if counts.get(key, 0) > 1:
+                    ancestry = {"status": "unknown", "reason": "repeated_origin_ambiguous"}
+                    break
+        item["ancestry"] = ancestry
+        result.append(item)
+    return result
+
+
 async def browse_dataset_resources(session: AsyncSession, *, project_id: str, dataset_id: str,
                                    revision_id: str, offset: int = 0, limit: int = 50) -> dict[str, Any]:
     """Page all pinned members, including unknown and non-Design receipts."""
@@ -71,7 +165,7 @@ async def browse_dataset_resources(session: AsyncSession, *, project_id: str, da
     rows = (await session.execute(statement.offset(offset).limit(limit))).all()
     return {"schema": "bms.family-msa.dataset-resources.v1", "project_id": project_id,
             "dataset_id": dataset_id, "revision_id": revision_id,
-            "revision_sha256": revision.payload_sha256, "items": [_render(*row) for row in rows],
+            "revision_sha256": revision.payload_sha256, "items": await _render_with_ancestry(session, dataset_id, revision, rows),
             "offset": offset, "limit": limit, "total": total,
             "next_offset": offset + len(rows) if offset + len(rows) < total else None}
 
@@ -94,7 +188,7 @@ async def freeze_dataset_resources(session: AsyncSession, *, project_id: str, da
         raise NotFound("Dataset member ordinal not found in exact revision")
     return {"schema": "bms.family-msa.dataset-resource-selection.v1", "project_id": project_id,
             "dataset_id": dataset_id, "revision_id": revision_id,
-            "revision_sha256": revision.payload_sha256, "members": [_render(*row) for row in rows]}
+            "revision_sha256": revision.payload_sha256, "members": await _render_with_ancestry(session, dataset_id, revision, rows)}
 
 
 async def resolve_molecular_member(project_session: AsyncSession, core_session: AsyncSession,

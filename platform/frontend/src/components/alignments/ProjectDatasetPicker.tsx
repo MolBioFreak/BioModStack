@@ -3,7 +3,7 @@ import { api } from '../../lib/api';
 import { listDomainDatasets, listDomainDatasetRevisions } from '../../lib/projectManager';
 import type { DomainDatasetHead, DomainDatasetRevisionSummary } from '../../lib/projectManager';
 
-type Occurrence = {ordinal:number; role:string; member_identity:string; member_sha256:string; receipt:{entity_kind:string; entity_id:string; content_digest?:string} | null};
+type Occurrence = {ancestry?: {status:string; occurrence?:{dataset_id:string; revision_id:string; revision_sha256:string; ordinal:number; member_sha256:string}}; ordinal:number; role:string; member_identity:string; member_sha256:string; receipt:{entity_kind:string; entity_id:string; content_digest?:string} | null};
 type Selection = {project_id:string; dataset_id:string; revision_id:string; revision_sha256:string; members:Occurrence[]};
 type ResidueMap = {schema:string; source_identity:string; source_digest:string; format:string; numbering:string; model_selection:string; entries:{observed_index:number;chain_id:string;model_index:number;model_serial:number|null;sequence_number:number;insertion_code:string;hetero_flag:string;residue_name:string}[]};
 type Resolved = {project_id?:string; dataset_id?:string; revision_id?:string; revision_sha256?:string; ordinal?:number; member_identity?:string; member_sha256?:string; status:string; reason?:string; sequence?:string; label?:string; molecule?:string; start?:number; end?:number; source_positions?:number[]; source_identity?:string; source_digest?:string; chain?:string; structure_residue_map?:ResidueMap | null; chains?:{chain_id:string;length:number}[]};

@@ -124,7 +124,7 @@ export default function AlignmentEditor({ model }: { model: string }) {
             sequence:x.resolved.sequence!, source_member_id:x.resolved.chain === undefined
                 ? x.selection.members[0].member_identity
                 : JSON.stringify([x.selection.members[0].member_identity,'observed_chain',x.resolved.chain]),
-            occurrence_id:JSON.stringify([x.selection.project_id,x.selection.dataset_id,x.selection.revision_id,x.selection.revision_sha256,x.selection.members[0].ordinal,x.selection.members[0].member_sha256]),
+            occurrence_id:x.selection.members[0].ancestry?.status === 'resolved' && x.selection.members[0].ancestry?.occurrence ? JSON.stringify([x.selection.project_id,x.selection.members[0].ancestry.occurrence.dataset_id,x.selection.members[0].ancestry.occurrence.revision_id,x.selection.members[0].ancestry.occurrence.revision_sha256,x.selection.members[0].ancestry.occurrence.ordinal,x.selection.members[0].ancestry.occurrence.member_sha256]) : null,
             source_offset:x.resolved.start, source_positions:x.resolved.source_positions ?? null,
             transformation_provenance:JSON.stringify({source_identity:x.resolved.source_identity,source_digest:x.resolved.source_digest,chain:x.resolved.chain,start:x.resolved.start,end:x.resolved.end,structure_residue_map:x.resolved.structure_residue_map ?? null,operation:'forward_slice'})
         }))];
