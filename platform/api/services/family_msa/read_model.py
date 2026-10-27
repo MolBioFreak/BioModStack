@@ -5,6 +5,8 @@ receipt. This module does not resolve paths, authorize access or select an
 ensemble member.
 """
 from pydantic import BaseModel
+from bms_alignment.formats import coordinates
+from bms_alignment.models import Row
 
 
 class AlignmentRow(BaseModel):
@@ -56,13 +58,16 @@ def alignment_document(*, result_id: str, fasta: str, roster: list[dict],
         original = source.get('sequence')
         positions = source.get('source_positions')
         mapped = None
-        if isinstance(original, str) and ''.join(c for c in original if c not in '-.').upper() == ''.join(c for c in aligned if c not in '-.').upper():
-            if isinstance(positions, list) and len(positions) == len(original) and all(p is None or (isinstance(p, int) and not isinstance(p, bool) and p >= 0) for p in positions):
-                residues = iter(p for c, p in zip(original, positions) if c not in '-.')
-                mapped = [None if c in '-.' else next(residues) for c in aligned]
-            elif positions is None and isinstance(source.get('source_offset'), int) and not isinstance(source.get('source_offset'), bool) and source['source_offset'] >= 0:
-                residues = iter(range(source['source_offset'], source['source_offset'] + len(original)))
-                mapped = [None if c in '-.' else next(residues) for c in aligned]
+        provenance = source.get('transformation_provenance')
+        if (isinstance(original, str) and isinstance(positions, list)
+                and len(positions) == len(original) and isinstance(provenance, str) and provenance.strip()
+                and ''.join(c for c in original if c not in '-.').upper() == ''.join(c for c in aligned if c not in '-.').upper()):
+            # Do not allow malformed JSON or model coercion to invent positions.
+            safe_positions = [p if type(p) is int and p >= 0 else None for p in positions]
+            raw = Row.model_construct(row_id=ident, header=source['header'], sequence=original,
+                                      source_positions=safe_positions, transformation_provenance=provenance)
+            residues = iter(p for c, p in zip(original, coordinates(raw)) if c not in '-.')
+            mapped = [None if c in '-.' else next(residues) for c in aligned]
         rows.append(AlignmentRow(row_id=ident, label=source['header'], aligned=aligned,
                                  source_member_id=source.get('source_member_id'), occurrence_id=source.get('occurrence_id'), source_positions=mapped))
     if len({len(row.aligned) for row in rows}) != 1:

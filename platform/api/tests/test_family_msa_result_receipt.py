@@ -47,7 +47,8 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     async with engine.begin() as con:
         await con.run_sync(Base.metadata.create_all)
     core_factory = async_sessionmaker(engine, expire_on_commit=False)
-    payload = {'roster': {'molecule': molecule, 'rows': [{'row_id': 'r1', 'header': 'one', 'sequence': sequence}]}, 'settings': {'threads': 1}}
+    payload = {'roster': {'molecule': molecule, 'rows': [{'row_id': 'r1', 'header': 'one', 'sequence': sequence,
+               'source_positions': [9, 5, 5, 0], 'transformation_provenance': 'synthetic reverse map'}]}, 'settings': {'threads': 1}}
     async with core_factory() as core:
         core.add(Job(id='canonical-job-completed', name='fixture', model_id=model, mode='family_msa',
                      status='running', queue_status='running', nextflow_run_id='unit', params=payload, output_dir=str(output)))
@@ -148,7 +149,9 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     job_url = '/api/family-msa/jobs/canonical-job-completed'
     assert (await client.get(job_url)).status_code == 401
     assert (await client.get(job_url, headers={'x-test-actor':'owner'})).status_code == 200
-    assert (await client.get(f'{job_url}/documents/{alignment.id}', headers={'x-test-actor':'owner'})).json()['rows'][0]['aligned'] == expected_aligned
+    job_row = (await client.get(f'{job_url}/documents/{alignment.id}', headers={'x-test-actor':'owner'})).json()['rows'][0]
+    assert job_row['aligned'] == expected_aligned
+    assert job_row['source_positions'] == [9, None, None, 0]
     assert (await client.get(f'{job_url}/artifacts/{alignment.id}', headers={'x-test-actor':'owner'})).content == original_bytes
     async with core_factory() as core:
         await core.delete(await core.get(Job, 'canonical-job-completed'))
@@ -163,7 +166,9 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     assert (await client.get(url, headers={'x-test-actor':'other'})).status_code == 404
     assert (await client.get(f'/api/family-msa/projects/{other_project_id}/receipts/{receipt_id}', headers={'x-test-actor':'owner'})).status_code == 404
     assert (await client.get(url, headers={'x-test-actor':'owner'})).status_code == 200
-    assert (await client.get(f'{url}/documents/{selected}', headers={'x-test-actor':'owner'})).json()['rows'][0]['aligned'] == expected_aligned
+    retained_row = (await client.get(f'{url}/documents/{selected}', headers={'x-test-actor':'owner'})).json()['rows'][0]
+    assert retained_row['aligned'] == expected_aligned
+    assert retained_row['source_positions'] == [9, None, None, 0]
     assert (await client.get(f'{url}/artifacts/{selected}', headers={'x-test-actor':'owner'})).content == original_bytes
     assert (await client.get(f'{url}/artifacts/not-in-receipt', headers={'x-test-actor':'owner'})).status_code == 404
     state = {'marks': [
