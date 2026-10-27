@@ -17,6 +17,7 @@ vi.mock('../../src/lib/api', async original => ({
     ...await original<typeof import('../../src/lib/api')>(),
     fetchModels: vi.fn(async () => ({ data: [] })),
     fetchModelById: vi.fn(async () => ({ data: { params: [], modes: [{ id: 'design', params: [] }] } })),
+    fetchNativeGenerationSettings: vi.fn(async () => { throw new Error('Fixture: native discovery unavailable'); }),
     fetchTemplates: vi.fn(async () => ({ data: [] })),
     fetchTemplateById: vi.fn(async () => ({ data: null })),
     fetchInputPresets: vi.fn(async () => ({ data: [] })),
@@ -65,6 +66,8 @@ afterEach(async () => {
 });
 async function settle() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 25)); }); }
 async function mount(entry = '/submit?template=protein_modification_experimental', clone?: unknown) {
+    // Resolve the real lazy editor before entering React's act scope.
+    await import('../../src/components/ProteinModificationTemplate');
     if (clone) localStorage.setItem('clonedJobData', JSON.stringify(clone));
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -81,6 +84,34 @@ async function input(selector: string, value: string) {
     const field = document.querySelector<HTMLInputElement>(selector); expect(field, selector).toBeTruthy();
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value); field!.dispatchEvent(new Event('input', { bubbles: true })); });
 }
+
+async function select(label: string, value: string) {
+    const field = [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === label)?.querySelector('select');
+    expect(field, label).toBeTruthy();
+    await act(async () => { field!.value = value; field!.dispatchEvent(new Event('change', { bubbles: true })); });
+    await settle();
+}
+
+it('keeps RFD3 selected for DNA intent and offers five engines with official links', async () => {
+    await mount('/submit?template=protein_modification_experimental&generator=rfd3');
+    await input('input[type="number"]', '123');
+    await select('Goal', 'dna_conditioned');
+    expect(route()).toContain('generator=rfd3');
+    expect(route()).toContain('design_task=dna_conditioned');
+    expect(document.querySelector('[data-bms-protein-generation-workflow="rfd3"]')).not.toBeNull();
+    expect([...document.querySelectorAll('input')].some(e => e.value === '123')).toBe(true);
+    const engine = [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Engine')!.querySelector('select')!;
+    expect([...engine.options].map(e => e.value)).toEqual(['rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa']);
+    for (const model of ['disco', 'laproteina', 'complexa', 'rfd4_proteina', 'rfd3']) {
+        await select('Engine', model);
+        const card = document.querySelector('aside[aria-label$=" references"]')!;
+        expect([...card.querySelectorAll('a')].map(a => a.textContent)).toEqual(['GitHub', 'Preprint', 'Docs']);
+        expect([...card.querySelectorAll('a')].every(a => a.href.startsWith('https://') && a.rel.includes('noopener'))).toBe(true);
+    }
+    expect(route()).toContain('design_task=dna_conditioned');
+    expect([...document.querySelectorAll('input')].some(e => e.value === '123')).toBe(true);
+    expect(mocks.submit).not.toHaveBeenCalled();
+});
 
 it('navigation metadata preserves context, native aliases and false/empty scientific values', () => {
     expect(deNovoRouteValues(new URLSearchParams('template=protein_local_redesign'))).toMatchObject({ modification_mode: 'rfd3_local_redesign' });

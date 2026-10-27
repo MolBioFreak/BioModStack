@@ -10,6 +10,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { completeCurrentLaunchContext, submitJob, type StructureMaterialization, type Job } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
+import { ModelReferenceCard } from './ModelReferenceCard';
 import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 import ShapeBlueprintTemplate from './ShapeBlueprintTemplate';
 import { ProteinDesignSections, ProteinDesignPanel, ProteinDesignRun, themedInsetStyle } from './ProteinDesignWorkflow';
@@ -83,10 +84,12 @@ const resolveNavigation = (values?: Record<string, unknown>): DeNovoNavigationSt
     const nativeMode = native ? { native_mode: typeof values?.native_mode === 'string' ? values.native_mode : 'generate' } : {};
     if (modification_mode !== 'de_novo_design') return { modification_mode, ...(values?.generator === 'rfd4_proteina' ? { generator: 'rfd4_proteina', design_task: 'refine', ...nativeMode } : {}) };
     const engine = values?.generator ?? values?.backend;
+    // Historical RFD3 drafts often predate an explicit generator field.
+    const legacyRfd3 = ['generation_mode', 'min_length', 'max_length', 'dump_trajectories'].some(key => Object.hasOwn(values ?? {}, key));
     return {
         modification_mode,
         ...nativeMode,
-        generator: typeof engine === 'string' ? engine : 'rfd3',
+        generator: typeof engine === 'string' ? engine : legacyRfd3 ? 'rfd3' : 'rfd4_proteina',
         design_task: typeof values?.design_task === 'string' ? values.design_task : 'unconditional',
     };
 };
@@ -97,6 +100,7 @@ export function ProteinModificationTemplate({
     onBack, initialValues, requiredPinnedGpu = null, onDraftChange, onNavigationChange, navigationState, runDetails, onOpenTemplateManager, launchContextId,
 }: ProteinModificationTemplateProps) {
     const [navigation, setNavigation] = useState(() => resolveNavigation({ ...navigationState, ...initialValues }));
+
     const drafts = useRef<Record<string, Record<string, unknown>>>(
         initialValues?.de_novo_drafts && typeof initialValues.de_novo_drafts === 'object'
             ? { ...initialValues.de_novo_drafts as Record<string, Record<string, unknown>> } : {},
@@ -115,6 +119,7 @@ export function ProteinModificationTemplate({
         initialized.current = true;
     }
     const callbacks = useRef({ onDraftChange, onNavigationChange });
+    const lastTaskByEngine = useRef<Record<string, string>>({ [navigation.generator ?? 'rfd4_proteina']: navigation.design_task ?? 'unconditional' });
     const activeRequest = useRef<Record<string, unknown>>({});
     callbacks.current = { onDraftChange, onNavigationChange };
     const validatedRedesign = navigation.modification_mode === 'region_redesign';
@@ -140,15 +145,16 @@ export function ProteinModificationTemplate({
         const nextKey = draftKey(next);
         if (!Object.hasOwn(drafts.current, nextKey)) {
             const current = drafts.current[activeKey] ?? {};
-            drafts.current[nextKey] = Object.fromEntries(
+            drafts.current[nextKey] = next.generator === 'rfd3' && navigation.generator === 'rfd3' && next.modification_mode === 'de_novo_design' && navigation.modification_mode === 'de_novo_design' ? { ...current } : Object.fromEntries(
                 (['rfd3', 'disco', 'laproteina'].includes(next.generator ?? '') && ['rfd3', 'disco', 'laproteina'].includes(navigation.generator ?? '') ? ['job_name', 'num_designs'] : ['job_name']).filter(key => Object.hasOwn(current, key)).map(key => [key, current[key]]),
             );
         }
+        if (next.modification_mode === 'de_novo_design' && next.generator) lastTaskByEngine.current[next.generator] = next.design_task ?? 'unconditional';
         setNavigation(next);
         callbacks.current.onNavigationChange?.(next);
     };
     const mode: ModificationMode = validatedRedesign ? 'rfd3_iteration' : navigation.modification_mode as ModificationMode;
-    const generator = navigation.generator ?? 'rfd3';
+    const generator = navigation.generator ?? (mode === 'de_novo_design' ? 'rfd4_proteina' : 'rfd3');
     const task = navigation.design_task ?? 'unconditional';
     const lastGeneration = useRef({ generator, design_task: task, native_mode: navigation.native_mode });
     const lastRedesign = useRef(validatedRedesign || drafts.current.region_redesign ? 'region_redesign' : 'rfd3_iteration');
@@ -167,10 +173,12 @@ export function ProteinModificationTemplate({
     </label> : null;
     return (
         <div className="space-y-3 text-[var(--text-primary)]" data-bms-de-novo-form="complete">
-            <div className="flex items-center gap-3">
-                <button type="button" onClick={onBack} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">Back</button>
-                <h2 className="text-lg font-semibold">Protein design</h2>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex items-center gap-3"><button type="button" onClick={onBack} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">Back</button>
+                <h2 className="text-lg font-semibold">Protein design</h2></div>
+                {mode !== 'shape_blueprint' && <ModelReferenceCard model={generator} />}
             </div>
+
             <nav aria-label="Design task" className="flex flex-wrap gap-2">
                 {DE_NOVO_MODIFICATION_MODE_CARDS.map(card => <button type="button" key={card.id}
                     aria-pressed={mode === card.id} onClick={() => chooseMode(card.id)}
@@ -181,20 +189,20 @@ export function ProteinModificationTemplate({
                     {!['rfd4_proteina', 'complexa'].includes(generator) && <label className={labelClass}>Goal
                         <select className={fieldClass} value={task} onChange={event => {
                             const design_task = event.target.value;
-                            const engine = design_task === 'motif_scaffolding' ? 'laproteina' : design_task === 'unconditional' ? generator : 'disco';
-                            changeNavigation({ modification_mode: mode, generator: engine, design_task });
+                            changeNavigation({ ...navigation, design_task });
                         }}>
                             <option value="unconditional">Explore new folds</option>
-                            <option value="dna_conditioned">Design around DNA · DISCO</option>
-                            <option value="rna_conditioned">Design around RNA · DISCO</option>
-                            <option value="ligand_conditioned">Design around a small molecule · DISCO</option>
-                            <option value="motif_scaffolding">Scaffold a motif · La-Proteina</option>
-                            <option value="custom_json">Explicit jobs / native JSON · DISCO</option>
+                            {generator !== 'laproteina' && <><option value="dna_conditioned">Design around DNA</option>
+                            <option value="rna_conditioned">Design around RNA</option>
+                            <option value="ligand_conditioned">Design around a small molecule</option></>}
+                            {generator === 'laproteina' && <option value="motif_scaffolding">Scaffold a motif</option>}
+                            {generator === 'disco' && <option value="custom_json">Use a native input document</option>}
+                            {!['unconditional', ...(generator !== 'laproteina' ? ['dna_conditioned', 'rna_conditioned', 'ligand_conditioned'] : []), ...(generator === 'laproteina' ? ['motif_scaffolding'] : []), ...(generator === 'disco' ? ['custom_json'] : [])].includes(task) && <option value={task}>Saved goal ({task})</option>}
                         </select>
                     </label>}
                     <label className={labelClass}>Engine
-                        <select className={fieldClass} value={generator} onChange={event => changeNavigation({ modification_mode: mode, generator: event.target.value, design_task: 'unconditional' })}>
-                            {(task === 'unconditional' ? ['rfd3', 'disco', 'laproteina', 'rfd4_proteina', 'complexa'] : [generator]).map(engine => <option key={engine} value={engine}>{engine === 'rfd3' ? 'RFD3' : engine === 'disco' ? 'DISCO' : engine === 'laproteina' ? 'La-Proteina' : engine === 'rfd4_proteina' ? 'RFD4-Proteina' : engine === 'complexa' ? 'Complexa' : engine}</option>)}
+                        <select className={fieldClass} value={generator} onChange={event => changeNavigation({ modification_mode: mode, generator: event.target.value, design_task: lastTaskByEngine.current[event.target.value] ?? 'unconditional' })}>
+                            {['rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa'].map(engine => <option key={engine} value={engine}>{engine === 'rfd3' ? 'RFD3' : engine === 'disco' ? 'DISCO' : engine === 'laproteina' ? 'La-Proteina' : engine === 'rfd4_proteina' ? 'RFD4-Proteina' : engine === 'complexa' ? 'Complexa' : engine}</option>)}
                         </select>
                     </label>
                     {nativeModeControl}
@@ -510,7 +518,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             <ProteinDesignSections label="Generation sections" sections={[inputSection, 'Sampling', 'Sequence Design']} active={section} onChange={setSection} />
             {/* Section navigation is presentation only. Source tools and viewers stay mounted. */}
             <div hidden={section !== inputSection} className="space-y-5">
-                {designTask === 'unconditional' ? <ProteinDesignPanel title="Generation" description="Generate new protein candidates.">
+                {designTask === 'unconditional' || generator === 'rfd3' ? <ProteinDesignPanel title="Generation" description={generator === 'rfd3' && designTask !== 'unconditional' ? 'Add a source and configure its conditions under Sampling.' : 'Generate new protein candidates.'}>
                     {generationControls}
                     <p className="text-xs text-[var(--text-secondary)]">{countHelp}</p>
                     {generator === 'rfd3' && <details><summary>Input structure (optional)</summary>
