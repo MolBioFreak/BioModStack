@@ -135,6 +135,22 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         await click('Review and submit');await until(()=>expect(submits()).toHaveLength(1));
         expect(submits()[0].body.params.molbio_ngs_receipt_id).toBe('new-receipt');
     });
+    it('preserves the remote return policy when switching to local and back', async () => {
+        await mount();
+        expect(container.querySelector('[aria-label="Successful remote results"]')).toBeNull();
+        await click('Vast · Test worker');
+        await input('select[aria-label="Successful remote results"]', 'automatic');
+        await click('Local');
+        expect(container.querySelector('[aria-label="Successful remote results"]')).toBeNull();
+        await click('Vast · Test worker');
+        expect(container.querySelector<HTMLSelectElement>('[aria-label="Successful remote results"]')!.value).toBe('automatic');
+        await click('Review and submit');
+        await until(() => expect(button('Approve and submit')).toBeTruthy());
+        expect(prepares()[0].body.execution_policy).toEqual({ remote_result_policy: 'automatic' });
+        await click('Approve and submit');
+        await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.execution_policy).toEqual({ remote_result_policy: 'automatic' });
+    });
     it('uploads POD5 files through shared transport and submits their server-returned folder', async () => {
         await mount();
         const upload = container.querySelector<HTMLInputElement>('input[aria-label="Upload POD5 files"]')!;

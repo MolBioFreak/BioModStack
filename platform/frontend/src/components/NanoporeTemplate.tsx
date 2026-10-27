@@ -1527,6 +1527,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 <div className="flex items-center gap-3">
                     <button
                         onClick={onBack}
+                        aria-label="Back to NGS runs"
                         className="p-2 hover:bg-[var(--bg-tertiary)] rounded-lg transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                     >
                         <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
@@ -1537,22 +1538,32 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         <NanoporeIcon />
                     </div>
                     <div>
-                        <h1 className="text-2xl font-bold text-[var(--text-primary)]">Nanopore Sequencing</h1>
+                        <h2 className="text-2xl font-bold text-[var(--text-primary)]">Data analysis</h2>
                     </div>
                 </div>
             </div>
-            <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} />
-            <ExecutionPolicyControl initialPolicy={initialReturnPolicy} onChange={setReturnPolicy} />
-
             {/* Operator-first workflow chooser: do not make users infer a workflow from low-level switches. */}
             <NanoporeWorkflowChooser
                 selectedWorkflow={selectedWorkflow}
                 onSelect={selectWorkflow}
             />
 
+            <details className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" open={executionTargetId ? true : undefined}>
+                <summary className="cursor-pointer text-sm font-medium">Compute location · {executionTargetId ? 'Remote worker selected' : 'Local'}</summary>
+                <div className="mt-3">
+                    <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} />
+                    {executionTargetId && <ExecutionPolicyControl initialPolicy={initialReturnPolicy} onChange={setReturnPolicy} />}
+                </div>
+            </details>
+
+            {selectedWorkflow === 'pooledAssignment' ? (
+                <PooledReferenceAssignmentPanel executionTargetId={executionTargetId} executionPolicy={initialReturnPolicy}
+                    fastqPath={fastqPath} sequences={molbioSequences}
+                    onFastqBrowse={() => openPathPicker({ field: 'fastqPath', title: 'Select FASTQ File', mode: 'file', filter: 'fastq' })} />
+            ) : <>
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
             <section className={TASK_FLOW_PANEL} data-testid="ngs-job-input-section" aria-labelledby="ngs-job-input-heading">
-                <h2 id="ngs-job-input-heading" className={`${TASK_FLOW_LABEL} mb-3`}>1 · Job and input</h2>
+                <h2 id="ngs-job-input-heading" className={`${TASK_FLOW_LABEL} mb-3`}>Job and input</h2>
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <div className={TASK_FLOW_CARD}>
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Job Name *</label>
@@ -1711,23 +1722,13 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
             {/* Shared MolBio and NGS reference library */}
             <section className={TASK_FLOW_PANEL} data-testid="immutable-molbio-reference-panel" data-ngs-section="reference" aria-labelledby="ngs-reference-heading">
-                <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>2 · Reference / sample</h2>
-                {!requiresReference && selectedWorkflow !== 'pooledAssignment' && !showOptionalReference && !selectedMolbioSequenceId && !selectedMolbioRevisionId && !selectedManagedReferenceRevisionId ? (
+                <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>Expected sequence</h2>
+                {!requiresReference && !showOptionalReference && !selectedMolbioSequenceId && !selectedMolbioRevisionId && !selectedManagedReferenceRevisionId ? (
                     <div className="space-y-3 text-sm text-[var(--text-secondary)]">
                         <p>No reference needed for basecalling.</p>
                         <button type="button" onClick={() => setShowOptionalReference(true)} className="rounded border border-[var(--border-primary)] px-3 py-2 text-[var(--text-primary)]">Add optional reference</button>
                     </div>
                 ) : <>
-                {selectedWorkflow === 'pooledAssignment' ? (
-                    <PooledReferenceAssignmentPanel
-                        executionTargetId={executionTargetId}
-                        executionPolicy={initialReturnPolicy}
-                        fastqPath={fastqPath}
-                        sequences={molbioSequences}
-                        onFastqBrowse={() => openPathPicker({ field: 'fastqPath', title: 'Select FASTQ File', mode: 'file', filter: 'fastq' })}
-                    />
-                ) : (
-                    <>
                     {!requiresReference && <button type="button" onClick={() => {
                         setSelectedMolbioSequenceId(''); setSelectedMolbioRevisionId('');
                         setSelectedManagedReferenceRevisionId(''); setApprovedComparisonPanelId('');
@@ -1801,12 +1802,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             }
                         }} />
                     </div>
-                    </>
-                )}
                 </>}
             </section>
             {/* Historical Domain-managed references remain visible only when reopening an older job. */}
-            {Boolean(initialValues?.ngsReferenceRevisionId) && selectedWorkflow !== 'pooledAssignment' && (
+            {Boolean(initialValues?.ngsReferenceRevisionId) && (
             <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-1 space-y-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                     <div><label className="block text-sm font-medium text-[var(--text-secondary)]">Historical Domain-managed reference</label><p className="mt-1 text-xs text-[var(--text-secondary)]">Read-only compatibility for a job created before the shared MolBio and NGS reference library.</p></div>
@@ -1857,15 +1856,9 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             </div>
             )}
 
-                <section className={TASK_FLOW_PANEL} data-testid="ngs-basecalling-section" aria-labelledby="ngs-basecalling-heading">
-                    <h2 id="ngs-basecalling-heading" className={`${TASK_FLOW_LABEL} mb-3`}>3 · Basecalling and quality</h2>
+                {(inputSource !== 'fastq' || cloneValidationControlsActive) && <section className={TASK_FLOW_PANEL} data-testid="ngs-basecalling-section" aria-labelledby="ngs-basecalling-heading">
+                    <h2 id="ngs-basecalling-heading" className={`${TASK_FLOW_LABEL} mb-3`}>{inputSource === 'pod5' ? 'Basecalling and quality' : inputSource === 'bam' ? 'Alignment quality' : 'Consensus profile'}</h2>
                     <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {inputSource === 'fastq' && (
-                <div className={`${TASK_FLOW_CARD} xl:col-span-2`}>
-                    <div className="text-sm font-semibold text-[var(--text-primary)]">Already basecalled</div>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Basecalling is not applicable to FASTQ input.</p>
-                </div>
-            )}
             {/* Locked P4 molecule, mode, and multiplexing controls */}
             {inputSource === 'pod5' && (
                 <div className={`${TASK_FLOW_CARD} space-y-3`}>
@@ -2038,10 +2031,10 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                 </div>
             )}
                     </div>
-                </section>
+                </section>}
 
             <section className={TASK_FLOW_PANEL} data-testid="ngs-analysis-section" aria-labelledby="ngs-analysis-heading">
-                <h2 id="ngs-analysis-heading" className={`${TASK_FLOW_LABEL} mb-3`}>4 · Analysis and advanced controls</h2>
+                <h2 id="ngs-analysis-heading" className={`${TASK_FLOW_LABEL} mb-3`}>Analysis settings</h2>
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             {/* Analysis Toggles — mode-aware: only relevant options shown */}
             <div className={`${TASK_FLOW_CARD} space-y-3`}>
@@ -2204,7 +2197,6 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
 
             {/* Advanced Options */}
             <div className={`${TASK_FLOW_CARD} ${cloneValidationControlsActive && !barcodeKit ? 'xl:col-span-2' : 'xl:col-span-1'}`}>
-                <div className="mb-3 text-sm font-semibold text-[var(--text-primary)]">Advanced controls</div>
                 <button
                     type="button"
                     onClick={() => setShowAdvanced(!showAdvanced)}
@@ -2555,8 +2547,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                 <div className="flex shrink-0 items-center gap-2">
                     <span className={`hidden rounded-full px-2 py-1 text-xs font-semibold sm:inline-flex ${canSubmit ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-200'}`}>{canSubmit ? 'Ready' : 'Needs input'}</span>
                     <button type="button" onClick={handleValidate} className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-xs font-semibold text-[var(--text-primary)] hover:border-[var(--accent-secondary)]">Validate</button>
-                    {selectedWorkflow !== 'pooledAssignment' && (
-                        <button
+                    <button
                             type="button"
                             onClick={handleSubmit}
                             disabled={!canSubmit || submissionPending}
@@ -2566,7 +2557,6 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                         >
                             {submissionPending ? 'Submitting…' : 'Review and submit'}
                         </button>
-                    )}
                 </div>
             </div>
 
@@ -2579,6 +2569,8 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             {!canSubmit && reviewBlocker && (
                 <p className="text-right text-xs text-[var(--text-secondary)]">Run disabled: {reviewBlocker}</p>
             )}
+
+            </>}
 
             {pathPicker && (
                 <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">

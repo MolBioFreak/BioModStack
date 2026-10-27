@@ -113,6 +113,28 @@ function buttonWithText(text: string) {
 }
 
 describe('mounted NGS settings to submit payload', () => {
+    it('shows only the pooled assignment form and a single FASTQ picker', async () => {
+        await renderTemplate({ selectedWorkflow: 'pooledAssignment', inputSource: 'fastq', fastqPath: '/data/pooled.fastq' });
+        expect(container.querySelectorAll('[data-testid="pooled-reference-assignment-panel"]')).toHaveLength(1);
+        expect(buttonWithText('Browse FASTQ')).not.toBeNull();
+        expect(buttonWithText('Submit pooled assignment')).not.toBeNull();
+        expect(container.querySelector('[data-testid="ngs-job-input-section"]')).toBeNull();
+        expect(container.querySelector('[data-testid="ngs-basecalling-section"]')).toBeNull();
+        expect(container.querySelector('[data-testid="ngs-analysis-section"]')).toBeNull();
+        expect(container.querySelector('[data-testid="ngs-review-bar"]')).toBeNull();
+        expect(container.textContent).not.toContain('Run disabled:');
+        expect(container.querySelector('[aria-label="Successful remote results"]')).toBeNull();
+    });
+
+    it('omits empty basecalling controls for FASTQ QC but keeps the clone consensus declaration', async () => {
+        await renderTemplate({ selectedWorkflow: 'fastqQc', inputSource: 'fastq' });
+        expect(container.querySelector('[data-testid="ngs-basecalling-section"]')).toBeNull();
+        expect(container.querySelector('[data-testid="ngs-analysis-section"]')).not.toBeNull();
+        await act(async () => container.querySelector<HTMLButtonElement>('[data-ngs-workflow-key="clone"]')!.click());
+        await flush();
+        expect(container.querySelector('[aria-label="Declared clone consensus profile"]')).not.toBeNull();
+    });
+
     it('submits visible assembly, GPU, reference, and POD5 input settings as one request', async () => {
         await renderTemplate({
             selectedWorkflow: 'constructScreening',

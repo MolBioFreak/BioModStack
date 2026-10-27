@@ -4474,9 +4474,9 @@ export function NGSToolkit() {
                         </button>
                     </nav>
                 </div>
-                <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-xs uppercase tracking-wide text-[var(--text-secondary)] mr-1">Documentation</span>
+                <details className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
+                    <summary className="cursor-pointer text-sm text-[var(--text-secondary)]">Tool documentation</summary>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
                         {NANOPORE_DOC_LINKS.map((link) => (
                             <a
                                 key={link.href}
@@ -4489,7 +4489,7 @@ export function NGSToolkit() {
                             </a>
                         ))}
                     </div>
-                </div>
+                </details>
             </header>
 
             {view === 'launch' ? (
