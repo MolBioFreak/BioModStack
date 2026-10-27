@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api'
+import { listGlobalExperiments, listDomainExperiments } from '../../lib/projectManager'
 import type { ResidueAnchor } from '../../lib/alignmentCoordinates'
 
 type Coordinate = {scope: 'artifact_columns'; artifact_id: string; start: number; end: number} | {scope: 'source_positions'; source_member_id: string; occurrence_id: string; start: number; end: number}
@@ -11,10 +12,19 @@ type Revision = {id: string; head_generation: number; revision_id: string; state
 const empty = (): State => ({schema: 'bms.family-msa.shared-state.v1', marks: [], views: [], comparisons: []})
 const id = () => crypto.randomUUID()
 
-export default function AlignmentShared({projectId, receiptId, artifactId, selection, viewer, applyViewer, rowOrder = [], hiddenRowIds = [], selectedRowId, applyView}: {projectId: string; receiptId: string; artifactId: string; selection?: ResidueAnchor; viewer: string; applyViewer: (viewer: string) => void; rowOrder?: string[]; hiddenRowIds?: string[]; selectedRowId?: string; applyView?: (view: View) => void}) {
+export default function AlignmentShared({projectId, receiptId, artifactId, selection, viewer, applyViewer, rowOrder = [], hiddenRowIds = [], selectedRowId, applyView, importedStateIds = []}: {projectId: string; receiptId: string; artifactId: string; selection?: ResidueAnchor; viewer: string; applyViewer: (viewer: string) => void; rowOrder?: string[]; hiddenRowIds?: string[]; selectedRowId?: string; applyView?: (view: View) => void; importedStateIds?: string[]}) {
   const base = `/api/family-msa/projects/${encodeURIComponent(projectId)}`
   const [dataset, setDataset] = useState('')
   const [domain, setDomain] = useState('')
+  const [domains, setDomains] = useState<{id: string; label: string}[]>([])
+  useEffect(() => { let live = true; setDomain(''); setDomains([])
+    void (async () => { try {
+      const experiments = await listGlobalExperiments(projectId)
+      const groups = await Promise.all(experiments.map(async experiment => (await listDomainExperiments(projectId, experiment.id)).map(item => ({id: item.id, label: `${experiment.name} / ${item.name}`}))))
+      if (live) setDomains(groups.flat())
+    } catch (e) { if (live) setError(String(e)) } })()
+    return () => { live = false }
+  }, [projectId])
   const [revision, setRevision] = useState<Revision>()
   const [draft, setDraft] = useState<State>(empty)
   const draftRef = useRef(draft)
@@ -47,9 +57,10 @@ export default function AlignmentShared({projectId, receiptId, artifactId, selec
   }
   return <section aria-label="Project shared alignment state">
     <h2>Project shared alignment state</h2><p>Shared Project Dataset; coordinates are zero-based. Open or create a state before saving.</p>
+    {importedStateIds.map((stateId, index) => <button key={stateId} disabled={busy} onClick={() => void run(async () => received((await api.get<Revision>(`${base}/shared-state/${encodeURIComponent(stateId)}`)).data))}>Open imported saved state {index + 1}</button>)}
     <label>Shared Dataset ID <input value={dataset} onChange={e => setDataset(e.target.value)}/></label>{' '}
     <button disabled={busy || !dataset} onClick={() => void run(async () => received((await api.get<Revision>(`${base}/shared-state/${encodeURIComponent(dataset)}`)).data))}>Open shared state</button>{' '}
-    <label>Domain experiment ID <input value={domain} onChange={e => setDomain(e.target.value)}/></label>{' '}
+    <label>Destination domain <select value={domain} onChange={e => setDomain(e.target.value)}><option value="">Choose a domain</option>{domains.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>{' '}
     <button disabled={busy || !domain} onClick={() => void run(async () => received((await api.post<Revision>(`${base}/shared-state`, {name: name || 'Alignment shared state', domain_experiment_id: domain, state: empty()})).data))}>Create shared state</button>
     {revision && <>
       <p>Dataset {revision.id} · revision {revision.revision_id} · generation {revision.head_generation}</p>
@@ -60,7 +71,7 @@ export default function AlignmentShared({projectId, receiptId, artifactId, selec
         const link = document.createElement('a'); link.href = url; link.download = 'alignment-project-bundle.zip'; link.click()
         setTimeout(() => URL.revokeObjectURL(url), 1000)
       })}>Export result and saved shared state</button>
-      <p>Export includes the saved revision, not unsaved edits. Extract the ZIP before importing its bundle directory.</p>
+      <p>Export includes the saved revision, not unsaved edits. Import the ZIP from the Project alignment library.</p>
       <label>Name <input value={name} onChange={e => setName(e.target.value)}/></label>{' '}
       <button disabled={!selection || selection.resultId !== artifactId} onClick={() => { if (selection) edit(current => ({...current, marks: [...current.marks, {id: id(), label: name, coordinate: {scope: 'artifact_columns', artifact_id: artifactId, start: selection.column, end: selection.column}, note: '', provenance: {}}]})) }}>Add selected column mark</button>{' '}
       <button disabled={!name} onClick={() => edit(current => ({...current, views: [...current.views, {id: id(), name, artifact_id: artifactId, hidden_row_ids: hiddenRowIds, row_order: rowOrder, selected_marks: [], viewer, selected_row_id: selection?.rowId ?? (selectedRowId || null), selected_column: selection?.column ?? null}]}))}>Save current viewer as view</button>

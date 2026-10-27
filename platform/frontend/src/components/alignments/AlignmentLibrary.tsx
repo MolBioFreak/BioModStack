@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../lib/api';
-import { searchProjects, type ProjectListItem } from '../../lib/projectManager';
+import { searchProjects, listGlobalExperiments, listDomainExperiments, type ProjectListItem } from '../../lib/projectManager';
 
 type Receipt = {receipt_id: string; entity_kind: string; availability: string};
 type Page = {items: Receipt[]; next_cursor: string | null};
@@ -12,7 +12,9 @@ export default function AlignmentLibrary({ initialProject }: {initialProject?: s
   const [project, setProject] = useState(initialProject || '');
   const [rows, setRows] = useState<Receipt[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
-  const [files, setFiles] = useState<File[]>([]);
+  const [file, setFile] = useState<File | null>(null);
+  const [domains, setDomains] = useState<{id: string; label: string}[]>([]);
+  const [domain, setDomain] = useState('');
   const [replayKey, setReplayKey] = useState<string>(() => crypto.randomUUID());
   const [alignmentKey, setAlignmentKey] = useState<string>(() => crypto.randomUUID());
   const [alignment, setAlignment] = useState<File | null>(null);
@@ -31,23 +33,24 @@ export default function AlignmentLibrary({ initialProject }: {initialProject?: s
     if (project) api.get<Page>(`/api/family-msa/projects/${encodeURIComponent(project)}/receipts`).then(({data}) => { if (live) { setRows(data.items); setCursor(data.next_cursor); } }).catch(e => { if (live) setError(String(e)); });
     return () => { live = false; };
   }, [project]);
+  useEffect(() => { let live = true; setDomain(''); setDomains([]);
+    if (project) (async () => {
+      try { const experiments = await listGlobalExperiments(project);
+        const groups = await Promise.all(experiments.map(async experiment => (await listDomainExperiments(project, experiment.id)).map(item => ({id: item.id, label: `${experiment.name} / ${item.name}`}))));
+        if (live) setDomains(groups.flat());
+      } catch (e) { if (live) setError(String(e)); }
+    })();
+    return () => { live = false; };
+  }, [project]);
   async function more() {
     try { const {data} = await api.get<Page>(`/api/family-msa/projects/${encodeURIComponent(project)}/receipts`, {params: {after: cursor}}); setRows(old => [...old, ...data.items]); setCursor(data.next_cursor); } catch (e) { setError(String(e)); }
   }
   async function upload() {
     setError(''); setStatus('');
     try {
-      const relative = (f: File) => f.webkitRelativePath.split('/').slice(1).join('/');
-      const byPath = new Map(files.map(f => [relative(f), f]));
-      const manifestFile = byPath.get('manifest.json');
-      if (!manifestFile) throw new Error('Select a portable bundle directory containing manifest.json.');
-      const manifest = JSON.parse(await manifestFile.text());
-      const metadata = new TextEncoder().encode(JSON.stringify({replay_key: replayKey, manifest, domain_experiment_id: null}));
-      const prefix = new Uint8Array(8); new DataView(prefix.buffer).setBigUint64(0, BigInt(metadata.length));
-      const parts: BlobPart[] = [prefix, metadata];
-      for (const entry of manifest.files) { const file = byPath.get(entry.path); if (!file) throw new Error(`Missing bundle file: ${entry.path}`); parts.push(file); }
-      const {data} = await api.post<{receipt_id: string; replayed: boolean; shared_state: string}>(`/api/family-msa/projects/${encodeURIComponent(project)}/imports/stream`, new Blob(parts), {headers: {'Content-Type': 'application/vnd.bms.alignment-bundle-stream'}});
-      setStatus(data.shared_state === 'retained_unmapped' ? 'Bundle imported. Shared state is retained but not restored.' : 'Bundle imported.');
+      if (!file) return;
+      const {data} = await api.post<{receipt_id: string; replayed: boolean; shared_state: string}>(`/api/family-msa/projects/${encodeURIComponent(project)}/imports/zip`, file, {params: {replay_key: replayKey, domain_experiment_id: domain || undefined}, headers: {'Content-Type': 'application/zip'}});
+      setStatus(data.shared_state === 'retained_unmapped' ? 'Bundle imported. Shared state is retained but not restored.' : data.shared_state === 'imported_with_unresolved' ? 'Bundle imported; some shared state references could not be mapped.' : 'Bundle imported.');
       setImported({project, receipt: data.receipt_id});
     } catch (e) { setError(String(e)); }
   }
@@ -72,10 +75,11 @@ export default function AlignmentLibrary({ initialProject }: {initialProject?: s
         <input aria-label="Alignment file" type="file" onChange={e => {setAlignment(e.target.files?.[0] || null); setAlignmentKey(crypto.randomUUID());}} />
         <button type="button" disabled={!alignment} onClick={uploadAlignment}>Import alignment</button>
       </fieldset>
-      <fieldset><legend>Import portable Project bundle</legend><p>Select the exported bundle directory. The import retains its files and does not create a Job.</p>
-        <input aria-label="Bundle directory" type="file" multiple {...({webkitdirectory: ''} as object)} onChange={e => {setFiles(Array.from(e.target.files || [])); setReplayKey(crypto.randomUUID());}} />
+      <fieldset><legend>Import portable Project bundle</legend><p>Select the exported ZIP. The import retains its files and does not create a Job. Choose a destination domain to restore saved state.</p>
+        <label>Destination domain <select value={domain} onChange={e => {setDomain(e.target.value); setReplayKey(crypto.randomUUID());}}><option value="">Retain without restoring shared state</option>{domains.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+        <input aria-label="Bundle ZIP" type="file" accept=".zip,application/zip" onChange={e => {setFile(e.target.files?.[0] || null); setReplayKey(crypto.randomUUID());}} />
 
-        <button type="button" disabled={!files.length} onClick={upload}>Import bundle</button>
+        <button type="button" disabled={!file} onClick={upload}>Import bundle</button>
       </fieldset></>}
   </section>;
 }

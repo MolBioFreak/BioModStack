@@ -9,6 +9,7 @@ export interface AlignmentViewerProps {
   onSelect: (anchor: ResidueAnchor) => void
 }
 export interface AlignmentWorkspaceProps {
+  importedStateIds?: string[];
   projectLabel?: string
   projectId?: string
   receiptId?: string
@@ -24,7 +25,7 @@ const viewerNames: Record<AlignmentViewerId, string> = {
 }
 
 /** Host for real viewer adapters. It never silently substitutes a fake renderer. */
-export default function AlignmentWorkspace({ projectLabel, projectId, receiptId, document, viewers = {}, downloads = [], onSelectionChange }: AlignmentWorkspaceProps) {
+export default function AlignmentWorkspace({ projectLabel, projectId, receiptId, document, viewers = {}, downloads = [], onSelectionChange, importedStateIds }: AlignmentWorkspaceProps) {
   const [viewerId, setViewerId] = useState<AlignmentViewerId>('jbrowse')
   const [selection, setSelection] = useState<ResidueAnchor>()
   const [rowId, setRowId] = useState('')
@@ -67,7 +68,7 @@ export default function AlignmentWorkspace({ projectLabel, projectId, receiptId,
         <button type="button" onClick={() => { const anchor = anchorAt(document, rowId, Number(column) - 1); if (anchor) select(anchor) }}>Inspect</button>
       </fieldset>
       {currentSelection && <p>Row {currentSelection.rowId}, column {currentSelection.column + 1}, {currentSelection.residue === null ? 'gap' : `residue ${currentSelection.residue + 1}`}{currentSelection.sourcePosition === undefined ? '; source coordinate unknown' : `; source coordinate ${currentSelection.sourcePosition + 1}`}</p>}
-      {projectId && receiptId && <AlignmentShared key={projectId} projectId={projectId} receiptId={receiptId} artifactId={document.resultId} selection={currentSelection} viewer={viewerId} rowOrder={order} hiddenRowIds={hidden} selectedRowId={document.rows.some(row => row.rowId === rowId) ? rowId : undefined} applyView={(view: View) => { if (view.viewer && view.viewer in viewerNames) setViewerId(view.viewer as AlignmentViewerId); updateLayout(view.row_order, view.hidden_row_ids); if (view.selected_row_id != null && view.selected_column != null) { const anchor = anchorAt(document, view.selected_row_id, view.selected_column); if (anchor) { setRowId(anchor.rowId); setColumn(String(anchor.column + 1)); select(anchor) } } else { setSelection(undefined); setRowId(view.selected_row_id ?? "") } }} applyViewer={value => { if (value in viewerNames) setViewerId(value as AlignmentViewerId) }}/>}
+      {projectId && receiptId && <AlignmentShared importedStateIds={importedStateIds} key={projectId} projectId={projectId} receiptId={receiptId} artifactId={document.resultId} selection={currentSelection} viewer={viewerId} rowOrder={order} hiddenRowIds={hidden} selectedRowId={document.rows.some(row => row.rowId === rowId) ? rowId : undefined} applyView={(view: View) => { if (view.viewer && view.viewer in viewerNames) setViewerId(view.viewer as AlignmentViewerId); updateLayout(view.row_order, view.hidden_row_ids); if (view.selected_row_id != null && view.selected_column != null) { const anchor = anchorAt(document, view.selected_row_id, view.selected_column); if (anchor) { setRowId(anchor.rowId); setColumn(String(anchor.column + 1)); select(anchor) } } else { setSelection(undefined); setRowId(view.selected_row_id ?? "") } }} applyViewer={value => { if (value in viewerNames) setViewerId(value as AlignmentViewerId) }}/>}
     </>}
     {localDownloads.length > 0 && <section aria-label="Downloads"><h2>Downloads</h2><ul>{localDownloads.map(item => <li key={`${item.label}:${item.href}`}><a href={item.href} download>{item.label}</a></li>)}</ul></section>}
   </main>

@@ -742,3 +742,62 @@ async def import_bundle_stream(request: Request, project_id: str,
     except (ValueError, KeyError, TypeError, OSError, CustodyError) as exc:
         await session.rollback()
         raise HTTPException(400, detail='Invalid or unavailable import bundle') from exc
+
+
+@router.post('/projects/{project_id}/imports/zip', response_model=ImportReceipt)
+async def import_bundle_zip(request: Request, project_id: str, replay_key: str,
+                            domain_experiment_id: str | None = None,
+                            session: AsyncSession = Depends(get_experiment_session)):
+    """Spool a portable ZIP, then verify its regular, relative members before custody."""
+    import shutil
+    import stat
+    import tempfile
+    import zipfile
+    from pathlib import Path
+    from bms_alignment.bundle import _safe_name
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    if not replay_key or len(replay_key) > 255:
+        raise HTTPException(400, detail='Invalid replay key')
+    if domain_experiment_id:
+        domain = await session.get(ExperimentAggregateHead, domain_experiment_id)
+        if not domain or domain.workspace_id != project_id or domain.aggregate_kind != 'domain_experiment':
+            raise HTTPException(404, detail='Destination domain not found')
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'bundle'
+            root.mkdir()
+            archive_path = Path(directory) / 'upload.zip'
+            with archive_path.open('wb') as upload:
+                async for chunk in request.stream():
+                    upload.write(chunk)
+            with zipfile.ZipFile(archive_path) as archive:
+                infos = archive.infolist()
+                names = [item.filename for item in infos]
+                if len(names) != len(set(names)) or 'manifest.json' not in names:
+                    raise ValueError('duplicate paths or missing manifest')
+                for item in infos:
+                    mode = item.external_attr >> 16
+                    if (item.filename != 'manifest.json' and not _safe_name(item.filename)) or item.is_dir() or (stat.S_IFMT(mode) not in (0, stat.S_IFREG)):
+                        raise ValueError('unsafe archive member')
+                manifest = json.loads(archive.read('manifest.json'))
+                descriptors = manifest['files']
+                if not isinstance(descriptors, list) or set(names) != {'manifest.json', *(item['path'] for item in descriptors)}:
+                    raise ValueError('archive members differ from manifest')
+                sizes = {item['path']: item['size'] for item in descriptors}
+                if len(sizes) != len(descriptors) or any(
+                    type(size) is not int or size < 0 or archive.getinfo(name).file_size != size
+                    for name, size in sizes.items()
+                ):
+                    raise ValueError('archive sizes differ from manifest')
+                for item in infos:
+                    target = root / item.filename
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.open(item) as source, target.open('wb') as dest:
+                        shutil.copyfileobj(source, dest, length=1024 * 1024)
+            return await _import_directory(project_id, replay_key, manifest, root, session, domain_experiment_id)
+    except HTTPException:
+        await session.rollback()
+        raise
+    except (ValueError, KeyError, TypeError, OSError, CustodyError, zipfile.BadZipFile, RuntimeError) as exc:
+        await session.rollback()
+        raise HTTPException(400, detail='Invalid or unavailable import bundle') from exc

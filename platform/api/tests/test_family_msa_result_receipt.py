@@ -180,6 +180,27 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     assert browser.status_code == 200, browser.text
     with zipfile.ZipFile(io.BytesIO(browser.content)) as archive:
         archive.extractall(tmp_path / 'browser-portable')
+    zip_url = f'/api/family-msa/projects/{project_id}/imports/zip'
+    params = {'replay_key': 'zip-roundtrip', 'domain_experiment_id': domain_id}
+    assert (await client.post(zip_url, params=params, content=browser.content)).status_code == 401
+    assert (await client.post(zip_url, params=params, headers={'x-test-actor':'other'}, content=browser.content)).status_code == 404
+    assert (await client.post(zip_url, params={**params, 'domain_experiment_id': 'missing'}, headers={'x-test-actor':'owner'}, content=browser.content)).status_code == 404
+    imported_zip = await client.post(zip_url, params=params, headers={'x-test-actor':'owner'}, content=browser.content)
+    assert imported_zip.status_code == 200, imported_zip.text
+    zipped = imported_zip.json()
+    assert zipped['shared_state'] == 'imported_with_unresolved'
+    retained = (await client.get(f"/api/family-msa/projects/{project_id}/receipts/{zipped['receipt_id']}", headers={'x-test-actor':'owner'})).json()
+    zip_alignment = next(x['id'] for x in retained['artifacts'] if x['role'] == 'alignment')
+    zip_state = (await client.get(f"/api/family-msa/projects/{project_id}/shared-state/{zipped['shared_states'][0]['dataset_id']}", headers={'x-test-actor':'owner'})).json()['state']
+    assert zip_state['marks'][0]['coordinate']['artifact_id'] == zip_alignment
+    assert (await client.get(f"/api/family-msa/projects/{project_id}/receipts/{zipped['receipt_id']}/documents/{zip_alignment}", headers={'x-test-actor':'owner'})).status_code == 200
+    replay_zip = await client.post(zip_url, params=params, headers={'x-test-actor':'owner'}, content=browser.content)
+    assert replay_zip.json()['replayed']
+    unsafe = io.BytesIO()
+    with zipfile.ZipFile(unsafe, 'w') as archive:
+        archive.writestr('../escape', 'bad')
+        archive.writestr('manifest.json', '{}')
+    assert (await client.post(zip_url, params={**params, 'replay_key': 'unsafe'}, headers={'x-test-actor':'owner'}, content=unsafe.getvalue())).status_code == 400
     # Exercise SDK against the real mounted scratch API without network sockets.
     import asyncio
     import io
