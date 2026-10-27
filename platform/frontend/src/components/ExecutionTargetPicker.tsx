@@ -64,8 +64,8 @@ export function ExecutionTargetPicker({ value, onChange, disabled = false, workf
     return (
         <section className="mb-5 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4" aria-label="Execution target">
             <div>
-                <h2 className="text-sm font-semibold text-slate-100">Execution target</h2>
-                <p className="mt-1 text-xs text-slate-400">
+                <h2 className="text-sm font-semibold text-[var(--text-primary)]">Execution target</h2>
+                <p className="mt-1 text-xs text-[var(--text-secondary)]">
                     BNS keeps jobs, history and results on this system. A selected worker runs the analysis.
                 </p>
             </div>
@@ -77,8 +77,8 @@ export function ExecutionTargetPicker({ value, onChange, disabled = false, workf
                     aria-pressed={selectedTargetId === ''}
                     disabled={disabled}
                     className={`rounded-lg border px-3 py-2 text-sm ${selectedTargetId === ''
-                        ? 'border-blue-400 bg-blue-500/15 text-blue-100'
-                        : 'border-slate-700 bg-slate-950 text-slate-300'}`}
+                        ? 'border-[var(--accent-primary)] bg-[color-mix(in_srgb,var(--accent-primary)_12%,var(--bg-secondary))] text-[var(--text-primary)]'
+                        : 'border-[var(--border-primary)] bg-[var(--bg-primary)] text-[var(--text-secondary)]'}`}
                 >
                     Local
                 </button>
@@ -91,8 +91,8 @@ export function ExecutionTargetPicker({ value, onChange, disabled = false, workf
                         disabled={disabled || target.state !== 'ready'}
                         title={target.state !== 'ready' ? target.last_error || target.setup?.message || 'Runtime not ready' : undefined}
                         className={`rounded-lg border px-3 py-2 text-sm ${selectedTargetId === target.id
-                            ? 'border-emerald-400 bg-emerald-500/15 text-emerald-100'
-                            : 'border-slate-700 bg-slate-950 text-slate-300'}`}
+                            ? 'border-[var(--accent-primary)] bg-[color-mix(in_srgb,var(--accent-primary)_12%,var(--bg-secondary))] text-[var(--text-primary)]'
+                            : 'border-[var(--border-primary)] bg-[var(--bg-primary)] text-[var(--text-secondary)]'}`}
                     >
                         Vast · {target.name ?? target.provider_instance_id}
                         {target.state !== 'ready' && <span className="block text-xs">Runtime not ready: {target.last_error || target.setup?.message || 'Setup required'}</span>}
@@ -103,13 +103,13 @@ export function ExecutionTargetPicker({ value, onChange, disabled = false, workf
             {selectedTargetId && (() => {
                 const selected = readyTargets.find((target) => target.id === selectedTargetId);
                 return selected ? (
-                    <p className="mt-3 text-xs text-slate-300">{String(selected.capabilities.gpu_count ?? '?')} × {String(selected.capabilities.gpu_name ?? 'GPU')}</p>
+                    <p className="mt-3 text-xs text-[var(--text-secondary)]">{String(selected.capabilities.gpu_count ?? '?')} × {String(selected.capabilities.gpu_name ?? 'GPU')}</p>
                 ) : (
-                    <p role="alert" className="mt-3 text-xs text-red-300">Selected worker {selectedTargetId} is unavailable. Choose Local or a ready worker, or wait for inventory recovery.</p>
+                    <p role="alert" className="mt-3 text-xs text-[var(--text-error)]">Selected worker {selectedTargetId} is unavailable. Choose Local or a ready worker, or wait for inventory recovery.</p>
                 );
             })()}
             {targetsQuery.error && (
-                <p role="alert" className="mt-3 text-xs text-red-300">
+                <p role="alert" className="mt-3 text-xs text-[var(--text-error)]">
                     Execution targets could not be refreshed. The selected placement is preserved; unavailable remote capacity cannot fall back to Local.
                 </p>
             )}
@@ -124,7 +124,7 @@ export function ExecutionTargetPicker({ value, onChange, disabled = false, workf
                                 : { ...workflowRequest, request: prepareExecutionPlacement({ ...workflowRequest.request, execution_target_id: target.id }) }
                         : prepareJobSubmission({ ...workflowRequest, execution_target_id: target.id }, submissionOptions)}
                     onChanged={() => targetsQuery.refetch()} />
-                    : <p className="mt-3 text-xs text-slate-400">For current-request dependencies, select a worker and configure the workflow in its existing controls.</p>;
+                    : <p className="mt-3 text-xs text-[var(--text-secondary)]">For current-request dependencies, select a worker and configure the workflow in its existing controls.</p>;
             })()}
             {preloadSelection && (() => {
                 const target = targets.find(item => item.id === selectedTargetId);
