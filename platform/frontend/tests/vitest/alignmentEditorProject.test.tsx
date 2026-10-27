@@ -33,7 +33,7 @@ it('pages and freezes distinct Dataset occurrences into the saved roster', async
  mocked.datasets.mockResolvedValue({items:[{dataset_id:'ds',name:'Set'}],next_cursor:null});
  mocked.revisions.mockResolvedValue({items:[{revision_id:'rev',revision_number:1}],next_cursor:null});
  const member=(ordinal:number)=>({ordinal,role:'sequence',member_identity:'same',member_sha256:`hash${ordinal}`,receipt:{entity_kind:'molecular'}});
- mocked.get.mockImplementation(async (url:string,options:any)=>url.endsWith('/molecular') ? {data:{status:'resolved',sequence:'CGT',label:'source',molecule:'dna',start:1,end:4,source_identity:'seq',source_digest:'digest'}} : {data:options.params.offset===0 ? {items:[member(0)],next_offset:50,total:51} : {items:[member(50)],next_offset:null,total:51}});
+ mocked.get.mockImplementation(async (url:string,options:any)=>url.endsWith('/molecular') ? {data:{status:'resolved',sequence:'CGT',label:'source',molecule:'dna',start:1,end:4,source_positions:[1,2,3],source_identity:'seq',source_digest:'digest'}} : {data:options.params.offset===0 ? {items:[member(0)],next_offset:50,total:51} : {items:[member(50)],next_offset:null,total:51}});
  mocked.post.mockImplementation(async (_url:string, payload:any)=>({data:{project_id:'p',dataset_id:'ds',revision_id:'rev',revision_sha256:'revision-hash',members:payload.ordinals.sort((a:number,b:number)=>a-b).map(member)}}));
  mocked.save.mockResolvedValue({});
  const div=document.createElement('div'),root=createRoot(div);
@@ -52,6 +52,7 @@ it('pages and freezes distinct Dataset occurrences into the saved roster', async
  expect(rows.map((r:any)=>r.sequence)).toEqual(['CGT','CGT']);
  expect(rows[0].occurrence_id).not.toBe(rows[1].occurrence_id);
  expect(rows[1].occurrence_id).toContain('revision-hash'); expect(rows[1].source_offset).toBe(1);
+ expect(rows[0].source_positions).toEqual([1,2,3]); expect(rows[1].source_positions).toEqual([1,2,3]);
  await act(async()=>root.unmount()); mocked.datasets.mockResolvedValue({items:[],next_cursor:null});
 });
 describe('alignment handoff recovery', () => {

@@ -43,6 +43,8 @@ async def test_real_molecular_owner_and_occurrence_read(tmp_path):
         a = await resolve_molecular_member(p, None, m, ordinal=0, **args)
         b = await resolve_molecular_member(p, None, m, ordinal=1, start=1, end=4, **args)
         assert (a['sequence'], b['sequence'], b['start'], b['end']) == ('ACGTAC', 'CGT', 1, 4)
+        assert a['source_positions'] == [0, 1, 2, 3, 4, 5]
+        assert b['source_positions'] == [1, 2, 3]
         assert a['source_identity'] == b['source_identity'] and a['ordinal'] != b['ordinal']
         with pytest.raises(ValidationFailure):
             await resolve_molecular_member(p, None, m, ordinal=1, start=0, end=7, **args)

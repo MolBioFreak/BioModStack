@@ -122,7 +122,8 @@ export default function AlignmentEditor({ model }: { model: string }) {
             row_id:`dataset_${String(i+1).padStart(8,'0')}`, header:x.resolved.label || x.selection.members[0].member_identity,
             sequence:x.resolved.sequence!, source_member_id:x.selection.members[0].member_identity,
             occurrence_id:JSON.stringify([x.selection.project_id,x.selection.dataset_id,x.selection.revision_id,x.selection.revision_sha256,x.selection.members[0].ordinal,x.selection.members[0].member_sha256]),
-            source_offset:x.resolved.start, transformation_provenance:JSON.stringify({source_identity:x.resolved.source_identity,source_digest:x.resolved.source_digest,start:x.resolved.start,end:x.resolved.end})
+            source_offset:x.resolved.start, source_positions:x.resolved.source_positions ?? null,
+            transformation_provenance:JSON.stringify({source_identity:x.resolved.source_identity,source_digest:x.resolved.source_digest,start:x.resolved.start,end:x.resolved.end,operation:'forward_slice'})
         }))];
         return {name:'Family alignment',model_id:model,mode:'family_msa',params:{roster:{...roster,rows,source_evidence,source_text:rows.length === roster.rows.length ? roster.source_text : null},settings}};
     };

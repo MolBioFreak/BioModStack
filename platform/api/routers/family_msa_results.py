@@ -294,8 +294,11 @@ async def comparison_roster(entries, read, artifact_id):
     rows = []
     for aligned in doc['rows']:
         source = original[aligned['row_id']]
-        # Never carry positional identity through an unproven transformation.
-        same = ''.join(c for c in source['sequence'] if c not in '-.') == ''.join(c for c in aligned['aligned'] if c not in '-.')
+        # Case changes do not change residue positions; U/T and all other
+        # native transformations remain unknown unless explicitly mapped.
+        source_residues = ''.join(c for c in source['sequence'] if c not in '-.')
+        aligned_residues = ''.join(c for c in aligned['aligned'] if c not in '-.')
+        same = source_residues.upper() == aligned_residues.upper()
         positions = source.get('source_positions')
         if same and positions is not None and len(positions) == len(source['sequence']):
             residues = iter([p for c, p in zip(source['sequence'], positions) if c not in '-.'])

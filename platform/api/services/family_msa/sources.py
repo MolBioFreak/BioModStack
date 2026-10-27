@@ -157,4 +157,5 @@ async def resolve_molecular_member(project_session: AsyncSession, core_session: 
             "source_identity": receipt["entity_id"], "source_digest": revision.content_sha256,
             "molecule": str((revision.snapshot or {}).get("sequence_type") or "dna").lower(),
             "label": (revision.snapshot or {}).get("name"), "start": first, "end": last,
+            "source_positions": list(range(first, last)),
             "sequence": sequence[first:last]}

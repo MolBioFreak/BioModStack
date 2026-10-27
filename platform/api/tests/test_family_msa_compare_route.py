@@ -18,6 +18,13 @@ async def test_comparison_roster_maps_only_explicit_identity_and_positions():
     report = compare(aligned, aligned)
     assert report['rows'][0]['positions'] == [{'source': 5, 'left_column': 0, 'right_column': 0}, {'source': 6, 'left_column': 2, 'right_column': 2}]
     assert report['left_unknown_identity_rows'] == ['unknown']
+    # MAFFT can lowercase DNA without changing residue correspondence.
+    blobs['a'] = b'>r\na-c\n>unknown\nac-\n'
+    lower = await comparison_roster(entries, read, 'a')
+    assert compare(lower, lower)['rows'][0]['positions'] == report['rows'][0]['positions']
+    # A U/T substitution is not just casing and cannot inherit the source map.
+    blobs['a'] = b'>r\nA-U\n>unknown\nAC-\n'
+    assert compare(await comparison_roster(entries, read, 'a'), aligned)['rows'][0]['mapping_unknown']
     blobs['a'] = b'>r\nA-T\n>unknown\nAC-\n'
     changed = await comparison_roster(entries, read, 'a')
     report = compare(changed, changed)

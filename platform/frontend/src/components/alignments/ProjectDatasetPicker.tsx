@@ -5,7 +5,7 @@ import type { DomainDatasetHead, DomainDatasetRevisionSummary } from '../../lib/
 
 type Occurrence = {ordinal:number; role:string; member_identity:string; member_sha256:string; receipt:{entity_kind:string; entity_id:string; content_digest?:string} | null};
 type Selection = {project_id:string; dataset_id:string; revision_id:string; revision_sha256:string; members:Occurrence[]};
-type Resolved = {project_id?:string; dataset_id?:string; revision_id?:string; revision_sha256?:string; ordinal?:number; member_identity?:string; member_sha256?:string; status:string; reason?:string; sequence?:string; label?:string; molecule?:string; start?:number; end?:number; source_identity?:string; source_digest?:string};
+type Resolved = {project_id?:string; dataset_id?:string; revision_id?:string; revision_sha256?:string; ordinal?:number; member_identity?:string; member_sha256?:string; status:string; reason?:string; sequence?:string; label?:string; molecule?:string; start?:number; end?:number; source_positions?:number[]; source_identity?:string; source_digest?:string};
 export type DatasetRow = {selection:Selection; resolved:Resolved; freeze_requested?:{project_id:string; dataset_id:string; revision_id:string; ordinals:number[]}};
 type Props = {projectId:string; globalId:string; domainId:string; rows:DatasetRow[]; onChange:React.Dispatch<React.SetStateAction<DatasetRow[]>>};
 const enc = encodeURIComponent;
