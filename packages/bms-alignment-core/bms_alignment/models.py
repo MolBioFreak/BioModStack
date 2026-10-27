@@ -48,6 +48,53 @@ class MafftSettings(Closed):
     threads: int = Field(default=1, ge=1)
     treeout: bool = False
 
+class FamsaSettings(Closed):
+    engine: Literal['famsa'] = 'famsa'
+    threads: int = Field(default=1, ge=1)
+    guide_tree: Literal['sl', 'upgma', 'nj'] = 'sl'
+    refine_mode: Literal['auto', 'on', 'off'] = 'auto'
+    keep_duplicates: bool = False
+    medoidtree: bool = False
+    medoid_seeds: int | None = None
+    medoid_threshold: int | None = None
+    trim_columns: float | None = None
+
+class MuscleSettings(Closed):
+    engine: Literal['muscle'] = 'muscle'
+    mode: Literal['align', 'super5'] = 'align'
+    threads: int = Field(default=1, ge=1)
+    permutation: Literal['none', 'abc', 'acb', 'bca', 'all'] = 'none'
+    perturb: int = Field(default=0, ge=0)
+    ensemble: Literal['none', 'stratified', 'diversified'] = 'none'
+    replicates: int | None = Field(default=None, ge=1)
+
+class TwilightSettings(Closed):
+    engine: Literal['twilight'] = 'twilight'
+    threads: int = Field(default=1, ge=1)
+    method: Literal['pairwise', 'tcs'] = 'pairwise'
+    acc_mode: Literal[0, 1, 2, 3] = 0
+    acc_max_group: int | None = None
+    acc_sample_rate: float | None = None
+    acc_sample_top: float | None = None
+    consistency_weight: float = 5.0
+    max_subtree: int | None = None
+    remove_gappy: float = 0.95
+    wildcard: bool = False
+    rooted: bool = False
+    prune: bool = False
+    filter: bool = False
+    match: float = 18
+    mismatch: float = -8
+    transition: float = -4
+    gap_open: float | None = None
+    gap_extend: float | None = None
+    gap_ends: float | None = None
+    scale: float | None = None
+    xdrop: float = 600
+    guide_source: Literal['supplied', 'mafft'] = 'supplied'
+    guide_tree: str | None = None
+    leaf_mapping: dict[str, str] = Field(default_factory=dict)
+
 class AlignmentRequest(Closed):
     roster: SequenceSet
-    settings: MafftSettings
+    settings: MafftSettings | FamsaSettings | MuscleSettings | TwilightSettings = Field(discriminator='engine')

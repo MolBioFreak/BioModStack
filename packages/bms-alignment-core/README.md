@@ -1,6 +1,6 @@
 # bms-alignment-core — partial implementation
 
-Standalone Python primitives and a MAFFT runner. This is **not a completed first-pass integration** and must not be advertised as full engine or parameter coverage. No BMS database, API, frontend, or runtime image is included.
+Standalone Python primitives and native adapter work for MAFFT, FAMSA, MUSCLE and TWILIGHT. This is **not a completed first-pass integration** and must not be advertised as full engine or parameter coverage. No BMS database, API, frontend, or runtime image is included.
 
 ## Local checks
 
@@ -17,8 +17,8 @@ FASTA import retains duplicate headers with generated occurrence-local row IDs. 
 
 `bundle create SOURCE DEST FILE... --exclude DESCRIPTION` copies caller-selected files with relative paths, hashes, and caller-declared exclusions. It does not discover dependencies or enforce their completeness; `bundle verify DEST` verifies listed bytes only. Bundles are not yet full BMS scientific contracts.
 
-`tree.map_mafft_tree` maps exact numbered MAFFT leaf labels with explicit missing/unmapped/duplicate observations. It is not a complete validating Newick parser, is not wired into TWILIGHT, and is not evidence of MAFFT 7.525 interoperability.
+TWILIGHT accepts supplied trees with explicit leaf mapping or MAFFT tree preparation; raw and submitted trees and mapping observations are retained. The mapping tokenizer is not a complete validating Newick parser. Neither TWILIGHT mode nor MAFFT 7.525 interoperability has been qualified. Use a fresh work directory for every run; reusing a directory may mix prior output files. MUSCLE 5.3 source has a special case in which stratified `replicates=1` produces one member rather than four; do not infer member counts from the help text. Ensemble files retain the native permutation/seed in their filenames.
 
 ## Required remaining work
 
-Complete machine-readable inventories and all native settings; FAMSA, MUSCLE, TWILIGHT and their native qualification; real reversible supplied/generated guide tree workflows; robust formats/A3M projection and raw bytes; source transformation maps and full correspondence metrics; typed full contracts and HTTP SDK; cancellable process ownership; full portable bundle manifests and relocation; package wheel clean-install acceptance; API/PM/Job/UI integration. More exhaustive verification and security review are needed before use as an integration authority.
+Complete machine-readable inventories and all native settings; native TWILIGHT and exact pinned MAFFT guide qualification; independent tree parsing, full transformation and ensemble identities; robust formats/A3M projection and raw bytes; source transformation maps and full correspondence metrics; typed full contracts and HTTP SDK; cancellable process ownership; full portable bundle manifests and relocation; package wheel clean-install acceptance; API/PM/Job/UI integration. More exhaustive verification and security review are needed before use as an integration authority. The adapter currently does not enforce molecule applicability or unsupported MUSCLE option combinations; native errors are retained.

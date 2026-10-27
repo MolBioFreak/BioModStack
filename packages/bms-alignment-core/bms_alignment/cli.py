@@ -4,6 +4,7 @@ from pathlib import Path
 from .models import AlignmentRequest, SequenceSet
 from .formats import compare, export, summary
 from .native import run_mafft
+from .engines import run_engine
 from .bundle import verify_bundle, make_bundle
 
 
@@ -13,7 +14,7 @@ def main():
     sub.add_parser('schema')
     for command in ('validate', 'inspect'):
         p = sub.add_parser(command); p.add_argument('file')
-    p = sub.add_parser('run'); p.add_argument('file'); p.add_argument('workdir'); p.add_argument('--mafft', default='mafft')
+    p = sub.add_parser('run'); p.add_argument('file'); p.add_argument('workdir'); p.add_argument('--executable'); p.add_argument('--mafft', default='mafft')
     p = sub.add_parser('compare'); p.add_argument('left'); p.add_argument('right')
     p = sub.add_parser('export'); p.add_argument('file'); p.add_argument('format', choices=['fasta', 'clustal', 'stockholm', 'a3m']); p.add_argument('--original', action='store_true')
     p = sub.add_parser('bundle'); bs = p.add_subparsers(dest='action', required=True)
@@ -24,7 +25,7 @@ def main():
     if a.command == 'schema': result = AlignmentRequest.model_json_schema()
     elif a.command == 'validate': result = AlignmentRequest.model_validate(read(a.file)).model_dump(mode='json')
     elif a.command == 'run':
-        result = run_mafft(AlignmentRequest.model_validate(read(a.file)), Path(a.workdir), a.mafft)
+        result = run_engine(AlignmentRequest.model_validate(read(a.file)), Path(a.workdir), a.executable, a.mafft)
         print(json.dumps(result, indent=2)); return result['returncode']
     elif a.command == 'inspect': result = summary(SequenceSet.model_validate(read(a.file)))
     elif a.command == 'compare': result = compare(SequenceSet.model_validate(read(a.left)), SequenceSet.model_validate(read(a.right)))
