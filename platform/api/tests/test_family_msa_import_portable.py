@@ -183,11 +183,12 @@ def test_real_portable_import_export_roundtrip(tmp_path, monkeypatch):
             client.import_project_bundle(project, mutated, replay_key='second')
         assert conflict.value.status == 409
         assert asyncio.run(counts()) == (3, 18)
+        imported = {}
         async def file_imports():
             import httpx
             samples = {
                 'fasta': b'>same\r\nAC-G\r\n>same\r\nACGG\r\n',
-                'stockholm': b'# STOCKHOLM 1.0\n#=GF ID test\na AC-G\nb ACGG\n//\n',
+                'stockholm': b'# STOCKHOLM 1.0\r\n#=GF ID test\r\n#=GS a DE annotated\r\na AC-G\r\nb ACGG\r\n#=GR a SS HHHH\r\n#=GC RF xxxx\r\n//\r\n',
                 'clustal': b'CLUSTAL W\n\na AC-G\nb ACGG\n',
                 'a3m': b'>a\nACx-G\n>b\nACGG\n',
             }
@@ -198,16 +199,35 @@ def test_real_portable_import_export_roundtrip(tmp_path, monkeypatch):
                     response = await c.post(path, params=params, content=raw)
                     assert response.status_code == 200, response.text
                     receipt = response.json()['receipt_id']
+                    imported[fmt] = (receipt, raw)
                     replay = await c.post(path, params=params, content=raw)
                     assert replay.json()['replayed'] and replay.json()['receipt_id'] == receipt
                     base = f'/api/family-msa/projects/{project}/receipts/{receipt}'
                     listing = (await c.get(base)).json()['artifacts']
                     source = next(item for item in listing if item['role'] == 'source')
                     assert (await c.get(base + '/artifacts/' + source['id'])).content == raw
+                    native = next(item for item in listing if item['role'] == 'source_metadata')
+                    from bms_alignment.models import SequenceSet
+                    from bms_alignment.formats import export_bytes
+                    roster = SequenceSet.model_validate_json((await c.get(base + '/artifacts/' + native['id'])).content)
+                    assert export_bytes(roster, fmt, original=True)[0] == raw
+                    if fmt == 'stockholm':
+                        assert [a['kind'] for a in roster.stockholm_annotations] == ['GF', 'GS', 'GR', 'GC']
                     aligned = next(item for item in listing if item['role'] == 'alignment')
                     doc = await c.get(base + '/documents/' + aligned['id'])
                     assert doc.status_code == 200, doc.text
                     assert [r['aligned'] for r in doc.json()['rows']] == ['AC-G', 'ACGG']
         asyncio.run(file_imports())
+        for fmt, (receipt, raw) in imported.items():
+            destination = tmp_path / ('file-export-' + fmt)
+            client.export_project_bundle(project, receipt, destination)
+            from bms_alignment.bundle import verify_bundle
+            from bms_alignment.models import SequenceSet
+            from bms_alignment.formats import export_bytes
+            assert verify_bundle(destination)['valid']
+            inventory = json.loads((destination / 'project-export.json').read_text())
+            native = next(x for x in inventory['artifacts'] if x['role'] == 'source_metadata')
+            roster = SequenceSet.model_validate_json((destination / native['path']).read_bytes())
+            assert export_bytes(roster, fmt, original=True)[0] == raw
     finally:
         asyncio.run(engine.dispose())

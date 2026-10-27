@@ -539,17 +539,19 @@ async def import_alignment(request: Request, project_id: str, format: str, repla
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'source'; root.mkdir()
             (root / 'original').write_bytes(raw)
+            (root / 'roster.json').write_text(roster.model_dump_json(), encoding='utf-8')
             (root / 'display.fasta').write_text(''.join(f">{row['row_id']}\n{row['sequence']}\n" for row in rows), encoding='utf-8')
             (root / 'receipt.json').write_text(json.dumps({'requested': {'roster': {'molecule': molecule, 'rows': rows}},
                 'import': {'source_format': format, 'display': 'match columns only' if format == 'a3m' else 'row projection',
                            'molecule': molecule}}), encoding='utf-8')
             entries = [{'id': 'original', 'role': 'source', 'logical_path': f'original.{format}', 'path': 'original'},
                        {'id': 'alignment', 'role': 'alignment', 'logical_path': 'display.fasta', 'path': 'display.fasta'},
+                       {'id': 'native-roster', 'role': 'source_metadata', 'logical_path': 'roster.json', 'path': 'roster.json'},
                        {'id': 'receipt', 'role': 'receipt', 'logical_path': 'receipt.json', 'path': 'receipt.json'}]
             (root / 'project-export.json').write_text(json.dumps({'schema': 'bms.family-msa.project-export.v1',
                 'project_id': project_id, 'receipt_id': 'file-import', 'artifacts': entries, 'shared_states': []}), encoding='utf-8')
             bundle = Path(directory) / 'bundle'
-            manifest = make_bundle(root, bundle, ['project-export.json', 'original', 'display.fasta', 'receipt.json'])
+            manifest = make_bundle(root, bundle, ['project-export.json', 'original', 'display.fasta', 'roster.json', 'receipt.json'])
             return await _import_directory(project_id, replay_key, manifest, bundle, session)
     except HTTPException:
         await session.rollback()

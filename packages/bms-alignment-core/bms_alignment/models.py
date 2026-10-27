@@ -34,6 +34,8 @@ class SequenceSet(Closed):
     rows: list[Row]
     source_format: Literal['fasta', 'stockholm', 'clustal', 'a3m'] = 'fasta'
     source_text: str | None = None
+    stockholm_annotations: list[dict] = Field(default_factory=list)
+    format_observations: list[str] = Field(default_factory=list)
     # Observational record of selected and excluded Dataset occurrences.
     source_evidence: list[dict] = Field(default_factory=list)
 
