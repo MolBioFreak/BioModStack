@@ -11,6 +11,8 @@ const ont = vi.hoisted(() => ({
     startIntent: vi.fn(),
     uploadFile: vi.fn(),
     importRawSignal: vi.fn(),
+    fetchRuns: vi.fn(),
+    stopRun: vi.fn(),
 }));
 
 const deviceResponse = {
@@ -35,6 +37,7 @@ const optionsResponse = {
         can_start: true,
         blockers: [],
         flow_cell_present: true,
+        available_kits: ['SQK-LSK114'],
         options: [{
             option_id: 'ont-option-safe',
             option_receipt_id: 'ont-preflight-safe',
@@ -55,7 +58,8 @@ vi.mock('../../src/lib/api', async (importOriginal) => {
         fetchOntDeviceStatus: ont.fetchDevice,
         fetchOntProtocolOptions: ont.fetchOptions,
         fetchMolBioNgsSummaries: vi.fn().mockResolvedValue({ items: [], next_cursor: null, total: 0 }),
-        fetchOntInstrumentRuns: vi.fn().mockResolvedValue([]),
+        fetchOntInstrumentRuns: ont.fetchRuns,
+        stopOntInstrumentRun: ont.stopRun,
         fetchOntInstrumentRunGeneration: vi.fn().mockResolvedValue(null),
         fetchOntRawSignalCapabilities: vi.fn().mockResolvedValue(null),
         fetchOntExternalPod5Candidates: vi.fn().mockResolvedValue({ candidates: [] }),
@@ -123,10 +127,13 @@ async function waitUntil(assertion: () => void) {
 }
 
 beforeEach(() => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     ont.fetchDevice.mockReset();
     ont.fetchOptions.mockReset();
     ont.createIntent.mockReset();
     ont.startIntent.mockReset();
+    ont.fetchRuns.mockReset().mockResolvedValue([]);
+    ont.stopRun.mockReset();
     ont.fetchDevice.mockResolvedValue(deviceResponse);
     ont.fetchOptions.mockResolvedValue(optionsResponse);
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -136,12 +143,45 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+    vi.restoreAllMocks();
     await act(async () => root.unmount());
     client.clear();
     document.body.replaceChildren();
 });
 
 describe('OntInstrumentPanel opaque intent lifecycle', () => {
+    it('keeps internal project IDs and unused revision inspection out of the default view', async () => {
+        await act(async () => root.render(panel()));
+        await flush();
+        expect(container.textContent).not.toMatch(/Global Experiment ID|Domain Experiment ID|URL-owned pinned|No exact pinned|Run intent disabled/);
+        expect(container.querySelector('[aria-label="Sequencing kit"]')).not.toBeNull();
+        expect(container.querySelector('[aria-label="Run length in hours"]')).not.toBeNull();
+    });
+
+    it('explains an inserted flow cell with no compatible MinKNOW kit', async () => {
+        ont.fetchOptions.mockResolvedValue({ data: { ...optionsResponse.data, can_start: false, available_kits: [], options: [] } });
+        await act(async () => root.render(panel()));
+        await flush();
+        expect(container.textContent).toContain('MinKNOW detects this flow cell but offers no compatible sequencing kits');
+        expect(container.textContent).not.toContain('Insert a flow cell to list kits');
+        expect([...container.querySelectorAll('button')].find((b) => b.textContent === 'Start sequencing')?.disabled).toBe(true);
+    });
+
+    it('offers Stop only for a server-confirmed run binding and preserves the run on stop', async () => {
+        ont.fetchRuns.mockResolvedValue([
+            { run_id: 'bound-run', status: 'running', experiment_group: 'domain-experiment-test', can_stop: true },
+            { run_id: 'uncertain-unbound', status: 'unknown', experiment_group: 'domain-experiment-test', can_stop: false },
+        ]);
+        ont.stopRun.mockResolvedValue({ data: { ...intent, id: 'bound-run', status: 'stopped' } });
+        await act(async () => root.render(panel()));
+        await flush();
+        const stop = [...container.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Stop run bound-run'))!;
+        expect(stop).toBeDefined();
+        expect([...container.querySelectorAll('button')].some((b) => b.textContent?.startsWith('Stop run uncertain-unbound'))).toBe(false);
+        await act(async () => stop.click());
+        await waitUntil(() => expect(ont.stopRun).toHaveBeenCalledWith('bound-run'));
+        expect(container.textContent).toContain('Data collected so far is kept');
+    });
     it('opens raw-signal tools without polling MinKNOW and registers an indexed BLOW5 pair', async () => {
         ont.uploadFile.mockImplementation(async (directory: string, file: File) => ({ data: { path: `${directory}/${file.name}`, size: file.size } }));
         ont.importRawSignal.mockResolvedValue({ run_id: 'external-native', observed_generation: 1, already_registered: false });
@@ -170,7 +210,7 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
         expect(request).not.toHaveProperty('source_fidelity');
     });
 
-    it('retains the created BMS intent and renders it revalidated/armed after the expected disabled-start response', async () => {
+    it('retains the durable run and reports an uncertain physical start without resubmitting it', async () => {
         let rejectStart: (reason: unknown) => void = () => undefined;
         ont.createIntent.mockResolvedValue({ data: intent });
         ont.startIntent.mockImplementation(() => new Promise((_, reject) => { rejectStart = reject; }));
@@ -180,7 +220,9 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
         });
         await flush();
 
-        const validate = Array.from(container.querySelectorAll('button')).find((element) => element.textContent === 'Validate run intent') as HTMLButtonElement;
+        const kit = container.querySelector<HTMLSelectElement>('[aria-label="Sequencing kit"]')!;
+        await act(async () => { kit.value = 'SQK-LSK114'; kit.dispatchEvent(new Event('change', { bubbles: true })); });
+        const validate = Array.from(container.querySelectorAll('button')).find((element) => element.textContent === 'Start sequencing') as HTMLButtonElement;
         await waitUntil(() => expect(validate.disabled).toBe(false));
         await act(async () => validate.click());
         await flush();
@@ -193,20 +235,20 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
             confirm_start: true,
             intent_generation: 1,
         });
-        expect(container.textContent).toContain('BMS run ont-run-durable-001 is armed; revalidating before physical start');
+        expect(container.textContent).toContain('Starting run ont-run-durable-001 in MinKNOW');
 
         await act(async () => {
             rejectStart({
                 response: {
-                    status: 501,
-                    data: { detail: 'MinKNOW protocol start remains disabled pending separately authorized supervised commissioning.' },
+                    status: 502,
+                    data: { detail: 'Lost contact with MinKNOW while starting. Check MinKNOW before retrying.' },
                 },
             });
             await Promise.resolve();
         });
 
-        expect(container.textContent).toContain('BMS run ont-run-durable-001 remains armed after fresh revalidation');
-        expect(container.textContent).toContain('physical MinKNOW start remains disabled');
+        expect(container.textContent).toContain('Lost contact with MinKNOW while starting');
+        expect(ont.startIntent).toHaveBeenCalledTimes(1);
         expect(container.textContent).not.toContain('Request failed');
     });
 
@@ -216,7 +258,7 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
         });
         await flush();
 
-        const validate = Array.from(container.querySelectorAll('button')).find((element) => element.textContent === 'Validate run intent') as HTMLButtonElement;
+        const validate = Array.from(container.querySelectorAll('button')).find((element) => element.textContent === 'Start sequencing') as HTMLButtonElement;
         await waitUntil(() => expect(validate.disabled).toBe(false));
 
         ont.fetchOptions.mockRejectedValueOnce(new Error('MinKNOW refresh failed'));

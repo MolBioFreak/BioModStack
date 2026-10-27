@@ -101,9 +101,14 @@ instrument control**:
    with **Stop run**, BMS seals the FASTQ/POD5 files from MinKNOW's run folder,
    registers the POD5 for raw-signal work and enables plasmid-QC handoff.
 
-If BMS loses contact with MinKNOW during a start, the run is marked `unknown`
-and is never started a second time. Polling picks it up again once MinKNOW
-responds. Hardware checks and power cycling are done from MinKNOW itself.
+The host bridge retains start receipts in
+`$XDG_STATE_HOME/biomodstack/ont-start-receipts.sqlite3` (default
+`~/.local/state/biomodstack/`). Preserve this state with the host installation.
+If the API loses the bridge's reply, polling recovers the exact run binding
+from that receipt without sending another start. A timeout between the bridge
+and MinKNOW itself remains `unknown`: check MinKNOW before starting another run.
+The bridge never retries an uncertain physical start or guesses a binding from
+sample names. Hardware checks and power cycling are done from MinKNOW itself.
 
 Configure `BMS_ONT_CONTAINER_RUNTIME=podman` and `BMS_CONTAINER_RUNTIME=podman`
 in the supported host environment for rootless Podman. Managed units preserve

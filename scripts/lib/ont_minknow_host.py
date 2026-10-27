@@ -13,6 +13,8 @@ from pathlib import Path
 import re
 from typing import Any, Callable, Iterable
 
+from .ont_start_receipts import claim_start, finish_start
+
 DEFAULT_MINKNOW_HOST = "localhost"
 DEFAULT_MINKNOW_MANAGER_PORT = 9502
 MAX_DISCOVERED_OUTPUT_FILES = 100000
@@ -395,7 +397,8 @@ def protocol_options(
                 if kit:
                     tools = _protocols_module()
                     found = tools.find_protocol(connection, product_code=product, kit=kit, experiment_type="sequencing")
-                    protocol_id = _string_or_none(_safe_get(found, "identifier"))
+                    # minknow_api.tools.protocols.find_protocol returns Optional[str].
+                    protocol_id = _string_or_none(found) if isinstance(found, str) else None
                     if protocol_id and basecalling_enabled:
                         sample_rate = (device.get("flow_cell") or {}).get("sample_rate")
                         configs = manager.find_basecall_configurations(product, kit, sample_rate)
@@ -436,25 +439,36 @@ def start_protocol(position_name: str, payload: dict[str, Any], *,
     if isinstance(run_hours, bool) or not isinstance(run_hours, (int, float)) or not 0 < run_hours <= 96:
         return 400, {"detail": "run_hours must be greater than 0 and at most 96"}
     try:
+        previous = claim_start(position_name, payload)
+    except ValueError as exc:
+        return 400, {"detail": str(exc)}
+    if previous is not None:
+        return previous
+    request_id = payload["start_request_id"]
+
+    def rejected(code: int, detail: str):
+        return finish_start(position_name, request_id, code, {"detail": detail, "start_outcome": "rejected"})
+
+    try:
         _manager, connection = _connect_position(position_name, manager_factory=manager_factory)
     except LookupError as exc:
-        return 404, {"detail": str(exc)}
+        return rejected(404, str(exc))
     except Exception as exc:  # noqa: BLE001
-        return 503, {"detail": f"MinKNOW is unreachable: {exc}"[:500]}
+        return rejected(503, f"MinKNOW is unreachable: {exc}"[:500])
     if not bool(_safe_get(connection.device.get_flow_cell_info(), "has_flow_cell", False)):
-        return 409, {"detail": "No flow cell is inserted in this position"}
+        return rejected(409, "No flow cell is inserted in this position")
     try:
         current = connection.protocol.get_current_protocol_run()
     except Exception:  # noqa: BLE001 - MinKNOW reports "no current protocol" as an error
         current = None
     if _string_or_none(_safe_get(current, "run_id")):
-        return 409, {"detail": "A protocol is already running on this position"}
+        return rejected(409, "A protocol is already running on this position")
     tools = _protocols_module()
     basecalling = None
     if payload.get("basecalling_enabled") is True:
         simplex_model = _string_or_none(payload.get("simplex_model"))
         if not simplex_model:
-            return 400, {"detail": "Basecalling needs a simplex model"}
+            return rejected(400, "Basecalling needs a simplex model")
         basecalling = tools.BasecallingArgs(
             simplex_model=simplex_model, modified_models=None, stereo_model=None,
             barcoding=None, alignment=None, min_qscore=payload.get("min_qscore"),
@@ -473,8 +487,16 @@ def start_protocol(position_name: str, payload: dict[str, Any], *,
             experiment_duration=float(run_hours),
         )
     except Exception as exc:  # noqa: BLE001
-        return 502, {"detail": f"MinKNOW refused the start: {exc}"[:500]}
-    return 201, {"minknow_run_id": str(run_id), "position": position_name, "fake_or_demo_devices": False}
+        return finish_start(position_name, request_id, 502, {
+            "detail": f"MinKNOW start outcome is unknown: {exc}"[:500], "start_outcome": "unknown",
+        })
+    if not isinstance(run_id, str) or not run_id.strip():
+        return finish_start(position_name, request_id, 502, {
+            "detail": "MinKNOW returned no run ID; check MinKNOW before starting another run.", "start_outcome": "unknown",
+        })
+    return finish_start(position_name, request_id, 201, {
+        "minknow_run_id": run_id, "start_outcome": "accepted", "fake_or_demo_devices": False,
+    })
 
 
 def build_manager(config: MinknowHostConfig):

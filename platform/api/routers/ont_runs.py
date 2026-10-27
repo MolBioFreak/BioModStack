@@ -345,6 +345,7 @@ class OntRunSummaryResponse(BaseModel):
 
     run_id: str
     position_id: str
+    can_stop: bool = False
     status: Literal[
         "armed",
         "starting",

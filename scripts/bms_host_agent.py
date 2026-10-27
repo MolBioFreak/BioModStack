@@ -26,6 +26,7 @@ from lib.ont_minknow_host import refresh_position as refresh_ont_position
 from lib.ont_minknow_host import restart_position as restart_ont_position
 from lib.ont_minknow_host import stop_protocol as stop_ont_protocol
 from lib.ont_minknow_host import start_protocol as start_ont_protocol
+from lib.ont_start_receipts import read_start_receipt
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROJECT = "biomodstack-core-runtime"
@@ -306,6 +307,12 @@ def ont_route_payload(path: str) -> dict[str, Any] | None:
     """Return host-agent ONT route payloads or None for unknown/not-found routes."""
     parsed = urlparse(path)
     route_path = parsed.path.rstrip("/") or "/"
+    if route_path.startswith("/ont/positions/") and "/start-requests/" in route_path:
+        position, request_id = route_path.removeprefix("/ont/positions/").split("/start-requests/", 1)
+        try:
+            return read_start_receipt(unquote(position), unquote(request_id))
+        except ValueError:
+            return None
     if route_path.startswith("/ont/runs/"):
         minknow_run_id = unquote(route_path.removeprefix("/ont/runs/")).strip()
         return observe_ont_run(minknow_run_id)

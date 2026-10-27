@@ -137,7 +137,6 @@ class OntRawSignalWorker:
                         select(OntInstrumentRun.id)
                         .where(
                             OntInstrumentRun.state.in_(("starting", "running", "stopping", "unknown")),
-                            OntInstrumentRun.minknow_run_id.is_not(None),
                         )
                         .order_by(OntInstrumentRun.observed_at, OntInstrumentRun.id)
                         .limit(100)
