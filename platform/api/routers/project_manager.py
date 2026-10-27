@@ -134,7 +134,7 @@ class WorkflowSetupCreateRequest(StrictRequestModel):
     relationship_kind: Literal["primary", "follow_up"]
     global_experiment_id: str | None = Field(default=None, min_length=1, max_length=128)
     experiment: WorkflowSetupExperimentRequest | None = None
-    domain_kind: Literal["protein_in_silico"]
+    domain_kind: Literal["protein_in_silico", "ngs_molbio"]
     capability_id: str = Field(min_length=1, max_length=255)
 
     @model_validator(mode="after")
@@ -466,6 +466,13 @@ async def list_domain_adapters() -> dict:
 async def list_protein_project_capabilities() -> dict[str, Any]:
     """Expose only server-adapted Protein workflows for Project creation."""
     return protein_capability_inventory(project_ready_only=True)
+
+
+@router.get("/api/family-msa-project-capabilities")
+async def list_family_msa_project_capabilities() -> dict[str, Any]:
+    """Discover editor setup routes; this does not attest Job execution readiness."""
+    from services.family_msa_project_capabilities import family_msa_capability_inventory
+    return family_msa_capability_inventory()
 
 
 @router.post("/api/projects/{project_id}/workflow-setups", status_code=status.HTTP_201_CREATED)

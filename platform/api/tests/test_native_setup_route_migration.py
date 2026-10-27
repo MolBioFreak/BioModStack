@@ -42,7 +42,7 @@ async def test_v22_preserves_v21_rows_and_immutable_contract(tmp_path):
         connection.executescript(migrations.MIGRATION_V21_SQL)
         connection.execute('INSERT INTO workflow_setup_contexts SELECT * FROM setup_copy')
         connection.execute('DROP TABLE setup_copy')
-        connection.execute('DELETE FROM experiment_schema_migrations WHERE version = 22')
+        connection.execute('DELETE FROM experiment_schema_migrations WHERE version >= 22')
         connection.commit()
         old_ledger = connection.execute('SELECT version, checksum FROM experiment_schema_migrations ORDER BY version').fetchall()
     finally:
