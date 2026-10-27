@@ -1001,6 +1001,8 @@ def estimate_vram(model_type: str, sequence_length: int, params: Optional[Any] =
     """
     normalized_model = (model_type or "default").strip().lower()
     effective_length = max(1, _coerce_int(sequence_length, 300))
+    if normalized_model in {'family_msa_protein', 'family_msa_nucleic'}:
+        return 0  # Family alignment is CPU-only, including new attempts.
     if normalized_model == 'protonpottsmpnn':
         from services.protonpottsmpnn_design import execution_device
         if not str(execution_device(params if isinstance(params, dict) else None)).startswith('cuda'):

@@ -6007,6 +6007,16 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     md_input_resolver = md_input_resolver or _resolve_md_input_path_for_runtime
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id in {'family_msa_protein', 'family_msa_nucleic'}:
+        from services.family_msa.requests import MODE, prepare_request
+        try:
+            selected, payload = prepare_request(job_data.params)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        if selected != normalized_model_id or normalized_mode != MODE:
+            raise HTTPException(422, detail='Family alignment model or mode does not match request')
+        job_data.params = payload
+        return job_data
     from services.sequence_designer_settings import normalize_historical_sequence_settings
     job_data.params = normalize_historical_sequence_settings(normalized_model_id, job_data.params)
     if normalized_model_id == 'frustrampnn':
@@ -7244,6 +7254,12 @@ async def _create_job(
     if estimate_model_id == "protenix":
         sequence_length = estimate_protenix_tokens(job_data.params, sequence_length)
     vram_estimate = estimate_vram(estimate_model_id, sequence_length, job_data.params)
+
+    # Family alignment never requests a GPU, even when a cloned request has a pin.
+    if normalized_model_id in {'family_msa_protein', 'family_msa_nucleic'}:
+        job_data.pinned_gpu = None
+        for key in ('gpu_id', 'pinned_gpu', 'pinned_gpus', 'cpus_per_gpu'):
+            job_data.params.pop(key, None)
 
     # ─── CPU-only override: orchestration/launcher jobs should not consume GPU slots ─────
     if is_antibody_pipeline_mode(job_data.mode) and str(job_data.params.get("parallel_mode") or "").strip().lower() == "full_orchestrator":
@@ -9685,6 +9701,8 @@ async def resubmit_job(
     # Create new output directory for resubmitted job
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
+    if original_job.model_id in {'family_msa_protein', 'family_msa_nucleic'}:
+        output_dir = str(get_results_dir() / f"{new_name}_{timestamp}_{uuid.uuid4().hex}")
 
     resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
     from scripts.lib.protein_cad_settings import replay_cad_settings
@@ -9742,6 +9760,9 @@ async def resubmit_job(
         resubmit_sequence_length,
         resubmit_params,
     )
+    if original_job.model_id in {'family_msa_protein', 'family_msa_nucleic'}:
+        for key in ('gpu_id', 'pinned_gpu', 'pinned_gpus', 'cpus_per_gpu'):
+            resubmit_params.pop(key, None)
     if original_job.model_id == "nanopore" and resubmit_workflow_id == "ont_fastq_qc" and resubmit_input_mode == "fastq":
         resubmit_vram_estimate = 0
         for key in ("gpu_id", "pinned_gpu", "pinned_gpus", "cpus_per_gpu"):
@@ -9836,7 +9857,8 @@ async def resubmit_job(
         queue_status='queued',
         vram_estimate_mb=resubmit_vram_estimate,
         sequence_length=resubmit_sequence_length,
-        pinned_gpu=original_job.pinned_gpu,
+        pinned_gpu=(None if original_job.model_id in {'family_msa_protein', 'family_msa_nucleic'}
+                    else original_job.pinned_gpu),
         priority=0,
         paused=False,
         retry_count=0,
