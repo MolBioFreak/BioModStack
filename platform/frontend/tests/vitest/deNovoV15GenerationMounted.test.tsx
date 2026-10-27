@@ -67,6 +67,19 @@ it.each([
     expect(mocks.submit).not.toHaveBeenCalled();
 });
 
+it('retains opaque editor imports across an engine switch without submitting them', async () => {
+    const draft = vi.fn(); const opaque = { provenance: null, tags: [], selected: false };
+    await render({ initialValues: { generator: 'rfd3', opaque_import: opaque }, onDraftChange: draft });
+    await edit('Engine', 'disco'); await edit('Engine', 'rfd3');
+    const saved = JSON.parse(JSON.stringify(latest(draft)));
+    expect(saved.opaque_import).toEqual(opaque);
+    expect(saved.native_job_request.params).not.toHaveProperty('opaque_import');
+    await act(async () => root.unmount()); document.body.replaceChildren();
+    await render({ initialValues: saved, onDraftChange: draft });
+    expect(latest(draft).opaque_import).toEqual(opaque);
+    expect(latest(draft).native_job_request.params).not.toHaveProperty('opaque_import');
+});
+
 it('preserves explicit cleared numeric drafts across engine switching and JSON reopen without converting them to zero', async () => {
     const draft = vi.fn();
     await render({ initialValues: { generator: 'rfd3' }, onDraftChange: draft });

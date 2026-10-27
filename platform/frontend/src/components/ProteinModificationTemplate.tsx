@@ -1,6 +1,6 @@
 import { LaProteinaEvaluation } from './LaProteinaEvaluation';
 import { DeNovoNativeGenerationSettings } from './DeNovoNativeGenerationSettings';
-import { OtherDeNovoSettings, retainedRfd3Draft, useRfd3GenerationBounds } from './OtherDeNovoSettings';
+import { OtherDeNovoSettings, retainedRfd3Draft, rfd3ExecutionKeys, useRfd3GenerationBounds } from './OtherDeNovoSettings';
 import { DiscoJobsInput } from './DiscoJobsInput';
 import { NativeSourceInput } from './DeNovoNativeSources';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
@@ -331,7 +331,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [sequenceOmitted, setSequenceOmitted] = useState(() => initialValues.sequence_design_omitted === true);
     const [sequenceNull, setSequenceNull] = useState(() => initialValues.sequence_design === null || initialValues.sequence_design_null === true);
 
-    const draftJson = JSON.stringify({
+    const draftValues: Record<string, unknown> = {
         ...retainedAlternativeParams,
         ...sequenceDesign,
         ...(sequenceOmitted ? { sequence_design_omitted: true } : {}),
@@ -369,7 +369,12 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         disco_ligand_sdf: ligandSdf,
         disco_ligand_name: ligandName,
         disco_na_sequence: nucleicSequence,
-    });
+    };
+    // Retain unrecognized editor imports, without reintroducing cleared fields
+    // owned by this child or placing extras in the native request.
+    const clearable = new Set<string>([...rfd3ExecutionKeys, 'conditioning', 'input_structure', 'source_mapping', 'source_model', 'generation_mode', 'native_job_request', 'de_novo_drafts', 'generator', 'backend', 'design_task', 'modification_mode', 'native_mode', 'suite_view', 'suite_last_tasks', 'suite_last_modes', 'sequence_design_null', 'sequence_design_omitted', 'pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path']);
+    const extras = Object.fromEntries(Object.entries(initialValues).filter(([key]) => !Object.hasOwn(draftValues, key) && !clearable.has(key)));
+    const draftJson = JSON.stringify({ ...extras, ...draftValues });
     const submitMutation = useMutation({
         mutationFn: async (payload: Partial<Job>) => submitJob(payload),
         onSuccess: async (response) => {

@@ -60,6 +60,16 @@ async function click(text: string) { const node = [...document.querySelectorAll<
 async function edit(label: string, value: string) { const node = document.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`); expect(node, label).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), 'value')!.set!.call(node, value); node!.dispatchEvent(new Event(node!.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); }
 async function disclose(text: string) { const node = [...document.querySelectorAll('summary')].find(s => s.textContent?.trim() === text); expect(node, text).toBeTruthy(); await act(async () => { const d = node!.parentElement as HTMLDetailsElement; d.open = true; d.dispatchEvent(new Event('toggle')); }); }
 function normalize(request: unknown, model = 'rfd4', mode = 'generate') { return JSON.parse(execFileSync('python', ['-c', model === 'rfd4' ? "import sys,json;from scripts.lib.rfd4_proteina_contract import normalize_request;print(json.dumps(normalize_request(json.loads(sys.argv[1]),sys.argv[2])))" : "import sys,json;from scripts.lib.complexa_contract import normalize_request;print(json.dumps(normalize_request(json.loads(sys.argv[1]))))", JSON.stringify(request), mode], { cwd, encoding: 'utf8' })); }
+it('retains opaque native editor companions without placing them in the Job request', async () => {
+    const companion = { document: { hash: 'retained' }, selection: [], provenance: null };
+    await mount('rfd4_proteina', { rfd4_request: {}, opaque_import: companion });
+    expect(draft.opaque_import).toEqual(companion);
+    expect(draft.native_job_request.params).not.toHaveProperty('opaque_import');
+    const saved = JSON.parse(JSON.stringify(draft)); await unmount(); await mount('rfd4_proteina', saved);
+    expect(draft.opaque_import).toEqual(companion);
+    expect(draft.native_job_request.params).not.toHaveProperty('opaque_import');
+});
+
 it('Complexa retained token strings and historical integers remain independently editable', async () => {
     await mount('complexa', { complexa_request: { task: 'protein_binder', source: { document_id: 'target', target_hotspots: [1, 'A1'] } } });
     expect((document.querySelector('[aria-label="Target hotspot 1"]') as HTMLInputElement).type).toBe('number');

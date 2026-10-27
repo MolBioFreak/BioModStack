@@ -178,7 +178,8 @@ suite.each(['omitted', 'null'])('cloned %s optional-operation envelope survives 
     if (presence === 'null') expect(reopened.params.native_job_request.sequence_design).toBeNull();
 }, 30000);
 suite('all five populated engine drafts survive real SQLite template Save and cold Load', async () => {
-    await mount(undefined, clone);
+    const opaque = { document: { hash: 'retained' }, provenance: null, selection: [] };
+    await mount(undefined, { ...clone, params: { ...clone.params, opaque_import: opaque } });
     const named = (name: string) => [...document.querySelectorAll('label')].find(node => !node.closest('[hidden]') && node.firstChild?.textContent === name)?.querySelector('input,select') as HTMLInputElement | HTMLSelectElement;
     const engine = async (name: string) => { await edit(named('Engine'), name); await settle(); };
     await engine('rfd3'); await edit(named('Minimum length'), '111');
@@ -190,6 +191,8 @@ suite('all five populated engine drafts survive real SQLite template Save and co
     await engine('rfd4_proteina');
     const saved = await saveTemplate('Five-engine drafts');
     expect(saved.params.native_job_request.params.rfd4_request).toEqual(nativeRequest);
+    expect(saved.params.editor_state.opaque_import).toEqual(opaque);
+    expect(saved.params.native_job_request.params).not.toHaveProperty('opaque_import');
     await coldLoad(saved);
     await engine('rfd3'); expect(named('Minimum length').value).toBe('111');
     await engine('disco'); expect(named('Target lengths').value).toBe('144');
@@ -199,6 +202,8 @@ suite('all five populated engine drafts survive real SQLite template Save and co
     await engine('rfd4_proteina');
     const again = await saveTemplate('Five-engine second save');
     expect(again.params.native_job_request.params.rfd4_request).toEqual(nativeRequest);
+    expect(again.params.editor_state.opaque_import).toEqual(opaque);
+    expect(again.params.native_job_request.params).not.toHaveProperty('opaque_import');
     expect(requests.some(r => r.path === '/api/jobs')).toBe(false);
 }, 30000);
 suite('ordinary parent clone saves native SQLite Template and cold Load preserves sparse science and explicit Local', async () => {

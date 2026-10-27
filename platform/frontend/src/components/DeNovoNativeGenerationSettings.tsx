@@ -96,7 +96,9 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         ...(Object.hasOwn(initialValues, 'pinned_gpu') ? { pinned_gpu: initialValues.pinned_gpu } : {}),
         ...(Object.hasOwn(initialValues, 'source_structure') ? { source_structure: initialValues.source_structure } : {}),
         params: { [field]: request, ...(nativeDraft.sources !== undefined ? { native_sources: nativeDraft.sources } : {}) } };
-    const draft = JSON.stringify({ ...sequence, job_name: name, [field]: request, native_mode: activeMode, ...(recipe ? { native_recipe: recipe } : {}),
+    const clearableEditorKeys = new Set(['native_recipe', 'native_sources', 'native_job_request', 'sequence_design_null', 'sequence_design_omitted', 'de_novo_drafts']);
+    const retainedExtras = Object.fromEntries(Object.entries(initialValues).filter(([key]) => !clearableEditorKeys.has(key)));
+    const draft = JSON.stringify({ ...retainedExtras, ...sequence, job_name: name, [field]: request, native_mode: activeMode, ...(recipe ? { native_recipe: recipe } : {}),
         ...(explicitSequenceNull ? { sequence_design_null: true } : {}),
         ...(sequenceOmitted ? { sequence_design_omitted: true } : {}),
         ...(Object.hasOwn(initialValues, 'pinned_gpu') ? { pinned_gpu: initialValues.pinned_gpu } : {}),
