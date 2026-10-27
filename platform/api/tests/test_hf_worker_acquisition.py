@@ -184,7 +184,8 @@ def test_rolling_window_starts_ninth_before_eighth_finishes(incoming, monkeypatc
         def submit(self, fn, /, *args, **kwargs):
             url, expiry, start, end, size, deadline = args
             # Includes running, queued AND completed-but-unwritten ranges.
-            prefix = leaf.read_bytes()
+            partial = Path(cache.root) / "hf-partials" / item["sha256"]
+            prefix = partial.read_bytes()
             assert prefix == data[:len(prefix)]
             assert end + 1 - len(prefix) <= hf.PARALLEL_RANGES * hf.RANGE_BYTES
             submitted.append(start)
@@ -233,7 +234,7 @@ def test_http_errors_never_publish(incoming, monkeypatch, status):
         cache.acquire_hf(item, operation, batch, source())
     assert len(boundary.calls) == 1  # no follow, fallback or automatic retry
     assert cache.probe(item)["state"] == "missing"
-    assert (path / item["sha256"]).stat().st_size == 0
+    assert (Path(cache.root) / "hf-partials" / item["sha256"]).stat().st_size == 0
 
 
 @pytest.mark.parametrize("mutate", [
@@ -261,9 +262,9 @@ def test_partial_failure_retry_rehashes_all_bytes(incoming, monkeypatch):
     with pytest.raises(hf.TransferError, match="hf_transport_failed") as error:
         cache.acquire_hf(item, operation, batch, source())
     assert "private" not in repr(error.value)
-    assert (path / item["sha256"]).read_bytes() == b"abc"
-    with pytest.raises(ValueError):
-        cache.ingest(item, path / item["sha256"])
+    assert (Path(cache.root) / "hf-partials" / item["sha256"]).read_bytes() == b"abc"
+    with pytest.raises(ValueError, match="source_outside_incoming"):
+        cache.ingest(item, Path(cache.root) / "hf-partials" / item["sha256"])
     expired = cache.acquire_hf(item, operation, batch, source(lifetime=-1))
     assert expired["state"] == "source_expired"
     boundary = HTTPDouble(monkeypatch, data)
@@ -282,7 +283,7 @@ def test_corrupt_prefix_and_full_digest_rejected(incoming, monkeypatch):
     HTTPDouble(monkeypatch, b"abcdef")
     with pytest.raises(hf.TransferError, match="hf_identity_mismatch"):
         cache.acquire_hf(item, operation, batch, source())
-    assert leaf.read_bytes() == b""
+    assert (Path(cache.root) / "hf-partials" / item["sha256"]).read_bytes() == b""
     assert cache.probe(item)["state"] == "missing"
     HTTPDouble(monkeypatch, b"xxxxxx")
     with pytest.raises(hf.TransferError, match="hf_identity_mismatch"):
@@ -341,7 +342,7 @@ def test_concurrent_writer_rejected(incoming, monkeypatch):
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with pytest.raises(hf.TransferError, match="hf_acquisition_busy"):
             cache.acquire_hf(item, operation, batch, source())
-        assert leaf.read_bytes() == b""
+        assert (Path(cache.root) / "hf-partials" / item["sha256"]).read_bytes() == b""
     finally:
         os.close(fd)
     HTTPDouble(monkeypatch, b"abc")
@@ -357,7 +358,7 @@ def test_slow_header_hard_deadline(incoming, monkeypatch):
         cache.acquire_hf(identity(b"abc"), operation, batch, source())
     assert time.monotonic() - started < 2
     assert boundary.connections[0].closed
-    assert (path / identity(b"abc")["sha256"]).stat().st_size == 0
+    assert (Path(cache.root) / "hf-partials" / identity(b"abc")["sha256"]).stat().st_size == 0
 
 
 def test_dns_deadline_without_live_resolution(monkeypatch):
@@ -375,15 +376,16 @@ def test_dns_deadline_without_live_resolution(monkeypatch):
         release.set()
 
 
-def test_json_action_sanitizes_invalid_capability(incoming):
+@pytest.mark.parametrize("entrypoint", [[cache_module.__file__], ["-m", "tools.bms_artifact_cache"]])
+def test_json_action_sanitizes_invalid_capability(incoming, entrypoint):
     cache, operation, batch, _ = incoming
     request = {"action": "acquire_hf", "artifact": identity(b"abc"),
                "operation_id": operation, "batch_id": batch,
                "source": source(host="invalid.example")}
-    result = subprocess.run([sys.executable, cache_module.__file__, "--root", str(cache.root)],
+    result = subprocess.run([sys.executable, *entrypoint, "--root", str(cache.root)],
                             input=json.dumps(request), text=True, capture_output=True)
     assert result.returncode == 1
-    assert json.loads(result.stderr) == {"state": "failed", "error": "TransferError"}
+    assert json.loads(result.stderr) == {"state": "failed", "error": "hf_invalid_source"}
     assert "private" not in result.stdout + result.stderr
     assert "https" not in result.stdout + result.stderr
 
@@ -439,7 +441,7 @@ def test_expiry_during_transfer_retains_only_completed_prefix(incoming, monkeypa
     HTTPDouble(monkeypatch, b"abcdef", mutate=expire_second)
     item = identity(b"abcdef")
     assert cache.acquire_hf(item, operation, batch, capability)["state"] == "source_expired"
-    assert (path / item["sha256"]).read_bytes() == b"abc"
+    assert (Path(cache.root) / "hf-partials" / item["sha256"]).read_bytes() == b"abc"
     assert cache.probe(item)["state"] == "missing"
     boundary = HTTPDouble(monkeypatch, b"abcdef")
     assert cache.acquire_hf(item, operation, batch, source())["state"] == "downloaded"
@@ -462,8 +464,12 @@ def test_active_acquisition_excludes_second_writer(incoming, monkeypatch):
             results.append(error)
     thread = threading.Thread(target=acquire)
     thread.start()
+    other_operation, other_batch = str(uuid.uuid4()), uuid.uuid4().hex
+    cache.incoming_batch(other_operation, other_batch, create=True)
     try:
         assert entered.wait(3)
+        with pytest.raises(hf.TransferError, match="hf_acquisition_busy"):
+            cache.acquire_hf(item, other_operation, other_batch, source())
         with pytest.raises(hf.TransferError, match="hf_acquisition_busy"):
             cache.acquire_hf(item, operation, batch, source())
     finally:
@@ -475,13 +481,13 @@ def test_active_acquisition_excludes_second_writer(incoming, monkeypatch):
     assert (path / item["sha256"]).read_bytes() == b"abc"
 
 
-def test_overall_deadline_and_byte_limit(incoming, monkeypatch):
+def test_inactivity_deadline_and_byte_limit(incoming, monkeypatch):
     cache, operation, batch, path = incoming
     item = identity(b"abc")
     monkeypatch.setattr(hf, "TRANSFER_TIMEOUT", 0)
     with pytest.raises(hf.TransferError, match="hf_transfer_timeout"):
         cache.acquire_hf(item, operation, batch, source())
-    assert (path / item["sha256"]).read_bytes() == b""
+    assert (Path(cache.root) / "hf-partials" / item["sha256"]).read_bytes() == b""
     with pytest.raises(hf.TransferError, match="hf_artifact_too_large"):
         cache.acquire_hf({**item, "size_bytes": hf.MAX_ARTIFACT_BYTES + 1}, operation, batch, source())
     assert cache.probe(item)["state"] == "missing"
