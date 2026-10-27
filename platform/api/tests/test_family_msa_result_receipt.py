@@ -16,23 +16,30 @@ from tests.test_project_manager_read_models import read_model_store, _hierarchy,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('native', [False, True], ids=['fixture-engine', 'native-image'])
 @pytest.mark.parametrize('model,molecule,sequence', [
     ('family_msa_nucleic', 'dna', 'ACGT'),
     ('family_msa_protein', 'protein', 'ACDE'),
 ])
-async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path, monkeypatch, model, molecule, sequence):
+async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path, monkeypatch, model, molecule, sequence, native):
     results = tmp_path / 'results'
     output = results / 'job'
     output.mkdir(parents=True)
     monkeypatch.setenv('BMS_RESULTS_DIR', str(results))
     monkeypatch.setenv('BMS_EXPERIMENT_ARTIFACT_ROOT', str(tmp_path / 'blobs'))
-    monkeypatch.delenv('BMS_FAMILY_MSA_SIF', raising=False)
     monkeypatch.delenv('INVOCATION_ID', raising=False)
-    # Fixture process exercises the real producer/DB path, not native MAFFT.
-    executable = tmp_path / 'mafft'
-    executable.write_text('#!/bin/sh\nfor a in "$@"; do last="$a"; done\ncat "$last"\n')
-    executable.chmod(0o755)
-    monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
+    if native:
+        image = os.environ.get('BMS_TEST_FAMILY_MSA_SIF')
+        if not image:
+            pytest.skip('set BMS_TEST_FAMILY_MSA_SIF to the isolated native image')
+        monkeypatch.setenv('BMS_FAMILY_MSA_SIF', image)
+    else:
+        monkeypatch.delenv('BMS_FAMILY_MSA_SIF', raising=False)
+        # Fixture process exercises the real producer/DB path, not native MAFFT.
+        executable = tmp_path / 'mafft'
+        executable.write_text('#!/bin/sh\nfor a in "$@"; do last="$a"; done\ncat "$last"\n')
+        executable.chmod(0o755)
+        monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core.db'}")
     @event.listens_for(engine.sync_engine, 'connect')
     def foreign_keys(connection, _):
@@ -60,6 +67,10 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
         alignment = next(a for a in artifacts if a.provenance['role'] == 'alignment')
         alignment_path = output / alignment.logical_path
         original_bytes = alignment_path.read_bytes()
+        # MAFFT may change nucleotide case; compare the HTTP document to the
+        # actual retained engine output rather than the submitted spelling.
+        expected_aligned = ''.join(original_bytes.decode().splitlines()[1:])
+        assert expected_aligned.upper() == sequence.upper()
         alignment_path.write_bytes(b'corrupt')
         with pytest.raises(AdapterError):
             await adapter.verify(core, job.id)
@@ -137,7 +148,7 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     job_url = '/api/family-msa/jobs/canonical-job-completed'
     assert (await client.get(job_url)).status_code == 401
     assert (await client.get(job_url, headers={'x-test-actor':'owner'})).status_code == 200
-    assert (await client.get(f'{job_url}/documents/{alignment.id}', headers={'x-test-actor':'owner'})).json()['rows'][0]['aligned'] == sequence
+    assert (await client.get(f'{job_url}/documents/{alignment.id}', headers={'x-test-actor':'owner'})).json()['rows'][0]['aligned'] == expected_aligned
     assert (await client.get(f'{job_url}/artifacts/{alignment.id}', headers={'x-test-actor':'owner'})).content == original_bytes
     async with core_factory() as core:
         await core.delete(await core.get(Job, 'canonical-job-completed'))
@@ -152,7 +163,7 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     assert (await client.get(url, headers={'x-test-actor':'other'})).status_code == 404
     assert (await client.get(f'/api/family-msa/projects/{other_project_id}/receipts/{receipt_id}', headers={'x-test-actor':'owner'})).status_code == 404
     assert (await client.get(url, headers={'x-test-actor':'owner'})).status_code == 200
-    assert (await client.get(f'{url}/documents/{selected}', headers={'x-test-actor':'owner'})).json()['rows'][0]['aligned'] == sequence
+    assert (await client.get(f'{url}/documents/{selected}', headers={'x-test-actor':'owner'})).json()['rows'][0]['aligned'] == expected_aligned
     assert (await client.get(f'{url}/artifacts/{selected}', headers={'x-test-actor':'owner'})).content == original_bytes
     assert (await client.get(f'{url}/artifacts/not-in-receipt', headers={'x-test-actor':'owner'})).status_code == 404
     assert (await client.get(job_url, headers={'x-test-actor':'owner'})).status_code == 404
