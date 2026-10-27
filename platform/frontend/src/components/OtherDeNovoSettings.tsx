@@ -62,10 +62,14 @@ export function OtherDeNovoSettings({ model, task, value, onChange, sourceCondit
         {settings != null && (typeof settings !== 'object' || Array.isArray(settings)) && <p role="status">Retained non-object settings: {JSON.stringify(settings)}. Edit a setting only to deliberately replace this value.</p>}
         {[...groups].map(([title, fields]) => <NativeSettingsDisclosure key={title} summary={title}>{() => <div className="space-y-3">{fields.map(([field, schema]) => {
             const definition = inventory.data?.execution?.[field];
+            const hasOverride = Object.hasOwn(object, field);
+            const sourceDefault = definition?.default_source && Object.hasOwn(definition, 'default') && ['boolean', 'integer', 'number', 'string'].includes(String(definition.type));
+            const shown = hasOverride ? object[field] : sourceDefault ? definition!.default : undefined;
             return <div key={field} data-native-setting={field} title={`Parameter key: ${field}`}>
-                {definition?.authority === 'profile' ? <p>{field}: {JSON.stringify(object[field] ?? definition.default)} · profile-owned; retained explicit value is unchanged.</p> : <BioXpSchemaInput label={model === 'rfd3' ? field : schema.title ?? field} nativeLabels schema={schema} rootSchema={root} value={object[field]} onChange={next => patch(field, next)} fallback={() => <p>Retained {field}: {JSON.stringify(object[field])}</p>} />}
+                {definition?.authority === 'profile' ? <p>{field}: {JSON.stringify(hasOverride ? object[field] : definition.default)} · profile-owned; retained explicit value is unchanged.</p> : <BioXpSchemaInput label={model === 'rfd3' ? field : schema.title ?? field} nativeLabels schema={schema} rootSchema={root} value={shown} onChange={next => patch(field, next)} fallback={() => <p>Retained {field}: {JSON.stringify(object[field])}</p>} />}
                 {definition?.default_source && <p className="text-xs">Inherited reference: {JSON.stringify(definition.default)} · {definition.default_source}</p>}
-                {Object.hasOwn(object, field) && definition?.authority !== 'profile' && <button type="button" onClick={() => patch(field, undefined)}>Use profile value</button>}
+                <p className="text-xs">{hasOverride ? 'Custom override' : sourceDefault ? 'Inherited reference; not an override' : 'Inherited value not reported'}</p>
+                {hasOverride && definition?.authority !== 'profile' && <button type="button" onClick={() => patch(field, undefined)}>Use profile value</button>}
             </div>;
         })}</div>}</NativeSettingsDisclosure>)}
         {sourceConditions && !generalConditions && inventory.data?.conditioning && <Rfd3AdditionalConditions definitions={inventory.data.conditioning} value={value} onChange={onChange} />}

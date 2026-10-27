@@ -42,6 +42,17 @@ it('execution discovery exactly matches its explicitly owned sparse projection',
     expect(retainedRfd3Settings({ skip_existing: false, seed: 0, dump_trajectories: false, unknown: 4 })).toEqual({ skip_existing: false });
     expect(retainedRfd3Draft({ conditioning: {}, source_model: 2, generation_mode: 'conditioned', unknown: 4 })).toEqual({ conditioning: {}, source_model: 2, generation_mode: 'conditioned' });
 });
+it('shows source-qualified execution defaults without writing them into the request', async () => {
+    const draft = vi.fn();
+    await render(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} initialValues={{ generator: 'rfd3' }} />);
+    await click('Sampling'); await click('Execution and native outputs');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="skip_existing"]')!.checked).toBe(true);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="low_memory_mode"]')!.checked).toBe(false);
+    expect(request().params).not.toHaveProperty('skip_existing');
+    expect(request().params).not.toHaveProperty('low_memory_mode');
+    expect(document.body.textContent).toContain('Inherited reference; not an override');
+});
+
 it.each([false, true, undefined])('parent cold reopen and unrelated edit preserve skip_existing=%s', async value => {
     const draft = vi.fn(); const template = vi.fn();
     await render(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} onOpenTemplateManager={template} initialValues={{ generator: 'rfd3', ...(value === undefined ? {} : { skip_existing: value }) }} />);
