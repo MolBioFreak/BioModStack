@@ -11,7 +11,7 @@ PYTHONPATH=. python -m pytest -q -rs
 # required by that installation, MAFFT_BINARIES to its helper directory.
 ```
 
-`bms-alignment schema`, `validate`, `run`, `inspect`, `compare`, `export`, and `bundle verify` accept JSON matching `AlignmentRequest` or `SequenceSet` as appropriate. `run` executes a real process with separate input, output, log and receipt. Native failures preserve files and return the native status. This early receipt includes local argv paths; it is not a portable scientific manifest.
+`bms-alignment schema`, `validate`, `run`, `inspect`, `compare`, `export`, and `bundle verify` accept JSON matching `AlignmentRequest` or `SequenceSet` as appropriate. `run` executes a real process with separate input, output, log and receipt. Native failures preserve files and return the native status. The receipt records the executable basename and relative input name, not local argv paths; it is not yet a complete portable scientific manifest.
 
 FASTA import retains duplicate headers with generated occurrence-local row IDs. Stockholm and Clustal are basic block parsers; original Stockholm text is retained, but structured annotations are not implemented. A3M is retained as original text; conversion or rectangular projection is unavailable and explicitly rejected. Exports disclose Stockholm metadata loss and replacement of headers by row IDs for block formats. Source identity defaults to unknown; comparison uses only explicitly declared member/occurrence IDs and offsets. Summary counts ambiguity literally and each occurrence equally.
 

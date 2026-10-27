@@ -31,6 +31,7 @@ def parse(text: str, fmt: str, molecule: str) -> SequenceSet:
 
 
 def export(roster: SequenceSet, fmt: str, original: bool = False) -> tuple[str, list[str]]:
+    roster = SequenceSet.model_validate(roster.model_dump())
     if original:
         if fmt != roster.source_format or roster.source_text is None:
             raise ValueError('original bytes unavailable for requested format')
