@@ -390,6 +390,34 @@ class ComparisonInput(BaseModel):
     right_artifact_id: str = Field(min_length=1)
 
 
+class PairAgreement(BaseModel):
+    method: str
+    matched_rows: int
+    shared_mapped_residues: int
+    left_unmapped_residues: int
+    right_unmapped_residues: int
+    rows_with_unknown_mapping: int
+    left_only_mapped_residues_known: int
+    right_only_mapped_residues_known: int
+    left_aligned_pairs: int
+    right_aligned_pairs: int
+    shared_aligned_pairs: int
+    union_aligned_pairs: int
+    jaccard: float | None
+
+
+class ComparisonReport(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    agreement: PairAgreement
+    left_excluded: int
+    right_excluded: int
+
+
+class ComparisonResponse(BaseModel):
+    method: str
+    report: ComparisonReport
+
+
 async def comparison_roster(entries, read, artifact_id):
     from bms_alignment.models import Row, SequenceSet
     doc = await document(entries, read, artifact_id)
@@ -418,7 +446,7 @@ async def comparison_roster(entries, read, artifact_id):
     return SequenceSet(molecule=roster['molecule'], rows=rows)
 
 
-@router.post('/projects/{project_id}/compare')
+@router.post('/projects/{project_id}/compare', response_model=ComparisonResponse)
 async def compare_project_results(request: Request, project_id: str, payload: ComparisonInput,
                                   session: AsyncSession = Depends(get_experiment_session)):
     from bms_alignment import compare

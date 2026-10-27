@@ -4,6 +4,7 @@ Coordinates are zero-based; no correspondence is inferred from labels or sequenc
 """
 from .formats import coordinates
 from .models import SequenceSet
+from collections import Counter
 
 
 def _index(roster):
@@ -49,7 +50,31 @@ def compare(a: SequenceSet, b: SequenceSet) -> dict:
     def excluded(roster, matched):
         return [{'row_id': row.row_id, 'source_member_id': row.source_member_id,
                  'occurrence_id': row.occurrence_id} for row in roster.rows if id(row) not in matched]
-    return {'rows': rows, 'left_excluded': len(a.rows)-len(common), 'right_excluded': len(b.rows)-len(common),
+    # Each shared source residue contributes to exactly one column in each
+    # alignment. Grouping by columns counts residue pairs without materializing
+    # the potentially quadratic set of row pairs in a dense column.
+    lc, rc, both = Counter(), Counter(), Counter()
+    for row in rows:
+        for p in row['positions']:
+            lcol, rcol = p['left_column'], p['right_column']
+            lc[lcol] += 1; rc[rcol] += 1; both[lcol, rcol] += 1
+    pairs = lambda counts: sum(n * (n - 1) // 2 for n in counts.values())
+    lp, rp, shared = pairs(lc), pairs(rc), pairs(both)
+    union = lp + rp - shared
+    agreement = {
+        'method': 'shared-source-residue-pair-jaccard.v1',
+        'matched_rows': len(rows),
+        'shared_mapped_residues': sum(len(row['positions']) for row in rows),
+        'left_unmapped_residues': sum(len(row['left_unmapped_columns']) for row in rows),
+        'right_unmapped_residues': sum(len(row['right_unmapped_columns']) for row in rows),
+        'rows_with_unknown_mapping': sum(row['mapping_unknown'] for row in rows),
+        'left_only_mapped_residues_known': sum(len(row['left_only_positions']) for row in rows),
+        'right_only_mapped_residues_known': sum(len(row['right_only_positions']) for row in rows),
+        'left_aligned_pairs': lp, 'right_aligned_pairs': rp,
+        'shared_aligned_pairs': shared, 'union_aligned_pairs': union,
+        'jaccard': shared / union if union else None,
+    }
+    return {'rows': rows, 'agreement': agreement, 'left_excluded': len(a.rows)-len(common), 'right_excluded': len(b.rows)-len(common),
             'left_excluded_members': excluded(a, {id(left[k]) for k in common}),
             'right_excluded_members': excluded(b, {id(right[k]) for k in common}),
             'left_unknown_identity_rows': left_unknown, 'right_unknown_identity_rows': right_unknown,
