@@ -72,8 +72,8 @@ function App() {
             <Route
               path="/designer"
               element={(
-                  <div className="w-full max-w-none">
-                    <NgsMolBioProjectHub />
+                  <div className="flex h-full min-h-0 w-full flex-col">
+                    <NgsMolBioProjectHub presentation="viewer" />
                     <MolBioToolkitV2 />
                   </div>
                 )}

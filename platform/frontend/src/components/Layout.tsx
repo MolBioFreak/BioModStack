@@ -6,7 +6,7 @@ import { ProjectReturnBanner } from './project-manager/ProjectReturnBanner';
 export function Layout({ children }: { children: React.ReactNode }) {
     return (
         <div className="h-screen flex flex-col overflow-x-hidden bg-surface text-content">
-            <header className="flex flex-wrap items-center gap-4 border-b border-border-primary bg-surface-secondary px-4 py-3">
+            <header className="flex shrink-0 flex-wrap items-center gap-4 border-b border-border-primary bg-surface-secondary px-4 py-3">
                 <span className="font-semibold">BNS Plasmid Development Toolkit</span>
                 <nav aria-label="Workspace navigation" className="flex flex-wrap items-center gap-2">
                     {[
