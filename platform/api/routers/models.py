@@ -489,8 +489,9 @@ async def get_generation_settings(model_id: str, mode: str, generator: str | Non
                     'profiles': {name: resolve_profile(name) for name in PROFILES}}
         if selected == 'disco':
             from pydantic import TypeAdapter
-            from scripts.lib.disco_contract import settings_schema, BondedNativeJob, NATIVE_REVISION
+            from scripts.lib.disco_contract import settings_schema, BondedNativeJob, NATIVE_REVISION, native_profile_reference
             return {'model_id': selected, 'mode': native_mode, 'source_revision': NATIVE_REVISION,
+                    'native_profile_reference': native_profile_reference(),
                     'parameter_schema': settings_schema(),
                     'input_schema': TypeAdapter(list[BondedNativeJob]).json_schema()}
         if selected == 'rfd4_proteina':

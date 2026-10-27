@@ -21,9 +21,8 @@ import { ProteinModificationTemplate } from '../../src/components/ProteinModific
 const inventories = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python3', ['-c', `import json
 from scripts.lib.rfd3_scientific_settings import scientific_inventory
 from scripts.lib.laproteina_contract import settings_schema, PROFILES, resolve_profile, native_profile_defaults
-from scripts.lib.disco_contract import NativeSettings
-from pydantic import TypeAdapter
-print(json.dumps({'rfd3':scientific_inventory(),'laproteina':{'parameter_schema':settings_schema(),'profiles':{k:resolve_profile(k) for k in PROFILES},'native_profile_defaults':native_profile_defaults()},'disco':{'parameter_schema':TypeAdapter(NativeSettings).json_schema()}}))`], { cwd: '../..', encoding: 'utf8' }));
+from scripts.lib.disco_contract import settings_schema as disco_schema, native_profile_reference
+print(json.dumps({'rfd3':scientific_inventory(),'laproteina':{'parameter_schema':settings_schema(),'profiles':{k:resolve_profile(k) for k in PROFILES},'native_profile_defaults':native_profile_defaults()},'disco':{'parameter_schema':disco_schema(),'native_profile_reference':native_profile_reference()}}))`], { cwd: '../..', encoding: 'utf8' }));
 let root: Root; let client: QueryClient; const previous = api.defaults.adapter;
 let requests: string[] = []; let unexpected: string[] = [];
 afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); api.defaults.adapter = previous; vi.restoreAllMocks(); expect(unexpected).toEqual([]); requests = []; unexpected = []; });
@@ -127,6 +126,34 @@ it('honors both flat aliases and legacy native JSON precedence without rewriting
     expect(projected).toMatchObject({ seed: 7, bb_ca_sc_scale_noise: 0, self_cond: false, bb_ca_gt_clamp_val: null });
     expect(changed).not.toHaveBeenCalled();
 });
+it('DISCO selected YAML references follow the parent selection without changing request overrides', async () => {
+    await render(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator: 'disco', target_lengths: '120', disco_experiment: 'designable', disco_effort: 'fast', disco_N_step: 0, pcad_disco_settings_json: { N_cycle: 7 } }} />);
+    await click('Diffusion and seeds');
+    const params = () => JSON.parse(document.querySelector('[data-request]')!.textContent!).params;
+    const field = (name: string) => document.querySelector(`[data-native-setting="${name}"]`)!;
+    const before = structuredClone(params());
+    expect(document.body.textContent).toContain('Upstream reference for designable/fast');
+    expect(field('N_step').textContent).toContain('sample_diffusion.N_step = 100');
+    expect(field('N_step').textContent).toContain('disco_N_step · 0');
+    expect(field('N_cycle').textContent).toContain('model.N_cycle = 2');
+    expect(params()).toEqual(before);
+    const select = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'max') && [...s.options].some(o => o.value === 'fast'))!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'max'); select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(document.body.textContent).toContain('Upstream reference for designable/max');
+    expect(field('N_step').textContent).toContain('sample_diffusion.N_step = 200');
+    expect(field('N_cycle').textContent).toContain('model.N_cycle = 4');
+    expect(params()).toEqual({ ...before, disco_effort: 'max' });
+});
+
+it('does not infer a DISCO profile from an explicit null selector', async () => {
+    const changed = vi.fn();
+    await render(<OtherDeNovoSettings model="disco" task="unconditional" value={{ pcad_disco_settings_json: { effort: null } }} requestParams={{ disco_effort: 'fast', disco_experiment: 'designable' }} onChange={changed} />);
+    await click('Diffusion and seeds');
+    expect(document.body.textContent).toContain('Profile reference values are not reported for this selection');
+    expect(document.body.textContent).not.toContain('Upstream reference for designable/fast');
+    expect(changed).not.toHaveBeenCalled();
+});
+
 it('shows DISCO retained flat values and seed shorthand as projected', async () => {
     await render(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator: 'disco', target_lengths: '120', disco_N_step: 0, disco_deterministic: false, disco_seeds: '0, 12' }} />);
     await click('Diffusion and seeds');
