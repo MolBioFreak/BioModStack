@@ -82,3 +82,30 @@ def compare(a: SequenceSet, b: SequenceSet) -> dict:
             'right_ambiguous_identities': [{**_ident(k), 'row_ids': [r.row_id for r in v]} for k, v in sorted(right_ambiguous.items())],
             'identity_policy': 'explicit source member and occurrence only',
             'coordinate_convention': 'zero-based source positions and alignment columns'}
+
+
+def ensemble_support(reference: SequenceSet, members: list[SequenceSet]) -> dict:
+    """Summarize observed retention of eligible reference pairs, not truth probability.
+
+    A sample's denominator is reference pairs among residues mapped in both
+    that member and the reference; missing identities/positions are excluded.
+    This explicit, requested operation is not run when opening an alignment.
+    """
+    samples = []
+    for member in members:
+        agreement = compare(reference, member)['agreement']
+        denominator = agreement['left_aligned_pairs']
+        numerator = agreement['shared_aligned_pairs']
+        samples.append({'numerator': numerator, 'denominator': denominator,
+                        'fraction': numerator / denominator if denominator else None,
+                        'matched_rows': agreement['matched_rows'],
+                        'shared_mapped_residues': agreement['shared_mapped_residues'],
+                        'rows_with_unknown_mapping': agreement['rows_with_unknown_mapping']})
+    numerator = sum(s['numerator'] for s in samples)
+    denominator = sum(s['denominator'] for s in samples)
+    return {'method': 'reference-pair-retention-pooled-over-members.v1',
+            'denominator_policy': 'sum of reference aligned pairs eligible in each member; missing mappings excluded',
+            'interpretation': 'observed agreement, not probability of alignment truth',
+            'sample_count': len(samples), 'samples_with_nonzero_denominator': sum(s['denominator'] > 0 for s in samples),
+            'numerator': numerator, 'denominator': denominator,
+            'fraction': numerator / denominator if denominator else None, 'samples': samples}

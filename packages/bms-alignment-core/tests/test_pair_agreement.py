@@ -51,3 +51,22 @@ def test_unknown_mapping_and_empty_denominator():
     assert result['rows_with_unknown_mapping'] == 1
     assert result['right_unmapped_residues'] == 1
     assert result['union_aligned_pairs'] == 0 and result['jaccard'] is None
+
+
+def test_ensemble_support_has_explicit_sample_denominators_and_unknowns():
+    from bms_alignment import ensemble_support
+    a = ['A-CG', 'AC-G', 'A--G']
+    b = ['AC-G', 'A-CG', 'A-G-']
+    reference, member = roster(a), roster(b)
+    missing = roster(b)
+    for row in missing.rows:
+        row.source_positions = None
+    got = ensemble_support(reference, [reference, member, missing])
+    expected_a, expected_b = oracle(a), oracle(b)
+    assert got['method'] == 'reference-pair-retention-pooled-over-members.v1'
+    assert got['sample_count'] == 3 and got['samples_with_nonzero_denominator'] == 2
+    assert [(s['numerator'], s['denominator']) for s in got['samples']] == [
+        (len(expected_a), len(expected_a)), (len(expected_a & expected_b), len(expected_a)), (0, 0)]
+    assert got['fraction'] == (len(expected_a) + len(expected_a & expected_b)) / (2 * len(expected_a))
+    assert got['samples'][2]['fraction'] is None
+    assert ensemble_support(reference, [])['fraction'] is None
