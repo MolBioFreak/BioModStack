@@ -29,8 +29,7 @@ def test_release_selection_and_host_fallback(tmp_path, monkeypatch):
     import paths
     from services.family_msa.runtime import select_runtime
     from services.remote_execution.images import image_environment_key
-    from lib.shared_runtime_images import publish_image
-    from lib.runtime_image_lifecycle import commit_release, transaction
+    from publish_runtime_images import publish_references
     root = tmp_path / 'store'
     monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(root))
     monkeypatch.setenv('BMS_RUNTIME_IMAGE_LANE', 'production')
@@ -40,10 +39,9 @@ def test_release_selection_and_host_fallback(tmp_path, monkeypatch):
     source = tmp_path / 'fixture'
     source.write_bytes(b'inert image fixture')
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    image = publish_image(source, root, digest)
     selector = 'BMS_RUNTIME_IMAGE_' + image_environment_key('msa_engines.sif').removeprefix('BMS_SELECTED_IMAGE_')
-    with transaction(root):
-        commit_release(root, 'production', {selector: {'path': str(image), 'sha256': digest}})
+    publish_references(root, 'production', {selector: {'source': str(source), 'sha256': digest}})
+    image = root / 'objects' / 'sha256' / digest / 'runtime.sif'
     assert select_runtime() == (str(image), {'selection': 'managed', 'release_sha256': digest})
     monkeypatch.setenv('BMS_FAMILY_MSA_SIF', '/explicit/test.sif')
     assert select_runtime()[0] == '/explicit/test.sif'

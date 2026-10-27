@@ -24,6 +24,24 @@ The recipe modifies the MUSCLE generator and TWILIGHT CMake source copies to rep
 
 Image includes original engine licenses and the FAMSA submodule license texts under `/opt/msa/share/licenses`; Ubuntu package copyright files remain under `/usr/share/doc`. MAFFT is BSD-style, FAMSA and MUSCLE GPLv3, TWILIGHT MIT; generator repository declares GPLv3. FAMSA includes mimalloc (MIT), libdeflate (MIT), zlib-ng (zlib), and an isa-l (BSD-style) checkout, though isa-l is not selected in this build. TWILIGHT dynamically links Ubuntu Boost, TBB, zlib, libstdc++, libgcc and glibc; MUSCLE is statically linked with the toolchain runtime. Exact package inventory is in the image. This is an inventory, **not completed legal clearance or a corresponding-source offer**: assess all system/static/transitive license texts, modification notices, source availability and GPL distribution obligations before distributing. The image does not bundle complete corresponding source; retain the exact package sources and modified build scripts as part of a distribution plan.
 
+## BMS installation handoff
+
+The API's frozen uv lock installs `packages/bms-alignment-core` from the same
+checkout; the checkout must retain that relative package directory. For an image
+already built and independently reviewed, the existing `scripts/publish_runtime_images.py`
+accepts the semantic selector `BMS_RUNTIME_IMAGE_MSA_ENGINES_SIF` with its
+source path and actual SHA-256. It publishes a complete lane reference set, not
+an incremental update; preserve all other intended selectors in the manifest.
+This only registers bytes and does not establish qualification or readiness.
+The family runtime chooses that lane's registered object, then the conventional
+`msa_engines.sif`, or the existing host fallback; `BMS_FAMILY_MSA_SIF` overrides
+selection. Receipts record selected provenance and observed digest.
+
+The default supported provision plan still lacks reviewed acquisition metadata for
+this image; the local digest below is not a public distribution URL or approval.
+A clean online production provision, release/license approval, service activation,
+and target-host execution remain unverified. No SIF is uploaded by this recipe.
+
 ## Local result (2026-10-27)
 
 Built with Apptainer 1.5.3 using `--fakeroot`; SIF SHA-256 `198186c9238df383a95215117ce3b55402cb9547f9f6ea58d2f4af25d634717a`. GCC 11.4.0, Ubuntu glibc 2.35; TWILIGHT configure selected CPU, its 20 compile commands contain no GPU source or `-march=native`, and `ldd` showed no CUDA/HIP libraries. Executable SHA-256: MAFFT launcher `52795975f34ad60b63b33f8c0cab2f4c67f34bec6c8b9782216f9655ce99ca0e`, FAMSA `63fcb5706cf8afd74f336cff2dbf386f89e0599495179edefb09a174f3cdd634`, MUSCLE `012d675d459a0b3ad9c4fd6cea4c25e17c91bb985ea41523e05cab5328807346`, TWILIGHT `584d4f954100252a78f060285d79a92762220b55d5c27c7a2e175888ccaa93fb`.

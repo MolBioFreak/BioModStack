@@ -33,12 +33,25 @@ from tests.test_core_protein_scientific_admission import admission
     *[(mol, 'family_msa_nucleic', {'engine': 'twilight', 'method': method, 'guide_source': 'mafft'}, 1)
       for mol in ('dna', 'rna') for method in ('pairwise', 'tcs')],
 ])
-async def test_scheduler_adapter_to_native_owned_runner(admission, monkeypatch, molecule, model, settings, members):
+async def test_scheduler_adapter_to_native_owned_runner(admission, monkeypatch, molecule, model, settings, members, managed=False):
     monkeypatch.delenv('INVOCATION_ID', raising=False)
     image = os.environ.get('BMS_TEST_FAMILY_MSA_SIF')
     if not image:
         pytest.skip('set BMS_TEST_FAMILY_MSA_SIF to the isolated native image')
-    monkeypatch.setenv('BMS_FAMILY_MSA_SIF', image)
+    if managed:
+        import paths
+        from publish_runtime_images import publish_references
+        root = Path(admission.bind.url.database).parent / 'family-image-store'
+        monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(root))
+        monkeypatch.setenv('BMS_RUNTIME_IMAGE_LANE', 'production')
+        monkeypatch.delenv('BMS_FAMILY_MSA_SIF', raising=False)
+        monkeypatch.delenv('BMS_RUNTIME_IMAGE_MSA_ENGINES_SIF', raising=False)
+        monkeypatch.setattr(paths, 'get_container_dir', lambda: root.parent / 'containers')
+        digest = hashlib.sha256(Path(image).read_bytes()).hexdigest()
+        publish_references(root, 'production', {'BMS_RUNTIME_IMAGE_MSA_ENGINES_SIF':
+            {'source': image, 'sha256': digest}})
+    else:
+        monkeypatch.setenv('BMS_FAMILY_MSA_SIF', image)
     seq = 'ACDEFGHIKLMNPQRSTVWY' if molecule == 'protein' else ('ACGU' if molecule == 'rna' else 'ACGT') * 5
     payload = {'roster': {'molecule': molecule, 'rows': [
         {'row_id': 'r1', 'header': 'one', 'sequence': seq},
@@ -89,6 +102,10 @@ async def test_scheduler_adapter_to_native_owned_runner(admission, monkeypatch, 
     assert receipt['effective_settings']['engine'] == settings['engine']
     runtime = receipt['runtime']
     assert runtime['sha256'] == hashlib.sha256(Path(image).read_bytes()).hexdigest()
+    if managed:
+        assert runtime['selection'] == 'managed'
+        assert runtime['release_sha256'] == runtime['sha256']
+        assert Path(runtime['path']).is_relative_to(root)
     alignments = [a for a in artifacts if a.provenance['role'] == 'alignment']
     assert len(alignments) == members
     assert all(Path(a.storage_path).stat().st_size > 0 for a in alignments)
@@ -97,6 +114,16 @@ async def test_scheduler_adapter_to_native_owned_runner(admission, monkeypatch, 
     else:
         assert 'row_map' in roles and 'native_receipt' in roles
         assert '>bmsrow' in Path(alignments[0].storage_path).read_text()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('molecule', 'model', 'settings'), [
+    ('dna', 'family_msa_nucleic', {'engine': 'mafft', 'threads': 2}),
+    ('protein', 'family_msa_protein', {'engine': 'famsa'}),
+])
+async def test_clean_root_registered_image_scheduler(admission, monkeypatch, molecule, model, settings):
+    await test_scheduler_adapter_to_native_owned_runner(
+        admission, monkeypatch, molecule, model, settings, 1, managed=True)
 
 
 @pytest.mark.asyncio
