@@ -188,8 +188,29 @@ async def job_result(request, session, job_id):
 async def project_result(request, session, project_id, receipt_id):
     await _require_mutation_owner(request, session, resource_id=project_id)
     receipt = await session.get(ExperimentExternalEntityReceipt, receipt_id)
-    if not receipt or receipt.workspace_id != project_id or receipt.entity_kind != 'family_msa_job_result':
+    if not receipt or receipt.workspace_id != project_id or receipt.entity_kind not in ('family_msa_job_result', 'family_msa_import'):
         raise HTTPException(404, detail='Result not found')
+    if receipt.entity_kind == 'family_msa_import':
+        try:
+            metadata = json.loads(receipt.acknowledgement_json)
+            entries = metadata['artifacts']
+            if metadata['schema'] != 'bms.family-msa.import.v1' or not isinstance(entries, list):
+                raise ValueError('invalid import receipt')
+        except (ValueError, KeyError, TypeError) as exc:
+            raise unavailable(exc) from exc
+        async def read_import(ident):
+            entry = next ( (x for x in entries if x['id'] == ident), None)
+            if entry is None:
+                raise HTTPException(404, detail='Artifact not found')
+            resource = await session.get(ExperimentResource, ident)
+            artifact = await session.get(ExperimentArtifact, ident)
+            if not resource or resource.workspace_id != project_id or resource.lifecycle_owner_id != receipt.id or not artifact or artifact.blob_sha256 != entry['sha256'] or artifact.logical_role != entry['role']:
+                raise unavailable(None)
+            try:
+                return (await retained_path(session, artifact)).read_bytes()
+            except (CustodyError, OSError) as exc:
+                raise unavailable(exc) from exc
+        return entries, read_import
     try:
         ack = _acknowledgement(receipt)
         _validate_persisted_authority(receipt, ack)
@@ -275,7 +296,12 @@ async def get_job_document(request: Request, job_id: str, artifact_id: str, sess
 @router.get('/projects/{project_id}/receipts/{receipt_id}')
 async def get_project(request: Request, project_id: str, receipt_id: str, session: AsyncSession = Depends(get_experiment_session)):
     entries, _ = await project_result(request, session, project_id, receipt_id)
-    return listing(entries)
+    result = listing(entries)
+    receipt = await session.get(ExperimentExternalEntityReceipt, receipt_id)
+    if receipt.entity_kind == 'family_msa_import':
+        metadata = json.loads(receipt.acknowledgement_json)
+        result['import_provenance'] = {key: metadata[key] for key in ('source_project_id', 'source_receipt_id', 'dependencies', 'shared_state')}
+    return result
 
 
 @router.get('/projects/{project_id}/receipts/{receipt_id}/artifacts/{artifact_id}')
@@ -410,3 +436,86 @@ async def get_shared_state(request: Request, project_id: str, dataset_id: str, r
     if sha256_text(revision.canonical_payload) != revision.payload_sha256:
         raise HTTPException(409, detail='Shared alignment revision corrupt')
     return shared_revision(head, revision)
+
+
+class ImportBundle(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    replay_key: str = Field(min_length=1, max_length=255)
+    manifest: dict[str, Any]
+    files: dict[str, str]  # base64, keyed only by portable paths
+
+
+class ImportReceipt(BaseModel):
+    receipt_id: str
+    replayed: bool
+    shared_state: str
+
+
+@router.post('/projects/{project_id}/imports', response_model=ImportReceipt)
+async def import_bundle(request: Request, project_id: str, payload: ImportBundle,
+                        session: AsyncSession = Depends(get_experiment_session)):
+    """Retain verified uploaded Project export bytes; never acquire client paths."""
+    import base64
+    import hashlib
+    import io
+    import tempfile
+    from pathlib import Path
+    from bms_alignment.bundle import inspect_project_bundle, _safe_name
+    from experiment_services import _resource, canonical_json
+    from services.family_msa.publication import retain_artifact
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    try:
+        decoded = {name: base64.b64decode(value, validate=True) for name, value in payload.files.items()}
+        if any(not _safe_name(name) for name in decoded):
+            raise ValueError('unsafe bundle path')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'manifest.json').write_text(json.dumps(payload.manifest), encoding='utf-8')
+            for name, data in decoded.items():
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            inspection = inspect_project_bundle(root)
+            if set(decoded) != set(payload.manifest['dependencies']['included']):
+                raise ValueError('uploaded files differ from manifest')
+        inventory = inspection['inventory']
+        raw_entries = inventory['artifacts']
+        if not raw_entries or any(not isinstance(x.get('id'), str) or not isinstance(x.get('role'), str) or not x['role'] for x in raw_entries):
+            raise ValueError('invalid artifact inventory')
+        if len({x['id'] for x in raw_entries}) != len(raw_entries):
+            raise ValueError('duplicate artifact identity')
+        digest = hashlib.sha256(canonical_json({'manifest': payload.manifest, 'files': {k: hashlib.sha256(v).hexdigest() for k,v in decoded.items()}}).encode()).hexdigest()
+        receipt_id = 'msa-import-' + hashlib.sha256(canonical_json([project_id, payload.replay_key]).encode()).hexdigest()
+        existing = await session.get(ExperimentExternalEntityReceipt, receipt_id)
+        if existing:
+            if existing.workspace_id != project_id or existing.entity_kind != 'family_msa_import' or existing.content_digest != digest:
+                raise HTTPException(409, detail='Import replay key conflicts with different content')
+            return {'receipt_id': receipt_id, 'replayed': True, 'shared_state': 'retained_unmapped'}
+        await _resource(session, kind='external_entity_receipt', workspace_id=project_id, lifecycle_owner_id=project_id, resource_id=receipt_id)
+        entries = []
+        # Shared state is retained verbatim, not falsely asserted to be a live mapped annotation.
+        groups = [(x, x['role']) for x in raw_entries] + [(x, 'shared_state_snapshot') for x in inventory['shared_states']]
+        for index, (entry, role) in enumerate(groups):
+            data = decoded[entry['path']]
+            artifact_id = receipt_id + '-' + str(index)
+            artifact = await retain_artifact(session, source=io.BytesIO(data), workspace_id=project_id,
+                lifecycle_owner_id=receipt_id, resource_id=artifact_id, logical_role=role,
+                logical_key=entry.get('logical_path') or entry['path'], schema_name='bms.family-msa.import',
+                schema_version='1', media_type='application/octet-stream',
+                provenance={'producer': 'portable_import', 'source_id': entry['id']})
+            entries.append({'id': artifact_id, 'role': role, 'logical_path': entry.get('logical_path'), 'sha256': artifact.blob_sha256})
+        ack = {'schema': 'bms.family-msa.import.v1', 'artifacts': entries,
+               'source_project_id': inventory.get('project_id'), 'source_receipt_id': inventory.get('receipt_id'),
+               'dependencies': inspection['dependencies'], 'shared_state': 'retained_unmapped'}
+        session.add(ExperimentExternalEntityReceipt(id=receipt_id, workspace_id=project_id, resource_id=receipt_id,
+            store_id='experiment', entity_kind='family_msa_import', entity_id=digest,
+            generation_or_revision='1', content_digest=digest, availability='available',
+            verification_authority='bms.family-msa.import.v1', acknowledgement_json=canonical_json(ack)))
+        await session.commit()
+        return {'receipt_id': receipt_id, 'replayed': False, 'shared_state': 'retained_unmapped'}
+    except HTTPException:
+        await session.rollback()
+        raise
+    except (ValueError, KeyError, TypeError, OSError, CustodyError) as exc:
+        await session.rollback()
+        raise HTTPException(400, detail='Invalid or unavailable import bundle') from exc

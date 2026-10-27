@@ -61,6 +61,12 @@ class Job(BaseModel):
     mode: str
 
 
+class ImportReceipt(BaseModel):
+    receipt_id: str
+    replayed: bool
+    shared_state: Literal['retained_unmapped']
+
+
 class BmsHttpError(Exception):
     def __init__(self, status: int, body: bytes):
         self.status = status
@@ -151,6 +157,19 @@ class AlignmentClient:
             return make_bundle(root, Path(destination), files, excluded=[
                 'Project shared states not explicitly selected',
                 'External dependencies not retained in the Project receipt'])
+
+    def import_project_bundle(self, project_id: str, directory, *, replay_key: str) -> "ImportReceipt":
+        import base64
+        from pathlib import Path
+        from .bundle import inspect_project_bundle
+        root = Path(directory)
+        inspect_project_bundle(root)
+        manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+        files = {name: base64.b64encode((root / name).read_bytes()).decode('ascii')
+                 for name in manifest['dependencies']['included']}
+        response = self._request('POST', '/api/family-msa/projects/' + quote(project_id, safe='') + '/imports',
+                                 {'replay_key': replay_key, 'manifest': manifest, 'files': files})
+        return ImportReceipt.model_validate(response)
 
     def model(self, model_id: Literal['family_msa_protein', 'family_msa_nucleic']) -> ModelInfo:
         return ModelInfo.model_validate(self._request('GET', '/api/models/' + quote(model_id, safe='')))
