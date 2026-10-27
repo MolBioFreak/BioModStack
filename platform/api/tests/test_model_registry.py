@@ -67,6 +67,18 @@ def _client_for(registry: ModelRegistry, monkeypatch: pytest.MonkeyPatch) -> Tes
     return TestClient(app)
 
 
+def test_de_novo_public_references_are_serialized_from_model_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = ModelRegistry(config_dir=API_ROOT / 'config' / 'models')
+    response = _client_for(registry, monkeypatch).get('/api/models/protein_modification_experimental')
+    assert response.status_code == 200
+    references = response.json()['engine_references']
+    assert set(references) == {'rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa'}
+    for entry in references.values():
+        assert entry['name'] and entry['description']
+        assert all(entry[key].startswith('https://') for key in ('github', 'paper', 'docs'))
+        assert entry['version'] is None
+
+
 def test_public_model_routes_hide_internal_and_disabled_models(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

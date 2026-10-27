@@ -527,6 +527,7 @@ async def get_model(model_id: str):
         "category": model.category,
         "description": model.description,
         "container": model.container,
+        "engine_references": {key: reference.model_dump() for key, reference in model.engine_references.items()},
         "inputs": model.inputs,
         "outputs": model.outputs,
         "modes": [

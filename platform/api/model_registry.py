@@ -709,6 +709,16 @@ def model_acquisition_plan(model_id: str) -> dict:
     return {"model_id": model_id, "artifacts": artifacts, "blockers": blockers}
 
 
+class ModelPublicReference(BaseModel):
+    """Display-only maintainer references, never execution or acquisition input."""
+    name: str
+    description: str
+    github: str = Field(pattern=r'^https://')
+    paper: str = Field(pattern=r'^https://')
+    docs: str = Field(pattern=r'^https://')
+    version: Optional[str] = None
+
+
 class ModelDefinition(BaseModel):
     """Complete definition of a model/tool."""
     id: str
@@ -721,6 +731,7 @@ class ModelDefinition(BaseModel):
     workflow: Optional[str] = None
     engine_containers: Dict[str, str] = Field(default_factory=dict)
     capabilities: Dict[str, Any] = Field(default_factory=dict)
+    engine_references: Dict[str, ModelPublicReference] = Field(default_factory=dict)
     public_launch: bool = True
     integration: Optional[ModelIntegration] = None
     

@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../src/lib/api', async original => ({
     ...await original<typeof import('../../src/lib/api')>(),
     fetchModels: vi.fn(async () => ({ data: [] })),
-    fetchModelById: vi.fn(async () => ({ data: { params: [], modes: [{ id: 'design', params: [] }] } })),
+    fetchModelById: vi.fn(async () => ({ data: { params: [], modes: [{ id: 'design', params: [] }], engine_references: Object.fromEntries(['rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa'].map(name => [name, { name, description: 'fixture', github: 'https://example.org/github', paper: 'https://example.org/paper', docs: 'https://example.org/docs' }])) } })),
     fetchNativeGenerationSettings: vi.fn(async () => { throw new Error('Fixture: native discovery unavailable'); }),
     fetchTemplates: vi.fn(async () => ({ data: [] })),
     fetchTemplateById: vi.fn(async () => ({ data: null })),
