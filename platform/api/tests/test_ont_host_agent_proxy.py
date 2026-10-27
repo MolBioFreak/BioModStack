@@ -230,16 +230,17 @@ def test_host_agent_protocol_options_route_returns_truthful_preflight(monkeypatc
     }
 
 
-def test_host_agent_retired_raw_position_start_route_is_unreachable(monkeypatch) -> None:
+def test_host_agent_start_route_delegates_to_minknow_start(monkeypatch) -> None:
     import bms_host_agent  # noqa: PLC0415
 
-    monkeypatch.setattr(
-        bms_host_agent,
-        "start_ont_protocol",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("retired host route must not reach MinKNOW start")),
-        raising=False,
-    )
+    seen = []
+    monkeypatch.setattr(bms_host_agent, "start_ont_protocol",
+                        lambda position, payload: seen.append((position, payload)) or (201, {"minknow_run_id": "r1"}))
 
+    assert bms_host_agent.ont_post_route_payload("/ont/positions/MD-105428/protocol-runs", {"confirm_start": True}) == (
+        201, {"minknow_run_id": "r1"},
+    )
+    assert seen == [("MD-105428", {"confirm_start": True})]
     assert bms_host_agent.ont_post_route_payload("/ont/positions/MD-105428/start", {"confirm_start": True}) is None
 
 
@@ -253,7 +254,7 @@ def test_host_agent_hardware_check_route_fails_closed() -> None:
 
     assert status == 501
     assert payload == {
-        "detail": "Mk1D hardware-check activation is disabled pending separately authorized supervised commissioning.",
+        "detail": "Run hardware checks from MinKNOW; BMS shows the result the next time it reads the position.",
         "position": "MD-105428",
         "fake_or_demo_devices": False,
     }
@@ -278,7 +279,7 @@ def test_begin_hardware_check_never_discovers_or_constructs_minknow_manager(monk
         assert status == 501
         assert response["position"] == "MD-105428"
         assert response["fake_or_demo_devices"] is False
-        assert "supervised commissioning" in response["detail"]
+        assert "MinKNOW" in response["detail"]
 
 
 def test_normalize_minknow_run_id_histories_and_current_hardware_check() -> None:

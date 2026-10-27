@@ -326,27 +326,155 @@ def build_protocol_options_preflight(
     }
 
 
+def _protocols_module():
+    from minknow_api.tools import protocols  # type: ignore[import-not-found]
+
+    return protocols
+
+
+def _connect_position(position_name: str, *, config: MinknowHostConfig | None = None,
+                      manager_factory: Callable[[MinknowHostConfig], Any] | None = None) -> tuple[Any, Any]:
+    """Return (manager, position connection) for one named MinKNOW position."""
+    config = config or MinknowHostConfig.from_env()
+    manager = (manager_factory or build_manager)(config)
+    for position in manager.flow_cell_positions():
+        if str(_safe_get(position, "name") or "") == str(position_name):
+            return manager, position.connect()
+    raise LookupError(f"MinKNOW position {position_name} was not found")
+
+
+def _product_code(connection: Any) -> str | None:
+    info = connection.device.get_flow_cell_info()
+    return (_string_or_none(_safe_get(info, "user_specified_product_code"))
+            or _string_or_none(_safe_get(info, "product_code")))
+
+
+def _sequencing_kits(connection: Any, product_code: str | None) -> list[str]:
+    kits: set[str] = set()
+    for protocol in _safe_get(connection.protocol.list_protocols(), "protocols", []) or []:
+        tags = _safe_get(protocol, "tags", {}) or {}
+        try:
+            if tags["experiment type"].string_value != "sequencing":
+                continue
+            if product_code and tags["flow cell"].string_value != product_code:
+                continue
+            kit = tags["kit"].string_value
+        except (KeyError, AttributeError, TypeError):
+            continue
+        if kit:
+            kits.add(kit)
+    return sorted(kits)
+
+
 def protocol_options(
     position: str,
     *,
     kit: str | None = None,
     basecalling_enabled: bool = True,
     status: dict[str, Any] | None = None,
+    manager_factory: Callable[[MinknowHostConfig], Any] | None = None,
 ) -> dict[str, Any] | None:
+    """Resolve the MinKNOW protocol and default basecall model for one kit."""
     status = status or discover_status()
     devices = status.get("live_devices") if isinstance(status, dict) else []
     for device in devices or []:
-        if str(device.get("position") or "") == str(position):
-            if str(device.get("device_type") or "").strip().lower() != "mk1d":
-                return None
-            output_dirs = device.get("output_directories") or ((status.get("minknow") or {}).get("output_directories") or {}) if isinstance(status, dict) else {}
-            return build_protocol_options_preflight(
-                position=device,
-                kit=kit,
-                basecalling_enabled=basecalling_enabled,
-                output_directories=output_dirs,
-            )
+        if str(device.get("position") or "") != str(position):
+            continue
+        if str(device.get("device_type") or "").strip().lower() != "mk1d":
+            return None
+        output_dirs = device.get("output_directories") or ((status.get("minknow") or {}).get("output_directories") or {}) if isinstance(status, dict) else {}
+        protocol_id: str | None = None
+        basecalling_options: dict[str, Any] = {}
+        available_kits: list[str] = []
+        lookup_error: str | None = None
+        if (device.get("flow_cell") or {}).get("present"):
+            try:
+                manager, connection = _connect_position(position, manager_factory=manager_factory)
+                product = _product_code(connection)
+                available_kits = _sequencing_kits(connection, product)
+                if kit:
+                    tools = _protocols_module()
+                    found = tools.find_protocol(connection, product_code=product, kit=kit, experiment_type="sequencing")
+                    protocol_id = _string_or_none(_safe_get(found, "identifier"))
+                    if protocol_id and basecalling_enabled:
+                        sample_rate = (device.get("flow_cell") or {}).get("sample_rate")
+                        configs = manager.find_basecall_configurations(product, kit, sample_rate)
+                        _config, simplex = tools.find_default_simplex_model(connection, kit, sample_rate, configs)
+                        basecalling_options = {
+                            "simplex_models": [simplex.name],
+                            "min_qscore": _safe_get(simplex, "default_q_score_cutoff"),
+                        }
+            except Exception as exc:  # noqa: BLE001 - grpc/minknow failures vary by version
+                lookup_error = str(exc)[:500]
+        result = build_protocol_options_preflight(
+            position=device,
+            kit=kit,
+            basecalling_enabled=basecalling_enabled,
+            output_directories=output_dirs,
+            protocol_id=protocol_id,
+            basecalling_options=basecalling_options,
+        )
+        if kit and not protocol_id and "protocol_unavailable" not in result["blockers"]:
+            result["blockers"].append("protocol_unavailable")
+            result["can_start"] = False
+        result["available_kits"] = available_kits
+        if lookup_error:
+            result["lookup_error"] = lookup_error
+        return result
     return None
+
+
+def start_protocol(position_name: str, payload: dict[str, Any], *,
+                   manager_factory: Callable[[MinknowHostConfig], Any] | None = None) -> tuple[int, dict[str, Any]]:
+    """Start one sequencing protocol as described by BMS's sealed run intent."""
+    if payload.get("confirm_start") is not True:
+        return 400, {"detail": "confirm_start=true is required to start a MinKNOW run"}
+    protocol_id = _string_or_none(payload.get("protocol_id"))
+    if not protocol_id:
+        return 400, {"detail": "protocol_id is required"}
+    run_hours = payload.get("run_hours")
+    if isinstance(run_hours, bool) or not isinstance(run_hours, (int, float)) or not 0 < run_hours <= 96:
+        return 400, {"detail": "run_hours must be greater than 0 and at most 96"}
+    try:
+        _manager, connection = _connect_position(position_name, manager_factory=manager_factory)
+    except LookupError as exc:
+        return 404, {"detail": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return 503, {"detail": f"MinKNOW is unreachable: {exc}"[:500]}
+    if not bool(_safe_get(connection.device.get_flow_cell_info(), "has_flow_cell", False)):
+        return 409, {"detail": "No flow cell is inserted in this position"}
+    try:
+        current = connection.protocol.get_current_protocol_run()
+    except Exception:  # noqa: BLE001 - MinKNOW reports "no current protocol" as an error
+        current = None
+    if _string_or_none(_safe_get(current, "run_id")):
+        return 409, {"detail": "A protocol is already running on this position"}
+    tools = _protocols_module()
+    basecalling = None
+    if payload.get("basecalling_enabled") is True:
+        simplex_model = _string_or_none(payload.get("simplex_model"))
+        if not simplex_model:
+            return 400, {"detail": "Basecalling needs a simplex model"}
+        basecalling = tools.BasecallingArgs(
+            simplex_model=simplex_model, modified_models=None, stereo_model=None,
+            barcoding=None, alignment=None, min_qscore=payload.get("min_qscore"),
+        )
+    output = tools.OutputArgs(reads_per_file=None, batch_duration=None)
+    try:
+        run_id = tools.start_protocol(
+            connection,
+            identifier=protocol_id,
+            sample_id=_string_or_none(payload.get("sample_id")) or "",
+            experiment_group=_string_or_none(payload.get("experiment_group")) or "",
+            barcode_info=None,
+            basecalling=basecalling,
+            pod5_arguments=output,
+            fastq_arguments=output if basecalling else None,
+            experiment_duration=float(run_hours),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return 502, {"detail": f"MinKNOW refused the start: {exc}"[:500]}
+    return 201, {"minknow_run_id": str(run_id), "position": position_name, "fake_or_demo_devices": False}
 
 
 def build_manager(config: MinknowHostConfig):
@@ -364,10 +492,9 @@ def build_manager(config: MinknowHostConfig):
 
 
 def begin_hardware_check(position_name: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    """Tombstone physical diagnostic activation until supervised commissioning."""
     del payload
     return 501, {
-        "detail": "Mk1D hardware-check activation is disabled pending separately authorized supervised commissioning.",
+        "detail": "Run hardware checks from MinKNOW; BMS shows the result the next time it reads the position.",
         "position": position_name,
         "fake_or_demo_devices": False,
     }
@@ -392,20 +519,42 @@ def refresh_position(position_name: str) -> tuple[int, dict[str, Any]]:
 
 
 def restart_position(position_name: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    del payload
     return 501, {
-        "detail": "BMS does not yet perform a MinKNOW/Mk1D instrument restart. Use refresh/reconnect for state reread; true restart/power-cycle needs live-validated MinKNOW semantics before enabling.",
+        "detail": "BMS can't power-cycle the Mk1D. Use Refresh or Reconnect Mk1D instead.",
         "position": position_name,
         "fake_or_demo_devices": False,
     }
 
-def stop_protocol(minknow_run_id: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+
+def stop_protocol(minknow_run_id: str, payload: dict[str, Any], *,
+                  manager_factory: Callable[[MinknowHostConfig], Any] | None = None) -> tuple[int, dict[str, Any]]:
+    """Stop one MinKNOW protocol run, keeping the data acquired so far."""
     if payload.get("confirm_stop") is not True:
         return 400, {"detail": "confirm_stop=true is required before stopping a MinKNOW run"}
-    return 501, {
-        "detail": "MinKNOW protocol stop is not implemented until live run-control wiring is validated",
-        "minknow_run_id": minknow_run_id,
-        "fake_or_demo_devices": False,
-    }
+    requested = _string_or_none(minknow_run_id)
+    if not requested:
+        return 400, {"detail": "MinKNOW run id is required"}
+    config = MinknowHostConfig.from_env()
+    try:
+        manager = (manager_factory or build_manager)(config)
+        positions = list(manager.flow_cell_positions())
+    except Exception as exc:  # noqa: BLE001
+        return 503, {"detail": f"MinKNOW is unreachable: {exc}"[:500]}
+    for position in positions:
+        try:
+            connection = position.connect()
+            current = connection.protocol.get_current_protocol_run()
+        except Exception:  # noqa: BLE001 - idle positions report no current run
+            continue
+        if _string_or_none(_safe_get(current, "run_id")) != requested:
+            continue
+        try:
+            connection.protocol.stop_protocol(protocol_run_id=requested)
+        except Exception as exc:  # noqa: BLE001
+            return 502, {"detail": f"MinKNOW refused the stop: {exc}"[:500]}
+        return 202, {"minknow_run_id": requested, "accepted": True, "fake_or_demo_devices": False}
+    return 409, {"detail": "That run is not currently running in MinKNOW", "minknow_run_id": requested}
 
 
 _MINKNOW_RUN_FOLDER_RE = re.compile(r"^\d{8}_\d{4}_[^/]+_([0-9A-Za-z]{8})$")
@@ -525,70 +674,113 @@ def discover_status(
         }
 
 
-def observe_run(minknow_run_id: str) -> dict[str, Any]:
-    """Return a bounded, read-only status snapshot for one already-bound run.
+_PROTOCOL_STATE_MAP = {
+    "protocol_running": "active",
+    "protocol_waiting_for_temperature": "active",
+    "protocol_waiting_for_acquisition": "active",
+    "protocol_waiting_for_resource": "active",
+    "protocol_completed": "completed",
+    "protocol_finished_unable_to_send_telemetry": "completed",
+    "protocol_stopped_by_user": "stopped",
+}
 
-    This is discovery only: it never starts/stops a protocol and deliberately
-    does not enumerate host filesystem paths.  Terminal artifact paths, when
-    supported in a later host adapter, must be explicit safe outputs rather
-    than inferred from browser input or directory scans.
-    """
+
+def _protocol_state_to_status(raw: str) -> str:
+    state = raw.strip().lower()
+    if state in _PROTOCOL_STATE_MAP:
+        return _PROTOCOL_STATE_MAP[state]
+    if state.startswith("protocol_finished_with_"):
+        return "failed"
+    return _LEGACY_STATES.get(state, "unknown")
+
+
+_LEGACY_STATES = {
+    "active": "active",
+    "running": "active",
+    "protocol_state_running": "active",
+    "acquisition_running": "active",
+    "acquisition_state_running": "active",
+    "complete": "completed",
+    "completed": "completed",
+    "finished": "completed",
+    "protocol_finished": "completed",
+    "protocol_state_finished": "completed",
+    "protocol_state_completed": "completed",
+    "acquisition_finished": "completed",
+    "acquisition_completed": "completed",
+    "acquisition_state_finished": "completed",
+    "acquisition_state_completed": "completed",
+    "failed": "failed",
+    "failure": "failed",
+    "error": "failed",
+    "protocol_error": "failed",
+    "protocol_state_error": "failed",
+    "acquisition_error": "failed",
+    "acquisition_state_error": "failed",
+    "stop": "stopped",
+    "stopped": "stopped",
+    "cancelled": "stopped",
+    "canceled": "stopped",
+    "aborted": "stopped",
+    "protocol_stopped": "stopped",
+    "protocol_state_stopped": "stopped",
+    "acquisition_stopped": "stopped",
+    "acquisition_state_stopped": "stopped",
+}
+
+
+def _run_info(position_name: str, minknow_run_id: str) -> dict[str, Any] | None:
+    """Read MinKNOW's own record of one protocol run, or None if this position lacks it."""
+    try:
+        _manager, connection = _connect_position(position_name)
+        info = connection.protocol.get_run_info(run_id=minknow_run_id)
+    except Exception:  # noqa: BLE001 - unknown run ids and offline positions both raise
+        return None
+    if _string_or_none(_safe_get(info, "run_id")) != minknow_run_id:
+        return None
+    raw_state = _safe_get(info, "state")
+    acquisitions = [str(item) for item in (_safe_get(info, "acquisition_run_ids", []) or [])]
+    return {
+        "state": _enum_name(info, "state", raw_state) or _string_or_none(raw_state) or "",
+        "output_path": _string_or_none(_safe_get(info, "output_path")),
+        "acquisition_id": acquisitions[-1] if acquisitions else None,
+    }
+
+
+def observe_run(minknow_run_id: str) -> dict[str, Any]:
+    """Return a bounded status snapshot and discovered outputs for one bound run."""
     requested = str(minknow_run_id or "").strip()
+    empty = {"fastq": [], "pod5": [], "bam": []}
     status = discover_status()
     if not requested or status.get("implementation_status") != MINKNOW_STATUS_CONFIGURED:
-        return {"status": "unknown", "minknow_run_id": requested, "output_files": {"fastq": [], "pod5": [], "bam": []}, "fake_or_demo_devices": False}
+        return {"status": "unknown", "minknow_run_id": requested, "output_files": empty, "fake_or_demo_devices": False}
     for device in status.get("live_devices") or []:
+        position_name = _string_or_none(device.get("position"))
+        info = _run_info(position_name, requested) if position_name else None
+        if info is not None:
+            output_path = info["output_path"]
+            output_files = (
+                _discover_run_outputs({"output": output_path}, requested)
+                if output_path else _discover_run_outputs(device.get("output_directories") or {}, requested)
+            )
+            return {
+                "status": _protocol_state_to_status(info["state"]),
+                "minknow_run_id": requested,
+                "acquisition_id": info["acquisition_id"],
+                "output_files": output_files,
+                "fake_or_demo_devices": False,
+            }
         current = device.get("current_protocol") if isinstance(device.get("current_protocol"), dict) else {}
         candidates = [current, *(device.get("protocol_runs") or []), *(device.get("acquisition_runs") or [])]
         matching = next((run for run in candidates if isinstance(run, dict) and str(run.get("run_id") or "").strip() == requested), None)
         if matching is None:
             continue
-        raw_state = str(matching.get("state") or matching.get("status") or "").strip().lower()
-        exact_states = {
-            "active": "active",
-            "running": "active",
-            "protocol_running": "active",
-            "protocol_state_running": "active",
-            "acquisition_running": "active",
-            "acquisition_state_running": "active",
-            "complete": "completed",
-            "completed": "completed",
-            "finished": "completed",
-            "protocol_finished": "completed",
-            "protocol_completed": "completed",
-            "protocol_state_finished": "completed",
-            "protocol_state_completed": "completed",
-            "acquisition_finished": "completed",
-            "acquisition_completed": "completed",
-            "acquisition_state_finished": "completed",
-            "acquisition_state_completed": "completed",
-            "failed": "failed",
-            "failure": "failed",
-            "error": "failed",
-            "protocol_error": "failed",
-            "protocol_state_error": "failed",
-            "acquisition_error": "failed",
-            "acquisition_state_error": "failed",
-            "stop": "stopped",
-            "stopped": "stopped",
-            "cancelled": "stopped",
-            "canceled": "stopped",
-            "aborted": "stopped",
-            "protocol_stopped": "stopped",
-            "protocol_state_stopped": "stopped",
-            "acquisition_stopped": "stopped",
-            "acquisition_state_stopped": "stopped",
-        }
-        if raw_state in exact_states:
-            observed = exact_states[raw_state]
-        else:
-            observed = "unknown"
-        output_files = _discover_run_outputs(device.get("output_directories") or {}, requested)
+        raw_state = str(matching.get("state") or matching.get("status") or "")
         return {
-            "status": observed,
+            "status": _protocol_state_to_status(raw_state),
             "minknow_run_id": requested,
             "acquisition_id": str(matching.get("acquisition_id") or "").strip() or None,
-            "output_files": output_files,
+            "output_files": _discover_run_outputs(device.get("output_directories") or {}, requested),
             "fake_or_demo_devices": False,
         }
-    return {"status": "unknown", "minknow_run_id": requested, "output_files": {"fastq": [], "pod5": [], "bam": []}, "fake_or_demo_devices": False}
+    return {"status": "unknown", "minknow_run_id": requested, "output_files": empty, "fake_or_demo_devices": False}

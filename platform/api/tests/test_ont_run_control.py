@@ -403,26 +403,16 @@ async def test_protocol_catalog_requires_literal_host_booleans(monkeypatch) -> N
     assert ont_run_control._option_snapshot("X1", malformed)["basecalling_enabled"] is False
 
 
-def test_browser_stop_endpoint_is_tombstoned_before_service_dispatch(monkeypatch) -> None:
+def test_stop_route_requires_literal_confirmation(monkeypatch) -> None:
     app = FastAPI()
     app.include_router(ont_runs.router, prefix="/api/ont")
-    client = TestClient(app)
-
     calls = []
+    monkeypatch.setattr(ont_run_control, "request_host_agent", lambda *a, **k: calls.append(a) or {})
 
-    def forbidden_dispatch(*args, **kwargs):
-        calls.append((args, kwargs))
-        return {}
+    response = TestClient(app).post("/api/ont/runs/run-1/stop", json={"confirm_stop": "true"})
 
-    monkeypatch.setattr(ont_run_control, "request_host_agent", forbidden_dispatch)
-
-    response = client.post("/api/ont/runs/run-1/stop", json={"confirm_stop": True})
-
+    assert response.status_code == 422
     assert calls == []
-    assert response.status_code == 410
-    assert response.json() == {
-        "detail": "Browser-initiated ONT physical stop is retired; use the separately supervised instrument-control lane."
-    }
 
 
 @pytest.mark.asyncio
@@ -473,11 +463,11 @@ async def test_run_intent_binds_opaque_option_to_durable_ledger_and_rejects_raw_
 
 
 @pytest.mark.asyncio
-async def test_public_start_501_is_canonical_and_does_not_reflect_backend_exception(monkeypatch) -> None:
-    async def disabled_start(_run_id: str, _payload: dict) -> dict:
-        raise NotImplementedError("PRIVATE-PROTOCOL /private/path grpc://private-host")
+async def test_public_start_failure_is_reported_without_backend_internals(monkeypatch) -> None:
+    async def lost_contact(_run_id: str, _payload: dict) -> dict:
+        raise RuntimeError("Lost contact with MinKNOW while starting. Check MinKNOW before retrying.")
 
-    monkeypatch.setattr(ont_run_control, "validate_armed_intent_start", disabled_start)
+    monkeypatch.setattr(ont_run_control, "validate_armed_intent_start", lost_contact)
     app = FastAPI()
     app.include_router(ont_runs.router, prefix="/api/ont")
     response = TestClient(app).post(
@@ -485,13 +475,8 @@ async def test_public_start_501_is_canonical_and_does_not_reflect_backend_except
         json={"confirm_start": True, "intent_generation": 1},
     )
 
-    assert response.status_code == 501
-    assert response.json() == {
-        "detail": "Starting MinKNOW runs from BMS is disabled; enabling it requires separate authorization and supervised commissioning."
-    }
-    assert "PRIVATE" not in response.text
-    assert "grpc://" not in response.text
-    assert "/private/path" not in response.text
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Lost contact with MinKNOW while starting. Check MinKNOW before retrying."}
 
 
 @pytest.mark.asyncio
@@ -516,7 +501,7 @@ async def test_intent_start_rereads_position_and_invalidates_changed_flowcell_wi
     monkeypatch.setattr(
         ont_run_control,
         "get_position_protocol_options",
-        lambda _position: {
+        lambda _position, _kit=None: {
             "position": "X1",
             "device_type": "mk1d",
             "running": False,
@@ -562,7 +547,7 @@ async def test_intent_start_invalidates_changed_protocol_capability_digest_witho
     )
     changed = {**initial, "basecalling_options": {"simplex_models": ["replacement-model"]}}
     monkeypatch.setattr(ont_run_control, "get_position_protocol_options", lambda *_args, **_kwargs: changed)
-    monkeypatch.setattr(ont_run_control, "get_ont_position", lambda _position: initial)
+    monkeypatch.setattr(ont_run_control, "get_ont_position", lambda _position, _kit=None: initial)
     monkeypatch.setattr(
         ont_run_control,
         "request_host_agent",
@@ -755,7 +740,7 @@ def test_raw_start_route_rejects_browser_protocol_payload_without_contacting_hos
         )
 
     assert response.status_code == 410
-    assert "physical starting remains disabled" in response.text
+    assert "/runs/{id}/start" in response.text
 
 
 def test_intent_start_schema_rejects_raw_protocol_model_and_path_fields_before_service_call(monkeypatch) -> None:
@@ -856,7 +841,7 @@ def test_hardware_check_public_route_is_a_fail_closed_tombstone(monkeypatch) -> 
 
     assert response.status_code == 501
     assert response.json() == {
-        "detail": "Mk1D hardware-check activation is disabled pending separately authorized supervised commissioning."
+        "detail": "Run hardware checks from MinKNOW; BMS shows the result the next time it reads the position."
     }
     assert calls == []
 
@@ -1224,3 +1209,168 @@ async def test_handoff_ready_ignores_prehashed_output_files_without_an_immutable
     assert projection is not None
     assert projection["terminal_artifact_manifest"] is None
     assert projection["handoff_ready"] is False
+
+
+
+def _ready_host_preflight(**overrides):
+    payload = {
+        "position": "X1",
+        "device_type": "mk1d",
+        "can_start": True,
+        "blockers": [],
+        "protocol_id": "sequencing/sequencing_MIN114_DNA_e8_2_400K:FLO-MIN114:SQK-LSK114",
+        "kit": "SQK-LSK114",
+        "available_kits": ["SQK-LSK114", "SQK-RBK114-24"],
+        "basecalling_enabled": True,
+        "basecalling_options": {"simplex_models": ["dna_r10.4.1_e8.2_400bps_hac@v5.0.0"], "min_qscore": 9},
+        "output_directories": {"output": "/var/lib/minknow/data"},
+        "flow_cell": {"present": True, "flow_cell_id": "FC-001", "product_code": "FLO-MIN114"},
+        "running": False,
+    }
+    payload.update(overrides)
+    return payload
+
+
+async def _armed_intent(monkeypatch, *, run_hours: float = 2.0):
+    monkeypatch.setattr(ont_run_control, "get_position_protocol_options", lambda _position, _kit=None: _ready_host_preflight())
+    catalog = await ont_run_control.issue_position_protocol_catalog("X1", kit="SQK-LSK114", run_hours=run_hours)
+    option = catalog["options"][0]
+    return catalog, await ont_run_control.create_run_intent("X1", {
+        "option_id": option["option_id"], "option_receipt_id": option["option_receipt_id"],
+        "sample_id": "plasmid-A12", "experiment_group": "domain-1",
+    })
+
+
+@pytest.mark.asyncio
+async def test_catalog_exposes_kits_and_run_length_but_not_protocol_internals(monkeypatch) -> None:
+    catalog, _intent = await _armed_intent(monkeypatch, run_hours=6)
+
+    assert catalog["kit"] == "SQK-LSK114"
+    assert catalog["available_kits"] == ["SQK-LSK114", "SQK-RBK114-24"]
+    assert catalog["run_hours"] == 6
+    assert catalog["options"][0]["protocol_label"] == "SQK-LSK114 sequencing · 6 h"
+    rendered = repr(catalog)
+    assert "sequencing_MIN114" not in rendered and "400bps_hac" not in rendered
+    with pytest.raises(ValueError, match="kit"):
+        await ont_run_control.issue_position_protocol_catalog("X1", kit="bad kit; rm -rf /")
+
+
+@pytest.mark.asyncio
+async def test_start_sends_sealed_protocol_to_minknow_and_tracks_the_run(monkeypatch) -> None:
+    _catalog, intent = await _armed_intent(monkeypatch)
+    calls = []
+
+    def host(method, path, payload=None, *, query=None, timeout=None):
+        calls.append((method, path, payload))
+        if path == "/ont/positions/X1/protocol-runs":
+            return {"minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000001", "position": "X1"}
+        if path.startswith("/ont/runs/"):
+            return {"status": "running", "minknow_run_id": "7f3c1a2b-0000-4000-8000-000000000001",
+                    "output_files": {"fastq": [], "pod5": [], "bam": []}}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", host)
+
+    started = await ont_run_control.validate_armed_intent_start(
+        intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]},
+    )
+
+    start_call = next(call for call in calls if call[1] == "/ont/positions/X1/protocol-runs")
+    assert start_call[0] == "POST"
+    assert start_call[2] == {
+        "confirm_start": True,
+        "protocol_id": "sequencing/sequencing_MIN114_DNA_e8_2_400K:FLO-MIN114:SQK-LSK114",
+        "basecalling_enabled": True,
+        "simplex_model": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0",
+        "min_qscore": 9,
+        "run_hours": 2.0,
+        "sample_id": "plasmid-A12",
+        "experiment_group": "domain-1",
+    }
+    assert started["state"] == "running"
+    events = [event["event_type"] for event in started["events"]]
+    assert events[:4] == ["preflight_armed", "preflight_revalidated", "start_requested", "start_accepted"]
+    async with ont_run_control.async_session() as session:
+        record = await session.get(OntInstrumentRun, intent["id"])
+        assert record.minknow_run_id == "7f3c1a2b-0000-4000-8000-000000000001"
+
+
+@pytest.mark.asyncio
+async def test_start_rejected_by_minknow_marks_run_failed(monkeypatch) -> None:
+    from services.host_agent_client import HostAgentRequestError
+
+    _catalog, intent = await _armed_intent(monkeypatch)
+
+    def host(method, path, payload=None, *, query=None, timeout=None):
+        raise HostAgentRequestError(status_code=409, detail={"detail": "A protocol is already running on this position"}, url=path)
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", host)
+
+    with pytest.raises(ValueError, match="already running"):
+        await ont_run_control.validate_armed_intent_start(
+            intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]},
+        )
+    persisted = await ont_run_control.get_instrument_run(intent["id"])
+    assert persisted["state"] == "failed"
+    assert persisted["events"][-1]["event_type"] == "start_failed"
+
+
+@pytest.mark.asyncio
+async def test_start_with_lost_host_contact_is_unknown_not_retried(monkeypatch) -> None:
+    _catalog, intent = await _armed_intent(monkeypatch)
+    monkeypatch.setattr(ont_run_control, "request_host_agent",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("connection reset")))
+
+    with pytest.raises(RuntimeError, match="Lost contact"):
+        await ont_run_control.validate_armed_intent_start(
+            intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]},
+        )
+    persisted = await ont_run_control.get_instrument_run(intent["id"])
+    assert persisted["state"] == "unknown"
+    with pytest.raises(ValueError, match="not an armed"):
+        await ont_run_control.validate_armed_intent_start(
+            intent["id"], {"confirm_start": True, "intent_generation": persisted["observed_generation"]},
+        )
+
+
+@pytest.mark.asyncio
+async def test_stop_sends_stop_and_user_stopped_run_keeps_its_reads(monkeypatch, tmp_path: Path) -> None:
+    fastq = tmp_path / "reads.fastq.gz"
+    fastq.write_bytes(b"@r1\nACGT\n+\n!!!!\n")
+    run_id = await _seed_server_observed_run(state="running", output_directories={"output": str(tmp_path)})
+    status = {"value": "running"}
+    calls = []
+
+    def host(method, path, payload=None, *, query=None, timeout=None):
+        calls.append((method, path, payload))
+        if path.endswith("/stop"):
+            status["value"] = "stopped"
+            return {"accepted": True}
+        return {"status": status["value"], "minknow_run_id": "PRIVATE-MINKNOW-RUN",
+                "output_files": {"fastq": [str(fastq)], "pod5": [], "bam": []}}
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", host)
+
+    stopped = await ont_run_control.stop_instrument_run(run_id, confirm_stop=True)
+
+    assert ("POST", "/ont/runs/PRIVATE-MINKNOW-RUN/stop", {"confirm_stop": True}) in calls
+    assert stopped["state"] == "stopped"
+    assert stopped["handoff_ready"] is True
+    assert stopped["terminal_artifact_manifest"] is not None
+    with pytest.raises(ValueError, match="only an active"):
+        await ont_run_control.stop_instrument_run(run_id, confirm_stop=True)
+
+
+@pytest.mark.asyncio
+async def test_monitor_polls_every_active_minknow_run(monkeypatch) -> None:
+    await _seed_server_observed_run(state="running")
+    seen = []
+
+    async def fake_reconcile(run_id):
+        seen.append(run_id)
+        return {}
+
+    monkeypatch.setattr(ont_run_control, "reconcile_instrument_run", fake_reconcile)
+
+    assert await ont_run_control.reconcile_active_runs_once() == 1
+    assert seen == ["ont-run-server-observed"]

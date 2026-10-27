@@ -4879,6 +4879,9 @@ export interface OntProtocolOptions {
     can_start: boolean;
     blockers: string[];
     flow_cell_present: boolean;
+    kit?: string | null;
+    available_kits?: string[];
+    run_hours?: number;
     options: OntProtocolOption[];
     fake_or_demo_devices: false;
 }
@@ -4902,8 +4905,10 @@ export interface OntMk1dReconnectResponse {
 export const requestMk1dReconnect = () =>
     api.post<OntMk1dReconnectResponse>('/api/ont/devices/reconnect', { confirm_reconnect: true });
 
-export const fetchOntProtocolOptions = (position: string) =>
-    api.get<OntProtocolOptions>(`/api/ont/positions/${encodeURIComponent(position)}/protocol-options`);
+export const fetchOntProtocolOptions = (position: string, selection: { kit?: string; run_hours?: number } = {}) =>
+    api.get<OntProtocolOptions>(`/api/ont/positions/${encodeURIComponent(position)}/protocol-options`, {
+        params: { kit: selection.kit || undefined, run_hours: selection.run_hours },
+    });
 
 export const createOntRunIntent = (position: string, payload: {
     option_id: string;
@@ -4914,6 +4919,9 @@ export const createOntRunIntent = (position: string, payload: {
 
 export const startOntRunIntent = (runId: string, payload: { confirm_start: boolean; intent_generation: number }) =>
     api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/start`, payload);
+
+export const stopOntInstrumentRun = (runId: string) =>
+    api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/stop`, { confirm_stop: true });
 
 export const fetchOntInstrumentRun = (runId: string) =>
     api.get<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}`);

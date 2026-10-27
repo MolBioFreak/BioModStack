@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 from typing import Any
 from uuid import uuid4
@@ -25,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import OntInstrumentRun, OntInstrumentRunEvent, OntInstrumentRunPreflight, OntProtocolOptionReceipt, async_session
 from paths import get_inputs_dir
-from services.host_agent_client import get_ont_position, get_ont_status, request_host_agent
+from services.host_agent_client import HostAgentRequestError, get_ont_position, get_ont_status, request_host_agent
 from services.ont_device_control import _public_mk1d_device
 from services.ont_raw_signal import (
     live_conversion_enabled,
@@ -620,7 +621,7 @@ async def _run_response(session: AsyncSession, record: OntInstrumentRun) -> dict
         "sample_id": record.sample_id,
         "experiment_group": record.experiment_group,
         "output_summary": _output_summary(record.output_files),
-        "handoff_ready": record.state == "completed" and _manifest_has_fastq(record),
+        "handoff_ready": record.state in {"completed", "stopped"} and _manifest_has_fastq(record),
         "terminal_artifact_manifest": _terminal_manifest_response(record),
         "preflight": _preflight_response(preflight),
         "selected_option_id": preflight.selected_option_id if preflight else None,
@@ -668,7 +669,7 @@ async def _append_observation(
     if state in TERMINAL_RUN_STATES:
         existing_manifest = record.terminal_artifact_manifest
         existing_digest = record.terminal_artifact_manifest_sha256
-        if existing_manifest is None and existing_digest is None and state == "completed":
+        if existing_manifest is None and existing_digest is None and state in {"completed", "stopped"}:
             manifest, manifest_sha256 = _terminal_artifact_manifest(
                 record,
                 state=state,
@@ -682,7 +683,7 @@ async def _append_observation(
         elif existing_manifest is not None or existing_digest is not None:
             if _valid_terminal_manifest(record) is None:
                 raise RuntimeError("stored terminal artifact manifest is invalid and cannot be rewritten")
-        record.handoff_ready = state == "completed" and _manifest_has_fastq(record)
+        record.handoff_ready = state in {"completed", "stopped"} and _manifest_has_fastq(record)
     else:
         record.handoff_ready = False
     session.add(
@@ -709,13 +710,23 @@ async def reset_ont_run_store() -> None:
         await session.commit()
 
 
-async def issue_position_protocol_catalog(position: str) -> dict[str, Any]:
+DEFAULT_RUN_HOURS = 24.0
+_KIT_RE = re.compile(r"^[A-Z0-9][A-Z0-9-]{2,63}$")
+
+
+async def issue_position_protocol_catalog(
+    position: str, *, kit: str | None = None, run_hours: float = DEFAULT_RUN_HOURS,
+) -> dict[str, Any]:
     """Return a still-valid identical-context receipt, or persist a new live option.
 
     The host-agent response is intentionally treated as sensitive server-side
     protocol capability data. Only labels and opaque handles leave the API.
     """
-    host_payload = get_position_protocol_options(position)
+    if kit is not None and not _KIT_RE.fullmatch(kit):
+        raise ValueError("kit must be an ONT kit code such as SQK-LSK114")
+    if isinstance(run_hours, bool) or not 0 < float(run_hours) <= 96:
+        raise ValueError("run_hours must be greater than 0 and at most 96")
+    host_payload = get_position_protocol_options(position, kit)
     if not isinstance(host_payload, dict):
         raise RuntimeError(f"host-agent returned non-object protocol options payload: {host_payload!r}")
     blockers = _catalog_blockers(host_payload)
@@ -732,6 +743,11 @@ async def issue_position_protocol_catalog(position: str) -> dict[str, Any]:
         "can_start": can_start,
         "blockers": blockers,
         "flow_cell_present": flow_cell_present,
+        "kit": kit,
+        "available_kits": [
+            str(item) for item in (host_payload.get("available_kits") or []) if _KIT_RE.fullmatch(str(item))
+        ][:200],
+        "run_hours": float(run_hours),
         "options": [],
         "fake_or_demo_devices": False,
     }
@@ -742,7 +758,7 @@ async def issue_position_protocol_catalog(position: str) -> dict[str, Any]:
     if not can_start:
         return safe_response
 
-    snapshot = _option_snapshot(position, host_payload)
+    snapshot = {**_option_snapshot(position, host_payload), "run_hours": float(run_hours)}
     source_digest = _canonical_digest(snapshot)
     capability_digest = _canonical_digest(
         {
@@ -796,7 +812,9 @@ async def issue_position_protocol_catalog(position: str) -> dict[str, Any]:
             "option_id": option_id,
             "option_receipt_id": receipt_id,
             "expires_at": _json_datetime(expires_at),
-            "protocol_label": _sanitize_label("MinKNOW sequencing protocol", "MinKNOW sequencing protocol"),
+            "protocol_label": _sanitize_label(
+                f"{snapshot['kit']} sequencing · {float(run_hours):g} h", "MinKNOW sequencing protocol",
+            ),
             "basecalling_enabled": snapshot["basecalling_enabled"],
             "output_policy_id": f"ont-output-policy-{source_digest[:16]}",
             "output_policy_label": "MinKNOW-managed output policy",
@@ -893,7 +911,7 @@ async def create_run_intent(position: str, payload: dict[str, Any]) -> dict[str,
 
 
 async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Freshly validate an intent but deliberately do not issue a MinKNOW start."""
+    """Revalidate an armed intent against the live position, then start it in MinKNOW."""
     if not isinstance(payload, dict) or set(payload) - {"confirm_start", "intent_generation"}:
         raise ValueError("start accepts only confirm_start and the current intent_generation")
     if payload.get("confirm_start") is not True:
@@ -916,7 +934,8 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
         # the server-side protocol/options seam so the durable receipt can be
         # compared against the real flow-cell and capability data without
         # sending it back to the browser.
-        live = get_position_protocol_options(record.position_id)
+        snapshot_kit = (preflight.source_snapshot or {}).get("kit") if isinstance(preflight.source_snapshot, dict) else None
+        live = get_position_protocol_options(record.position_id, snapshot_kit)
         invalid_reason = None
         if str(live.get("position") or record.position_id) != record.position_id:
             invalid_reason = "position_mismatch"
@@ -930,7 +949,7 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
         ):
             invalid_reason = "position_protocol_changed"
         else:
-            fresh_catalog = get_position_protocol_options(record.position_id)
+            fresh_catalog = get_position_protocol_options(record.position_id, snapshot_kit)
             if not isinstance(fresh_catalog, dict):
                 invalid_reason = "protocol_capability_unavailable"
             elif str(fresh_catalog.get("device_type") or "").strip().lower() != "mk1d":
@@ -942,7 +961,10 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
             ):
                 invalid_reason = "protocol_capability_unavailable"
             else:
-                fresh_snapshot = _option_snapshot(record.position_id, fresh_catalog)
+                fresh_snapshot = {
+                    **_option_snapshot(record.position_id, fresh_catalog),
+                    "run_hours": (preflight.source_snapshot or {}).get("run_hours", DEFAULT_RUN_HOURS),
+                }
                 fresh_source_digest = _canonical_digest(fresh_snapshot)
                 fresh_capability_digest = _canonical_digest(
                     {
@@ -963,8 +985,70 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
             await session.commit()
             raise ValueError(f"protocol preflight is stale: {invalid_reason}")
         await _append_observation(session, record, event_type="preflight_revalidated", state="armed", minknow_payload={"source": "fresh_position_read"})
+        snapshot = preflight.source_snapshot if isinstance(preflight.source_snapshot, dict) else {}
+        basecalling = snapshot.get("basecalling_options") if isinstance(snapshot.get("basecalling_options"), dict) else {}
+        simplex_models = basecalling.get("simplex_models") or []
+        start_request = {
+            "confirm_start": True,
+            "protocol_id": snapshot.get("protocol_id"),
+            "basecalling_enabled": snapshot.get("basecalling_enabled") is True,
+            "simplex_model": simplex_models[0] if simplex_models else None,
+            "min_qscore": basecalling.get("min_qscore"),
+            "run_hours": float(snapshot.get("run_hours") or DEFAULT_RUN_HOURS),
+            "sample_id": record.sample_id,
+            "experiment_group": record.experiment_group,
+        }
+        # Durably record that BMS is about to start before calling MinKNOW, so a
+        # crash or timeout can never leave an untracked run behind.
+        await _append_observation(session, record, event_type="start_requested", state="starting",
+                                  minknow_payload={"protocol_id": start_request["protocol_id"]})
         await session.commit()
-        raise NotImplementedError("MinKNOW protocol start remains disabled pending separately authorized supervised commissioning")
+        try:
+            started = request_host_agent(
+                "POST", f"/ont/positions/{record.position_id}/protocol-runs", start_request, timeout=60.0,
+            )
+        except HostAgentRequestError as exc:
+            detail = exc.detail.get("detail") if isinstance(exc.detail, dict) else exc.detail
+            await _append_observation(session, record, event_type="start_failed", state="failed",
+                                      minknow_payload={"status_code": exc.status_code})
+            await session.commit()
+            raise ValueError(f"MinKNOW did not start the run: {detail}") from exc
+        except Exception as exc:  # noqa: BLE001 - outcome unknown; MinKNOW may have started it
+            await _append_observation(session, record, event_type="start_outcome_unknown", state="unknown",
+                                      minknow_payload={"reason": "host_agent_unreachable"})
+            await session.commit()
+            raise RuntimeError("Lost contact with MinKNOW while starting. Check MinKNOW before retrying.") from exc
+        minknow_run_id = str((started or {}).get("minknow_run_id") or "").strip() if isinstance(started, dict) else ""
+        if not minknow_run_id:
+            await _append_observation(session, record, event_type="start_outcome_unknown", state="unknown",
+                                      minknow_payload={"reason": "no_run_id_returned"})
+            await session.commit()
+            raise RuntimeError("MinKNOW accepted the start but returned no run id. Check MinKNOW.")
+        record.minknow_run_id = minknow_run_id
+        await _append_observation(session, record, event_type="start_accepted", state="starting",
+                                  minknow_payload={"source": "minknow_start"})
+        await session.commit()
+    return await reconcile_instrument_run(run_id)
+
+
+async def stop_instrument_run(run_id: str, *, confirm_stop: bool) -> dict[str, Any]:
+    """Ask MinKNOW to stop a running BMS-managed run; status polling records the result."""
+    if confirm_stop is not True:
+        raise ValueError("confirm_stop=true is required to stop a run")
+    async with async_session() as session:
+        record = await _load_run(session, run_id)
+        if record.state not in {"starting", "running", "unknown"} or not record.minknow_run_id:
+            raise ValueError(f"run is {record.state}; only an active MinKNOW run can be stopped")
+        try:
+            request_host_agent("POST", f"/ont/runs/{record.minknow_run_id}/stop", {"confirm_stop": True}, timeout=30.0)
+        except HostAgentRequestError as exc:
+            detail = exc.detail.get("detail") if isinstance(exc.detail, dict) else exc.detail
+            raise ValueError(f"MinKNOW did not stop the run: {detail}") from exc
+        if record.state != "unknown":
+            await _append_observation(session, record, event_type="stop_requested", state="stopping",
+                                      minknow_payload={"source": "bms_stop"})
+            await session.commit()
+    return await reconcile_instrument_run(run_id)
 
 
 async def get_instrument_run(run_id: str) -> dict[str, Any] | None:
@@ -1074,11 +1158,7 @@ def _event_type_for_observed_state(state: str) -> str:
 
 
 async def reconcile_instrument_run(run_id: str) -> dict[str, Any]:
-    """Reconcile one durable run against a bounded, read-only host snapshot.
-
-    This never invokes physical control.  Identical host evidence is a no-op so
-    polling cannot inflate the durable generation or append duplicate events.
-    """
+    """Update one run from MinKNOW's current status. Identical status is a no-op."""
     async with async_session() as session:
         record = await _load_run(session, run_id)
         if not record.minknow_run_id:
@@ -1293,8 +1373,8 @@ async def build_plasmid_qc_handoff(run_id: str, payload: dict[str, Any]) -> dict
     """Build generic plasmid-QC input only from a terminal, digested host artifact."""
     async with async_session() as session:
         record = await _load_run(session, run_id)
-        if record.state != "completed":
-            raise ValueError("instrument run must be durably observed as completed before plasmid QC handoff")
+        if record.state not in {"completed", "stopped"}:
+            raise ValueError("the run must finish (completed or stopped) before plasmid QC handoff")
         reference = Path(str(payload.get("reference_fasta") or "")).expanduser()
         if not reference.is_file() or reference.is_symlink():
             raise ValueError("server-issued reference snapshot is unavailable")
@@ -1332,9 +1412,12 @@ async def build_plasmid_qc_handoff(run_id: str, payload: dict[str, Any]) -> dict
         }
 
 
-def get_position_protocol_options(position: str) -> dict[str, Any]:
+def get_position_protocol_options(position: str, kit: str | None = None) -> dict[str, Any]:
     """Return host-agent protocol options/preflight for one ONT position."""
-    host_payload = request_host_agent("GET", f"/ont/positions/{position}/protocol-options")
+    host_payload = request_host_agent(
+        "GET", f"/ont/positions/{position}/protocol-options",
+        query={"kit": kit} if kit else None, timeout=30.0,
+    )
     if isinstance(host_payload, dict) and "can_start" in host_payload:
         return host_payload
 
@@ -1352,3 +1435,69 @@ def get_position_protocol_options(position: str) -> dict[str, Any]:
         basecalling_enabled=True,
         output_directories=output_directories,
     )
+
+
+ACTIVE_RUN_STATES = ("starting", "running", "stopping", "unknown")
+
+
+async def reconcile_active_runs_once(*, limit: int = 100) -> int:
+    """Poll MinKNOW once for every BMS run that is still in progress."""
+    async with async_session() as session:
+        run_ids = list((await session.execute(
+            select(OntInstrumentRun.id)
+            .where(OntInstrumentRun.state.in_(ACTIVE_RUN_STATES), OntInstrumentRun.minknow_run_id.is_not(None))
+            .order_by(OntInstrumentRun.observed_at, OntInstrumentRun.id)
+            .limit(limit)
+        )).scalars())
+    reconciled = 0
+    for run_id in run_ids:
+        try:
+            await reconcile_instrument_run(str(run_id))
+            reconciled += 1
+        except Exception:  # noqa: BLE001 - one bad run must not stop the others
+            import logging
+            logging.getLogger(__name__).exception("ONT run status update failed: %s", run_id)
+    return reconciled
+
+
+class OntRunMonitor:
+    """Background poller that keeps BMS run state in step with MinKNOW."""
+
+    def __init__(self, poll_interval: float = 10.0) -> None:
+        self._poll_interval = poll_interval
+        self._stop = None
+        self._task = None
+
+    async def start(self) -> None:
+        import asyncio
+        if self._task is not None and not self._task.done():
+            return
+        self._stop = asyncio.Event()
+        self._task = asyncio.create_task(self._run(), name="ont-run-monitor")
+
+    async def _run(self) -> None:
+        import asyncio
+        while not self._stop.is_set():
+            try:
+                await reconcile_active_runs_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).exception("ONT run monitor iteration failed")
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self._poll_interval)
+            except asyncio.TimeoutError:
+                pass
+
+    async def stop(self) -> None:
+        import asyncio
+        if self._task is None:
+            return
+        self._stop.set()
+        self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            pass
+        self._task = None

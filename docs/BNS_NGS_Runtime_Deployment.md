@@ -86,6 +86,25 @@ the edition object every alignment session reports `pinned NGS samtools runtime
 is unavailable or does not match the Dorado lock`; the rest of the result stays
 readable.
 
+## Sequencing runs on the Mk1D
+
+BMS manages runs; MinKNOW carries them out. Install the bridge with
+`config/bns-native-installation/install-minknow-bridge.py`, then in **NGS → ONT
+instrument control**:
+
+1. Pick the Mk1D position and the sequencing kit used for the library. BMS asks
+   MinKNOW for the matching sequencing protocol and its default (HAC) basecalling
+   model for the inserted flow cell.
+2. Set the run length and press **Start sequencing**. BMS records the run before
+   it calls MinKNOW, then saves MinKNOW's run id.
+3. BMS polls MinKNOW every 10 seconds. When the run completes, or is stopped
+   with **Stop run**, BMS seals the FASTQ/POD5 files from MinKNOW's run folder,
+   registers the POD5 for raw-signal work and enables plasmid-QC handoff.
+
+If BMS loses contact with MinKNOW during a start, the run is marked `unknown`
+and is never started a second time. Polling picks it up again once MinKNOW
+responds. Hardware checks and power cycling are done from MinKNOW itself.
+
 Configure `BMS_ONT_CONTAINER_RUNTIME=podman` and `BMS_CONTAINER_RUNTIME=podman`
 in the supported host environment for rootless Podman. Managed units preserve
 both selectors. Rootless worker commands keep the host UID so their output
