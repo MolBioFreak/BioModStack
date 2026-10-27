@@ -114,7 +114,7 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
         from experiment_services import add_audit_event
         add_audit_event(pm, workspace_id=project.id, resource_id=project.id, event_type='workspace_owner_bound', generation=1, payload={'principal_id': 'owner'})
         await pm.commit()
-        project_id, receipt_id = project.id, receipt.id
+        project_id, receipt_id, domain_id = project.id, receipt.id, domain.id
         other_project, _, _ = await _hierarchy(pm)
         add_audit_event(pm, workspace_id=other_project.id, resource_id=other_project.id, event_type='workspace_owner_bound', generation=1, payload={'principal_id': 'owner'})
         await pm.commit()
@@ -166,6 +166,45 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     assert (await client.get(f'{url}/documents/{selected}', headers={'x-test-actor':'owner'})).json()['rows'][0]['aligned'] == expected_aligned
     assert (await client.get(f'{url}/artifacts/{selected}', headers={'x-test-actor':'owner'})).content == original_bytes
     assert (await client.get(f'{url}/artifacts/not-in-receipt', headers={'x-test-actor':'owner'})).status_code == 404
+    state = {'marks': [{'id': 'mark', 'label': 'test', 'coordinate': {'scope': 'artifact_columns', 'artifact_id': selected, 'start': 0, 'end': 1}}]}
+    response = await client.post(f'/api/family-msa/projects/{project_id}/shared-state',
+        headers={'x-test-actor':'owner'}, json={'name':'test marks', 'domain_experiment_id':domain_id, 'state':state})
+    assert response.status_code == 201, response.text
+    state_id = response.json()['id']
+    # Exercise SDK against the real mounted scratch API without network sockets.
+    import asyncio
+    import io
+    from urllib.error import HTTPError
+    from bms_alignment.http import AlignmentClient
+    from bms_alignment.bundle import inspect_project_bundle
+    loop = asyncio.get_running_loop()
+    class AsgiOpener:
+        def open(self, request, timeout):
+            async def send():
+                return await client.request(request.method, request.full_url, headers=dict(request.header_items()), content=request.data)
+            response = asyncio.run_coroutine_threadsafe(send(), loop).result(timeout=timeout)
+            if response.status_code >= 400:
+                raise HTTPError(request.full_url, response.status_code, 'error', {}, io.BytesIO(response.content))
+            return io.BytesIO(response.content)
+    sdk = AlignmentClient('http://test', headers={'x-test-actor':'owner'})
+    sdk._opener = AsgiOpener()
+    destination = tmp_path / 'portable'
+    await asyncio.to_thread(sdk.export_project_bundle, project_id, receipt_id, destination, shared_state_ids=[state_id])
+    exported = inspect_project_bundle(destination)
+    saved_state = json.loads((destination / exported['inventory']['shared_states'][0]['path']).read_text())
+    assert saved_state['state']['marks'][0]['coordinate']['artifact_id'] == selected
+    import subprocess, sys
+    inspected = subprocess.run([sys.executable, '-m', 'bms_alignment.cli', 'bundle', 'inspect-project', str(destination)], capture_output=True, text=True, check=True)
+    assert json.loads(inspected.stdout)['inventory'] == exported['inventory']
+    inventory = exported['inventory']['artifacts']
+    assert {item['id'] for item in inventory} == set(before)
+    for item in inventory:
+        assert (destination / item['path']).read_bytes() == before[item['id']]
+    portable_alignment = next(item for item in inventory if item['id'] == selected)
+    assert (destination / portable_alignment['path']).read_bytes() == original_bytes
+    (destination / portable_alignment['path']).write_bytes(b'corrupt')
+    with pytest.raises(ValueError, match='bundle verification failed'):
+        inspect_project_bundle(destination)
     assert (await client.get(job_url, headers={'x-test-actor':'owner'})).status_code == 404
     await client.aclose()
     await engine.dispose()

@@ -210,7 +210,7 @@ async def project_result(request, session, project_id, receipt_id):
 
 
 def listing(entries):
-    return {'artifacts': [{'id': x['id'], 'role': x['role']} for x in entries]}
+    return {'artifacts': [{'id': x['id'], 'role': x['role'], 'logical_path': x.get('logical_path')} for x in entries]}
 
 
 async def document(entries, read, artifact_id):

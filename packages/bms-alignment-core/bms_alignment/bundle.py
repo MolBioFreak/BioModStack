@@ -34,6 +34,32 @@ def make_bundle(source: Path, destination: Path, filenames: list[str], *, exclud
     return manifest
 
 
+def inspect_project_bundle(root: Path) -> dict:
+    """Read a Project export only after verifying every listed bundle byte."""
+    verification = verify_bundle(root)
+    if not verification['valid']:
+        raise ValueError('bundle verification failed: ' + '; '.join(verification['errors']))
+    manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+    included = set(manifest['dependencies']['included'])
+    if 'project-export.json' not in included:
+        raise ValueError('bundle has no Project export inventory')
+    inventory = json.loads((root / 'project-export.json').read_text(encoding='utf-8'))
+    if not isinstance(inventory, dict) or inventory.get('schema') != 'bms.family-msa.project-export.v1':
+        raise ValueError('invalid Project export inventory')
+    entries = inventory.get('artifacts'), inventory.get('shared_states')
+    if any(not isinstance(group, list) for group in entries):
+        raise ValueError('invalid Project export entries')
+    paths = []
+    for group in entries:
+        for entry in group:
+            if not isinstance(entry, dict) or entry.get('path') not in included or entry.get('path') == 'project-export.json':
+                raise ValueError('Project export references unverified bytes')
+            paths.append(entry['path'])
+    if len(set(paths)) != len(paths):
+        raise ValueError('duplicate Project export paths')
+    return {'inventory': inventory, 'dependencies': manifest['dependencies']}
+
+
 def verify_bundle(root: Path) -> dict:
     try:
         manifest = json.loads((root/'manifest.json').read_text())

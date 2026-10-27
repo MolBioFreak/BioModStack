@@ -98,6 +98,60 @@ class AlignmentClient:
         except HTTPError as exc:
             raise BmsHttpError(exc.code, exc.read()) from exc
 
+    def export_project_bundle(self, project_id: str, receipt_id: str, destination, *, shared_state_ids: list[str] | None = None) -> dict:
+        """Export the exact authorized Project artifacts and selected shared states.
+
+        Shared states are selected explicitly; this does not claim to discover all
+        Project annotations. Artifact identifiers remain in the inventory, not paths.
+        """
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from .bundle import make_bundle
+
+        prefix = '/api/family-msa/projects/' + quote(project_id, safe='')
+        result_path = prefix + '/receipts/' + quote(receipt_id, safe='')
+        listing = self._request('GET', result_path)
+        artifacts = listing['artifacts']
+        if not isinstance(artifacts, list) or not artifacts:
+            raise ValueError('empty artifact inventory')
+        if len({a['id'] for a in artifacts}) != len(artifacts):
+            raise ValueError('duplicate artifact identifiers')
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            files = []
+            inventory = []
+            for index, artifact in enumerate(artifacts):
+                path = f'artifacts/{index:06d}'
+                request = Request(self.base_url + result_path + '/artifacts/' + quote(artifact['id'], safe=''),
+                                  headers={**self.headers, 'Accept': 'application/octet-stream'}, method='GET')
+                try:
+                    with self._opener.open(request, timeout=self.timeout) as response:
+                        data = response.read()
+                except HTTPError as exc:
+                    raise BmsHttpError(exc.code, exc.read()) from exc
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+                files.append(path)
+                inventory.append({'id': artifact['id'], 'role': artifact['role'], 'logical_path': artifact.get('logical_path'), 'path': path})
+            states = []
+            for index, state_id in enumerate(shared_state_ids or []):
+                state = self._request('GET', prefix + '/shared-state/' + quote(state_id, safe=''))
+                path = f'shared-state/{index:06d}.json'
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(json.dumps(state, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+                files.append(path)
+                states.append({'id': state_id, 'path': path})
+            inventory_path = 'project-export.json'
+            (root / inventory_path).write_text(json.dumps({'schema': 'bms.family-msa.project-export.v1',
+                'project_id': project_id, 'receipt_id': receipt_id, 'artifacts': inventory,
+                'shared_states': states}, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+            files.insert(0, inventory_path)
+            return make_bundle(root, Path(destination), files, excluded=[
+                'Project shared states not explicitly selected',
+                'External dependencies not retained in the Project receipt'])
+
     def model(self, model_id: Literal['family_msa_protein', 'family_msa_nucleic']) -> ModelInfo:
         return ModelInfo.model_validate(self._request('GET', '/api/models/' + quote(model_id, safe='')))
 
