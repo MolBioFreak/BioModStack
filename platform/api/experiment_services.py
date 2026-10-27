@@ -3413,7 +3413,10 @@ async def reconcile_run_group(
             if terminal.get("output_evidence") and not terminal.get("output_receipt_ids"):
                 preparation = await session.get(ExperimentWorkflowPreparation, attempt.preparation_id)
                 normalized = json.loads(preparation.normalized_request_json) if preparation else {}
-                if normalized.get("launch_authority", {}).get("schema") == "bms.protein-setup-launch-authority.v1":
+                terminal_job = await core_session.get(Job, attempt.scheduler_job_id)
+                native_family_msa = terminal_job is not None and terminal_job.model_id in {
+                    'family_msa_protein', 'family_msa_nucleic'} and terminal_job.mode == 'family_msa'
+                if normalized.get("launch_authority", {}).get("schema") == "bms.protein-setup-launch-authority.v1" or native_family_msa:
                     linked = await session.scalar(select(ExperimentLineageEdge.id).where(
                         ExperimentLineageEdge.source_resource_id == attempt.resource_id,
                         ExperimentLineageEdge.edge_mode == "produced",
@@ -3422,9 +3425,10 @@ async def reconcile_run_group(
                         try:
                             from services.global_experiments.receipts import verify_and_link_terminal_outputs
 
-                            await verify_and_link_terminal_outputs(
-                                session, core_session, attempt_id=attempt.resource_id,
-                            )
+                            async with session.begin_nested():
+                                await verify_and_link_terminal_outputs(
+                                    session, core_session, attempt_id=attempt.resource_id,
+                                )
                         except Exception:
                             # Retain pending evidence without a lifecycle change.
                             pass
@@ -3453,7 +3457,9 @@ async def reconcile_run_group(
             preparation = await session.get(ExperimentWorkflowPreparation, attempt.preparation_id)
             normalized = json.loads(preparation.normalized_request_json) if preparation else {}
             launch_authority = normalized.get("launch_authority", {})
-            native_protein = launch_authority.get("schema") == "bms.protein-setup-launch-authority.v1"
+            native_protein = launch_authority.get("schema") == "bms.protein-setup-launch-authority.v1" or (
+                job.model_id in {'family_msa_protein', 'family_msa_nucleic'} and job.mode == 'family_msa'
+            )
             resource_usage = None
             resource_evidence = None
             try:
@@ -3505,13 +3511,14 @@ async def reconcile_run_group(
                 try:
                     from services.global_experiments.receipts import verify_and_link_terminal_outputs
 
-                    receipt.update(
-                        await verify_and_link_terminal_outputs(
-                            session,
-                            core_session,
-                            attempt_id=attempt.resource_id,
+                    async with session.begin_nested():
+                        receipt.update(
+                            await verify_and_link_terminal_outputs(
+                                session,
+                                core_session,
+                                attempt_id=attempt.resource_id,
+                            )
                         )
-                    )
                 except Exception as exc:
                     condition_code = str(getattr(exc, "code", "terminal_output_verification_pending"))
                     pending_receipt = {

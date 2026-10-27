@@ -24,6 +24,7 @@ def family_msa_capability(capability_id: str):
         'project_native_owner_id': f'{capability_id}:family_msa',
         'safe_setup_destination': destination, 'launch_mode': 'typed_launcher_handoff',
         'product_taxonomy': {'family': 'family_alignment'},
+        'result_adapter_ids': [f'bms.family-msa.{capability_id}.adapter.v1'],
     }
     schema = {
         '$id': f'bms.workflow-parameters.{capability_id}.v1', 'type': 'object',

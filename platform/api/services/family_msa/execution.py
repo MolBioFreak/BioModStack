@@ -110,7 +110,9 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
         files += [(output, 'alignment', 'text/x-fasta'),
                   (Path(str(input_file) + '.tree'), 'guide_tree', 'text/plain')]
     else:
-        files.append((work / 'worker-result.json', 'native_receipt', 'application/json'))
+        files.extend([(work / 'request.json', 'native_request', 'application/json'),
+                      (output, 'engine_stdout', 'text/plain'),
+                      (work / 'worker-result.json', 'native_receipt', 'application/json')])
         for path in (work / 'native').rglob('*'):
             if not path.is_file():
                 continue
@@ -138,14 +140,32 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
         job.completed_at = datetime.utcnow()
         job.error_message = error
         job.assigned_gpu = None
+        artifacts = []
         for path, role, media_type in files:
             if path.is_file():
                 digest = hashlib.sha256()
                 with path.open('rb') as stream:
                     for chunk in iter(lambda: stream.read(1024 * 1024), b''):
                         digest.update(chunk)
-                session.add(JobArtifact(id=str(uuid.uuid4()), owner_job_id=job_id, attempt=attempt,
+                artifact = JobArtifact(id=str(uuid.uuid4()), owner_job_id=job_id, attempt=attempt,
                     logical_path=str(path.relative_to(Path(output_dir).resolve())), storage_path=str(path),
                     sha256=digest.hexdigest(), bytes=path.stat().st_size, media_type=media_type,
-                    provenance={'role': role, 'run_identity': run_identity}))
+                    provenance={'role': role, 'run_identity': run_identity})
+                artifacts.append(artifact)
+                session.add(artifact)
+        from services.family_msa.result_manifest import write_result_manifest
+        try:
+            manifest_path, manifest_data = write_result_manifest(
+                work, job_id=job_id, attempt=attempt, run_identity=run_identity,
+                artifacts=artifacts, status='failed' if error else 'completed')
+        except Exception:
+            # Publication is observational: it must not change Job outcome.
+            import logging
+            logging.getLogger(__name__).exception('family MSA result manifest unavailable for %s', job_id)
+        else:
+            session.add(JobArtifact(id=str(uuid.uuid4()), owner_job_id=job_id, attempt=attempt,
+                logical_path=str(manifest_path.relative_to(Path(output_dir).resolve())),
+                storage_path=str(manifest_path), sha256=hashlib.sha256(manifest_data).hexdigest(),
+                bytes=len(manifest_data), media_type='application/json',
+                provenance={'role': 'result_manifest', 'run_identity': run_identity}))
         await session.commit()
