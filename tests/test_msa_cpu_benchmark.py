@@ -25,7 +25,10 @@ def test_timeout_and_failed_status_are_distinct(tmp_path):
     def run(code, timeout):
         return b.invoke([sys.executable, '-c', code], tmp_path, timeout, tmp_path / 'out', tmp_path / 'err', tmp_path / 'time')
     assert run('raise SystemExit(3)', 5)['status'] == 'failed'
-    assert run('import time; time.sleep(5)', .1)['status'] == 'timeout'
+    timed = run('import time; time.sleep(5)', .1)
+    assert timed['status'] == 'timeout'
+    assert timed['peak_rss_kib'] is None
+    assert timed['user_seconds'] is None
 
 
 def test_missing_output_is_observation(tmp_path):

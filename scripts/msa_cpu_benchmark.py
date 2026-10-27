@@ -45,6 +45,8 @@ def observe(source, output):
 
 
 def invoke(argv, cwd, timeout, out, err, metrics):
+    # A killed timer may leave no metrics; never reuse a previous run's file.
+    metrics.unlink(missing_ok=True)
     wrapped = ['/usr/bin/time', '-f', '%U %S %M', '-o', str(metrics), '--'] + argv
     start = time.monotonic()
     with out.open('wb') as stdout, err.open('wb') as stderr:
