@@ -38,6 +38,7 @@ def compile_engine(request, executable, input_path, output_path, tree_path=None)
         a = prefix + ['-t', str(s.threads), '-gt', s.guide_tree, '-refine_mode', s.refine_mode]
         for name in ('keep_duplicates', 'medoidtree', 'dgr', 'dgo', 'dsp'):
             if getattr(s, name): a.append('-' + name)
+        if s.verbose: a.append('-v')
         for name in ('medoid_seeds', 'medoid_threshold', 'trim_columns', 'r', 'sm', 'go', 'ge', 'tgo', 'tge', 'dist', 'gsd', 'gsl'):
             if getattr(s, name) is not None: a += ['-' + name, str(getattr(s, name))]
         return a + [input_path, output_path]
@@ -57,6 +58,7 @@ def compile_engine(request, executable, input_path, output_path, tree_path=None)
             if value is not None: a += ['--' + name.replace('_', '-'), str(value)]
         for name in ('wildcard', 'rooted', 'prune', 'filter', 'write_filtered', 'write_prune', 'check'):
             if getattr(s, name): a.append('--' + name)
+        if s.verbose: a.append('--verbose')
         return a
     raise ValueError('Unsupported engine')
 

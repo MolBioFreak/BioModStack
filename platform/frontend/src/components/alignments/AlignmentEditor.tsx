@@ -69,6 +69,7 @@ export default function AlignmentEditor({ model }: { model: string }) {
     const [engine,setEngine] = useState<Engine>('mafft');
     const [drafts,setDrafts] = useState<Record<Engine,Settings>>(() => structuredClone(defaults));
     const [inventory,setInventory] = useState<Partial<Record<Engine,ReturnType<typeof settingsInventory>>>>({});
+    const [inventoryError,setInventoryError] = useState(false);
     useEffect(() => {
         let cancelled = false;
         void Promise.resolve().then(() => api.get<SettingsSchema>('/api/family-msa/settings-schema')).then(({data}) => {
@@ -76,7 +77,7 @@ export default function AlignmentEditor({ model }: { model: string }) {
             const next = Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(engine => [engine,settingsInventory(data,engine)])) as Record<Engine,ReturnType<typeof settingsInventory>>;
             setInventory(next);
             setDrafts(previous => Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(engine => [engine,{...next[engine].defaults,...previous[engine]}])) as Record<Engine,Settings>);
-        }).catch(() => {});
+        }).catch(() => { if (!cancelled) setInventoryError(true); });
         return () => { cancelled = true; };
     }, []);
     const [fasta,setFasta] = useState(''); const [busy,setBusy] = useState(false); const [error,setError] = useState(''); const [job,setJob] = useState(urlJob ?? '');
@@ -191,6 +192,7 @@ export default function AlignmentEditor({ model }: { model: string }) {
     };
     return <section aria-label="New family alignment" className="space-y-4 rounded border border-slate-600 p-4">
         <h2 className="text-lg font-semibold">New family alignment</h2>
+        {inventoryError && <p role="status">Settings discovery failed; showing the limited built-in settings instead.</p>}
         {setup.active && !setup.setup && <p role="status">Project setup must load before editing.</p>}
         <fieldset disabled={busy || (setup.active && !setup.setup)} className="space-y-3">
             <label className="block">Molecule <select aria-label="Molecule" className={inputClass} value={molecule} onChange={e=>{const next=e.target.value as Molecule; setMolecule(next); if ((next === 'protein' && engine === 'twilight') || (next !== 'protein' && engine === 'famsa')) setEngine('mafft');}}>{(model === 'family_msa_nucleic' ? ['dna','rna'] : ['protein']).map(x=><option key={x}>{x}</option>)}</select></label>

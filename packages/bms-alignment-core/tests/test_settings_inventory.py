@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 
 import pytest
@@ -28,12 +29,21 @@ def test_schema_and_nondefault_compilers():
     assert all(x in twilight for x in ('--min-len', '3', '--max-ambig', '0.5', '--check'))
 
 
+@pytest.mark.parametrize('strategy', ['fft_ns_2', 'linsi', 'ginsi', 'einsi', 'auto'])
+def test_mafft_explicit_overrides(strategy):
+    args = compile_mafft(request('mafft', strategy=strategy, retree=1, maxiterate=3, reorder=True, quiet=True), 'mafft', 'in')
+    assert args.count('--retree') == args.count('--maxiterate') == 1
+    assert args[args.index('--retree') + 1] == '1'
+    assert args[args.index('--maxiterate') + 1] == '3'
+    assert '--reorder' in args and '--quiet' in args
+
+
 @pytest.mark.skipif(not os.environ.get('BMS_MSA_SIF'), reason='BMS_MSA_SIF not configured')
 @pytest.mark.parametrize('engine,molecule,settings', [
-    ('mafft', 'dna', {'strategy': 'einsi', 'op': 1.2, 'ep': 0.1}),
-    ('famsa', 'protein', {'sm': 'MIQS', 'go': -14000, 'dgr': True}),
+    ('mafft', 'dna', {'strategy': 'einsi', 'op': 1.2, 'ep': 0.1, 'retree': 1, 'maxiterate': 3, 'reorder': True, 'quiet': True}),
+    ('famsa', 'protein', {'sm': 'MIQS', 'go': -14000, 'dgr': True, 'verbose': True}),
     ('muscle', 'protein', {'mode': 'super5', 'permutation': 'abc', 'perturb': 1}),
-    ('twilight', 'dna', {'guide_source': 'mafft', 'method': 'tcs', 'min_len': 3, 'max_ambig': 0.5, 'check': True}),
+    ('twilight', 'dna', {'guide_source': 'mafft', 'method': 'tcs', 'min_len': 3, 'max_ambig': 0.5, 'check': True, 'verbose': True}),
 ])
 def test_native_nondefaults(tmp_path, engine, molecule, settings):
     sif = os.environ['BMS_MSA_SIF']
@@ -41,3 +51,6 @@ def test_native_nondefaults(tmp_path, engine, molecule, settings):
     result = run_engine(request(engine, molecule, **settings), tmp_path, prefix + [engine], prefix + ['mafft'])
     assert result['returncode'] == 0, (result, (Path(result['attempt_dir']) / 'engine.log').read_text())
     assert result['artifacts']
+    receipt = json.loads((Path(result['attempt_dir']) / 'receipt.json').read_text())
+    expected = request(engine, molecule, **settings).settings.model_dump(mode='json')
+    assert receipt['requested']['settings'] == receipt['effective_settings'] == expected

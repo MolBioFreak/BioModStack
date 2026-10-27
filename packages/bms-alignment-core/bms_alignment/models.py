@@ -51,6 +51,10 @@ class MafftSettings(Closed):
     treeout: bool = False
     op: float | None = None
     ep: float | None = None
+    retree: int | None = Field(default=None, ge=0, description='Override the strategy guide-tree rebuild count.')
+    maxiterate: int | None = Field(default=None, ge=0, description='Override the strategy refinement iteration count.')
+    reorder: bool = False
+    quiet: bool = False
 
 class FamsaSettings(Closed):
     engine: Literal['famsa'] = 'famsa'
@@ -74,6 +78,7 @@ class FamsaSettings(Closed):
     dgr: bool = False
     dgo: bool = False
     dsp: bool = False
+    verbose: bool = False
 
 class MuscleSettings(Closed):
     engine: Literal['muscle'] = 'muscle'
@@ -106,6 +111,7 @@ class TwilightSettings(Closed):
     write_filtered: bool = False
     write_prune: bool = False
     check: bool = False
+    verbose: bool = False
     match: float = 18
     mismatch: float = -8
     transition: float = -4

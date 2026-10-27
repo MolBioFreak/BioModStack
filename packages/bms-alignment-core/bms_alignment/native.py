@@ -10,14 +10,17 @@ def compile_mafft(request: AlignmentRequest, executable: str, input_path: str) -
     s = request.settings
     prefix = [executable] if isinstance(executable, str) else list(executable)
     args = prefix + ['--amino' if request.roster.molecule == 'protein' else '--nuc', '--thread', str(s.threads)]
-    if s.strategy == 'fft_ns_2': args += ['--retree', '2', '--maxiterate', '0']
-    elif s.strategy == 'linsi': args += ['--localpair', '--maxiterate', '1000']
-    elif s.strategy == 'ginsi': args += ['--globalpair', '--maxiterate', '1000']
-    elif s.strategy == 'einsi': args += ['--genafpair', '--maxiterate', '1000']
+    if s.strategy == 'fft_ns_2': args += ['--retree', str(s.retree if s.retree is not None else 2), '--maxiterate', str(s.maxiterate if s.maxiterate is not None else 0)]
+    elif s.strategy in ('linsi', 'ginsi', 'einsi'):
+        args += [{'linsi': '--localpair', 'ginsi': '--globalpair', 'einsi': '--genafpair'}[s.strategy], '--maxiterate', str(s.maxiterate if s.maxiterate is not None else 1000)]
     elif s.strategy == 'auto': args += ['--auto']
+    if s.strategy != 'fft_ns_2' and s.retree is not None: args += ['--retree', str(s.retree)]
+    if s.strategy == 'auto' and s.maxiterate is not None: args += ['--maxiterate', str(s.maxiterate)]
     for name in ('op', 'ep'):
         if getattr(s, name) is not None: args += ['--' + name, str(getattr(s, name))]
     if s.treeout: args.append('--treeout')
+    if s.reorder: args.append('--reorder')
+    if s.quiet: args.append('--quiet')
     return args + [input_path]
 
 
