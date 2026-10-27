@@ -1,1 +1,1 @@
-"""Family-MSA integration helpers. Scientific contracts belong to bms_alignment."""
+"""Family alignment integration, separate from folding-MSA workflows."""
