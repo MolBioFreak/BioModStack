@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "npm --prefix alignment-viewers/jbrowse ci --ignore-scripts && npm --prefix alignment-viewers/jbrowse run build && NODE_ENV=production vite",
-    "build": "npm --prefix alignment-viewers/jbrowse ci --ignore-scripts && npm --prefix alignment-viewers/jbrowse run build && tsc -b && vite build",
+    "dev": "pnpm --filter @bms/jbrowse-viewer build && NODE_ENV=production vite",
+    "build": "pnpm --filter @bms/jbrowse-viewer build && tsc -b && vite build",
     "build:share": "vite build --config vite.share.config.ts",
     "build:isolated": "BMS_FRONTEND_BUILD_OUT_DIR=${BMS_FRONTEND_BUILD_OUT_DIR:-.artifacts/frontend-dist} pnpm run build",
     "lint": "eslint .",

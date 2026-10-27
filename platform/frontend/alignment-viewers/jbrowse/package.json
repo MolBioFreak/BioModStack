@@ -16,5 +16,7 @@
   "private": true,
   "scripts": {
     "build": "vite build"
-  }
+  },
+  "name": "@bms/jbrowse-viewer",
+  "version": "0.0.0"
 }

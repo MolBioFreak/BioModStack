@@ -50,7 +50,7 @@ async def main():
                 for typ in ('mousePressed','mouseReleased'):
                     await call('Input.dispatchMouseEvent',{'type':typ,'x':box[0]+x,'y':box[1]+y,'button':'left','clickCount':1})
                 await asyncio.sleep(.05)
-                found=await ev('document.querySelector("#selected").textContent')
+                found=await ev('(document.querySelector("main")?.textContent.match(/Row (one|two), column \d+[^.]*/)?.[0] || "null")')
                 if found!='null': break
             if found!='null': break
         print('selected',found); assert found!='null'
@@ -58,7 +58,7 @@ async def main():
         # the replacement document. The host must never send the alignment.
         await ev("window.leaks=[];window.addEventListener('message',e=>{if(e.data?.probe)leaks.push(e.data)});let f=document.querySelector('iframe');f.removeAttribute('srcdoc');f.src='http://127.0.0.1:43732/redirect';")
         await asyncio.sleep(2)
-        before=await ev('document.querySelector("#selected").textContent')
+        before=await ev('(document.querySelector("main")?.textContent.match(/Row (one|two), column \d+[^.]*/)?.[0] || "null")')
         # replacement itself posts synthetic spoof and reports any incoming message
         await asyncio.sleep(1)
         leaks=await ev('window.leaks')

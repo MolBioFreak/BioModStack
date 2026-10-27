@@ -1,5 +1,6 @@
 import { Link, useLocation, useParams } from 'react-router-dom';
 import AlignmentWorkspace from './AlignmentWorkspace';
+import JbrowseViewer from './JbrowseViewer';
 import AlignmentEditor from './AlignmentEditor';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -71,6 +72,6 @@ export default function AlignmentPage() {
         {base && alignments.length > 1 && <label>Alignment member <select value={selected} onChange={e => setSelection({base, id: e.target.value})}><option value="">Choose a member</option>{alignments.map(x => <option key={x.id} value={x.id}>{x.id}</option>)}</select></label>}
         {!base && !resultId && section === 'New' && <>{!queryModel && <label>Alignment family <select aria-label="Alignment family" value={model} onChange={e => setSelectedModel(e.target.value)}><option value="family_msa_protein">Protein</option><option value="family_msa_nucleic">Nucleic acid</option></select></label>}<AlignmentEditor key={model} model={model}/></>}
         {!base && !resultId && section !== 'New' && <p role="status">{section === 'Compare' ? 'Alignment comparison is not connected yet.' : 'Alignment library is not connected yet.'}</p>}
-        <AlignmentWorkspace projectLabel={setup.setup?.project_label} document={document} downloads={base ? artifacts.map(x => ({label: `${x.role} (${x.id})`, href: `${base}/artifacts/${encodeURIComponent(x.id)}`})) : []} />
+        <AlignmentWorkspace viewers={{ jbrowse: JbrowseViewer }} projectLabel={setup.setup?.project_label} document={document} downloads={base ? artifacts.map(x => ({label: `${x.role} (${x.id})`, href: `${base}/artifacts/${encodeURIComponent(x.id)}`})) : []} />
     </div>;
 }
