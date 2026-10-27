@@ -1,0 +1,22 @@
+# bms-alignment-core — partial implementation
+
+Standalone Python primitives and a MAFFT runner. This is **not a completed first-pass integration** and must not be advertised as full engine or parameter coverage. No BMS database, API, frontend, or runtime image is included.
+
+## Local checks
+
+```sh
+cd packages/bms-alignment-core
+PYTHONPATH=. python -m pytest -q -rs
+# For actual native evidence set BMS_TEST_MAFFT to the executable and, if
+# required by that installation, MAFFT_BINARIES to its helper directory.
+```
+
+`bms-alignment schema`, `validate`, `run`, `inspect`, `compare`, `export`, and `bundle verify` accept JSON matching `AlignmentRequest` or `SequenceSet` as appropriate. `run` executes a real process with separate input, output, log and receipt. Native failures preserve files and return the native status. This early receipt includes local argv paths; it is not a portable scientific manifest.
+
+FASTA import retains duplicate headers with generated occurrence-local row IDs. Stockholm and Clustal are basic block parsers; original Stockholm text is retained, but structured annotations are not implemented. A3M is retained as original text; conversion or rectangular projection is unavailable and explicitly rejected. Exports disclose Stockholm metadata loss and replacement of headers by row IDs for block formats. Source identity defaults to unknown; comparison uses only explicitly declared member/occurrence IDs and offsets. Summary counts ambiguity literally and each occurrence equally.
+
+`tree.map_mafft_tree` maps exact numbered MAFFT leaf labels with explicit missing/unmapped/duplicate observations. It is not a complete validating Newick parser, is not wired into TWILIGHT, and is not evidence of MAFFT 7.525 interoperability.
+
+## Required remaining work
+
+Complete machine-readable inventories and all native settings; FAMSA, MUSCLE, TWILIGHT and their native qualification; real reversible supplied/generated guide tree workflows; robust formats/A3M projection and raw bytes; source transformation maps and full correspondence metrics; typed full contracts and HTTP SDK; cancellable process ownership; full portable bundle manifests and relocation; package wheel clean-install acceptance; API/PM/Job/UI integration. More exhaustive verification and security review are needed before use as an integration authority.
