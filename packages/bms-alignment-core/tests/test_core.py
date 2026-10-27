@@ -19,6 +19,9 @@ def test_explicit_identity_and_offsets():
     b = parse('>renamed\nAC-\n', 'fasta', 'dna')
     for r in (a.rows[0], b.rows[0]):
         r.source_member_id = 'source'; r.occurrence_id = 'one'; r.source_offset = 20
+        r.transformation_provenance = 'declared original'
+    a.rows[0].source_positions = [20, None, 21]
+    b.rows[0].source_positions = [20, 21, None]
     assert compare(a,b)['rows'][0]['positions'] == [dict(source=20,left_column=0,right_column=0), dict(source=21,left_column=2,right_column=1)]
 
 

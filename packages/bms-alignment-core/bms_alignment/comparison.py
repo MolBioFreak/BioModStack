@@ -34,15 +34,18 @@ def compare(a: SequenceSet, b: SequenceSet) -> dict:
         xi = {v: i for i, v in enumerate(x) if v is not None}
         yi = {v: i for i, v in enumerate(y) if v is not None}
         # A3M lowercase insertions are not ordinary alignment columns.
-        known = (l.source_offset is not None and r.source_offset is not None
-                 and a.source_format != 'a3m' and b.source_format != 'a3m')
+        if a.source_format == 'a3m': x = [None] * len(l.sequence); xi = {}
+        if b.source_format == 'a3m': y = [None] * len(r.sequence); yi = {}
+        lu = [i for i, c in enumerate(l.sequence) if c not in '-.' and x[i] is None]
+        ru = [i for i, c in enumerate(r.sequence) if c not in '-.' and y[i] is None]
         rows.append({**_ident(key), 'left_row_id': l.row_id, 'right_row_id': r.row_id,
-                     'positions': [{'source': p, 'left_column': xi[p], 'right_column': yi[p]} for p in sorted(xi.keys() & yi.keys())] if known else [],
-                     'left_only_positions': sorted(xi.keys() - yi.keys()) if known else [],
-                     'right_only_positions': sorted(yi.keys() - xi.keys()) if known else [],
-                     'mapping_unknown': not known,
-                     'left_unmapped_columns': [i for i, c in enumerate(l.sequence) if c not in '-.' and (x[i] is None or a.source_format == 'a3m')],
-                     'right_unmapped_columns': [i for i, c in enumerate(r.sequence) if c not in '-.' and (y[i] is None or b.source_format == 'a3m')]})
+                     'positions': [{'source': p, 'left_column': xi[p], 'right_column': yi[p]} for p in sorted(xi.keys() & yi.keys())],
+                     'left_only_positions': sorted(xi.keys() - yi.keys()) if not ru else [],
+                     'right_only_positions': sorted(yi.keys() - xi.keys()) if not lu else [],
+                     'mapping_unknown': bool(lu or ru),
+                     'left_unmapped_columns': lu, 'right_unmapped_columns': ru,
+                     'left_transformation_provenance': l.transformation_provenance,
+                     'right_transformation_provenance': r.transformation_provenance})
     def excluded(roster, matched):
         return [{'row_id': row.row_id, 'source_member_id': row.source_member_id,
                  'occurrence_id': row.occurrence_id} for row in roster.rows if id(row) not in matched]

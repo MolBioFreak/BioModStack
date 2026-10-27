@@ -55,16 +55,17 @@ def export(roster: SequenceSet, fmt: str, original: bool = False) -> tuple[str, 
 
 
 def coordinates(row: Row) -> list[int | None]:
-    """Map gapped columns to zero-based source positions; unknown stays unknown."""
-    i = 0
-    result = []
-    for c in row.sequence:
-        if c in '-.':
-            result.append(None)
-        else:
-            result.append(None if row.source_offset is None else row.source_offset + i)
-            i += 1
-    return result
+    """Return only explicitly mapped, unambiguous source positions.
+
+    Offset alone does not establish orientation or contiguity. Malformed maps
+    and duplicate source positions are observations, not admission failures.
+    """
+    positions = row.source_positions
+    if not row.transformation_provenance or not row.transformation_provenance.strip() or positions is None or len(positions) != len(row.sequence):
+        return [None] * len(row.sequence)
+    counts = Counter(p for c, p in zip(row.sequence, positions) if c not in '-.' and p is not None)
+    return [p if c not in '-.' and type(p) is int and p >= 0 and counts[p] == 1 else None
+            for c, p in zip(row.sequence, positions)]
 
 
 def summary(roster: SequenceSet) -> list[dict]:

@@ -11,6 +11,9 @@ class Row(Closed):
     source_member_id: str | None = None
     occurrence_id: str | None = None
     source_offset: int | None = None
+    # One entry per sequence column; gaps and unknown residues are None.
+    source_positions: list[int | None] | None = None
+    transformation_provenance: str | None = None
 
     @field_validator('row_id')
     @classmethod

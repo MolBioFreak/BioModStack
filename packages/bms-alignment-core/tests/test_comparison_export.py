@@ -19,6 +19,9 @@ def test_unknown_ambiguous_and_offsets():
     b = parse('>renamed\nACG-\n>other\nACG-\n', 'fasta', 'dna')
     for row in (a.rows[0], b.rows[0]):
         row.source_member_id, row.occurrence_id, row.source_offset = 'm', 'one', 4
+        row.transformation_provenance = 'declared original'
+    a.rows[0].source_positions = [4, None, 5, 6]
+    b.rows[0].source_positions = [4, 5, 6, None]
     a.rows[1].source_member_id, a.rows[1].occurrence_id = 'm', 'two'
     b.rows[1].source_member_id, b.rows[1].occurrence_id = 'm', 'two'
     b.rows[1].source_offset = 4
@@ -51,6 +54,9 @@ def test_cli_compare_and_relocated_bundle(tmp_path):
         roster.rows[0].source_member_id = 'member'
         roster.rows[0].occurrence_id = 'occ'
         roster.rows[0].source_offset = 12
+        roster.rows[0].transformation_provenance = 'declared original'
+    a.rows[0].source_positions = [12, None, 13]
+    b.rows[0].source_positions = [12, 13, None]
     (source / 'a.json').write_text(a.model_dump_json())
     (source / 'b.json').write_text(b.model_dump_json())
     result = json.loads(cli('compare', source/'a.json', source/'b.json').stdout)
@@ -65,3 +71,33 @@ def test_cli_compare_and_relocated_bundle(tmp_path):
     (relocated/'a.json').write_text('corrupted')
     p = subprocess.run([sys.executable, '-m', 'bms_alignment.cli', 'bundle', 'verify', str(relocated)], capture_output=True, text=True)
     assert p.returncode == 1 and not json.loads(p.stdout)['valid']
+
+
+def test_explicit_reverse_noncontiguous_duplicates_and_missing():
+    a = parse('>same\nA-CGT\n', 'fasta', 'dna')
+    b = parse('>same\nAC-GT\n', 'fasta', 'dna')
+    for row in (a.rows[0], b.rows[0]):
+        row.source_member_id = 'source'; row.occurrence_id = 'occ'
+        row.source_offset = 4
+    assert compare(a, b)['rows'][0]['mapping_unknown']
+    assert compare(a, b)['rows'][0]['positions'] == []
+    a.rows[0].source_positions = [9, None, 5, 2, 0]
+    b.rows[0].source_positions = [0, 2, None, 5, 9]
+    a.rows[0].transformation_provenance = 'reverse and subset'
+    b.rows[0].transformation_provenance = 'forward subset'
+    row = compare(a, b)['rows'][0]
+    assert row['positions'] == [dict(source=0, left_column=4, right_column=0),
+                                dict(source=2, left_column=3, right_column=1),
+                                dict(source=5, left_column=2, right_column=3),
+                                dict(source=9, left_column=0, right_column=4)]
+    assert not row['mapping_unknown']
+    a.rows[0].source_positions = [9, None, 5, 5, None]
+    row = compare(a, b)['rows'][0]
+    assert row['positions'] == [dict(source=9, left_column=0, right_column=4)]
+    assert row['left_unmapped_columns'] == [2, 3, 4]
+    assert row['right_only_positions'] == [] and row['mapping_unknown']
+    a.rows[0].source_positions = [9]
+    assert compare(a, b)['rows'][0]['left_unmapped_columns'] == [0, 2, 3, 4]
+    a.rows[0].source_positions = [9, None, 5, 2, 0]
+    a.rows[0].transformation_provenance = None
+    assert compare(a, b)['rows'][0]['positions'] == []
