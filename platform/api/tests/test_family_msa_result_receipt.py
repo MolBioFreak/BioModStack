@@ -185,7 +185,13 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     class AsgiOpener:
         def open(self, request, timeout):
             async def send():
-                return await client.request(request.method, request.full_url, headers=dict(request.header_items()), content=request.data)
+                content = request.data
+                if content is not None and not isinstance(content, bytes):
+                    async def upload(source=content):
+                        for chunk in source:
+                            yield chunk
+                    content = upload()
+                return await client.request(request.method, request.full_url, headers=dict(request.header_items()), content=content)
             response = asyncio.run_coroutine_threadsafe(send(), loop).result(timeout=timeout)
             if response.status_code >= 400:
                 raise HTTPError(request.full_url, response.status_code, 'error', {}, io.BytesIO(response.content))
@@ -198,8 +204,12 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     saved_state = json.loads((destination / exported['inventory']['shared_states'][0]['path']).read_text())
     assert saved_state['state']['marks'][0]['coordinate']['artifact_id'] == selected
     imported = await asyncio.to_thread(sdk.import_project_bundle, project_id, destination, replay_key='native-roundtrip', domain_experiment_id=domain_id)
-    replay = await asyncio.to_thread(sdk.import_project_bundle, project_id, destination, replay_key='native-roundtrip', domain_experiment_id=domain_id)
+    replay = await asyncio.to_thread(sdk.import_project_bundle_streaming, project_id, destination, replay_key='native-roundtrip', domain_experiment_id=domain_id)
     assert replay.replayed and replay.shared_states == imported.shared_states
+    streamed = await asyncio.to_thread(sdk.import_project_bundle_streaming, project_id, destination, replay_key='streamed-roundtrip', domain_experiment_id=domain_id)
+    assert streamed.shared_states[0]['status'] == 'imported'
+    streamed_state = await client.get(f"/api/family-msa/projects/{project_id}/shared-state/{streamed.shared_states[0]['dataset_id']}", headers={'x-test-actor':'owner'})
+    assert streamed_state.status_code == 200 and len(streamed_state.json()['state']['marks']) == 3
     report = imported.shared_states[0]
     assert report['status'] == 'imported'
     assert report['unresolved'] == [{'location': 'marks/2/coordinate/artifact_id', 'source_artifact_id': 'not-exported'}]
