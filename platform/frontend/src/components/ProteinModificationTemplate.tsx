@@ -220,8 +220,8 @@ export function ProteinModificationTemplate({
                     mode={navigation.native_mode ?? 'generate'}
                     initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} />
                     : ['rfd3', 'disco', 'laproteina'].includes(generator) ? <GenerationEditor key={activeKey} initialValues={childValues.current.values} generator={generator}
-                    designTask={task} runDetails={runDetails} onDraftChange={reportDraft} /> : <p role="alert">No native editor registered for {generator}. Retained settings have not been translated to another engine.</p>}
-            </> : mode === 'rfd3_iteration' ? <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} /> : <ProteinLocalRedesignTemplate key={activeKey} embedded
+                    designTask={task} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} /> : <p role="alert">No native editor registered for {generator}. Retained settings have not been translated to another engine.</p>}
+            </> : mode === 'rfd3_iteration' ? <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} /> : <ProteinLocalRedesignTemplate key={activeKey} embedded
                 onBack={onBack} initialValues={childValues.current.values}
                 submissionModelId={validatedRedesign ? 'protein_modification_experimental' : 'protein_local_redesign'}
                 requiredPinnedGpu={requiredPinnedGpu} runDetails={runDetails} onDraftChange={reportDraft} />}</>
@@ -237,11 +237,12 @@ export function ProteinModificationTemplate({
     );
 }
 
-function GenerationEditor({ initialValues, generator, designTask, onDraftChange, runDetails }: {
+function GenerationEditor({ initialValues, generator, designTask, onDraftChange, runDetails, suiteView }: {
     initialValues: Record<string, unknown>;
     generator: string;
     designTask: string;
     runDetails?: ReactNode;
+    suiteView: 'simple' | 'advanced';
     onDraftChange: (draft: Record<string, unknown>) => void;
 }) {
     const navigate = useNavigate();
@@ -249,6 +250,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const backend: DeNovoBackend = generator === 'laproteina' ? 'laproteina' : 'disco';
     const inputSection = designTask === 'unconditional' ? 'Design' : 'Source and regions';
     const [section, setSection] = useState(inputSection);
+    useEffect(() => { setSection(suiteView === 'advanced' ? 'Sampling' : inputSection); }, [suiteView, inputSection]);
     const [jobName, setJobName] = useState(initialString(initialValues, 'job_name', 'protein_modification'));
     const [numDesigns, setNumDesigns] = useState(initialNumber(initialValues, 'num_designs', 8));
     const [minLength, setMinLength] = useState(initialNumber(initialValues, 'min_length', 100));

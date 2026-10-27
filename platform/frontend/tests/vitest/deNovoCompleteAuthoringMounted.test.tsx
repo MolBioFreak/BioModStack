@@ -194,7 +194,10 @@ it('each leaf of the selected native settings schema has a typed mounted control
     await mount('rfd4_proteina', 'generate', { ...d20, settings }); await click('Native settings');
     for (const title of ['Profiles and recycling', 'Integration and partial / inverse sampling', 'Backbone schedule and simulation', 'Sequence latent schedule and simulation', 'Search checkpoint timeline', 'Guidance and dataset transforms', 'Runtime, output and retained assets', 'Primary amount overrides']) await openGroup(title);
     for (const label of leaves) {
-        const control = [...document.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[aria-label]')].find(node => node.getAttribute('aria-label') === controlLabel(label));
+        const translated = controlLabel(label);
+        const rootKey = label.match(/^settings\.settings\.(?:(?:search|generation)\.)?([^.\[]+)$/)?.[1];
+        const owner = rootKey && [...document.querySelectorAll<HTMLElement>('[data-rfd4-override]')].find(node => node.dataset.rfd4Override === rootKey);
+        const control = owner?.querySelector<HTMLInputElement | HTMLSelectElement>('input,select') ?? [...document.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[aria-label]')].find(node => node.getAttribute('aria-label') === translated);
         expect(control, `${label} → ${controlLabel(label)}`).toBeTruthy(); expect(['INPUT', 'SELECT']).toContain(control!.tagName);
     }
     await click('Generate candidates');
@@ -212,7 +215,11 @@ it('every current settings property has its mounted native override control with
             : ['num_replicates', 'batch_size', 'seed'].includes(key) ? [`Requested ${key}`]
             : [[settings.properties[key], ...(settings.properties[key].anyOf ?? []), ...(settings.properties[key].oneOf ?? [])].some((child: any) => ['object', 'array'].includes(child.type) || child.properties || child.items) ? `Set override for ${key}` : key];
         for (const label of labels) {
-            expect([...document.querySelectorAll('[aria-label]')].filter(node => node.getAttribute('aria-label') === label), `${key}: ${label}`).toHaveLength(1);
+            const owner = [...document.querySelectorAll<HTMLElement>('[data-rfd4-override]')].find(node => node.dataset.rfd4Override === key);
+            const scalar = labels.length === 1 && label === key || ['num_replicates', 'batch_size', 'seed'].includes(key);
+            const matches = scalar ? [...(owner?.querySelectorAll('input,select') ?? [])] : [...document.querySelectorAll('[aria-label]')].filter(node => node.getAttribute('aria-label') === label);
+            // A nullable scalar union can render a branch selector and its value.
+            expect(matches.length, `${key}: ${label}`).toBeGreaterThan(0);
             inventory.push(label);
         }
     }
