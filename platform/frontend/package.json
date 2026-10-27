@@ -46,6 +46,7 @@
     "tailwindcss": "^4.1.17"
   },
   "devDependencies": {
+    "@bms/jbrowse-viewer": "workspace:*",
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.1",
     "@types/plotly.js": "^3.0.9",

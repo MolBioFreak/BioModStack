@@ -170,6 +170,9 @@ importers:
         specifier: ^4.1.17
         version: 4.1.18
     devDependencies:
+      '@bms/jbrowse-viewer':
+        specifier: workspace:*
+        version: link:alignment-viewers/jbrowse
       '@eslint/js':
         specifier: ^9.39.1
         version: 9.39.2
