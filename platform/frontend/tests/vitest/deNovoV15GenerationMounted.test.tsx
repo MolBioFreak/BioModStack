@@ -55,7 +55,7 @@ const latest = (spy: ReturnType<typeof vi.fn>) => spy.mock.calls.at(-1)![0];
 
 it('preserves explicit cleared numeric drafts across engine switching and JSON reopen without converting them to zero', async () => {
     const draft = vi.fn();
-    await render({ onDraftChange: draft });
+    await render({ initialValues: { generator: 'rfd3' }, onDraftChange: draft });
     await edit('Minimum length', ''); await edit('Seed', '');
     await edit('Engine', 'disco'); await edit('Engine', 'rfd3');
     expect(control('Minimum length').value).toBe(''); expect(control('Seed').value).toBe('');
@@ -66,8 +66,8 @@ it('preserves explicit cleared numeric drafts across engine switching and JSON r
     expect(control('Minimum length').value).toBe(''); expect(control('Seed').value).toBe('');
 });
 
-it('defaults to one RFD3 editor and one run area after scientific inputs', async () => {
-    await render({ runDetails: <div data-policy>Execution details</div> });
+it('renders one RFD3 editor and one run area after scientific inputs when selected', async () => {
+    await render({ initialValues: { generator: 'rfd3' }, runDetails: <div data-policy>Execution details</div> });
     expect(control('Engine').value).toBe('rfd3');
     expect([...document.querySelectorAll('nav[aria-label="Design task"] button')].map(el => el.textContent)).toEqual(['Generate', 'Redesign structure', 'Shape']);
     expect([...document.querySelectorAll('nav[aria-label="Generation sections"] button')].map(el => el.textContent)).toEqual(['Design', 'Sampling', 'Sequence Design']);
@@ -83,10 +83,11 @@ it('defaults to one RFD3 editor and one run area after scientific inputs', async
 
 it('exposes real conditional engines, retains independent goal drafts, and submits only active scientific values', async () => {
     const draft = vi.fn(); const navigation = vi.fn();
-    await render({ onDraftChange: draft, onNavigationChange: navigation });
+    await render({ initialValues: { generator: 'rfd3' }, onDraftChange: draft, onNavigationChange: navigation });
     await edit('Minimum length', '111');
     await edit('Goal', 'dna_conditioned');
-    expect(control('Engine').value).toBe('disco');
+    expect(control('Engine').value).toBe('rfd3');
+    await edit('Engine', 'disco'); await edit('Goal', 'dna_conditioned');
     await edit('DNA/RNA sequence', 'ACGT');
     await edit('Inference seed count', '3');
     await edit('Goal', 'rna_conditioned');
@@ -95,7 +96,7 @@ it('exposes real conditional engines, retains independent goal drafts, and submi
     await edit('Goal', 'dna_conditioned');
     expect(control('DNA/RNA sequence').value).toBe('ACGT');
     expect(control('Inference seed count').value).toBe('3');
-    expect(navigation).toHaveBeenCalledTimes(3);
+    expect(navigation).toHaveBeenCalledTimes(5);
     expect(document.querySelectorAll('[data-execution]')).toHaveLength(1);
     await click('Generate candidates');
     expect(latest(mocks.submit).params).toMatchObject({ generator: 'disco', design_task: 'dna_conditioned', disco_na_sequence: 'ACGT', disco_num_inference_seeds: 3, disco_effort: 'fast' });
@@ -103,12 +104,12 @@ it('exposes real conditional engines, retains independent goal drafts, and submi
     expect(latest(mocks.submit).params).not.toHaveProperty('min_length');
     expect(latest(mocks.submit).params).not.toHaveProperty('laproteina_preset');
     expect(latest(draft).de_novo_drafts['de_novo_design:rfd3:unconditional'].min_length).toBe(111);
-    await edit('Goal', 'motif_scaffolding');
+    await edit('Engine', 'laproteina'); await edit('Goal', 'motif_scaffolding');
     expect(control('Engine').value).toBe('laproteina');
     await click('Sampling');
     expect([...document.querySelectorAll('label')].some(node => node.textContent?.trim() === 'Samples per length')).toBe(false);
     expect(latest(draft).laproteina_samples_per_length).toBe(8); // Retained unconditional-only control, not motif sampling.
-    await edit('Goal', 'ligand_conditioned');
+    await edit('Engine', 'disco'); await edit('Goal', 'ligand_conditioned');
     expect(control('Engine').value).toBe('disco');
     expect(control('Ligand SDF path')).toBeTruthy();
 });
@@ -170,7 +171,7 @@ it('keeps validated and native redesign route identities and snapshots distinct'
 
 it('forwards the full retained draft envelope to Template Manager without submitting', async () => {
     const open = vi.fn();
-    await render({ onOpenTemplateManager: open });
+    await render({ initialValues: { generator: 'rfd3' }, onOpenTemplateManager: open });
     await edit('Minimum length', '123'); await edit('Engine', 'laproteina'); await edit('Samples per length', '5');
     await click('Template Manager');
     expect(latest(open)).toMatchObject({ currentModelId: 'protein_modification_experimental', currentMode: 'de_novo_design', currentParams: { generator: 'laproteina', laproteina_samples_per_length: 5, de_novo_drafts: { 'de_novo_design:rfd3:unconditional': { min_length: 123 } } } });
@@ -180,7 +181,7 @@ it('forwards the full retained draft envelope to Template Manager without submit
 it('does not republish child drafts indefinitely when the external callback identity changes', async () => {
     const draft = vi.fn();
     function Owner() { const [, setDraft] = useState({}); return <ProteinModificationTemplate onBack={() => {}} initialValues={{ modification_mode: 'shape_blueprint' }} onDraftChange={value => { draft(value); setDraft(value); }} />; }
-    await render();
+    await render({ initialValues: { modification_mode: 'shape_blueprint' } });
     await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><Owner /></MemoryRouter></QueryClientProvider>));
     expect(draft).toHaveBeenCalledOnce();
 });
@@ -212,7 +213,7 @@ it('retains the real source/residue workbench through sections, engine switches 
         expect(document.body.textContent).toContain('2 residues selected');
         await click('Use selected residues');
         await wait(() => control('Motif PDB path').value === 'inputs/exact-motif.pdb');
-        await edit('Goal', 'unconditional'); await edit('Engine', 'disco'); await edit('Goal', 'motif_scaffolding');
+        await edit('Goal', 'unconditional'); await edit('Engine', 'disco'); await edit('Engine', 'laproteina'); await edit('Goal', 'motif_scaffolding');
         await wait(() => document.body.textContent?.includes('2 residues selected') === true);
         expect(control('Motif PDB path').value).toBe('inputs/exact-motif.pdb');
         expect([...document.querySelectorAll('summary')].some(e => e.textContent?.includes('Local structure'))).toBe(true);
@@ -228,7 +229,7 @@ it('retains the real source/residue workbench through sections, engine switches 
 
 it('shares job intent only with untouched engine drafts and preserves explicit native false/paths on replay', async () => {
     const draft = vi.fn();
-    await render({ onDraftChange: draft });
+    await render({ initialValues: { generator: 'rfd3' }, onDraftChange: draft });
     await edit('Job name', 'Shared name'); await edit('Number of designs', '6'); await edit('Engine', 'disco');
     expect(control('Job name').value).toBe('Shared name'); expect(control('Requested design count').value).toBe('6');
     await edit('Job name', ''); await edit('Engine', 'rfd3'); await edit('Job name', 'Changed RFD3'); await edit('Engine', 'disco');
@@ -243,7 +244,7 @@ it('shares job intent only with untouched engine drafts and preserves explicit n
 });
 
 it('fresh motif goal uses its compatible profile and retains an explicitly changed profile through task switches and cold reopen', async () => {
-    const draft = vi.fn(); await render({ onDraftChange: draft });
+    const draft = vi.fn(); await render({ initialValues: { generator: 'laproteina' }, onDraftChange: draft });
     await edit('Goal', 'motif_scaffolding');
     expect(control('La-Proteina preset').value).toBe('motif_idx_aa');
     expect(latest(draft).laproteina_preset).toBe('motif_idx_aa');
