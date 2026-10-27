@@ -1190,12 +1190,13 @@ class BioModStackPanel(Adw.Application):
     def _script_env(self) -> dict:
         env = os.environ.copy()
         for key in list(env):
-            # Installation selectors survive a desktop launch/reboot. Runtime,
-            # lane, image and credential overrides still come from configuration.
+            # Installation and container-client selectors survive desktop
+            # launches. Lane, image and credential overrides stay configured.
             if (key.startswith("BMS_") and key not in {
                 "BMS_PYTHON_ROOT", "BMS_FRONTEND_ROOT", "BMS_FRONTEND_NODE",
                 "BMS_MICROMAMBA_BIN", "BMS_MICROMAMBA_ROOT_PREFIX",
                 "BMS_PLANNOTATE_ENV", "BMS_PLANNOTATE_BIN",
+                "BMS_CONTAINER_RUNTIME", "BMS_ONT_CONTAINER_RUNTIME",
             }) or key == "COMPOSE_PROJECT_NAME":
                 env.pop(key, None)
         return env
