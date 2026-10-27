@@ -26,7 +26,16 @@ const positions = [{ model_number: 2, label_asym_id: 'X', label_seq_id: 7, auth_
 beforeEach(() => {
     old = api.defaults.adapter; wire = []; unexpected = []; draft = undefined; localStorage.clear(); sessionStorage.clear();
     xhr = vi.spyOn(XMLHttpRequest.prototype, 'open').mockImplementation(() => { unexpected.push('XHR'); throw new Error('No network'); });
-    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { unexpected.push('fetch'); throw new Error('No network'); });
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const method = init?.method ?? (typeof input === 'object' && 'method' in input ? input.method : 'GET');
+        if (url === '/api/files/download/%2Fretained%2Ftarget.cif' && method === 'GET') {
+            // Actual native-writer annotations; only the selected MODEL binding differs.
+            const cif = readFileSync(resolve('tests/fixtures/rfd4-saved-conditions.cif'), 'utf8').replace(/(_atom_site\.pdbx_PDB_model_num\s+)1/, '$12');
+            return { ok: true, text: async () => cif } as Response;
+        }
+        unexpected.push(`fetch ${method} ${url}`); throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
     api.defaults.adapter = async config => {
         const url = config.url ?? '', body = config.data ? JSON.parse(config.data) : undefined;
         wire.push({ url, body }); let data: unknown;
@@ -86,11 +95,10 @@ it('native enum choices write explicit values without changing manual historical
     expect(draft.rfd4_request.input.examples[0].conditions.C_CENTROID['1,-2,0']).toHaveLength(1);
 });
 it('mounted source projects native-writer saved targets separately from selection', async () => {
-    const cif = readFileSync(resolve('tests/fixtures/rfd4-saved-conditions.cif'), 'utf8').replace(/(_atom_site\.pdbx_PDB_model_num\s+)1/, '$12');
-    // Keep native writer bytes unchanged apart from selected MODEL fixture binding.
-    fetchSpy.mockImplementation(async () => ({ ok: true, text: async () => cif } as Response));
+    // Integrated source inspection reads the saved layers automatically, without a manual reload.
     await mount('rfd4_proteina', { native_sources: { exact: source }, rfd4_request: { input: { kind: 'annotated', slots: ['exact'] } } });
-    await disclose('Input structures'); await click('Inspect retained exact'); await click('Read saved conditions for exact');
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[data-native-viewer]')?.getAttribute('data-layers')).toContain('Saved C_INTCRD'); });
+    expect(fetchSpy).toHaveBeenCalledWith('/api/files/download/%2Fretained%2Ftarget.cif');
     const layers = JSON.parse(document.querySelector('[data-native-viewer]')!.getAttribute('data-layers')!);
     expect(layers.find((l: any) => l.descriptor.label === 'Saved C_INTCRD').values[0]).toMatchObject({ value: 1, identity: { documentId: source.path, labelAsymId: 'X', atomIndex: 0, modelNumber: 2 } });
     expect(document.body.textContent).toContain('1.0, 2.0, 3.0');
@@ -128,15 +136,42 @@ it('actual exact source selection explicitly applies independent coordinates/pro
     await vi.waitFor(async () => { await settle(); expect(document.querySelector('[aria-label="Retained residue for target.v2"]')).not.toBeNull(); });
     await edit('Retained residue for target.v2', '0'); await edit('Retained atom for target.v2', '0'); await click('Add exact selection from target.v2');
     expect(draft.rfd4_request.input.examples[0].conditions).toBeUndefined();
-    expect(document.querySelector('[data-native-viewer]')?.getAttribute('data-linked')).toBe('true');
+    expect(document.querySelector('[data-native-viewer]')?.getAttribute('data-linked')).toBe('false');
+    expect(document.querySelector('[aria-label="Source sequence for target.v2"]')).not.toBeNull();
     expect(JSON.parse(document.querySelector('[data-native-viewer]')!.getAttribute('data-selection')!)).toMatchObject([{ labelAsymId: 'X', authSeqId: 42 }]);
     await click('Use visual selection in new condition'); await edit('Native condition value', 'true'); await click('Apply native condition');
     await edit('Condition family', 'C_SEQ_PROB_CYS'); await edit('Native condition value', '0'); await click('Apply native condition');
     await edit('Native contig', 'X7-7,20-40,/0,X7-7'); await click('Move region 2 earlier'); await click('Add pair condition'); await click('Use selection for pair 1 left'); await click('Use selection for pair 1 right');
     const ex = draft.rfd4_request.input.examples[0]; expect(ex.contig).toBe('20-40,X7-7,/0,X7-7'); expect(ex.conditions.C_SEQ_PROB_CYS['0'][0].select).toContain('res_id == 7'); expect(ex.conditions.C_CRD.true[0].select).toContain('atom_name == "CA"');
-    await click('Clear visual selection'); expect(draft.rfd4_request.input.examples[0]).toEqual(ex);
+    await click('Clear selection'); expect(draft.rfd4_request.input.examples[0]).toEqual(ex);
+    expect(JSON.parse(document.querySelector('[data-native-viewer]')!.getAttribute('data-selection')!)).toEqual([]);
     await click('Generate candidates'); const body = wire.find(w => w.url === '/api/jobs').body;
     expect(body.params.native_sources['target.v2']).toEqual(source); expect(normalize(body.params.rfd4_request)).toMatchObject(body.params.rfd4_request);
+});
+it('integrated parent turns an exact residue into a fragment and condition and emits the exact native request', async () => {
+    const initial = { input: { kind: 'condition_spec', examples: [{ name: 'integrated', sources: [{ slot: 'target.v2', input_as_annotated_cif: true }] }] }, settings: { seed: 0 } };
+    await mount('rfd4_proteina', { native_recipe: 'motif', native_sources: { 'target.v2': source }, rfd4_request: initial });
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector('.rfd4-design-source [data-native-viewer]')).not.toBeNull(); });
+    expect(wire.filter(w => w.url === '/api/files/materialize-structure').map(w => w.body)).toEqual([source]);
+    expect(fetchSpy).toHaveBeenCalledWith('/api/files/download/%2Fretained%2Ftarget.cif');
+    expect(draft.rfd4_request).toEqual(initial);
+    await edit('Retained residue for target.v2', '0'); await click('Add exact selection from target.v2');
+    expect(document.body.textContent).toContain('1 residues selected');
+    expect(draft.rfd4_request).toEqual(initial);
+    await click('Add selected residues as fragment');
+    expect(draft.rfd4_request.input.examples[0].contig).toBe('X7-7');
+    await click('Fix coordinates on selection');
+    const expected = { ...initial, input: { ...initial.input, examples: [{ ...initial.input.examples[0], contig: 'X7-7', conditions: { C_CRD: { true: [{ select: '(chain_id == "X" and res_id == 7)' }] } } }] } };
+    expect(draft.rfd4_request).toEqual(expected);
+    await click('Clear selection');
+    expect(document.body.textContent).toContain('0 residues selected');
+    expect(JSON.parse(document.querySelector('.rfd4-design-source [data-native-viewer]')!.getAttribute('data-selection')!)).toEqual([]);
+    expect(draft.rfd4_request).toEqual(expected);
+    await click('Generate candidates');
+    const jobs = wire.filter(w => w.url === '/api/jobs'); expect(jobs).toHaveLength(1);
+    expect(jobs[0].body.params.rfd4_request).toEqual(expected);
+    expect(jobs[0].body.params.native_sources).toEqual({ 'target.v2': source });
+    expect(normalize(jobs[0].body.params.rfd4_request)).toEqual({ ...expected, mode: 'generate', version: 'rfd4_request_v1' });
 });
 it.each(['partial', 'inverse'])('%s has separate annotated task and exact native request', async recipe => {
     await mount('rfd4_proteina'); await edit('RFD4 task', recipe);

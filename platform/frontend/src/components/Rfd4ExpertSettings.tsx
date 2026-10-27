@@ -3,7 +3,52 @@ import { api } from '../lib/api';
 import { BioXpSchemaInput } from './BioXpSchemaInput';
 import { NativeSettingsDisclosure } from './NativeSettingsDisclosure';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
-import { NativeNumber, nativeRecord, patchNative } from './Rfd4TaskWorkspace';
+import { nativeRecord, patchNative } from './Rfd4TaskWorkspace';
+
+const controlClasses = 'mt-1 w-full rounded border border-slate-700 bg-slate-900 p-2';
+const readableNames: Record<string, string> = {
+    n_recycle: 'Recycling passes', n_recycle_schedule: 'Recycling schedule',
+    condition_on_recycle_remaining: 'Condition on remaining recycling passes',
+    val_set_name_override: 'Validation set name override', nsteps: 'Integration steps',
+    num_replicates: 'Replicates', batch_size: 'Batch size', seed: 'Random seed',
+    bb_ca: 'Backbone coordinates', local_latents: 'Sequence latents',
+    guidance_w: 'Guidance weight', nn: 'Neural network execution', bioir: 'BioIR execution',
+};
+function readableLabel(key: string, schema: Schema) {
+    const text = readableNames[key] ?? schema.title ?? key.replaceAll('_', ' ');
+    return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** Single shipped snapshot only: never compose scientific layers in the browser. */
+function selectedGenerationSnapshot(request: Record<string, any>, schema: Schema, discovery: unknown) {
+    const data = nativeRecord(discovery), defaults = nativeRecord(schema['x-selected-default-groups']);
+    const changed = Object.entries(nativeRecord(request.groups)).filter(([key, value]) => value !== defaults[key]);
+    if (!changed.length) return data.default_generation;
+    if (changed.length !== 1) return undefined;
+    const [group, selection] = changed[0];
+    return nativeRecord(nativeRecord(data.generation_by_group)[group])[String(selection)];
+}
+
+function ExpertScalar({ label, schema, value, inherited, onChange }: {
+    label: string; schema: Schema; value: unknown; inherited: unknown; onChange: (value: unknown) => void;
+}) {
+    const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+    const kind = types.find(type => type !== 'null');
+    const shown = value === undefined ? inherited : value;
+    const title = readableLabel(label, schema);
+    const known = inherited !== undefined;
+    return <fieldset className="min-w-0 space-y-2 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+        <legend className="px-1 font-medium">{title}</legend>
+        <code className="block text-xs text-slate-400">{String(schema['x-native-mapping'] ?? label)}</code>
+        {schema.description && <p className="text-sm text-slate-400">{schema.description}</p>}
+        {kind === 'boolean' ? <label className="flex items-center gap-2"><input aria-label={title} type="checkbox" ref={node => { if (node) node.indeterminate = shown === undefined || shown === null; }} checked={shown === true} onChange={event => onChange(event.target.checked)} />{title}</label>
+            : <label className="block text-sm">{title}<input aria-label={title} className={controlClasses} type="number" step={kind === 'integer' ? 1 : 'any'} min={schema.minimum} max={schema.maximum} value={typeof shown === 'number' || typeof shown === 'string' ? shown : ''} placeholder={known ? undefined : 'Not reported for this selection'} onChange={event => onChange(event.target.value === '' ? '' : Number(event.target.value))} /></label>}
+        <p className="text-xs text-slate-400">{value === undefined ? known ? `Inherited profile reference: ${JSON.stringify(inherited)}. Not a requested override.` : 'Inherited value not reported for this selection. Read selected effective configuration in Profile reference.' : value === '' ? 'Cleared override retained. Enter a value or use the profile value.' : `Requested override: ${JSON.stringify(value)}`}</p>
+        {(schema.minimum !== undefined || schema.maximum !== undefined || schema.exclusiveMinimum !== undefined || schema.exclusiveMaximum !== undefined) && <p className="text-xs text-slate-400">Native range: {schema.minimum !== undefined ? `≥ ${schema.minimum}` : schema.exclusiveMinimum !== undefined ? `> ${schema.exclusiveMinimum}` : 'unbounded'} to {schema.maximum !== undefined ? `≤ ${schema.maximum}` : schema.exclusiveMaximum !== undefined ? `< ${schema.exclusiveMaximum}` : 'unbounded'}</p>}
+        {schema['x-units'] != null && <p>Units: {String(schema['x-units'])}</p>}
+        {types.includes('null') && <button type="button" onClick={() => onChange(null)}>Set explicit null for {title}</button>}
+    </fieldset>;
+}
 
 // Inspect schema structure only; defaults are not authored by opening a panel.
 function collectionKind(child: Schema, root: Schema, seen = new Set<string>()): 'object' | 'array' | undefined {
@@ -53,7 +98,8 @@ export function NativeProfileSnapshot({ model, mode, request, discovery }: { mod
 }
 
 /** Named model-specific expert sections reuse native typed leaves, not a second schema/composer. */
-export function Rfd4ExpertSettings({ request, schema, onChange, fileSlots = {} }: { request: Record<string, any>; schema: Schema; onChange: (v: Record<string, any>) => void; fileSlots?: Record<string, string> }) {
+export function Rfd4ExpertSettings({ request, schema, onChange, fileSlots = {}, discovery }: { request: Record<string, any>; schema: Schema; onChange: (v: Record<string, any>) => void; fileSlots?: Record<string, string>; discovery?: unknown }) {
+    const generationSnapshot = selectedGenerationSnapshot(request, schema, discovery);
     const [step, setStep] = useState('');
     const [metricQuery, setMetricQuery] = useState('');
     const [metricKey, setMetricKey] = useState('');
@@ -86,9 +132,14 @@ export function Rfd4ExpertSettings({ request, schema, onChange, fileSlots = {} }
     const leaf = (label: string, child: Schema | undefined, value: unknown, path: (string | number)[]) => {
         if (!child) return null;
         const kind = collectionKind(child, schema);
+        const types = Array.isArray(child.type) ? child.type : [child.type];
+        const scalar = !child.enum && !Object.hasOwn(child, 'const') && types.some(type => ['integer', 'number', 'boolean'].includes(String(type))) && types.every(type => ['integer', 'number', 'boolean', 'null'].includes(String(type)));
+        const inherited = path[0] === 'settings' && path[1] === 'generation' ? path.slice(2).reduce<any>((v, key) => v?.[key], generationSnapshot) : undefined;
         return <div key={label} data-rfd4-override={label}>
-            {kind && value === undefined ? <fieldset className="space-y-2"><legend>{label}</legend>
+            {scalar ? <ExpertScalar label={label} schema={child} value={value} inherited={inherited} onChange={v => changeLeaf(path, v)} /> : kind && value === undefined ? <fieldset className="space-y-2 rounded-lg border border-slate-700 p-3"><legend>{readableLabel(label, child)}</legend>
+                <code className="block text-xs text-slate-400">{String(child['x-native-mapping'] ?? path.join('.'))}</code>
                 <p>From selected profile</p>
+                {inherited !== undefined && <p className="text-xs text-slate-400 break-all">Profile reference (not a requested override): {JSON.stringify(inherited)}</p>}
                 <button type="button" aria-label={`Set override for ${label}`} onClick={() => changeLeaf(path, kind === 'array' ? [] : {})}>Set override</button>
             </fieldset> : <BioXpSchemaInput label={label} nativeLabels schema={child} rootSchema={schema} path={path} value={value} onChange={v => changeLeaf(path, v)} fallback={() => value === undefined ? <p>From selected profile</p> : <p>Retained value does not match this schema.</p>} />}
             {value !== undefined && <button type="button" aria-label={`Use profile value for ${label}`} onClick={() => changeLeaf(path, undefined)}>Use profile value</button>}
@@ -101,7 +152,7 @@ export function Rfd4ExpertSettings({ request, schema, onChange, fileSlots = {} }
         <p>Unchanged settings use the selected profile.</p>
         {section('Profiles and recycling', () => <>
             {leaf('Native profiles', schema.properties?.groups, request.groups, ['groups'])}
-            {Object.entries(generationSchema?.properties ?? {}).filter(([key]) => !['args', 'model', 'dataset'].includes(key)).map(([key, child]) => leaf(key, child, generation[key], ['settings', 'generation', key]))}
+            <div className="grid items-start gap-3 sm:grid-cols-2">{Object.entries(generationSchema?.properties ?? {}).filter(([key]) => !['args', 'model', 'dataset'].includes(key)).map(([key, child]) => leaf(key, child, generation[key], ['settings', 'generation', key]))}</div>
         </>)}
         {section('Integration and partial / inverse sampling', () => <>{leaf('Integration arguments', generationSchema?.properties?.args, generation.args, ['settings', 'generation', 'args'])}</>)}
         {['bb_ca', 'local_latents'].map(modality => section(modality === 'bb_ca' ? 'Backbone schedule and simulation' : 'Sequence latent schedule and simulation', () => <>
@@ -151,6 +202,6 @@ export function Rfd4ExpertSettings({ request, schema, onChange, fileSlots = {} }
             <p>Profile reference shows declared defaults, not combined effective values.</p>
             <pre className="whitespace-pre-wrap break-all" aria-label="Requested RFD4 values">{JSON.stringify(request, null, 2)}</pre>
         </>)}
-        {section('Primary amount overrides', () => <>{['num_replicates', 'batch_size', 'seed'].filter(key => settingsSchema?.properties?.[key]).map(key => <NativeNumber key={key} label={`Requested ${key}`} value={settings[key]} onChange={v => patchSettings(key, v)} />)}</>)}
+        {section('Primary amount overrides', () => <div className="grid gap-3 sm:grid-cols-2">{['num_replicates', 'batch_size', 'seed'].map(key => leaf(key, settingsSchema?.properties?.[key], settings[key], ['settings', key]))}</div>)}
     </div>;
 }

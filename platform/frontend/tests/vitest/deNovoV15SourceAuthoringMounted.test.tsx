@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 
 const inventories = JSON.parse(execFileSync(process.env.BMS_SCHEMA_PYTHON ?? 'python', ['-c',
     "import sys,json;sys.path.insert(0,'platform/api');from services.rfd4_proteina import generation_settings;from services.complexa import discovery;print(json.dumps({'rfd4_proteina':generation_settings('generate'),'complexa':discovery()}))",
@@ -42,7 +43,14 @@ const preview = (body: any) => ({ schema: 'bms.job.execution-preview.v1', reques
 beforeEach(() => {
     requests = []; unexpected = []; saved = []; previous = api.defaults.adapter;
     localStorage.clear(); sessionStorage.clear(); materializer = async body => receipt(body); previewer = async body => preview(body);
-    fetchGuard = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { unexpected.push('fetch'); throw new Error('No live network'); });
+    fetchGuard = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+        const url = new URL(String(input), 'http://localhost');
+        const path = decodeURIComponent(url.pathname.replace('/api/files/download/', ''));
+        if (url.pathname.startsWith('/api/files/download/') && path.startsWith('inputs/structure-') && path.endsWith('.cif')) {
+            return new Response(readFileSync('tests/fixtures/rfd4-saved-conditions.cif', 'utf8'));
+        }
+        unexpected.push(`fetch ${url}`); throw new Error('No live network');
+    });
     xhrGuard = vi.spyOn(XMLHttpRequest.prototype, 'open').mockImplementation(() => { unexpected.push('XHR'); throw new Error('No live network'); });
     api.defaults.adapter = async config => {
         const url = config.url ?? '', method = config.method ?? 'get';
@@ -123,7 +131,7 @@ it('clear while exact acquisition is pending never restores that document or ano
 it('legacy exact-document MODEL changes update both selector fields without stale primary or model identity', async () => {
     const source = { job_id: 'producer', design_id: 'design', document: { artifact_id: 'alternate', target_state: 'state-B', model: 2 }, model_number: 2, output_format: 'native' };
     await mount('rfd4_proteina', { rfd4_request: { input: { kind: 'annotated', slots: ['selected'] } }, native_sources: { selected: source } });
-    await sources(); await click('Inspect retained selected'); await edit('Source MODEL for selected', '1'); await settle();
+    await sources(); await edit('Source MODEL for selected', '1'); await settle();
     const acquisitions = requests.filter(r => r.url.includes('materialize'));
     expect(acquisitions).toHaveLength(2);
     expect(acquisitions[1].body).toMatchObject({ document: { artifact_id: 'alternate', target_state: 'state-B', model: 1 }, model_number: 1 });
@@ -265,7 +273,7 @@ it('task-row acquisition binds a structure without a named empty slot, retains M
     expect(document.querySelector('[aria-label="Native source name"]')).toBeNull();
     await chooseInlineFile();
     await vi.waitFor(() => expect(document.querySelector<HTMLSelectElement>('[aria-label="Annotated source 1"]')?.value).toBe('input_1'));
-    await clickAria('Inspect structure for Annotated source 1');
+    expect(document.querySelector('[data-viewer-url]')).not.toBeNull();
     expect(requests.filter(row => row.url.includes('materialize'))).toHaveLength(1);
     await edit('Source MODEL for input_1', '2'); await settle();
     await click('Template Manager');
@@ -279,7 +287,7 @@ it('task-row acquisition binds a structure without a named empty slot, retains M
     if ([...document.querySelectorAll('button')].some(node => node.textContent?.trim() === '← Back to list')) await click('← Back to list');
     await click('Load'); await settle(); await click('Generate candidates');
     expect(requests.find(row => row.url === '/api/jobs' && row.method === 'post')!.body.params).toEqual(original);
-    expect(requests.filter(row => row.url.includes('materialize'))).toHaveLength(2);
+    expect(requests.filter(row => row.url.includes('materialize'))).toHaveLength(3);
 });
 it('cancelling a task-row picker while materialization is pending creates neither binding nor source row', async () => {
     let release!: (value: any) => void;
@@ -295,20 +303,20 @@ it('cancelling a task-row picker while materialization is pending creates neithe
     expect(params).not.toHaveProperty('native_sources');
     expect(document.querySelector('[aria-label="Annotated source 1"]')).toBeNull();
 });
-it('using an existing input binds the task without materialization or renaming shared source names', async () => {
+it('using an existing input inspects read-only without rebinding or renaming shared source names', async () => {
     const source = { path: 'inputs/original.cif.gz', expected_sha256: 'a'.repeat(64), model_number: 2, output_format: 'native' };
     await mount('rfd4_proteina', { rfd4_request: { input: { kind: 'annotated', slots: [] } }, native_sources: { retained_name: source } });
     await edit('Add annotated source', 'retained_name'); await settle(); await click('Generate candidates');
     const params = requests.find(row => row.url === '/api/jobs' && row.method === 'post')!.body.params;
     expect(params.rfd4_request.input.slots).toEqual(['retained_name']);
     expect(params.native_sources).toEqual({ retained_name: source });
-    expect(requests.some(row => row.url.includes('materialize'))).toBe(false);
+    expect(requests.filter(row => row.url.includes('materialize')).map(row => row.body)).toEqual([{ ...source, output_format: 'native' }]);
 });
 it('compact source inspection preserves author-only PDB identity without undefined labels or a false remove action', async () => {
     materializer = async body => ({ ...receipt(body), format: 'pdb', native_format: 'pdb', model_number: 2,
         source_positions: [{ model_number: 2, auth_asym_id: ' ', auth_seq_id: '0', component_id: 'ACE', atoms: [{ auth_atom_id: 'CH3', type_symbol: 'C', model_atom_index: 0 }] }] });
     await mount('rfd4_proteina', { rfd4_request: { input: { kind: 'annotated', slots: ['selected'] } }, native_sources: { selected: { path: 'inputs/native.pdb', model_number: 2, output_format: 'native' } } });
-    await clickAria('Inspect structure for Annotated source 1'); await click('Inspect retained selected');
+    expect(document.querySelector('[data-viewer-url]')).not.toBeNull();
     const group = document.querySelector('[role="group"][aria-label="Choose structure for Annotated source 1"]')!;
     expect(group.textContent).not.toContain('Remove source');
     expect(group.textContent).not.toContain('undefined');
