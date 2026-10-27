@@ -17,15 +17,30 @@ from tests.test_core_protein_scientific_admission import admission
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(('molecule', 'model'), [('protein', 'family_msa_protein'), ('dna', 'family_msa_nucleic')])
-async def test_scheduler_adapter_to_native_owned_runner(admission, monkeypatch, molecule, model):
+@pytest.mark.parametrize(('molecule', 'model', 'settings', 'members'), [
+    ('protein', 'family_msa_protein', {'engine': 'mafft', 'threads': 2}, 1),
+    ('dna', 'family_msa_nucleic', {'engine': 'mafft', 'threads': 2}, 1),
+    ('protein', 'family_msa_protein', {'engine': 'famsa'}, 1),
+    *[(mol, 'family_msa_protein' if mol == 'protein' else 'family_msa_nucleic',
+       {'engine': 'muscle', 'mode': mode, 'ensemble': ensemble, 'replicates': 2 if ensemble != 'none' else None}, count)
+      for mol in ('protein', 'dna', 'rna') for mode, ensemble, count in
+      [('align', 'none', 1), ('super5', 'none', 1), ('align', 'stratified', 8), ('align', 'diversified', 2)]],
+    ('dna', 'family_msa_nucleic', {'engine': 'muscle', 'permutation': 'all'}, 4),
+    ('dna', 'family_msa_nucleic', {'engine': 'twilight', 'method': 'tcs', 'guide_source': 'supplied',
+       'guide_tree': '((a:0.1,b:0.1):0.1,c:0.1);', 'leaf_mapping': {'a': 'r1', 'b': 'r2', 'c': 'r3'}}, 1),
+    *[(mol, 'family_msa_nucleic', {'engine': 'twilight', 'method': method, 'guide_source': 'mafft'}, 1)
+      for mol in ('dna', 'rna') for method in ('pairwise', 'tcs')],
+])
+async def test_scheduler_adapter_to_native_owned_runner(admission, monkeypatch, molecule, model, settings, members):
     image = os.environ.get('BMS_TEST_FAMILY_MSA_SIF')
     if not image:
         pytest.skip('set BMS_TEST_FAMILY_MSA_SIF to the isolated native image')
     monkeypatch.setenv('BMS_FAMILY_MSA_SIF', image)
+    seq = 'ACDEFGHIKLMNPQRSTVWY' if molecule == 'protein' else ('ACGU' if molecule == 'rna' else 'ACGT') * 5
     payload = {'roster': {'molecule': molecule, 'rows': [
-        {'row_id': 'r1', 'header': 'one', 'sequence': 'ACGTACGT'},
-        {'row_id': 'r2', 'header': 'two', 'sequence': 'ACGTACGA'}]}, 'settings': {'threads': 2}}
+        {'row_id': 'r1', 'header': 'one', 'sequence': seq},
+        {'row_id': 'r2', 'header': 'two', 'sequence': seq},
+        {'row_id': 'r3', 'header': 'three', 'sequence': seq[:-1] + 'A'}]}, 'settings': settings}
     created = await jobs._create_job(JobCreate(name='native scratch', model_id=model,
         mode='family_msa', params=payload), BackgroundTasks(), admission)
     factory = async_sessionmaker(admission.bind, expire_on_commit=False)
@@ -56,12 +71,24 @@ async def test_scheduler_adapter_to_native_owned_runner(admission, monkeypatch, 
     monkeypatch.setenv(nextflow.TRANSIENT_WORKFLOW_OWNER_NONCE_ENV, 'scratch-nonce')
     await nextflow.launch_nextflow_job(**captured[0], allow_running_job=True)
     await admission.refresh(job)
+    if settings.get('permutation') == 'all':
+        assert job.status == 'failed' and 'muscle exited' in job.error_message
+        artifacts = (await admission.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))).all()
+        logs = [Path(a.storage_path).read_text() for a in artifacts if a.provenance['role'] == 'engine_log']
+        assert any('-perm all not supported' in text for text in logs)
+        return
     assert job.status == 'completed' and job.queue_status == 'completed', job.error_message
     artifacts = (await admission.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))).all()
     roles = {a.provenance['role']: a for a in artifacts}
     assert {'input', 'alignment', 'engine_log', 'receipt'} <= roles.keys()
-    assert '>r1' in Path(roles['alignment'].storage_path).read_text()
-    assert Path(roles['engine_log'].storage_path).stat().st_size > 0
+    alignments = [a for a in artifacts if a.provenance['role'] == 'alignment']
+    assert len(alignments) == members
+    assert all(Path(a.storage_path).stat().st_size > 0 for a in alignments)
+    if settings['engine'] == 'mafft':
+        assert '>r1' in Path(alignments[0].storage_path).read_text()
+    else:
+        assert 'row_map' in roles and 'native_receipt' in roles
+        assert '>bmsrow' in Path(alignments[0].storage_path).read_text()
 
 
 @pytest.mark.asyncio
@@ -91,5 +118,45 @@ async def test_owned_runner_cancellation_reaps_process(admission, monkeypatch, t
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+@pytest.mark.asyncio
+async def test_cancel_api_stops_owned_runner(admission, monkeypatch, tmp_path):
+    from services.family_msa.execution import run_owned_job
+    from services import job_control
+    executable = tmp_path / 'famsa'
+    executable.write_text('#!/bin/sh\nprintf "%s" "$$" > "$PID_FILE"\nexec sleep 120\n')
+    executable.chmod(0o755)
+    pid_file = tmp_path / 'pid'
+    monkeypatch.setenv('PID_FILE', str(pid_file))
+    monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
+    monkeypatch.delenv('BMS_FAMILY_MSA_SIF', raising=False)
+    payload = {'roster': {'molecule': 'protein', 'rows': [
+        {'row_id': 'r1', 'header': 'one', 'sequence': 'ACDEFG'}]}, 'settings': {'engine': 'famsa'}}
+    job = Job(id='cancel-api-scratch', name='cancel', model_id='family_msa_protein', mode='family_msa',
+              params=payload, status='running', queue_status='running', nextflow_run_id='scratch-unit')
+    admission.add(job)
+    await admission.commit()
+    factory = async_sessionmaker(admission.bind, expire_on_commit=False)
+    task = asyncio.create_task(run_owned_job(job.id, payload, str(tmp_path / 'output'), factory))
+    for _ in range(200):
+        if pid_file.exists():
+            break
+        await asyncio.sleep(0.05)
+    assert pid_file.exists()
+    pid = int(pid_file.read_text())
+    async def stop_owner(run_id):
+        assert run_id == 'scratch-unit'
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return True
+    monkeypatch.setattr(job_control, 'cancel_nextflow_job', stop_owner)
+    result = await jobs.cancel_job(job.id, admission)
+    await admission.refresh(job)
+    assert result['job_id'] == job.id and job.status == 'cancelled'
+    assert job.params['cancellation_receipt']['remote_stop_verified'] is True
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)

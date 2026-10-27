@@ -8,7 +8,8 @@ from .formats import parse
 
 def compile_mafft(request: AlignmentRequest, executable: str, input_path: str) -> list[str]:
     s = request.settings
-    args = [executable, '--amino' if request.roster.molecule == 'protein' else '--nuc', '--thread', str(s.threads)]
+    prefix = [executable] if isinstance(executable, str) else list(executable)
+    args = prefix + ['--amino' if request.roster.molecule == 'protein' else '--nuc', '--thread', str(s.threads)]
     if s.strategy == 'fft_ns_2': args += ['--retree', '2', '--maxiterate', '0']
     elif s.strategy == 'linsi': args += ['--localpair', '--maxiterate', '1000']
     elif s.strategy == 'ginsi': args += ['--globalpair', '--maxiterate', '1000']

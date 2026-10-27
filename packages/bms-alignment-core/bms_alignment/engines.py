@@ -33,15 +33,16 @@ def map_tree(tree, mapping, expected):
 
 def compile_engine(request, executable, input_path, output_path, tree_path=None):
     s = request.settings
+    prefix = [executable] if isinstance(executable, str) else list(executable)
     if s.engine == 'famsa':
-        a = [executable, '-t', str(s.threads), '-gt', s.guide_tree, '-refine_mode', s.refine_mode]
+        a = prefix + ['-t', str(s.threads), '-gt', s.guide_tree, '-refine_mode', s.refine_mode]
         for name in ('keep_duplicates', 'medoidtree'):
             if getattr(s, name): a.append('-' + name)
         for name in ('medoid_seeds', 'medoid_threshold', 'trim_columns'):
             if getattr(s, name) is not None: a += ['-' + name, str(getattr(s, name))]
         return a + [input_path, output_path]
     if s.engine == 'muscle':
-        a = [executable, '-' + s.mode, input_path, '-output', output_path, '-threads', str(s.threads),
+        a = prefix + ['-' + s.mode, input_path, '-output', output_path, '-threads', str(s.threads),
              '-amino' if request.roster.molecule == 'protein' else '-nt']
         if s.ensemble == 'none' or s.permutation != 'none': a += ['-perm', s.permutation]
         if s.ensemble == 'none' or s.perturb != 0: a += ['-perturb', str(s.perturb)]
@@ -49,7 +50,7 @@ def compile_engine(request, executable, input_path, output_path, tree_path=None)
         if s.replicates is not None: a += ['-replicates', str(s.replicates)]
         return a
     if s.engine == 'twilight':
-        a = [executable, '-i', input_path, '-o', output_path, '-t', tree_path, '--type', 'n', '--cpu', str(s.threads), '--accurate']
+        a = prefix + ['-i', input_path, '-o', output_path, '-t', tree_path, '--type', 'n', '--cpu', str(s.threads), '--accurate']
         if s.method == 'tcs': a.append('tcs')
         for name in ('acc_mode', 'acc_max_group', 'acc_sample_rate', 'acc_sample_top', 'consistency_weight', 'max_subtree', 'remove_gappy', 'match', 'mismatch', 'transition', 'gap_open', 'gap_extend', 'gap_ends', 'scale', 'xdrop'):
             value = getattr(s, name)
