@@ -9,11 +9,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import get_session
 from experiment_database import get_experiment_session
-from experiment_models import ExperimentBase, ExperimentResource, ExperimentAggregateHead, ExperimentRevision, ExperimentDatasetRevisionMember, ExperimentExternalEntityReceipt
+from experiment_models import ExperimentBase, ExperimentResource, ExperimentExternalEntityReceipt
 from molbio_database import get_molbio_session
 from molbio_models import MolBioBase, MolecularDocument, MolecularRevision
 from routers import family_msa_results as routes
 from services.global_experiments.adapters import MolBioRevisionAdapter
+from experiment_services import create_project, create_global_experiment, create_domain_experiment, create_dataset, save_dataset_revision
+from test_project_manager_adapters import _project_payload, _global_payload, _domain_payload
 
 
 @pytest.mark.asyncio
@@ -34,12 +36,19 @@ async def test_source_routes_with_real_molecular_owner_and_paging(tmp_path, monk
     entity = urlencode({'sequence_id': 'seq', 'revision_id': 'rev'})
     fresh = await owner.verify(None, entity)
     async with ps() as s:
-        s.add_all([ExperimentResource(id=x, kind='test') for x in ('p', 'd', 'r', 'q')])
-        s.add(ExperimentAggregateHead(aggregate_id='d', aggregate_kind='dataset', workspace_id='p', display_name='D'))
-        s.add(ExperimentRevision(resource_id='r', subject_id='d', revision_number=1, schema_name='test', schema_version='1', canonical_payload='{}', payload_sha256='a'*64, dependency_graph_sha256='b'*64))
-        s.add(ExperimentExternalEntityReceipt(id='q', workspace_id='p', resource_id='q', store_id=fresh['store_id'], entity_kind=fresh['entity_kind'], entity_id=entity, generation_or_revision=str(fresh['entity_revision_id']), content_digest=fresh['content_digest'], availability='available', verification_authority=owner.adapter_id, acknowledgement_json=json.dumps(fresh)))
-        for i in range(103):
-            s.add(ExperimentDatasetRevisionMember(revision_id='r', ordinal=i, role='sequence', semantic_identity='q' if i < 102 else 'unknown', value_json='{}', content_sha256='d'*64))
+        project = await create_project(s, _project_payload())
+        experiment = await create_global_experiment(s, project.id, _global_payload())
+        domain = await create_domain_experiment(s, project.id, experiment.id, _domain_payload('ngs_molbio'))
+        dataset = await create_dataset(s, project.id, 'Pinned sequences', 'ngs_molbio.sequence_collection.v1', experiment_id=domain.id)
+        s.add(ExperimentResource(id='q', kind='test', workspace_id=project.id))
+        s.add(ExperimentExternalEntityReceipt(id='q', workspace_id=project.id, resource_id='q', store_id=fresh['store_id'], entity_kind=fresh['entity_kind'], entity_id=entity, generation_or_revision=str(fresh['entity_revision_id']), content_digest=fresh['content_digest'], availability='available', verification_authority=owner.adapter_id, acknowledgement_json=json.dumps(fresh)))
+        # Exercise the immutable Project storage owner, not the typed Dataset
+        # authoring endpoint: repeated receipt/role pairs here are intentional
+        # paging fixtures and are not accepted by that endpoint.
+        members = [{'identity': 'q' if i < 102 else 'unknown', 'role': 'sequence',
+                    'value': {'receipt_id': 'q' if i < 102 else 'unknown'}} for i in range(103)]
+        revision = await save_dataset_revision(s, dataset.aggregate_id, {'members': members}, expected_head_generation=dataset.head_generation)
+        project_id, dataset_id, revision_id = project.id, dataset.aggregate_id, revision.resource_id
         await s.commit()
     async def project_session():
         async with ps() as s:
@@ -60,7 +69,7 @@ async def test_source_routes_with_real_molecular_owner_and_paging(tmp_path, monk
     app.dependency_overrides[get_experiment_session] = project_session
     app.dependency_overrides[get_molbio_session] = molecular_session
     app.dependency_overrides[get_session] = core_session
-    base = '/api/family-msa/projects/p/datasets/d/revisions/r/resources'
+    base = f'/api/family-msa/projects/{project_id}/datasets/{dataset_id}/revisions/{revision_id}/resources'
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
             pages = []
