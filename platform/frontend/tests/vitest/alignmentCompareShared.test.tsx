@@ -4,6 +4,11 @@ import {expect, it, vi} from 'vitest'
 import AlignmentShared from '../../src/components/alignments/AlignmentShared'
 import {api} from '../../src/lib/api'
 
+vi.mock('../../src/lib/projectManager', () => ({
+  listGlobalExperiments: vi.fn().mockResolvedValue([{id:'experiment', name:'Experiment'}]),
+  listDomainExperiments: vi.fn().mockResolvedValue([{id:'domain', name:'Domain'}]),
+}))
+
 it('requests a backend comparison and retains its returned report in the shared revision', async () => {
   const state = {schema:'bms.family-msa.shared-state.v1', marks:[], views:[], comparisons:[]}
   const get = vi.spyOn(api, 'get').mockResolvedValue({data:{id:'dataset', head_generation:2, revision_id:'rev', state}})
@@ -54,7 +59,10 @@ it('retains edits made during a save, switches datasets, and restores the draft 
   await act(async () => button('Open shared state').click())
   expect(div.textContent).toContain('second (b)')
   expect(div.textContent).toContain('generation 3')
-  await act(async () => set('Domain experiment ID', 'domain'))
+  await act(async () => {
+    const select = [...div.querySelectorAll('label')].find(x => x.textContent?.includes('Destination domain'))!.querySelector('select')!
+    select.value = 'domain'; select.dispatchEvent(new Event('change', {bubbles:true}))
+  })
   await act(async () => button('Create shared state').click())
   expect(div.textContent).toContain('Dataset created')
   await act(async () => set('Shared Dataset ID', 'one'))
