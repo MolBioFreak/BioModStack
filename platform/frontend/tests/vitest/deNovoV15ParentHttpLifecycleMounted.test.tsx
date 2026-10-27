@@ -83,7 +83,13 @@ async function saveTemplate(name: string) {
 }
 async function coldLoad(saved: any) {
     await unmount(); sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY,'ambient-remote');
-    await mount(`/submit?model=${saved.params.native_job_request.model_id}&mode=${saved.mode}`); await click('Template Manager'); await click('← Back to list');
+    const route = saved.params.native_job_request ? `/submit?model=${saved.params.native_job_request.model_id}&mode=${saved.mode}` : undefined;
+    await mount(route); await click('Template Manager'); await click('← Back to list');
+    if (!saved.params.native_job_request) {
+        const allWorkflows = [...document.querySelectorAll('label')].find(node => node.textContent?.includes('All workflows'))?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+        expect(allWorkflows).toBeTruthy();
+        await act(async () => allWorkflows!.click());
+    }
     await vi.waitFor(async () => { await settle(); expect(document.body.textContent).toContain(saved.name); });
     const row = [...document.querySelectorAll('button')].find(e => e.textContent === 'Load' && e.parentElement?.parentElement?.textContent?.includes(saved.name));
     expect(row).toBeTruthy(); await act(async () => row!.click()); await settle();
@@ -206,6 +212,27 @@ suite('all five populated engine drafts survive real SQLite template Save and co
     expect(again.params.native_job_request.params).not.toHaveProperty('opaque_import');
     expect(requests.some(r => r.path === '/api/jobs')).toBe(false);
 }, 30000);
+suite('last generation selection survives redesign and a real SQLite cold Template Load', async () => {
+    await mount();
+    const named = (name: string) => [...document.querySelectorAll('label')].find(node => !node.closest('[hidden]') && node.firstChild?.textContent === name)?.querySelector('input,select') as HTMLInputElement | HTMLSelectElement;
+    await edit(named('Engine'), 'rfd3');
+    await edit(named('Goal'), 'rna_conditioned');
+    await edit(named('Engine'), 'disco');
+    await edit(named('Target lengths'), '144');
+    await edit(named('Goal'), 'dna_conditioned');
+    await click('Redesign structure');
+    const saved = await saveTemplate('Return to generation cold');
+    expect(saved.params.editor_state.suite_last_generation).toMatchObject({ generator: 'disco', design_task: 'dna_conditioned' });
+    await coldLoad(saved);
+    await click('Generate');
+    expect(named('Engine').value).toBe('disco');
+    expect(named('Goal').value).toBe('dna_conditioned');
+    await edit(named('Goal'), 'unconditional');
+    expect(named('Target lengths').value).toBe('144');
+    await edit(named('Engine'), 'rfd3');
+    expect(named('Goal').value).toBe('rna_conditioned');
+}, 30000);
+
 suite('ordinary parent clone saves native SQLite Template and cold Load preserves sparse science and explicit Local', async () => {
     sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY,'ambient-remote');
     await mount(undefined,clone);
