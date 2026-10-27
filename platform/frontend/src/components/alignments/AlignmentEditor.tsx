@@ -5,6 +5,7 @@ import { getLaunchContext } from '../../lib/projectManager';
 import type { JsonObject } from '../../lib/projectManager';
 import { useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup';
 import ProjectDatasetPicker, { type DatasetRow } from './ProjectDatasetPicker';
+import requestSchema from './alignment-request.schema.json';
 
 type Engine = 'mafft' | 'famsa' | 'muscle' | 'twilight';
 type Molecule = 'protein' | 'dna' | 'rna';
@@ -28,18 +29,8 @@ export function settingsInventory(schema: SettingsSchema, engine: Engine): {fiel
     }
     return {fields:result,defaults:settings};
 }
-const fields: Record<Engine, Field[]> = {
-    mafft: [{key:'strategy',label:'Strategy',kind:'select',options:['fft_ns_2','linsi','ginsi','auto']},{key:'treeout',label:'Retain guide tree',kind:'boolean'}],
-    famsa: [{key:'guide_tree',label:'Guide tree',kind:'select',options:['sl','upgma','nj']},{key:'refine_mode',label:'Refinement',kind:'select',options:['auto','on','off']},{key:'keep_duplicates',label:'Keep duplicates',kind:'boolean'},{key:'medoidtree',label:'Medoid tree',kind:'boolean'}, ...['medoid_seeds','medoid_threshold'].map(key=>({key,label:key.replaceAll('_',' '),kind:'integer' as const})),{key:'trim_columns',label:'Trim columns',kind:'number'}],
-    muscle: [{key:'mode',label:'Mode',kind:'select',options:['align','super5']},{key:'permutation',label:'Permutation',kind:'select',options:['none','abc','acb','bca','all']},{key:'perturb',label:'Perturbation',kind:'integer',min:0},{key:'ensemble',label:'Ensemble',kind:'select',options:['none','stratified','diversified']},{key:'replicates',label:'Replicates',kind:'integer',min:1}],
-    twilight: [{key:'method',label:'Method',kind:'select',options:['pairwise','tcs']},{key:'acc_mode',label:'Accuracy mode',kind:'select',options:['0','1','2','3']},...['acc_max_group','max_subtree'].map(key=>({key,label:key.replaceAll('_',' '),kind:'integer' as const})),...['acc_sample_rate','acc_sample_top','consistency_weight','remove_gappy','match','mismatch','transition','gap_open','gap_extend','gap_ends','scale','xdrop'].map(key=>({key,label:key.replaceAll('_',' '),kind:'number' as const})),...['wildcard','rooted','prune','filter'].map(key=>({key,label:key,kind:'boolean' as const})),{key:'guide_source',label:'Guide source',kind:'select',options:['supplied','mafft']},{key:'guide_tree',label:'Supplied Newick tree',kind:'text'},{key:'leaf_mapping',label:'Leaf mapping',kind:'mapping'}],
-};
-const defaults: Record<Engine, Settings> = {
-    mafft:{engine:'mafft',threads:1,strategy:'fft_ns_2',treeout:false},
-    famsa:{engine:'famsa',threads:1,guide_tree:'sl',refine_mode:'auto',keep_duplicates:false,medoidtree:false,medoid_seeds:null,medoid_threshold:null,trim_columns:null},
-    muscle:{engine:'muscle',threads:1,mode:'align',permutation:'none',perturb:0,ensemble:'none',replicates:null},
-    twilight:{engine:'twilight',threads:1,method:'pairwise',acc_mode:0,acc_max_group:null,acc_sample_rate:null,acc_sample_top:null,consistency_weight:5,max_subtree:null,remove_gappy:0.95,wildcard:false,rooted:false,prune:false,filter:false,match:18,mismatch:-8,transition:-4,gap_open:null,gap_extend:null,gap_ends:null,scale:null,xdrop:600,guide_source:'supplied',guide_tree:null,leaf_mapping:{}},
-};
+const inventory = Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(engine => [engine, settingsInventory(requestSchema as SettingsSchema, engine)])) as Record<Engine,ReturnType<typeof settingsInventory>>;
+const defaults = Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(engine => [engine, inventory[engine].defaults])) as Record<Engine,Settings>;
 export function fastaRoster(text: string, molecule: Molecule) {
     const rows: {row_id:string;header:string;sequence:string}[] = [];
     for (const line of text.split(/\r?\n/)) {
@@ -68,16 +59,16 @@ export default function AlignmentEditor({ model }: { model: string }) {
     const [molecule,setMolecule] = useState<Molecule>(model === 'family_msa_nucleic' ? 'dna' : 'protein');
     const [engine,setEngine] = useState<Engine>('mafft');
     const [drafts,setDrafts] = useState<Record<Engine,Settings>>(() => structuredClone(defaults));
-    const [inventory,setInventory] = useState<Partial<Record<Engine,ReturnType<typeof settingsInventory>>>>({});
-    const [inventoryError,setInventoryError] = useState(false);
+    const [schemaWarning,setSchemaWarning] = useState('');
     useEffect(() => {
         let cancelled = false;
         void Promise.resolve().then(() => api.get<SettingsSchema>('/api/family-msa/settings-schema')).then(({data}) => {
-            if (cancelled) return;
-            const next = Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(engine => [engine,settingsInventory(data,engine)])) as Record<Engine,ReturnType<typeof settingsInventory>>;
-            setInventory(next);
-            setDrafts(previous => Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(engine => [engine,{...next[engine].defaults,...previous[engine]}])) as Record<Engine,Settings>);
-        }).catch(() => { if (!cancelled) setInventoryError(true); });
+            if (!cancelled && JSON.stringify(data.$defs) !== JSON.stringify(requestSchema.$defs)) {
+                // Key ordering is immaterial to JSON schemas.
+                const canonical = (value: unknown): string => JSON.stringify(value, (_key, item) => item && !Array.isArray(item) && typeof item === 'object' ? Object.fromEntries(Object.entries(item).sort(([a],[b]) => a.localeCompare(b))) : item);
+                if (canonical(data.$defs) !== canonical(requestSchema.$defs)) setSchemaWarning('The editor and API request schemas differ; review settings before submission.');
+            }
+        }).catch(() => { if (!cancelled) setSchemaWarning('Could not compare the editor and API request schemas.'); });
         return () => { cancelled = true; };
     }, []);
     const [fasta,setFasta] = useState(''); const [busy,setBusy] = useState(false); const [error,setError] = useState(''); const [job,setJob] = useState(urlJob ?? '');
@@ -192,7 +183,7 @@ export default function AlignmentEditor({ model }: { model: string }) {
     };
     return <section aria-label="New family alignment" className="space-y-4 rounded border border-slate-600 p-4">
         <h2 className="text-lg font-semibold">New family alignment</h2>
-        {inventoryError && <p role="status">Settings discovery failed; showing the limited built-in settings instead.</p>}
+        {schemaWarning && <p role="status">{schemaWarning}</p>}
         {setup.active && !setup.setup && <p role="status">Project setup must load before editing.</p>}
         <fieldset disabled={busy || (setup.active && !setup.setup)} className="space-y-3">
             <label className="block">Molecule <select aria-label="Molecule" className={inputClass} value={molecule} onChange={e=>{const next=e.target.value as Molecule; setMolecule(next); if ((next === 'protein' && engine === 'twilight') || (next !== 'protein' && engine === 'famsa')) setEngine('mafft');}}>{(model === 'family_msa_nucleic' ? ['dna','rna'] : ['protein']).map(x=><option key={x}>{x}</option>)}</select></label>
@@ -203,7 +194,7 @@ export default function AlignmentEditor({ model }: { model: string }) {
             {requestIdentityWarning(datasetRows) && <p role="status">Some source identity evidence is missing or differs from the frozen selection; review the saved request evidence.</p>}
             {datasetRows.some(x=>x.resolved.status === 'resolved' && x.resolved.molecule && x.resolved.molecule !== molecule) && <p role="status">Some resolved sources have a different molecule type from the selected roster. Review the source and molecule before running.</p>}
             <div className="grid gap-3 sm:grid-cols-2"><label>Threads <input aria-label="Threads" className={inputClass} type="number" min={1} step={1} value={String(settings.threads)} onChange={e=>update('threads',e.target.value === '' ? null : Number(e.target.value))}/></label>
-            {(inventory[engine]?.fields ?? fields[engine]).map(field => <label key={field.key} className="block">{field.label} {' '}{field.kind === 'boolean' ? <input type="checkbox" checked={Boolean(settings[field.key])} onChange={e=>update(field.key,e.target.checked)}/> : field.kind === 'select' ? <select className={inputClass} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value === '' ? null : field.key === 'acc_mode' ? Number(e.target.value) : e.target.value)}>{field.nullable && <option value="">Native default</option>}{field.options?.map(x=><option key={x}>{x}</option>)}</select> : field.kind === 'mapping' ? <MappingInput value={(settings[field.key] || {}) as Record<string,string>} onChange={value=>update(field.key,value)}/> : field.kind === 'text' ? <textarea className={`${inputClass} block w-full`} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value || null)}/> : <input className={inputClass} type="number" step={field.kind === 'integer' ? 1 : 'any'} min={field.min} value={settings[field.key] == null ? '' : String(settings[field.key])} onChange={e=>update(field.key,e.target.value === '' ? null : Number(e.target.value))}/>}</label>)}
+            {inventory[engine].fields.map(field => <label key={field.key} className="block">{field.label} {' '}{field.kind === 'boolean' ? <input type="checkbox" checked={Boolean(settings[field.key])} onChange={e=>update(field.key,e.target.checked)}/> : field.kind === 'select' ? <select className={inputClass} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value === '' ? null : field.key === 'acc_mode' ? Number(e.target.value) : e.target.value)}>{field.nullable && <option value="">Native default</option>}{field.options?.map(x=><option key={x}>{x}</option>)}</select> : field.kind === 'mapping' ? <MappingInput value={(settings[field.key] || {}) as Record<string,string>} onChange={value=>update(field.key,value)}/> : field.kind === 'text' ? <textarea className={`${inputClass} block w-full`} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value || null)}/> : <input className={inputClass} type="number" step={field.kind === 'integer' ? 1 : 'any'} min={field.min} value={settings[field.key] == null ? '' : String(settings[field.key])} onChange={e=>update(field.key,e.target.value === '' ? null : Number(e.target.value))}/>}</label>)}
             </div>
             {setup.active && <button type="button" onClick={()=>void run('save')} className={inputClass}>Save Project draft</button>}{' '}
             <button type="button" onClick={()=>void run('launch')} className={inputClass}>Start run</button>

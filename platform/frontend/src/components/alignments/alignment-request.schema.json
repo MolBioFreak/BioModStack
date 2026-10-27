@@ -1,0 +1,865 @@
+{
+  "$defs": {
+    "FamsaSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "dgo": {
+          "default": false,
+          "title": "Dgo",
+          "type": "boolean"
+        },
+        "dgr": {
+          "default": false,
+          "title": "Dgr",
+          "type": "boolean"
+        },
+        "dist": {
+          "anyOf": [
+            {
+              "enum": [
+                "indel_div_lcs",
+                "indel075_div_lcs"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dist"
+        },
+        "dsp": {
+          "default": false,
+          "title": "Dsp",
+          "type": "boolean"
+        },
+        "engine": {
+          "const": "famsa",
+          "default": "famsa",
+          "title": "Engine",
+          "type": "string"
+        },
+        "ge": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ge"
+        },
+        "go": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Go"
+        },
+        "gsd": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gsd"
+        },
+        "gsl": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gsl"
+        },
+        "guide_tree": {
+          "default": "sl",
+          "enum": [
+            "sl",
+            "upgma",
+            "nj"
+          ],
+          "title": "Guide Tree",
+          "type": "string"
+        },
+        "keep_duplicates": {
+          "default": false,
+          "title": "Keep Duplicates",
+          "type": "boolean"
+        },
+        "medoid_seeds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Medoid Seeds"
+        },
+        "medoid_threshold": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Medoid Threshold"
+        },
+        "medoidtree": {
+          "default": false,
+          "title": "Medoidtree",
+          "type": "boolean"
+        },
+        "r": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "R"
+        },
+        "refine_mode": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "title": "Refine Mode",
+          "type": "string"
+        },
+        "sm": {
+          "anyOf": [
+            {
+              "enum": [
+                "MIQS",
+                "PFASUM31",
+                "PFASUM43",
+                "PFASUM60"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sm"
+        },
+        "tge": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tge"
+        },
+        "tgo": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tgo"
+        },
+        "threads": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Threads",
+          "type": "integer"
+        },
+        "trim_columns": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trim Columns"
+        },
+        "verbose": {
+          "default": false,
+          "title": "Verbose",
+          "type": "boolean"
+        }
+      },
+      "title": "FamsaSettings",
+      "type": "object"
+    },
+    "MafftSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "const": "mafft",
+          "default": "mafft",
+          "title": "Engine",
+          "type": "string"
+        },
+        "ep": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ep"
+        },
+        "maxiterate": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Override the strategy refinement iteration count.",
+          "title": "Maxiterate"
+        },
+        "op": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Op"
+        },
+        "quiet": {
+          "default": false,
+          "title": "Quiet",
+          "type": "boolean"
+        },
+        "reorder": {
+          "default": false,
+          "title": "Reorder",
+          "type": "boolean"
+        },
+        "retree": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Override the strategy guide-tree rebuild count.",
+          "title": "Retree"
+        },
+        "strategy": {
+          "default": "fft_ns_2",
+          "enum": [
+            "fft_ns_2",
+            "linsi",
+            "ginsi",
+            "einsi",
+            "auto"
+          ],
+          "title": "Strategy",
+          "type": "string"
+        },
+        "threads": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Threads",
+          "type": "integer"
+        },
+        "treeout": {
+          "default": false,
+          "title": "Treeout",
+          "type": "boolean"
+        }
+      },
+      "title": "MafftSettings",
+      "type": "object"
+    },
+    "MuscleSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "const": "muscle",
+          "default": "muscle",
+          "title": "Engine",
+          "type": "string"
+        },
+        "ensemble": {
+          "default": "none",
+          "enum": [
+            "none",
+            "stratified",
+            "diversified"
+          ],
+          "title": "Ensemble",
+          "type": "string"
+        },
+        "mode": {
+          "default": "align",
+          "enum": [
+            "align",
+            "super5"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "permutation": {
+          "default": "none",
+          "enum": [
+            "none",
+            "abc",
+            "acb",
+            "bca",
+            "all"
+          ],
+          "title": "Permutation",
+          "type": "string"
+        },
+        "perturb": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Perturb",
+          "type": "integer"
+        },
+        "replicates": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replicates"
+        },
+        "threads": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Threads",
+          "type": "integer"
+        }
+      },
+      "title": "MuscleSettings",
+      "type": "object"
+    },
+    "Row": {
+      "additionalProperties": false,
+      "properties": {
+        "header": {
+          "title": "Header",
+          "type": "string"
+        },
+        "occurrence_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Occurrence Id"
+        },
+        "row_id": {
+          "title": "Row Id",
+          "type": "string"
+        },
+        "sequence": {
+          "title": "Sequence",
+          "type": "string"
+        },
+        "source_member_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Member Id"
+        },
+        "source_offset": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Offset"
+        },
+        "source_positions": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Positions"
+        },
+        "transformation_provenance": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transformation Provenance"
+        }
+      },
+      "required": [
+        "row_id",
+        "header",
+        "sequence"
+      ],
+      "title": "Row",
+      "type": "object"
+    },
+    "SequenceSet": {
+      "additionalProperties": false,
+      "properties": {
+        "molecule": {
+          "enum": [
+            "protein",
+            "dna",
+            "rna"
+          ],
+          "title": "Molecule",
+          "type": "string"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/Row"
+          },
+          "title": "Rows",
+          "type": "array"
+        },
+        "source_evidence": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Source Evidence",
+          "type": "array"
+        },
+        "source_format": {
+          "default": "fasta",
+          "enum": [
+            "fasta",
+            "stockholm",
+            "clustal",
+            "a3m"
+          ],
+          "title": "Source Format",
+          "type": "string"
+        },
+        "source_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Text"
+        }
+      },
+      "required": [
+        "molecule",
+        "rows"
+      ],
+      "title": "SequenceSet",
+      "type": "object"
+    },
+    "TwilightSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "acc_max_group": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acc Max Group"
+        },
+        "acc_mode": {
+          "default": 0,
+          "enum": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "title": "Acc Mode",
+          "type": "integer"
+        },
+        "acc_sample_rate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acc Sample Rate"
+        },
+        "acc_sample_top": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acc Sample Top"
+        },
+        "check": {
+          "default": false,
+          "title": "Check",
+          "type": "boolean"
+        },
+        "consistency_weight": {
+          "default": 5.0,
+          "title": "Consistency Weight",
+          "type": "number"
+        },
+        "engine": {
+          "const": "twilight",
+          "default": "twilight",
+          "title": "Engine",
+          "type": "string"
+        },
+        "filter": {
+          "default": false,
+          "title": "Filter",
+          "type": "boolean"
+        },
+        "gap_ends": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gap Ends"
+        },
+        "gap_extend": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gap Extend"
+        },
+        "gap_open": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gap Open"
+        },
+        "guide_source": {
+          "default": "supplied",
+          "enum": [
+            "supplied",
+            "mafft"
+          ],
+          "title": "Guide Source",
+          "type": "string"
+        },
+        "guide_tree": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Guide Tree"
+        },
+        "leaf_mapping": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Leaf Mapping",
+          "type": "object"
+        },
+        "length_deviation": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Length Deviation"
+        },
+        "match": {
+          "default": 18,
+          "title": "Match",
+          "type": "number"
+        },
+        "max_ambig": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Ambig"
+        },
+        "max_len": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Len"
+        },
+        "max_subtree": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Subtree"
+        },
+        "method": {
+          "default": "pairwise",
+          "enum": [
+            "pairwise",
+            "tcs"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "min_len": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Len"
+        },
+        "mismatch": {
+          "default": -8,
+          "title": "Mismatch",
+          "type": "number"
+        },
+        "prune": {
+          "default": false,
+          "title": "Prune",
+          "type": "boolean"
+        },
+        "remove_gappy": {
+          "default": 0.95,
+          "title": "Remove Gappy",
+          "type": "number"
+        },
+        "rooted": {
+          "default": false,
+          "title": "Rooted",
+          "type": "boolean"
+        },
+        "scale": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scale"
+        },
+        "threads": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Threads",
+          "type": "integer"
+        },
+        "transition": {
+          "default": -4,
+          "title": "Transition",
+          "type": "number"
+        },
+        "verbose": {
+          "default": false,
+          "title": "Verbose",
+          "type": "boolean"
+        },
+        "wildcard": {
+          "default": false,
+          "title": "Wildcard",
+          "type": "boolean"
+        },
+        "write_filtered": {
+          "default": false,
+          "title": "Write Filtered",
+          "type": "boolean"
+        },
+        "write_prune": {
+          "default": false,
+          "title": "Write Prune",
+          "type": "boolean"
+        },
+        "xdrop": {
+          "default": 600,
+          "title": "Xdrop",
+          "type": "number"
+        }
+      },
+      "title": "TwilightSettings",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "roster": {
+      "$ref": "#/$defs/SequenceSet"
+    },
+    "settings": {
+      "discriminator": {
+        "mapping": {
+          "famsa": "#/$defs/FamsaSettings",
+          "mafft": "#/$defs/MafftSettings",
+          "muscle": "#/$defs/MuscleSettings",
+          "twilight": "#/$defs/TwilightSettings"
+        },
+        "propertyName": "engine"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/MafftSettings"
+        },
+        {
+          "$ref": "#/$defs/FamsaSettings"
+        },
+        {
+          "$ref": "#/$defs/MuscleSettings"
+        },
+        {
+          "$ref": "#/$defs/TwilightSettings"
+        }
+      ],
+      "title": "Settings"
+    }
+  },
+  "required": [
+    "roster",
+    "settings"
+  ],
+  "title": "AlignmentRequest",
+  "type": "object"
+}

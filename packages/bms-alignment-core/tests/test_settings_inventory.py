@@ -29,6 +29,12 @@ def test_schema_and_nondefault_compilers():
     assert all(x in twilight for x in ('--min-len', '3', '--max-ambig', '0.5', '--check'))
 
 
+def test_bundled_editor_schema_matches_request_owner():
+    root = Path(__file__).resolve().parents[3]
+    bundled = root / 'platform/frontend/src/components/alignments/alignment-request.schema.json'
+    assert json.loads(bundled.read_text()) == AlignmentRequest.model_json_schema()
+
+
 @pytest.mark.parametrize('strategy', ['fft_ns_2', 'linsi', 'ginsi', 'einsi', 'auto'])
 def test_mafft_explicit_overrides(strategy):
     args = compile_mafft(request('mafft', strategy=strategy, retree=1, maxiterate=3, reorder=True, quiet=True), 'mafft', 'in')
