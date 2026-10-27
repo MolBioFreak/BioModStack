@@ -553,7 +553,7 @@ function WorkspaceTabs({
         }
     }, [activeId, tabs]);
     return (
-        <div className="border-b border-slate-700 bg-slate-900/80 px-2 py-1">
+        <div className="shrink-0 border-b border-slate-700 bg-slate-900/80 px-2 py-1">
             <div ref={railRef} className="flex gap-2 overflow-x-auto pb-1">
                 {tabs.map((tab) => (
                     <div
@@ -573,9 +573,6 @@ function WorkspaceTabs({
                             <div className="truncate font-medium">
                                 {tab.title || 'Untitled'}
                                 {tab.dirty ? ' *' : ''}
-                            </div>
-                            <div className="mt-0.5 text-[10px] uppercase tracking-[0.1em] text-slate-500">
-                                {tab.sequenceType}
                             </div>
                         </button>
                         <button
@@ -3294,10 +3291,7 @@ export function MolBioToolkitV2() {
             <div
                 ref={toolkitRootRef}
                 tabIndex={-1}
-                className={`molbio-toolkit w-full flex bg-slate-900 text-slate-100 overflow-hidden ${isViewerFullscreen ? 'fixed inset-0 z-[70] h-full' : 'relative'}`}
-                style={isViewerFullscreen
-                    ? undefined
-                    : { height: 'clamp(36rem, calc(100vh - 8rem), 96rem)' }}
+                className={`molbio-toolkit w-full flex bg-slate-900 text-slate-100 overflow-hidden ${isViewerFullscreen ? 'fixed inset-0 z-[70] h-full' : 'relative flex-1 min-h-0'}`}
                 data-molbio-viewer-fullscreen={isViewerFullscreen ? 'true' : 'false'}
                 data-molbio-viewer-desktop={!isMobileMolBio ? 'true' : 'false'}
             >
@@ -3360,11 +3354,10 @@ export function MolBioToolkitV2() {
                 )}
 
                 {/* Center: Viewer */}
-                <div className="relative flex-1 flex flex-col min-w-0 overflow-hidden">
-                    {!isViewerFullscreen && <div className="flex flex-wrap items-center justify-end gap-2 border-b border-slate-700 px-3 py-2">
+                <div data-molbio-workspace className="relative flex-1 flex flex-col min-w-0 min-h-0 overflow-y-auto [&>*]:shrink-0">
+                    {!isViewerFullscreen && (projectExportHref || projectAttachmentError) && <div className="flex flex-wrap items-center justify-end gap-2 border-b border-slate-700 px-3 py-2">
                         {projectExportHref && <span role="status" className="text-xs text-emerald-300">Exported. <Link to={projectExportHref} className="underline">Open destination Project</Link></span>}
                         {projectAttachmentError && <span role="alert" className="text-xs text-red-300">{projectAttachmentError}</span>}
-                        <button type="button" disabled={!(selectedExactMolecularRevision || selectedSequenceId) || isDirty} className="rounded border border-cyan-600 px-3 py-1 text-xs font-semibold text-cyan-300 disabled:opacity-50" title="Save the sequence before attaching its exact revision" onClick={() => void openProjectExport()}>Add to Project</button>
                     </div>}
                     <ProjectAttachmentDialog open={projectAttachmentSource !== null} source={projectAttachmentSource ?? undefined} initialProjectId={workspaceId ?? undefined}
                         destination={globalExperimentId && domainExperimentId ? { globalExperimentId, domainExperimentId, stateRevisionId } : undefined}
@@ -3378,6 +3371,7 @@ export function MolBioToolkitV2() {
                         <SequenceHeader
                             sequenceData={sequenceData}
                             onSave={isExactMolecularAuthority ? undefined : saveSequence}
+                            onFocusViewer={sequenceData.circular ? toggleViewerFullscreen : undefined}
                             onExportToProject={() => void openProjectExport()}
                             projectExportDisabled={!(selectedExactMolecularRevision || selectedSequenceId) || isDirty}
                             onUndo={isExactMolecularAuthority ? undefined : undo}
@@ -3472,8 +3466,19 @@ export function MolBioToolkitV2() {
 
                     {!isViewerFullscreen && selectedSequenceId && (
                         <section className="mx-3 mt-2 rounded border border-slate-700 bg-slate-800/60 px-3 py-2 text-xs" aria-label="Sequencing verification workup">
-                            <div className="flex items-center justify-between gap-3">
-                                <span className="font-medium text-slate-200">Sequencing verification (read-only)</span>
+                            <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+                                <details className="min-w-0 flex-1">
+                                    <summary className="w-fit cursor-pointer font-medium text-slate-200">Sequencing verification · {ngsWorkups.length ? `${ngsWorkups.length} workup${ngsWorkups.length === 1 ? '' : 's'}` : ngsWorkupStatus === 'loading' ? 'loading' : ngsWorkupStatus === 'unavailable' ? 'unavailable' : ngsWorkupQuery.hasNextPage ? 'more history available' : 'no results'}</summary>
+                                    {ngsWorkups.length === 0 ? (
+                                        <p className="mt-1 text-slate-400">{ngsWorkupStatus === 'loading' ? 'Loading sequencing workups…' : ngsWorkupStatus === 'unavailable' ? 'Sequencing workups unavailable.' : ngsWorkupQuery.hasNextPage ? 'No valid workups in the loaded page; older history remains.' : 'No revision-bound NGS evidence. Job completion is not a scientific PASS.'}</p>
+                                    ) : ngsWorkups.map((workup) => (
+                                        <div key={workup.job_id} className="mt-1 flex items-center justify-between text-slate-300">
+                                            <span>{workup.scientific_status} · {workup.revision_relation === 'current' ? 'current revision' : 'historical revision'} · {workup.manifest_available ? 'validated manifest' : 'evidence unavailable/review'}</span>
+                                            <a className="text-blue-300 hover:text-blue-200" href={ngsResultHref(workup.job_id, location.search)}>NGS Run Inspector</a>
+                                        </div>
+                                    ))}
+                                    {ngsWorkupContinuation}
+                                </details>
                                 <a
                                     className="text-blue-300 hover:text-blue-200"
                                     href={contextHref('/ngs', {
@@ -3484,15 +3489,6 @@ export function MolBioToolkitV2() {
                                     Hand off {selectedExactMolecularRevision ? 'this exact immutable revision' : 'current construct'} to Nanopore
                                 </a>
                             </div>
-                            {ngsWorkups.length === 0 ? (
-                                <p className="mt-1 text-slate-400">{ngsWorkupStatus === 'loading' ? 'Loading sequencing workups…' : ngsWorkupStatus === 'unavailable' ? 'Sequencing workups unavailable.' : ngsWorkupQuery.hasNextPage ? 'No valid workups in the loaded page; older history remains.' : 'No revision-bound NGS evidence. Job completion is not a scientific PASS.'}</p>
-                            ) : ngsWorkups.map((workup) => (
-                                <div key={workup.job_id} className="mt-1 flex items-center justify-between text-slate-300">
-                                    <span>{workup.scientific_status} · {workup.revision_relation === 'current' ? 'current revision' : 'historical revision'} · {workup.manifest_available ? 'validated manifest' : 'evidence unavailable/review'}</span>
-                                    <a className="text-blue-300 hover:text-blue-200" href={ngsResultHref(workup.job_id, location.search)}>NGS Run Inspector</a>
-                                </div>
-                            ))}
-                            {ngsWorkupContinuation}
                         </section>
                     )}
 
@@ -3506,37 +3502,13 @@ export function MolBioToolkitV2() {
                     )}
 
 
-                    <div className="relative flex-1 overflow-hidden flex flex-col">
-                        {sequenceData.circular && (
-                            <div
-                                style={isViewerFullscreen ? {
-                                    left: 'calc(env(safe-area-inset-left) + 0.75rem)',
-                                    top: 'calc(env(safe-area-inset-top) + 0.75rem)',
-                                } : undefined}
-                                className={isViewerFullscreen
-                                    ? 'pointer-events-none absolute z-20 flex items-center gap-2 left-[max(env(safe-area-inset-left),0.75rem)] top-[max(env(safe-area-inset-top),0.75rem)]'
-                                    : 'relative z-20 flex shrink-0 justify-end border-b border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2'}
-                            >
-                                {isViewerFullscreen ? (
-                                    <button
-                                        type="button"
-                                        data-molbio-focus-exit="true"
-                                        onClick={() => setIsViewerFullscreen(false)}
-                                        className="pointer-events-auto min-h-12 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 text-sm font-semibold text-[var(--text-primary)] shadow-[var(--shadow-card)] hover:bg-[var(--bg-tertiary)]"
-                                        title="Exit focused plasmid view"
-                                    >
-                                        Exit Focus
-                                    </button>
-                                ) : (
-                                    <button
-                                        type="button"
-                                        onClick={toggleViewerFullscreen}
-                                        className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-1.5 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
-                                        title="Focus Viewer"
-                                    >
-                                        Focus Viewer
-                                    </button>
-                                )}
+                    <div className="relative flex-1 flex flex-col">
+                        {sequenceData.circular && isViewerFullscreen && (
+                            <div style={{left:'calc(env(safe-area-inset-left) + 0.75rem)',top:'calc(env(safe-area-inset-top) + 0.75rem)'}}
+                                className="pointer-events-none absolute z-20 flex items-center gap-2">
+                                <button type="button" data-molbio-focus-exit="true" onClick={() => setIsViewerFullscreen(false)}
+                                    className="pointer-events-auto min-h-12 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 text-sm font-semibold text-[var(--text-primary)] shadow-[var(--shadow-card)] hover:bg-[var(--bg-tertiary)]"
+                                    title="Exit focused plasmid view">Exit Focus</button>
                             </div>
                         )}
                         {sequenceData.sequence ? (
@@ -3561,9 +3533,9 @@ export function MolBioToolkitV2() {
                                     </Suspense>
                                 )}
 
-                                {/* Sequence Viewer */}
+                                {/* Retain a readable canvas; the workspace scrolls when headers and tracks need more room. */}
                                 {showRnaStructureViewer ? (
-                                    <div className="flex-1 overflow-hidden grid grid-rows-[minmax(220px,42%)_minmax(280px,58%)]">
+                                    <div data-molbio-sequence-canvas className="flex-1 overflow-hidden grid grid-rows-[minmax(220px,42%)_minmax(280px,58%)]" style={{flex: '1 0 32rem', minHeight: '32rem'}}>
                                         <div className="min-h-0 overflow-hidden">
                                             <SequenceViewer
                                                 sequenceData={viewerSequenceData}
@@ -3591,7 +3563,7 @@ export function MolBioToolkitV2() {
                                         )}
                                     </div>
                                 ) : (
-                                    <div className="flex-1 min-h-0 overflow-hidden">
+                                    <div data-molbio-sequence-canvas className="overflow-hidden" style={isViewerFullscreen ? { flex: '1 1 0%', minHeight: 0 } : { flex: '1 0 24rem', minHeight: '24rem' }}>
                                         <SequenceViewer
                                             sequenceData={viewerSequenceData}
                                             visibility={visibility}

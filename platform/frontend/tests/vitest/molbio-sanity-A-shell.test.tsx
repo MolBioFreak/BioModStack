@@ -10,8 +10,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../src/components/MolBioToolkit/SequenceViewer', () => ({SequenceViewer:(props:any)=>{mocks.viewer=props;return <div data-qa-sequence-viewer onContextMenu={props.onContextMenu}><button data-qa-select-range onClick={()=>props.onSelection({start:2,end:22})}>Select QA range</button></div>}}));
 vi.mock('../../src/components/MolBioToolkit/VisibilityPanel', () => ({VisibilityPanel:(props:any)=>{mocks.visibility=props;return null}}));
 vi.mock('../../src/components/MolBioToolkit/utils/orfs', () => ({findOpenReadingFrames:mocks.orfs}));
-vi.mock('../../src/components/MolBioToolkit/GCContentTrack', () => ({GCContentTrack:()=>null}));
-vi.mock('../../src/components/MolBioToolkit/SequenceHeader', () => ({SequenceHeader:(props:any)=>{mocks.header=props;return null}}));
+vi.mock('../../src/components/MolBioToolkit/GCContentTrack', () => ({GCContentTrack:()=> <div data-qa-analytics>Sequence analytics</div>}));
+vi.mock('../../src/components/MolBioToolkit/SequenceHeader', async (original) => {const actual=await original<any>();return {SequenceHeader:(props:any)=>{mocks.header=props;return <actual.SequenceHeader {...props}/>}};});
 vi.mock('../../src/components/MolBioToolkit/MolecularInputModal', () => ({MolecularInputModal:(props:any)=>{mocks.input=props;return null}}));
 vi.mock('../../src/components/MolBioToolkit/AutoAnnotatePanel', () => ({AutoAnnotatePanel:(props:any)=>{mocks.annotation=props;return null}}));
 vi.mock('../../src/components/MolBioToolkit/panels', () => Object.fromEntries(['AlignmentPanel','AssemblyPanel','DigestPanel','HistoryPanel','PCRPanel','PrimerPanel','RnaStructurePanel','FeaturePanel','EditPanel','SearchPanel'].map(name=>[name,(props:any)=>{if(name==='DigestPanel')mocks.digest=props;if(name==='PrimerPanel')mocks.primer=props;if(name==='FeaturePanel')mocks.feature=props;return null}])));
@@ -103,4 +103,31 @@ it('keeps focus-view Quick Add above the viewer and opens working primer and fea
   } else await act(()=>dialog.querySelector<HTMLButtonElement>('[aria-label="Close creation dialog"]')!.click());
   expect(host.querySelector('[data-molbio-viewer-fullscreen="true"]')).toBeTruthy();
  }
+});
+
+
+it('keeps the canvas minimum when tracks open, fills focus mode, and restores the tracks on exit', async () => {
+ await act(async()=>mocks.input.onCreateSequence({name:'Tracks QA',sequence:'ACGT'.repeat(100),sequenceType:'dna',circular:true}));
+ const workspace=host.querySelector<HTMLElement>('[data-molbio-workspace]')!;
+ const canvas=()=>host.querySelector<HTMLElement>('[data-molbio-sequence-canvas]')!;
+ expect(canvas().style.minHeight).toBe('24rem');
+ expect(canvas().style.flexShrink).toBe('0');
+ expect(workspace.classList.contains('overflow-y-auto')).toBe(true);
+ expect(host.querySelector<HTMLElement>('[data-molbio-viewer-fullscreen]')!.style.height).toBe('');
+ const options=host.querySelector<HTMLDetailsElement>('[data-sequence-secondary-actions]')!;
+ await act(()=>options.querySelector('summary')!.click());
+ await act(()=>host.querySelector<HTMLButtonElement>('[title="Show analytics tracks"]')!.click());
+ expect(host.querySelector('[data-qa-analytics]')).not.toBeNull();
+ expect(canvas().style.minHeight).toBe('24rem');
+ expect(canvas().style.flexShrink).toBe('0');
+ const focus=host.querySelector<HTMLButtonElement>('[title="Focus Viewer"]')!;
+ expect(focus.closest('[data-sequence-primary-actions]')).not.toBeNull();
+ expect(host.querySelectorAll('[title="Focus Viewer"]')).toHaveLength(1);
+ await act(()=>focus.click());
+ expect(canvas().style.minHeight).toBe('0');
+ expect(host.querySelector('[data-qa-analytics]')).toBeNull();
+ await act(()=>host.querySelector<HTMLButtonElement>('[data-molbio-focus-exit]')!.click());
+ expect(canvas().style.minHeight).toBe('24rem');
+ expect(host.querySelector('[data-qa-analytics]')).not.toBeNull();
+ expect(host.querySelectorAll('[title="Focus Viewer"]')).toHaveLength(1);
 });

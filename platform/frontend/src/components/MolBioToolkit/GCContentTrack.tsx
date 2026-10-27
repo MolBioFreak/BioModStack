@@ -475,12 +475,12 @@ export function GCContentTrack({
     }
 
     return (
-        <div className="border-b border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-2">
+        <div className="shrink-0 border-b border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1" data-molbio-analytics>
             <div className="overflow-hidden rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)]">
                 <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-slate-800 px-3 py-2">
                     <div className="mr-1 flex shrink-0 items-baseline gap-2">
                         <span className="text-sm font-semibold text-[var(--text-primary)]">Sequence analytics</span>
-                        <span className="text-xs font-semibold text-slate-200">{metric.label}</span>
+                        <span className="text-xs text-[var(--text-secondary)]">Whole-sequence GC <strong className="ml-1 text-lg font-semibold text-[var(--text-primary)]">{calculateGC(normalizedSequence).toFixed(1)}%</strong></span>
                     </div>
                     <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-0.5">
                             {METRIC_DEFINITIONS.map((definition) => (
@@ -499,12 +499,9 @@ export function GCContentTrack({
                             ))}
                     </div>
                     <div className="ml-auto flex shrink-0 items-center gap-1.5 text-[10px]">
-                        <div className="rounded-full border border-slate-700 bg-slate-950 px-2 py-0.5 text-slate-200">
+                        {metricId !== 'gc' && <div className="rounded-full border border-slate-700 bg-slate-950 px-2 py-0.5 text-slate-200">
                             {metric.summaryLabel}: {formatMetricValue(metric, summary.mean)}
-                        </div>
-                        <div className="hidden rounded-full border border-slate-700 bg-slate-950 px-2 py-0.5 text-slate-400 xl:block">
-                            Range: {formatRange(metric, summary.minimum, summary.maximum)}
-                        </div>
+                        </div>}
                         {selectionStats && (
                             <div className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-cyan-100">
                                 Selected {selectionSnapshot?.coordinateLabel}: {formatMetricValue(metric, selectionStats.value)}
@@ -513,11 +510,10 @@ export function GCContentTrack({
                     </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 border-b border-[var(--border-primary)] p-3 text-sm lg:grid-cols-4" aria-label="Sequence composition summary">
-                    <div><p className="text-xs text-[var(--text-secondary)]">Whole-sequence GC</p><p className="text-2xl font-semibold text-[var(--text-primary)]">{calculateGC(normalizedSequence).toFixed(1)}%</p></div>
-                    <div><p className="text-xs text-[var(--text-secondary)]">Sequence length</p><p className="font-semibold">{normalizedSequence.length.toLocaleString()} bases</p></div>
-                    <div><p className="text-xs text-[var(--text-secondary)]">Ambiguous bases</p><p className="font-semibold">{Array.from(normalizedSequence).filter(base => !CANONICAL_BASES.has(base)).length.toLocaleString()}</p></div>
-                    <div><p className="text-xs text-[var(--text-secondary)]">Selected metric · window range</p><p className="font-semibold">{formatRange(metric, summary.minimum, summary.maximum)}</p></div>
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-3 py-1 text-xs text-[var(--text-secondary)]" aria-label="Sequence composition summary">
+                    <span>Length <strong className="text-[var(--text-primary)]">{normalizedSequence.length.toLocaleString()} bases</strong></span>
+                    <span>Ambiguous bases <strong className="text-[var(--text-primary)]">{Array.from(normalizedSequence).filter(base => !CANONICAL_BASES.has(base)).length.toLocaleString()}</strong></span>
+                    <span>{metric.shortLabel} window range <strong className="text-[var(--text-primary)]">{formatRange(metric, summary.minimum, summary.maximum)}</strong></span>
                 </div>
                 <div className="px-2 py-1">
                     <Plot

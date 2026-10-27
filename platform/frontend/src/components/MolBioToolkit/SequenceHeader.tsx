@@ -13,6 +13,7 @@ type ViewMode = 'linear' | 'circular' | 'both';
 interface SequenceHeaderProps {
     sequenceData: SequenceData;
     onSave?: () => void;
+    onFocusViewer?: () => void;
     onExportToProject?: () => void;
     projectExportDisabled?: boolean;
     onUndo?: () => void;
@@ -48,6 +49,7 @@ function calculateGC(sequence: string): number {
 export function SequenceHeader({
     sequenceData,
     onSave,
+    onFocusViewer,
     onExportToProject,
     projectExportDisabled,
     onUndo,
@@ -77,7 +79,7 @@ export function SequenceHeader({
     const unitLabel = sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna');
     const moleculeLabel = sequenceData.moleculeLabel || sequenceData.sequenceType.toUpperCase();
     return (
-        <div className="sequence-header bg-slate-800 border-b border-slate-700">
+        <div className="sequence-header shrink-0 bg-slate-800 border-b border-slate-700">
             <div className="px-3 py-2 space-y-2">
                 <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                     {/* Left: Sequence info */}
@@ -249,6 +251,11 @@ export function SequenceHeader({
                         Share
                     </button>
                 )}
+                {onFocusViewer && <button type="button" onClick={onFocusViewer} title="Focus Viewer"
+                    className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]">Focus Viewer</button>}
+                {onExportToProject && <button type="button" onClick={onExportToProject} disabled={projectExportDisabled}
+                    className="rounded border border-[var(--border-primary)] px-2 py-1.5 text-sm text-[var(--text-primary)] disabled:opacity-50"
+                    title="Save the sequence before attaching its exact revision">Add to Project</button>}
 
                 {/* Export */}
                 <ExportDropdown sequenceData={sequenceData} historyJournal={historyJournal} onExportToProject={onExportToProject} projectExportDisabled={projectExportDisabled} />

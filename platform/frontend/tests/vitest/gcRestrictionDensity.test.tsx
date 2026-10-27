@@ -89,3 +89,20 @@ it('updates chart colors after the actual root theme changes', async () => {
         expect((plotSpy.mock.lastCall?.[0] as any).layout.plot_bgcolor).toBe('#ffffff');expect((plotSpy.mock.lastCall?.[0] as any).layout.xaxis.tickfont.color).toBe('#333333');
     } finally {act(()=>renderer.unmount());if(prior===null)document.documentElement.removeAttribute('style');else document.documentElement.setAttribute('style',prior);if(previousTheme===null)document.documentElement.removeAttribute('data-theme');else document.documentElement.setAttribute('data-theme',previousTheme);}
 });
+
+
+it('keeps one prominent whole-sequence GC value when switching metrics', () => {
+    let renderer!:ReturnType<typeof create>;
+    act(()=>{renderer=create(<GCContentTrack sequence={'G'.repeat(9)+'A'.repeat(3)} windowSize={10} stepSize={3}/>);});
+    const text=(node:any):string=>typeof node==='string'?node:(node.children??[]).map(text).join('');
+    expect(text(renderer.root).match(/Whole-sequence GC/g)).toHaveLength(1);
+    expect(text(renderer.root)).toContain('75.0%');
+    const summary=renderer.root.findByProps({'aria-label':'Sequence composition summary'});
+    expect(text(summary)).toContain('12 bases');
+    expect(text(summary)).toContain('Ambiguous bases');
+    const button=renderer.root.findAllByType('button').find(node=>node.children.join('')==='Ambiguous bases %')!;
+    act(()=>button.props.onClick());
+    expect(text(renderer.root).match(/Whole-sequence GC/g)).toHaveLength(1);
+    expect(text(renderer.root)).toContain('75.0%');
+    act(()=>renderer.unmount());
+});
