@@ -279,6 +279,160 @@
           "default": null,
           "title": "Ep"
         },
+        "weighti": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pairwise consistency weight; applies to iterative pairwise strategies.",
+          "title": "Weighti"
+        },
+        "lop": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Local pairwise gap opening penalty.",
+          "title": "Lop"
+        },
+        "lep": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Local pairwise offset.",
+          "title": "Lep"
+        },
+        "lexp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Local pairwise gap extension penalty.",
+          "title": "Lexp"
+        },
+        "long_gap_open": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "E-INS-i skip penalty (native --LOP).",
+          "title": "Long Gap Open"
+        },
+        "long_gap_extend": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "E-INS-i skip extension penalty (native --LEXP).",
+          "title": "Long Gap Extend"
+        },
+        "bl": {
+          "anyOf": [
+            {
+              "enum": [
+                30,
+                45,
+                62,
+                80
+              ],
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Protein BLOSUM matrix number.",
+          "title": "Bl"
+        },
+        "jtt": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Protein JTT PAM distance.",
+          "title": "Jtt"
+        },
+        "tm": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Protein transmembrane PAM distance.",
+          "title": "Tm"
+        },
+        "kimura": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Nucleotide transition/transversion parameter.",
+          "title": "Kimura"
+        },
+        "randomseed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native random seed where used by MAFFT.",
+          "title": "Randomseed"
+        },
+        "nofft": {
+          "default": false,
+          "title": "Nofft",
+          "type": "boolean"
+        },
         "retree": {
           "anyOf": [
             {

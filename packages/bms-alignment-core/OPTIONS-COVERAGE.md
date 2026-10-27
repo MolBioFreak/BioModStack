@@ -1,5 +1,25 @@
 # Family MSA settings coverage (incremental)
 
+## MAFFT 7.525 source/manual increment
+
+Source: the installed `/opt/msa/bin/mafft` shell wrapper in the pinned SIF; its build script pins [7.525 source](https://mafft.cbrc.jp/alignment/software/mafft-7.525-without-extensions-src.tgz) SHA256 `edb34ae9b26d6b55328c18fa060ed741bca8cd599c2f4f8fad0e0871c8082265`. Semantics and applicability were cross-checked against the [upstream manual](https://mafft.cbrc.jp/alignment/software/manual/manual.html), which is not itself version-pinned. The installed wrapper recognizes substantially more options than `--help`; its textual mentions also include internal, unavailable-extension and commented options, so mentions are not a verified supported-option inventory.
+
+| Native option | BMS field / classification | Scope and evidence |
+|---|---|---|
+| `--weighti` | `weighti` | Pairwise consistency weight; manual associates it with pairwise algorithms. |
+| `--lop`, `--lep`, `--lexp` | same names | Local pairwise gap opening, offset, and extension; applicable to local/generalized-affine pairwise modes. |
+| `--LOP`, `--LEXP` | `long_gap_open`, `long_gap_extend` | Generalized-affine skip penalties; capitalization is significant. |
+| `--bl`, `--jtt`, `--tm`, `--kimura` | same names | Substitution model selection; native wrapper stores these in one variable. If several are given, compiler order is BL, JTT, TM, Kimura and native last wins. Native applicability depends on molecule. |
+| `--randomseed`, `--nofft` | same names | Wrapper options passed through; applicability and effective behavior depend on algorithm. |
+| `--threadit`, `--threadtb`, `--fft`, `--parttree`, `--partsize`, `--groupsize`, `--dpparttree`, `--fastaparttree`, `--mixedlinkage`, `--minimumlinkage`, `--averagelinkage`, `--weightm`, `--weightr`, `--unweight`, `--termgappenalty`, `--legacygappenalty`, `--anysymbol`, `--preservecase`, `--adjustdirection`, `--adjustdirectionaccurately` | Missing; potentially applicable full-family expert controls | Need version-specific applicability, side effects and native tests before exposing. |
+| `--aamatrix`, `--treein`, `--seed`, `--seedtable` | Missing; external scientific inputs | Need typed artifact custody and native format/interactions; not implemented. |
+| `--add`, `--addfragments`, `--addfull`, `--addprofile`, `--merge`, `--mapout`, `--keeplength` | Distinct add/profile workflows | Not the existing de novo full-family mode. |
+| `--clustalout`, `--phylipout`, `--distout`, `--scoreout`, `--nodeout` | Output artifacts/formats | Not exposed; native output parser currently assumes FASTA. |
+| `--dash`, `--pdbfilelist`, RNA structure pairwise and external FASTA/BLAST/LAST options | Extension/dependency or distinct structure workflows | Not established in this without-extensions image. |
+| Other wrapper mentions | Unclassified | A complete option-by-option source audit and disposition remains open; do not treat this table as comprehensive. |
+
+The SIF native tests run E-INS-i with local/skip penalties, consistency weight, BLOSUM, no-FFT and seed; L-INS-i DNA with Kimura; and separate JTT and TM protein calls. Receipts persist requested values and argv, not verified native-effective algorithm settings; a zero exit and nonempty output do not establish the effect of every flag or scientific accuracy. Auto/strategy interactions, model conflicts, all molecule combinations and browser save/retry parity remain unqualified.
+
 The request owner's `AlignmentRequest.model_json_schema()` is served at `/api/family-msa/settings-schema`; the editor derives fields and defaults from a bundled copy generated from that same model. `test_bundled_editor_schema_matches_request_owner` checks the copy against the owner; regenerate it whenever the model changes. Independently deployed frontend and API versions can still diverge; the editor reports a schema mismatch or an unavailable comparison without blocking execution. The schema inventories accepted BMS settings, not every upstream option or a proof of native behavior.
 
 Inspected against the scratch CPU SIF: MAFFT 7.525 `--help`, FAMSA 2.5.2 `-help`, MUSCLE 5.3 `-h`, TWILIGHT 0.3.0 `-h`. For the existing full-family alignment modes, this increment adds MAFFT E-INS-i, `--op` and `--ep`; FAMSA `-r`, `-sm`, `-go`, `-ge`, `-tgo`, `-tge`, `-dist`, `-gsd`, `-gsl`, `-dgr`, `-dgo`, `-dsp`; TWILIGHT `--length-deviation`, `--max-ambig`, `--max-len`, `--min-len`, `--write-filtered`, `--write-prune`, `--check`. Existing MUSCLE align/Super5, permutation, perturbation and ensemble controls were retained.

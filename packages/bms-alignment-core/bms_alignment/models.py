@@ -53,6 +53,18 @@ class MafftSettings(Closed):
     treeout: bool = False
     op: float | None = None
     ep: float | None = None
+    weighti: float | None = Field(default=None, description='Pairwise consistency weight; applies to iterative pairwise strategies.')
+    lop: float | None = Field(default=None, description='Local pairwise gap opening penalty.')
+    lep: float | None = Field(default=None, description='Local pairwise offset.')
+    lexp: float | None = Field(default=None, description='Local pairwise gap extension penalty.')
+    long_gap_open: float | None = Field(default=None, description='E-INS-i skip penalty (native --LOP).')
+    long_gap_extend: float | None = Field(default=None, description='E-INS-i skip extension penalty (native --LEXP).')
+    bl: Literal[30, 45, 62, 80] | None = Field(default=None, description='Protein BLOSUM matrix number.')
+    jtt: int | None = Field(default=None, description='Protein JTT PAM distance.')
+    tm: int | None = Field(default=None, description='Protein transmembrane PAM distance.')
+    kimura: int | None = Field(default=None, description='Nucleotide transition/transversion parameter.')
+    randomseed: int | None = Field(default=None, description='Native random seed where used by MAFFT.')
+    nofft: bool = False
     retree: int | None = Field(default=None, ge=0, description='Override the strategy guide-tree rebuild count.')
     maxiterate: int | None = Field(default=None, ge=0, description='Override the strategy refinement iteration count.')
     reorder: bool = False

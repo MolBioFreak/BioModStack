@@ -97,6 +97,38 @@ def test_boolean_values_and_roundtrip(engine, molecule, flags):
             assert (flag in args) is value
 
 
+def test_mafft_expert_options_round_trip_and_compilation():
+    values = {'weighti': 2.5, 'lop': -2.0, 'lep': 0.1, 'lexp': -0.1,
+              'long_gap_open': -6.0, 'long_gap_extend': 0.0, 'bl': 45,
+              'jtt': 100, 'tm': 100, 'kimura': 2, 'randomseed': 7, 'nofft': True}
+    req = AlignmentRequest.model_validate_json(request('mafft', strategy='einsi', **values).model_dump_json())
+    assert all(getattr(req.settings, k) == v for k, v in values.items())
+    args = compile_mafft(req, 'mafft', 'in')
+    for key, value in values.items():
+        flag = {'long_gap_open': '--LOP', 'long_gap_extend': '--LEXP'}.get(key, '--' + key)
+        assert args.count(flag) == 1
+        if key != 'nofft': assert float(args[args.index(flag) + 1]) == value
+    omitted = compile_mafft(request('mafft'), 'mafft', 'in')
+    assert not {arg for arg in args[args.index('--weighti'):-1] if arg.startswith('--')}.intersection(omitted)
+
+
+@pytest.mark.skipif(not os.environ.get('BMS_MSA_SIF'), reason='BMS_MSA_SIF not configured')
+@pytest.mark.parametrize('molecule,settings', [
+    ('protein', {'strategy': 'einsi', 'maxiterate': 2, 'weighti': 2.5, 'lop': -2.0, 'lep': 0.1, 'lexp': -0.1, 'long_gap_open': -6.0, 'long_gap_extend': 0.0, 'bl': 45, 'nofft': True, 'randomseed': 7}),
+    ('dna', {'strategy': 'linsi', 'maxiterate': 2, 'kimura': 2, 'weighti': 2.5}),
+    ('protein', {'jtt': 100}),
+    ('protein', {'tm': 100}),
+])
+def test_mafft_expert_native_receipt(tmp_path, molecule, settings):
+    prefix = ['apptainer', 'exec', '--cleanenv', '--bind', f'{tmp_path}:{tmp_path}', os.environ['BMS_MSA_SIF'], 'mafft']
+    req = request('mafft', molecule, **settings)
+    result = run_engine(req, tmp_path, prefix)
+    assert result['returncode'] == 0, (result, (Path(result['attempt_dir']) / 'engine.log').read_text())
+    receipt = json.loads((Path(result['attempt_dir']) / 'receipt.json').read_text())
+    assert receipt['requested']['settings'] == receipt['effective_settings'] == req.settings.model_dump(mode='json')
+    assert receipt['observations'].get('output_headers')
+
+
 def test_nullable_native_controls_omit_flags():
     for engine, molecule, flags in [
         ('mafft', 'dna', ['--op', '--ep']),

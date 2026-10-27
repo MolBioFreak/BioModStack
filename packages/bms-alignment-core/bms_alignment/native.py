@@ -16,8 +16,11 @@ def compile_mafft(request: AlignmentRequest, executable: str, input_path: str) -
     elif s.strategy == 'auto': args += ['--auto']
     if s.strategy != 'fft_ns_2' and s.retree is not None: args += ['--retree', str(s.retree)]
     if s.strategy == 'auto' and s.maxiterate is not None: args += ['--maxiterate', str(s.maxiterate)]
-    for name in ('op', 'ep'):
+    for name in ('op', 'ep', 'weighti', 'lop', 'lep', 'lexp', 'bl', 'jtt', 'tm', 'kimura', 'randomseed'):
         if getattr(s, name) is not None: args += ['--' + name, str(getattr(s, name))]
+    for name, flag in (('long_gap_open', '--LOP'), ('long_gap_extend', '--LEXP')):
+        if getattr(s, name) is not None: args += [flag, str(getattr(s, name))]
+    if s.nofft: args.append('--nofft')
     if s.treeout: args.append('--treeout')
     if s.reorder: args.append('--reorder')
     if s.quiet: args.append('--quiet')
