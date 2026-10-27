@@ -40,7 +40,7 @@ test('missing sequence QC manifest is classified as an old-run unavailable state
     );
     assert.equal(
         sequenceQcManifestUnavailableLabel('forbidden'),
-        'manifest blocked by path safety',
+        'manifest access denied',
     );
 });
 

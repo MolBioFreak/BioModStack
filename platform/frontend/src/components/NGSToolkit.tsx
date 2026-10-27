@@ -4684,7 +4684,7 @@ export function NGSToolkit() {
                                         onClick={() => void openIgvModal()}
                                         disabled={!selectedJob || !!igvMissingReason}
                                         title={igvMissingReason || 'Open IGV genome viewer'}
-                                        className="px-3 py-1.5 text-xs rounded border transition-colors text-[var(--text-primary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]"
+                                        className="px-3 py-1.5 text-xs rounded border transition-colors text-[var(--text-primary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)] disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         Open IGV
                                     </button>
@@ -4700,7 +4700,7 @@ export function NGSToolkit() {
                                     >
                                         Read &amp; Signal Workbench
                                     </button>
-                                    <span className="text-xs text-[var(--text-secondary)]">{selectedJobId}</span>
+                                    <span className="text-xs text-[var(--text-secondary)]" title={selectedJobId}>{selectedJob?.name || selectedJobId}</span>
                                 </div>
                             )}
                         </div>
