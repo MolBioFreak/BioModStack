@@ -3,10 +3,11 @@ import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import AlignmentEditor from '../../src/components/alignments/AlignmentEditor';
-const mocked = vi.hoisted(() => ({save:vi.fn(), start:vi.fn(), context:vi.fn(), submit:vi.fn(), post:vi.fn(), active:true, setup:{project_id:'p',setup_context_id:'s',draft:{molecule:'protein',engine:'muscle',fasta:'>one\nAA\n>two\nBB',drafts:{muscle:{engine:'muscle',threads:3,mode:'super5',permutation:'none',perturb:0,ensemble:'none',replicates:null}}}}}));
+const mocked = vi.hoisted(() => ({save:vi.fn(), start:vi.fn(), context:vi.fn(), submit:vi.fn(), post:vi.fn(), get:vi.fn(), datasets:vi.fn(), revisions:vi.fn(), active:true, setup:{project_id:'p',global_experiment_id:'g',domain_experiment_id:'d',setup_context_id:'s',draft:{molecule:'protein',engine:'muscle',fasta:'>one\nAA\n>two\nBB',drafts:{muscle:{engine:'muscle',threads:3,mode:'super5',permutation:'none',perturb:0,ensemble:'none',replicates:null}}}}}));
 vi.mock('../../src/components/project-manager/ProjectWorkflowSetup',()=>({useProjectWorkflowSetup:()=>({active:mocked.active,setup:mocked.setup,saveDraft:mocked.save,startRun:mocked.start})}));
-vi.mock('../../src/lib/api',()=>({submitJob:mocked.submit,api:{post:mocked.post}}));
-vi.mock('../../src/lib/projectManager',()=>({getLaunchContext:mocked.context}));
+vi.mock('../../src/lib/api',()=>({submitJob:mocked.submit,api:{post:mocked.post,get:mocked.get}}));
+vi.mock('../../src/lib/projectManager',()=>({getLaunchContext:mocked.context,listDomainDatasets:mocked.datasets,listDomainDatasetRevisions:mocked.revisions}));
+mocked.datasets.mockResolvedValue({items:[],next_cursor:null});
 describe('Project alignment editor',()=>{
  it('reopens flattened state and submits the pinned Project scheduler',async()=>{
   const div=document.createElement('div'), root=createRoot(div);
@@ -26,6 +27,32 @@ describe('Project alignment editor',()=>{
   expect(mocked.post).toHaveBeenCalledWith('/api/launch-contexts/ctx/bind',{job_id:'job'});
   await act(async()=>root.unmount());
  });
+});
+it('pages and freezes distinct Dataset occurrences into the saved roster', async()=>{
+ vi.clearAllMocks(); mocked.active=true;
+ mocked.datasets.mockResolvedValue({items:[{dataset_id:'ds',name:'Set'}],next_cursor:null});
+ mocked.revisions.mockResolvedValue({items:[{revision_id:'rev',revision_number:1}],next_cursor:null});
+ const member=(ordinal:number)=>({ordinal,role:'sequence',member_identity:'same',member_sha256:`hash${ordinal}`,receipt:{entity_kind:'molecular'}});
+ mocked.get.mockImplementation(async (url:string,options:any)=>url.endsWith('/molecular') ? {data:{status:'resolved',sequence:'CGT',label:'source',molecule:'dna',start:1,end:4,source_identity:'seq',source_digest:'digest'}} : {data:options.params.offset===0 ? {items:[member(0)],next_offset:50,total:51} : {items:[member(50)],next_offset:null,total:51}});
+ mocked.post.mockImplementation(async (_url:string, payload:any)=>({data:{project_id:'p',dataset_id:'ds',revision_id:'rev',revision_sha256:'revision-hash',members:payload.ordinals.sort((a:number,b:number)=>a-b).map(member)}}));
+ mocked.save.mockResolvedValue({});
+ const div=document.createElement('div'),root=createRoot(div);
+ await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_nucleic"/></MemoryRouter>));
+ const select=async(label:string,value:string)=>{const el=div.querySelector(`[aria-label="${label}"]`) as HTMLSelectElement; await act(async()=>{el.value=value;el.dispatchEvent(new Event('change',{bubbles:true}));});};
+ await select('Dataset','ds'); await select('Dataset revision','rev');
+ await act(async()=>{(div.querySelector('input[type=checkbox]') as HTMLInputElement).click()});
+ await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Next resources')!.click()});
+ await act(async()=>{(div.querySelector('input[type=checkbox]') as HTMLInputElement).click()});
+ await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Add selected resources')!.click()});
+ expect(mocked.post).toHaveBeenCalledWith(expect.stringContaining('/resources/freeze'),{ordinals:[0,50]});
+ await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click()});
+ const draft=mocked.save.mock.calls[0][0];
+ expect(draft.editor_state.datasetRows).toHaveLength(2);
+ const rows=draft.native_job_request.params.roster.rows.slice(-2);
+ expect(rows.map((r:any)=>r.sequence)).toEqual(['CGT','CGT']);
+ expect(rows[0].occurrence_id).not.toBe(rows[1].occurrence_id);
+ expect(rows[1].occurrence_id).toContain('revision-hash'); expect(rows[1].source_offset).toBe(1);
+ await act(async()=>root.unmount()); mocked.datasets.mockResolvedValue({items:[],next_cursor:null});
 });
 describe('alignment handoff recovery', () => {
  it('retains IDs after a lost binding response, retries and reopens without resubmitting', async () => {

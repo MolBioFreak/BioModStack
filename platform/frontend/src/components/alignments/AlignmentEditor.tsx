@@ -4,6 +4,7 @@ import { api, submitJob } from '../../lib/api';
 import { getLaunchContext } from '../../lib/projectManager';
 import type { JsonObject } from '../../lib/projectManager';
 import { useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup';
+import ProjectDatasetPicker, { type DatasetRow } from './ProjectDatasetPicker';
 
 type Engine = 'mafft' | 'famsa' | 'muscle' | 'twilight';
 type Molecule = 'protein' | 'dna' | 'rna';
@@ -45,6 +46,7 @@ export default function AlignmentEditor({ model }: { model: string }) {
     const [engine,setEngine] = useState<Engine>('mafft');
     const [drafts,setDrafts] = useState<Record<Engine,Settings>>(() => structuredClone(defaults));
     const [fasta,setFasta] = useState(''); const [busy,setBusy] = useState(false); const [error,setError] = useState(''); const [job,setJob] = useState(urlJob ?? '');
+    const [datasetRows,setDatasetRows] = useState<DatasetRow[]>([]);
     const [contextId,setContextId] = useState(urlContext ?? '');
     const [returnUri,setReturnUri] = useState('');
     useEffect(() => {
@@ -63,15 +65,25 @@ export default function AlignmentEditor({ model }: { model: string }) {
         const id = `${setup.setup.project_id}:${setup.setup.setup_context_id}`;
         if (hydrated.current === id) return;
         hydrated.current = id;
-        const editor = (setup.setup.draft?.editor_state ?? setup.setup.draft) as {molecule?:Molecule;engine?:Engine;drafts?:Record<Engine,Settings>;fasta?:string} | undefined;
+        const editor = (setup.setup.draft?.editor_state ?? setup.setup.draft) as {molecule?:Molecule;engine?:Engine;drafts?:Record<Engine,Settings>;fasta?:string;datasetRows?:DatasetRow[]} | undefined;
         if (editor?.molecule) setMolecule(editor.molecule); if (editor?.engine && defaults[editor.engine]) setEngine(editor.engine);
         if (editor?.drafts) setDrafts({...structuredClone(defaults),...editor.drafts}); if (typeof editor?.fasta === 'string') setFasta(editor.fasta);
+        if (Array.isArray(editor?.datasetRows)) setDatasetRows(editor.datasetRows);
     }, [setup.setup]);
     const settings = drafts[engine];
     const update = (key:string,value:Value) => setDrafts(previous=>({...previous,[engine]:{...previous[engine],[key]:value}}));
-    const request = () => ({name:'Family alignment',model_id:model,mode:'family_msa',params:{roster:fastaRoster(fasta,molecule),settings}});
+    const request = () => {
+        const roster = fastaRoster(fasta,molecule);
+        const rows = [...roster.rows, ...datasetRows.filter(x=>x.resolved.status === 'resolved' && typeof x.resolved.sequence === 'string').map((x,i)=>({
+            row_id:`dataset_${String(i+1).padStart(8,'0')}`, header:x.resolved.label || x.selection.members[0].member_identity,
+            sequence:x.resolved.sequence!, source_member_id:x.selection.members[0].member_identity,
+            occurrence_id:JSON.stringify([x.selection.project_id,x.selection.dataset_id,x.selection.revision_id,x.selection.revision_sha256,x.selection.members[0].ordinal,x.selection.members[0].member_sha256]),
+            source_offset:x.resolved.start, transformation_provenance:JSON.stringify({source_identity:x.resolved.source_identity,source_digest:x.resolved.source_digest,start:x.resolved.start,end:x.resolved.end})
+        }))];
+        return {name:'Family alignment',model_id:model,mode:'family_msa',params:{roster:{...roster,rows,source_text:rows.length === roster.rows.length ? roster.source_text : null},settings}};
+    };
     const draft = (allowIncomplete = false) => {
-        const editor_state = {molecule,engine,drafts,fasta};
+        const editor_state = {molecule,engine,drafts,fasta,datasetRows};
         try { return {native_job_request:request(),editor_state} as unknown as JsonObject; }
         catch (error) { if (!allowIncomplete) throw error; return {editor_state} as unknown as JsonObject; }
     };
@@ -137,7 +149,9 @@ export default function AlignmentEditor({ model }: { model: string }) {
             <label className="block">Molecule <select aria-label="Molecule" className={inputClass} value={molecule} onChange={e=>{const next=e.target.value as Molecule; setMolecule(next); if ((next === 'protein' && engine === 'twilight') || (next !== 'protein' && engine === 'famsa')) setEngine('mafft');}}>{(model === 'family_msa_nucleic' ? ['dna','rna'] : ['protein']).map(x=><option key={x}>{x}</option>)}</select></label>
             <label className="block">Engine <select aria-label="Engine" className={inputClass} value={engine} onChange={e=>setEngine(e.target.value as Engine)}>{(['mafft','famsa','muscle','twilight'] as Engine[]).map(x=><option key={x} value={x} disabled={(molecule === 'protein' && x === 'twilight') || (molecule !== 'protein' && x === 'famsa')}>{x}{(molecule === 'protein' && x === 'twilight') || (molecule !== 'protein' && x === 'famsa') ? ' — unavailable for molecule' : ''}</option>)}</select></label>
             <label className="block">FASTA roster <textarea aria-label="FASTA roster" className={`${inputClass} block w-full font-mono`} rows={8} value={fasta} onChange={e=>setFasta(e.target.value)}/></label>
-            <p className="text-sm">Direct FASTA only; Project dataset source selection is not connected. Headers and duplicate sequences are retained.</p>
+            <p className="text-sm">FASTA headers and duplicate sequences are retained. Resolved Dataset occurrences are appended as separate rows; unavailable sources are shown but not added to the roster.</p>
+            {setup.active && setup.setup && <ProjectDatasetPicker projectId={setup.setup.project_id} globalId={setup.setup.global_experiment_id} domainId={setup.setup.domain_experiment_id} rows={datasetRows} onChange={setDatasetRows}/>}
+            {datasetRows.some(x=>x.resolved.status === 'resolved' && x.resolved.molecule && x.resolved.molecule !== molecule) && <p role="status">Some resolved sources have a different molecule type from the selected roster. Review the source and molecule before running.</p>}
             <div className="grid gap-3 sm:grid-cols-2"><label>Threads <input aria-label="Threads" className={inputClass} type="number" min={1} step={1} value={String(settings.threads)} onChange={e=>update('threads',e.target.value === '' ? null : Number(e.target.value))}/></label>
             {fields[engine].map(field => <label key={field.key} className="block">{field.label} {' '}{field.kind === 'boolean' ? <input type="checkbox" checked={Boolean(settings[field.key])} onChange={e=>update(field.key,e.target.checked)}/> : field.kind === 'select' ? <select className={inputClass} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,field.key === 'acc_mode' ? Number(e.target.value) : e.target.value)}>{field.options?.map(x=><option key={x}>{x}</option>)}</select> : field.kind === 'mapping' ? <MappingInput value={(settings[field.key] || {}) as Record<string,string>} onChange={value=>update(field.key,value)}/> : field.kind === 'text' ? <textarea className={`${inputClass} block w-full`} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value || null)}/> : <input className={inputClass} type="number" step={field.kind === 'integer' ? 1 : 'any'} min={field.min} value={settings[field.key] == null ? '' : String(settings[field.key])} onChange={e=>update(field.key,e.target.value === '' ? null : Number(e.target.value))}/>}</label>)}
             </div>
