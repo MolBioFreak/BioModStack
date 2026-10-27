@@ -35,7 +35,7 @@ export default function AlignmentPage() {
     });
     const manifest = useQuery({
         queryKey: ['alignment-result-manifest', base],
-        queryFn: async ({ signal }) => (await api.get<{artifacts: {id: string; role: string}[]}>(base!, { signal })).data,
+        queryFn: async ({ signal }) => (await api.get<{artifacts: {id: string; role: string; logical_path?: string | null}[]}>(base!, { signal })).data,
         enabled: Boolean(base), retry: false,
         refetchInterval: q => jobId && !(projectId && receiptId) && (!job.data || ['queued', 'running'].includes(job.data.status)) && !q.state.data ? jobPollingInterval(3000, q) : false,
         refetchIntervalInBackground: false,
@@ -73,10 +73,10 @@ export default function AlignmentPage() {
         {base && !manifest.data && !error && <p role="status">Waiting for alignment result{job.data?.status ? ` (Job ${job.data.status})` : ''}…</p>}
         {base && manifest.data && !alignments.length && <p role="status">No alignment artifact is available in this result. <button onClick={() => void manifest.refetch()}>Retry</button></p>}
         {error && <div role="alert">Alignment result unavailable: {String(error)} <button onClick={() => { if (job.error) void job.refetch(); if (manifest.error) void manifest.refetch(); if (documentQuery.error) void documentQuery.refetch(); }}>Retry</button></div>}
-        {base && alignments.length > 1 && <label>Alignment member <select value={selected} onChange={e => setSelection({base, id: e.target.value})}><option value="">Choose a member</option>{alignments.map(x => <option key={x.id} value={x.id}>{x.id}</option>)}</select></label>}
+        {base && alignments.length > 1 && <label>Alignment member <select value={selected} onChange={e => setSelection({base, id: e.target.value})}><option value="">Choose a member</option>{alignments.map((x, index) => <option key={x.id} value={x.id}>{x.logical_path || `Alignment ${index + 1}`}</option>)}</select></label>}
         {!base && !resultId && section === 'New' && <>{!queryModel && <label>Alignment family <select aria-label="Alignment family" value={model} onChange={e => setSelectedModel(e.target.value)}><option value="family_msa_protein">Protein</option><option value="family_msa_nucleic">Nucleic acid</option></select></label>}<AlignmentEditor key={model} model={model}/></>}
         {!base && !resultId && section === 'Library' && <AlignmentLibrary initialProject={projectId}/>}
         {!base && !resultId && section === 'Compare' && <p role="status">Alignment comparison is not connected yet.</p>}
-        <AlignmentWorkspace viewers={{ jbrowse: JbrowseViewer, 'alignment-viewer-2': Av2Viewer, biojs: BiojsViewer }} projectLabel={setup.setup?.project_label} projectId={projectId || undefined} receiptId={projectId ? receiptId || undefined : undefined} document={document} downloads={base ? artifacts.map(x => ({label: `${x.role} (${x.id})`, href: `${base}/artifacts/${encodeURIComponent(x.id)}`})) : []} />
+        <AlignmentWorkspace viewers={{ jbrowse: JbrowseViewer, 'alignment-viewer-2': Av2Viewer, biojs: BiojsViewer }} projectLabel={setup.setup?.project_label} projectId={projectId || undefined} receiptId={projectId ? receiptId || undefined : undefined} document={document} downloads={base ? artifacts.map(x => ({label: x.role === 'source' ? `Original file (${x.logical_path || 'source'})` : `${x.role}${x.logical_path ? ` (${x.logical_path})` : ''}`, href: `${base}/artifacts/${encodeURIComponent(x.id)}`})) : []} />
     </div>;
 }

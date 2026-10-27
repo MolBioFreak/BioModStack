@@ -169,5 +169,31 @@ def test_real_portable_import_export_roundtrip(tmp_path, monkeypatch):
             client.import_project_bundle(project, mutated, replay_key='second')
         assert conflict.value.status == 409
         assert asyncio.run(counts()) == (3, 18)
+        async def file_imports():
+            import httpx
+            samples = {
+                'fasta': b'>same\r\nAC-G\r\n>same\r\nACGG\r\n',
+                'stockholm': b'# STOCKHOLM 1.0\n#=GF ID test\na AC-G\nb ACGG\n//\n',
+                'clustal': b'CLUSTAL W\n\na AC-G\nb ACGG\n',
+                'a3m': b'>a\nACx-G\n>b\nACGG\n',
+            }
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test', headers=client.headers) as c:
+                for fmt, raw in samples.items():
+                    path = f'/api/family-msa/projects/{project}/imports/alignment'
+                    params = {'format': fmt, 'molecule': 'dna', 'replay_key': 'file-' + fmt}
+                    response = await c.post(path, params=params, content=raw)
+                    assert response.status_code == 200, response.text
+                    receipt = response.json()['receipt_id']
+                    replay = await c.post(path, params=params, content=raw)
+                    assert replay.json()['replayed'] and replay.json()['receipt_id'] == receipt
+                    base = f'/api/family-msa/projects/{project}/receipts/{receipt}'
+                    listing = (await c.get(base)).json()['artifacts']
+                    source = next(item for item in listing if item['role'] == 'source')
+                    assert (await c.get(base + '/artifacts/' + source['id'])).content == raw
+                    aligned = next(item for item in listing if item['role'] == 'alignment')
+                    doc = await c.get(base + '/documents/' + aligned['id'])
+                    assert doc.status_code == 200, doc.text
+                    assert [r['aligned'] for r in doc.json()['rows']] == ['AC-G', 'ACGG']
+        asyncio.run(file_imports())
     finally:
         asyncio.run(engine.dispose())

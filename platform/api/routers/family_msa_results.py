@@ -473,6 +473,46 @@ class ImportReceipt(BaseModel):
     shared_states: list[dict[str, Any]] = Field(default_factory=list)
 
 
+@router.post('/projects/{project_id}/imports/alignment', response_model=ImportReceipt)
+async def import_alignment(request: Request, project_id: str, format: str, replay_key: str, molecule: str,
+                           session: AsyncSession = Depends(get_experiment_session)):
+    """Retain an uploaded source and a clearly separate display projection."""
+    import tempfile
+    from pathlib import Path
+    from bms_alignment.bundle import make_bundle
+    from bms_alignment.formats import parse, project_a3m
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    try:
+        if format not in ('fasta', 'stockholm', 'clustal', 'a3m') or not replay_key or len(replay_key) > 255:
+            raise ValueError('invalid import parameters')
+        raw = await request.body()
+        roster = parse(raw.decode('utf-8'), format, molecule)
+        projected = {row['row_id']: row['match_columns'] for row in project_a3m(roster)} if format == 'a3m' else {}
+        rows = [{'row_id': row.row_id, 'header': row.header,
+                 'sequence': projected.get(row.row_id, row.sequence)} for row in roster.rows]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'source'; root.mkdir()
+            (root / 'original').write_bytes(raw)
+            (root / 'display.fasta').write_text(''.join(f">{row['row_id']}\n{row['sequence']}\n" for row in rows), encoding='utf-8')
+            (root / 'receipt.json').write_text(json.dumps({'requested': {'roster': {'molecule': molecule, 'rows': rows}},
+                'import': {'source_format': format, 'display': 'match columns only' if format == 'a3m' else 'row projection',
+                           'molecule': molecule}}), encoding='utf-8')
+            entries = [{'id': 'original', 'role': 'source', 'logical_path': f'original.{format}', 'path': 'original'},
+                       {'id': 'alignment', 'role': 'alignment', 'logical_path': 'display.fasta', 'path': 'display.fasta'},
+                       {'id': 'receipt', 'role': 'receipt', 'logical_path': 'receipt.json', 'path': 'receipt.json'}]
+            (root / 'project-export.json').write_text(json.dumps({'schema': 'bms.family-msa.project-export.v1',
+                'project_id': project_id, 'receipt_id': 'file-import', 'artifacts': entries, 'shared_states': []}), encoding='utf-8')
+            bundle = Path(directory) / 'bundle'
+            manifest = make_bundle(root, bundle, ['project-export.json', 'original', 'display.fasta', 'receipt.json'])
+            return await _import_directory(project_id, replay_key, manifest, bundle, session)
+    except HTTPException:
+        await session.rollback()
+        raise
+    except (ValueError, KeyError, TypeError, OSError, CustodyError) as exc:
+        await session.rollback()
+        raise HTTPException(400, detail='Unable to import alignment file') from exc
+
+
 async def _import_directory(project_id, replay_key, manifest, root, session, domain_experiment_id=None):
     import hashlib
     from bms_alignment.bundle import inspect_project_bundle
