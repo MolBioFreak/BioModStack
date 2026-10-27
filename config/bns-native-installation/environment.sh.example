@@ -10,4 +10,6 @@ export PATH="$bms_local_root/base-python/bin:$bms_local_root/node/bin:$bms_local
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}/bns-plasmid-development-toolkit"
 export PYTHONDONTWRITEBYTECODE=1
 export BMS_PLANNOTATE_BIN="$bms_local_root/annotation/bin/plannotate"
+export BMS_CONTAINER_RUNTIME=podman
+export BMS_ONT_CONTAINER_RUNTIME=podman
 unset bms_local_root

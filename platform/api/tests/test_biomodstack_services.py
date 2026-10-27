@@ -431,6 +431,8 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
     monkeypatch.setenv("BMS_MICROMAMBA_BIN", "/installed/annotation/bin/micromamba")
     monkeypatch.setenv("BMS_MICROMAMBA_ROOT_PREFIX", "/installed/annotation/envs")
     monkeypatch.setenv("BMS_PLANNOTATE_ENV", "plannotate")
+    monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "podman")
+    monkeypatch.setenv("BMS_ONT_CONTAINER_RUNTIME", "podman")
     units = services.render_user_units(project_root, runtime_mode="dev")
     for assignment in (
         "BMS_MICROMAMBA_BIN=/installed/annotation/bin/micromamba",
@@ -451,6 +453,8 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
     assert "Environment=BMS_ONT_LIVE_CONVERSION_ENABLED=1" in units[services.API_SERVICE]
     assert "Environment=BMS_ONT_RAW_SIGNAL_RETENTION_POLICY=pod5_and_blow5" in units[services.API_SERVICE]
     for owner in (services.API_SERVICE, services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE):
+        assert "Environment=BMS_CONTAINER_RUNTIME=podman" in units[owner]
+        assert "Environment=BMS_ONT_CONTAINER_RUNTIME=podman" in units[owner]
         for key, (_, digest) in policies.items():
             assert f"Environment=BMS_ONT_{key}_IMAGE=sha256:{digest}" in units[owner]
             assert f"Environment=BMS_ONT_{key}_IMAGE_DIGEST={digest}" in units[owner]

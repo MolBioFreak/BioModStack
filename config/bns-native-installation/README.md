@@ -16,3 +16,9 @@ Place `control-panel.sh` and `open-workspace.sh` in that prefix. For a new insta
 The MinKNOW bridge requires the vendor interpreter at `/opt/ont/minknow/ont-python/bin/python`, uses localhost only and creates reconnect credentials in a private user configuration file. It preserves existing credentials. Restart the managed API/frontend through `source/start_ui.sh` after applying bridge configuration. Install the separately privileged reconnect socket using `config/mk1d-reconnect/install-native-root-helper.py` as documented there.
 
 Machine environments, reconnect secrets, databases, annotations, instrument data, models, runtime images and generated test results stay outside Git. The bridge installation does not start a sequencing protocol or qualify NGS execution.
+
+The native launcher preserves the installed Python, frontend, annotation and
+container-client selectors when refreshing managed units. Set both
+`BMS_CONTAINER_RUNTIME` and `BMS_ONT_CONTAINER_RUNTIME` for the provisioned
+backend. Starting a local runtime target preserves existing Tailscale routing;
+it does not select a full-BMS development or production checkout.

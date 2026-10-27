@@ -23,7 +23,6 @@ def _load_lifecycle() -> None:
     global API_LOG, CORE_RUNTIME_LOG, FRONTEND_LOG, ServiceManagerError
     global resolve_runtime_mode, restart_all, restart_api, runtime_descriptor
     global start_api, start_all, start_runtime_target, status_lines, stop_api, stop_all
-    global TailnetEnvironmentError, select_tailnet_environment
     from biomodstack_services import (  # noqa: E402
         API_LOG,
         CORE_RUNTIME_LOG,
@@ -39,10 +38,6 @@ def _load_lifecycle() -> None:
         status_lines,
         stop_api,
         stop_all,
-    )
-    from biomodstack_tailnet import (  # noqa: E402
-        TailnetEnvironmentError,
-        select_tailnet_environment,
     )
 
 
@@ -178,10 +173,6 @@ def main() -> int:
             if args.notify:
                 notify(f"🚀 Starting BioModStack {target} runtime target…")
             start_runtime_target(target=target)
-            if target == "dev":
-                select_tailnet_environment("development")
-            elif target == "prod":
-                select_tailnet_environment("production")
             if args.notify:
                 notify("✅ BioModStack requested runtime target is running")
             print(f"Started runtime target: {target}")
@@ -264,7 +255,6 @@ def main() -> int:
             return 0
     except (
         ServiceManagerError,
-        TailnetEnvironmentError,
         FileNotFoundError,
         OSError,
         subprocess.CalledProcessError,

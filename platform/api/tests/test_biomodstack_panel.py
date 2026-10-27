@@ -539,15 +539,19 @@ def test_panel_preserves_installation_selectors_when_starting_after_reboot(monke
         "BMS_MICROMAMBA_BIN": "/installed/annotation/bin/micromamba",
         "BMS_MICROMAMBA_ROOT_PREFIX": "/installed/annotation/envs",
         "BMS_PLANNOTATE_ENV": "plannotate",
+        "BMS_CONTAINER_RUNTIME": "podman",
+        "BMS_ONT_CONTAINER_RUNTIME": "podman",
     }
     for key, value in selectors.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("BMS_DB_PATH", "/stale/lane.db")
     monkeypatch.setenv("BMS_SUDO_PASSWORD", "discard")
+    monkeypatch.setenv("BMS_ONT_SLOW5TOOLS_IMAGE", "unreviewed:latest")
     env = module.BioModStackPanel._script_env(SimpleNamespace())
     assert {key: env[key] for key in selectors} == selectors
     assert "BMS_DB_PATH" not in env
     assert "BMS_SUDO_PASSWORD" not in env
+    assert "BMS_ONT_SLOW5TOOLS_IMAGE" not in env
 
 
 def test_panel_database_paths_use_the_development_lane(monkeypatch, tmp_path):
