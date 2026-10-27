@@ -3,90 +3,17 @@
     "FamsaSettings": {
       "additionalProperties": false,
       "properties": {
-        "dgo": {
-          "default": false,
-          "title": "Dgo",
-          "type": "boolean"
-        },
-        "dgr": {
-          "default": false,
-          "title": "Dgr",
-          "type": "boolean"
-        },
-        "dist": {
-          "anyOf": [
-            {
-              "enum": [
-                "indel_div_lcs",
-                "indel075_div_lcs"
-              ],
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Dist"
-        },
-        "dsp": {
-          "default": false,
-          "title": "Dsp",
-          "type": "boolean"
-        },
         "engine": {
           "const": "famsa",
           "default": "famsa",
           "title": "Engine",
           "type": "string"
         },
-        "ge": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Ge"
-        },
-        "go": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Go"
-        },
-        "gsd": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Gsd"
-        },
-        "gsl": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Gsl"
+        "threads": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Threads",
+          "type": "integer"
         },
         "guide_tree": {
           "default": "sl",
@@ -98,9 +25,24 @@
           "title": "Guide Tree",
           "type": "string"
         },
+        "refine_mode": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "title": "Refine Mode",
+          "type": "string"
+        },
         "keep_duplicates": {
           "default": false,
           "title": "Keep Duplicates",
+          "type": "boolean"
+        },
+        "medoidtree": {
+          "default": false,
+          "title": "Medoidtree",
           "type": "boolean"
         },
         "medoid_seeds": {
@@ -127,10 +69,17 @@
           "default": null,
           "title": "Medoid Threshold"
         },
-        "medoidtree": {
-          "default": false,
-          "title": "Medoidtree",
-          "type": "boolean"
+        "trim_columns": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trim Columns"
         },
         "r": {
           "anyOf": [
@@ -143,16 +92,6 @@
           ],
           "default": null,
           "title": "R"
-        },
-        "refine_mode": {
-          "default": "auto",
-          "enum": [
-            "auto",
-            "on",
-            "off"
-          ],
-          "title": "Refine Mode",
-          "type": "string"
         },
         "sm": {
           "anyOf": [
@@ -172,7 +111,7 @@
           "default": null,
           "title": "Sm"
         },
-        "tge": {
+        "go": {
           "anyOf": [
             {
               "type": "integer"
@@ -182,7 +121,19 @@
             }
           ],
           "default": null,
-          "title": "Tge"
+          "title": "Go"
+        },
+        "ge": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ge"
         },
         "tgo": {
           "anyOf": [
@@ -196,23 +147,72 @@
           "default": null,
           "title": "Tgo"
         },
-        "threads": {
-          "default": 1,
-          "minimum": 1,
-          "title": "Threads",
-          "type": "integer"
-        },
-        "trim_columns": {
+        "tge": {
           "anyOf": [
             {
-              "type": "number"
+              "type": "integer"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "title": "Trim Columns"
+          "title": "Tge"
+        },
+        "dist": {
+          "anyOf": [
+            {
+              "enum": [
+                "indel_div_lcs",
+                "indel075_div_lcs"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dist"
+        },
+        "gsd": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gsd"
+        },
+        "gsl": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gsl"
+        },
+        "dgr": {
+          "default": false,
+          "title": "Dgr",
+          "type": "boolean"
+        },
+        "dgo": {
+          "default": false,
+          "title": "Dgo",
+          "type": "boolean"
+        },
+        "dsp": {
+          "default": false,
+          "title": "Dsp",
+          "type": "boolean"
         },
         "verbose": {
           "default": false,
@@ -231,68 +231,6 @@
           "default": "mafft",
           "title": "Engine",
           "type": "string"
-        },
-        "ep": {
-          "anyOf": [
-            {
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Ep"
-        },
-        "maxiterate": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Override the strategy refinement iteration count.",
-          "title": "Maxiterate"
-        },
-        "op": {
-          "anyOf": [
-            {
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Op"
-        },
-        "quiet": {
-          "default": false,
-          "title": "Quiet",
-          "type": "boolean"
-        },
-        "reorder": {
-          "default": false,
-          "title": "Reorder",
-          "type": "boolean"
-        },
-        "retree": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Override the strategy guide-tree rebuild count.",
-          "title": "Retree"
         },
         "strategy": {
           "default": "fft_ns_2",
@@ -316,6 +254,68 @@
           "default": false,
           "title": "Treeout",
           "type": "boolean"
+        },
+        "op": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Op"
+        },
+        "ep": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ep"
+        },
+        "retree": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Override the strategy guide-tree rebuild count.",
+          "title": "Retree"
+        },
+        "maxiterate": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Override the strategy refinement iteration count.",
+          "title": "Maxiterate"
+        },
+        "reorder": {
+          "default": false,
+          "title": "Reorder",
+          "type": "boolean"
+        },
+        "quiet": {
+          "default": false,
+          "title": "Quiet",
+          "type": "boolean"
         }
       },
       "title": "MafftSettings",
@@ -330,16 +330,6 @@
           "title": "Engine",
           "type": "string"
         },
-        "ensemble": {
-          "default": "none",
-          "enum": [
-            "none",
-            "stratified",
-            "diversified"
-          ],
-          "title": "Ensemble",
-          "type": "string"
-        },
         "mode": {
           "default": "align",
           "enum": [
@@ -348,6 +338,12 @@
           ],
           "title": "Mode",
           "type": "string"
+        },
+        "threads": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Threads",
+          "type": "integer"
         },
         "permutation": {
           "default": "none",
@@ -367,6 +363,16 @@
           "title": "Perturb",
           "type": "integer"
         },
+        "ensemble": {
+          "default": "none",
+          "enum": [
+            "none",
+            "stratified",
+            "diversified"
+          ],
+          "title": "Ensemble",
+          "type": "string"
+        },
         "replicates": {
           "anyOf": [
             {
@@ -379,12 +385,6 @@
           ],
           "default": null,
           "title": "Replicates"
-        },
-        "threads": {
-          "default": 1,
-          "minimum": 1,
-          "title": "Threads",
-          "type": "integer"
         }
       },
       "title": "MuscleSettings",
@@ -393,24 +393,12 @@
     "Row": {
       "additionalProperties": false,
       "properties": {
-        "header": {
-          "title": "Header",
-          "type": "string"
-        },
-        "occurrence_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Occurrence Id"
-        },
         "row_id": {
           "title": "Row Id",
+          "type": "string"
+        },
+        "header": {
+          "title": "Header",
           "type": "string"
         },
         "sequence": {
@@ -428,6 +416,18 @@
           ],
           "default": null,
           "title": "Source Member Id"
+        },
+        "occurrence_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Occurrence Id"
         },
         "source_offset": {
           "anyOf": [
@@ -503,14 +503,6 @@
           "title": "Rows",
           "type": "array"
         },
-        "source_evidence": {
-          "items": {
-            "additionalProperties": true,
-            "type": "object"
-          },
-          "title": "Source Evidence",
-          "type": "array"
-        },
         "source_format": {
           "default": "fasta",
           "enum": [
@@ -533,6 +525,29 @@
           ],
           "default": null,
           "title": "Source Text"
+        },
+        "stockholm_annotations": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Stockholm Annotations",
+          "type": "array"
+        },
+        "format_observations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Format Observations",
+          "type": "array"
+        },
+        "source_evidence": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Source Evidence",
+          "type": "array"
         }
       },
       "required": [
@@ -545,17 +560,26 @@
     "TwilightSettings": {
       "additionalProperties": false,
       "properties": {
-        "acc_max_group": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
+        "engine": {
+          "const": "twilight",
+          "default": "twilight",
+          "title": "Engine",
+          "type": "string"
+        },
+        "threads": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Threads",
+          "type": "integer"
+        },
+        "method": {
+          "default": "pairwise",
+          "enum": [
+            "pairwise",
+            "tcs"
           ],
-          "default": null,
-          "title": "Acc Max Group"
+          "title": "Method",
+          "type": "string"
         },
         "acc_mode": {
           "default": 0,
@@ -567,6 +591,18 @@
           ],
           "title": "Acc Mode",
           "type": "integer"
+        },
+        "acc_max_group": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acc Max Group"
         },
         "acc_sample_rate": {
           "anyOf": [
@@ -592,28 +628,49 @@
           "default": null,
           "title": "Acc Sample Top"
         },
-        "check": {
-          "default": false,
-          "title": "Check",
-          "type": "boolean"
-        },
         "consistency_weight": {
           "default": 5.0,
           "title": "Consistency Weight",
           "type": "number"
         },
-        "engine": {
-          "const": "twilight",
-          "default": "twilight",
-          "title": "Engine",
-          "type": "string"
+        "max_subtree": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Subtree"
+        },
+        "remove_gappy": {
+          "default": 0.95,
+          "title": "Remove Gappy",
+          "type": "number"
+        },
+        "wildcard": {
+          "default": false,
+          "title": "Wildcard",
+          "type": "boolean"
+        },
+        "rooted": {
+          "default": false,
+          "title": "Rooted",
+          "type": "boolean"
+        },
+        "prune": {
+          "default": false,
+          "title": "Prune",
+          "type": "boolean"
         },
         "filter": {
           "default": false,
           "title": "Filter",
           "type": "boolean"
         },
-        "gap_ends": {
+        "length_deviation": {
           "anyOf": [
             {
               "type": "number"
@@ -623,7 +680,90 @@
             }
           ],
           "default": null,
-          "title": "Gap Ends"
+          "title": "Length Deviation"
+        },
+        "max_ambig": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Ambig"
+        },
+        "max_len": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Len"
+        },
+        "min_len": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Len"
+        },
+        "write_filtered": {
+          "default": false,
+          "title": "Write Filtered",
+          "type": "boolean"
+        },
+        "write_prune": {
+          "default": false,
+          "title": "Write Prune",
+          "type": "boolean"
+        },
+        "check": {
+          "default": false,
+          "title": "Check",
+          "type": "boolean"
+        },
+        "verbose": {
+          "default": false,
+          "title": "Verbose",
+          "type": "boolean"
+        },
+        "match": {
+          "default": 18,
+          "title": "Match",
+          "type": "number"
+        },
+        "mismatch": {
+          "default": -8,
+          "title": "Mismatch",
+          "type": "number"
+        },
+        "transition": {
+          "default": -4,
+          "title": "Transition",
+          "type": "number"
+        },
+        "gap_open": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gap Open"
         },
         "gap_extend": {
           "anyOf": [
@@ -637,7 +777,7 @@
           "default": null,
           "title": "Gap Extend"
         },
-        "gap_open": {
+        "gap_ends": {
           "anyOf": [
             {
               "type": "number"
@@ -647,7 +787,24 @@
             }
           ],
           "default": null,
-          "title": "Gap Open"
+          "title": "Gap Ends"
+        },
+        "scale": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scale"
+        },
+        "xdrop": {
+          "default": 600,
+          "title": "Xdrop",
+          "type": "number"
         },
         "guide_source": {
           "default": "supplied",
@@ -676,148 +833,6 @@
           },
           "title": "Leaf Mapping",
           "type": "object"
-        },
-        "length_deviation": {
-          "anyOf": [
-            {
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Length Deviation"
-        },
-        "match": {
-          "default": 18,
-          "title": "Match",
-          "type": "number"
-        },
-        "max_ambig": {
-          "anyOf": [
-            {
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Max Ambig"
-        },
-        "max_len": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Max Len"
-        },
-        "max_subtree": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Max Subtree"
-        },
-        "method": {
-          "default": "pairwise",
-          "enum": [
-            "pairwise",
-            "tcs"
-          ],
-          "title": "Method",
-          "type": "string"
-        },
-        "min_len": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Min Len"
-        },
-        "mismatch": {
-          "default": -8,
-          "title": "Mismatch",
-          "type": "number"
-        },
-        "prune": {
-          "default": false,
-          "title": "Prune",
-          "type": "boolean"
-        },
-        "remove_gappy": {
-          "default": 0.95,
-          "title": "Remove Gappy",
-          "type": "number"
-        },
-        "rooted": {
-          "default": false,
-          "title": "Rooted",
-          "type": "boolean"
-        },
-        "scale": {
-          "anyOf": [
-            {
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Scale"
-        },
-        "threads": {
-          "default": 1,
-          "minimum": 1,
-          "title": "Threads",
-          "type": "integer"
-        },
-        "transition": {
-          "default": -4,
-          "title": "Transition",
-          "type": "number"
-        },
-        "verbose": {
-          "default": false,
-          "title": "Verbose",
-          "type": "boolean"
-        },
-        "wildcard": {
-          "default": false,
-          "title": "Wildcard",
-          "type": "boolean"
-        },
-        "write_filtered": {
-          "default": false,
-          "title": "Write Filtered",
-          "type": "boolean"
-        },
-        "write_prune": {
-          "default": false,
-          "title": "Write Prune",
-          "type": "boolean"
-        },
-        "xdrop": {
-          "default": 600,
-          "title": "Xdrop",
-          "type": "number"
         }
       },
       "title": "TwilightSettings",
