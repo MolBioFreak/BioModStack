@@ -57,7 +57,7 @@ def compile_engine(request, executable, input_path, output_path, tree_path=None)
             value = getattr(s, name)
             if value is not None: a += ['--' + name.replace('_', '-'), str(value)]
         for name in ('wildcard', 'rooted', 'prune', 'filter', 'write_filtered', 'write_prune', 'check'):
-            if getattr(s, name): a.append('--' + name)
+            if getattr(s, name): a.append('--' + name.replace('_', '-'))
         if s.verbose: a.append('--verbose')
         return a
     raise ValueError('Unsupported engine')

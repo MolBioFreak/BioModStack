@@ -3,13 +3,19 @@ import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import AlignmentEditor from '../../src/components/alignments/AlignmentEditor';
+import AlignmentEditor, { settingsInventory } from '../../src/components/alignments/AlignmentEditor';
 const mocks = vi.hoisted(() => ({get:vi.fn(),submit:vi.fn()}));
 vi.mock('../../src/components/project-manager/ProjectWorkflowSetup',()=>({useProjectWorkflowSetup:()=>({active:false})}));
 vi.mock('../../src/lib/api',()=>({submitJob:mocks.submit,api:{get:mocks.get}}));
 vi.mock('../../src/lib/projectManager',()=>({getLaunchContext:vi.fn()}));
 
 describe('native alignment inventory',()=>{
+ it('preserves numeric enum types and zero defaults from schema metadata',()=>{
+  const schema = {$defs:{TwilightSettings:{properties:{engine:{type:'string'},acc_mode:{type:'integer',enum:[0,1,2,3],default:0}, future_numeric:{type:'integer',enum:[0,2],default:0}}}}};
+  const result = settingsInventory(schema, 'twilight');
+  expect(result.defaults.acc_mode).toBe(0);
+  expect(result.fields.find(field=>field.key === 'future_numeric')?.options).toEqual([0,2]);
+ });
  it.skipIf(!process.env.BMS_ALIGNMENT_SCHEMA)('renders request-owned schema and sends typed nondefaults',async()=>{
   const schema=JSON.parse(readFileSync(process.env.BMS_ALIGNMENT_SCHEMA!, 'utf8'));
   mocks.get.mockResolvedValue({data:schema}); mocks.submit.mockResolvedValue({data:{id:'job'}});

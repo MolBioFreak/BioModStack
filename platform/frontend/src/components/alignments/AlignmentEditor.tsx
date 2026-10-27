@@ -11,7 +11,7 @@ type Engine = 'mafft' | 'famsa' | 'muscle' | 'twilight';
 type Molecule = 'protein' | 'dna' | 'rna';
 type Value = string | number | boolean | null | Record<string, string>;
 type Settings = Record<string, Value> & { engine: Engine };
-type Field = { key: string; label: string; kind: 'number' | 'integer' | 'boolean' | 'select' | 'text' | 'mapping'; options?: string[]; min?: number; nullable?: boolean };
+type Field = { key: string; label: string; kind: 'number' | 'integer' | 'boolean' | 'select' | 'text' | 'mapping'; options?: (string | number)[]; min?: number; nullable?: boolean };
 type PropertySchema = { type?: string; enum?: (string | number)[]; default?: Value; minimum?: number; anyOf?: PropertySchema[] };
 type SettingsSchema = { $defs: Record<string, {properties: Record<string, PropertySchema>}> };
 const schemaNames: Record<Engine,string> = {mafft:'MafftSettings',famsa:'FamsaSettings',muscle:'MuscleSettings',twilight:'TwilightSettings'};
@@ -25,7 +25,7 @@ export function settingsInventory(schema: SettingsSchema, engine: Engine): {fiel
         settings[key] = property.default ?? (key === 'leaf_mapping' ? {} : null);
         if (key === 'threads') continue;
         const kind: Field['kind'] = shape.enum ? 'select' : shape.type === 'boolean' ? 'boolean' : shape.type === 'integer' ? 'integer' : shape.type === 'number' ? 'number' : shape.type === 'object' ? 'mapping' : 'text';
-        result.push({key, label:key.replaceAll('_',' '), kind, options:shape.enum?.map(String), min:shape.minimum, nullable:property.anyOf?.some(x=>x.type === 'null')});
+        result.push({key, label:key.replaceAll('_',' '), kind, options:shape.enum, min:shape.minimum, nullable:property.anyOf?.some(x=>x.type === 'null')});
     }
     return {fields:result,defaults:settings};
 }
@@ -194,7 +194,7 @@ export default function AlignmentEditor({ model }: { model: string }) {
             {requestIdentityWarning(datasetRows) && <p role="status">Some source identity evidence is missing or differs from the frozen selection; review the saved request evidence.</p>}
             {datasetRows.some(x=>x.resolved.status === 'resolved' && x.resolved.molecule && x.resolved.molecule !== molecule) && <p role="status">Some resolved sources have a different molecule type from the selected roster. Review the source and molecule before running.</p>}
             <div className="grid gap-3 sm:grid-cols-2"><label>Threads <input aria-label="Threads" className={inputClass} type="number" min={1} step={1} value={String(settings.threads)} onChange={e=>update('threads',e.target.value === '' ? null : Number(e.target.value))}/></label>
-            {inventory[engine].fields.map(field => <label key={field.key} className="block">{field.label} {' '}{field.kind === 'boolean' ? <input type="checkbox" checked={Boolean(settings[field.key])} onChange={e=>update(field.key,e.target.checked)}/> : field.kind === 'select' ? <select className={inputClass} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value === '' ? null : field.key === 'acc_mode' ? Number(e.target.value) : e.target.value)}>{field.nullable && <option value="">Native default</option>}{field.options?.map(x=><option key={x}>{x}</option>)}</select> : field.kind === 'mapping' ? <MappingInput value={(settings[field.key] || {}) as Record<string,string>} onChange={value=>update(field.key,value)}/> : field.kind === 'text' ? <textarea className={`${inputClass} block w-full`} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value || null)}/> : <input className={inputClass} type="number" step={field.kind === 'integer' ? 1 : 'any'} min={field.min} value={settings[field.key] == null ? '' : String(settings[field.key])} onChange={e=>update(field.key,e.target.value === '' ? null : Number(e.target.value))}/>}</label>)}
+            {inventory[engine].fields.map(field => <label key={field.key} className="block">{field.label} {' '}{field.kind === 'boolean' ? <input type="checkbox" checked={Boolean(settings[field.key])} onChange={e=>update(field.key,e.target.checked)}/> : field.kind === 'select' ? <select className={inputClass} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value === '' && field.nullable ? null : field.options?.find(option => String(option) === e.target.value) ?? e.target.value)}>{field.nullable && <option value="">Native default</option>}{field.options?.map(x=><option key={x}>{x}</option>)}</select> : field.kind === 'mapping' ? <MappingInput value={(settings[field.key] || {}) as Record<string,string>} onChange={value=>update(field.key,value)}/> : field.kind === 'text' ? <textarea className={`${inputClass} block w-full`} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value || null)}/> : <input className={inputClass} type="number" step={field.kind === 'integer' ? 1 : 'any'} min={field.min} value={settings[field.key] == null ? '' : String(settings[field.key])} onChange={e=>update(field.key,e.target.value === '' ? null : Number(e.target.value))}/>}</label>)}
             </div>
             {setup.active && <button type="button" onClick={()=>void run('save')} className={inputClass}>Save Project draft</button>}{' '}
             <button type="button" onClick={()=>void run('launch')} className={inputClass}>Start run</button>
