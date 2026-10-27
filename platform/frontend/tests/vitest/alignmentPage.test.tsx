@@ -23,6 +23,13 @@ describe('alignment route receiver', () => {
         expect(getSetup).not.toHaveBeenCalled();
         await act(async () => root.unmount()); client.clear();
     });
+    it('receives the Job query used by existing Project receipts', async () => {
+        const div = document.createElement('div'); const root = createRoot(div); const client = new QueryClient();
+        await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/alignments?job_id=job-1']}><Routes><Route path="/alignments" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>));
+        expect(div.textContent).toContain('Job job-1: alignment artifact reopening is unavailable');
+        expect(div.textContent).not.toContain('Alignment library is not connected yet.');
+        await act(async () => root.unmount()); client.clear();
+    });
     it('loads Project setup then offers its exact return link', async () => {
         let resolve!: (value: unknown) => void;
         getSetup.mockReturnValueOnce(new Promise(r => { resolve = r; }));

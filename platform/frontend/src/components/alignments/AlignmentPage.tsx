@@ -7,10 +7,13 @@ import { projectManagerErrorMessage } from '../../lib/projectManager';
 
 /** Route receiver only: native artifact and editor owners are not yet connected. */
 export default function AlignmentPage() {
-    const { jobId, resultId } = useParams<{ jobId?: string; resultId?: string }>();
+    const { jobId: routeJobId, resultId } = useParams<{ jobId?: string; resultId?: string }>();
     const location = useLocation();
     const setup = useProjectWorkflowSetup();
     const query = new URLSearchParams(location.search);
+    // Existing Project receipts use the query form; do not silently show the
+    // library for those links while the result reader is still unavailable.
+    const jobId = routeJobId || (location.pathname === '/alignments' ? query.get('job_id') : null);
     const [selectedModel, setSelectedModel] = useState('family_msa_protein');
     const queryModel = query.get('model');
     const model = queryModel === 'family_msa_protein' || queryModel === 'family_msa_nucleic' ? queryModel : selectedModel;
