@@ -1,6 +1,7 @@
 """Authoritative, bounded multi-record DNA import for the NGS handoff lane."""
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import uuid
@@ -41,8 +42,12 @@ MAX_IMPORT_RECORD_BASES = 2_000_000
 MAX_IMPORT_FEATURES_PER_RECORD = 10_000
 MAX_IMPORT_ERROR_MESSAGE = 500
 
+# Python's default CSV field limit is smaller than a supported sequence. Source
+# and record bounds below still apply before anything can be persisted.
+csv.field_size_limit(max(csv.field_size_limit(), MAX_IMPORT_SOURCE_CHARS))
+
 Topology = Literal["linear", "circular"]
-ImportSourceFormat = Literal["fasta", "genbank", "raw_dna", "raw-dna"]
+ImportSourceFormat = Literal["fasta", "genbank", "csv", "raw_dna", "raw-dna"]
 
 
 class ImportFeatureSegment(BaseModel):
@@ -136,7 +141,7 @@ class SequenceImportRequest(BaseModel):
         source_format = normalize_source_format(self.source_format)
         has_text = self.source_text is not None
         has_rows = self.raw_rows is not None
-        if source_format in {"fasta", "genbank"} and (not has_text or has_rows):
+        if source_format in {"fasta", "genbank", "csv"} and (not has_text or has_rows):
             raise ValueError(f"{source_format} import requires source_text and forbids raw_rows")
         if source_format == "raw_dna" and (not has_rows or has_text):
             raise ValueError("raw_dna import requires raw_rows and forbids source_text")
@@ -164,6 +169,7 @@ class _ParsedRecord:
     features: list[dict[str, Any]]
     accession: str | None = None
     organism: str | None = None
+    source_topology: str | None = None
 
 
 class SequenceImportInputError(ValueError):
@@ -180,8 +186,8 @@ def normalize_source_format(source_format: str) -> str:
     normalized = str(source_format).strip().lower()
     if normalized == "raw-dna":
         return "raw_dna"
-    if normalized not in {"fasta", "genbank", "raw_dna"}:
-        raise ValueError("source_format must be fasta, genbank, or raw_dna")
+    if normalized not in {"fasta", "genbank", "csv", "raw_dna"}:
+        raise ValueError("source_format must be fasta, genbank, csv, or raw_dna")
     return normalized
 
 
@@ -202,7 +208,7 @@ def import_request_fingerprint(request: SequenceImportRequest) -> str:
 
 def _source_payload(request: SequenceImportRequest) -> dict[str, Any]:
     source_format = normalize_source_format(request.source_format)
-    if source_format in {"fasta", "genbank"}:
+    if source_format in {"fasta", "genbank", "csv"}:
         return {"source_format": source_format, "source_text": request.source_text or ""}
     return {
         "source_format": source_format,
@@ -212,7 +218,7 @@ def _source_payload(request: SequenceImportRequest) -> dict[str, Any]:
 
 def source_digest(request: SequenceImportRequest) -> str:
     source_format = normalize_source_format(request.source_format)
-    if source_format in {"fasta", "genbank"}:
+    if source_format in {"fasta", "genbank", "csv"}:
         return hashlib.sha256((request.source_text or "").encode("utf-8")).hexdigest()
     return hashlib.sha256(_canonical_json(_source_payload(request)).encode("utf-8")).hexdigest()
 
@@ -457,6 +463,77 @@ def _parse_text_source(
     return parsed
 
 
+def _parse_csv_source(
+    request: SequenceImportRequest,
+    *,
+    errors: list[dict[str, Any]],
+) -> list[_ParsedRecord]:
+    source_text = request.source_text or ""
+    if len(source_text.encode("utf-8")) > MAX_IMPORT_SOURCE_BYTES:
+        errors.append(_error("source exceeds the maximum UTF-8 size", code="source_too_large"))
+        return []
+    aliases = {
+        "name": "name", "plasmid": "name", "plasmid_name": "name", "sequence_name": "name", "id": "name",
+        "sequence": "sequence", "dna": "sequence", "dna_sequence": "sequence", "nucleotide_sequence": "sequence", "bases": "sequence",
+        "topology": "topology", "description": "description", "accession": "accession", "organism": "organism",
+    }
+    parsed: list[_ParsedRecord] = []
+    reader = csv.reader(StringIO(source_text.lstrip("\ufeff"), newline=""), strict=True)
+    ordinal = 0
+    total_bases = 0
+    try:
+        header = next((row for row in reader if any(value.strip() for value in row)), [])
+        columns: dict[str, int] = {}
+        for index, label in enumerate(header):
+            key = aliases.get("_".join(label.strip().lower().replace("-", " ").replace("_", " ").split()))
+            if key in columns:
+                errors.append(_error(f"CSV has more than one {key} column. Keep one column for each field.", code="csv_header"))
+                return []
+            if key:
+                columns[key] = index
+        if not {"name", "sequence"}.issubset(columns):
+            errors.append(_error("CSV needs a header row with name and sequence columns (for example: name,sequence,topology).", code="csv_header"))
+            return []
+        for values in reader:
+            if not any(value.strip() for value in values):
+                continue
+            ordinal += 1
+            if ordinal > MAX_IMPORT_RECORDS:
+                errors.append(_error("source exceeds the maximum record count", code="too_many_records"))
+                break
+            try:
+                if len(values) != len(header):
+                    raise ValueError("column count does not match the header; quote fields containing commas or line breaks")
+                fields = {key: values[index].strip() for key, index in columns.items()}
+                for key in ("description", "accession", "organism", "topology"):
+                    if not fields.get(key):
+                        fields.pop(key, None)
+                if "topology" in fields:
+                    fields["topology"] = fields["topology"].lower()
+                row = RawDnaRow.model_validate(fields)
+                sequence = canonicalize_nucleotide_sequence(row.sequence, "dna", allow_empty=False)
+                total_bases += len(sequence)
+                if total_bases > MAX_IMPORT_TOTAL_BASES:
+                    errors.append(_error("import exceeds the maximum total sequence length", code="batch_too_large"))
+                    break
+                parsed.append(_ParsedRecord(
+                    record_ordinal=ordinal, source_name=row.name, name=row.name,
+                    description=row.description, sequence=sequence,
+                    topology=row.topology or request.topology_default, source_topology=row.topology,
+                    features=[], accession=row.accession, organism=row.organism,
+                ))
+            except ValueError as exc:
+                errors.append(_error(
+                    f"CSV record {ordinal} (line {reader.line_num}): {_bounded_message(exc)}",
+                    record_ordinal=ordinal, code="invalid_record",
+                ))
+    except csv.Error as exc:
+        errors.append(_error(f"CSV line {reader.line_num}: {_bounded_message(exc)}", code="parse_error"))
+    if not parsed and not errors:
+        errors.append(_error("CSV contains no sequence rows", code="empty_source"))
+    return parsed
+
+
 def _parse_raw_source(
     request: SequenceImportRequest,
     *,
@@ -566,7 +643,7 @@ def _apply_topology(
                     field="topology",
                 )
             )
-        record.topology = mapped or row_topology or request.topology_default
+        record.topology = mapped or row_topology or record.source_topology or request.topology_default
 
 
 def _record_report(record: _ParsedRecord) -> dict[str, Any]:
@@ -598,6 +675,8 @@ def build_sequence_import_preview(
     records = (
         _parse_raw_source(request, errors=errors)
         if source_format == "raw_dna"
+        else _parse_csv_source(request, errors=errors)
+        if source_format == "csv"
         else _parse_text_source(request, errors=errors)
     )
     try:

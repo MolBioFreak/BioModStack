@@ -79,4 +79,27 @@ describe('expected-sequence entry',()=>{
         expect(mocks.commit.mock.calls[0][0].topology_overrides).toEqual({'1':'linear'});
     });
 
+    it('browses a CSV batch and submits the original file to authoritative preview and commit before attaching every reference',async()=>{
+        await click('Browse sequence files');
+        const source='name,sequence,topology\nA,ACGT,circular\nB,TGCA,linear\n';
+        const file=new File([source],'references.CSV',{type:'text/csv'});
+        Object.defineProperty(file,'text',{value:async()=>source});
+        const node=host.querySelector<HTMLInputElement>('[aria-label="Sequence files"]')!;
+        expect(node.accept.split(',')).toContain('.csv');
+        Object.defineProperty(node,'files',{value:[file]});await act(async()=>node.dispatchEvent(new Event('change',{bubbles:true})));
+        await click('Check sequences');await until(()=>expect(button('Save and add to Project').disabled).toBe(false));
+        expect(mocks.preview).toHaveBeenCalledWith(expect.objectContaining({source_format:'csv',source_text:source,source_provider:'upload',source_id:'references.CSV'}));
+        expect(mocks.commit).not.toHaveBeenCalled();
+        await click('Save and add to Project');await until(()=>expect(added).toHaveBeenCalledWith(records,'state-3'));
+        expect(mocks.commit.mock.calls[0][0]).toEqual(mocks.preview.mock.calls[0][0]);
+        expect(mocks.member.mock.calls.map(call=>call[3])).toEqual(['sequence_id=a&revision_id=ra','sequence_id=b&revision_id=rb']);
+    });
+    it('accepts pasted CSV and blocks the complete batch when one CSV row fails validation',async()=>{
+        mocks.preview.mockResolvedValue({data:{valid:false,records:[{record_ordinal:1,name:'A',length:4,topology:'circular'}],errors:[{record_ordinal:2,message:'CSV record 2 (line 3): invalid nucleotide'}]}});
+        await input('Pasted sequence format','csv');await input('Paste expected sequences','name,sequence\nA,ACGT\nB,ACGT!');await click('Check sequences');
+        await until(()=>expect(host.textContent).toContain('CSV record 2 (line 3): invalid nucleotide'));
+        expect(mocks.preview.mock.calls[0][0]).toMatchObject({source_format:'csv',source_text:'name,sequence\nA,ACGT\nB,ACGT!',source_provider:'paste'});
+        expect(button('Save and add to Project').disabled).toBe(true);expect(mocks.commit).not.toHaveBeenCalled();
+    });
+
 });
