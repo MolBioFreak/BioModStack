@@ -19,6 +19,14 @@ FASTA import retains duplicate headers with generated occurrence-local row IDs. 
 
 TWILIGHT accepts supplied trees with explicit leaf mapping or MAFFT tree preparation; raw and submitted trees and mapping observations are retained. The mapping tokenizer is not a complete validating Newick parser. Neither TWILIGHT mode nor MAFFT 7.525 interoperability has been qualified. Use a fresh work directory for every run; reusing a directory may mix prior output files. MUSCLE 5.3 source has a special case in which stratified `replicates=1` produces one member rather than four; do not infer member counts from the help text. Ensemble files retain the native permutation/seed in their filenames.
 
+## HTTP client (partial)
+
+`bms_alignment.http.AlignmentClient` exposes typed model discovery, preview, Job submission and Job readback using the existing BMS routes. `JobSubmission.params` uses the same `AlignmentRequest` as the standalone package; explicitly supplied false, zero and null values are retained. Supply authentication headers to the Python client where required, and use HTTPS outside a trusted local connection. Redirects are not followed. Project launch context, when supplied in the request, is also sent in the existing launch-context header. Server authorization and admission remain authoritative.
+
+The CLI has `bms-alignment api --url URL model MODEL`, `preview REQUEST.json`, `submit REQUEST.json`, and `job JOB_ID`. It has no credential configuration; use the SDK where authentication headers are needed. These methods do not implement source resolve, annotation, comparison, or Project bundle import/export. Bundle create/verify remain local file operations, not a Project custody contract. The SDK subset is not complete AC14.
+
+The optional `tests/test_http_sdk_integration.py` runs with API dependencies and paths available; it uses real BMS ASGI model/Job routers and a scratch SQLite store, with an in-process HTTP adapter, not a listening server or native alignment run.
+
 ## Required remaining work
 
 Complete machine-readable inventories and all native settings; native TWILIGHT and exact pinned MAFFT guide qualification; independent tree parsing, full transformation and ensemble identities; robust formats/A3M projection and raw bytes; source transformation maps and full correspondence metrics; typed full contracts and HTTP SDK; cancellable process ownership; full portable bundle manifests and relocation; package wheel clean-install acceptance; API/PM/Job/UI integration. More exhaustive verification and security review are needed before use as an integration authority. The adapter currently does not enforce molecule applicability or unsupported MUSCLE option combinations; native errors are retained.

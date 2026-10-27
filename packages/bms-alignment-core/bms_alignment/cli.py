@@ -20,6 +20,11 @@ def main():
     p = sub.add_parser('bundle'); bs = p.add_subparsers(dest='action', required=True)
     p = bs.add_parser('verify'); p.add_argument('directory')
     p = bs.add_parser('create'); p.add_argument('source'); p.add_argument('directory'); p.add_argument('files', nargs='+'); p.add_argument('--exclude', action='append', default=[])
+    p = sub.add_parser('api'); p.add_argument('--url', required=True); api = p.add_subparsers(dest='api_action', required=True)
+    p = api.add_parser('model'); p.add_argument('model_id', choices=['family_msa_protein', 'family_msa_nucleic'])
+    for action in ('preview', 'submit'):
+        p = api.add_parser(action); p.add_argument('file', help='JobSubmission JSON')
+    p = api.add_parser('job'); p.add_argument('job_id')
     a = parser.parse_args()
     read = lambda f: json.loads(Path(f).read_text())
     if a.command == 'schema': result = AlignmentRequest.model_json_schema()
@@ -29,6 +34,13 @@ def main():
         print(json.dumps(result, indent=2)); return result['returncode']
     elif a.command == 'inspect': result = summary(SequenceSet.model_validate(read(a.file)))
     elif a.command == 'compare': result = compare(SequenceSet.model_validate(read(a.left)), SequenceSet.model_validate(read(a.right)))
+    elif a.command == 'api':
+        from .http import AlignmentClient, JobSubmission
+        client = AlignmentClient(a.url)
+        if a.api_action == 'model': result = client.model(a.model_id)
+        elif a.api_action == 'job': result = client.job(a.job_id)
+        else: result = getattr(client, a.api_action)(JobSubmission.model_validate(read(a.file)))
+        result = result.model_dump(mode='json', by_alias=True)
     elif a.command == 'export':
         text, warnings = export(SequenceSet.model_validate(read(a.file)), a.format, a.original)
         import sys
