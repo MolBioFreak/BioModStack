@@ -27,6 +27,7 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     monkeypatch.setenv('BMS_RESULTS_DIR', str(results))
     monkeypatch.setenv('BMS_EXPERIMENT_ARTIFACT_ROOT', str(tmp_path / 'blobs'))
     monkeypatch.delenv('BMS_FAMILY_MSA_SIF', raising=False)
+    monkeypatch.delenv('INVOCATION_ID', raising=False)
     # Fixture process exercises the real producer/DB path, not native MAFFT.
     executable = tmp_path / 'mafft'
     executable.write_text('#!/bin/sh\nfor a in "$@"; do last="$a"; done\ncat "$last"\n')
@@ -99,6 +100,45 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
         retained = ack['metadata']['retained_artifacts']
         assert len(retained) == len(artifacts)
         before = {x['resource_id']: (await retained_path(pm, await pm.get(ExperimentArtifact, x['resource_id']))).read_bytes() for x in retained}
+        from experiment_services import add_audit_event
+        add_audit_event(pm, workspace_id=project.id, resource_id=project.id, event_type='workspace_owner_bound', generation=1, payload={'principal_id': 'owner'})
+        await pm.commit()
+        project_id, receipt_id = project.id, receipt.id
+        other_project, _, _ = await _hierarchy(pm)
+        add_audit_event(pm, workspace_id=other_project.id, resource_id=other_project.id, event_type='workspace_owner_bound', generation=1, payload={'principal_id': 'owner'})
+        await pm.commit()
+        other_project_id = other_project.id
+        from services.global_experiments.result_surfaces import result_surface_for_receipt
+        surface = await result_surface_for_receipt(pm, project_id=project_id, receipt_id=receipt_id)
+        assert surface['route']['query'] == {'project_id': project_id, 'receipt_id': receipt_id}
+        selected = next(x['resource_id'] for x in retained if x['role'] == 'alignment')
+    import httpx
+    from fastapi import FastAPI, Request
+    from database import get_session
+    from experiment_database import get_experiment_session
+    from routers.family_msa_results import router
+    app = FastAPI()
+    app.include_router(router)
+    @app.middleware('http')
+    async def principal(request: Request, call_next):
+        actor = request.headers.get('x-test-actor')
+        if actor:
+            request.state.authenticated_principal = {'id': actor, 'roles': ['operator']}
+        return await call_next(request)
+    async def core_dep():
+        async with core_factory() as session:
+            yield session
+    async def pm_dep():
+        async with read_model_store() as session:
+            yield session
+    app.dependency_overrides[get_session] = core_dep
+    app.dependency_overrides[get_experiment_session] = pm_dep
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test')
+    job_url = '/api/family-msa/jobs/canonical-job-completed'
+    assert (await client.get(job_url)).status_code == 401
+    assert (await client.get(job_url, headers={'x-test-actor':'owner'})).status_code == 200
+    assert (await client.get(f'{job_url}/documents/{alignment.id}', headers={'x-test-actor':'owner'})).json()['rows'][0]['aligned'] == sequence
+    assert (await client.get(f'{job_url}/artifacts/{alignment.id}', headers={'x-test-actor':'owner'})).content == original_bytes
     async with core_factory() as core:
         await core.delete(await core.get(Job, 'canonical-job-completed'))
         await core.commit()
@@ -107,4 +147,14 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     async with read_model_store() as pm:
         for resource_id, expected in before.items():
             assert (await retained_path(pm, await pm.get(ExperimentArtifact, resource_id))).read_bytes() == expected
+    url = f'/api/family-msa/projects/{project_id}/receipts/{receipt_id}'
+    assert (await client.get(url)).status_code == 401
+    assert (await client.get(url, headers={'x-test-actor':'other'})).status_code == 404
+    assert (await client.get(f'/api/family-msa/projects/{other_project_id}/receipts/{receipt_id}', headers={'x-test-actor':'owner'})).status_code == 404
+    assert (await client.get(url, headers={'x-test-actor':'owner'})).status_code == 200
+    assert (await client.get(f'{url}/documents/{selected}', headers={'x-test-actor':'owner'})).json()['rows'][0]['aligned'] == sequence
+    assert (await client.get(f'{url}/artifacts/{selected}', headers={'x-test-actor':'owner'})).content == original_bytes
+    assert (await client.get(f'{url}/artifacts/not-in-receipt', headers={'x-test-actor':'owner'})).status_code == 404
+    assert (await client.get(job_url, headers={'x-test-actor':'owner'})).status_code == 404
+    await client.aclose()
     await engine.dispose()

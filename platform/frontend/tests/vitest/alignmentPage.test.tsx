@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import AlignmentPage from '../../src/components/alignments/AlignmentPage';
 import { parseFamilyAlignmentCapabilities } from '../../src/lib/projectManager';
+import { api } from '../../src/lib/api';
 
 const getSetup = vi.hoisted(() => vi.fn());
 vi.mock('../../src/lib/projectManager', async original => ({ ...(await original<Record<string, unknown>>()), getProjectWorkflowSetup: getSetup }));
@@ -16,19 +17,23 @@ describe('alignment route receiver', () => {
         expect(parseFamilyAlignmentCapabilities(inventory).map(x => x.domain_kind)).toEqual(['protein_in_silico', 'ngs_molbio']);
         expect(() => parseFamilyAlignmentCapabilities({ ...inventory, capabilities: [row('family_msa_nucleic', 'protein_in_silico')] })).toThrow();
     });
-    it('reopens a job without inventing artifact data', async () => {
+    it('reopens exact retained Project documents and downloads', async () => {
+        const get = vi.spyOn(api, 'get').mockImplementation(async (url) => ({data: String(url).includes('/documents/') ? {result_id:'a', rows:[{row_id:'r', label:'one', aligned:'AC'}]} : {artifacts:[{id:'a', role:'alignment'}]}}));
         const div = document.createElement('div'); const root = createRoot(div); const client = new QueryClient();
-        await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/alignments/jobs/job-1']}><Routes><Route path="/alignments/jobs/:jobId" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>));
-        expect(div.textContent).toContain('Job job-1: alignment artifact reopening is unavailable');
-        expect(getSetup).not.toHaveBeenCalled();
-        await act(async () => root.unmount()); client.clear();
+        await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/alignments?project_id=p&receipt_id=r']}><Routes><Route path="/alignments" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>); });
+        await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+        expect(div.textContent).toContain('Result: a');
+        expect(div.querySelector('a[href="/api/family-msa/projects/p/receipts/r/artifacts/a"]')).not.toBeNull();
+        expect(get).toHaveBeenCalledWith('/api/family-msa/projects/p/receipts/r/documents/a', expect.anything());
+        await act(async () => root.unmount()); client.clear(); get.mockRestore();
     });
     it('receives the Job query used by existing Project receipts', async () => {
+        const get = vi.spyOn(api, 'get').mockResolvedValue({data:{artifacts:[]}});
         const div = document.createElement('div'); const root = createRoot(div); const client = new QueryClient();
         await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/alignments?job_id=job-1']}><Routes><Route path="/alignments" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>));
-        expect(div.textContent).toContain('Job job-1: alignment artifact reopening is unavailable');
+        expect(get).toHaveBeenCalledWith('/api/family-msa/jobs/job-1', expect.anything());
         expect(div.textContent).not.toContain('Alignment library is not connected yet.');
-        await act(async () => root.unmount()); client.clear();
+        await act(async () => root.unmount()); client.clear(); get.mockRestore();
     });
     it('loads Project setup then offers its exact return link', async () => {
         let resolve!: (value: unknown) => void;

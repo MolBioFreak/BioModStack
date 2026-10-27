@@ -395,6 +395,8 @@ app.include_router(experiment_workspaces.router)
 app.include_router(molbio_ngs_experiments.router)
 app.include_router(projects.router)
 app.include_router(project_manager.router)
+from routers import family_msa_results
+app.include_router(family_msa_results.router)
 app.include_router(ngs_molbio_n5.router)
 app.include_router(payload_ownership_audit.router)
 if dev_issues.dev_issue_ledger_enabled():
