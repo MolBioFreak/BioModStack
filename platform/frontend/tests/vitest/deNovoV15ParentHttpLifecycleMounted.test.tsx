@@ -302,6 +302,55 @@ suite.each(['/submit','/bms/submit'])('ordinary fresh parent at %s snapshots inh
     expect(saved.params.native_job_request.execution_target_id).toBe('ambient-remote');
     expect(saved.params.native_job_request.params).toEqual({rfd4_request:{}});
 },30000);
+suite('two mounted Project editors retain their hydrated generation across refetch and conflict', async () => {
+    const seed = JSON.parse(readFileSync(resolve(evidence!,'seed.json'),'utf8'));
+    const path = `/api/projects/${seed.project_id}/workflow-setups/${encodeURIComponent(seed.setup.setup_context_id)}`;
+    const route = `/submit?model=rfd4_proteina&mode=generate&project_id=${seed.project_id}&setup_context_id=${encodeURIComponent(seed.setup.setup_context_id)}`;
+    await mount(undefined,clone); const source = await saveTemplate('Two editor source'); await unmount();
+    const beforeSeed = (await http('GET',path)).data;
+    const seeded = await http('PUT',path+'/draft',{expected_generation:beforeSeed.generation,draft:source.params},{'Idempotency-Key':crypto.randomUUID()});
+    expect(seeded.status).toBe(200);
+    await mount(route);
+    const firstHost = document.body.lastElementChild as HTMLDivElement;
+    const secondHost = document.createElement('div'); document.body.append(secondHost);
+    const secondRoot = createRoot(secondHost);
+    const secondClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const editIn = async (host: HTMLElement, value: string) => {
+        const input = host.querySelector<HTMLInputElement>('[aria-label="Chain 1 min_length"]');
+        expect(input).toBeTruthy(); await edit(input!, value);
+    };
+    const saveIn = async (host: HTMLElement) => {
+        const button = [...host.querySelectorAll('button')].find(node => node.textContent?.trim() === 'Save draft');
+        expect(button).toBeTruthy(); await act(async () => button!.click());
+    };
+    try {
+        await act(async () => secondRoot.render(<QueryClientProvider client={secondClient}><MemoryRouter initialEntries={[route]}><JobSubmission /></MemoryRouter></QueryClientProvider>));
+        await vi.waitFor(async () => { await settle(); expect(secondHost.querySelector('[aria-label="Chain 1 min_length"]')).toBeTruthy(); });
+        const initial = (await http('GET',path)).data;
+        await editIn(firstHost, '41'); await editIn(secondHost, '57');
+        for (let i = 0; i < 2; i++) {
+            const count = requests.filter(r => r.path === path+'/draft').length;
+            await saveIn(secondHost);
+            await vi.waitFor(async () => { await settle(); expect(requests.filter(r => r.path === path+'/draft')).toHaveLength(count+1); expect(requests.filter(r => r.path === path+'/draft').at(-1).status).toBe(200); });
+        }
+        const saves = requests.filter(r => r.path === path+'/draft');
+        expect(saves.map(r => r.body.expected_generation)).toEqual([initial.generation, initial.generation+1]);
+        const retained = (await http('GET',path)).data;
+        expect(retained.generation).toBe(initial.generation+2);
+        expect(retained.draft).toEqual(saves[1].data.draft);
+        expect(retained.draft.native_job_request.params.rfd4_request.input.chains[0].min_length).toBe(57);
+        await act(async () => { await client.refetchQueries({ queryKey: ['project-workflow-setup', seed.project_id, seed.setup.setup_context_id] }); });
+        expect(firstHost.querySelector<HTMLInputElement>('[aria-label="Chain 1 min_length"]')?.value).toBe('41');
+        await saveIn(firstHost);
+        await vi.waitFor(async () => { await settle(); expect(requests.filter(r => r.path === path+'/draft')).toHaveLength(3); });
+        const stale = requests.filter(r => r.path === path+'/draft')[2];
+        expect(stale.body.expected_generation).toBe(initial.generation);
+        expect(stale.status).toBe(409);
+        expect((await http('GET',path)).data).toEqual(retained);
+        expect(firstHost.querySelector('[role="alert"]')).toBeTruthy();
+        writeFileSync(resolve(evidence!,'project-two-editor-readback.json'),JSON.stringify({initial, saves, stale, retained, after:(await http('GET',path)).data},null,2));
+    } finally { await act(async () => secondRoot.unmount()); secondClient.clear(); }
+}, 30000);
 suite('ordinary Project retains MODEL 2 partial recipe through two Saves cold reopen and Prepare', async () => {
     const seed = JSON.parse(readFileSync(resolve(evidence!,'seed.json'),'utf8'));
     const fixture = JSON.parse(readFileSync(resolve(evidence!,'source.json'),'utf8'));

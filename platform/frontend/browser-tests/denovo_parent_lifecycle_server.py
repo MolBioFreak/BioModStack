@@ -7,7 +7,8 @@ import sys
 
 REPO = Path(__file__).resolve().parents[3]
 ROOT = Path(os.environ['BMS_PARENT_LIFECYCLE_ROOT']).resolve()
-assert ROOT.is_relative_to(Path('/home/dalab/.hermes/profiles/fresh/cache/scratch'))
+SCRATCH = Path(os.environ.get('BMS_PARENT_SCRATCH_ROOT', os.environ.get('TMPDIR', '/tmp'))).resolve()
+assert ROOT != SCRATCH and ROOT.is_relative_to(SCRATCH), 'lifecycle root must be inside scratch root'
 ROOT.mkdir(parents=True, exist_ok=True)
 for key, leaf in {'HOME':'home','BMS_DATA':'data','BMS_INPUTS':'inputs','BMS_RESULTS_DIR':'results','BMS_WORK':'work','BMS_CACHE':'cache','BMS_ANALYSIS_CACHE':'analysis','TMPDIR':'tmp','BMS_WEIGHTS':'weights','BMS_CONTAINER_DIR':'containers','BMS_MSA_CACHE':'msa','NXF_HOME':'nxf'}.items():
     os.environ[key] = str(ROOT / leaf)
@@ -37,6 +38,8 @@ async def bounded(request: Request, call_next):
     allowed = (request.method in {'GET','HEAD'} or path.startswith('/api/user-templates') or
         (request.method == 'POST' and (path == '/api/projects' or path == '/api/files/materialize-structure' or path.endswith('/workflow-setups') or path.endswith('/prepare-launch'))) or
         (request.method == 'PUT' and path.endswith('/draft')))
+    if os.environ.get('BMS_PARENT_SAVE_ONLY'):
+        allowed = request.method in {'GET', 'HEAD'} or (request.method == 'PUT' and path == os.environ['BMS_PARENT_SAVE_PATH'])
     if (ROOT / 'browser-readonly').exists() and request.method not in {'GET', 'HEAD'}:
         allowed = False
     body = (await request.body()).decode()
@@ -80,6 +83,7 @@ if os.environ.get('BMS_PARENT_BROWSER_BUILD'):
         return FileResponse(build / 'index.html')
 
 if __name__ == '__main__':
-    asyncio.run(seed())
+    if not os.environ.get('BMS_PARENT_SAVE_ONLY'):
+        asyncio.run(seed())
     import uvicorn
     uvicorn.run(app, host='127.0.0.1', port=int(os.environ.get('BMS_PARENT_PORT','18879')))

@@ -333,7 +333,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const effectiveLaMotif = { motif_task_name: motifTaskName, motif_pdb: motifPdb, contig_string: motifContig, ...(nativeControls.pcad_laproteina_settings_json && typeof nativeControls.pcad_laproteina_settings_json === 'object' && !Array.isArray(nativeControls.pcad_laproteina_settings_json) ? nativeControls.pcad_laproteina_settings_json as Record<string, unknown> : {}) };
     const hasEffectiveLaMotif = Boolean(effectiveLaMotif.motif_task_name || (effectiveLaMotif.motif_pdb && effectiveLaMotif.contig_string));
     const authorLaMotif = (key: string, value: unknown) => setNativeControls(current => ({ ...current, pcad_laproteina_settings_json: { ...(current.pcad_laproteina_settings_json && typeof current.pcad_laproteina_settings_json === 'object' && !Array.isArray(current.pcad_laproteina_settings_json) ? current.pcad_laproteina_settings_json as Record<string, unknown> : {}), [key]: value } }));
-    const retainedAlternativeParams = Object.fromEntries(Object.entries(initialValues).filter(([key]) => key.startsWith(`${backend}_`) && key !== 'laproteina_motif_inspection'));
+    const retainedAlternativeParams = Object.fromEntries(Object.entries(initialValues).filter(([key]) =>
+        (key.startsWith(`${backend}_`) || key.startsWith(`pcad_${backend}_`) && !['pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path'].includes(key)) && key !== 'laproteina_motif_inspection'));
     const [error, setError] = useState<string | null>(null);
     const [sequenceDesign, setSequenceDesign] = useState(() => hydrateGeneralSequenceDesign(initialValues));
     const [sequenceOmitted, setSequenceOmitted] = useState(() => initialValues.sequence_design_omitted === true);
@@ -654,7 +655,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             </div>
             {generator === 'disco' && <DiscoJobsInput value={nativeControls.pcad_disco_jobs_json} path={discoInputJson} sourcePath={nativeControls.pcad_disco_jobs_source_path as string | undefined} onChange={(jobs, sourcePath) => setNativeControls(current => { const next = { ...current }; if (jobs === undefined) { delete next.pcad_disco_jobs_json; delete next.pcad_disco_jobs_source_path; } else { next.pcad_disco_jobs_json = jobs; if (sourcePath !== undefined) next.pcad_disco_jobs_source_path = sourcePath; } return next; })} />}
             <div hidden={section !== 'Sampling'} className="space-y-5">
-                <OtherDeNovoSettings generalConditions={generator === 'rfd3'} model={generator as 'rfd3' | DeNovoBackend} task={generator === 'rfd3' ? 'unconditional_monomer' : designTask} value={generator === 'rfd3' ? rfd3Settings : nativeControls} onChange={generator === 'rfd3' ? setRfd3Settings : setNativeControls}
+                <OtherDeNovoSettings generalConditions={generator === 'rfd3'} model={generator as 'rfd3' | DeNovoBackend} task={generator === 'rfd3' ? 'unconditional_monomer' : designTask} selectedPreset={generator === 'laproteina' ? laproteinaPreset : undefined} requestParams={generator === 'rfd3' ? undefined : JSON.parse(JSON.stringify(buildAlternativeWorkflowRequest().params))} value={generator === 'rfd3' ? rfd3Settings : nativeControls} onChange={generator === 'rfd3' ? setRfd3Settings : setNativeControls}
                     primaryOverrideFields={generator === 'laproteina' ? ['num_steps', ...(isMotif ? ['contig_string', 'segment_order', 'motif_atom_spec', 'atom_selection_mode', 'motif_min_length', 'motif_max_length'] : [])] : generator === 'disco' ? ['experiment', 'effort', 'num_inference_seeds', 'use_deepspeed_evo_attention'] : []} />
                 {designTask !== 'unconditional' && <ProteinDesignPanel title="Generation" description={countHelp}>{generationControls}</ProteinDesignPanel>}
                 <ProteinDesignPanel title={`${engineName} sampling`}>
@@ -669,6 +670,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                         {!isMotif && presetControl}
                         <label className={labelClass}>Sampling steps
                             <input className={fieldClass} type="number" min={50} max={2000} value={String(effectiveOverride('num_steps', laproteinaSteps) ?? '')} onChange={event => { const value = editedNumber(event.target.value); setEffectiveOverride('num_steps', value, () => setLaproteinaSteps(value)); }} />
+                            <span className="block text-xs">BMS sampling value is sent explicitly; a native override takes precedence over it and the upstream profile reference.</span>
                             {overrideNote('num_steps')}
                         </label>
                     </div> : <>
