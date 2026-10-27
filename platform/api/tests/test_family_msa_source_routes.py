@@ -14,7 +14,7 @@ from molbio_database import get_molbio_session
 from molbio_models import MolBioBase, MolecularDocument, MolecularRevision
 from routers import family_msa_results as routes
 from services.global_experiments.adapters import MolBioRevisionAdapter
-from experiment_services import create_project, create_global_experiment, create_domain_experiment, create_dataset, save_dataset_revision
+from experiment_services import create_project, create_global_experiment, create_domain_experiment, create_dataset, save_dataset_revision, derive_dataset_revision
 from test_project_manager_adapters import _project_payload, _global_payload, _domain_payload
 
 
@@ -48,7 +48,10 @@ async def test_source_routes_with_real_molecular_owner_and_paging(tmp_path, monk
         members = [{'identity': 'q' if i < 102 else 'unknown', 'role': 'sequence',
                     'value': {'receipt_id': 'q' if i < 102 else 'unknown'}} for i in range(103)]
         revision = await save_dataset_revision(s, dataset.aggregate_id, {'members': members}, expected_head_generation=dataset.head_generation)
+        derived = await derive_dataset_revision(s, dataset.aggregate_id, revision.resource_id, [2, 0], expected_head_generation=dataset.head_generation)
+        ambiguous = await derive_dataset_revision(s, dataset.aggregate_id, revision.resource_id, [0, 0], expected_head_generation=dataset.head_generation)
         project_id, dataset_id, revision_id = project.id, dataset.aggregate_id, revision.resource_id
+        derived_id, ambiguous_id = derived.resource_id, ambiguous.resource_id
         await s.commit()
     async def project_session():
         async with ps() as s:
@@ -80,9 +83,26 @@ async def test_source_routes_with_real_molecular_owner_and_paging(tmp_path, monk
                 page = res.json(); pages.extend(page['items']); offset = page['next_offset']
             assert [x['ordinal'] for x in pages] == list(range(103))
             assert pages[-1]['receipt'] is None
+            for item in pages:
+                assert item['ancestry']['status'] == 'resolved'
+                assert item['ancestry']['occurrence']['revision_id'] == revision_id
+                assert item['ancestry']['occurrence']['ordinal'] == item['ordinal']
             res = await client.post(base + '/freeze', json={'ordinals': [102, 1, 0]})
             assert res.status_code == 200, res.text
-            assert [x['ordinal'] for x in res.json()['members']] == [0, 1, 102]
+            selected = res.json()['members']
+            assert [x['ordinal'] for x in selected] == [0, 1, 102]
+            assert [x['ancestry'] for x in selected] == [pages[i]['ancestry'] for i in (0, 1, 102)]
+            derived_base = base.replace(revision_id, derived_id)
+            derived_response = await client.post(derived_base + '/freeze', json={'ordinals': None})
+            assert derived_response.status_code == 200, derived_response.text
+            derived_members = derived_response.json()['members']
+            assert [x['ancestry']['occurrence']['ordinal'] for x in derived_members] == [2, 0]
+            assert all(x['ancestry']['occurrence']['revision_id'] == revision_id for x in derived_members)
+            ambiguous_base = base.replace(revision_id, ambiguous_id)
+            ambiguous_response = await client.get(ambiguous_base)
+            assert ambiguous_response.status_code == 200, ambiguous_response.text
+            assert [x['ancestry'] for x in ambiguous_response.json()['items']] == [
+                {'status': 'unknown', 'reason': 'repeated_origin_ambiguous'}] * 2
             res = await client.get(base + '/1/molecular', params={'start': 1, 'end': 4})
             assert res.status_code == 200, res.text
             assert res.json()['sequence'] == 'CGT'

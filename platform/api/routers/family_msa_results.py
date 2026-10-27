@@ -66,6 +66,7 @@ class SourceOccurrence(BaseModel):
     media_type: str | None
     value: Any
     receipt: SourceReceipt | None
+    ancestry: dict[str, Any]
 
 
 class ResourcePage(BaseModel):
