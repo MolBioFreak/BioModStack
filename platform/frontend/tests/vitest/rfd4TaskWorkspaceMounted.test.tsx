@@ -274,6 +274,10 @@ it('projects selected effective scalar values without authoring them and invalid
     expect(batch.value).toBe('9');
     expect((document.querySelector('[aria-label="Verbose"]') as HTMLInputElement).checked).toBe(false);
     expect(draft.rfd4_request).toEqual({});
+    await click('Design');
+    expect((document.querySelector('[data-rfd4-task-workspace] [aria-label="Batch size"]') as HTMLInputElement).value).toBe('9');
+    expect((document.querySelector('[data-rfd4-task-workspace] [aria-label="Seed"]') as HTMLInputElement).value).toBe('0');
+    await click('Native settings');
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(batch, '3'); batch.dispatchEvent(new Event('input', { bubbles: true })); });
     const reset = document.querySelector<HTMLButtonElement>('[aria-label="Use profile value for batch_size"]')!;
     await act(async () => reset.click()); await settle();
