@@ -157,7 +157,16 @@ One `.rootfs-<digest>` envelope lives beside the SIF object under
 `objects/sha256`, not inside its immutable 0500 directory. Publication never
 chmods or replaces the canonical source SIF or its parent. Extraction occurs in
 an exact `.derive-<digest>-<uuid>` stage under the existing lifecycle fence; the
-completed, fsynced envelope is atomically renamed into place. Its manifest binds
+completed envelope is atomically renamed into place. After all extracted
+inodes have their write bits removed and checked, one Linux `syncfs` on the
+staging filesystem flushes their bytes and mode/directory metadata together;
+there is no synchronous flush per extracted inode. Manifest fsync and the
+post-rename parent fsync remain. An envelope-directory fsync alone would not
+make descendant bytes durable. The filesystem-wide barrier can also wait for
+unrelated dirty writes on that filesystem and propagates writeback errors,
+just as publication must not ignore failed durability. No permissions, integrity
+checks, private-view isolation, or warm reuse semantics are relaxed.
+Its manifest binds
 source identity, tree content hashes, symlink targets, internal hardlink groups,
 and original/frozen modes. Special device/FIFO/socket entries and external
 hardlinks fail closed. Frozen files/directories have write bits removed and

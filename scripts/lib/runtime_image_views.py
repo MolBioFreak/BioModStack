@@ -6,6 +6,7 @@ No SIF copies, writable donor hardlinks or second reference store.
 """
 from __future__ import annotations
 
+import ctypes
 import errno
 import fcntl
 import json
@@ -212,7 +213,6 @@ def _inventory(path, *, freeze=False, identities=None):
                     0o400 if row["kind"] == "file" else 0o500)
                 if key not in frozen_inodes:
                     os.fchmod(fd, mode)
-                    os.fsync(fd)
                 after = os.fstat(fd)
                 # chmod changes mode and ctime only. Byte identity, link count
                 # and reachable no-follow inode must survive the actual freeze.
@@ -317,6 +317,22 @@ def _recover_stages(root, digest):
             os.fsync(fd)
 
 
+def _sync_filesystem(fd):
+    """Flush extracted bytes and frozen modes together before publication.
+
+    Linux syncfs waits for data AND metadata on the staging filesystem; fsync
+    on the envelope alone does not flush its descendants. Batching avoids a
+    separate journal commit wait after every chmod in a large extracted image.
+    This may also wait for unrelated dirty data on that same filesystem.
+    """
+    syncfs = ctypes.CDLL(None, use_errno=True).syncfs
+    syncfs.argtypes = [ctypes.c_int]
+    syncfs.restype = ctypes.c_int
+    if syncfs(fd) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
 def _derive(root, digest, image_fd, identity, extract, *, verification=None):
     path = derived_path(root, digest)
     _recover_stages(root, digest)
@@ -352,7 +368,7 @@ def _derive(root, digest, image_fd, identity, extract, *, verification=None):
                 os.fsync(fd)
             with _directory(stage) as fd:
                 os.fchmod(fd, 0o500)
-                os.fsync(fd)
+                _sync_filesystem(fd)
             stage_verification = {}
             verify_derivation(stage, identity, verification=stage_verification, full=False)
             if snapshot_tree(stage / 'rootfs') != tree:
