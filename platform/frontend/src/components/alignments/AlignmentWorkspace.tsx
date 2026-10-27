@@ -1,5 +1,6 @@
 import { useState, type ComponentType } from 'react'
 import { anchorAt, type AlignmentDocument, type ResidueAnchor } from '../../lib/alignmentCoordinates'
+import AlignmentShared from './AlignmentShared'
 
 export type AlignmentViewerId = 'jbrowse' | 'alignment-viewer-2' | 'biojs'
 export interface AlignmentViewerProps {
@@ -9,6 +10,8 @@ export interface AlignmentViewerProps {
 }
 export interface AlignmentWorkspaceProps {
   projectLabel?: string
+  projectId?: string
+  receiptId?: string
   document?: AlignmentDocument
   viewers?: Partial<Record<AlignmentViewerId, ComponentType<AlignmentViewerProps>>>
   onSelectionChange?: (anchor: ResidueAnchor) => void
@@ -21,7 +24,7 @@ const viewerNames: Record<AlignmentViewerId, string> = {
 }
 
 /** Host for real viewer adapters. It never silently substitutes a fake renderer. */
-export default function AlignmentWorkspace({ projectLabel, document, viewers = {}, downloads = [], onSelectionChange }: AlignmentWorkspaceProps) {
+export default function AlignmentWorkspace({ projectLabel, projectId, receiptId, document, viewers = {}, downloads = [], onSelectionChange }: AlignmentWorkspaceProps) {
   const [viewerId, setViewerId] = useState<AlignmentViewerId>('jbrowse')
   const [selection, setSelection] = useState<ResidueAnchor>()
   const [rowId, setRowId] = useState('')
@@ -52,7 +55,7 @@ export default function AlignmentWorkspace({ projectLabel, document, viewers = {
         <button type="button" onClick={() => { const anchor = anchorAt(document, rowId, Number(column) - 1); if (anchor) select(anchor) }}>Inspect</button>
       </fieldset>
       {currentSelection && <p>Row {currentSelection.rowId}, column {currentSelection.column + 1}, {currentSelection.residue === null ? 'gap' : `residue ${currentSelection.residue + 1}`}{currentSelection.sourcePosition === undefined ? '; source coordinate unknown' : `; source coordinate ${currentSelection.sourcePosition + 1}`}</p>}
-      <p>Marks, comparisons, saved views, settings and job submission require their Project and API owners; they are not connected here.</p>
+      {projectId && receiptId && <AlignmentShared key={`${projectId}:${receiptId}:${document.resultId}`} projectId={projectId} receiptId={receiptId} artifactId={document.resultId} selection={currentSelection} viewer={viewerId} applyViewer={value => { if (value in viewerNames) setViewerId(value as AlignmentViewerId) }}/>}
     </>}
     {localDownloads.length > 0 && <section aria-label="Downloads"><h2>Downloads</h2><ul>{localDownloads.map(item => <li key={`${item.label}:${item.href}`}><a href={item.href} download>{item.label}</a></li>)}</ul></section>}
   </main>

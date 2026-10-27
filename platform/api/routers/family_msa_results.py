@@ -269,6 +269,50 @@ async def get_project_document(request: Request, project_id: str, receipt_id: st
     return await document(entries, read, artifact_id)
 
 
+class ComparisonInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    left_receipt_id: str = Field(min_length=1)
+    left_artifact_id: str = Field(min_length=1)
+    right_receipt_id: str = Field(min_length=1)
+    right_artifact_id: str = Field(min_length=1)
+
+
+async def comparison_roster(entries, read, artifact_id):
+    from bms_alignment.models import Row, SequenceSet
+    doc = await document(entries, read, artifact_id)
+    receipt_entry = next(x for x in entries if x['role'] == 'receipt')
+    receipt = json.loads(await read(receipt_entry['id']))
+    roster = receipt['requested']['roster']
+    original = {row['row_id']: row for row in roster['rows']}
+    rows = []
+    for aligned in doc['rows']:
+        source = original[aligned['row_id']]
+        # Never carry positional identity through an unproven transformation.
+        same = ''.join(c for c in source['sequence'] if c not in '-.') == ''.join(c for c in aligned['aligned'] if c not in '-.')
+        positions = source.get('source_positions')
+        if same and positions is not None and len(positions) == len(source['sequence']):
+            residues = iter([p for c, p in zip(source['sequence'], positions) if c not in '-.'])
+            positions = [None if c in '-.' else next(residues) for c in aligned['aligned']]
+        else:
+            positions = None
+        rows.append(Row(row_id=aligned['row_id'], header=aligned['label'], sequence=aligned['aligned'],
+                        source_member_id=source.get('source_member_id'), occurrence_id=source.get('occurrence_id'),
+                        source_offset=source.get('source_offset') if same and source.get('source_positions') is None else None,
+                        source_positions=positions, transformation_provenance=source.get('transformation_provenance')))
+    return SequenceSet(molecule=roster['molecule'], rows=rows)
+
+
+@router.post('/projects/{project_id}/compare')
+async def compare_project_results(request: Request, project_id: str, payload: ComparisonInput,
+                                  session: AsyncSession = Depends(get_experiment_session)):
+    from bms_alignment import compare
+    left_entries, left_read = await project_result(request, session, project_id, payload.left_receipt_id)
+    right_entries, right_read = await project_result(request, session, project_id, payload.right_receipt_id)
+    left = await comparison_roster(left_entries, left_read, payload.left_artifact_id)
+    right = await comparison_roster(right_entries, right_read, payload.right_artifact_id)
+    return {'method': 'explicit-source-occurrence.v1', 'report': compare(left, right)}
+
+
 SHARED_KIND = 'family_msa.shared_state.v1'
 
 
