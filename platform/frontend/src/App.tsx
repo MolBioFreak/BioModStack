@@ -15,6 +15,7 @@ const MolBioToolkitV2 = lazy(() => import('./components/MolBioToolkit/indexV2').
 const NGSToolkit = lazy(() => import('./components/NGSToolkit').then((module) => ({ default: module.NGSToolkit })));
 const BioXpCockpit = lazy(() => import('./components/BioXpCockpit').then((module) => ({ default: module.BioXpCockpit })));
 const StatsToolkitLauncher = lazy(() => import('./components/StatsToolkitLauncher').then((module) => ({ default: module.StatsToolkitLauncher })));
+const AlignmentPage = lazy(() => import('./components/alignments/AlignmentPage'));
 
 function RouteLoadingFallback() {
   return (
@@ -72,6 +73,12 @@ function App() {
             <Route path="/projects/:projectId/experiments/:experimentId" element={<ProjectManager />} />
             <Route path="/projects/:projectId/experiments/:experimentId/domains/:domainId" element={<ProjectManager />} />
             <Route path="/submit" element={<JobSubmission />} />
+            <Route path="/alignments" element={<AlignmentPage />} />
+            <Route path="/alignments/library" element={<AlignmentPage />} />
+            <Route path="/alignments/new" element={<AlignmentPage />} />
+            <Route path="/alignments/compare" element={<AlignmentPage />} />
+            <Route path="/alignments/jobs/:jobId" element={<AlignmentPage />} />
+            <Route path="/alignments/results/:resultId" element={<AlignmentPage />} />
             <Route path="/results" element={<ResultsViewer />} />
             <Route path="/designs" element={<ResultsViewer />} />
             <Route path="/designs/:jobId" element={<ResultsViewer />} />

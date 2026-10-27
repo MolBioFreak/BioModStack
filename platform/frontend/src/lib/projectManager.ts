@@ -1058,7 +1058,7 @@ export interface ProjectWorkflowSetupCreate {
     relationship_kind: 'primary' | 'follow_up';
     global_experiment_id: string | null;
     experiment?: { name: string; objective: string };
-    domain_kind: 'protein_in_silico';
+    domain_kind: 'protein_in_silico' | 'ngs_molbio';
     capability_id: string;
 }
 
@@ -1921,6 +1921,32 @@ export function parseProjectWorkflowSetupNavigation(value: unknown): ProjectWork
 export async function listProteinProjectCapabilities(signal?: AbortSignal): Promise<ProteinProjectCapabilityInventory> {
     const response = await api.get<unknown>('/api/protein-project-capabilities', { signal });
     return parseProteinProjectCapabilityInventory(response.data);
+}
+
+export interface FamilyAlignmentSetupCapability {
+    capability_id: string;
+    label: string;
+    domain_kind: 'protein_in_silico' | 'ngs_molbio';
+}
+
+export function parseFamilyAlignmentCapabilities(value: unknown): FamilyAlignmentSetupCapability[] {
+    const record = exactRecord(value, 'family alignment inventory', ['schema', 'capabilities']);
+    if (record.schema !== 'bms.family-msa-project-workflow-picker.v1') throw new Error('Family alignment inventory schema is unsupported.');
+    return requireArray(record.capabilities, 'family alignment inventory.capabilities', (value, label) => {
+        const row = exactRecord(value, label, ['capability_id', 'label', 'domain_kind', 'project_setup_state', 'project_setup_adapter_id', 'project_native_owner_id', 'safe_setup_destination', 'launch_mode', 'product_taxonomy']);
+        const id = requireLiteral(row.capability_id, `${label}.capability_id`, ['family_msa_protein', 'family_msa_nucleic'] as const);
+        const domain = requireLiteral(row.domain_kind, `${label}.domain_kind`, ['protein_in_silico', 'ngs_molbio'] as const);
+        if (domain !== (id === 'family_msa_protein' ? 'protein_in_silico' : 'ngs_molbio') || row.project_setup_state !== 'ready' || row.project_native_owner_id !== `${id}:family_msa` || row.safe_setup_destination !== `/alignments?model=${id}&mode=family_msa` || row.launch_mode !== 'typed_launcher_handoff') throw new Error(`${label} has an invalid alignment setup contract.`);
+        requireString(row.project_setup_adapter_id, `${label}.project_setup_adapter_id`);
+        const taxonomy = exactRecord(row.product_taxonomy, `${label}.product_taxonomy`, ['family']);
+        if (taxonomy.family !== 'family_alignment') throw new Error(`${label} has an invalid taxonomy.`);
+        return { capability_id: id, label: requireString(row.label, `${label}.label`), domain_kind: domain };
+    });
+}
+
+export async function listFamilyAlignmentCapabilities(signal?: AbortSignal): Promise<FamilyAlignmentSetupCapability[]> {
+    const response = await api.get<unknown>('/api/family-msa-project-capabilities', { signal });
+    return parseFamilyAlignmentCapabilities(response.data);
 }
 
 export async function createProjectWorkflowSetup(projectId: string, request: ProjectWorkflowSetupCreate): Promise<ProjectWorkflowSetupNavigation> {
