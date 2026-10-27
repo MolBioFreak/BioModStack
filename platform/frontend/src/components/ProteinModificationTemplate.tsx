@@ -274,7 +274,10 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const requestMaxLength = lengthMode === 'exact' ? exactLength : maxLength;
     const [seed, setSeed] = useState(initialNumber(initialValues, 'seed', 0));
     const [dumpTrajectories, setDumpTrajectories] = useState(initialValues?.dump_trajectories === true);
-    const [targetLengths, setTargetLengths] = useState(initialString(initialValues, 'target_lengths', '100,200'));
+    const [alternativeLengthMode, setAlternativeLengthMode] = useState<'exact' | 'list'>(initialValues.alternative_length_mode === 'exact' ? 'exact' : 'list');
+    const [targetLengthList, setTargetLengthList] = useState(initialString(initialValues, 'target_length_list', initialString(initialValues, 'target_lengths', '')));
+    const [targetLengthExact, setTargetLengthExact] = useState(initialString(initialValues, 'target_length_exact', ''));
+    const targetLengths = alternativeLengthMode === 'exact' ? targetLengthExact : targetLengthList;
     const [laproteinaPreset, setLaproteinaPreset] = useState(initialString(initialValues, 'laproteina_preset', designTask === 'motif_scaffolding' ? 'motif_idx_aa' : 'ucond_tri'));
     const [laproteinaSamples, setLaproteinaSamples] = useState(initialNumber(initialValues, 'laproteina_samples_per_length', 8));
     const [laproteinaSteps, setLaproteinaSteps] = useState(initialNumber(initialValues, 'laproteina_num_steps', 400));
@@ -289,7 +292,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [motifMaxLength, setMotifMaxLength] = useState(initialString(initialValues, 'laproteina_motif_max_length', ''));
     const [discoExperiment, setDiscoExperiment] = useState(initialString(initialValues, 'disco_experiment', 'designable'));
     const [discoEffort, setDiscoEffort] = useState(initialString(initialValues, 'disco_effort', 'fast'));
-    const [discoInferenceSeeds, setDiscoInferenceSeeds] = useState(initialNumber(initialValues, 'disco_num_inference_seeds', 8));
+    const [discoInferenceSeeds, setDiscoInferenceSeeds] = useState<number | '' | null>(initialValues.disco_num_inference_seeds === null ? null : initialNumber(initialValues, 'disco_num_inference_seeds', 8));
     const [discoSeeds, setDiscoSeeds] = useState(initialString(initialValues, 'disco_seeds', ''));
     const [discoAttention, setDiscoAttention] = useState(initialValues.disco_use_deepspeed_evo_attention === true);
     const [discoInputJson, setDiscoInputJson] = useState(initialString(initialValues, 'disco_input_json_path', ''));
@@ -353,6 +356,9 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         seed: seed,
         dump_trajectories: dumpTrajectories,
         target_lengths: targetLengths,
+        alternative_length_mode: alternativeLengthMode,
+        target_length_list: targetLengthList,
+        target_length_exact: targetLengthExact,
         laproteina_preset: laproteinaPreset,
         laproteina_samples_per_length: laproteinaSamples,
         laproteina_num_steps: laproteinaSteps,
@@ -560,9 +566,16 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 <input className={fieldClass} type="number" min={1} value={numDesigns} onChange={event => setNumDesigns(editedNumber(event.target.value))} />
             </label>
         </> : <>
-            <label className={labelClass}>Target lengths
-                <input className={fieldClass} value={targetLengths} onChange={event => setTargetLengths(event.target.value)} placeholder="100,150,200" />
+            <label className={labelClass}>Length selection
+                <select className={fieldClass} value={alternativeLengthMode} onChange={event => setAlternativeLengthMode(event.target.value as 'exact' | 'list')}><option value="list">Discrete lengths</option><option value="exact">Exact length</option></select>
             </label>
+            {alternativeLengthMode === 'exact' ? <label className={labelClass}>Exact target length
+                <input className={fieldClass} type="number" value={targetLengthExact} onChange={event => setTargetLengthExact(event.target.value)} />
+                <span>Required; enter one length.</span>
+            </label> : <label className={labelClass}>Target lengths
+                <input className={fieldClass} value={targetLengthList} onChange={event => setTargetLengthList(event.target.value)} placeholder="Comma-separated lengths" />
+                <span>Required; enter a discrete comma-separated list, not a range.</span>
+            </label>}
             <label className={labelClass}>Requested design count
                 <input className={fieldClass} type="number" min={1} max={512} value={numDesigns} onChange={event => setNumDesigns(editedNumber(event.target.value))} />
             </label>
@@ -676,6 +689,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                             </label>
                             <label className={labelClass}>Inference seed count
                                 <input className={fieldClass} type="number" min={1} max={1024} value={String(effectiveOverride('num_inference_seeds', discoInferenceSeeds) ?? '')} onChange={event => { const value = editedNumber(event.target.value); setEffectiveOverride('num_inference_seeds', value, () => setDiscoInferenceSeeds(value)); }} />
+                                {effectiveOverride('num_inference_seeds', discoInferenceSeeds) === null && <span>None (native seeds list; legacy launch may resolve a count)</span>}
                                 {overrideNote('num_inference_seeds')}
                             </label>
                             <label className={labelClass}>Exact seeds

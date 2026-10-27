@@ -86,7 +86,7 @@ it('native input precedence and reorder do not reinterpret DNA or atom types', (
 it('DISCO parent retains explicit molecular jobs and sparse science across serialized cold reopen', async () => {
     const draft = vi.fn();
     const jobs = [{ name: 'native', sequences: [{ dnaSequence: { sequence: 'AGTC', count: 1 } }, { ligand: { ligand: 'CCD_ATP', count: 1 } }, { ion: { ion: 'MG', count: 2 } }], covalent_bonds: [] }];
-    const initial = { generator: 'disco', design_task: 'custom_json', pcad_disco_jobs_json: jobs, pcad_disco_settings_json: { seeds: 0, num_inference_seeds: null, deterministic: false, noisy_guidance: { omega_seq: 0 } }, disco_input_json_path: '/retained/native.json' };
+    const initial = { generator: 'disco', design_task: 'custom_json', target_lengths: '125', pcad_disco_jobs_json: jobs, pcad_disco_settings_json: { seeds: 0, num_inference_seeds: null, deterministic: false, noisy_guidance: { omega_seq: 0 } }, disco_input_json_path: '/retained/native.json' };
     await render(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} initialValues={initial} />);
     await edit('DISCO job 1 name', 'renamed');
     const saved = JSON.parse(JSON.stringify(draft.mock.calls.at(-1)![0]));

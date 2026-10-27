@@ -93,6 +93,58 @@ it('preserves explicit cleared numeric drafts across engine switching and JSON r
     expect(control('Minimum length').value).toBe(''); expect(control('Seed').value).toBe('');
 });
 
+it('retains DISCO nullable primary seed count through switching, submit, and cold reopen', async () => {
+    const draft = vi.fn();
+    await render({ initialValues: { generator: 'disco', target_lengths: '120', disco_num_inference_seeds: null }, onDraftChange: draft });
+    await click('Sampling');
+    expect(document.body.textContent).toContain('None (native seeds list; legacy launch may resolve a count)');
+    expect(latest(draft).disco_num_inference_seeds).toBeNull();
+    expect(latest(draft).native_job_request.params.disco_num_inference_seeds).toBeNull();
+    await edit('Engine', 'rfd3'); await edit('Engine', 'disco');
+    expect(latest(draft).disco_num_inference_seeds).toBeNull();
+    await click('Generate candidates');
+    expect(latest(mocks.submit).params.disco_num_inference_seeds).toBeNull();
+    const saved = JSON.parse(JSON.stringify(latest(draft)));
+    await act(async () => root.unmount()); document.body.replaceChildren();
+    await render({ initialValues: saved, onDraftChange: draft });
+    expect(latest(draft).disco_num_inference_seeds).toBeNull();
+});
+
+it.each(['disco', 'laproteina'])('retains %s discrete and exact drafts through switches, submission and reopen', async generator => {
+    const draft = vi.fn();
+    await render({ initialValues: { generator }, onDraftChange: draft });
+    expect(control('Target lengths').value).toBe('');
+    expect(latest(draft).native_job_request).toBeNull();
+    await click('Generate candidates'); expect(mocks.submit).not.toHaveBeenCalled();
+    await edit('Target lengths', '87, 123,87');
+    await edit('Length selection', 'exact');
+    expect(control('Exact target length').value).toBe('');
+    await edit('Exact target length', '173');
+    expect(latest(draft).native_job_request.params.target_lengths).toBe('173');
+    await edit('Engine', 'rfd3'); await edit('Engine', generator);
+    expect(control('Exact target length').value).toBe('173');
+    await click('Generate candidates');
+    expect(latest(mocks.submit).params.target_lengths).toBe('173');
+    expect(latest(mocks.submit).params).not.toHaveProperty('target_length_list');
+    const saved = JSON.parse(JSON.stringify(latest(draft)));
+    await act(async () => root.unmount()); document.body.replaceChildren();
+    await render({ initialValues: saved, onDraftChange: draft });
+    expect(control('Exact target length').value).toBe('173');
+    await edit('Length selection', 'list');
+    expect(control('Target lengths').value).toBe('87, 123,87');
+    expect(latest(draft).native_job_request.params.target_lengths).toBe('87, 123,87');
+    await edit('Length selection', 'exact'); expect(control('Exact target length').value).toBe('173');
+});
+
+it.each(['disco', 'laproteina'])('reopens historical %s lists without normalizing them', async generator => {
+    const draft = vi.fn();
+    await render({ initialValues: { generator, target_lengths: ' 99,101, 99 ' }, onDraftChange: draft });
+    expect(control('Target lengths').value).toBe(' 99,101, 99 ');
+    await edit('Length selection', 'exact'); await edit('Exact target length', '222');
+    await edit('Length selection', 'list');
+    expect(latest(draft).native_job_request.params.target_lengths).toBe(' 99,101, 99 ');
+});
+
 it('renders one RFD3 editor and one run area after scientific inputs when selected', async () => {
     await render({ initialValues: { generator: 'rfd3' }, runDetails: <div data-policy>Execution details</div> });
     expect(control('Engine').value).toBe('rfd3');
@@ -115,6 +167,7 @@ it('exposes real conditional engines, retains independent goal drafts, and submi
     await edit('Goal', 'dna_conditioned');
     expect(control('Engine').value).toBe('rfd3');
     await edit('Engine', 'disco'); await edit('Goal', 'dna_conditioned');
+    await edit('Target lengths', '120');
     await edit('DNA/RNA sequence', 'ACGT');
     await edit('Inference seed count', '3');
     await edit('Goal', 'rna_conditioned');
@@ -143,7 +196,7 @@ it('exposes real conditional engines, retains independent goal drafts, and submi
 
 it('edits active DISCO native overrides at the primary controls without losing inactive values', async () => {
     const draft = vi.fn();
-    await render({ initialValues: { generator: 'disco', disco_effort: 'fast', disco_num_inference_seeds: 8, pcad_disco_settings_json: { effort: 'max', num_inference_seeds: 3, deterministic: false } }, onDraftChange: draft });
+    await render({ initialValues: { generator: 'disco', target_lengths: '120', disco_effort: 'fast', disco_num_inference_seeds: 8, pcad_disco_settings_json: { effort: 'max', num_inference_seeds: 3, deterministic: false } }, onDraftChange: draft });
     await click('Sampling');
     expect(control('Inference effort').value).toBe('max');
     expect(control('Inference seed count').value).toBe('3');
@@ -161,7 +214,7 @@ it('edits active DISCO native overrides at the primary controls without losing i
 
 it('edits active La-Proteina native sampling steps without overwriting its retained primary value', async () => {
     const draft = vi.fn();
-    await render({ initialValues: { generator: 'laproteina', laproteina_num_steps: 400, pcad_laproteina_settings_json: { num_steps: 600, self_cond: false } }, onDraftChange: draft });
+    await render({ initialValues: { generator: 'laproteina', target_lengths: '120', laproteina_num_steps: 400, pcad_laproteina_settings_json: { num_steps: 600, self_cond: false } }, onDraftChange: draft });
     await click('Sampling'); expect(control('Sampling steps').value).toBe('600');
     await edit('Sampling steps', '650');
     await click('Generate candidates');
@@ -269,7 +322,7 @@ it('retains the real source/residue workbench through sections, engine switches 
     };
     try {
         const draft = vi.fn();
-        await render({ initialValues: { generator: 'laproteina', design_task: 'motif_scaffolding', laproteina_contig_string: '5/A1/2/A3/5', laproteina_segment_order: 'A', laproteina_checkpoint_dir: '/retained/custom' }, onDraftChange: draft });
+        await render({ initialValues: { generator: 'laproteina', target_lengths: '120', design_task: 'motif_scaffolding', laproteina_contig_string: '5/A1/2/A3/5', laproteina_segment_order: 'A', laproteina_checkpoint_dir: '/retained/custom' }, onDraftChange: draft });
         await click('Presets');
         await wait(() => [...document.querySelectorAll('button')].some(e => e.textContent === 'Local structure'));
         await click('Local structure');
@@ -308,7 +361,7 @@ it('shares job intent only with untouched engine drafts and preserves explicit n
     saved.disco_checkpoint_path = '/retained/checkpoint.pt';
     saved.disco_use_deepspeed_evo_attention = false;
     await act(async () => root.unmount()); document.body.replaceChildren();
-    await render({ initialValues: saved }); await edit('Job name', 'Native replay'); await click('Generate candidates');
+    await render({ initialValues: saved }); await edit('Job name', 'Native replay'); await edit('Target lengths', '120'); await click('Generate candidates');
     expect(latest(mocks.submit).params).toMatchObject({ disco_checkpoint_path: '/retained/checkpoint.pt', disco_use_deepspeed_evo_attention: false });
 });
 

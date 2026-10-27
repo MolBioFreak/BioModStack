@@ -217,14 +217,14 @@ it.each([
 });
 
 it.each(['rfd3', 'disco', 'laproteina'])('legacy %s clone retains an omitted optional-operation envelope', async generator => {
-    await mount('/submit', { model_id: 'protein_modification_experimental', mode: 'de_novo_design', name: 'Legacy omission', params: { generator, min_length: 73, max_length: 99 } });
+    await mount('/submit', { model_id: 'protein_modification_experimental', mode: 'de_novo_design', name: 'Legacy omission', params: { generator, min_length: 73, max_length: 99, ...(generator === 'rfd3' ? {} : { target_lengths: '125' }) } });
     await click('Generate candidates');
     expect(mocks.submit).toHaveBeenCalledTimes(1);
     expect(Object.hasOwn(mocks.submit.mock.calls[0][0] as object, 'sequence_design')).toBe(false);
 });
 
 it.each(['rfd3', 'disco', 'laproteina'])('legacy %s clone retains a null optional-operation envelope', async generator => {
-    await mount('/submit', { model_id: 'protein_modification_experimental', mode: 'de_novo_design', name: 'Legacy null', sequence_design: null, params: { generator, min_length: 73, max_length: 99 } });
+    await mount('/submit', { model_id: 'protein_modification_experimental', mode: 'de_novo_design', name: 'Legacy null', sequence_design: null, params: { generator, min_length: 73, max_length: 99, ...(generator === 'rfd3' ? {} : { target_lengths: '125' }) } });
     await click('Generate candidates');
     expect(mocks.submit).toHaveBeenCalledTimes(1);
     expect((mocks.submit.mock.calls[0][0] as any).sequence_design).toBeNull();

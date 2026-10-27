@@ -85,11 +85,8 @@ async function coldLoad(saved: any) {
     await unmount(); sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY,'ambient-remote');
     const route = saved.params.native_job_request ? `/submit?model=${saved.params.native_job_request.model_id}&mode=${saved.mode}` : undefined;
     await mount(route); await click('Template Manager'); await click('← Back to list');
-    if (!saved.params.native_job_request) {
-        const allWorkflows = [...document.querySelectorAll('label')].find(node => node.textContent?.includes('All workflows'))?.querySelector<HTMLInputElement>('input[type="checkbox"]');
-        expect(allWorkflows).toBeTruthy();
-        await act(async () => allWorkflows!.click());
-    }
+    const allWorkflows = [...document.querySelectorAll('label')].find(node => node.textContent?.includes('All workflows'))?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    if (allWorkflows && !allWorkflows.checked) await act(async () => allWorkflows.click());
     await vi.waitFor(async () => { await settle(); expect(document.body.textContent).toContain(saved.name); });
     const row = [...document.querySelectorAll('button')].find(e => e.textContent === 'Load' && e.parentElement?.parentElement?.textContent?.includes(saved.name));
     expect(row).toBeTruthy(); await act(async () => row!.click()); await settle();
@@ -199,19 +196,64 @@ suite('all five populated engine drafts survive real SQLite template Save and co
     expect(saved.params.native_job_request.params.rfd4_request).toEqual(nativeRequest);
     expect(saved.params.editor_state.opaque_import).toEqual(opaque);
     expect(saved.params.native_job_request.params).not.toHaveProperty('opaque_import');
+    const closeManager = async () => {
+        const close = document.querySelector<HTMLButtonElement>('button[aria-label="Close"]');
+        expect(close).toBeTruthy();
+        await act(async () => close!.click()); await settle();
+    };
+    await closeManager();
+    const engines = ['rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa'];
+    const before: Record<string, any> = { rfd4_proteina: saved.params.native_job_request };
+    const assertNoEditorMetadata = (request: any) => {
+        for (const key of ['editor_state', 'opaque_import', 'native_task_drafts', 'native_source_drafts', 'native_control_drafts', 'suite_last_generation']) {
+            expect(request).not.toHaveProperty(key);
+            expect(request.params).not.toHaveProperty(key);
+        }
+    };
+    for (const name of engines.slice(1)) {
+        await engine(name);
+        const snapshot = await saveTemplate(`Before cold ${name}`);
+        before[name] = snapshot.params.native_job_request;
+        expect(before[name].params.generator ?? before[name].model_id).toBe(name);
+        assertNoEditorMetadata(before[name]);
+        await closeManager();
+    }
+    assertNoEditorMetadata(before.rfd4_proteina);
     await coldLoad(saved);
-    await engine('rfd3'); expect(named('Minimum length').value).toBe('111');
-    await engine('disco'); expect(named('Target lengths').value).toBe('144');
-    await engine('laproteina'); expect(named('Target lengths').value).toBe('155');
-    await engine('complexa');
-    await vi.waitFor(async () => { await settle(); expect(document.querySelector<HTMLSelectElement>('[aria-label="Complexa task"]')?.value).toBe('AME'); });
-    await engine('rfd4_proteina');
-    const again = await saveTemplate('Five-engine second save');
-    expect(again.params.native_job_request.params.rfd4_request).toEqual(nativeRequest);
-    expect(again.params.editor_state.opaque_import).toEqual(opaque);
-    expect(again.params.native_job_request.params).not.toHaveProperty('opaque_import');
+    for (const name of engines) {
+        await engine(name);
+        if (name === 'rfd3') expect(named('Minimum length').value).toBe('111');
+        if (name === 'disco') expect(named('Target lengths').value).toBe('144');
+        if (name === 'laproteina') expect(named('Target lengths').value).toBe('155');
+        if (name === 'complexa') await vi.waitFor(async () => { await settle(); expect(document.querySelector<HTMLSelectElement>('[aria-label="Complexa task"]')?.value).toBe('AME'); });
+        const reopened = await saveTemplate(`After cold ${name}`);
+        if (name === 'rfd4_proteina') expect(reopened.params.editor_state.opaque_import).toEqual(opaque);
+        expect(reopened.params.native_job_request).toEqual(before[name]);
+        assertNoEditorMetadata(reopened.params.native_job_request);
+        await closeManager();
+    }
     expect(requests.some(r => r.path === '/api/jobs')).toBe(false);
 }, 30000);
+suite.each(['disco', 'laproteina'])('%s exact and discrete lengths survive SQLite cold Template Load', async name => {
+    await mount();
+    const named = (label: string) => [...document.querySelectorAll('label')].find(node => !node.closest('[hidden]') && node.firstChild?.textContent === label)?.querySelector('input,select') as HTMLInputElement | HTMLSelectElement;
+    await edit(named('Engine'), name); await settle();
+    expect(named('Target lengths').value).toBe('');
+    await edit(named('Target lengths'), '87, 123,87');
+    await edit(named('Length selection'), 'exact');
+    await edit(named('Exact target length'), '173');
+    const saved = await saveTemplate(`Exact and discrete ${name}`);
+    expect(saved.params.native_job_request.params.target_lengths).toBe('173');
+    expect(saved.params.editor_state.target_length_list).toBe('87, 123,87');
+    await coldLoad(saved);
+    expect(named('Exact target length').value).toBe('173');
+    await edit(named('Length selection'), 'list');
+    expect(named('Target lengths').value).toBe('87, 123,87');
+    const reopened = await saveTemplate(`Discrete ${name} reopened`);
+    expect(reopened.params.native_job_request.params.target_lengths).toBe('87, 123,87');
+    expect(reopened.params.editor_state.target_length_exact).toBe('173');
+}, 30000);
+
 suite('last generation selection survives redesign and a real SQLite cold Template Load', async () => {
     await mount();
     const named = (name: string) => [...document.querySelectorAll('label')].find(node => !node.closest('[hidden]') && node.firstChild?.textContent === name)?.querySelector('input,select') as HTMLInputElement | HTMLSelectElement;
