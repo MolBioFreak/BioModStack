@@ -64,7 +64,7 @@ class Job(BaseModel):
 class ImportReceipt(BaseModel):
     receipt_id: str
     replayed: bool
-    shared_state: Literal['retained_unmapped', 'imported', 'none']
+    shared_state: Literal['retained_unmapped', 'imported', 'imported_with_unresolved', 'none']
     shared_states: list[dict[str, Any]] = Field(default_factory=list)
 
 

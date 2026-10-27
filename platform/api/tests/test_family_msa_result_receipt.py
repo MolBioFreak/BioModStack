@@ -206,6 +206,7 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     imported = await asyncio.to_thread(sdk.import_project_bundle, project_id, destination, replay_key='native-roundtrip', domain_experiment_id=domain_id)
     replay = await asyncio.to_thread(sdk.import_project_bundle_streaming, project_id, destination, replay_key='native-roundtrip', domain_experiment_id=domain_id)
     assert replay.replayed and replay.shared_states == imported.shared_states
+    assert imported.shared_state == replay.shared_state == 'imported_with_unresolved'
     streamed = await asyncio.to_thread(sdk.import_project_bundle_streaming, project_id, destination, replay_key='streamed-roundtrip', domain_experiment_id=domain_id)
     assert streamed.shared_states[0]['status'] == 'imported'
     streamed_state = await client.get(f"/api/family-msa/projects/{project_id}/shared-state/{streamed.shared_states[0]['dataset_id']}", headers={'x-test-actor':'owner'})

@@ -575,7 +575,12 @@ async def _import_directory(project_id, replay_key, manifest, root, session, dom
             else:
                 report['reason'] = 'domain_experiment_id not supplied'
         reports.append(report)
-    state_status = ('retained_unmapped' if any(e['role'] == 'shared_state_snapshot' for e in raw_entries) else 'none') if not reports else ('imported' if all(r['status'] == 'imported' for r in reports) else 'retained_unmapped')
+    if not reports:
+        state_status = 'retained_unmapped' if any(e['role'] == 'shared_state_snapshot' for e in raw_entries) else 'none'
+    elif not all(r['status'] == 'imported' for r in reports):
+        state_status = 'retained_unmapped'
+    else:
+        state_status = 'imported_with_unresolved' if any(r['unresolved'] for r in reports) else 'imported'
     ack = {'schema': 'bms.family-msa.import.v1', 'artifacts': entries,
            'source_project_id': inventory.get('project_id'), 'source_receipt_id': inventory.get('receipt_id'),
            'dependencies': inspection['dependencies'], 'shared_state': state_status, 'shared_states': reports, 'artifact_id_map': artifact_ids}
