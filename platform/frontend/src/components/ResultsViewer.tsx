@@ -2153,6 +2153,9 @@ function ResultsViewerContent() {
         }>();
 
         sortedJobs.forEach((job) => {
+            // NGS and alignment outputs are routed to their own result surfaces;
+            // do not collapse their jobs into protein design lineage groups.
+            if (jobCategory(job) !== 'other') return;
             if (job.parent_job_id) {
                 childJobIds.add(job.id);
             }
@@ -2214,6 +2217,8 @@ function ResultsViewerContent() {
             const batchData = job.batch_id ? batchMap.get(job.batch_id) : null;
             const hasChildren = Boolean(batchData && batchData.children.length > 0);
             const displayDesigns = (() => {
+                if (jobCategory(job) === 'alignments') return 'Family alignment';
+                if (jobCategory(job) === 'ngs') return 'NGS results';
                 if (isRFD3GenerationResultJob(job)) return 'RFD3 generation';
                 const rfd3CandidateLabel = getRFD3LocalRedesignCandidateLabel(job);
                 if (rfd3CandidateLabel) return `Requested: ${rfd3CandidateLabel}`;
