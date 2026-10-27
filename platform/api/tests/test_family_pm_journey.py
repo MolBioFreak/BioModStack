@@ -36,6 +36,10 @@ async def test_journey(setup_store,native_core_store,model,domain,molecule,seq):
         job_id=r.json()['id']
         r=await c.post('/api/launch-contexts/'+context_id+'/bind',json={'job_id':job_id}); assert r.status_code==200, r.text
         assert r.json()['return_uri'].startswith('/projects/')
+        # Simulate a lost bind response: repeat against the actual PM authority.
+        r=await c.post('/api/launch-contexts/'+context_id+'/bind',json={'job_id':job_id}); assert r.status_code==200, r.text
+        r=await c.get('/api/launch-contexts/'+context_id); assert r.status_code==200, r.text
+        assert r.json()['canonical_job_id']==job_id
         async with native_core_store() as core:
             row=await core.get(Job,job_id); assert row and row.model_id==model and row.mode=='family_msa'
         async with setup_store() as store:

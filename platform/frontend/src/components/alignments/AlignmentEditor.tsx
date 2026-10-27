@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, submitJob } from '../../lib/api';
 import { getLaunchContext } from '../../lib/projectManager';
 import type { JsonObject } from '../../lib/projectManager';
@@ -38,10 +38,25 @@ function MappingInput({value, onChange}: {value: Record<string,string>; onChange
 export default function AlignmentEditor({ model }: { model: string }) {
     const setup = useProjectWorkflowSetup();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const urlContext = searchParams.get('launch_context_id');
+    const urlJob = searchParams.get('alignment_job_id');
     const [molecule,setMolecule] = useState<Molecule>(model === 'family_msa_nucleic' ? 'dna' : 'protein');
     const [engine,setEngine] = useState<Engine>('mafft');
     const [drafts,setDrafts] = useState<Record<Engine,Settings>>(() => structuredClone(defaults));
-    const [fasta,setFasta] = useState(''); const [busy,setBusy] = useState(false); const [error,setError] = useState(''); const [job,setJob] = useState('');
+    const [fasta,setFasta] = useState(''); const [busy,setBusy] = useState(false); const [error,setError] = useState(''); const [job,setJob] = useState(urlJob ?? '');
+    const [contextId,setContextId] = useState(urlContext ?? '');
+    const [returnUri,setReturnUri] = useState('');
+    useEffect(() => {
+        if (!urlContext) return;
+        let cancelled = false;
+        setContextId(urlContext);
+        if (urlJob) setJob(urlJob);
+        void getLaunchContext(urlContext).then(context => {
+            if (!cancelled && (context.canonical_job_id || context.recovery_job_id)) setJob((context.canonical_job_id || context.recovery_job_id)!);
+        }).catch(() => {});
+        return () => { cancelled = true; };
+    }, [urlContext, urlJob]);
     const hydrated = useRef('');
     useEffect(() => {
         if (!setup.setup) return;
@@ -60,8 +75,35 @@ export default function AlignmentEditor({ model }: { model: string }) {
         try { return {native_job_request:request(),editor_state} as unknown as JsonObject; }
         catch (error) { if (!allowIncomplete) throw error; return {editor_state} as unknown as JsonObject; }
     };
+    const bind = async (context: string, id: string) => {
+        const binding = await api.post<{return_uri:string}>(`/api/launch-contexts/${encodeURIComponent(context)}/bind`, {job_id:id});
+        const uri = binding.data.return_uri;
+        if (typeof uri === 'string' && uri.startsWith('/') && !uri.startsWith('//')) setReturnUri(uri);
+    };
+    const remember = (context: string, id: string) => {
+        setContextId(context); setJob(id);
+        const next = new URLSearchParams(searchParams);
+        next.set('launch_context_id', context); if (id) next.set('alignment_job_id', id); else next.delete('alignment_job_id');
+        navigate({search:`?${next.toString()}`}, {replace:true});
+    };
+    const retryBinding = async () => {
+        setBusy(true); setError('');
+        try { await bind(contextId, job); }
+        catch (e) { setError(`Project binding could not be confirmed: ${e instanceof Error ? e.message : String(e)}`); }
+        finally { setBusy(false); }
+    };
+    const recover = async () => {
+        setBusy(true); setError('');
+        try {
+            const context = await getLaunchContext(contextId);
+            const id = context.canonical_job_id || context.recovery_job_id;
+            if (id) remember(contextId, id);
+            else setError('No Job ID is currently recorded for this launch context. Check again before starting another run.');
+        } catch (e) { setError(`Recovery lookup failed: ${e instanceof Error ? e.message : String(e)}`); }
+        finally { setBusy(false); }
+    };
     const run = async (action:'save'|'launch') => {
-        setBusy(true); setError(''); setJob('');
+        setBusy(true); setError('');
         try {
             if (setup.active) {
                 if (action === 'save') await setup.saveDraft(draft(true));
@@ -69,20 +111,24 @@ export default function AlignmentEditor({ model }: { model: string }) {
                     const prepared = await setup.startRun(draft(), {stayInEditor:true});
                     const contextId = prepared.launch_context_id;
                     if (!contextId) throw new Error('The Project workflow did not return a launch context.');
+                    remember(contextId, '');
                     const context = await getLaunchContext(contextId);
                     const scheduler = context.pinned_scheduler;
                     if (!scheduler) throw new Error('The Project workflow did not return a pinned scheduler.');
                     const response = await submitJob({...scheduler, launch_context_id:contextId}, {launchContext:true});
                     const id = response.data?.id;
                     if (typeof id !== 'string') throw new Error('Job API returned no Job ID');
-                    const binding = await api.post<{return_uri:string}>(`/api/launch-contexts/${encodeURIComponent(contextId)}/bind`, {job_id:id});
-                    const uri = binding.data.return_uri;
-                    if (typeof uri === 'string' && uri.startsWith('/') && !uri.startsWith('//')) navigate(uri);
-                    else setJob(id);
+                    remember(contextId, id);
+                    await bind(contextId, id);
                 }
             }
-            else if (action === 'launch') { const response = await submitJob(request()); const id = response.data?.id; if (typeof id !== 'string') throw new Error('Job API returned no Job ID'); setJob(id); }
-        } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+            else if (action === 'launch') {
+                const response = await submitJob({...request(), ...(urlContext ? {launch_context_id:urlContext} : {})}); const id = response.data?.id;
+                if (typeof id !== 'string') throw new Error('Job API returned no Job ID');
+                if (urlContext) { remember(urlContext, id); await bind(urlContext, id); }
+                else setJob(id);
+            }
+        } catch (e) { setError(`Launch or Project handoff not confirmed: ${e instanceof Error ? e.message : String(e)}. Check the Job and launch context before starting another run.`); } finally { setBusy(false); }
     };
     return <section aria-label="New family alignment" className="space-y-4 rounded border border-slate-600 p-4">
         <h2 className="text-lg font-semibold">New family alignment</h2>
@@ -98,7 +144,9 @@ export default function AlignmentEditor({ model }: { model: string }) {
             {setup.active && <button type="button" onClick={()=>void run('save')} className={inputClass}>Save Project draft</button>}{' '}
             <button type="button" onClick={()=>void run('launch')} className={inputClass}>Start run</button>
         </fieldset>
-        {error && <p role="alert">{error}</p>}{job && <p role="status">Job submitted: <Link to={`/alignments/jobs/${encodeURIComponent(job)}`}>{job}</Link></p>}
+        {error && <p role="alert">{error}</p>}{contextId && !job && <div><p>Launch context: {contextId}</p><button type="button" disabled={busy} onClick={()=>void recover()} className={inputClass}>Recover Project Job</button></div>}{job && <div role="status"><p>Job submitted: <Link to={`/alignments/jobs/${encodeURIComponent(job)}`}>{job}</Link></p>
+            {contextId && <><p>Launch context: {contextId}</p><button type="button" disabled={busy} onClick={()=>void retryBinding()} className={inputClass}>Retry Project binding</button>{returnUri && <> <Link to={returnUri}>Return to Project</Link></>}</>}
+        </div>}
         <p className="text-sm">Scientific scope: MAFFT and MUSCLE support protein, DNA and RNA; FAMSA supports protein; TWILIGHT supports DNA and RNA. Direct API requests may specify other combinations; these descriptors do not validate them.</p>
         <p className="text-sm">Execution availability depends on the installed Job dispatcher and native engines. No alternative engine is selected automatically.</p>
     </section>;

@@ -3,8 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import AlignmentEditor from '../../src/components/alignments/AlignmentEditor';
-const mocked = vi.hoisted(() => ({save:vi.fn(), start:vi.fn(), context:vi.fn(), submit:vi.fn(), post:vi.fn(), setup:{project_id:'p',setup_context_id:'s',draft:{molecule:'protein',engine:'muscle',fasta:'>one\nAA\n>two\nBB',drafts:{muscle:{engine:'muscle',threads:3,mode:'super5',permutation:'none',perturb:0,ensemble:'none',replicates:null}}}}}));
-vi.mock('../../src/components/project-manager/ProjectWorkflowSetup',()=>({useProjectWorkflowSetup:()=>({active:true,setup:mocked.setup,saveDraft:mocked.save,startRun:mocked.start})}));
+const mocked = vi.hoisted(() => ({save:vi.fn(), start:vi.fn(), context:vi.fn(), submit:vi.fn(), post:vi.fn(), active:true, setup:{project_id:'p',setup_context_id:'s',draft:{molecule:'protein',engine:'muscle',fasta:'>one\nAA\n>two\nBB',drafts:{muscle:{engine:'muscle',threads:3,mode:'super5',permutation:'none',perturb:0,ensemble:'none',replicates:null}}}}}));
+vi.mock('../../src/components/project-manager/ProjectWorkflowSetup',()=>({useProjectWorkflowSetup:()=>({active:mocked.active,setup:mocked.setup,saveDraft:mocked.save,startRun:mocked.start})}));
 vi.mock('../../src/lib/api',()=>({submitJob:mocked.submit,api:{post:mocked.post}}));
 vi.mock('../../src/lib/projectManager',()=>({getLaunchContext:mocked.context}));
 describe('Project alignment editor',()=>{
@@ -24,6 +24,55 @@ describe('Project alignment editor',()=>{
   expect(mocked.start).toHaveBeenCalledWith(mocked.save.mock.calls[0][0],{stayInEditor:true});
   expect(mocked.submit).toHaveBeenCalledWith({...pinned,launch_context_id:'ctx'},{launchContext:true});
   expect(mocked.post).toHaveBeenCalledWith('/api/launch-contexts/ctx/bind',{job_id:'job'});
+  await act(async()=>root.unmount());
+ });
+});
+describe('alignment handoff recovery', () => {
+ it('retains IDs after a lost binding response, retries and reopens without resubmitting', async () => {
+  vi.clearAllMocks(); mocked.active=true;
+  mocked.start.mockResolvedValue({launch_context_id:'ctx'});
+  mocked.context.mockResolvedValue({pinned_scheduler:{name:'Pinned',model_id:'family_msa_protein',mode:'family_msa',params:{}}});
+  mocked.submit.mockResolvedValue({data:{id:'job'}});
+  mocked.post.mockRejectedValueOnce(new Error('response lost')).mockResolvedValue({data:{return_uri:'/projects/p'}});
+  const div=document.createElement('div'), root=createRoot(div);
+  await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
+  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Start run')!.click()});
+  expect(div.textContent).toContain('Job submitted: job'); expect(div.textContent).toContain('Launch context: ctx');
+  expect(div.textContent).toContain('response lost');
+  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Retry Project binding')!.click()});
+  expect(mocked.submit).toHaveBeenCalledTimes(1); expect(mocked.post).toHaveBeenCalledTimes(2);
+  expect(div.textContent).toContain('Return to Project');
+  await act(async()=>root.unmount());
+  mocked.context.mockResolvedValue({canonical_job_id:'job'});
+  const root2=createRoot(div);
+  await act(async()=>root2.render(<MemoryRouter initialEntries={['/?launch_context_id=ctx']}><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
+  expect(div.textContent).toContain('Job submitted: job');
+  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Retry Project binding')!.click()});
+  expect(mocked.submit).toHaveBeenCalledTimes(1);
+  await act(async()=>root2.unmount());
+ });
+ it('shows the submitted IDs while binding is still pending', async () => {
+  vi.clearAllMocks(); mocked.active=true; mocked.start.mockResolvedValue({launch_context_id:'ctx'});
+  mocked.context.mockResolvedValue({pinned_scheduler:{name:'Pinned',model_id:'family_msa_protein',mode:'family_msa',params:{}}});
+  mocked.submit.mockResolvedValue({data:{id:'job'}});
+  let finish!: (value: unknown) => void;
+  mocked.post.mockReturnValue(new Promise(resolve=>{finish=resolve}));
+  const div=document.createElement('div'), root=createRoot(div);
+  await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
+  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Start run')!.click(); await Promise.resolve();});
+  expect(div.textContent).toContain('Job submitted: job'); expect(div.textContent).toContain('Launch context: ctx');
+  await act(async()=>finish({data:{return_uri:'/projects/p'}}));
+  await act(async()=>root.unmount());
+ });
+ it('binds a direct launch context without a setup', async () => {
+  vi.clearAllMocks(); mocked.active=false; mocked.context.mockResolvedValue({});
+  mocked.submit.mockResolvedValue({data:{id:'direct-job'}}); mocked.post.mockResolvedValue({data:{return_uri:'/projects/p'}});
+  const div=document.createElement('div'), root=createRoot(div);
+  await act(async()=>root.render(<MemoryRouter initialEntries={['/?launch_context_id=direct']}><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
+  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Start run')!.click()});
+  expect(mocked.submit).toHaveBeenCalledWith(expect.objectContaining({launch_context_id:'direct'}));
+  expect(mocked.post).toHaveBeenCalledWith('/api/launch-contexts/direct/bind',{job_id:'direct-job'});
+  expect(div.textContent).toContain('Launch context: direct');
   await act(async()=>root.unmount());
  });
 });
