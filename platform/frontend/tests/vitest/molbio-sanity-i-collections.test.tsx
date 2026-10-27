@@ -8,7 +8,10 @@ const mock = vi.hoisted(() => ({
     commit: vi.fn(), createSequence: vi.fn(), preview: vi.fn(), domain: 'domain-1', state: 'state-1', summaries: vi.fn(), reference: vi.fn(), sample: vi.fn(), stateDetail: vi.fn(),
     fullReferences: vi.fn(), fullHistory: vi.fn(), fullSamples: vi.fn(), control: vi.fn(),
 }));
-vi.mock('../../src/lib/api', () => ({
+vi.mock('../../src/lib/api', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/lib/api')>();
+    return {
+    prepareExecutionPlacement: actual.prepareExecutionPlacement,
     fetchMolBioNgsSummaries: mock.summaries,
     fetchExecutionTargets: vi.fn().mockResolvedValue({ data: [] }),
     fetchMolBioNgsReferenceRevision: mock.reference,
@@ -31,7 +34,8 @@ vi.mock('../../src/lib/api', () => ({
     fetchFiles: vi.fn(), importMolBioNgsBrowserReference: mock.control,
     issueMolBioNgsReceipt: mock.control, previewMolBioSequenceImport: mock.preview,
     submitOntNgsJob: mock.control, submitPooledReferenceAssignment: mock.control,
-}));
+    };
+});
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
     useGlobalExperimentContext: () => ({ workspaceId: 'workspace-1', globalExperimentId: 'global-1',
         selectedDomainExperiment: { domain_experiment_id: mock.domain }, stateRevisionId: mock.state,

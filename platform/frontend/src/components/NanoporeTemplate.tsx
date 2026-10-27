@@ -47,6 +47,7 @@ import { useGlobalExperimentContext } from './experiments/GlobalExperimentContex
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { NanoporeWorkflowChooser, type WorkflowKey } from './ngs/NanoporeWorkflowChooser';
 import { buildNanoporeOperatorStageParams } from '../lib/nanoporeLaunchPayload';
+import { normalizeNanoporeWorkflowChoice } from '../lib/nanoporeWorkflow';
 
 const TASK_FLOW_PANEL = 'rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_75%,#000)] p-5 shadow-[0_18px_45px_rgba(0,0,0,0.32)]';
 const TASK_FLOW_CARD = 'rounded-xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-tertiary)_70%,#000)] p-4';
@@ -104,7 +105,7 @@ interface NanoporeTemplateProps {
 // Constants
 // ============================================================================
 const DORADO_MODELS: Record<DoradoModel, { label: string; description: string }> = {
-    sup: { label: 'Super Accurate (SUP)', description: 'Highest accuracy; best for methylation.' },
+    sup: { label: 'Super Accurate (SUP)', description: 'Highest basecalling accuracy; slower.' },
     hac: { label: 'High Accuracy (HAC)', description: 'Balanced speed/accuracy.' },
     fast: { label: 'Fast', description: 'Fastest; lower accuracy.' },
 };
@@ -806,6 +807,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     });
     const [selectedMolbioSequenceId, setSelectedMolbioSequenceId] = useState(molbioSequenceId);
     const [selectedMolbioRevisionId, setSelectedMolbioRevisionId] = useState(molbioRevisionId);
+    const [showOptionalReference, setShowOptionalReference] = useState(false);
     const molbioRevisionPairError = Boolean(selectedMolbioSequenceId) !== Boolean(selectedMolbioRevisionId)
         ? 'Exact molecular sequence and revision IDs must be supplied together.'
         : null;
@@ -822,16 +824,16 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [jobName, setJobName] = useState(initialValues?.jobName as string || '');
     const [inputSource, setInputSource] = useState<InputSource>(initialValues?.inputSource as InputSource || 'pod5');
     const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowKey>(() => {
-        if (typeof initialValues?.selectedWorkflow === 'string') return initialValues.selectedWorkflow as WorkflowKey;
+        if (typeof initialValues?.selectedWorkflow === 'string') return normalizeNanoporeWorkflowChoice(initialValues.selectedWorkflow as WorkflowKey);
         if (initialValues?.selectedWorkflow === 'constructScreening' || initialValues?.ontWorkflowId === 'ont_construct_screening') return 'constructScreening';
         if (initialValues?.selectedWorkflow === 'fastqQc' || initialValues?.ontWorkflowId === 'ont_fastq_qc') return 'fastqQc';
         if (initialValues?.runAssembly === true || initialValues?.ontWorkflowId === 'wf_clone_validation') return 'clone';
-        if (initialValues?.inputSource === 'bam') return 'bamQc';
+        if (initialValues?.ontWorkflowId === 'ont_basecall_dna') return 'dna';
+        if (initialValues?.ontWorkflowId === 'ont_methylation_analysis') return 'modified';
+        if (initialValues?.inputSource === 'bam') return 'plasmidQc';
         if (initialValues?.inputSource === 'fastq') return 'plasmidQc';
         if (initialValues?.doradoMolecule === 'rna') return 'rna';
-        if (initialValues?.modifiedBases && initialValues.modifiedBases !== 'none') return 'modified';
-        if (initialValues?.barcodeKit) return 'barcode';
-        if (initialValues?.doradoMode === 'duplex') return 'duplex';
+        if (initialValues?.runModkit === true) return 'modified';
         return 'dna';
     });
     const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
@@ -901,8 +903,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // State: Basecalling Config
     // ============================================================================
     const [doradoModel, setDoradoModel] = useState<DoradoModel>(initialValues?.doradoModel as DoradoModel || 'sup');
-    const [doradoMolecule, setDoradoMolecule] = useState<DoradoMolecule>(initialValues?.doradoMolecule as DoradoMolecule || 'dna');
-    const [doradoMode, setDoradoMode] = useState<DoradoMode>(initialValues?.doradoMode as DoradoMode || 'simplex');
+    const [doradoMolecule, setDoradoMolecule] = useState<DoradoMolecule>(initialValues?.doradoMolecule as DoradoMolecule || (selectedWorkflow === 'rna' ? 'rna' : 'dna'));
+    const [doradoMode, setDoradoMode] = useState<DoradoMode>(initialValues?.doradoMode as DoradoMode || (initialValues?.selectedWorkflow === 'duplex' ? 'duplex' : 'simplex'));
     // Absence is distinct from an explicit historical/operator declaration.
     const [wfCloneBasecallerModel, setWfCloneBasecallerModel] = useState<string | undefined>(
         initialValues?.wfCloneBasecallerModel as string | undefined,
@@ -913,7 +915,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         ? pinnedBasecallerModel : cloneModelSchema.default;
     const declaredCloneModel = wfCloneBasecallerModel ?? recommendedCloneModel;
     const [duplexPairs, setDuplexPairs] = useState(initialValues?.duplexPairs as string || '');
-    const [barcodeKit, setBarcodeKit] = useState<'' | 'SQK-RBK114-96'>(initialValues?.barcodeKit as '' | 'SQK-RBK114-96' || '');
+    const [barcodeKit, setBarcodeKit] = useState<'' | 'SQK-RBK114-96'>((initialValues?.barcodeKit as '' | 'SQK-RBK114-96' | undefined) ?? (initialValues?.selectedWorkflow === 'barcode' ? 'SQK-RBK114-96' : ''));
     const [sampleSheet, setSampleSheet] = useState(initialValues?.sampleSheet as string || '');
     const [modifiedBases, setModifiedBases] = useState<ModifiedBases>(initialValues?.modifiedBases as ModifiedBases || 'none');
 
@@ -1209,8 +1211,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         selectedReferenceIsExactStateMember,
         usesMolBioReceiptLane,
     ]);
-    const methylationEnabled = modifiedBases !== 'none';
-    const canRunModkit = selectedWorkflow === 'modified' && methylationEnabled;
+    const canRunModkit = selectedWorkflow === 'modified';
     const fastqQcSettingAvailable = selectedWorkflow === 'plasmidQc'
         || selectedWorkflow === 'bamQc'
         || selectedWorkflow === 'fastqQc'
@@ -1234,6 +1235,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (inputSource === 'pod5' && doradoMode === 'duplex' && !duplexPairs.trim()) blockers.push('Duplex basecalling requires a confined read-pairs file.');
         if (inputSource === 'pod5' && doradoMode === 'duplex' && barcodeKit) blockers.push('Barcode classification and duplex cannot be combined in the locked runtime.');
         if (inputSource === 'pod5' && modifiedBases !== 'none' && (doradoMolecule !== 'dna' || doradoModel !== 'hac' || doradoMode !== 'simplex')) blockers.push('Modified-base calling requires DNA HAC simplex.');
+        if (inputSource === 'pod5' && canRunModkit && runModkit && modifiedBases === 'none') blockers.push('Choose a modification model before generating methylation tables.');
         if (inputSource === 'bam' && !bamPath.trim()) blockers.push('Please specify a BAM file path.');
         if (inputSource === 'fastq' && !fastqPath.trim()) blockers.push('Please specify a FASTQ file path.');
         if (inputSource === 'fastq' && !['clone', 'plasmidQc', 'constructScreening', 'fastqQc', 'pooledAssignment'].includes(selectedWorkflow)) blockers.push('The selected workflow does not accept FASTQ input.');
@@ -1654,26 +1656,12 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             return;
         }
         setDoradoMolecule('dna');
-        if (workflow === 'duplex') {
-            setTrimAdapters(true);
-            setDoradoMode('duplex');
-            setModifiedBases('none');
-            setBarcodeKit('');
-            setRunModkit(false);
-            return;
-        }
         setDoradoMode('simplex');
         if (workflow === 'modified') {
             setDoradoModel('hac');
             setModifiedBases('5mC_5hmC');
             setBarcodeKit('');
             setRunModkit(true);
-            return;
-        }
-        if (workflow === 'barcode') {
-            setModifiedBases('none');
-            setBarcodeKit('SQK-RBK114-96');
-            setRunModkit(false);
             return;
         }
         setModifiedBases('none');
@@ -1884,6 +1872,12 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             {/* Shared MolBio and NGS reference library */}
             <section className={TASK_FLOW_PANEL} data-testid="immutable-molbio-reference-panel" data-ngs-section="reference" aria-labelledby="ngs-reference-heading">
                 <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>2 · Reference / sample</h2>
+                {!requiresReference && selectedWorkflow !== 'pooledAssignment' && !showOptionalReference && !selectedMolbioSequenceId && !selectedMolbioRevisionId && !selectedManagedReferenceRevisionId ? (
+                    <div className="space-y-3 text-sm text-[var(--text-secondary)]">
+                        <p>No reference needed for basecalling.</p>
+                        <button type="button" onClick={() => setShowOptionalReference(true)} className="rounded border border-[var(--border-primary)] px-3 py-2 text-[var(--text-primary)]">Add optional reference</button>
+                    </div>
+                ) : <>
                 {selectedWorkflow === 'pooledAssignment' ? (
                     <PooledReferenceAssignmentPanel
                         executionTargetId={executionTargetId}
@@ -1897,6 +1891,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     {!requiresReference && <button type="button" onClick={() => {
                         setSelectedMolbioSequenceId(''); setSelectedMolbioRevisionId('');
                         setSelectedManagedReferenceRevisionId(''); setApprovedComparisonPanelId('');
+                        setShowOptionalReference(false);
                     }}>No reference — basecalling only</button>}
                     <div className="mb-3">
                         <h3 className="text-sm font-semibold text-[var(--text-primary)]">Shared Experiment reference</h3>
@@ -1960,6 +1955,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     </div>
                     </>
                 )}
+                </>}
             </section>
             {/* Historical Domain-managed references remain visible only when reopening an older job. */}
             {Boolean(initialValues?.ngsReferenceRevisionId) && selectedWorkflow !== 'pooledAssignment' && (
@@ -2025,45 +2021,39 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             {/* Locked P4 molecule, mode, and multiplexing controls */}
             {inputSource === 'pod5' && (
                 <div className={`${TASK_FLOW_CARD} space-y-3`}>
-                    <div className="text-sm font-semibold text-[var(--text-primary)]">Runtime settings</div>
+                    <div className="text-sm font-semibold text-[var(--text-primary)]">Read setup</div>
                     <div className="grid grid-cols-2 gap-3">
-                        <label className="text-sm text-[var(--text-secondary)]">Molecule
-                            <select value={doradoMolecule} onChange={(event) => {
-                                const value = event.target.value as DoradoMolecule;
-                                setDoradoMolecule(value);
-                                if (value === 'rna') { setDoradoMode('simplex'); setModifiedBases('none'); setBarcodeKit(''); setTrimAdapters(true); setRunAssembly(false); }
-                            }} className="block w-full mt-1 bg-[var(--bg-tertiary)] rounded p-2">
-                                <option value="dna">DNA — R10.4.1 E8.2 5 kHz</option>
-                                <option value="rna">RNA004 — 4 kHz</option>
+                        <div className="text-sm text-[var(--text-secondary)]">Molecule
+                            <p className="mt-2 text-[var(--text-primary)]">{doradoMolecule === 'rna' ? 'RNA004 · 4 kHz' : 'DNA · R10.4.1 E8.2 · 5 kHz'}</p>
+                        </div>
+                        {doradoMolecule === 'dna' ? <label className="text-sm text-[var(--text-secondary)]">Strand mode
+                            <select aria-label="Strand mode" value={doradoMode} onChange={(event) => { const value = event.target.value as DoradoMode; setDoradoMode(value); if (value === 'duplex') setTrimAdapters(true); }} className="block w-full mt-1 bg-[var(--bg-tertiary)] rounded p-2">
+                                <option value="simplex">One strand (simplex)</option>
+                                <option value="duplex" disabled={modifiedBases !== 'none' || Boolean(barcodeKit)}>Paired strands (duplex)</option>
                             </select>
-                        </label>
-                        <label className="text-sm text-[var(--text-secondary)]">Basecalling mode
-                            <select value={doradoMode} onChange={(event) => { const value = event.target.value as DoradoMode; setDoradoMode(value); if (value === 'duplex') { setBarcodeKit(''); setModifiedBases('none'); setTrimAdapters(true); } }} className="block w-full mt-1 bg-[var(--bg-tertiary)] rounded p-2">
-                                <option value="simplex">Simplex</option>
-                                <option value="duplex" disabled={doradoMolecule === 'rna'}>Duplex (explicit pairs)</option>
-                            </select>
-                        </label>
+                        </label> : <div className="text-sm text-[var(--text-secondary)]">Strand mode<p className="mt-2 text-[var(--text-primary)]">One strand (simplex)</p></div>}
                     </div>
                     {doradoMode === 'duplex' && (
-                        <input value={duplexPairs} onChange={(event) => setDuplexPairs(event.target.value)} placeholder="Confined duplex pairs file" className="w-full bg-[var(--bg-tertiary)] rounded p-2" />
+                        <label className="block text-sm text-[var(--text-secondary)]">Read pairs file<input aria-label="Read pairs file" value={duplexPairs} onChange={(event) => setDuplexPairs(event.target.value)} placeholder="Select the file matching template and complement reads" className="mt-1 w-full bg-[var(--bg-tertiary)] rounded p-2" /></label>
                     )}
-                    {doradoMolecule === 'dna' && doradoMode === 'simplex' && (
+                    {selectedWorkflow === 'dna' && doradoMolecule === 'dna' && doradoMode === 'simplex' && (
                         <div className="grid grid-cols-2 gap-3">
-                            <select value={barcodeKit} onChange={(event) => {
+                            <label className="text-sm text-[var(--text-secondary)]">Barcoding<select aria-label="Barcoding" value={barcodeKit} onChange={(event) => {
                                 const value = event.target.value as '' | 'SQK-RBK114-96';
                                 setBarcodeKit(value);
                                 if (value) { setModifiedBases('none'); setRunModkit(false); setRunAssembly(false); }
                                 else setSampleSheet('');
-                            }} disabled={modifiedBases !== 'none'} className="bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40">
-                                <option value="">No barcode classification</option>
+                            }} disabled={modifiedBases !== 'none'} className="mt-1 block w-full bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40">
+                                <option value="">No barcoding</option>
                                 <option value="SQK-RBK114-96">SQK-RBK114-96</option>
-                            </select>
-                            <input value={sampleSheet} onChange={(event) => setSampleSheet(event.target.value)} disabled={!barcodeKit} placeholder="Optional confined sample sheet" className="bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40" />
+                            </select></label>
+                            {barcodeKit && <label className="text-sm text-[var(--text-secondary)]">Sample sheet (optional)<input aria-label="Sample sheet" value={sampleSheet} onChange={(event) => setSampleSheet(event.target.value)} className="mt-1 w-full bg-[var(--bg-tertiary)] rounded p-2" /></label>}
                         </div>
                     )}
-                    <div className="text-xs text-[var(--text-secondary)]">Current source pin: Dorado {doradoLock.dorado.version}; model <code>{pinnedBasecallerModel}</code>. Quality is operator-selected. The server resolves the runtime identity; remote execution review shows effective settings, not proof of execution.
+                    {(modifiedBases !== 'none' || barcodeKit) && <p className="text-xs text-[var(--text-secondary)]">Paired-strand calling cannot be combined with modification calling or barcoding in this installation.</p>}
+                    <details className="text-xs text-[var(--text-secondary)]"><summary className="cursor-pointer">Model and runtime details</summary><div className="mt-2">Dorado {doradoLock.dorado.version}; model <code>{pinnedBasecallerModel}</code>.
                         {doradoMode === 'duplex' && <> Stereo model: <code>{doradoLock.models.stereo.id}</code>.</>}
-                        {modifiedBases !== 'none' && <> Modification model: <code>{doradoLock.models.modified_bases[modifiedBases].id}</code>.</>}</div>
+                        {modifiedBases !== 'none' && <> Modification model: <code>{doradoLock.models.modified_bases[modifiedBases].id}</code>.</>}</div></details>
                 </div>
             )}
 
@@ -2076,7 +2066,10 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             <button
                                 key={key}
                                 onClick={() => setDoradoModel(key)}
-                                className={`p-3 rounded-lg border-2 transition-all text-left ${doradoModel === key
+                                aria-label={model.label}
+                                disabled={modifiedBases !== 'none' && key !== 'hac'}
+                                aria-pressed={doradoModel === key}
+                                className={`p-3 rounded-lg border-2 transition-all text-left disabled:opacity-40 disabled:cursor-not-allowed ${doradoModel === key
                                     ? ''
                                     : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)] bg-[var(--bg-tertiary)]/60'
                                     }`}
@@ -2094,15 +2087,18 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             )}
 
             {/* Methylation Detection */}
-            {inputSource === 'pod5' && (
+            {inputSource === 'pod5' && doradoMolecule === 'dna' && (
                 <div className={TASK_FLOW_CARD}>
-                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-3">Modified Base Detection</label>
+                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-3">Modification calling</label>
+                    <p className="mb-3 text-xs text-[var(--text-secondary)]">{selectedWorkflow === 'modified' ? 'Choose which modifications to call before analysis.' : 'Optional per-read modification calls in the BAM. Use Methylation analysis for per-site tables.'}</p>
                     <div className="grid grid-cols-2 gap-3">
                         {(Object.entries(MODIFIED_BASES_OPTIONS) as [ModifiedBases, typeof MODIFIED_BASES_OPTIONS[ModifiedBases]][]).map(([key, opt]) => (
                             <button
                                 key={key}
                                 onClick={() => { setModifiedBases(key); if (key !== 'none') { setBarcodeKit(''); setSampleSheet(''); } }}
+                                aria-label={opt.label}
                                 disabled={key !== 'none' && (doradoMolecule !== 'dna' || doradoModel !== 'hac' || doradoMode !== 'simplex' || Boolean(barcodeKit))}
+                                aria-pressed={modifiedBases === key}
                                 className={`p-3 rounded-lg border-2 transition-all text-left disabled:opacity-40 disabled:cursor-not-allowed ${modifiedBases === key
                                     ? ''
                                     : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)] bg-[var(--bg-tertiary)]/60'
@@ -2117,6 +2113,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             </button>
                         ))}
                     </div>
+                    <p className="mt-3 text-xs text-[var(--text-secondary)]">Modification models in this installation require High Accuracy (HAC), one strand, and no barcoding.</p>
                 </div>
             )}
 
@@ -2201,7 +2198,6 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             {/* Analysis Toggles — mode-aware: only relevant options shown */}
             <div className={`${TASK_FLOW_CARD} space-y-3`}>
                 <div className="text-sm font-semibold text-[var(--text-primary)]">Analysis options</div>
-                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Analysis Options</label>
 
                 {/* Trim adapters — POD5 only */}
                 {inputSource === 'pod5' && (
@@ -2215,24 +2211,6 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">Trim adapters{doradoMolecule === 'rna' ? ' (required for RNA)' : doradoMode === 'duplex' ? ' (fixed by duplex mode)' : ''}</span>
-                        </div>
-                    </label>
-                )}
-
-                {/* Modkit — POD5 or BAM */}
-                {canRunModkit && (
-                    <label className="flex items-center gap-3 cursor-pointer">
-                        <input
-                            type="checkbox"
-                            checked={runModkit}
-                            onChange={(e) => setRunModkit(e.target.checked)}
-                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
-                        />
-                        <div>
-                            <span className="text-sm text-[var(--text-primary)]">Run modkit analysis</span>
-                            <p className="text-xs text-[var(--text-secondary)]">
-                                {inputSource === 'bam' ? 'Summarize MM/ML tags.' : 'Generate methylation tables.'}
-                            </p>
                         </div>
                     </label>
                 )}
@@ -2435,6 +2413,24 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 <span className="text-sm text-[var(--text-primary)]">Emit move tags for aligned signal views</span>
                             </label>
                         )}
+                        {/* Modkit — POD5 or BAM */}
+                        {canRunModkit && (
+                            <label className="flex items-center gap-3 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={runModkit}
+                                    onChange={(e) => setRunModkit(e.target.checked)}
+                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                                />
+                                <div>
+                                    <span className="text-sm text-[var(--text-primary)]">Generate methylation tables</span>
+                                    <p className="text-xs text-[var(--text-secondary)]">
+                                        {inputSource === 'bam' ? 'Summarize the existing modification calls.' : 'Align and summarize the newly called modifications.'}
+                                    </p>
+                                </div>
+                            </label>
+                        )}
+
                         {runModkit && canRunModkit && (
                             <div className="space-y-2">
                                 <label className="text-xs text-[var(--text-secondary)] mb-1 block">

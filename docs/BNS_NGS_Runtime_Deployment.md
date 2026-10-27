@@ -38,6 +38,15 @@ waveform and Squigualiser workbench consumers use validated indexed BLOW5.
 The alignment result's **Read & Signal Workbench** retains the existing complete
 mapping, calibration, rendering and ideal-comparison controls.
 
+DNA basecalling has one task card: strand mode, barcoding and per-read
+modification calling are configured once below it. Methylation analysis is a
+separate task for reference-based modification tables, including existing tagged
+BAM input. Molecule type follows the selected task; optional basecalling
+references open on request. Model details and expert settings remain available
+without duplicating task cards. Older duplex, barcode and BAM-QC selections
+reopen under their parent task with saved parameters retained. Modification tags
+alone do not change a saved DNA basecalling job into an analysis workflow.
+
 ## Installation identities
 
 The four OCI policies under `platform/api/config/ont_signal_workbench` name
