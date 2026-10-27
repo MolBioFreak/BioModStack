@@ -3,10 +3,11 @@ import type { JobCategoryVisibility } from '../../lib/jobCategories';
 interface Props {
     value: JobCategoryVisibility;
     onChange: (value: JobCategoryVisibility) => void;
+    ngsLabel?: string;
 }
 
 /** Visibility changes only what is shown, never Job execution or cancellation. */
-export function JobCategoryFilter({ value, onChange }: Props) {
+export function JobCategoryFilter({ value, onChange, ngsLabel = 'Show NGS Jobs' }: Props) {
     return (
         <details className="relative rounded border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200">
             <summary className="cursor-pointer select-none">Job types</summary>
@@ -14,7 +15,7 @@ export function JobCategoryFilter({ value, onChange }: Props) {
                 <label className="flex items-center gap-2">
                     <input type="checkbox" checked={value.ngs}
                         onChange={event => onChange({ ...value, ngs: event.target.checked })} />
-                    Show NGS
+                    {ngsLabel}
                 </label>
                 <label className="flex items-center gap-2">
                     <input type="checkbox" checked={value.alignments}

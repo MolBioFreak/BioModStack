@@ -560,7 +560,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                             Clear Queue
                         </button>
                     )}
-                    <JobCategoryFilter value={categoryVisibility} onChange={setCategoryVisibility} />
+                    <JobCategoryFilter value={categoryVisibility} onChange={setCategoryVisibility} ngsLabel="Show NGS" />
                     <button
                         onClick={() => setShowCancelled(!showCancelled)}
                         className={`px-2 py-1 rounded text-xs ${showCancelled ? 'bg-slate-600 text-white' : 'bg-slate-700/50 text-slate-400 hover:text-white'}`}
