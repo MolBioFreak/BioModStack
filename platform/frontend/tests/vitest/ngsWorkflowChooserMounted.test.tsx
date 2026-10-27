@@ -32,7 +32,12 @@ describe('mounted NGS workflow chooser', () => {
         const cards = Array.from(container.querySelectorAll<HTMLButtonElement>('button[data-ngs-workflow-key]'));
         const byKey = (key: string) => cards.find((card) => card.dataset.ngsWorkflowKey === key);
 
-        expect(cards).toHaveLength(11);
+        expect(cards).toHaveLength(8);
+        expect(byKey('duplex')).toBeUndefined();
+        expect(byKey('barcode')).toBeUndefined();
+        expect(byKey('bamQc')).toBeUndefined();
+        expect(byKey('modified')?.textContent).toContain('Methylation analysis');
+        expect(byKey('dna')?.textContent).toContain('optional paired strands, barcodes and modification calls');
         expect(byKey('dna')?.getAttribute('aria-pressed')).toBe('true');
         expect(cards.filter((card) => card.getAttribute('aria-pressed') === 'true')).toHaveLength(1);
         expect(byKey('clone')?.getAttribute('aria-pressed')).toBe('false');
@@ -56,6 +61,13 @@ describe('mounted NGS workflow chooser', () => {
 
         expect(onSelect).toHaveBeenCalledTimes(1);
         expect(onSelect).toHaveBeenCalledWith('fastqQc');
+    });
+
+    it.each([['duplex', 'dna'], ['barcode', 'dna'], ['bamQc', 'plasmidQc']])('reopens legacy %s under its existing workflow', async (saved, current) => {
+        await renderChooser(saved as WorkflowKey);
+        const selected = container.querySelectorAll('[aria-pressed="true"]');
+        expect(selected).toHaveLength(1);
+        expect((selected[0] as HTMLElement).dataset.ngsWorkflowKey).toBe(current);
     });
 
 });

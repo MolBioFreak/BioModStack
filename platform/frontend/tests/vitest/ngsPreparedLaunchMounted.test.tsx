@@ -240,6 +240,71 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-RBK114-96', sample_sheet: '/data/samples.csv' });
     });
+    it('offers DNA calling options once and submits modification tags without adding methylation analysis', async () => {
+        await mount();
+        expect(container.querySelector('[data-ngs-workflow-key="duplex"]')).toBeNull();
+        expect(container.querySelector('[data-ngs-workflow-key="barcode"]')).toBeNull();
+        expect(container.querySelectorAll('select[aria-label="Strand mode"]')).toHaveLength(1);
+        expect(container.querySelectorAll('select[aria-label="Barcoding"]')).toHaveLength(1);
+        const modification = container.querySelector<HTMLButtonElement>('button[aria-label="6mA only"]')!;
+        expect(modification.disabled).toBe(true);
+        await quality('hac');
+        await act(async () => modification.click()); await settle();
+        expect(modification.getAttribute('aria-pressed')).toBe('true');
+        expect(container.querySelector<HTMLButtonElement>('button[aria-label="Super Accurate (SUP)"]')?.disabled).toBe(true);
+        expect(container.querySelector<HTMLSelectElement>('select[aria-label="Barcoding"]')?.disabled).toBe(true);
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].url).toBe('/api/ont/ngs/ont_basecall_dna/submit');
+        expect(capturedRequest().params).toMatchObject({ dorado_quality_mode: 'hac', modified_bases: '6mA', run_modkit: false });
+    });
+    it('opens optional reference controls on demand and returns to reference-free calling', async () => {
+        await mount();
+        expect(container.querySelector('[data-testid="molbio-sequence-selector"]')).toBeNull();
+        await click('Add optional reference');
+        expect(container.querySelector('[data-testid="molbio-sequence-selector"]')).not.toBeNull();
+        await input('[data-testid="molbio-sequence-selector"]', 'sequence-1');
+        await click('No reference — basecalling only');
+        expect(container.querySelector('[data-testid="molbio-sequence-selector"]')).toBeNull();
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).not.toHaveProperty('molbio_ngs_receipt_id');
+        expect(submits()[0].body).not.toHaveProperty('managed_reference');
+    });
+    it('reopens a modification-tagged DNA basecall as the same basecalling workflow', async () => {
+        const saved = normalizeNanoporeCloneState({ name: 'saved-tagged-basecall', model_id: 'nanopore', mode: 'basecall_dna', params: {
+            ont_workflow_id: 'ont_basecall_dna', pod5_dir: '/data/pod5', dorado_quality_mode: 'hac',
+            modified_bases: '5mC_5hmC', run_modkit: false,
+        } } as unknown as Job)!;
+        await mount(saved);
+        expect(container.querySelector('[data-ngs-workflow-key="dna"]')?.getAttribute('aria-pressed')).toBe('true');
+        await remoteReview();
+        expect(prepares()[0].url).toBe('/api/ont/ngs/ont_basecall_dna/prepare');
+        await click('Approve and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ modified_bases: '5mC_5hmC', run_modkit: false });
+    });
+    it('analyzes existing modification-tagged BAM without requiring another basecalling model', async () => {
+        await mount({ ...base, selectedWorkflow: 'modified', inputSource: 'bam', pod5Dir: '', bamPath: '/data/tagged.bam',
+            modifiedBases: 'none', runModkit: true, ngsReferenceRevisionId: 'reference-revision-1' });
+        expect(container.querySelector('button[aria-label="6mA only"]')).toBeNull();
+        await click('Show advanced controls');
+        const tables = Array.from(container.querySelectorAll('label')).find(node => node.textContent?.includes('Generate methylation tables'))!;
+        expect(tables.querySelector<HTMLInputElement>('input')?.checked).toBe(true);
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].url).toBe('/api/ont/ngs/ont_methylation_analysis/submit');
+        expect(capturedRequest().params).toMatchObject({ bam_path: '/data/tagged.bam', run_modkit: true });
+        expect(capturedRequest().params).not.toHaveProperty('modified_bases');
+    });
+    it('blocks incomplete methylation analysis instead of silently dropping the requested tables', async () => {
+        await mount({ ...base, selectedWorkflow: 'modified', doradoModel: 'hac', modifiedBases: '6mA',
+            runModkit: true, ngsReferenceRevisionId: 'reference-revision-1' });
+        await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="No modification detection"]')!.click());
+        await settle();
+        expect(button('Review and submit').disabled).toBe(true);
+        expect(container.textContent).toContain('Choose a modification model before generating methylation tables.');
+        expect(submits()).toHaveLength(0);
+        await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="6mA only"]')!.click());
+        await settle(); await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ modified_bases: '6mA', run_modkit: true });
+    });
     it('retains explicit duplex settings and stereo source identity', async () => {
         await mount({ ...base, selectedWorkflow: 'duplex', doradoMode: 'duplex', duplexPairs: '/data/pairs.txt' });
         expect(container.textContent).toContain(doradoLock.models.stereo.id);
@@ -253,13 +318,13 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         expect(capturedRequest().params).toMatchObject({ modified_bases: modification, dorado_quality_mode: 'hac', run_modkit: true });
     });
 
-    it('keeps Local reference-free, grouping context and all 11 choices; no remote preparation', async () => {
+    it('keeps Local reference-free and retains every workflow without duplicate option cards', async () => {
         await mount({ ...base, doradoModel: 'fast', batchSize: 0, emitSummary: false, emitMoves: false });
-        expect(container.querySelectorAll('[data-ngs-workflow-key]')).toHaveLength(11);
+        expect(container.querySelectorAll('[data-ngs-workflow-key]')).toHaveLength(8);
         for (const quality of ['Super Accurate (SUP)', 'High Accuracy (HAC)', 'Fast']) {
             expect(Array.from(container.querySelectorAll('button')).some(node => node.textContent?.includes(quality))).toBe(true);
         }
-        expect(container.textContent).toContain('Reference-free basecalling is supported');
+        expect(container.textContent).toContain('No reference needed for basecalling.');
         expect(button('Local').getAttribute('aria-pressed')).toBe('true');
         await click('Review and submit');
         await until(() => expect(submits()).toHaveLength(1));

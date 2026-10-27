@@ -1,15 +1,5 @@
-export type WorkflowKey =
-    | 'clone'
-    | 'plasmidQc'
-    | 'constructScreening'
-    | 'fastqQc'
-    | 'bamQc'
-    | 'dna'
-    | 'rna'
-    | 'duplex'
-    | 'modified'
-    | 'barcode'
-    | 'pooledAssignment';
+import { normalizeNanoporeWorkflowChoice, type WorkflowKey } from '../../lib/nanoporeWorkflow';
+export type { WorkflowKey } from '../../lib/nanoporeWorkflow';
 
 type WorkflowBadge = 'VENDOR REPORT' | 'REVIEW ONLY';
 
@@ -50,16 +40,10 @@ const WORKFLOW_CHOICES: readonly WorkflowChoice[] = [
         result: 'Read and alignment QC only; no clone report',
     },
     {
-        key: 'bamQc',
-        title: 'Analyze aligned plasmid BAM',
-        input: 'BAM + saved MolBio revision',
-        result: 'BMS plasmid QC and alignment evidence',
-    },
-    {
         key: 'dna',
-        title: 'Basecall DNA simplex',
+        title: 'Basecall DNA',
         input: 'DNA POD5',
-        result: 'Dorado calls BAM, summary and runtime provenance',
+        result: 'DNA reads, with optional paired strands, barcodes and modification calls',
     },
     {
         key: 'rna',
@@ -68,22 +52,10 @@ const WORKFLOW_CHOICES: readonly WorkflowChoice[] = [
         result: 'RNA004 simplex calls BAM, trimming and provenance',
     },
     {
-        key: 'duplex',
-        title: 'Basecall DNA duplex',
-        input: 'DNA POD5 + validated read-pairs file',
-        result: 'Duplex BAM with retained stereo model provenance',
-    },
-    {
         key: 'modified',
-        title: 'Call modified bases',
-        input: 'DNA POD5',
-        result: 'HAC simplex calls plus modkit tables',
-    },
-    {
-        key: 'barcode',
-        title: 'Classify and demultiplex RBK114',
-        input: 'DNA POD5',
-        result: 'Barcode groups and demultiplexed reads',
+        title: 'Methylation analysis',
+        input: 'DNA POD5 or modification-tagged BAM + saved reference',
+        result: 'Per-site methylation tables and modification summaries',
     },
     {
         key: 'pooledAssignment',
@@ -114,12 +86,12 @@ export function NanoporeWorkflowChooser({
             <div>
                 <h2 className="text-base font-semibold text-[var(--text-primary)]">Choose what you want to do</h2>
                 <p className="text-sm text-[var(--text-secondary)] mt-1">
-                    Choose one path first. The form below then exposes only its compatible inputs and locked runtime settings.
+                    Choose a task, then configure its input and options below.
                 </p>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                 {WORKFLOW_CHOICES.map((workflow) => {
-                    const selected = selectedWorkflow === workflow.key;
+                    const selected = normalizeNanoporeWorkflowChoice(selectedWorkflow) === workflow.key;
                     return (
                         <button
                             key={workflow.key}
