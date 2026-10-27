@@ -491,7 +491,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
     const blockers = effectiveProtocolOptions?.blockers ?? [];
     const domainIntentBlocker = exactDomainExperimentId
         ? null
-        : 'Choose a Project to start sequencing.';
+        : 'Choose a Project (Projects button above) to start sequencing.';
     const canStart = Boolean(
         !instrumentEvidenceError
         && !domainIntentBlocker
@@ -502,6 +502,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
     );
     const availableKits = effectiveProtocolOptions?.available_kits ?? [];
     const activeRuns = durableRuns.filter((run) => run.can_stop || run.status === 'stopping');
+    const minknowReachable = !deviceStatus.isLoading && data?.implementation_status === 'configured';
     const availableCount = useMemo(() => devices.filter((device) => device.available_for_run).length, [devices]);
     const selectedGeneration = selectedGenerationQuery.data;
 
@@ -594,8 +595,8 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
 
             <div className="grid gap-3 md:grid-cols-3">
                 <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Mk1D link</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{deviceStatus.isLoading ? 'Checking…' : statusLabel(data?.implementation_status)}</div></div>
-                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Positions</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{devices.length}</div></div>
-                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Available</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{availableCount}</div></div>
+                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Positions</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{minknowReachable ? devices.length : '—'}</div></div>
+                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Available</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{minknowReachable ? availableCount : '—'}</div></div>
             </div>
 
             {domainIntentBlocker ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">{domainIntentBlocker}</p> : null}
@@ -622,16 +623,16 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
 
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
-                    <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Instrument positions</h3><p className="text-xs text-[var(--text-secondary)]">Only host-approved Mk1D cards are returned.</p></div><button type="button" onClick={() => void deviceStatus.refetch()} className="text-sm text-[var(--accent-secondary)]">Refresh</button></div>
+                    <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Instrument positions</h3><p className="text-xs text-[var(--text-secondary)]">Mk1D positions reported by MinKNOW.</p></div><button type="button" onClick={() => void deviceStatus.refetch()} className="text-sm text-[var(--accent-secondary)]">Refresh</button></div>
                     {data?.message ? <p className="rounded-lg bg-slate-900/40 p-2 text-xs text-[var(--text-secondary)]">{data.message}</p> : null}
                     <div className="grid gap-3 md:grid-cols-2">
-                        {devices.length === 0 ? <div className="rounded-lg border border-dashed border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 text-sm text-[var(--text-secondary)]">No live Mk1D positions reported by MinKNOW.</div> : devices.map((device) => <button key={device.position} type="button" onClick={() => setSelectedPosition(device.position)} className={`rounded-xl border p-4 text-left transition ${selectedDevice?.position === device.position ? 'border-cyan-400 bg-cyan-500/10' : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] hover:border-cyan-500/50'}`}><div className="text-base font-semibold text-[var(--text-primary)]">{device.position}</div><div className="text-xs text-[var(--text-secondary)]">Mk1D · {deviceStateLabel(device)}</div><div className="mt-3 text-xs text-[var(--text-secondary)]">Flow cell: {device.flow_cell.present ? 'present' : 'absent'} · Running: {device.running ? 'yes' : 'no'}</div></button>)}
+                        {devices.length === 0 && !data?.message ? <div className="rounded-lg border border-dashed border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 text-sm text-[var(--text-secondary)] md:col-span-2">{minknowReachable ? 'No Mk1D positions found. Check the device is plugged in, then Refresh.' : 'MinKNOW is not reachable. Use Reconnect Mk1D, then Refresh.'}</div> : devices.map((device) => <button key={device.position} type="button" onClick={() => setSelectedPosition(device.position)} className={`rounded-xl border p-4 text-left transition ${selectedDevice?.position === device.position ? 'border-cyan-400 bg-cyan-500/10' : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] hover:border-cyan-500/50'}`}><div className="text-base font-semibold text-[var(--text-primary)]">{device.position}</div><div className="text-xs text-[var(--text-secondary)]">Mk1D · {deviceStateLabel(device)}</div><div className="mt-3 text-xs text-[var(--text-secondary)]">Flow cell: {device.flow_cell.present ? 'present' : 'absent'} · Running: {device.running ? 'yes' : 'no'}</div></button>)}
                     </div>
                 </div>
 
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
                     <div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">New sequencing run</h3><p className="text-xs text-[var(--text-secondary)]">BMS picks the matching MinKNOW protocol and default basecalling model for the kit and flow cell.</p></div>
-                    <label className="block text-xs font-semibold text-[var(--text-secondary)]">Current domain sample revision
+                    <label className="block text-xs font-semibold text-[var(--text-secondary)]">Sample
                         <select
                             value={selectedSample?.id ?? ''}
                             onChange={(event) => setSampleSelection(exactDomainExperimentId && event.target.value ? { domainId: exactDomainExperimentId, sampleId: event.target.value } : null)}
@@ -708,9 +709,9 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
 
             </> : null}
             <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4 text-[var(--text-primary)]">
-                <h3 className="text-sm font-semibold">Import raw signal</h3>
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Upload raw signal</h3>
                 <p className="text-xs text-[var(--text-secondary)]">Register POD5, SLOW5 or indexed BLOW5 in the selected Project. File provenance and validation stay in the ONT ledger. SLOW5 is retained as source data; waveform and Squigualiser views use validated indexed BLOW5.</p>
-                {!exactDomainExperimentId ? <p role="status" className="text-sm text-[var(--text-secondary)]">Choose a Project to import raw signal.</p> : null}
+                {!exactDomainExperimentId && rawSignalOnly ? <p role="status" className="text-sm text-[var(--text-secondary)]">Choose a Project (Projects button above) to import raw signal.</p> : null}
                 <fieldset disabled={importRawSignal.isPending} className="grid gap-3 sm:grid-cols-2">
                     <label className="text-xs">Raw-signal file<input key={exactDomainExperimentId ?? 'no-project'} aria-label="Raw-signal file" type="file" accept=".pod5,.slow5,.blow5" onChange={(e) => { setRawUpload(e.target.files?.[0] ?? null); setRawIndexUpload(null); uploadedRawFiles.current.clear(); rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`; }} className="mt-1 block w-full text-sm" /></label>
                     {rawUpload?.name.toLowerCase().endsWith('.blow5') ? <label className="text-xs">Matching BLOW5 index<input aria-label="BLOW5 index" type="file" accept=".idx" onChange={(e) => { setRawIndexUpload(e.target.files?.[0] ?? null); uploadedRawFiles.current = new Map(); rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`; }} className="mt-1 block w-full text-sm" /></label> : null}
@@ -722,7 +723,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
             <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
                 <div>
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Register existing POD5</h3>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Select an existing POD5 to register. The source file stays unchanged.</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Use a POD5 already on this computer instead of uploading it. The file is not moved or changed.</p>
                 </div>
                 {externalPod5CandidatesQuery.isError ? <p role="alert" className="text-sm text-amber-100">Existing POD5 candidates are unavailable: {errorMessage(externalPod5CandidatesQuery.error, 'unknown candidate-list failure')}</p> : null}
                 <select
@@ -745,7 +746,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                     onClick={() => registerExternalPod5.mutate()}
                     className="rounded-lg border border-cyan-500/50 px-3 py-2 text-sm font-semibold text-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                    {registerExternalPod5.isPending ? 'Registering immutable POD5…' : 'Register selected POD5'}
+                    {registerExternalPod5.isPending ? 'Registering POD5…' : 'Register selected POD5'}
                 </button>
             </div>
 

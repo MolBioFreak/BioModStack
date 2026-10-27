@@ -806,7 +806,7 @@ def _require_local_development_browser(request: Request, job_id: str) -> None:
     ):
         raise OntNgsRouteError(
             status_code=403, code="NGS_ROTATION_ORIGIN_DENIED",
-            message="Capability rotation requires a local Development operator.",
+            message="Results can only be opened from the BMS web page on this computer or its Tailnet address.",
             job_id=job_id, resource="rotation",
         )
     configured = urlsplit(os.environ.get("BMS_FRONTEND_HEALTH_URL", ""))
@@ -837,7 +837,7 @@ def _require_local_development_browser(request: Request, job_id: str) -> None:
     ):
         raise OntNgsRouteError(
             status_code=403, code="NGS_ROTATION_ORIGIN_DENIED",
-            message="Same-origin Development browser authority is required.",
+            message="Open these results from the BMS web page itself, not from another site or port.",
             job_id=job_id, resource="rotation",
         )
 

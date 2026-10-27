@@ -57,7 +57,7 @@ export function sequenceQcManifestUnavailableLabel(status: SequenceQcManifestSta
         case 'access-denied':
             return 'manifest access requires browser authorization';
         case 'forbidden':
-            return 'manifest blocked by path safety';
+            return 'manifest access denied';
         case 'idle':
             return 'no run selected';
         default:

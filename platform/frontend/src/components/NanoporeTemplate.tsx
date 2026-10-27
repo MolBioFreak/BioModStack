@@ -1675,8 +1675,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     return (
         <div className="nanopore-template mx-auto max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_25%,#000)] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.38)] lg:p-6">
             {review && review.key === requestKey && <ExecutionPlanApproval preview={review.prepared.preview} finish={review.finish} />}
-            <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} />
-            <ExecutionPolicyControl initialPolicy={initialReturnPolicy} onChange={setReturnPolicy} />
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -1696,6 +1694,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     </div>
                 </div>
             </div>
+            <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} />
+            <ExecutionPolicyControl initialPolicy={initialReturnPolicy} onChange={setReturnPolicy} />
 
             {/* Operator-first workflow chooser: do not make users infer a workflow from low-level switches. */}
             <NanoporeWorkflowChooser
