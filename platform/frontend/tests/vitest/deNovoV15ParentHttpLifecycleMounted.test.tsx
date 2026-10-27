@@ -165,6 +165,30 @@ suite('ordinary parent Complexa inactive reward controls survive cold SQLite Tem
     expect(restored.params.native_job_request.params).not.toHaveProperty('native_control_drafts');
 },30000);
 const clone = { name:'Parent retained exact', model_id:'rfd4_proteina', mode:'generate', execution_target_id:null, sequence_design:null, params:{rfd4_request:nativeRequest} };
+suite('all five populated engine drafts survive real SQLite template Save and cold Load', async () => {
+    await mount(undefined, clone);
+    const named = (name: string) => [...document.querySelectorAll('label')].find(node => !node.closest('[hidden]') && node.firstChild?.textContent === name)?.querySelector('input,select') as HTMLInputElement | HTMLSelectElement;
+    const engine = async (name: string) => { await edit(named('Engine'), name); await settle(); };
+    await engine('rfd3'); await edit(named('Minimum length'), '111');
+    await engine('disco'); await edit(named('Target lengths'), '144');
+    await engine('laproteina'); await edit(named('Target lengths'), '155');
+    await engine('complexa');
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[aria-label="Complexa task"]')).not.toBeNull(); });
+    await edit(document.querySelector<HTMLSelectElement>('[aria-label="Complexa task"]')!, 'AME');
+    await engine('rfd4_proteina');
+    const saved = await saveTemplate('Five-engine drafts');
+    expect(saved.params.native_job_request.params.rfd4_request).toEqual(nativeRequest);
+    await coldLoad(saved);
+    await engine('rfd3'); expect(named('Minimum length').value).toBe('111');
+    await engine('disco'); expect(named('Target lengths').value).toBe('144');
+    await engine('laproteina'); expect(named('Target lengths').value).toBe('155');
+    await engine('complexa');
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector<HTMLSelectElement>('[aria-label="Complexa task"]')?.value).toBe('AME'); });
+    await engine('rfd4_proteina');
+    const again = await saveTemplate('Five-engine second save');
+    expect(again.params.native_job_request.params.rfd4_request).toEqual(nativeRequest);
+    expect(requests.some(r => r.path === '/api/jobs')).toBe(false);
+}, 30000);
 suite('ordinary parent clone saves native SQLite Template and cold Load preserves sparse science and explicit Local', async () => {
     sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY,'ambient-remote');
     await mount(undefined,clone);
