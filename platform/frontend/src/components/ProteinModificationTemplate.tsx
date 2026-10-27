@@ -691,7 +691,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 <ModelDocumentationLinks topics={generator === 'rfd3' ? ['rfdiffusion'] : backend === 'laproteina' ? ['laproteina'] : ['disco']} compact />
             </div>
             <div hidden={section !== 'Sequence Design'}>
-                <GeneralSequenceDesignSettings value={sequenceDesign} onChange={next => { setSequenceOmitted(false); setSequenceNull(false); setSequenceDesign(next); }} />
+                <GeneralSequenceDesignSettings value={sequenceDesign} onChange={next => { if (next.invocation_draft?.enabled || next.sequence_design.enabled) { setSequenceOmitted(false); setSequenceNull(false); } setSequenceDesign(next); }} />
             </div>
             <details className="space-y-3 rounded-xl border p-4" style={themedInsetStyle}>
                 <summary className="cursor-pointer text-sm font-medium">Run details</summary>
