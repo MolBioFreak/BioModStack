@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
 import { api } from '../lib/api';
 import { BioXpSchemaInput } from './BioXpSchemaInput';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
@@ -37,6 +38,13 @@ export function OtherDeNovoSettings({ model, task, value, onChange, sourceCondit
     const key = `pcad_${model}_settings_json`;
     const settings = model === 'rfd3' ? value : value[key];
     const object = settings && typeof settings === 'object' && !Array.isArray(settings) ? settings as Record<string, unknown> : {};
+    const samplerIdentity = JSON.stringify([model, task, Object.hasOwn(value, 'inference_sampler'), value.inference_sampler]);
+    const samplerState = useRef({ identity: samplerIdentity, retainEmpty: Object.hasOwn(value, 'inference_sampler') });
+    useEffect(() => {
+        if (samplerState.current.identity !== samplerIdentity) {
+            samplerState.current = { identity: samplerIdentity, retainEmpty: Object.hasOwn(value, 'inference_sampler') };
+        }
+    }, [samplerIdentity, value]);
     const root: Schema = inventory.data?.parameter_schema ?? { type: 'object', properties: inventory.data?.execution ?? {} };
     const patch = (field: string, next: unknown) => {
         const updated = { ...object }; if (next === undefined) delete updated[field]; else updated[field] = next;
@@ -64,9 +72,14 @@ export function OtherDeNovoSettings({ model, task, value, onChange, sourceCondit
             const definition = inventory.data?.execution?.[field];
             const hasOverride = Object.hasOwn(object, field);
             const sourceDefault = definition?.default_source && Object.hasOwn(definition, 'default') && ['boolean', 'integer', 'number', 'string'].includes(String(definition.type));
-            const shown = hasOverride ? object[field] : sourceDefault ? definition!.default : undefined;
+            const sampler = model === 'rfd3' && field === 'inference_sampler';
+            const shown = hasOverride ? object[field] : sampler ? {} : sourceDefault ? definition!.default : undefined;
             return <div key={field} data-native-setting={field} title={`Parameter key: ${field}`}>
-                {definition?.authority === 'profile' ? <p>{field}: {JSON.stringify(hasOverride ? object[field] : definition.default)} · profile-owned; retained explicit value is unchanged.</p> : <BioXpSchemaInput label={model === 'rfd3' ? field : schema.title ?? field} nativeLabels schema={schema} rootSchema={root} value={shown} onChange={next => patch(field, next)} fallback={() => <p>Retained {field}: {JSON.stringify(object[field])}</p>} />}
+                {definition?.authority === 'profile' ? <p>{field}: {JSON.stringify(hasOverride ? object[field] : definition.default)} · profile-owned; retained explicit value is unchanged.</p> : <BioXpSchemaInput label={model === 'rfd3' ? field : schema.title ?? field} nativeLabels schema={schema} rootSchema={root} showInherited={sampler} value={shown} onChange={next => {
+                    const result = sampler && next && typeof next === 'object' && !Array.isArray(next) && Object.keys(next).length === 0 && !samplerState.current.retainEmpty ? undefined : next;
+                    if (sampler) samplerState.current.identity = JSON.stringify([model, task, result !== undefined, result]);
+                    patch(field, result);
+                }} fallback={() => <p>Retained {field}: {JSON.stringify(object[field])}</p>} />}
                 {definition?.default_source && <p className="text-xs">Inherited reference: {JSON.stringify(definition.default)} · {definition.default_source}</p>}
                 <p className="text-xs">{hasOverride ? 'Custom override' : sourceDefault ? 'Inherited reference; not an override' : 'Inherited value not reported'}</p>
                 {hasOverride && definition?.authority !== 'profile' && <button type="button" onClick={() => patch(field, undefined)}>Use profile value</button>}

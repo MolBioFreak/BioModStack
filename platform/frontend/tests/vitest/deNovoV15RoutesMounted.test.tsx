@@ -152,6 +152,25 @@ it('retains the last task of an inactive engine through template save and load',
     expect(document.querySelector('button[aria-pressed="true"]')?.textContent).toBeTruthy();
 });
 
+it('restores the last generation engine and goal after a redesign template load', async () => {
+    await mount('/submit?template=protein_modification_experimental&generator=rfd3');
+    await select('Goal', 'rna_conditioned');
+    await select('Engine', 'disco');
+    await select('Goal', 'dna_conditioned');
+    await click('Redesign structure');
+    await click('Template Manager');
+    await input('input[placeholder="e.g., My Boltz Config"]', 'Return to generation');
+    await click('Save Template');
+    expect(mocks.saved[0].params.editor_state).toMatchObject({ suite_last_generation: { generator: 'disco', design_task: 'dna_conditioned' }, suite_last_tasks: { rfd3: 'rna_conditioned' } });
+    await click('Load');
+    await click('Generate');
+    const selected = (label: string) => [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === label)?.querySelector('select')?.value;
+    expect(selected('Engine')).toBe('disco');
+    expect(selected('Goal')).toBe('dna_conditioned');
+    await select('Engine', 'rfd3');
+    expect(selected('Goal')).toBe('rna_conditioned');
+});
+
 it('does not infer RFD3 from shared legacy lengths', async () => {
     await mount('/submit', { model_id: 'protein_modification_experimental', mode: 'de_novo_design', name: 'Legacy', params: { min_length: 73, max_length: 99 } });
     const engine = [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Engine')!.querySelector('select')!;

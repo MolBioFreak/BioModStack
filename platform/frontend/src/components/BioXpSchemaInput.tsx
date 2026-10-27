@@ -78,8 +78,8 @@ function matches(schema: Schema, value: unknown, root: Schema): boolean {
 }
 
 /** Schema-driven presentation, not an admission/validation authority. */
-export function BioXpSchemaInput({ label, schema, value, onChange, fallback, rootSchema = schema, rawDraft = false, nativeLabels = false, path = [] }: {
-    label: string; schema: Schema; rootSchema?: Schema; rawDraft?: boolean; nativeLabels?: boolean; value: unknown; onChange: (value: unknown) => void;
+export function BioXpSchemaInput({ label, schema, value, onChange, fallback, rootSchema = schema, rawDraft = false, nativeLabels = false, showInherited = false, path = [] }: {
+    label: string; schema: Schema; rootSchema?: Schema; rawDraft?: boolean; nativeLabels?: boolean; showInherited?: boolean; value: unknown; onChange: (value: unknown) => void;
     fallback: (label: string, value: unknown, onChange: (value: unknown) => void) => React.ReactNode;
     path?: ReadonlyArray<string | number>;
 }) {
@@ -143,12 +143,15 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
         </select></label> : kind === 'object' && objectValue(value) ? <>
             {[...new Set([...Object.keys(fields), ...Object.keys(value)])].map(name => {
                 const child = resolve(fields[name] ?? (objectValue(active.additionalProperties) ? active.additionalProperties as Schema : {}), rootSchema);
+                const reference = [child, ...(child.anyOf ?? []), ...(child.oneOf ?? [])].map(item => resolve(item, rootSchema)).find(item => Object.hasOwn(item, 'default') && item.default_source);
+                const inherited = showInherited && value[name] === undefined && reference !== undefined;
                 return <div key={name}>
                     <label>{display(`${label}.${name}`)}{active.required?.includes(name) ? ' *' : ''}<select aria-label={`${label}.${name} presence`} className={classes} value={value[name] === undefined ? 'omitted' : 'value'} onChange={event => update(name, event.target.value === 'omitted' ? undefined : initialValue(child))}>
                         <option value="omitted">{rawDraft ? 'Unspecified (preserved)' : `Omit (service default${Object.hasOwn(child, 'default') ? `: ${JSON.stringify(child.default)}` : ''})`}</option><option value="value">Explicit value</option>
                     </select></label>
                     {rawDraft && value[name] === undefined && Object.hasOwn(child, 'source_default') && <button type="button" aria-label={`Use source value for ${label}.${name}`} onClick={() => update(name, structuredClone(child.source_default))}>Use source value: {JSON.stringify(child.source_default)}</button>}
-                    {value[name] !== undefined && <BioXpSchemaInput label={`${label}.${name}`} schema={child} rootSchema={rootSchema} rawDraft={rawDraft} nativeLabels={nativeLabels} value={value[name]} path={[...path, name]} onChange={next => update(name, next)} fallback={fallback} />}
+                    {inherited && <p className="text-xs text-slate-400">Inherited reference: {JSON.stringify(reference.default)} · {String(reference.default_source)}. Not an override.</p>}
+                    {(value[name] !== undefined || inherited) && <BioXpSchemaInput label={`${label}.${name}`} schema={child} rootSchema={rootSchema} rawDraft={rawDraft} nativeLabels={nativeLabels} showInherited={showInherited} value={inherited ? reference.default : value[name]} path={[...path, name]} onChange={next => update(name, next)} fallback={fallback} />}
                 </div>;
             })}
             {active.additionalProperties !== false && <>

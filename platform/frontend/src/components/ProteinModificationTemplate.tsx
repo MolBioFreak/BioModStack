@@ -120,9 +120,15 @@ export function ProteinModificationTemplate({
         initialized.current = true;
     }
     const callbacks = useRef({ onDraftChange, onNavigationChange });
+    const savedGeneration = initialValues?.suite_last_generation;
+    const lastGeneration = useRef<{ generator: string; design_task: string; native_mode?: string }>(
+        savedGeneration && typeof savedGeneration === 'object' && !Array.isArray(savedGeneration) && typeof (savedGeneration as Record<string, unknown>).generator === 'string'
+            ? savedGeneration as { generator: string; design_task: string; native_mode?: string }
+            : { generator: navigation.generator ?? 'rfd4_proteina', design_task: navigation.design_task ?? 'unconditional', native_mode: navigation.native_mode },
+    );
     const lastTaskByEngine = useRef<Record<string, string>>({
         ...(initialValues?.suite_last_tasks && typeof initialValues.suite_last_tasks === 'object' && !Array.isArray(initialValues.suite_last_tasks) ? initialValues.suite_last_tasks as Record<string, string> : {}),
-        [navigation.generator ?? 'rfd4_proteina']: navigation.design_task ?? 'unconditional',
+        ...(navigation.modification_mode === 'de_novo_design' ? { [navigation.generator ?? 'rfd4_proteina']: navigation.design_task ?? 'unconditional' } : {}),
     });
     const lastModeByEngine = useRef<Record<string, string>>({
         ...(initialValues?.suite_last_modes && typeof initialValues.suite_last_modes === 'object' && !Array.isArray(initialValues.suite_last_modes) ? initialValues.suite_last_modes as Record<string, string> : {}),
@@ -148,7 +154,7 @@ export function ProteinModificationTemplate({
         // Complexa derives its operation inside the request; its navigation key
         // stays stable while that operation changes.
         if (navigation.generator && navigation.generator !== 'complexa' && typeof draft.native_mode === 'string') lastModeByEngine.current[navigation.generator] = draft.native_mode;
-        callbacks.current.onDraftChange?.({ ...draft, ...navigation, suite_view: suiteView, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, ...(navigation.generator === 'complexa' && typeof draft.native_mode === 'string' ? { native_mode: draft.native_mode } : {}), modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) });
+        callbacks.current.onDraftChange?.({ ...draft, ...navigation, suite_view: suiteView, suite_last_generation: { ...lastGeneration.current }, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, ...(navigation.generator === 'complexa' && typeof draft.native_mode === 'string' ? { native_mode: draft.native_mode } : {}), modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) });
     }, [activeKey, navigation.modification_mode, navigation.generator, navigation.design_task, navigation.native_mode, savedMode, suiteView]);
     const changeNavigation = (state: DeNovoNavigationState) => {
         const next = resolveNavigation({ ...state });
@@ -169,7 +175,6 @@ export function ProteinModificationTemplate({
     const mode: ModificationMode = validatedRedesign ? 'rfd3_iteration' : navigation.modification_mode as ModificationMode;
     const generator = navigation.generator ?? (mode === 'de_novo_design' ? 'rfd4_proteina' : 'rfd3');
     const task = navigation.design_task ?? 'unconditional';
-    const lastGeneration = useRef({ generator, design_task: task, native_mode: navigation.native_mode });
     const lastRedesign = useRef(validatedRedesign || drafts.current.region_redesign ? 'region_redesign' : 'rfd3_iteration');
     const chooseMode = (next: ModificationMode) => changeNavigation(next === 'de_novo_design'
         ? { modification_mode: next, ...lastGeneration.current }
@@ -236,7 +241,7 @@ export function ProteinModificationTemplate({
                 : <ShapeBlueprintTemplate launchContextId={launchContextId} key={activeKey} embedded initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />}
             {onOpenTemplateManager && <button type="button" className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm"
                 onClick={() => onOpenTemplateManager({
-                    currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...navigation, suite_view: suiteView, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) },
+                    currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...navigation, suite_view: suiteView, suite_last_generation: { ...lastGeneration.current }, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) },
                     currentModelId: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? generator : mode === 'rfd3_iteration' && !validatedRedesign ? 'protein_local_redesign' : 'protein_modification_experimental',
                     baseTemplateId: 'protein_modification_experimental',
                     currentMode: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? navigation.native_mode ?? 'generate' : mode === 'rfd3_iteration' ? validatedRedesign ? 'region_redesign' : 'rfd3_local_redesign' : mode,

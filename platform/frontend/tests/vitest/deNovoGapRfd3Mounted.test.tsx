@@ -53,6 +53,44 @@ it('shows source-qualified execution defaults without writing them into the requ
     expect(document.body.textContent).toContain('Inherited reference; not an override');
 });
 
+it('shows sampler reference values and resets only the edited sparse override', async () => {
+    await render(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator: 'rfd3' }} />);
+    await click('Sampling'); await click('Sampler and classifier-free guidance');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="inference_sampler.num_timesteps"]')!.value).toBe('200');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="inference_sampler.allow_realignment"]')!.checked).toBe(false);
+    expect(request().params).not.toHaveProperty('inference_sampler');
+    await edit('inference_sampler.num_timesteps', '250');
+    expect(request().params.inference_sampler).toEqual({ num_timesteps: 250 });
+    await edit('inference_sampler.num_timesteps presence', 'omitted');
+    expect(request().params).not.toHaveProperty('inference_sampler');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="inference_sampler.num_timesteps"]')!.value).toBe('200');
+});
+
+it('preserves explicit sampler values and updates empty-object custody when drafts change in place', async () => {
+    let replace!: (value: Record<string, unknown>) => void;
+    let saved: Record<string, unknown> = {};
+    function Harness() {
+        const [value, setValue] = useState<Record<string, unknown>>({});
+        replace = setValue; saved = value;
+        return <OtherDeNovoSettings model="rfd3" task="unconditional_monomer" value={value} onChange={setValue} />;
+    }
+    await render(<Harness />); await click('Sampler and classifier-free guidance');
+    await act(async () => replace({ inference_sampler: { num_timesteps: 0, allow_realignment: false, custom: null } }));
+    expect(saved.inference_sampler).toEqual({ num_timesteps: 0, allow_realignment: false, custom: null });
+    await edit('inference_sampler.num_timesteps presence', 'omitted');
+    expect(saved.inference_sampler).toEqual({ allow_realignment: false, custom: null });
+    await act(async () => replace({ inference_sampler: {} }));
+    await edit('inference_sampler.num_timesteps', '250');
+    await edit('inference_sampler.num_timesteps presence', 'omitted');
+    expect(saved.inference_sampler).toEqual({});
+    await act(async () => replace({}));
+    await edit('inference_sampler.num_timesteps', '250');
+    await edit('inference_sampler.num_timesteps presence', 'omitted');
+    expect(saved).not.toHaveProperty('inference_sampler');
+    await act(async () => replace({ inference_sampler: null }));
+    expect(saved.inference_sampler).toBeNull();
+});
+
 it.each([false, true, undefined])('parent cold reopen and unrelated edit preserve skip_existing=%s', async value => {
     const draft = vi.fn(); const template = vi.fn();
     await render(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} onOpenTemplateManager={template} initialValues={{ generator: 'rfd3', ...(value === undefined ? {} : { skip_existing: value }) }} />);
