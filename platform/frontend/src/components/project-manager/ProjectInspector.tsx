@@ -178,7 +178,7 @@ export function ProjectInspector({
                     )}
                     {actions.has('edit') && <button type="button" onClick={onEdit} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content focus:ring-2 focus:ring-accent">Edit revision</button>}
                     {(actions.has('add_note') || ['project', 'global_experiment', 'domain_experiment'].includes(selection.node_type)) && <button type="button" onClick={onRecord} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content focus:ring-2 focus:ring-accent">Add record</button>}
-                    {actions.has('archive') && <button type="button" onClick={onArchive} className="rounded-lg border border-warning/60 px-3 py-2 text-xs font-semibold text-warning focus:ring-2 focus:ring-warning">Archive</button>}
+                    {actions.has('archive') && <button type="button" onClick={onArchive} className="rounded-lg border border-warning/60 px-3 py-2 text-xs font-semibold text-warning focus:ring-2 focus:ring-warning">{selection.node_type === 'project' ? 'Delete Project' : 'Archive'}</button>}
                     {actions.has('restore') && <button type="button" onClick={onRestore} className="rounded-lg border border-success/60 px-3 py-2 text-xs font-semibold text-success focus:ring-2 focus:ring-success">Restore</button>}
                 </fieldset>
             </header>

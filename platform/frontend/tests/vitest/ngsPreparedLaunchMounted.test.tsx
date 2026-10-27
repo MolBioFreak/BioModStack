@@ -119,6 +119,22 @@ const submits = () => calls.filter(call => call.url.endsWith('/submit'));
 async function remoteReview() { await click('Vast · Test worker'); await click('Review and submit'); await until(() => expect(button('Approve and submit')).toBeTruthy()); }
 
 describe('ordinary NGS prepared launch through mounted consumers and real API transport', () => {
+    it('resolves exact Project sequence summaries outside the first library page before launching', async () => {
+        const original = api.defaults.adapter as (config: InternalAxiosRequestConfig) => Promise<any>;
+        const lookups: string[] = [];
+        api.defaults.adapter = async (config) => {
+            if (config.url === '/api/sequences/') {
+                const ids = config.params?.sequence_ids;
+                if (ids) lookups.push(ids);
+                return {data: ids ? [molecular] : [],status:200,statusText:'OK',headers:{},config};
+            }
+            return original(config);
+        };
+        await mount({...base,molbioSequenceId:'sequence-1',molbioRevisionId:'revision-1'});
+        expect(lookups).toEqual(['sequence-1']);
+        await click('Review and submit');await until(()=>expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params.molbio_ngs_receipt_id).toBe('new-receipt');
+    });
     it('uploads POD5 files through shared transport and submits their server-returned folder', async () => {
         await mount();
         const upload = container.querySelector<HTMLInputElement>('input[aria-label="Upload POD5 files"]')!;

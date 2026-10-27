@@ -495,3 +495,20 @@ async def test_project_hub_keeps_unavailable_molecular_members_visible(hub_store
     missing = next(item for item in response.json()["plasmids"] if item["revision_id"] == "missing-revision")
     assert missing["availability"] == "unavailable"
     assert missing["unavailable_reason"] == "Molecular member unavailable"
+
+
+@pytest.mark.asyncio
+async def test_deleted_editable_sequence_reopens_its_retained_exact_project_revision(hub_stores):
+    from datetime import datetime
+    experiment_factory, native_factory, molbio_factory, project, experiment, domain, revision = hub_stores
+    async with molbio_factory() as session:
+        document = await session.get(MolecularDocument, 'sequence-pl1480')
+        document.deleted_at = datetime.utcnow()
+        await session.commit()
+    app = _app(experiment_factory, native_factory, molbio_factory)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.get(f'/api/projects/{project.id}/experiments/{experiment.id}/domains/{domain.id}/project-hub', params={'state_revision_id': 'state-current'})
+    assert response.status_code == 200, response.text
+    card = next(item for item in response.json()['plasmids'] if item['sequence_id'] == 'sequence-pl1480')
+    assert card['editable_projection_available'] is False
+    assert f'molbio_revision_id={revision.id}' in card['reopen_href']

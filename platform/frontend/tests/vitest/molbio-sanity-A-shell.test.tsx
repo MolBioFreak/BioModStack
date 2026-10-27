@@ -76,9 +76,12 @@ it('failed selection cannot publish a workspace or its URL', async () => {
 
 it('keeps focus-view Quick Add above the viewer and opens working primer and feature dialogs', async () => {
  await act(async()=>mocks.input.onCreateSequence({name:'Focus QA',sequence:'ACGT'.repeat(30),sequenceType:'dna',circular:true}));
- await act(()=>host.querySelector<HTMLButtonElement>('button[title="Focus Viewer"]')!.click());
+ const focusButtons=host.querySelectorAll<HTMLButtonElement>('button[title="Focus Viewer"]');
+ expect(focusButtons).toHaveLength(1);expect(focusButtons[0].parentElement!.className).not.toContain('absolute');
+ await act(()=>focusButtons[0].click());
  const focus = host.querySelector<HTMLElement>('[data-molbio-viewer-fullscreen="true"]')!;
  expect(focus).toBeTruthy();
+ const exit=host.querySelector<HTMLButtonElement>('[data-molbio-focus-exit]')!;expect(exit.className).toContain('bg-[var(--bg-secondary)]');expect(exit.className).toContain('text-[var(--text-primary)]');
  await act(()=>host.querySelector<HTMLButtonElement>('[data-qa-select-range]')!.click());
  const viewer=host.querySelector('[data-qa-sequence-viewer]')!;
  const layer=(element:Element)=>Number(element.className.match(/z-\[?(\d+)/)?.[1]??0);

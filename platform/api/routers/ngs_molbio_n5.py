@@ -575,8 +575,9 @@ def _project_hub_molecular_href(
     domain_id: str,
     state_revision_id: str,
     sequence_id: str,
+    revision_id: str | None = None,
 ) -> str:
-    """Open the stable sequence at its latest editable server head."""
+    """Open an editable head or an exact retained version after projection deletion."""
     return "/designer?" + urlencode({
         "workspace_id": project_id,
         "global_experiment_id": experiment_id,
@@ -584,6 +585,7 @@ def _project_hub_molecular_href(
         "state_revision_id": state_revision_id,
         "section": "plasmids",
         "molbio_sequence_id": sequence_id,
+        **({"molbio_revision_id": revision_id} if revision_id else {}),
     })
 
 
@@ -630,7 +632,7 @@ async def project_hub(
     attached_sequence_ids = sorted({row.document_id for row in attached_revisions.values()})
     molecular_documents = {
         row.id: row for row in (await molbio.scalars(
-            select(MolecularDocument).options(load_only(MolecularDocument.id, MolecularDocument.current_revision_id)).where(MolecularDocument.id.in_(attached_sequence_ids))
+            select(MolecularDocument).options(load_only(MolecularDocument.id, MolecularDocument.current_revision_id, MolecularDocument.deleted_at)).where(MolecularDocument.id.in_(attached_sequence_ids))
         )).all()
     } if attached_sequence_ids else {}
     current_revision_ids = [
@@ -701,9 +703,10 @@ async def project_hub(
     for receipt in molecular_receipts:
         attached_revision = attached_revisions.get(receipt.entity_id)
         document = molecular_documents.get(attached_revision.document_id) if attached_revision is not None else None
+        editable_projection_available = document is not None and document.deleted_at is None
         revision = (
             current_revisions.get(document.current_revision_id)
-            if document is not None and document.current_revision_id
+            if editable_projection_available and document.current_revision_id
             else None
         ) or attached_revision
         if revision is None or not isinstance(revision.snapshot, dict):
@@ -770,6 +773,7 @@ async def project_hub(
             "name": name,
             "description": str(snapshot.get("description") or ""),
             "availability": receipt.availability,
+            "editable_projection_available": editable_projection_available,
             "unavailable_reason": None,
             "length_bp": revision.content_length,
             "gc_percent": snapshot.get("gc_content"),
@@ -791,6 +795,7 @@ async def project_hub(
                 domain_id=domain_id,
                 state_revision_id=selected.id,
                 sequence_id=sequence_id,
+                revision_id=revision.id if not editable_projection_available else None,
             ),
             "map_segments": map_segments,
         })

@@ -56,7 +56,7 @@ it.each(['project', 'global_experiment', 'domain_experiment'] as const)('refresh
     await wait(() => expect(host.querySelector<HTMLInputElement>('[aria-label="Name"]')?.value).toBe('Saved title'));
     await act(() => button('Save immutable revision').click());
     await wait(() => expect(host.querySelector('[role="dialog"]')).toBeNull());
-    for (const [open, confirm] of [['Archive record', 'Archive without cancelling runs'], ['Restore record', 'Restore']]) {
+    for (const [open, confirm] of [['Archive record', kind === 'project' ? 'Delete Project (archive)' : 'Archive without cancelling runs'], ['Restore record', 'Restore']]) {
         await act(() => button(open).click());
         await wait(() => expect(button(confirm)).toBeTruthy());
         await act(() => button(confirm).click());

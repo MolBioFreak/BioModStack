@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
+import { useThemeColors } from '../useThemeColors';
 import type { Data, Layout, PlotSelectionEvent, Shape } from 'plotly.js';
 import type { SelectionInfo } from './SequenceViewer';
 import type { RestrictionOccurrence } from '../../lib/restrictionAnalysis';
@@ -30,10 +31,7 @@ interface MetricDefinition {
     label: string;
     shortLabel: string;
     description: string;
-    color: string;
-    fillColor: string;
     range?: [number, number];
-    preferredBand?: [number, number] | null;
     suffix: string;
     tickFormat: string;
     decimals: number;
@@ -95,24 +93,18 @@ const METRIC_DEFINITIONS: MetricDefinition[] = [
         id: 'gc',
         label: 'GC Content',
         shortLabel: 'GC%',
-        description: 'Sliding-window GC percentage. Useful for spotting synthesis, cloning, and expression trouble zones.',
-        color: '#22c55e',
-        fillColor: 'rgba(34, 197, 94, 0.12)',
+        description: 'Measured GC percentage in each sequence window; no smoothing. Ambiguous bases are excluded from the GC denominator.',
         range: [0, 100],
-        preferredBand: [40, 60],
         suffix: '%',
         tickFormat: '.0f',
         decimals: 1,
-        summaryLabel: 'Mean GC',
+        summaryLabel: 'Whole-sequence GC',
     },
     {
         id: 'restriction_density',
         label: 'Restriction Density',
         shortLabel: 'Cuts/kb',
         description: 'Cut-site density for the currently mapped enzyme set. Useful when reviewing cloning-accessible regions.',
-        color: '#f97316',
-        fillColor: 'rgba(249, 115, 22, 0.12)',
-        preferredBand: null,
         suffix: '/kb',
         tickFormat: '.1f',
         decimals: 2,
@@ -121,12 +113,9 @@ const METRIC_DEFINITIONS: MetricDefinition[] = [
     {
         id: 'ambiguity_density',
         label: 'Ambiguity Load',
-        shortLabel: 'Ambig%',
+        shortLabel: 'Ambiguous bases %',
         description: 'Fraction of ambiguous or non-canonical bases in each window. This should usually be zero.',
-        color: '#f43f5e',
-        fillColor: 'rgba(244, 63, 94, 0.12)',
         range: [0, 100],
-        preferredBand: [0, 0],
         suffix: '%',
         tickFormat: '.0f',
         decimals: 1,
@@ -135,12 +124,9 @@ const METRIC_DEFINITIONS: MetricDefinition[] = [
     {
         id: 'homopolymer_burden',
         label: 'Homopolymer Burden',
-        shortLabel: 'Runs≥4',
+        shortLabel: 'Homopolymer runs ≥4',
         description: 'Percent of bases sitting inside homopolymer runs of length 4 or more. Useful for synthesis and sequencing QC.',
-        color: '#38bdf8',
-        fillColor: 'rgba(56, 189, 248, 0.12)',
         range: [0, 100],
-        preferredBand: [0, 10],
         suffix: '%',
         tickFormat: '.0f',
         decimals: 1,
@@ -221,16 +207,6 @@ function buildWindows(sequenceLength: number, windowSize: number, stepSize: numb
     return windows;
 }
 
-function smoothValues(values: number[]): number[] {
-    if (values.length <= 2) return values;
-    return values.map((value, index) => {
-        const left = values[Math.max(0, index - 1)];
-        const right = values[Math.min(values.length - 1, index + 1)];
-        return (left + value + right) / 3;
-    });
-}
-
-
 function computeMetricValue(
     metric: MetricId,
     sequence: string,
@@ -297,26 +273,9 @@ function calculateYRange(metric: MetricDefinition, values: number[]): [number, n
         return metric.range ?? [0, 1];
     }
 
-    const observedMin = Math.min(...values);
     const observedMax = Math.max(...values);
 
-    if (metric.id === 'gc') {
-        const paddedMin = Math.floor((observedMin - 4) / 5) * 5;
-        const paddedMax = Math.ceil((observedMax + 4) / 5) * 5;
-        const bandMin = metric.preferredBand?.[0] ?? paddedMin;
-        const bandMax = metric.preferredBand?.[1] ?? paddedMax;
-        let lower = clamp(Math.min(paddedMin, bandMin), 0, 100);
-        let upper = clamp(Math.max(paddedMax, bandMax), 0, 100);
-        if ((upper - lower) < 22) {
-            const midpoint = (upper + lower) / 2;
-            lower = clamp(Math.floor(midpoint - 11), 0, 100);
-            upper = clamp(Math.ceil(midpoint + 11), 0, 100);
-        }
-        if ((upper - lower) < 12) {
-            return [0, 100];
-        }
-        return [lower, upper];
-    }
+    if (metric.id === 'gc') return [0, 100];
 
     if (metric.id === 'ambiguity_density' || metric.id === 'homopolymer_burden') {
         const upper = clamp(Math.ceil((observedMax * 1.25) / 5) * 5, 5, 100);
@@ -346,6 +305,7 @@ export function GCContentTrack({
     onSelectionChange,
     onClearSelection,
 }: GCContentTrackProps) {
+    const colors = useThemeColors();
     const [metricId, setMetricId] = useState<MetricId>('gc');
     useEffect(() => {
         if (metricId === 'restriction_density') onRestrictionAnalysisRequested?.();
@@ -371,7 +331,7 @@ export function GCContentTrack({
     }, [circular, metricId, normalizedSequence.length, restrictionOccurrences, reverseCoordinates, selectedEnzymes]);
 
     const analyticsData = useMemo<AnalyticsPoint[]>(() => {
-        if (!normalizedSequence || normalizedSequence.length < 10) return [];
+        if (!normalizedSequence) return [];
 
         return buildWindows(normalizedSequence.length, windowSize, computedStepSize).map(({ start, end }) => ({
             start,
@@ -381,22 +341,17 @@ export function GCContentTrack({
         }));
     }, [computedStepSize, metricId, normalizedSequence, restrictionPositions, windowSize]);
 
-    const smoothedValues = useMemo(
-        () => smoothValues(analyticsData.map((point) => point.value)),
-        [analyticsData],
-    );
-
     const summary = useMemo(() => {
         if (analyticsData.length === 0) {
             return { mean: 0, minimum: 0, maximum: 0 };
         }
         const rawValues = analyticsData.map((point) => point.value);
         return {
-            mean: rawValues.reduce((sum, value) => sum + value, 0) / rawValues.length,
+            mean: computeMetricValue(metricId, normalizedSequence, 0, normalizedSequence.length, restrictionPositions),
             minimum: Math.min(...rawValues),
             maximum: Math.max(...rawValues),
         };
-    }, [analyticsData]);
+    }, [analyticsData, metricId, normalizedSequence, restrictionPositions]);
 
     const plotSelection = useMemo(
         () => selectionForPlotDisplay(
@@ -441,50 +396,26 @@ export function GCContentTrack({
     const rawValues = useMemo(() => analyticsData.map((point) => point.value), [analyticsData]);
     const yRange = useMemo(() => calculateYRange(metric, rawValues), [metric, rawValues]);
 
-    const traces = useMemo<Data[]>(() => [
-        {
-            x: analyticsData.map((point) => point.position),
-            y: rawValues,
-            type: 'scatter',
-            mode: 'lines',
-            line: { width: 1.2, color: metric.color, shape: 'linear' },
-            opacity: 0.36,
-            hoverinfo: 'skip',
-            showlegend: false,
-        },
-        {
-            x: analyticsData.map((point) => point.position),
-            y: smoothedValues,
-            customdata: analyticsData.map((point) => [point.start + 1, point.end, point.value]),
-            type: 'scatter',
-            mode: 'lines',
-            line: { width: 2.6, color: metric.color, shape: 'linear' },
-            hovertemplate: `<b>${metric.label}</b><br>%{customdata[0]:,.0f}-%{customdata[1]:,.0f}<br>%{customdata[2]:.${metric.decimals}f}${metric.suffix}<extra></extra>`,
-            showlegend: false,
-        },
-    ], [analyticsData, metric, rawValues, smoothedValues]);
+    const traces = useMemo<Data[]>(() => [{
+        x: analyticsData.map(point => point.position),
+        y: rawValues,
+        width: Math.max(1, computedStepSize * .88),
+        customdata: analyticsData.map(point => [point.start + 1, point.end]),
+        type: 'bar',
+        marker: { color: colors.accentPrimary },
+        hovertemplate: `<b>${metric.label}</b><br>Bases %{customdata[0]:,.0f}–%{customdata[1]:,.0f}<br>%{y:.${metric.decimals}f}${metric.suffix}<extra></extra>`,
+        showlegend: false,
+    }], [analyticsData, colors.accentPrimary, computedStepSize, metric, rawValues]);
 
     const layout = useMemo<Partial<Layout>>(() => {
         const shapes: Partial<Shape>[] = [];
-        if (metric.preferredBand && metric.preferredBand[1] > metric.preferredBand[0]) {
-            shapes.push({
-                type: 'rect',
-                x0: 0,
-                x1: normalizedSequence.length,
-                y0: metric.preferredBand[0],
-                y1: metric.preferredBand[1],
-                fillcolor: 'rgba(148, 163, 184, 0.08)',
-                line: { width: 0 },
-                layer: 'below',
-            });
-        }
         shapes.push({
             type: 'line',
             x0: 0,
             x1: normalizedSequence.length,
             y0: summary.mean,
             y1: summary.mean,
-            line: { color: 'rgba(148, 163, 184, 0.45)', width: 1, dash: 'dot' },
+            line: { color: colors.textSecondary, width: 1, dash: 'dot' },
             layer: 'below',
         });
         if (selectionSnapshot) {
@@ -505,7 +436,7 @@ export function GCContentTrack({
             height,
             margin: { l: 50, r: 14, t: 6, b: 28 },
             paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(2, 6, 23, 0.62)',
+            plot_bgcolor: colors.bgPrimary,
             hovermode: 'x unified',
             showlegend: false,
             dragmode: 'select',
@@ -514,43 +445,41 @@ export function GCContentTrack({
             xaxis: {
                 showgrid: false,
                 zeroline: false,
-                color: '#94a3b8',
-                tickfont: { size: 10, color: '#64748b' },
+                        tickfont: { size: 12, color: colors.textSecondary },
                 range: [0, normalizedSequence.length],
                 tickformat: ',',
                 fixedrange: false,
-                title: { text: 'Position (bp)', font: { size: 10, color: '#64748b' } },
+                title: { text: 'Position (bp)', font: { size: 12, color: colors.textSecondary } },
             },
             yaxis: {
                 showgrid: true,
-                gridcolor: 'rgba(51, 65, 85, 0.28)',
+                gridcolor: colors.borderPrimary,
                 zeroline: false,
-                color: '#94a3b8',
-                tickfont: { size: 10, color: '#64748b' },
+                        tickfont: { size: 12, color: colors.textSecondary },
                 range: yRange,
                 tickformat: metric.tickFormat,
                 fixedrange: true,
-                title: { text: metric.shortLabel, font: { size: 10, color: '#64748b' } },
+                title: { text: metric.shortLabel, font: { size: 12, color: colors.textSecondary } },
             },
             shapes,
             hoverlabel: {
-                bgcolor: '#020617',
-                bordercolor: '#1e293b',
-                font: { color: '#e2e8f0', size: 11 },
+                bgcolor: colors.bgSecondary,
+                bordercolor: colors.borderPrimary,
+                font: { color: colors.textPrimary, size: 11 },
             },
         };
-    }, [height, metric, normalizedSequence.length, selectionSnapshot, summary.mean, yRange]);
+    }, [colors, height, metric, normalizedSequence.length, selectionSnapshot, summary.mean, yRange]);
 
     if (!normalizedSequence || analyticsData.length === 0) {
         return null;
     }
 
     return (
-        <div className="border-b border-slate-700 bg-slate-950/20 px-2 py-2">
-            <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70 shadow-[0_0_0_1px_rgba(15,23,42,0.5)]">
+        <div className="border-b border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-2">
+            <div className="overflow-hidden rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)]">
                 <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-slate-800 px-3 py-2">
                     <div className="mr-1 flex shrink-0 items-baseline gap-2">
-                        <span className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Profile</span>
+                        <span className="text-sm font-semibold text-[var(--text-primary)]">Sequence analytics</span>
                         <span className="text-xs font-semibold text-slate-200">{metric.label}</span>
                     </div>
                     <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-0.5">
@@ -560,7 +489,7 @@ export function GCContentTrack({
                                     onClick={() => setMetricId(definition.id)}
                                     className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
                                         metricId === definition.id
-                                            ? 'border-slate-500 bg-slate-700 text-white'
+                                            ? 'border-[var(--accent-primary)] bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
                                             : 'border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800'
                                     }`}
                                     title={definition.description}
@@ -584,6 +513,12 @@ export function GCContentTrack({
                     </div>
                 </div>
 
+                <div className="grid grid-cols-2 gap-2 border-b border-[var(--border-primary)] p-3 text-sm lg:grid-cols-4" aria-label="Sequence composition summary">
+                    <div><p className="text-xs text-[var(--text-secondary)]">Whole-sequence GC</p><p className="text-2xl font-semibold text-[var(--text-primary)]">{calculateGC(normalizedSequence).toFixed(1)}%</p></div>
+                    <div><p className="text-xs text-[var(--text-secondary)]">Sequence length</p><p className="font-semibold">{normalizedSequence.length.toLocaleString()} bases</p></div>
+                    <div><p className="text-xs text-[var(--text-secondary)]">Ambiguous bases</p><p className="font-semibold">{Array.from(normalizedSequence).filter(base => !CANONICAL_BASES.has(base)).length.toLocaleString()}</p></div>
+                    <div><p className="text-xs text-[var(--text-secondary)]">Selected metric · window range</p><p className="font-semibold">{formatRange(metric, summary.minimum, summary.maximum)}</p></div>
+                </div>
                 <div className="px-2 py-1">
                     <Plot
                         data={traces}
@@ -607,12 +542,7 @@ export function GCContentTrack({
                         <span>•</span>
                         <span>{computedStepSize.toLocaleString()} bp step</span>
                         <span>•</span>
-                        <span className="inline-flex items-center gap-1">
-                            <span className="h-px w-4 bg-slate-500" /> raw
-                        </span>
-                        <span className="inline-flex items-center gap-1">
-                            <span className="h-0.5 w-4" style={{ backgroundColor: metric.color }} /> 3-window mean
-                        </span>
+                        <span>Bars show measured window values; no smoothing. Dotted line: whole-sequence value.</span>
                         {metricId === 'restriction_density' && (
                             <>
                                 <span>•</span>

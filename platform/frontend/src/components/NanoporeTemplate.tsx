@@ -28,7 +28,6 @@ import {
     fetchMolBioSequenceRevisions,
     fetchNucleotideSequences,
     issueMolBioNgsReceipt,
-    previewMolBioSequenceImport,
     submitOntNgsJob,
     prepareOntNgsJob,
     type OntNgsPreparedReview,
@@ -36,9 +35,6 @@ import {
     submitPooledReferenceAssignment,
     preparePooledReferenceAssignment,
     type MolBioSequenceImportCommitResponse,
-    type MolBioSequenceImportError,
-    type MolBioSequenceImportPayload,
-    type MolBioSequenceImportPreviewRecord,
     type MolBioSequenceRevision,
     type NucleotideSequenceListItem,
     type PooledReferenceAssignmentSubmitRequest,
@@ -49,6 +45,8 @@ import { NanoporeWorkflowChooser, type WorkflowKey } from './ngs/NanoporeWorkflo
 import { buildNanoporeOperatorStageParams } from '../lib/nanoporeLaunchPayload';
 import { normalizeNanoporeWorkflowChoice } from '../lib/nanoporeWorkflow';
 import { Pod5Upload } from './ngs/Pod5Upload';
+import { ReferenceSequenceInputs } from './ngs/ReferenceSequenceInputs';
+import { BarcodeSampleSheet } from './ngs/BarcodeSampleSheet';
 
 const TASK_FLOW_PANEL = 'rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 shadow-[var(--shadow-card)]';
 const TASK_FLOW_CARD = 'min-w-0 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4';
@@ -423,17 +421,6 @@ function revisionLabel(revision: MolBioSequenceRevision): string {
     return `r${revision.revision_number} · ${revision.is_current ? 'current' : 'historical'}`;
 }
 
-interface RawDnaImportRow {
-    id: string;
-    name: string;
-    sequence: string;
-    topology: 'circular' | 'linear';
-}
-
-function createRawDnaImportRow(index: number): RawDnaImportRow {
-    return { id: `raw-dna-${index}-${Date.now()}`, name: '', sequence: '', topology: 'circular' };
-}
-
 function ImportedMolBioRecords({ records }: { records: MolBioSequenceImportCommitResponse['records'] }) {
     const { contextHref } = useGlobalExperimentContext();
     if (!records.length) return null;
@@ -444,173 +431,6 @@ function ImportedMolBioRecords({ records }: { records: MolBioSequenceImportCommi
             <Link to={contextHref('/designer', { molbio_sequence_id: record.sequence_id, molbio_revision_id: record.revision_id ?? null })} className="underline">{record.revision_id ? 'Open exact revision in MolBio viewer' : 'Open MolBio library'}</Link>
         </li>)}</ul>
     </div>;
-}
-
-function MolBioSequenceImportPanel() {
-    const queryClient = useQueryClient();
-    const [format, setFormat] = useState<'fasta' | 'genbank' | 'raw_dna'>('fasta');
-    const [topologyDefault, setTopologyDefault] = useState<'circular' | 'linear'>('circular');
-    const [sourceText, setSourceText] = useState('');
-    const [rawRows, setRawRows] = useState<RawDnaImportRow[]>(() => [createRawDnaImportRow(0)]);
-    const [previewPayload, setPreviewPayload] = useState<MolBioSequenceImportPayload | null>(null);
-    const [previewRecords, setPreviewRecords] = useState<Array<MolBioSequenceImportPreviewRecord & { errors: string[] }>>([]);
-    const [previewErrors, setPreviewErrors] = useState<MolBioSequenceImportError[]>([]);
-    const [message, setMessage] = useState('');
-    const [committedRecords, setCommittedRecords] = useState<MolBioSequenceImportCommitResponse['records']>([]);
-
-    const buildPayload = (): MolBioSequenceImportPayload => {
-        if (format === 'raw_dna') {
-            const rawRowsPayload = rawRows
-                .filter((row) => row.name.trim() && row.sequence.replace(/\s/g, '').trim())
-                .map((row) => ({
-                    name: row.name.trim(),
-                    sequence: row.sequence.replace(/\s/g, '').toUpperCase(),
-                    topology: row.topology,
-                }));
-            if (rawRowsPayload.length === 0) throw new Error('Add at least one named raw-DNA row before preview.');
-            return {
-                origin_surface: 'ngs',
-                source_format: 'raw_dna',
-                raw_rows: rawRowsPayload,
-                topology_default: topologyDefault,
-                idempotency_key: newIdempotencyKey('molbio-sequence-import'),
-            };
-        }
-
-        if (!sourceText.trim()) {
-            throw new Error(`Provide ${format === 'fasta' ? 'FASTA' : 'GenBank'} text before preview.`);
-        }
-        return {
-            origin_surface: 'ngs',
-            source_format: format,
-            source_text: sourceText,
-            topology_default: topologyDefault,
-            idempotency_key: newIdempotencyKey('molbio-sequence-import'),
-        };
-    };
-
-    const previewMutation = useMutation({
-        mutationFn: (payload: MolBioSequenceImportPayload) => previewMolBioSequenceImport(payload),
-        onSuccess: (response, payload) => {
-            const errors = response.data.errors || [];
-            setPreviewPayload(payload);
-            setPreviewRecords(response.data.records.map((record) => ({
-                ...record,
-                errors: errors
-                    .filter((error) => error.record_ordinal === record.record_ordinal)
-                    .map((error) => error.message),
-            })));
-            setPreviewErrors(errors.filter((error) => error.record_ordinal == null));
-            setMessage('Preview ready. Review every independent record before commit.');
-        },
-        onError: (error: unknown) => {
-            setPreviewPayload(null);
-            setPreviewRecords([]);
-            setPreviewErrors([]);
-            setMessage(extractApiErrorMessage(error));
-        },
-    });
-
-    const commitMutation = useMutation({
-        mutationFn: () => {
-            if (!previewPayload) throw new Error('Preview the import before committing it.');
-            return commitMolBioSequenceImport(previewPayload);
-        },
-        onSuccess: (response) => {
-            setMessage(`Committed ${response.data.records.length} saved sequence record(s).`);
-            setCommittedRecords(response.data.records);
-            setPreviewPayload(null);
-            setPreviewRecords([]);
-            setPreviewErrors([]);
-            queryClient.invalidateQueries({ queryKey: ['molbio-ngs-sequences'] });
-            queryClient.invalidateQueries({ queryKey: ['molbio-ngs-revisions'] });
-        },
-        onError: (error: unknown) => setMessage(extractApiErrorMessage(error)),
-    });
-
-    const handlePreview = () => {
-        setMessage('');
-        try {
-            previewMutation.mutate(buildPayload());
-        } catch (error: unknown) {
-            setMessage(error instanceof Error ? error.message : 'Unable to build import preview.');
-        }
-    };
-
-    return (
-        <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/40 p-3" data-testid="molbio-sequence-import-panel">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                    <h3 className="text-sm font-semibold text-[var(--text-primary)]">Import saved MolBio sequence</h3>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Preview checks your sequences without saving them. Commit saves the imported sequences and revisions.</p>
-                </div>
-                <div className="flex gap-2">
-                    <select value={format} onChange={(event) => setFormat(event.target.value as typeof format)} className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-xs text-[var(--text-primary)]">
-                        <option value="fasta">FASTA text</option>
-                        <option value="genbank">GenBank text</option>
-                        <option value="raw_dna">Explicit raw-DNA rows</option>
-                    </select>
-                    <select value={topologyDefault} onChange={(event) => setTopologyDefault(event.target.value as typeof topologyDefault)} className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-xs text-[var(--text-primary)]" aria-label="Import topology default">
-                        <option value="circular">Default circular</option>
-                        <option value="linear">Default linear</option>
-                    </select>
-                </div>
-            </div>
-
-            {format !== 'raw_dna' ? (
-                <div className="mt-2">
-                    <textarea value={sourceText} onChange={(event) => setSourceText(event.target.value)} placeholder={format === 'fasta' ? '>construct-a\nATGC…' : 'LOCUS       construct-a…'} rows={4} className="w-full rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 font-mono text-xs text-[var(--text-primary)]" />
-                </div>
-            ) : (
-                <div className="mt-2 space-y-2">
-                    {rawRows.map((row, index) => (
-                        <div key={row.id} className="grid grid-cols-1 gap-2 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2 md:grid-cols-[minmax(10rem,0.25fr)_minmax(0,1fr)_8rem_auto]">
-                            <input value={row.name} onChange={(event) => setRawRows((previous) => previous.map((candidate) => candidate.id === row.id ? { ...candidate, name: event.target.value } : candidate))} placeholder={`Record ${index + 1} name`} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-sm text-[var(--text-primary)]" />
-                            <input value={row.sequence} onChange={(event) => setRawRows((previous) => previous.map((candidate) => candidate.id === row.id ? { ...candidate, sequence: event.target.value.replace(/[^ACGTNacgtn\s]/g, '') } : candidate))} placeholder="ATGC…" className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 font-mono text-sm text-[var(--text-primary)]" />
-                            <select value={row.topology} onChange={(event) => setRawRows((previous) => previous.map((candidate) => candidate.id === row.id ? { ...candidate, topology: event.target.value as RawDnaImportRow['topology'] } : candidate))} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-sm text-[var(--text-primary)]">
-                                <option value="circular">Circular</option>
-                                <option value="linear">Linear</option>
-                            </select>
-                            <button type="button" onClick={() => setRawRows((previous) => previous.length > 1 ? previous.filter((candidate) => candidate.id !== row.id) : previous)} disabled={rawRows.length <= 1} className="rounded border border-[var(--border-primary)] px-2 py-1.5 text-xs text-[var(--text-secondary)] disabled:cursor-not-allowed disabled:opacity-40">Remove</button>
-                        </div>
-                    ))}
-                    <button type="button" onClick={() => setRawRows((previous) => [...previous, createRawDnaImportRow(previous.length)])} className="rounded border border-[var(--border-primary)] px-2 py-1.5 text-xs text-[var(--text-primary)]">Add raw-DNA row</button>
-                </div>
-            )}
-
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-                <button type="button" onClick={handlePreview} disabled={previewMutation.isPending || commitMutation.isPending} className="rounded border border-[var(--accent-secondary)] bg-[color-mix(in_srgb,var(--accent-secondary)_12%,transparent)] px-3 py-1.5 text-xs text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40">
-                    {previewMutation.isPending ? 'Previewing…' : 'Preview import'}
-                </button>
-                <button type="button" onClick={() => commitMutation.mutate()} disabled={!previewPayload || previewRecords.some((record) => record.errors.length > 0) || previewErrors.length > 0 || previewMutation.isPending || commitMutation.isPending} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40">
-                    {commitMutation.isPending ? 'Committing…' : 'Commit preview'}
-                </button>
-                {message && <span className="text-xs text-[var(--text-secondary)]">{message}</span>}
-            </div>
-
-            <ImportedMolBioRecords records={committedRecords} />
-            {(previewRecords.length > 0 || previewErrors.length > 0) && (
-                <div className="mt-3 overflow-x-auto rounded border border-[var(--border-primary)]" data-testid="molbio-import-preview-records">
-                    <table className="w-full min-w-[720px] text-left text-xs">
-                        <thead className="bg-[var(--bg-secondary)] uppercase tracking-wide text-[var(--text-secondary)]">
-                            <tr><th className="px-2 py-1.5">Independent record</th><th className="px-2 py-1.5">Digest</th><th className="px-2 py-1.5">Topology</th><th className="px-2 py-1.5">Errors</th></tr>
-                        </thead>
-                        <tbody className="divide-y divide-[var(--border-primary)]">
-                            {previewRecords.map((record, index) => (
-                                <tr key={`${record.name}-${index}`}>
-                                    <td className="px-2 py-1.5 text-[var(--text-primary)]">{record.name}</td>
-                                    <td className="px-2 py-1.5 font-mono text-[var(--text-secondary)]">{record.canonical_digest || '—'}</td>
-                                    <td className="px-2 py-1.5 text-[var(--text-secondary)]">{record.topology || '—'}</td>
-                                    <td className="px-2 py-1.5 text-rose-400">{record.errors.length > 0 ? record.errors.join(' · ') : 'None'}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                    {previewErrors.length > 0 && <div className="border-t border-[var(--border-primary)] px-2 py-1.5 text-xs text-rose-400">{previewErrors.map((error) => error.message).join(' · ')}</div>}
-                </div>
-            )}
-        </section>
-    );
 }
 
 interface PooledTargetDraft {
@@ -919,6 +739,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [duplexPairs, setDuplexPairs] = useState(initialValues?.duplexPairs as string || '');
     const [barcodeKit, setBarcodeKit] = useState<'' | 'SQK-RBK114-96'>((initialValues?.barcodeKit as '' | 'SQK-RBK114-96' | undefined) ?? (initialValues?.selectedWorkflow === 'barcode' ? 'SQK-RBK114-96' : ''));
     const [sampleSheet, setSampleSheet] = useState(initialValues?.sampleSheet as string || '');
+    const [sampleSheetBlocker, setSampleSheetBlocker] = useState('');
     const [modifiedBases, setModifiedBases] = useState<ModifiedBases>(initialValues?.modifiedBases as ModifiedBases || 'none');
 
     // ============================================================================
@@ -1169,7 +990,20 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             })
             .filter((value): value is string => Boolean(value)),
     ), [exactStateRevisionQuery.data?.members]);
-    const allMolbioSequences = molbioSequencesQuery.data || [];
+    const missingSequenceIds = [...new Set([...exactStateMolecularRevisionKeys].map(key => key.split(':')[0]))]
+        .filter(id => !(molbioSequencesQuery.data ?? []).some(sequence => sequence.id === id)).sort();
+    const projectSequenceSummaries = useQuery({
+        queryKey: ['molbio-ngs-sequences', 'exact-project-members', exactDomainExperimentId, exactStateRevisionId, missingSequenceIds.join(',')],
+        queryFn: async () => {
+            const result: NucleotideSequenceListItem[] = [];
+            for (let index = 0; index < missingSequenceIds.length; index += 128) {
+                result.push(...(await fetchNucleotideSequences({ sequence_ids: missingSequenceIds.slice(index,index+128).join(','), limit: 500 })).data);
+            }
+            return result;
+        },
+        enabled: Boolean(exactDomainExperimentId && missingSequenceIds.length), retry: false,
+    });
+    const allMolbioSequences = [...(molbioSequencesQuery.data ?? []), ...(projectSequenceSummaries.data ?? [])];
     const allMolbioRevisions = molbioRevisionsQuery.data || [];
     const molbioSequences = exactDomainExperimentId
         ? allMolbioSequences.filter((sequence) => [...exactStateMolecularRevisionKeys].some((key) => key.startsWith(`${sequence.id}:`)))
@@ -1234,6 +1068,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (!executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1) blockers.push('Select one GPU or Scheduler auto before submitting this NGS job.');
         if (inputSource === 'pod5' && !pod5Dir.trim()) blockers.push('Please specify a POD5 data directory.');
         if (inputSource === 'pod5' && pod5Uploading) blockers.push('Wait for the POD5 upload to finish.');
+        if (inputSource === 'pod5' && barcodeKit && sampleSheetBlocker) blockers.push(sampleSheetBlocker);
         if (inputSource === 'pod5' && doradoMolecule === 'rna' && doradoMode === 'duplex') blockers.push('RNA duplex is unsupported by the locked Dorado runtime.');
         if (inputSource === 'pod5' && doradoMode === 'duplex' && !duplexPairs.trim()) blockers.push('Duplex basecalling requires a confined read-pairs file.');
         if (inputSource === 'pod5' && doradoMode === 'duplex' && barcodeKit) blockers.push('Barcode classification and duplex cannot be combined in the locked runtime.');
@@ -1899,14 +1734,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         setShowOptionalReference(false);
                     }}>No reference — basecalling only</button>}
                     <div className="mb-3">
-                        <h3 className="text-sm font-semibold text-[var(--text-primary)]">Shared Experiment reference</h3>
-                        <p className="mt-1 text-xs text-[var(--text-secondary)]">{requiresReference ? 'Choose a saved reference revision attached to this Experiment.' : 'Reference-free basecalling is supported. Optionally choose an attached reference for alignment; Experiment and state grouping are retained.'}</p>
+                        <h3 className="text-sm font-semibold text-[var(--text-primary)]">Expected sequence for this analysis</h3>
+                        <p className="mt-1 text-xs text-[var(--text-secondary)]">{requiresReference ? 'Choose a Project sequence below, or add expected sequences by pasting, browsing files, or selecting saved MolBio sequences.' : 'Reference-free basecalling is supported. Optionally choose an attached reference for alignment; Experiment and state grouping are retained.'}</p>
                         {requiresReference && exactDomainExperimentId && molbioSequences.length === 0 && !molbioSequencesQuery.isLoading && !exactStateRevisionQuery.isLoading && (
-                            <p role="alert" className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">No shared reference is attached to this scientific-state revision. Return to the Experiment’s Molecular Inputs section to add one or more references.</p>
+                            <p role="alert" className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">This Project has no expected sequences yet. Add one or several below.</p>
                         )}
                     </div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                        <label className="text-xs text-[var(--text-secondary)]">Experiment reference sequence
+                        <label className="text-xs text-[var(--text-secondary)]">Project sequence
                             <select
                                 value={selectedMolbioSequenceId}
                                 onChange={(event) => {
@@ -1917,7 +1752,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-2 text-sm text-[var(--text-primary)]"
                                 data-testid="molbio-sequence-selector"
                             >
-                                <option value="">Select attached reference…</option>
+                                <option value="">Select a Project sequence…</option>
                                 {molbioSequences.map((sequence) => <option key={sequence.id} value={sequence.id}>{sequence.name}</option>)}
                             </select>
                         </label>
@@ -1934,6 +1769,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             </select>
                         </label>
                     </div>
+                    {projectSequenceSummaries.isError && <p role="alert" className="mt-2 text-xs text-[var(--text-error)]">Some Project sequences could not be loaded. <button type="button" onClick={() => void projectSequenceSummaries.refetch()}>Retry Project sequences</button></p>}
                     {molbioRevisionsQuery.isError && <p className="mt-2 text-xs text-rose-400">Unable to load revisions for this sequence.</p>}
                     {selectedMolbioSequence && selectedMolbioRevision && (
                         <div className="mt-3 grid grid-cols-2 gap-2 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/50 p-3 text-xs md:grid-cols-5" data-testid="molbio-revision-summary">
@@ -1956,7 +1792,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         </div>
                     )}
                     <div className="mt-3">
-                        <MolBioSequenceImportPanel key={`${exactDomainExperimentId}:${exactStateRevisionId}`} />
+                        <ReferenceSequenceInputs key={exactDomainExperimentId} onAdded={(records, nextStateId) => {
+                            if (nextStateId) experimentContext.setStateRevisionId(nextStateId);
+                            if (records.length === 1 && nextStateId && records[0].revision_id) {
+                                setSelectedMolbioSequenceId(records[0].sequence_id);
+                                setSelectedMolbioRevisionId(records[0].revision_id);
+                                setApprovedComparisonPanelId('');
+                            }
+                        }} />
                     </div>
                     </>
                 )}
@@ -2052,7 +1895,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 <option value="">No barcoding</option>
                                 <option value="SQK-RBK114-96">SQK-RBK114-96</option>
                             </select></label>
-                            {barcodeKit && <label className="text-sm text-[var(--text-secondary)]">Sample sheet (optional)<input aria-label="Sample sheet" value={sampleSheet} onChange={(event) => setSampleSheet(event.target.value)} className="mt-1 w-full bg-[var(--bg-tertiary)] rounded p-2" /></label>}
+                            {barcodeKit && <div className="col-span-2"><BarcodeSampleSheet path={sampleSheet} kit={barcodeKit} onChange={setSampleSheet} onBlocker={setSampleSheetBlocker} /></div>}
                         </div>
                     )}
                     {(modifiedBases !== 'none' || barcodeKit) && <p className="text-xs text-[var(--text-secondary)]">Paired-strand calling cannot be combined with modification calling or barcoding in this installation.</p>}

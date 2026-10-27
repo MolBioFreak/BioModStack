@@ -1,4 +1,8 @@
 import type { ReactNode } from 'react';
+import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
+import { removeMolecularProjectMember } from '../../lib/molecularProjectMembership';
 import { Link } from 'react-router-dom';
 import type {
     ProjectHubExperimentSummary,
@@ -29,6 +33,15 @@ function RelationLink({ href, children }: { href: string | null; children: React
     return <Link to={href} className="font-medium text-accent hover:underline">{children}</Link>;
 }
 
+function RemoveProjectSequence({sequence,model}:{sequence:ProjectHubDNASequenceSummary;model:ProjectHubReadModel}) {
+    const [confirm,setConfirm]=useState(false); const client=useQueryClient(); const [,setParams]=useSearchParams();
+    const remove=useMutation({mutationFn:()=>removeMolecularProjectMember(model.identity.workspace_id,model.identity.global_experiment_id,model.identity.domain_experiment_id,sequence.sequence_id,model.identity.selected_state_revision_id),onSuccess:async state=>{
+        await Promise.all([client.invalidateQueries({queryKey:['molbio-project-hub']}),client.invalidateQueries({queryKey:['project-manager']}),client.invalidateQueries({queryKey:['molbio-ngs-domain-state']})]);
+        setParams(previous=>{const next=new URLSearchParams(previous);next.set('state_revision_id',state.id);return next;});setConfirm(false);
+    }});
+    return <div className="text-xs"><button type="button" className="rounded border border-border-primary px-3 py-2 text-[var(--text-error)]" onClick={()=>setConfirm(true)}>Delete from Project</button>{confirm&&<div role="alertdialog" aria-label={`Remove ${sequence.name} from Project`} className="mt-2 max-w-sm space-y-2 rounded border border-border-primary bg-surface p-3"><p>Remove “{sequence.name}” from this Project? The saved sequence stays in MolBio; previous Project states and sequencing evidence are retained.</p><div className="flex gap-2"><button type="button" disabled={remove.isPending} onClick={()=>setConfirm(false)}>Cancel</button><button type="button" disabled={remove.isPending} onClick={()=>remove.mutate()} className="text-[var(--text-error)]">Confirm delete from Project</button></div>{remove.isError&&<p role="alert">{remove.error instanceof Error?remove.error.message:'Unable to remove this sequence.'}</p>}</div>}</div>;
+}
+
 function DNASequenceCard({ sequence, model }: { sequence: ProjectHubDNASequenceSummary; model: ProjectHubReadModel }) {
     const sequenceData = model.sequence_data.items.filter((item) => item.plasmid_sequence_id === sequence.sequence_id);
     const experiments = model.experiments.filter((item) => item.plasmid_sequence_ids.includes(sequence.sequence_id));
@@ -41,14 +54,14 @@ function DNASequenceCard({ sequence, model }: { sequence: ProjectHubDNASequenceS
                 <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                         <h3 className="truncate text-base font-semibold text-content">{sequence.name}</h3>
-                        <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">Latest editable · Revision {sequence.revision_number}</span>
+                        <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">{sequence.editable_projection_available === false ? 'Retained saved version' : 'Latest editable'} · Revision {sequence.revision_number}</span>
                     </div>
                     <p className="mt-1 text-xs text-content-secondary">
                         {sequence.length_bp.toLocaleString()} bp · {sequence.topology ?? 'unknown topology'} · {sequence.feature_count} features
                     </p>
                     {sequence.description ? <p className="mt-2 line-clamp-2 text-xs text-content-muted">{sequence.description}</p> : null}
                 </div>
-                <Link to={sequence.reopen_href} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">Open latest</Link>
+                <div className="flex flex-wrap items-start gap-2"><Link to={sequence.reopen_href} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-[var(--text-on-accent)] outline-none focus:ring-2 focus:ring-accent">{sequence.editable_projection_available === false ? 'Open saved version' : 'Open latest'}</Link><RemoveProjectSequence sequence={sequence} model={model} /></div>
             </div>
 
             {hasRelationships ? (
@@ -159,7 +172,7 @@ export function DNASequenceProjectWorkspace({ model }: { model: ProjectHubReadMo
                 <header className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">DNA sequence workspace</p>
-                        <h2 className="mt-1 text-lg font-semibold text-content">{model.project.plasmid_count} current DNA sequences</h2>
+                        <h2 className="mt-1 text-lg font-semibold text-content">{model.project.plasmid_count} Project DNA sequences</h2>
                         <p className="mt-1 max-w-3xl text-xs text-content-secondary">Each DNA sequence opens at its latest editable revision. A sequence can be a plasmid, linear construct, amplicon, assembly product, or reference. NGS evidence, saved experiments, and derived results stay with the sequence that owns them.</p>
                     </div>
                     <div className="flex flex-wrap gap-2">

@@ -12,6 +12,8 @@ import {
     projectResultHref,
     isPermissionError,
     issuePreparedLaunchContext,
+    getProject,
+    archiveProject,
     listNgsMolBioProjectLinks,
     listDomainWorkflowPlanRevisions,
     prepareDomainWorkflowPlanRevision,
@@ -221,6 +223,10 @@ function ProjectsIndex() {
         else next.set('scope', nextScope);
         setSearchParams(next);
     };
+    const deleteProject = useMutation({
+        mutationFn: async (id: string) => { const current = await getProject(id); return archiveProject(id, current.head_generation); },
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project-manager', 'projects'] }),
+    });
     const projectsQuery = useInfiniteQuery({
         queryKey: ['project-manager', 'projects', apiScope, query.trim(), statusFilter, archiveFilter],
         initialPageParam: undefined as string | undefined,
@@ -265,6 +271,7 @@ function ProjectsIndex() {
                         <button key={value} type="button" role="tab" aria-selected={scope === value} onClick={() => selectScope(value)} className={`rounded-lg px-4 py-2 text-sm font-semibold focus:ring-2 focus:ring-accent ${scope === value ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>{label}</button>
                     ))}
                 </div>
+                {deleteProject.isError && <p role="alert" className="mt-4 text-sm text-[var(--text-error)]">{projectManagerErrorMessage(deleteProject.error)}</p>}
                 <section aria-label="Project discovery controls" className="mt-3 grid gap-3 rounded-xl border border-border-primary bg-surface-secondary p-3 md:grid-cols-[minmax(12rem,1fr)_auto_auto_auto]">
                     <input aria-label="Search Projects" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, objective, owner, or tag" className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-sm text-content" />
                     <select aria-label="Project status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content"><option value="all">All statuses</option><option value="draft">Draft</option><option value="active">Active</option><option value="on_hold">On hold</option><option value="completed">Completed</option></select>
@@ -284,7 +291,8 @@ function ProjectsIndex() {
                             const activeCount = typeof project.active_experiment_count === 'number' ? project.active_experiment_count : typeof payload.active_experiment_count === 'number' ? payload.active_experiment_count : null;
                             const failureCount = typeof project.unresolved_failure_count === 'number' ? project.unresolved_failure_count : typeof payload.unresolved_failure_count === 'number' ? payload.unresolved_failure_count : null;
                             return (
-                                <Link data-project-card key={project.id} to={`/projects/${encodeURIComponent(project.id)}`} className="group rounded-2xl border border-border-primary bg-surface-secondary p-5 shadow-sm outline-none transition hover:-translate-y-0.5 hover:border-accent hover:shadow-xl focus:ring-2 focus:ring-accent">
+                                <article key={project.id} className="relative rounded-2xl border border-border-primary bg-surface-secondary">
+                                <Link data-project-card to={`/projects/${encodeURIComponent(project.id)}`} className="group rounded-2xl border border-border-primary bg-surface-secondary p-5 shadow-sm outline-none transition hover:-translate-y-0.5 hover:border-accent hover:shadow-xl focus:ring-2 focus:ring-accent">
                                     <div className="flex flex-wrap items-start justify-between gap-2"><div className="flex flex-wrap gap-2"><span className="rounded-full border border-border-primary px-2 py-1 text-xs font-semibold text-content-secondary">{projectScope === 'ngs_molbio_local' ? 'NGS/MolBio' : 'Global'}</span>{projectScope === 'ngs_molbio_local' ? <LocalProjectAssociationBadge project={project} /> : null}</div><span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-muted">{project.status}</span></div>
                                     <h2 className="mt-4 text-lg font-semibold text-content group-hover:text-accent">{project.name}</h2>
                                     <p className="mt-2 line-clamp-3 text-xs leading-5 text-content-secondary">{typeof payload.research_objective === 'string' ? payload.research_objective : project.description || 'No research objective recorded.'}</p>
@@ -292,6 +300,8 @@ function ProjectsIndex() {
                                     <p className="mt-4 text-[10px] text-content-muted">Updated {new Date(project.updated_at).toLocaleString()}</p>
                                     <span className="mt-3 inline-flex text-sm font-semibold text-accent">Open Project</span>
                                 </Link>
+                                {project.lifecycle_state !== 'archived' && <div className="px-5 pb-4"><button type="button" disabled={deleteProject.isPending} aria-label={`Delete Project ${project.name}`} onClick={() => { if (window.confirm(`Delete Project “${project.name}” from active Projects? It will be archived so its sequences, data and history remain recoverable.`)) deleteProject.mutate(project.id); }} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-error)]">Delete Project</button></div>}
+                                </article>
                             );
                         })}
                         {projectsQuery.hasNextPage ? (

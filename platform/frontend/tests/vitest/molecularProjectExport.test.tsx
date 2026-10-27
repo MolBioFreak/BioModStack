@@ -2,7 +2,7 @@ import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
-import { addMolecularProjectMember, exportMolecularProjectHistory, sequenceInventoryPolicy, type MolecularProjectHistory } from '../../src/lib/molecularProjectMembership';
+import { removeMolecularProjectMember, addMolecularProjectMember, exportMolecularProjectHistory, sequenceInventoryPolicy, type MolecularProjectHistory } from '../../src/lib/molecularProjectMembership';
 import { ExportDropdown } from '../../src/components/MolBioToolkit/ExportDropdown';
 
 afterEach(() => vi.restoreAllMocks());
@@ -83,4 +83,20 @@ describe('native molecular Project export', () => {
         expect(note.source_receipt_ids).toEqual(['current-receipt', 'old-receipt']);
         expect(post.mock.calls.some(([url]) => String(url).endsWith('/state/revisions'))).toBe(false);
     });
+});
+
+it('removes only the selected Project sequence membership and preserves policy, other members and evidence', async () => {
+    const payload=sequenceInventoryPolicy();payload.notes='Keep policy';
+    reads({payload,members:[
+        {receipt_id:'remove',entity_kind:'molecular_revision',role:'molecular_expected_construct',ordinal:0,sample_revision_id:null,reopen_destination:{params:{sequence_id:'sequence'}}},
+        {receipt_id:'keep',entity_kind:'molecular_revision',role:'molecular_expected_construct',ordinal:1,sample_revision_id:null,reopen_destination:{params:{sequence_id:'other'}}},
+        {receipt_id:'evidence',entity_kind:'ngs_job',role:'ngs_analysis',ordinal:2,sample_revision_id:null},
+    ]},9);
+    const post=writes();await removeMolecularProjectMember('project','experiment','domain','sequence','state');
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post.mock.calls[0][1]).toMatchObject({expected_head_generation:9,parent_revision_id:'state',payload,members:[{receipt_id:'keep'},{receipt_id:'evidence'}]});
+});
+it('rejects stale Project deletion before writing membership', async () => {
+    reads({members:[]},9);const post=writes();
+    await expect(removeMolecularProjectMember('project','experiment','domain','sequence','old')).rejects.toThrow('Project changed');expect(post).not.toHaveBeenCalled();
 });

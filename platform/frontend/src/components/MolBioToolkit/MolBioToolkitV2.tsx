@@ -28,6 +28,7 @@ import { DEFAULT_VISIBILITY } from './sequenceViewerConstants';
 import { ProjectAttachmentDialog, type ProjectAttachmentSource } from '../project-manager/ProjectAttachmentDialog';
 import { MOLECULAR_MEMBER_ADAPTER } from '../../lib/molecularProjectMembership';
 import { SequenceHeader } from './SequenceHeader';
+import { DeleteSequenceAction } from './DeleteSequenceAction';
 import {
     MobileMolBioWorkspace,
     MobileMolBioReadPanel,
@@ -180,6 +181,7 @@ interface SequenceLibraryProps {
     projectScoped: boolean;
     showAllConstructs: boolean;
     onToggleAllConstructs: () => void;
+    onDeleted?: (sequenceId: string) => void;
 }
 
 export function SequenceLibrary({
@@ -197,6 +199,7 @@ export function SequenceLibrary({
     projectScoped,
     showAllConstructs,
     onToggleAllConstructs,
+    onDeleted,
 }: SequenceLibraryProps) {
     const [showDemos, setShowDemos] = useState(false);
 
@@ -274,8 +277,8 @@ export function SequenceLibrary({
                     </div>
                 ) : (
                     sequences.map((seq) => (
+                        <div key={seq.id} className="border-b border-[var(--border-primary)]">
                         <button
-                            key={seq.id}
                             onClick={() => onSelect(seq)}
                             data-molbio-mobile-touch-target={mobile ? 'true' : undefined}
                             className={`w-full border-b border-slate-800 p-3 text-left transition-colors hover:bg-slate-800 ${mobile ? 'min-h-12' : ''} ${selectedId === seq.id ? 'bg-slate-700' : ''}`}
@@ -296,6 +299,8 @@ export function SequenceLibrary({
                                 {seq.feature_count} features{seq.updated_at ? ` • ${new Date(seq.updated_at).toLocaleDateString()}` : ''}
                             </div>
                         </button>
+                        {seq.entity_kind !== 'molecular_revision' && <div className="px-3 pb-2"><DeleteSequenceAction mobile={mobile} sequenceId={seq.id} name={seq.name} onDeleted={() => { onDeleted?.(seq.id); onRefresh(); }} /></div>}
+                        </div>
                     ))
                 )}
             </div>
@@ -3191,6 +3196,12 @@ export function MolBioToolkitV2() {
                             selectedId={selectedSequenceId}
                             onSelect={(sequence) => handleMobileSelectSequence(sequence.id)}
                             onRefresh={loadLibrary}
+                            onDeleted={(id) => {
+                                invalidateGetSequence();
+                                if (selectedSequenceId === id && !activeWorkspace?.exactMolecularRevision) closeWorkspaceImmediately(activeWorkspaceId);
+                                setWorkspaceTabs(previous => previous.filter(tab => tab.sequenceId !== id || Boolean(tab.exactMolecularRevision)));
+                                void loadLibrary();
+                            }}
                             onLoadDemo={handleMobileLoadDemo}
                             loading={libraryLoading}
                             width={viewportWidth}
@@ -3322,6 +3333,12 @@ export function MolBioToolkitV2() {
                                 guardedLoadSequence(sequence.id);
                             }}
                             onRefresh={loadLibrary}
+                            onDeleted={(id) => {
+                                invalidateGetSequence();
+                                if (selectedSequenceId === id && !activeWorkspace?.exactMolecularRevision) closeWorkspaceImmediately(activeWorkspaceId);
+                                setWorkspaceTabs(previous => previous.filter(tab => tab.sequenceId !== id || Boolean(tab.exactMolecularRevision)));
+                                void loadLibrary();
+                            }}
                             onLoadDemo={guardedLoadDemo}
                             loading={libraryLoading}
                             width={viewerLayout.leftPanelWidth}
@@ -3379,8 +3396,6 @@ export function MolBioToolkitV2() {
                             showGCTrack={showGCTrack}
                             onGCTrackToggle={() => setShowGCTrack(prev => !prev)}
                             onOpenLibrary={isExactMolecularAuthority ? undefined : () => setShowInputModal(true)}
-                            isViewerFullscreen={isViewerFullscreen}
-                            onToggleFullscreen={toggleViewerFullscreen}
                             isLibraryPanelCollapsed={isLibraryPanelCollapsed}
                             isToolPanelCollapsed={isToolPanelCollapsed}
                             onToggleLibraryPanel={toggleLibraryPanel}
@@ -3498,18 +3513,16 @@ export function MolBioToolkitV2() {
                                     left: 'calc(env(safe-area-inset-left) + 0.75rem)',
                                     top: 'calc(env(safe-area-inset-top) + 0.75rem)',
                                 } : undefined}
-                                className={`pointer-events-none absolute z-20 flex items-center gap-2 ${
-                                    isViewerFullscreen
-                                        ? 'left-[max(env(safe-area-inset-left),0.75rem)] top-[max(env(safe-area-inset-top),0.75rem)]'
-                                        : `right-4 ${showGCTrack ? 'top-[212px]' : 'top-4'}`
-                                }`}
+                                className={isViewerFullscreen
+                                    ? 'pointer-events-none absolute z-20 flex items-center gap-2 left-[max(env(safe-area-inset-left),0.75rem)] top-[max(env(safe-area-inset-top),0.75rem)]'
+                                    : 'relative z-20 flex shrink-0 justify-end border-b border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2'}
                             >
                                 {isViewerFullscreen ? (
                                     <button
                                         type="button"
                                         data-molbio-focus-exit="true"
                                         onClick={() => setIsViewerFullscreen(false)}
-                                        className="pointer-events-auto min-h-12 rounded-lg border border-cyan-500/70 bg-slate-950/95 px-4 text-sm font-semibold text-slate-100 shadow-xl transition-colors hover:bg-slate-800"
+                                        className="pointer-events-auto min-h-12 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 text-sm font-semibold text-[var(--text-primary)] shadow-[var(--shadow-card)] hover:bg-[var(--bg-tertiary)]"
                                         title="Exit focused plasmid view"
                                     >
                                         Exit Focus
@@ -3518,7 +3531,7 @@ export function MolBioToolkitV2() {
                                     <button
                                         type="button"
                                         onClick={toggleViewerFullscreen}
-                                        className="pointer-events-auto rounded-full border border-slate-600 bg-slate-900/90 px-3 py-1.5 text-sm font-medium text-slate-100 shadow-lg transition-colors hover:bg-slate-800"
+                                        className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-1.5 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
                                         title="Focus Viewer"
                                     >
                                         Focus Viewer
