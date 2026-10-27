@@ -6,6 +6,8 @@ from typing import Any
 
 
 TYPED_CORE_JOB_MODELS = {
+    "family_msa_protein",
+    "family_msa_nucleic",
     "boltz2",
     "boltz_cp_experimental",
     "boltzgen",

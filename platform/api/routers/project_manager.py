@@ -1574,7 +1574,8 @@ async def _plan_launch_authority(
     plan_authority: ExperimentWorkflowPlanAuthority,
     pinned: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if await _is_native_protein_domain(session, plan_authority.expected_domain_revision_id):
+    if ((isinstance(pinned, dict) and pinned.get("schema") == "bms.protein-setup-launch-authority.v1")
+            or await _is_native_protein_domain(session, plan_authority.expected_domain_revision_id)):
         from experiment_services import protein_setup_launch_authority
         return await protein_setup_launch_authority(session, plan_authority, pinned=pinned)
     authority = await exact_local_launch_authority(
@@ -1604,7 +1605,8 @@ async def _current_preparation_launch_authority(
     if not isinstance(normalized_preparation, dict):
         raise ValidationFailure("replacement_preparation_required")
     pinned = normalized_preparation.get("launch_authority")
-    native = await _is_native_protein_domain(global_session, plan_authority.expected_domain_revision_id)
+    native = ((isinstance(pinned, dict) and pinned.get("schema") == "bms.protein-setup-launch-authority.v1")
+              or await _is_native_protein_domain(global_session, plan_authority.expected_domain_revision_id))
     # Native proof includes the preparation's pinned Project/Experiment revisions
     # and capability. A Domain-only cache must not substitute another Plan's proof.
     current_authority = (

@@ -468,7 +468,8 @@ async def persist_workflow_plan_authority(
     native_contract = None
     if normalized_job_request is not None:
         from services.protein_project_capabilities import normalized_job_plan_contract, protein_setup_parameter_schema, _PARAMETER_SCHEMAS
-        setup_capability = capability_id if capability_id in _PARAMETER_SCHEMAS and protein_setup_parameter_schema(capability_id).get("x-bms-native-editor-draft") else None
+        from services.family_msa_project_capabilities import family_msa_capability
+        setup_capability = capability_id if ((capability_id in _PARAMETER_SCHEMAS and protein_setup_parameter_schema(capability_id).get("x-bms-native-editor-draft")) or family_msa_capability(capability_id) is not None) else None
         native_contract = normalized_job_plan_contract(
             normalized_job_request, native_entrypoint=native_entrypoint,
             setup_capability_id=setup_capability,
@@ -2394,6 +2395,9 @@ async def protein_setup_launch_authority(
         "schema": "bms.protein-setup-launch-authority.v1",
         "capability_contract_sha256": authority.capability_contract_sha256,
     }
+    from services.family_msa_project_capabilities import family_msa_capability
+    family = family_msa_capability((await _head(session, authority.workflow_id, "workflow")).description)
+    expected_domain = family[0]["domain_kind"] if family is not None else "protein_in_silico"
     for prefix, head in (("project", project), ("global_experiment", experiment), ("domain", domain)):
         revision_id = (pinned or {}).get(f"{prefix}_revision_id", head.current_revision_id)
         if prefix == "domain":
@@ -2407,7 +2411,7 @@ async def protein_setup_launch_authority(
             raise ValidationFailure("Protein setup hierarchy revision is not canonical")
         if prefix == "domain" and (
             payload.get("schema") != "bms.domain-experiment.v1"
-            or payload.get("domain_kind") != "protein_in_silico"
+            or payload.get("domain_kind") != expected_domain
         ):
             raise ValidationFailure("native Protein setup authority requires its Protein Domain")
         result.update({

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { submitJob } from '../../lib/api';
+import { Link, useNavigate } from 'react-router-dom';
+import { api, submitJob } from '../../lib/api';
+import { getLaunchContext } from '../../lib/projectManager';
 import type { JsonObject } from '../../lib/projectManager';
 import { useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup';
 
@@ -36,6 +37,7 @@ function MappingInput({value, onChange}: {value: Record<string,string>; onChange
 }
 export default function AlignmentEditor({ model }: { model: string }) {
     const setup = useProjectWorkflowSetup();
+    const navigate = useNavigate();
     const [molecule,setMolecule] = useState<Molecule>(model === 'family_msa_nucleic' ? 'dna' : 'protein');
     const [engine,setEngine] = useState<Engine>('mafft');
     const [drafts,setDrafts] = useState<Record<Engine,Settings>>(() => structuredClone(defaults));
@@ -46,7 +48,7 @@ export default function AlignmentEditor({ model }: { model: string }) {
         const id = `${setup.setup.project_id}:${setup.setup.setup_context_id}`;
         if (hydrated.current === id) return;
         hydrated.current = id;
-        const editor = setup.setup.draft?.editor_state as {molecule?:Molecule;engine?:Engine;drafts?:Record<Engine,Settings>;fasta?:string} | undefined;
+        const editor = (setup.setup.draft?.editor_state ?? setup.setup.draft) as {molecule?:Molecule;engine?:Engine;drafts?:Record<Engine,Settings>;fasta?:string} | undefined;
         if (editor?.molecule) setMolecule(editor.molecule); if (editor?.engine && defaults[editor.engine]) setEngine(editor.engine);
         if (editor?.drafts) setDrafts({...structuredClone(defaults),...editor.drafts}); if (typeof editor?.fasta === 'string') setFasta(editor.fasta);
     }, [setup.setup]);
@@ -61,7 +63,24 @@ export default function AlignmentEditor({ model }: { model: string }) {
     const run = async (action:'save'|'launch') => {
         setBusy(true); setError(''); setJob('');
         try {
-            if (setup.active) { if (action === 'save') await setup.saveDraft(draft(true)); else await setup.startRun(draft()); }
+            if (setup.active) {
+                if (action === 'save') await setup.saveDraft(draft(true));
+                else {
+                    const prepared = await setup.startRun(draft(), {stayInEditor:true});
+                    const contextId = prepared.launch_context_id;
+                    if (!contextId) throw new Error('The Project workflow did not return a launch context.');
+                    const context = await getLaunchContext(contextId);
+                    const scheduler = context.pinned_scheduler;
+                    if (!scheduler) throw new Error('The Project workflow did not return a pinned scheduler.');
+                    const response = await submitJob({...scheduler, launch_context_id:contextId}, {launchContext:true});
+                    const id = response.data?.id;
+                    if (typeof id !== 'string') throw new Error('Job API returned no Job ID');
+                    const binding = await api.post<{return_uri:string}>(`/api/launch-contexts/${encodeURIComponent(contextId)}/bind`, {job_id:id});
+                    const uri = binding.data.return_uri;
+                    if (typeof uri === 'string' && uri.startsWith('/') && !uri.startsWith('//')) navigate(uri);
+                    else setJob(id);
+                }
+            }
             else if (action === 'launch') { const response = await submitJob(request()); const id = response.data?.id; if (typeof id !== 'string') throw new Error('Job API returned no Job ID'); setJob(id); }
         } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
     };

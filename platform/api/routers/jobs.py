@@ -6009,15 +6009,22 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     normalized_mode = str(job_data.mode or "").strip().lower()
     if normalized_model_id in {'family_msa_protein', 'family_msa_nucleic'}:
         from services.family_msa.requests import MODE, prepare_request
+        from services.resource_usage_evidence import strip_resource_execution_metadata
+        from services.execution_ownership import strip_execution_metadata
+        native_params = strip_execution_metadata(strip_resource_execution_metadata(job_data.params))
+        adapter = native_params.pop('workflow_adapter', None)
+        metadata = {key: value for key, value in job_data.params.items() if key not in native_params and key != 'workflow_adapter'}
+        if adapter is not None:
+            metadata['workflow_adapter'] = adapter
         try:
-            selected, payload = prepare_request(job_data.params)
+            selected, payload = prepare_request(native_params)
         except (TypeError, ValueError) as exc:
             raise HTTPException(422, detail=str(exc)) from exc
         if selected != normalized_model_id or normalized_mode != MODE:
             raise HTTPException(422, detail='Family alignment model or mode does not match request')
         job_data.model_id = selected
         job_data.mode = MODE
-        job_data.params = payload
+        job_data.params = {**payload, **metadata}
         return job_data
     from services.sequence_designer_settings import normalize_historical_sequence_settings
     job_data.params = normalize_historical_sequence_settings(normalized_model_id, job_data.params)
