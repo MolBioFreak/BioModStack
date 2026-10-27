@@ -5,7 +5,6 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from .formats import parse
 from .models import AlignmentRequest, MafftSettings
 from .native import run_mafft
 from .tree import _TOKEN, map_mafft_tree
@@ -109,15 +108,18 @@ def run_engine(request: AlignmentRequest, workdir: Path, executable=None, mafft=
     with (workdir/'engine.log').open('wb') as log:
         p = subprocess.run(args, stdout=log, stderr=subprocess.STDOUT, cwd=workdir, env=env, check=False)
     files = sorted(workdir.glob('ensemble.*.fasta')) if ensemble else [output] if output.exists() else []
+    from .observations import observe_alignment
+    native_roster = request.roster.model_copy(deep=True)
+    for row, ident in zip(native_roster.rows, ids):
+        row.row_id = ident
     observations = []
     for file in files:
-        try:
-            aligned = parse(file.read_text(), 'fasta', request.roster.molecule)
-            headers = [r.header for r in aligned.rows]
-            observations.append({'artifact': file.name, 'native_order': headers,
-                'missing_ids': sorted(set(ids)-set(headers)), 'unexpected_ids': sorted(set(headers)-set(ids))})
-        except (ValueError, OSError) as exc:
-            observations.append({'artifact': file.name, 'parse_error': str(exc)})
+        details = observe_alignment(file, native_roster)
+        if 'output_headers' in details:
+            details['native_order'] = details['output_headers']
+        if 'observation_error' in details:
+            details['parse_error'] = details['observation_error']
+        observations.append({'artifact': file.name, **details})
     receipt = {'attempt_dir': str(workdir), 'returncode': p.returncode, 'requested': request.model_dump(mode='json'),
         'effective_settings': s.model_dump(mode='json'), 'argv': args, 'wall_seconds': time.monotonic()-start,
         'artifacts': [p.name for p in workdir.iterdir() if p.is_file() and p.name != 'receipt.json'],
