@@ -162,7 +162,7 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
         ont.fetchOptions.mockResolvedValue({ data: { ...optionsResponse.data, can_start: false, available_kits: [], options: [] } });
         await act(async () => root.render(panel()));
         await flush();
-        expect(container.textContent).toContain('MinKNOW detects this flow cell but offers no compatible sequencing kits');
+        expect(container.textContent).toContain('Test cells are used for hardware checks in MinKNOW');
         expect(container.textContent).not.toContain('Insert a flow cell to list kits');
         expect([...container.querySelectorAll('button')].find((b) => b.textContent === 'Start sequencing')?.disabled).toBe(true);
     });
