@@ -1,15 +1,19 @@
 """Exact native and Project-retained family alignment result readers."""
 import json
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Job, JobArtifact, get_session
 from experiment_database import get_experiment_session
 from experiment_models import ExperimentArtifact, ExperimentExternalEntityReceipt, ExperimentResource
-from experiment_services import ValidationFailure
-from routers.experiment_workspaces import _operator_principal, _require_mutation_owner
+from experiment_services import ExperimentServiceError, ValidationFailure
+from molbio_database import get_molbio_session
+from routers.experiment_workspaces import _error, _operator_principal, _require_mutation_owner
+from services.family_msa.sources import browse_dataset_resources, freeze_dataset_resources, resolve_molecular_member
 from services.family_msa.publication import CustodyError, retained_path
 from services.family_msa.read_model import alignment_document
 from services.global_experiments.adapters import AdapterError, _read_verified_file, registry
@@ -17,6 +21,115 @@ from services.global_experiments.result_surfaces import _acknowledgement, _valid
 from services.job_result_roots import resolve_persisted_job_result_root
 
 router = APIRouter(prefix='/api/family-msa', tags=['family-msa-results'])
+
+
+class SourceReceipt(BaseModel):
+    receipt_id: str
+    entity_kind: str
+    entity_id: str
+    adapter_id: str
+    revision: str | None
+    content_digest: str | None
+    availability: str
+
+
+class SourceOccurrence(BaseModel):
+    ordinal: int
+    role: str
+    member_identity: str
+    member_sha256: str
+    media_type: str | None
+    value: Any
+    receipt: SourceReceipt | None
+
+
+class ResourcePage(BaseModel):
+    schema_name: str = Field(alias='schema')
+    project_id: str
+    dataset_id: str
+    revision_id: str
+    revision_sha256: str
+    items: list[SourceOccurrence]
+    offset: int
+    limit: int
+    total: int
+    next_offset: int | None
+
+
+class ResourceSelection(BaseModel):
+    schema_name: str = Field(alias='schema')
+    project_id: str
+    dataset_id: str
+    revision_id: str
+    revision_sha256: str
+    members: list[SourceOccurrence]
+
+
+class FreezeRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    ordinals: list[StrictInt] | None = None
+
+
+class ResolvedMember(BaseModel):
+    schema_name: str = Field(alias='schema')
+    project_id: str
+    dataset_id: str
+    revision_id: str
+    revision_sha256: str
+    ordinal: int
+    member_identity: str
+    member_sha256: str
+    status: str
+    reason: str | None = None
+    source_kind: str | None = None
+    source_identity: str | None = None
+    source_digest: str | None = None
+    molecule: str | None = None
+    label: str | None = None
+    start: int | None = None
+    end: int | None = None
+    sequence: str | None = None
+
+
+SOURCE_PATH = '/projects/{project_id}/datasets/{dataset_id}/revisions/{revision_id}'
+
+
+@router.get(SOURCE_PATH + '/resources', response_model=ResourcePage)
+async def source_resources(request: Request, project_id: str, dataset_id: str, revision_id: str,
+                           offset: int = 0, limit: int = 50,
+                           session: AsyncSession = Depends(get_experiment_session)):
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    try:
+        return await browse_dataset_resources(session, project_id=project_id, dataset_id=dataset_id,
+                                              revision_id=revision_id, offset=offset, limit=limit)
+    except ExperimentServiceError as exc:
+        raise _error(exc) from exc
+
+
+@router.post(SOURCE_PATH + '/resources/freeze', response_model=ResourceSelection)
+async def source_freeze(request: Request, project_id: str, dataset_id: str, revision_id: str,
+                        payload: FreezeRequest, session: AsyncSession = Depends(get_experiment_session)):
+    """Return an immutable selection value; the Project draft owner persists it."""
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    try:
+        return await freeze_dataset_resources(session, project_id=project_id, dataset_id=dataset_id,
+                                              revision_id=revision_id, ordinals=payload.ordinals)
+    except ExperimentServiceError as exc:
+        raise _error(exc) from exc
+
+
+@router.get(SOURCE_PATH + '/resources/{ordinal}/molecular', response_model=ResolvedMember)
+async def source_molecular(request: Request, project_id: str, dataset_id: str, revision_id: str,
+                           ordinal: int, start: int | None = None, end: int | None = None,
+                           session: AsyncSession = Depends(get_experiment_session),
+                           core: AsyncSession = Depends(get_session),
+                           molbio: AsyncSession = Depends(get_molbio_session)):
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    try:
+        return await resolve_molecular_member(session, core, molbio, project_id=project_id,
+            dataset_id=dataset_id, revision_id=revision_id, ordinal=ordinal, start=start, end=end)
+    except ExperimentServiceError as exc:
+        raise _error(exc) from exc
 
 
 def unavailable(exc):
