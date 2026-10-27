@@ -99,6 +99,9 @@ def test_real_portable_import_export_roundtrip(tmp_path, monkeypatch):
         assert list(scratch.iterdir()) == []
         tracemalloc.start()
         first = client.import_project_bundle_streaming(project, original, replay_key='first')
+        page = client._request('GET', f'/api/family-msa/projects/{project}/receipts')
+        assert page['items'] == [{'receipt_id': first.receipt_id, 'entity_kind': 'family_msa_import', 'availability': 'available'}]
+        assert page['next_cursor'] is None
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
         assert peak < 16 * 1024 * 1024, peak

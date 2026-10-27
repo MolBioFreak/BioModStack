@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from database import Job, JobArtifact, get_session
 from experiment_database import get_experiment_session
@@ -22,6 +23,22 @@ from services.global_experiments.result_surfaces import _acknowledgement, _valid
 from services.job_result_roots import resolve_persisted_job_result_root
 
 router = APIRouter(prefix='/api/family-msa', tags=['family-msa-results'])
+
+
+@router.get('/projects/{project_id}/receipts')
+async def list_project_alignments(request: Request, project_id: str, after: str = '',
+                                  session: AsyncSession = Depends(get_experiment_session)):
+    """Page existing Project receipts, without creating computation records."""
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    rows = (await session.scalars(select(ExperimentExternalEntityReceipt).where(
+        ExperimentExternalEntityReceipt.workspace_id == project_id,
+        ExperimentExternalEntityReceipt.entity_kind.in_(('family_msa_job_result', 'family_msa_import')),
+        ExperimentExternalEntityReceipt.id > after,
+    ).order_by(ExperimentExternalEntityReceipt.id).limit(101))).all()
+    page = rows[:100]
+    return {'items': [{'receipt_id': r.id, 'entity_kind': r.entity_kind,
+                       'availability': r.availability} for r in page],
+            'next_cursor': page[-1].id if len(rows) > 100 else None}
 
 
 @router.get('/settings-schema')

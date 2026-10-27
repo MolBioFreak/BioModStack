@@ -4,6 +4,7 @@ import JbrowseViewer from './JbrowseViewer';
 import Av2Viewer from './Av2Viewer';
 import BiojsViewer from './BiojsViewer';
 import AlignmentEditor from './AlignmentEditor';
+import AlignmentLibrary from './AlignmentLibrary';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { jobPollingInterval } from '../../lib/queryPolling';
@@ -74,7 +75,8 @@ export default function AlignmentPage() {
         {error && <div role="alert">Alignment result unavailable: {String(error)} <button onClick={() => { if (job.error) void job.refetch(); if (manifest.error) void manifest.refetch(); if (documentQuery.error) void documentQuery.refetch(); }}>Retry</button></div>}
         {base && alignments.length > 1 && <label>Alignment member <select value={selected} onChange={e => setSelection({base, id: e.target.value})}><option value="">Choose a member</option>{alignments.map(x => <option key={x.id} value={x.id}>{x.id}</option>)}</select></label>}
         {!base && !resultId && section === 'New' && <>{!queryModel && <label>Alignment family <select aria-label="Alignment family" value={model} onChange={e => setSelectedModel(e.target.value)}><option value="family_msa_protein">Protein</option><option value="family_msa_nucleic">Nucleic acid</option></select></label>}<AlignmentEditor key={model} model={model}/></>}
-        {!base && !resultId && section !== 'New' && <p role="status">{section === 'Compare' ? 'Alignment comparison is not connected yet.' : 'Alignment library is not connected yet.'}</p>}
+        {!base && !resultId && section === 'Library' && <AlignmentLibrary initialProject={projectId}/>}
+        {!base && !resultId && section === 'Compare' && <p role="status">Alignment comparison is not connected yet.</p>}
         <AlignmentWorkspace viewers={{ jbrowse: JbrowseViewer, 'alignment-viewer-2': Av2Viewer, biojs: BiojsViewer }} projectLabel={setup.setup?.project_label} projectId={projectId || undefined} receiptId={projectId ? receiptId || undefined : undefined} document={document} downloads={base ? artifacts.map(x => ({label: `${x.role} (${x.id})`, href: `${base}/artifacts/${encodeURIComponent(x.id)}`})) : []} />
     </div>;
 }
