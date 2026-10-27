@@ -2374,6 +2374,43 @@ async def save_dataset_revision(
     return revision
 
 
+async def derive_dataset_revision(
+    session: AsyncSession, dataset_id: str, parent_revision_id: str,
+    ordinals: list[int], *, expected_head_generation: int,
+) -> ExperimentRevision:
+    """Copy explicitly selected parent occurrences, recording their exact origin.
+
+    Origin is the immediate parent, not a claim about earlier revisions. The
+    order and multiplicity of ordinals are intentional and preserved.
+    """
+    parent = await session.get(ExperimentRevision, parent_revision_id)
+    if parent is None or parent.subject_id != dataset_id:
+        raise NotFound("parent Dataset revision not found")
+    if any(type(ordinal) is not int or ordinal < 0 for ordinal in ordinals):
+        raise ValidationFailure("invalid parent member ordinal")
+    rows = (await session.execute(select(ExperimentDatasetRevisionMember).where(
+        ExperimentDatasetRevisionMember.revision_id == parent_revision_id,
+        ExperimentDatasetRevisionMember.ordinal.in_(ordinals),
+    ))).scalars().all()
+    by_ordinal = {row.ordinal: row for row in rows}
+    if any(ordinal not in by_ordinal for ordinal in ordinals):
+        raise NotFound("parent Dataset member ordinal not found")
+    members = []
+    for ordinal in ordinals:
+        row = by_ordinal[ordinal]
+        value = json.loads(row.value_json)
+        # Wrap rather than mutate source values, including scalar values.
+        value = {"schema": "bms.dataset-derived-member.v1", "source_value": value,
+                 "origin": {"revision_id": parent_revision_id,
+                            "revision_sha256": parent.payload_sha256,
+                            "ordinal": ordinal, "member_sha256": row.content_sha256}}
+        members.append({"role": row.role, "identity": row.semantic_identity,
+                        "value": value, "media_type": row.media_type})
+    return await save_dataset_revision(session, dataset_id,
+        {"schema": "bms.dataset-revision.v1", "members": members},
+        expected_head_generation=expected_head_generation)
+
+
 async def protein_setup_launch_authority(
     session: AsyncSession,
     authority: ExperimentWorkflowPlanAuthority,
