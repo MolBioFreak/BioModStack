@@ -5764,8 +5764,19 @@ export interface OntExternalPod5Registration {
     already_registered: boolean;
 }
 
-export const fetchOntInstrumentRuns = (limit = 100) =>
-    apiData(api.get<OntRunSummary[]>('/api/ont/runs', { params: { limit } }));
+export interface OntInstrumentRunListOptions {
+    /** Exact Project (experiment_group) id; filtered server-side before paging. */
+    experimentGroup?: string;
+    offset?: number;
+}
+export const fetchOntInstrumentRuns = (limit = 100, options: OntInstrumentRunListOptions = {}) =>
+    apiData(api.get<OntRunSummary[]>('/api/ont/runs', {
+        params: {
+            limit,
+            ...(options.offset ? { offset: options.offset } : {}),
+            ...(options.experimentGroup !== undefined ? { experiment_group: options.experimentGroup } : {}),
+        },
+    }));
 export const fetchOntInstrumentRunGeneration = (runId: string, observedGeneration: number) =>
     apiData(api.get<OntRunGeneration>(
         `/api/ont/runs/${encodeURIComponent(runId)}/generations/${encodeURIComponent(String(observedGeneration))}`,

@@ -799,12 +799,22 @@ async def ont_start_instrument_run(position: str, payload: dict[str, Any]) -> di
 @router.get("/runs", response_model=list[OntRunSummaryResponse])
 async def ont_list_instrument_runs(
     limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    experiment_group: str | None = Query(None, min_length=1, max_length=256),
 ) -> list[OntRunSummaryResponse]:
-    """List persisted run summaries without contacting MinKNOW."""
+    """List persisted run summaries without contacting MinKNOW.
+
+    ``experiment_group`` restricts the list to one exact Project before
+    ``offset``/``limit`` paging is applied.
+    """
     try:
         return [
             OntRunSummaryResponse.model_validate(item)
-            for item in await ont_run_control.list_instrument_runs(limit=limit)
+            for item in await ont_run_control.list_instrument_runs(
+                limit=limit,
+                offset=offset,
+                experiment_group=experiment_group,
+            )
         ]
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

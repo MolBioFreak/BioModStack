@@ -271,4 +271,28 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
         expect(container.querySelector('[role="alert"]')?.textContent).toContain('could not be refreshed');
         expect(container.textContent).not.toContain('Server-approved protocol · Server output policy');
     });
+    it('requests only the selected Project runs server-side and pages older runs instead of dropping them', async () => {
+        const run = (index: number) => ({
+            run_id: `project-run-${index}`,
+            status: 'completed',
+            experiment_group: 'domain-experiment-test',
+            observed_generation: 1,
+            can_stop: false,
+        });
+        ont.fetchRuns
+            .mockResolvedValueOnce(Array.from({ length: 100 }, (_, index) => run(index)))
+            .mockResolvedValueOnce([run(100), run(101)]);
+        await act(async () => root.render(panel(true)));
+        await flush();
+        expect(ont.fetchRuns).toHaveBeenNthCalledWith(1, 100, { experimentGroup: 'domain-experiment-test', offset: 0 });
+        await waitUntil(() => expect(container.textContent).toContain('100 runs loaded · older runs available'));
+        const more = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Load older runs')!;
+        expect(more).toBeDefined();
+        await act(async () => more.click());
+        await waitUntil(() => expect(container.textContent).toContain('102 runs loaded'));
+        expect(ont.fetchRuns).toHaveBeenNthCalledWith(2, 100, { experimentGroup: 'domain-experiment-test', offset: 100 });
+        expect([...container.querySelectorAll('button')].some((b) => b.textContent === 'Load older runs')).toBe(false);
+        const options = [...container.querySelectorAll('option')].map((option) => option.textContent);
+        expect(options).toContain('project-run-101 · completed · version 1');
+    });
 });
