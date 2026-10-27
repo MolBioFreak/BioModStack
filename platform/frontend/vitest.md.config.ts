@@ -13,6 +13,7 @@ export default defineConfig({
         setupFiles: ['./tests/vitest/setup.ts'],
         include: [
             './tests/vitest/alignmentPage.test.tsx',
+            './tests/vitest/alignmentInventoryMounted.test.tsx',
             './tests/vitest/alignmentEditorProject.test.tsx',
             './tests/vitest/alignmentWorkspace.test.tsx',
             './tests/vitest/alignmentShared.test.tsx',

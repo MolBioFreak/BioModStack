@@ -24,6 +24,13 @@ from services.job_result_roots import resolve_persisted_job_result_root
 router = APIRouter(prefix='/api/family-msa', tags=['family-msa-results'])
 
 
+@router.get('/settings-schema')
+async def settings_schema():
+    """The request owner's schema is the shared settings inventory."""
+    from bms_alignment import AlignmentRequest
+    return AlignmentRequest.model_json_schema()
+
+
 class SourceReceipt(BaseModel):
     receipt_id: str
     entity_kind: str

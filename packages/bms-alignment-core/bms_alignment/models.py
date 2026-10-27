@@ -46,9 +46,11 @@ class SequenceSet(Closed):
 
 class MafftSettings(Closed):
     engine: Literal['mafft'] = 'mafft'
-    strategy: Literal['fft_ns_2', 'linsi', 'ginsi', 'auto'] = 'fft_ns_2'
+    strategy: Literal['fft_ns_2', 'linsi', 'ginsi', 'einsi', 'auto'] = 'fft_ns_2'
     threads: int = Field(default=1, ge=1)
     treeout: bool = False
+    op: float | None = None
+    ep: float | None = None
 
 class FamsaSettings(Closed):
     engine: Literal['famsa'] = 'famsa'
@@ -60,6 +62,18 @@ class FamsaSettings(Closed):
     medoid_seeds: int | None = None
     medoid_threshold: int | None = None
     trim_columns: float | None = None
+    r: int | None = None
+    sm: Literal['MIQS', 'PFASUM31', 'PFASUM43', 'PFASUM60'] | None = None
+    go: int | None = None
+    ge: int | None = None
+    tgo: int | None = None
+    tge: int | None = None
+    dist: Literal['indel_div_lcs', 'indel075_div_lcs'] | None = None
+    gsd: int | None = None
+    gsl: int | None = None
+    dgr: bool = False
+    dgo: bool = False
+    dsp: bool = False
 
 class MuscleSettings(Closed):
     engine: Literal['muscle'] = 'muscle'
@@ -85,6 +99,13 @@ class TwilightSettings(Closed):
     rooted: bool = False
     prune: bool = False
     filter: bool = False
+    length_deviation: float | None = None
+    max_ambig: float | None = None
+    max_len: int | None = None
+    min_len: int | None = None
+    write_filtered: bool = False
+    write_prune: bool = False
+    check: bool = False
     match: float = 18
     mismatch: float = -8
     transition: float = -4

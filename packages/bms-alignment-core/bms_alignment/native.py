@@ -13,7 +13,10 @@ def compile_mafft(request: AlignmentRequest, executable: str, input_path: str) -
     if s.strategy == 'fft_ns_2': args += ['--retree', '2', '--maxiterate', '0']
     elif s.strategy == 'linsi': args += ['--localpair', '--maxiterate', '1000']
     elif s.strategy == 'ginsi': args += ['--globalpair', '--maxiterate', '1000']
+    elif s.strategy == 'einsi': args += ['--genafpair', '--maxiterate', '1000']
     elif s.strategy == 'auto': args += ['--auto']
+    for name in ('op', 'ep'):
+        if getattr(s, name) is not None: args += ['--' + name, str(getattr(s, name))]
     if s.treeout: args.append('--treeout')
     return args + [input_path]
 

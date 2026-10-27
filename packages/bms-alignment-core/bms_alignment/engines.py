@@ -37,9 +37,9 @@ def compile_engine(request, executable, input_path, output_path, tree_path=None)
     prefix = [executable] if isinstance(executable, str) else list(executable)
     if s.engine == 'famsa':
         a = prefix + ['-t', str(s.threads), '-gt', s.guide_tree, '-refine_mode', s.refine_mode]
-        for name in ('keep_duplicates', 'medoidtree'):
+        for name in ('keep_duplicates', 'medoidtree', 'dgr', 'dgo', 'dsp'):
             if getattr(s, name): a.append('-' + name)
-        for name in ('medoid_seeds', 'medoid_threshold', 'trim_columns'):
+        for name in ('medoid_seeds', 'medoid_threshold', 'trim_columns', 'r', 'sm', 'go', 'ge', 'tgo', 'tge', 'dist', 'gsd', 'gsl'):
             if getattr(s, name) is not None: a += ['-' + name, str(getattr(s, name))]
         return a + [input_path, output_path]
     if s.engine == 'muscle':
@@ -53,10 +53,10 @@ def compile_engine(request, executable, input_path, output_path, tree_path=None)
     if s.engine == 'twilight':
         a = prefix + ['-i', input_path, '-o', output_path, '-t', tree_path, '--type', 'n', '--cpu', str(s.threads), '--accurate']
         if s.method == 'tcs': a.append('tcs')
-        for name in ('acc_mode', 'acc_max_group', 'acc_sample_rate', 'acc_sample_top', 'consistency_weight', 'max_subtree', 'remove_gappy', 'match', 'mismatch', 'transition', 'gap_open', 'gap_extend', 'gap_ends', 'scale', 'xdrop'):
+        for name in ('acc_mode', 'acc_max_group', 'acc_sample_rate', 'acc_sample_top', 'consistency_weight', 'max_subtree', 'remove_gappy', 'match', 'mismatch', 'transition', 'gap_open', 'gap_extend', 'gap_ends', 'scale', 'xdrop', 'length_deviation', 'max_ambig', 'max_len', 'min_len'):
             value = getattr(s, name)
             if value is not None: a += ['--' + name.replace('_', '-'), str(value)]
-        for name in ('wildcard', 'rooted', 'prune', 'filter'):
+        for name in ('wildcard', 'rooted', 'prune', 'filter', 'write_filtered', 'write_prune', 'check'):
             if getattr(s, name): a.append('--' + name)
         return a
     raise ValueError('Unsupported engine')
