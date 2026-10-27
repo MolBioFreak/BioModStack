@@ -301,6 +301,8 @@ async def get_project(request: Request, project_id: str, receipt_id: str, sessio
     if receipt.entity_kind == 'family_msa_import':
         metadata = json.loads(receipt.acknowledgement_json)
         result['import_provenance'] = {key: metadata[key] for key in ('source_project_id', 'source_receipt_id', 'dependencies', 'shared_state')}
+        result['import_provenance']['shared_states'] = metadata.get('shared_states', [])
+        result['import_provenance']['artifact_id_map'] = metadata.get('artifact_id_map', {})
     return result
 
 
@@ -443,17 +445,21 @@ class ImportBundle(BaseModel):
     replay_key: str = Field(min_length=1, max_length=255)
     manifest: dict[str, Any]
     files: dict[str, str]  # base64, keyed only by portable paths
+    domain_experiment_id: str | None = None
 
 
 class ImportReceipt(BaseModel):
     receipt_id: str
     replayed: bool
     shared_state: str
+    shared_states: list[dict[str, Any]] = Field(default_factory=list)
 
 
-async def _import_directory(project_id, replay_key, manifest, root, session):
+async def _import_directory(project_id, replay_key, manifest, root, session, domain_experiment_id=None):
     import hashlib
     from bms_alignment.bundle import inspect_project_bundle
+    from bms_alignment.project_remap import remap_state
+    from pydantic import ValidationError
     from experiment_services import _resource, canonical_json
     from services.family_msa.publication import retain_artifact
 
@@ -465,13 +471,17 @@ async def _import_directory(project_id, replay_key, manifest, root, session):
     if len({x['id'] for x in raw_entries}) != len(raw_entries):
         raise ValueError('duplicate artifact identity')
     hashes = {item['path']: item['sha256'] for item in manifest['files']}
-    digest = hashlib.sha256(canonical_json({'manifest': manifest, 'files': hashes}).encode()).hexdigest()
+    digest_input = {'manifest': manifest, 'files': hashes}
+    if domain_experiment_id is not None:
+        digest_input['domain_experiment_id'] = domain_experiment_id
+    digest = hashlib.sha256(canonical_json(digest_input).encode()).hexdigest()
     receipt_id = 'msa-import-' + hashlib.sha256(canonical_json([project_id, replay_key]).encode()).hexdigest()
     existing = await session.get(ExperimentExternalEntityReceipt, receipt_id)
     if existing:
         if existing.workspace_id != project_id or existing.entity_kind != 'family_msa_import' or existing.content_digest != digest:
             raise HTTPException(409, detail='Import replay key conflicts with different content')
-        return {'receipt_id': receipt_id, 'replayed': True, 'shared_state': 'retained_unmapped'}
+        ack = json.loads(existing.acknowledgement_json)
+        return {'receipt_id': receipt_id, 'replayed': True, 'shared_state': ack['shared_state'], 'shared_states': ack.get('shared_states', [])}
     await _resource(session, kind='external_entity_receipt', workspace_id=project_id, lifecycle_owner_id=project_id, resource_id=receipt_id)
     entries = []
     groups = [(x, x['role']) for x in raw_entries] + [(x, 'shared_state_snapshot') for x in inventory['shared_states']]
@@ -486,15 +496,37 @@ async def _import_directory(project_id, replay_key, manifest, root, session):
                 schema_version='1', media_type='application/octet-stream', expected_sha256=descriptor['sha256'],
                 expected_size=descriptor['size'], provenance={'producer': 'portable_import', 'source_id': entry['id']})
         entries.append({'id': artifact_id, 'role': role, 'logical_path': entry.get('logical_path'), 'sha256': artifact.blob_sha256})
+    artifact_ids = {entry['id']: entries[index]['id'] for index, entry in enumerate(raw_entries)}
+    reports = []
+    for entry in inventory['shared_states']:
+        report = {'source_id': entry['id'], 'status': 'retained_unmapped', 'dataset_id': None, 'unresolved': []}
+        try:
+            snapshot = json.loads((root / entry['path']).read_bytes())
+            state = SharedState.model_validate(snapshot['state'])
+            mapped = remap_state(state.model_dump(by_alias=True), artifact_ids)
+            report['unresolved'] = [item.model_dump() for item in mapped.unresolved]
+        except (ValueError, KeyError, TypeError, ValidationError):
+            report['reason'] = 'unrecognized shared state snapshot'
+        else:
+            if domain_experiment_id:
+                head = await create_dataset(session, project_id, 'Imported alignment state', SHARED_KIND,
+                                            experiment_id=domain_experiment_id)
+                await save_dataset_revision(session, head.aggregate_id, mapped.state,
+                                            expected_head_generation=head.head_generation)
+                report.update(status='imported', dataset_id=head.aggregate_id)
+            else:
+                report['reason'] = 'domain_experiment_id not supplied'
+        reports.append(report)
+    state_status = ('retained_unmapped' if any(e['role'] == 'shared_state_snapshot' for e in raw_entries) else 'none') if not reports else ('imported' if all(r['status'] == 'imported' for r in reports) else 'retained_unmapped')
     ack = {'schema': 'bms.family-msa.import.v1', 'artifacts': entries,
            'source_project_id': inventory.get('project_id'), 'source_receipt_id': inventory.get('receipt_id'),
-           'dependencies': inspection['dependencies'], 'shared_state': 'retained_unmapped'}
+           'dependencies': inspection['dependencies'], 'shared_state': state_status, 'shared_states': reports, 'artifact_id_map': artifact_ids}
     session.add(ExperimentExternalEntityReceipt(id=receipt_id, workspace_id=project_id, resource_id=receipt_id,
         store_id='experiment', entity_kind='family_msa_import', entity_id=digest,
         generation_or_revision='1', content_digest=digest, availability='available',
         verification_authority='bms.family-msa.import.v1', acknowledgement_json=canonical_json(ack)))
     await session.commit()
-    return {'receipt_id': receipt_id, 'replayed': False, 'shared_state': 'retained_unmapped'}
+    return {'receipt_id': receipt_id, 'replayed': False, 'shared_state': state_status, 'shared_states': reports}
 
 
 @router.post('/projects/{project_id}/imports', response_model=ImportReceipt)
@@ -519,7 +551,7 @@ async def import_bundle(request: Request, project_id: str, payload: ImportBundle
                 target = root / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
-            return await _import_directory(project_id, payload.replay_key, payload.manifest, root, session)
+            return await _import_directory(project_id, payload.replay_key, payload.manifest, root, session, payload.domain_experiment_id)
     except HTTPException:
         await session.rollback()
         raise
@@ -583,7 +615,7 @@ async def import_bundle_stream(request: Request, project_id: str,
                 if chunk:
                     raise ValueError('trailing upload bytes')
             (root / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
-            return await _import_directory(project_id, payload.replay_key, manifest, root, session)
+            return await _import_directory(project_id, payload.replay_key, manifest, root, session, payload.domain_experiment_id)
     except HTTPException:
         await session.rollback()
         raise

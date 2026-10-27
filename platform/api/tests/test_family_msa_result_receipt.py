@@ -166,7 +166,11 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     assert (await client.get(f'{url}/documents/{selected}', headers={'x-test-actor':'owner'})).json()['rows'][0]['aligned'] == expected_aligned
     assert (await client.get(f'{url}/artifacts/{selected}', headers={'x-test-actor':'owner'})).content == original_bytes
     assert (await client.get(f'{url}/artifacts/not-in-receipt', headers={'x-test-actor':'owner'})).status_code == 404
-    state = {'marks': [{'id': 'mark', 'label': 'test', 'coordinate': {'scope': 'artifact_columns', 'artifact_id': selected, 'start': 0, 'end': 1}}]}
+    state = {'marks': [
+        {'id': 'mark', 'label': 'test', 'coordinate': {'scope': 'artifact_columns', 'artifact_id': selected, 'start': 0, 'end': 1}},
+        {'id': 'duplicate', 'label': 'test', 'coordinate': {'scope': 'artifact_columns', 'artifact_id': selected, 'start': 0, 'end': 1}},
+        {'id': 'unknown', 'label': 'unknown', 'coordinate': {'scope': 'artifact_columns', 'artifact_id': 'not-exported', 'start': 0, 'end': 1}}],
+        'views': [{'id': 'view', 'name': 'view', 'artifact_id': selected}]}
     response = await client.post(f'/api/family-msa/projects/{project_id}/shared-state',
         headers={'x-test-actor':'owner'}, json={'name':'test marks', 'domain_experiment_id':domain_id, 'state':state})
     assert response.status_code == 201, response.text
@@ -193,6 +197,29 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     exported = inspect_project_bundle(destination)
     saved_state = json.loads((destination / exported['inventory']['shared_states'][0]['path']).read_text())
     assert saved_state['state']['marks'][0]['coordinate']['artifact_id'] == selected
+    imported = await asyncio.to_thread(sdk.import_project_bundle, project_id, destination, replay_key='native-roundtrip', domain_experiment_id=domain_id)
+    replay = await asyncio.to_thread(sdk.import_project_bundle, project_id, destination, replay_key='native-roundtrip', domain_experiment_id=domain_id)
+    assert replay.replayed and replay.shared_states == imported.shared_states
+    report = imported.shared_states[0]
+    assert report['status'] == 'imported'
+    assert report['unresolved'] == [{'location': 'marks/2/coordinate/artifact_id', 'source_artifact_id': 'not-exported'}]
+    imported_url = f'/api/family-msa/projects/{project_id}/receipts/{imported.receipt_id}'
+    imported_listing = (await client.get(imported_url, headers={'x-test-actor':'owner'})).json()
+    imported_alignment = next(x['id'] for x in imported_listing['artifacts'] if x['role'] == 'alignment')
+    assert imported_listing['import_provenance']['artifact_id_map'][selected] == imported_alignment
+    state_url = f"/api/family-msa/projects/{project_id}/shared-state/{report['dataset_id']}"
+    assert (await client.get(state_url)).status_code == 401
+    live = (await client.get(state_url, headers={'x-test-actor':'owner'})).json()['state']
+    assert [m['coordinate']['artifact_id'] for m in live['marks']] == [imported_alignment, imported_alignment, 'not-exported']
+    assert live['views'][0]['artifact_id'] == imported_alignment
+    second = tmp_path / 'second-portable'
+    await asyncio.to_thread(sdk.export_project_bundle, project_id, imported.receipt_id, second)
+    assert len(inspect_project_bundle(second)['inventory']['shared_states']) == 1
+    second_import = await asyncio.to_thread(sdk.import_project_bundle, project_id, second, replay_key='second-roundtrip', domain_experiment_id=domain_id)
+    assert second_import.shared_states[0]['unresolved'][0]['source_artifact_id'] == 'not-exported'
+    second_live = (await client.get(f"/api/family-msa/projects/{project_id}/shared-state/{second_import.shared_states[0]['dataset_id']}", headers={'x-test-actor':'owner'})).json()['state']
+    second_listing = (await client.get(f'/api/family-msa/projects/{project_id}/receipts/{second_import.receipt_id}', headers={'x-test-actor':'owner'})).json()
+    assert second_live['marks'][0]['coordinate']['artifact_id'] == next(x['id'] for x in second_listing['artifacts'] if x['role'] == 'alignment')
     import subprocess, sys
     inspected = subprocess.run([sys.executable, '-m', 'bms_alignment.cli', 'bundle', 'inspect-project', str(destination)], capture_output=True, text=True, check=True)
     assert json.loads(inspected.stdout)['inventory'] == exported['inventory']

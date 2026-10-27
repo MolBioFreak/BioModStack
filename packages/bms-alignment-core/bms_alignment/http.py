@@ -64,7 +64,8 @@ class Job(BaseModel):
 class ImportReceipt(BaseModel):
     receipt_id: str
     replayed: bool
-    shared_state: Literal['retained_unmapped']
+    shared_state: Literal['retained_unmapped', 'imported', 'none']
+    shared_states: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class BmsHttpError(Exception):
@@ -107,8 +108,8 @@ class AlignmentClient:
     def export_project_bundle(self, project_id: str, receipt_id: str, destination, *, shared_state_ids: list[str] | None = None) -> dict:
         """Export the exact authorized Project artifacts and selected shared states.
 
-        Shared states are selected explicitly; this does not claim to discover all
-        Project annotations. Artifact identifiers remain in the inventory, not paths.
+        If not explicitly selected, discover states attached by portable import.
+        Other Project annotations still require explicit selection.
         """
         from pathlib import Path
         from tempfile import TemporaryDirectory
@@ -117,6 +118,8 @@ class AlignmentClient:
         prefix = '/api/family-msa/projects/' + quote(project_id, safe='')
         result_path = prefix + '/receipts/' + quote(receipt_id, safe='')
         listing = self._request('GET', result_path)
+        if shared_state_ids is None:
+            shared_state_ids = [s['dataset_id'] for s in listing.get('import_provenance', {}).get('shared_states', []) if s.get('dataset_id')]
         artifacts = listing['artifacts']
         if not isinstance(artifacts, list) or not artifacts:
             raise ValueError('empty artifact inventory')
@@ -158,7 +161,7 @@ class AlignmentClient:
                 'Project shared states not explicitly selected',
                 'External dependencies not retained in the Project receipt'])
 
-    def import_project_bundle(self, project_id: str, directory, *, replay_key: str) -> "ImportReceipt":
+    def import_project_bundle(self, project_id: str, directory, *, replay_key: str, domain_experiment_id: str | None = None) -> "ImportReceipt":
         import base64
         from pathlib import Path
         from .bundle import inspect_project_bundle
@@ -168,17 +171,17 @@ class AlignmentClient:
         files = {name: base64.b64encode((root / name).read_bytes()).decode('ascii')
                  for name in manifest['dependencies']['included']}
         response = self._request('POST', '/api/family-msa/projects/' + quote(project_id, safe='') + '/imports',
-                                 {'replay_key': replay_key, 'manifest': manifest, 'files': files})
+                                 {'replay_key': replay_key, 'manifest': manifest, 'files': files, 'domain_experiment_id': domain_experiment_id})
         return ImportReceipt.model_validate(response)
 
-    def import_project_bundle_streaming(self, project_id: str, directory, *, replay_key: str) -> "ImportReceipt":
+    def import_project_bundle_streaming(self, project_id: str, directory, *, replay_key: str, domain_experiment_id: str | None = None) -> "ImportReceipt":
         """Upload verified portable files in bounded chunks without base64 encoding."""
         from pathlib import Path
         from .bundle import inspect_project_bundle
         root = Path(directory)
         inspect_project_bundle(root)
         manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
-        metadata = json.dumps({'replay_key': replay_key, 'manifest': manifest}).encode('utf-8')
+        metadata = json.dumps({'replay_key': replay_key, 'manifest': manifest, 'domain_experiment_id': domain_experiment_id}).encode('utf-8')
         def body():
             yield len(metadata).to_bytes(8, 'big')
             yield metadata
