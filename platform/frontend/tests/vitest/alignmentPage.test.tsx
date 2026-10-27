@@ -73,6 +73,8 @@ describe('alignment route receiver', () => {
         await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/alignments?project_id=p&receipt_id=r']}><Routes><Route path="/alignments" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>); });
         await act(async () => { await new Promise(r => setTimeout(r, 20)); });
         expect(div.textContent).toContain('Result: a');
+        expect(div.textContent).toContain('Project: p');
+        expect(div.textContent).not.toContain('No project selected');
         expect(div.querySelector('iframe[title="JBrowseMSA"]')?.getAttribute('sandbox')).toBe('allow-scripts');
         expect(div.textContent).not.toContain('JBrowseMSA is not connected');
         expect(div.querySelector('a[href="/api/family-msa/projects/p/receipts/r/artifacts/a"]')).not.toBeNull();
