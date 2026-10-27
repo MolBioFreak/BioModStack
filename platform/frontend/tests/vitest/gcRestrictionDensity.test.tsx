@@ -70,3 +70,22 @@ describe('GC restriction density authority', () => {
         act(() => renderer.unmount());
     });
 });
+
+it('shows unsmoothed window bars on a 0–100 GC scale and reports true whole-sequence GC', () => {
+    plotSpy.mockClear();let renderer!:ReturnType<typeof create>;
+    act(()=>{renderer=create(<GCContentTrack sequence={'G'.repeat(9)+'A'.repeat(3)} windowSize={10} stepSize={3}/>);});
+    const props=plotSpy.mock.lastCall?.[0] as any;
+    expect(props.data).toHaveLength(1);expect(props.data[0].type).toBe('bar');expect(props.data[0].y).toEqual([90,70]);
+    expect(props.layout.yaxis.range).toEqual([0,100]);expect(props.layout.shapes[0].y0).toBe(75);
+    expect(JSON.stringify(renderer.toJSON())).toContain('75.0');expect(JSON.stringify(renderer.toJSON())).toContain('no smoothing');
+    act(()=>renderer.unmount());
+});
+it('updates chart colors after the actual root theme changes', async () => {
+    plotSpy.mockClear();let renderer!:ReturnType<typeof create>;
+    const prior=document.documentElement.getAttribute('style');const previousTheme=document.documentElement.getAttribute('data-theme');
+    try {
+        act(()=>{renderer=create(<GCContentTrack sequence={'ACGT'.repeat(20)}/>);});
+        await act(async()=>{document.documentElement.style.setProperty('--bg-primary','#ffffff');document.documentElement.style.setProperty('--text-secondary','#333333');document.documentElement.dataset.theme='clean_light';await new Promise(resolve=>setTimeout(resolve,0));});
+        expect((plotSpy.mock.lastCall?.[0] as any).layout.plot_bgcolor).toBe('#ffffff');expect((plotSpy.mock.lastCall?.[0] as any).layout.xaxis.tickfont.color).toBe('#333333');
+    } finally {act(()=>renderer.unmount());if(prior===null)document.documentElement.removeAttribute('style');else document.documentElement.setAttribute('style',prior);if(previousTheme===null)document.documentElement.removeAttribute('data-theme');else document.documentElement.setAttribute('data-theme',previousTheme);}
+});

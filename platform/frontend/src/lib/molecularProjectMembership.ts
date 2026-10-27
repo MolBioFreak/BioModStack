@@ -112,3 +112,22 @@ export async function exportMolecularProjectHistory(
         source_receipt_ids: [...new Set(receiptIds)],
     });
 }
+
+/** Remove current Project membership; canonical sequences and prior states remain intact. */
+export async function removeMolecularProjectMember(projectId: string, experimentId: string, domainId: string, sequenceId: string, expectedStateRevisionId: string) {
+    const state = await fetchMolBioNgsDomainState(domainId);
+    if (state.current_state_revision_id !== expectedStateRevisionId) throw new Error('This Project changed. Open its current sequence workspace before deleting membership.');
+    const current = await fetchMolBioNgsStateRevision(domainId, expectedStateRevisionId);
+    const members = current.members.filter(member => {
+        const params = member.reopen_destination?.params as {sequence_id?:string}|undefined;
+        return !(member.entity_kind === 'molecular_revision' && params?.sequence_id === sequenceId);
+    }).map(({receipt_id, role, ordinal, sample_revision_id})=>({receipt_id,role,ordinal,sample_revision_id}));
+    if (members.length === current.members.length) throw new Error('The sequence is no longer a member of this Project state.');
+    const domain = await getDomainExperiment(projectId,experimentId,domainId);
+    if (!domain.current_revision_id) throw new Error('The current workspace revision is unavailable.');
+    return saveMolBioNgsStateRevision(domainId,{
+        global_domain_experiment_revision_id:domain.current_revision_id,
+        expected_head_generation:state.head_generation,parent_revision_id:expectedStateRevisionId,
+        idempotency_key:crypto.randomUUID(),payload:current.payload,members,
+    });
+}

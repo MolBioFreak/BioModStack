@@ -229,9 +229,10 @@ it('the visible shared preview/commit panel retains all returned exact revisions
     const panel = container.querySelector('[data-testid="molbio-sequence-import-panel"]')!;
     await inputValue(panel.querySelector('textarea')!, '>A\nACGT\n>B\nTGCA\n');
     await inputValue(panel.querySelector('[aria-label="Import topology default"]')!, 'linear');
-    await act(async () => button('Preview import').click());
-    await until(() => expect(button('Commit preview').disabled).toBe(false));
-    await act(async () => button('Commit preview').click());
+    await act(async () => panel.querySelector<HTMLInputElement>('input[type=checkbox]')!.click());
+    await act(async () => button('Check sequences').click());
+    await until(() => expect(button('Save sequences to MolBio').disabled).toBe(false));
+    await act(async () => button('Save sequences to MolBio').click());
     await until(() => expect(panel.querySelectorAll('[data-testid="molbio-import-committed-records"] a')).toHaveLength(2));
     expect(mock.commit).toHaveBeenCalledWith(expect.objectContaining({ origin_surface: 'ngs', topology_default: 'linear' }));
     expect(referenceSelect().value).toBe('r1');

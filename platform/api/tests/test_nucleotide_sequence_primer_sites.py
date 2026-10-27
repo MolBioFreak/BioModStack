@@ -265,3 +265,22 @@ def test_put_rejects_linearization_of_existing_origin_wrapping_primer(
 
     assert response.status_code == 400, response.text
     assert "primer" in response.json()["detail"].lower()
+
+
+def test_exact_sequence_summary_filter_includes_selected_records_beyond_the_first_page(sequence_client):
+    ids = []
+    for name in ["AAA", "ZZZ"]:
+        response = sequence_client.post("/api/sequences/", json={"name": name, "sequence": "ACGT", "sequence_type": "dna"})
+        assert response.status_code == 200
+        ids.append(response.json()["id"])
+    response = sequence_client.get("/api/sequences/", params={"sequence_ids": ids[1], "limit": 1, "sort_by": "name", "sort_desc": False})
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [ids[1]]
+    assert "sequence" not in response.json()[0]
+    both = sequence_client.get("/api/sequences/", params={"sequence_ids": ",".join(ids)})
+    assert {item["id"] for item in both.json()} == set(ids)
+
+
+@pytest.mark.parametrize("value", ["", ",", "a,", " a", ",".join(["a"] * 257)])
+def test_exact_sequence_summary_filter_rejects_malformed_or_unbounded_ids(sequence_client, value):
+    assert sequence_client.get("/api/sequences/", params={"sequence_ids": value}).status_code == 422

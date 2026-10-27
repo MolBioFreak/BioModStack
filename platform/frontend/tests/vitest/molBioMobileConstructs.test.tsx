@@ -1,4 +1,5 @@
 import React, { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MobileMolBioWorkspace } from '../../src/components/MolBioToolkit/MobileMolBioWorkspace';
@@ -29,7 +30,7 @@ describe('mobile SequenceLibrary integration', () => {
     document.body.appendChild(host);
     root = createRoot(host);
     await act(async () => root?.render(
-      <MobileMolBioWorkspace
+      <QueryClientProvider client={new QueryClient()}><MobileMolBioWorkspace
         constructName="PL931"
         digestIdentity="workspace-1:recent-1"
         hasSequence
@@ -57,7 +58,7 @@ describe('mobile SequenceLibrary integration', () => {
         details={<div>details</div>}
         digest={<div>digest</div>}
         qc={<div>qc</div>}
-      />,
+      /></QueryClientProvider>,
     ));
 
     const library = host.querySelector<HTMLElement>('[data-molbio-construct-library="true"]');

@@ -48,9 +48,10 @@ interface BarcodeMappingCellsProps {
     sequences: NucleotideSequenceListItem[];
     mapping: BarcodeMappingDraft;
     onChange: (next: BarcodeMappingDraft) => void;
+    disabled?: boolean;
 }
 
-function BarcodeMappingCells({ unitId, sequences, mapping, onChange }: BarcodeMappingCellsProps) {
+function BarcodeMappingCells({ unitId, sequences, mapping, onChange, disabled }: BarcodeMappingCellsProps) {
     const revisionsQuery = useQuery<MolBioSequenceRevision[]>({
         queryKey: ['ont-barcode-revisions', mapping.sequenceId],
         queryFn: async () => (await fetchMolBioSequenceRevisions(mapping.sequenceId)).data,
@@ -67,6 +68,7 @@ function BarcodeMappingCells({ unitId, sequences, mapping, onChange }: BarcodeMa
                     <select
                         aria-label={`Saved sequence for ${unitId}`}
                         value={mapping.sequenceId}
+                        disabled={disabled}
                         onChange={(event) => onChange({ ...mapping, sequenceId: event.target.value, revisionId: '' })}
                         className="w-full min-w-[15rem] rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-sm text-[var(--text-primary)]"
                     >
@@ -79,7 +81,7 @@ function BarcodeMappingCells({ unitId, sequences, mapping, onChange }: BarcodeMa
                         aria-label={`Exact revision for ${unitId}`}
                         value={mapping.revisionId}
                         onChange={(event) => onChange({ ...mapping, revisionId: event.target.value })}
-                        disabled={!mapping.sequenceId || revisionsQuery.isLoading}
+                        disabled={disabled || !mapping.sequenceId || revisionsQuery.isLoading}
                         className="w-full min-w-[15rem] rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-sm text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         <option value="">Select exact revision…</option>
@@ -110,6 +112,7 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
     const [namePrefix, setNamePrefix] = useState('');
     const [pinnedGpu, setPinnedGpu] = useState('');
     const [message, setMessage] = useState('');
+    const [bulkMapping, setBulkMapping] = useState('');
     const [mappingByUnit, setMappingByUnit] = useState<Record<string, BarcodeMappingDraft>>({});
 
     const unitsQuery = useQuery<OntBarcodeUnit[]>({
@@ -135,6 +138,36 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
     const units = allUnits.filter((unit) => unit.unit_id !== 'unclassified');
     const unclassifiedUnit = allUnits.find((unit) => unit.unit_id === 'unclassified');
     const sequences = sequencesQuery.data || [];
+
+    const applyBulkMapping = useMutation({
+        mutationFn: async () => {
+            const rows = bulkMapping.trim().split(/\r?\n/).map(line => line.split(line.includes('\t') ? '\t' : ',').map(value => value.trim()));
+            if (!bulkMapping.trim() || rows.length > 96) throw new Error('Paste 1–96 barcode-to-plasmid rows.');
+            const next: Record<string, BarcodeMappingDraft> = {};
+            for (const fields of rows) {
+                if (fields.length < 2 || fields.length > 3) throw new Error('Use barcode, plasmid name or ID, and optional saved version.');
+                const [barcode, name, exactVersion] = fields;
+                const unit = units.find(unit => unit.unit_id === barcode);
+                if (!unit || barcode === 'unclassified' || next[barcode]) throw new Error(`Unknown or repeated assignable barcode: ${barcode}`);
+                let matches = sequences.filter(sequence => sequence.id === name);
+                if (!matches.length) {
+                    const results = (await fetchNucleotideSequences({search:name,limit:500,sequence_type:'dna'})).data;
+                    if (results.length === 500) throw new Error(`Too many matches for ${name}. Use an exact saved sequence ID.`);
+                    matches = results.filter(sequence => sequence.id === name || sequence.name === name);
+                }
+                if (matches.length !== 1) throw new Error(`Plasmid ${name} is missing or ambiguous. Use its exact sequence ID.`);
+                const sequence = matches[0];
+                const versions = (await fetchMolBioSequenceRevisions(sequence.id)).data;
+                const version = exactVersion ? versions.find(version => version.id === exactVersion || String(version.revision_number) === exactVersion)
+                    : versions.find(version => version.is_current);
+                if (!version) throw new Error(`The requested version of ${name} is unavailable.`);
+                next[barcode] = {sampleAlias:unit.sample_alias || mappingByUnit[barcode]?.sampleAlias || '',sequenceId:sequence.id,revisionId:version.id};
+            }
+            return next;
+        },
+        onSuccess: next => { setMappingByUnit(previous => ({...previous,...next})); setMessage(`Applied ${Object.keys(next).length} exact barcode-to-plasmid mappings. Review the table before submitting.`); },
+        onError: error => setMessage(error instanceof Error ? error.message : 'Mapping could not be applied.'),
+    });
 
     const [executionTargetId, setExecutionTargetId] = useState<string | null>(null);
     const [executionPolicy, setExecutionPolicy] = useState<ExecutionPolicy | undefined>();
@@ -204,13 +237,19 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
                 </select>
                 <input value={namePrefix} onChange={(event) => setNamePrefix(event.target.value)} placeholder="Optional name prefix" className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]" />
                 <input disabled={Boolean(executionTargetId)} value={pinnedGpu} onChange={(event) => setPinnedGpu(event.target.value)} inputMode="numeric" placeholder="Optional pinned GPU" className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]" />
-                <button type="button" disabled={submitMutation.isPending || units.length === 0} onClick={() => submitMutation.mutate()} className="rounded bg-blue-600 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-40">
+                <button type="button" disabled={submitMutation.isPending || applyBulkMapping.isPending || units.length === 0} onClick={() => submitMutation.mutate()} className="rounded bg-blue-600 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-40">
                     {submitMutation.isPending ? 'Submitting batch…' : 'Submit mapped batch'}
                 </button>
             </div>
             {unitsQuery.isLoading && <div className="text-xs text-[var(--text-secondary)]">Loading barcodes…</div>}
             {unitsQuery.isError && <div className="text-xs text-rose-400">No verified barcode manifest is available.</div>}
             {sequencesQuery.isError && <div className="text-xs text-rose-400">Saved MolBio sequences could not be loaded.</div>}
+            <details className="rounded border border-[var(--border-primary)] p-3">
+                <summary className="cursor-pointer text-sm font-semibold">Add barcode-to-plasmid mappings in bulk</summary>
+                <p className="mt-2 text-xs text-[var(--text-secondary)]">Paste two or three columns: barcode number, saved plasmid name or ID, optional version number or revision ID. Current versions are pinned when you apply the rows. Existing mappings stay unchanged if any row fails.</p>
+                <textarea aria-label="Bulk barcode plasmid mappings" rows={5} value={bulkMapping} onChange={event=>setBulkMapping(event.target.value)} disabled={applyBulkMapping.isPending || submitMutation.isPending} placeholder={'barcode01\tplasmid_A\nbarcode02\tplasmid_B'} className="mt-2 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 font-mono text-sm" />
+                <button type="button" disabled={applyBulkMapping.isPending || submitMutation.isPending || !bulkMapping.trim()} onClick={()=>applyBulkMapping.mutate()} className="mt-2 rounded border border-[var(--border-primary)] px-3 py-2 text-xs">{applyBulkMapping.isPending?'Checking mappings…':'Apply barcode mappings'}</button>
+            </details>
             <div className="overflow-x-auto rounded border border-[var(--border-primary)]">
                 <table className="w-full min-w-[1080px] text-left text-sm">
                     <thead className="bg-[var(--bg-tertiary)] text-xs uppercase tracking-wide text-[var(--text-secondary)]">
@@ -237,7 +276,7 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
                                             value={mapping.sampleAlias}
                                             onChange={(event) => setMappingByUnit((previous) => ({ ...previous, [unit.unit_id]: { ...mapping, sampleAlias: event.target.value } }))}
                                             placeholder="Optional"
-                                            disabled={Boolean(unit.sample_alias)}
+                                            disabled={applyBulkMapping.isPending || submitMutation.isPending || Boolean(unit.sample_alias)}
                                             title={unit.sample_alias ? 'Authoritative alias from the Dorado sample sheet' : 'Optional operator alias when no sample sheet alias exists'}
                                             className="w-full min-w-[10rem] rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-sm text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-70"
                                         />
@@ -246,6 +285,7 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
                                         unitId={unit.unit_id}
                                         sequences={sequences}
                                         mapping={mapping}
+                                        disabled={applyBulkMapping.isPending || submitMutation.isPending}
                                         onChange={(next) => setMappingByUnit((previous) => ({ ...previous, [unit.unit_id]: next }))}
                                     />
                                     <td className="px-3 py-2 align-top font-mono text-[var(--text-secondary)]">{unit.read_count}</td>

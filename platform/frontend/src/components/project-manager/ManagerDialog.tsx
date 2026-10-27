@@ -676,7 +676,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
         if (mode === 'create_global') return 'Create Global Experiment';
         if (mode === 'create_domain') return 'Create Domain Experiment';
         if (mode === 'edit') return `Edit ${selection?.title ?? 'revision'}`;
-        if (mode === 'archive') return `Archive ${selection?.title ?? 'selection'}`;
+        if (mode === 'archive') return `${selection?.node_type === 'project' ? 'Delete Project:' : 'Archive'} ${selection?.title ?? 'selection'}`;
         if (mode === 'restore') return `Restore ${selection?.title ?? 'selection'}`;
         if (mode === 'record') return `Add record to ${selection?.title ?? 'selection'}`;
         return 'Project Manager action';
@@ -877,7 +877,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                     <div className="flex justify-end gap-2 border-t border-border-primary pt-4">
                         <button type="button" onClick={onClose} className="rounded-lg border border-border-primary px-4 py-2 text-xs font-semibold text-content-secondary">Cancel</button>
                         <button type="submit" disabled={!canSubmit || mutation.isPending} className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 focus:ring-2 focus:ring-accent">
-                            {mutation.isPending ? 'Saving…' : mode === 'create_project' ? 'Create Project' : mode === 'archive' ? 'Archive without cancelling runs' : mode === 'restore' ? 'Restore' : mode === 'record' ? `Append ${recordKind}` : 'Save immutable revision'}
+                            {mutation.isPending ? 'Saving…' : mode === 'create_project' ? 'Create Project' : mode === 'archive' ? (selection?.node_type === 'project' ? 'Delete Project (archive)' : 'Archive without cancelling runs') : mode === 'restore' ? 'Restore' : mode === 'record' ? `Append ${recordKind}` : 'Save immutable revision'}
                         </button>
                     </div>
                 </form>

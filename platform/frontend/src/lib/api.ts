@@ -3758,6 +3758,7 @@ export interface GoldenGateAssemblyOptionsResponse {
 }
 
 export interface FetchNucleotideSequencesParams {
+    sequence_ids?: string;
     limit?: number;
     offset?: number;
     search?: string;
@@ -6551,6 +6552,7 @@ export interface ProjectHubMapSegment {
 }
 
 export interface ProjectHubDNASequenceSummary {
+    editable_projection_available?: boolean;
     sequence_id: string;
     revision_id: string;
     receipt_id: string;

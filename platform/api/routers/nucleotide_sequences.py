@@ -6,7 +6,7 @@ Provides CRUD operations for DNA/RNA sequences with feature annotations.
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing import Optional, List, Any, Literal
+from typing import Annotated, Optional, List, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func, case
 from datetime import datetime, timezone
@@ -722,6 +722,7 @@ async def list_sequences(
     topology: str = Query("all", description="Filter by topology: all, circular, linear"),
     sort_by: str = Query("updated_at", description="Sort by updated_at, created_at, name, length, gc_content, or feature_count"),
     sort_desc: bool = Query(True, description="Sort descending"),
+    sequence_ids: Annotated[Optional[str], Query(max_length=10000, description="Comma-separated exact sequence IDs, at most 256")] = None,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
@@ -736,6 +737,12 @@ async def list_sequences(
         *(getattr(NucleotideSequence, field) for field in summary_fields),
         feature_count.label("feature_count"),
     )
+
+    if sequence_ids is not None:
+        exact_ids = sequence_ids.split(",")
+        if not exact_ids or len(exact_ids) > 256 or any(not item or item != item.strip() or len(item) > 100 for item in exact_ids):
+            raise HTTPException(status_code=422, detail="sequence_ids must contain 1–256 exact non-empty IDs")
+        query = query.where(NucleotideSequence.id.in_(exact_ids))
 
     normalized_type = sequence_type.strip().lower() if sequence_type else None
     if normalized_type in {"dna", "rna"}:

@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { fetchMolBioNgsDomainState, fetchProjectHub } from '../lib/api';
 import {
+    archiveProject,
+    getProject,
     getProjectResultContext,
     getDomainRunGroup,
     getDomainWorkflowPlan,
@@ -195,6 +197,10 @@ function ProjectsIndex() {
     const [query, setQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [archiveFilter, setArchiveFilter] = useState('active');
+    const deleteProject = useMutation({
+        mutationFn: async (id: string) => { const current = await getProject(id); return archiveProject(id, current.head_generation); },
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project-manager', 'projects'] }),
+    });
     const apiScope = 'all';
     const projectsQuery = useInfiniteQuery({
         queryKey: ['project-manager', 'projects', apiScope, query.trim(), statusFilter, archiveFilter],
@@ -254,7 +260,8 @@ function ProjectsIndex() {
                             const activeCount = typeof project.active_experiment_count === 'number' ? project.active_experiment_count : typeof payload.active_experiment_count === 'number' ? payload.active_experiment_count : null;
                             const failureCount = typeof project.unresolved_failure_count === 'number' ? project.unresolved_failure_count : typeof payload.unresolved_failure_count === 'number' ? payload.unresolved_failure_count : null;
                             return (
-                                <Link data-project-card key={project.id} to={`/projects/${encodeURIComponent(project.id)}`} className="group rounded-2xl border border-border-primary bg-surface-secondary p-5 shadow-sm outline-none transition hover:-translate-y-0.5 hover:border-accent hover:shadow-xl focus:ring-2 focus:ring-accent">
+                                <article key={project.id} className="relative rounded-2xl border border-border-primary bg-surface-secondary">
+                                <Link data-project-card to={`/projects/${encodeURIComponent(project.id)}`} className="group block rounded-2xl p-5 shadow-sm outline-none transition hover:-translate-y-0.5 hover:border-accent hover:shadow-xl focus:ring-2 focus:ring-accent">
                                     <div className="flex flex-wrap items-start justify-between gap-2"><div className="flex flex-wrap gap-2"><span className="rounded-full border border-border-primary px-2 py-1 text-xs font-semibold text-content-secondary">NGS/MolBio</span>{projectScope === 'ngs_molbio_local' ? <LocalProjectAssociationBadge project={project} /> : null}</div><span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-muted">{project.status}</span></div>
                                     <h2 className="mt-4 text-lg font-semibold text-content group-hover:text-accent">{project.name}</h2>
                                     <p className="mt-2 line-clamp-3 text-xs leading-5 text-content-secondary">{typeof payload.research_objective === 'string' ? payload.research_objective : project.description || 'No description recorded.'}</p>
@@ -262,6 +269,8 @@ function ProjectsIndex() {
                                     <p className="mt-4 text-[10px] text-content-muted">Updated {new Date(project.updated_at).toLocaleString()}</p>
                                     <span className="mt-3 inline-flex text-sm font-semibold text-accent">Open Project</span>
                                 </Link>
+                                {project.lifecycle_state !== 'archived' && <div className="px-5 pb-4"><button type="button" disabled={deleteProject.isPending} aria-label={`Delete Project ${project.name}`} onClick={() => { if (window.confirm(`Delete Project “${project.name}” from active Projects? It will be archived so its sequences, data and history remain recoverable.`)) deleteProject.mutate(project.id); }} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-error)]">Delete Project</button></div>}
+                                </article>
                             );
                         })}
                         {projectsQuery.hasNextPage ? (
@@ -279,6 +288,7 @@ function ProjectsIndex() {
                     <section className="mt-8 rounded-2xl border border-dashed border-border-secondary bg-surface-secondary p-10 text-center"><h2 className="text-lg font-semibold text-content">No Projects match</h2><p className="mt-2 text-sm text-content-secondary">Change the discovery filters or create a durable Project.</p><button type="button" onClick={() => setDialogMode('create_project')} className="mt-5 rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white">Create Project</button></section>
                 )}
             </div>
+            {deleteProject.isError && <p role="alert" className="p-4 text-sm text-[var(--text-error)]">{projectManagerErrorMessage(deleteProject.error)}</p>}
             <ManagerDialog mode={dialogMode} onClose={() => setDialogMode(null)} onComplete={(destination) => { void queryClient.invalidateQueries({ queryKey: ['project-manager', 'projects'] }); if (destination?.projectId) navigate(`/projects/${encodeURIComponent(destination.projectId)}`); }} />
         </div>
     );
