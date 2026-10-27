@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import os
 import tempfile
 from pathlib import Path
@@ -164,3 +165,39 @@ async def retained_path(session: AsyncSession, artifact: ExperimentArtifact) -> 
     if actual != (blob.sha256, blob.size_bytes):
         raise CustodyError("retained artifact bytes are corrupt")
     return path
+
+
+async def retain_job_artifact(
+    core_session: AsyncSession, experiment_session: AsyncSession, *,
+    job_id: str, artifact_id: str, workspace_id: str, lifecycle_owner_id: str,
+    resource_id: str, logical_role: str, schema_name: str, schema_version: str,
+) -> ExperimentArtifact:
+    """Copy an authorized JobArtifact into PM custody in the caller's transaction.
+
+    Authorization, selection of the native result manifest and its full artifact
+    set, receipt/lineage creation, and commit belong to the caller. This primitive
+    does not change the Job or imply that a complete result was attached.
+    """
+    from database import Job, JobArtifact
+    from services.global_experiments.adapters import _read_verified_file
+    from services.job_result_roots import resolve_persisted_job_result_root
+
+    job = await core_session.get(Job, job_id)
+    source = await core_session.get(JobArtifact, artifact_id)
+    if job is None or source is None or source.owner_job_id != job_id:
+        raise CustodyError("JobArtifact is not owned by the selected Job")
+    root = resolve_persisted_job_result_root(job)
+    _, data = await asyncio.to_thread(
+        _read_verified_file, source.storage_path, source.sha256, source.bytes,
+        canonical_root=root,
+    )
+    return await retain_artifact(
+        experiment_session, source=io.BytesIO(data), workspace_id=workspace_id,
+        lifecycle_owner_id=lifecycle_owner_id, resource_id=resource_id,
+        logical_role=logical_role, logical_key=source.logical_path,
+        schema_name=schema_name, schema_version=schema_version,
+        media_type=source.media_type, expected_sha256=source.sha256,
+        expected_size=source.bytes,
+        provenance={"job_id": job_id, "job_artifact_id": artifact_id,
+                    "attempt": source.attempt},
+    )

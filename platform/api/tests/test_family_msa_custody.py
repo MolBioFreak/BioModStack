@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from experiment_migrations import run_all
 from experiment_models import (ExperimentResource, ExperimentArtifact, ExperimentArtifactBlob)
-from services.family_msa.publication import CustodyError, install_blob, retain_artifact, retained_path
+from services.family_msa.publication import CustodyError, install_blob, retain_artifact, retained_path, retain_job_artifact
 
 
 def test_blob_source_validation_and_corruption(tmp_path, monkeypatch):
@@ -113,4 +113,63 @@ def test_concurrent_catalog_and_replay_media(tmp_path, monkeypatch):
             assert len((await s.scalars(select(ExperimentArtifactBlob))).all()) == 1
             assert len((await s.scalars(select(ExperimentArtifact))).all()) == 14
         await engine.dispose()
+    asyncio.run(exercise())
+
+
+def test_real_job_artifact_copy_survives_job_deletion(tmp_path, monkeypatch):
+    from database import Base, Job, JobArtifact
+
+    results = tmp_path / 'results'
+    output = results / 'job'
+    output.mkdir(parents=True)
+    data = b'>fixture\nAC-G\n'
+    source = output / 'alignment.fasta'
+    source.write_bytes(data)
+    monkeypatch.setenv('BMS_RESULTS_DIR', str(results))
+    monkeypatch.setenv('BMS_EXPERIMENT_ARTIFACT_ROOT', str(tmp_path / 'blobs'))
+
+    async def exercise():
+        run_all(tmp_path / 'pm.db')
+        core_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core.db'}")
+        pm_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'pm.db'}")
+        @event.listens_for(core_engine.sync_engine, 'connect')
+        def foreign_keys(connection, _):
+            connection.execute('PRAGMA foreign_keys=ON')
+        async with core_engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        core_sessions = async_sessionmaker(core_engine, expire_on_commit=False)
+        pm_sessions = async_sessionmaker(pm_engine, expire_on_commit=False)
+        async with core_sessions() as core:
+            core.add(Job(id='job', name='fixture', model_id='family_msa_protein', mode='family_msa', status='completed', params={}, output_dir=str(output)))
+            await core.flush()
+            core.add(JobArtifact(id='native', owner_job_id='job', attempt=0, logical_path='alignment.fasta', storage_path=str(source), sha256=hashlib.sha256(data).hexdigest(), bytes=len(data), media_type='text/plain', provenance={}))
+            await core.commit()
+        async with pm_sessions() as pm:
+            pm.add(ExperimentResource(id='workspace', kind='workspace'))
+            await pm.commit()
+        args = dict(job_id='job', artifact_id='native', workspace_id='workspace', lifecycle_owner_id='workspace', resource_id='retained', logical_role='alignment', schema_name='alignment.native', schema_version='1')
+        async with core_sessions() as core, pm_sessions() as pm:
+            with pytest.raises(CustodyError):
+                await retain_job_artifact(core, pm, **{**args, 'job_id': 'wrong'})
+            source.write_bytes(b'changed')
+            from services.global_experiments.adapters import AdapterError
+            with pytest.raises(AdapterError):
+                await retain_job_artifact(core, pm, **args)
+            source.write_bytes(data)
+            await retain_job_artifact(core, pm, **args)
+            await pm.rollback()
+        async with core_sessions() as core, pm_sessions() as pm:
+            assert await pm.get(ExperimentArtifact, 'retained') is None
+            await retain_job_artifact(core, pm, **args)
+            await pm.commit()
+        async with core_sessions() as core:
+            await core.delete(await core.get(Job, 'job'))
+            await core.commit()
+        shutil.rmtree(output)
+        async with core_sessions() as core, pm_sessions() as pm:
+            assert await core.get(JobArtifact, 'native') is None
+            artifact = await pm.get(ExperimentArtifact, 'retained')
+            assert (await retained_path(pm, artifact)).read_bytes() == data
+        await core_engine.dispose()
+        await pm_engine.dispose()
     asyncio.run(exercise())
