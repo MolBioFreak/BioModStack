@@ -1,5 +1,7 @@
 import { Link, useLocation, useParams } from 'react-router-dom';
 import AlignmentWorkspace from './AlignmentWorkspace';
+import AlignmentEditor from './AlignmentEditor';
+import { useState } from 'react';
 import { ProjectWorkflowSetupBanner, useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup';
 import { projectManagerErrorMessage } from '../../lib/projectManager';
 
@@ -9,6 +11,9 @@ export default function AlignmentPage() {
     const location = useLocation();
     const setup = useProjectWorkflowSetup();
     const query = new URLSearchParams(location.search);
+    const [selectedModel, setSelectedModel] = useState('family_msa_protein');
+    const queryModel = query.get('model');
+    const model = queryModel === 'family_msa_protein' || queryModel === 'family_msa_nucleic' ? queryModel : selectedModel;
     const section = location.pathname.endsWith('/compare') ? 'Compare' : location.pathname.endsWith('/new') || (location.pathname === '/alignments' && query.has('model')) ? 'New' : 'Library';
     return <div className="mx-auto max-w-7xl p-4">
         {setup.active && setup.isLoading && <p role="status">Loading Project workflow setup…</p>}
@@ -18,7 +23,8 @@ export default function AlignmentPage() {
             {(['Library', 'New', 'Compare'] as const).map(name => <Link key={name} aria-current={section === name ? 'page' : undefined} to={{ pathname: `/alignments/${name.toLowerCase()}`, search: setup.active ? location.search : '' }}>{name}</Link>)}
         </nav>
         {(jobId || resultId) && <p role="status">{jobId ? `Job ${jobId}` : `Result ${resultId}`}: alignment artifact reopening is unavailable until the native result API is connected.</p>}
-        {!jobId && !resultId && <p role="status">{section === 'New' ? 'Alignment setup and submission are not connected yet.' : section === 'Compare' ? 'Alignment comparison is not connected yet.' : 'Alignment library is not connected yet.'}</p>}
+        {!jobId && !resultId && section === 'New' && <>{!queryModel && <label>Alignment family <select aria-label="Alignment family" value={model} onChange={e => setSelectedModel(e.target.value)}><option value="family_msa_protein">Protein</option><option value="family_msa_nucleic">Nucleic acid</option></select></label>}<AlignmentEditor key={model} model={model}/></>}
+        {!jobId && !resultId && section !== 'New' && <p role="status">{section === 'Compare' ? 'Alignment comparison is not connected yet.' : 'Alignment library is not connected yet.'}</p>}
         <AlignmentWorkspace projectLabel={setup.setup?.project_label} />
     </div>;
 }
