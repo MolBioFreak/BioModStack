@@ -1,4 +1,4 @@
-import asyncio, json, urllib.request, websockets
+import asyncio, base64, json, os, urllib.request, websockets
 
 async def main():
     page = next(t for t in json.load(urllib.request.urlopen('http://127.0.0.1:19231/json')) if t['type']=='page')
@@ -22,6 +22,7 @@ async def main():
             if 'exceptionDetails' in result: raise RuntimeError(result['exceptionDetails'])
             return result['result'].get('value')
         await call('Page.enable'); await call('Network.enable'); await call('Runtime.enable')
+        await call('Emulation.setDeviceMetricsOverride', {'width':1280,'height':1000,'deviceScaleFactor':1,'mobile':False})
         await call('Page.reload',{'ignoreCache':True})
         await asyncio.sleep(4)
         targets=json.load(urllib.request.urlopen('http://127.0.0.1:19231/json'))
@@ -38,27 +39,35 @@ async def main():
                     child_events.append(msg)
             canvases=await child_ev('document.querySelectorAll("canvas").length')
             print('canvases',canvases); assert canvases > 0
+            payload=await child_ev("JSON.parse(document.querySelector('#payload').textContent).rows")
+            assert [r['label'] for r in payload[:2]] == ['duplicate', 'duplicate'] and '\n>forged' in payload[2]['label']
             blocked=await child_ev("fetch('http://127.0.0.1:43731/probe-outbound').then(()=>false,()=>true)",True)
             print('fetch blocked',blocked); assert blocked
             image=await child_ev("new Promise(r=>{let i=new Image(); i.onload=()=>r('loaded'); i.onerror=()=>r('blocked'); i.src='http://127.0.0.1:43731/probe-image'})",True)
             print('image',image); assert image=='blocked'
             print('child network events',[(e.get('method'),e.get('params',{}).get('blockedReason')) for e in child_events if e.get('method','').startswith('Network.')])
         box=await ev('(()=>{const r=document.querySelector("iframe").getBoundingClientRect();return [r.x,r.y]})()')
+        if os.environ.get('JBROWSE_PROBE_SCREENSHOT'):
+            image = await call('Page.captureScreenshot')
+            with open(os.environ['JBROWSE_PROBE_SCREENSHOT'], 'wb') as out: out.write(base64.b64decode(image['data']))
         found=None
-        for y in (65,75,85,95,105,115,125):
-            for x in (82,92,102,112,122):
-                for typ in ('mousePressed','mouseReleased'):
+        seen=set()
+        await ev("window.messages=[];window.addEventListener('message',e=>{if(e.data?.channel==='bms-jbrowse-inline-v1')messages.push(e.data)})")
+        print('iframe box',box)
+        for y in range(45, 180, 5):
+            for x in range(260, 360, 10):
+                for typ in ('mouseMoved','mousePressed','mouseReleased'):
                     await call('Input.dispatchMouseEvent',{'type':typ,'x':box[0]+x,'y':box[1]+y,'button':'left','clickCount':1})
                 await asyncio.sleep(.05)
-                found=await ev('(document.querySelector("main")?.textContent.match(/Row (one|two), column \d+[^.]*/)?.[0] || "null")')
-                if found!='null': break
-            if found!='null': break
-        print('selected',found); assert found!='null'
+                found=await ev('(document.querySelector("main")?.textContent.match(/Row (one|two|three), column \\d+, (?:gap|residue \\d+); source coordinate unknown/)?.[0] || "null")')
+                if found != 'null': seen.add(found)
+        print('selected',sorted(seen), 'message indices',await ev('[...new Set(messages.map(m=>m.index))]')); assert {'Row one, column 2, residue 2; source coordinate unknown', 'Row two, column 2, gap; source coordinate unknown'} <= seen
+        assert not await ev('window.pwned || false')
         # Force a navigation through an HTTP redirect, then a forged message from
         # the replacement document. The host must never send the alignment.
         await ev("window.leaks=[];window.addEventListener('message',e=>{if(e.data?.probe)leaks.push(e.data)});let f=document.querySelector('iframe');f.removeAttribute('srcdoc');f.src='http://127.0.0.1:43732/redirect';")
         await asyncio.sleep(2)
-        before=await ev('(document.querySelector("main")?.textContent.match(/Row (one|two), column \d+[^.]*/)?.[0] || "null")')
+        before=await ev('(document.querySelector("main")?.textContent.match(/Row (one|two|three), column \\d+, (?:gap|residue \\d+); source coordinate unknown/)?.[0] || "null")')
         # replacement itself posts synthetic spoof and reports any incoming message
         await asyncio.sleep(1)
         leaks=await ev('window.leaks')

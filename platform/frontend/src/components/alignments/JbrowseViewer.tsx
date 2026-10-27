@@ -15,7 +15,7 @@ function Frame({ document, onSelect }: AlignmentViewerProps) {
   current.current = { document, onSelect }
   const [token] = useState(() => crypto.randomUUID() + crypto.randomUUID())
   const [srcDoc] = useState(() => {
-    const payload = JSON.stringify({ rows: document.rows.map(({ aligned }) => ({ aligned })), token }).replace(/</g, '\\u003c')
+    const payload = JSON.stringify({ rows: document.rows.map(({ rowId, label, aligned }) => ({ rowId, label, aligned })), token }).replace(/</g, '\\u003c')
     // The host sends no rows after frame navigation. This does NOT prevent a
     // compromised viewer script from exfiltrating rows by self-navigation.
     const code = viewerCode.replace(/<\/script/gi, '<\\/script')
@@ -31,5 +31,5 @@ function Frame({ document, onSelect }: AlignmentViewerProps) {
     window.addEventListener('message', receive)
     return () => window.removeEventListener('message', receive)
   }, [token])
-  return <section aria-label="JBrowseMSA"><p>Experimental viewer: labels are synthetic; external selections and marks are not displayed.</p><iframe ref={frame} title="JBrowseMSA" sandbox="allow-scripts" srcDoc={srcDoc} style={{ width: '100%', height: 460, border: 0 }} /></section>
+  return <section aria-label="JBrowseMSA"><p>Experimental viewer: row labels include their row IDs; control characters are escaped. External selections and marks are not displayed.</p><iframe ref={frame} title="JBrowseMSA" sandbox="allow-scripts" srcDoc={srcDoc} style={{ width: '100%', height: 460, border: 0 }} /></section>
 }
