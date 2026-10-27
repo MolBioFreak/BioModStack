@@ -102,6 +102,30 @@ async def retain_artifact(
     sha, size, key = await asyncio.to_thread(
         install_blob, source, expected_sha256=expected_sha256, expected_size=expected_size
     )
+    # Acquire the catalog row before any reads. SQLite serializes competing
+    # writers here; reading first can leave a stale snapshot that cannot upgrade
+    # to a write transaction. The uniqueness constraint arbitrates other DBs.
+    dialect = session.get_bind().dialect.name
+    if dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+    elif dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        raise CustodyError(f"unsupported artifact catalog dialect: {dialect}")
+    await session.execute(
+        insert(ExperimentArtifactBlob).values(
+            sha256=sha, size_bytes=size, media_type=media_type,
+            storage_key=key, state="present", verified_at=now(), created_at=now(),
+        ).on_conflict_do_nothing(index_elements=["sha256"])
+    )
+    blob = await session.get(ExperimentArtifactBlob, sha)
+    if blob is None or blob.size_bytes != size or blob.storage_key != key:
+        raise CustodyError("blob catalog conflicts with retained bytes")
+    blob.state = "present"
+    blob.verified_at = now()
+    # The shared blob's media type cannot identify two artifacts with identical
+    # bytes but different representations. Bind it to each artifact instead.
+    identity_json = canonical_json({"source": provenance, "media_type": media_type})
     existing = await session.get(ExperimentArtifact, resource_id) if resource_id else None
     if existing is not None:
         resource = await session.get(ExperimentResource, resource_id)
@@ -110,26 +134,18 @@ async def retain_artifact(
                 or existing.blob_sha256 != sha or existing.logical_role != logical_role
                 or existing.logical_key != logical_key or existing.schema_name != schema_name
                 or existing.schema_version != schema_version
-                or existing.provenance_json != canonical_json(provenance)):
+                or (existing.provenance_json != identity_json and not (
+                    existing.provenance_json == canonical_json(provenance)
+                    and blob.media_type == media_type
+                ))):
             raise CustodyError("artifact replay conflicts with existing identity")
         return existing
-    blob = await session.get(ExperimentArtifactBlob, sha)
-    if blob is None:
-        blob = ExperimentArtifactBlob(sha256=sha, size_bytes=size, media_type=media_type,
-                                      storage_key=key, state="present", verified_at=now())
-        session.add(blob)
-        await session.flush()
-    elif blob.size_bytes != size or blob.storage_key != key:
-        raise CustodyError("blob catalog conflicts with retained bytes")
-    else:
-        blob.state = "present"
-        blob.verified_at = now()
     resource = await _resource(session, kind="artifact", workspace_id=workspace_id,
                                lifecycle_owner_id=lifecycle_owner_id, resource_id=resource_id)
     artifact = ExperimentArtifact(resource_id=resource.id, blob_sha256=sha,
                                   logical_role=logical_role, logical_key=logical_key,
                                   schema_name=schema_name, schema_version=schema_version,
-                                  provenance_json=canonical_json(provenance))
+                                  provenance_json=identity_json)
     session.add(artifact)
     await session.flush()
     return artifact

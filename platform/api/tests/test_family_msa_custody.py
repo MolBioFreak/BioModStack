@@ -2,6 +2,8 @@
 import asyncio
 import hashlib
 import io
+import shutil
+import sqlite3
 
 import pytest
 from sqlalchemy import event, select
@@ -70,5 +72,45 @@ def test_project_custody_replay_and_original_removal(tmp_path, monkeypatch):
             with pytest.raises(CustodyError):
                 await put(s, "project1", "artifact1", b"different")
             await s.rollback()
+        # A consistent PM database backup alone does not contain blob bytes.
+        with sqlite3.connect(tmp_path / "pm.db") as original, sqlite3.connect(tmp_path / "backup.db") as backup:
+            original.backup(backup)
+        shutil.copytree(tmp_path / "blobs", tmp_path / "backup-blobs")
+        monkeypatch.setenv("BMS_EXPERIMENT_ARTIFACT_ROOT", str(tmp_path / "backup-blobs"))
+        backup_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'backup.db'}")
+        async with async_sessionmaker(backup_engine, expire_on_commit=False)() as s:
+            artifact = await s.get(ExperimentArtifact, "artifact2")
+            assert (await retained_path(s, artifact)).read_bytes() == data
+        await backup_engine.dispose()
+        await engine.dispose()
+    asyncio.run(exercise())
+
+
+def test_concurrent_catalog_and_replay_media(tmp_path, monkeypatch):
+    monkeypatch.setenv("BMS_EXPERIMENT_ARTIFACT_ROOT", str(tmp_path / "blobs"))
+
+    async def exercise():
+        run_all(tmp_path / "pm.db")
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'pm.db'}")
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as s:
+            s.add(ExperimentResource(id="workspace", kind="workspace"))
+            await s.commit()
+        async def put(resource, media="text/plain"):
+            async with sessions() as s:
+                obj = await retain_artifact(s, source=io.BytesIO(b"same"),
+                    workspace_id="workspace", lifecycle_owner_id="workspace",
+                    resource_id=resource, logical_role="alignment", logical_key="x",
+                    schema_name="native", schema_version="1", media_type=media, provenance={})
+                await s.commit()
+                return obj.resource_id
+        assert len(await asyncio.gather(*(put(f"a{i}") for i in range(12)))) == 12
+        assert await asyncio.gather(put("same-id"), put("same-id")) == ["same-id", "same-id"]
+        await put("other-media", "application/octet-stream")
+        with pytest.raises(CustodyError):
+            await put("same-id", "application/octet-stream")
+        async with sessions() as s:
+            assert len((await s.scalars(select(ExperimentArtifactBlob))).all()) == 1
+            assert len((await s.scalars(select(ExperimentArtifact))).all()) == 14
         await engine.dispose()
     asyncio.run(exercise())
