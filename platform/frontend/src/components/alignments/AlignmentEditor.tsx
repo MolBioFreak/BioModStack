@@ -120,7 +120,9 @@ export default function AlignmentEditor({ model }: { model: string }) {
         });
         const rows = [...roster.rows, ...datasetRows.filter(x=>x.resolved.status === 'resolved' && typeof x.resolved.sequence === 'string').map((x,i)=>({
             row_id:`dataset_${String(i+1).padStart(8,'0')}`, header:x.resolved.label || x.selection.members[0].member_identity,
-            sequence:x.resolved.sequence!, source_member_id:x.selection.members[0].member_identity,
+            sequence:x.resolved.sequence!, source_member_id:x.resolved.chain === undefined
+                ? x.selection.members[0].member_identity
+                : JSON.stringify([x.selection.members[0].member_identity,'observed_chain',x.resolved.chain]),
             occurrence_id:JSON.stringify([x.selection.project_id,x.selection.dataset_id,x.selection.revision_id,x.selection.revision_sha256,x.selection.members[0].ordinal,x.selection.members[0].member_sha256]),
             source_offset:x.resolved.start, source_positions:x.resolved.source_positions ?? null,
             transformation_provenance:JSON.stringify({source_identity:x.resolved.source_identity,source_digest:x.resolved.source_digest,chain:x.resolved.chain,start:x.resolved.start,end:x.resolved.end,operation:'forward_slice'})

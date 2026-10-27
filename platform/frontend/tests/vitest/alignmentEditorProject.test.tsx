@@ -170,5 +170,6 @@ it('selects a Design chain and retains its region and occurrence in the draft', 
  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click()});
  const row=mocked.save.mock.calls[0][0].native_job_request.params.roster.rows.at(-1);
  expect(row.sequence).toBe('Y'); expect(row.source_positions).toEqual([1]); expect(JSON.parse(row.transformation_provenance).chain).toBe('B');
+ expect(JSON.parse(row.source_member_id)).toEqual(['q','observed_chain','B']);
  await act(async()=>root.unmount()); mocked.datasets.mockResolvedValue({items:[],next_cursor:null});
 });
