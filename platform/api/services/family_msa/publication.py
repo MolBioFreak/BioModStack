@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import io
 import os
+import stat
 import tempfile
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Protocol
+
+
+class _Readable(Protocol):
+    def read(self, n: int) -> bytes: ...
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,7 +44,7 @@ def _root() -> Path:
     return _controlled_root("BMS_EXPERIMENT_ARTIFACT_ROOT", "experiment-artifacts")
 
 
-def install_blob(source: BinaryIO, *, expected_sha256: str | None = None,
+def install_blob(source: _Readable, *, expected_sha256: str | None = None,
                  expected_size: int | None = None) -> tuple[str, int, str]:
     """Atomically install bytes; verify both an optional source authority and reuse.
 
@@ -100,9 +104,20 @@ async def retain_artifact(
     replay fails instead of replacing an existing artifact. The owner and
     workspace must be checked by the existing PM authorization path first.
     """
-    sha, size, key = await asyncio.to_thread(
+    installed = await asyncio.to_thread(
         install_blob, source, expected_sha256=expected_sha256, expected_size=expected_size
     )
+    return await _catalog_artifact(session, installed=installed, workspace_id=workspace_id,
+        lifecycle_owner_id=lifecycle_owner_id, logical_role=logical_role, logical_key=logical_key,
+        schema_name=schema_name, schema_version=schema_version, media_type=media_type,
+        provenance=provenance, resource_id=resource_id)
+
+
+async def _catalog_artifact(session: AsyncSession, *, installed: tuple[str, int, str],
+    workspace_id: str, lifecycle_owner_id: str, logical_role: str, logical_key: str,
+    schema_name: str, schema_version: str, media_type: str, provenance: dict,
+    resource_id: str | None) -> ExperimentArtifact:
+    sha, size, key = installed
     # Acquire the catalog row before any reads. SQLite serializes competing
     # writers here; reading first can leave a stale snapshot that cannot upgrade
     # to a write transaction. The uniqueness constraint arbitrates other DBs.
@@ -167,6 +182,69 @@ async def retained_path(session: AsyncSession, artifact: ExperimentArtifact) -> 
     return path
 
 
+def _install_job_blob(path_value, expected_sha256, expected_size, root):
+    """Open beneath the physical root and verify the exact streamed snapshot."""
+    from services.global_experiments.adapters import (
+        AdapterError, _open_canonical_root, _open_directory_at, _same_file_identity, _sha256,
+    )
+    digest = _sha256(expected_sha256, "artifact sha256") if expected_sha256 is not None else None
+    if not isinstance(path_value, str) or not path_value.strip() or path_value != path_value.strip():
+        raise AdapterError("source_contract_invalid", "native artifact path is unavailable")
+    root = Path(root).expanduser()
+    candidate = Path(path_value).expanduser()
+    try:
+        relative = candidate.relative_to(root) if candidate.is_absolute() else candidate
+        if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+            raise ValueError("native artifact path traverses its canonical root")
+        directory_fd = _open_canonical_root(root)
+        try:
+            for component in relative.parts[:-1]:
+                child = _open_directory_at(directory_fd, component)
+                os.close(directory_fd)
+                directory_fd = child
+            name = relative.parts[-1]
+            observed = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if not stat.S_ISREG(observed.st_mode):
+                raise OSError("native artifact is not a regular no-follow file")
+            fd = os.open(name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                         getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+        finally:
+            os.close(directory_fd)
+        try:
+            opened = os.fstat(fd)
+            if not _same_file_identity(observed, opened) or not stat.S_ISREG(opened.st_mode):
+                raise OSError("native artifact changed while it was opened")
+            if expected_size is not None and (isinstance(expected_size, bool) or
+                    not isinstance(expected_size, int) or expected_size != opened.st_size):
+                raise AdapterError("source_digest_mismatch", "native artifact size does not match authority")
+
+            class VerifiedStream:
+                count = 0
+                hasher = hashlib.sha256()
+
+                def read(self, n):
+                    chunk = os.read(fd, n)
+                    self.count += len(chunk)
+                    self.hasher.update(chunk)
+                    if not chunk:
+                        after = os.fstat(fd)
+                        if (not _same_file_identity(opened, after) or after.st_size != opened.st_size
+                                or after.st_mtime_ns != opened.st_mtime_ns
+                                or after.st_ctime_ns != opened.st_ctime_ns or self.count != opened.st_size):
+                            raise AdapterError("source_artifact_unavailable", "native artifact changed during verification")
+                        if digest is not None and self.hasher.hexdigest() != digest:
+                            raise AdapterError("source_digest_mismatch", "native artifact digest does not match authority")
+                    return chunk
+
+            return install_blob(VerifiedStream(), expected_sha256=digest, expected_size=expected_size)
+        finally:
+            os.close(fd)
+    except AdapterError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise AdapterError("source_artifact_unavailable", "native artifact could not be verified") from exc
+
+
 async def retain_job_artifact(
     core_session: AsyncSession, experiment_session: AsyncSession, *,
     job_id: str, artifact_id: str, workspace_id: str, lifecycle_owner_id: str,
@@ -179,7 +257,6 @@ async def retain_job_artifact(
     does not change the Job or imply that a complete result was attached.
     """
     from database import Job, JobArtifact
-    from services.global_experiments.adapters import _read_verified_file
     from services.job_result_roots import resolve_persisted_job_result_root
 
     job = await core_session.get(Job, job_id)
@@ -187,17 +264,15 @@ async def retain_job_artifact(
     if job is None or source is None or source.owner_job_id != job_id:
         raise CustodyError("JobArtifact is not owned by the selected Job")
     root = resolve_persisted_job_result_root(job)
-    _, data = await asyncio.to_thread(
-        _read_verified_file, source.storage_path, source.sha256, source.bytes,
-        canonical_root=root,
+    installed = await asyncio.to_thread(
+        _install_job_blob, source.storage_path, source.sha256, source.bytes, root,
     )
-    return await retain_artifact(
-        experiment_session, source=io.BytesIO(data), workspace_id=workspace_id,
+    return await _catalog_artifact(
+        experiment_session, installed=installed, workspace_id=workspace_id,
         lifecycle_owner_id=lifecycle_owner_id, resource_id=resource_id,
         logical_role=logical_role, logical_key=source.logical_path,
         schema_name=schema_name, schema_version=schema_version,
-        media_type=source.media_type, expected_sha256=source.sha256,
-        expected_size=source.bytes,
+        media_type=source.media_type,
         provenance={"job_id": job_id, "job_artifact_id": artifact_id,
                     "attempt": source.attempt},
     )

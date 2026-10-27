@@ -173,3 +173,110 @@ def test_real_job_artifact_copy_survives_job_deletion(tmp_path, monkeypatch):
         await core_engine.dispose()
         await pm_engine.dispose()
     asyncio.run(exercise())
+
+
+def test_streamed_job_blob_concurrent_and_nofollow(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from services.family_msa.publication import _install_job_blob
+    from services.global_experiments.adapters import AdapterError
+    root = tmp_path / "results"
+    root.mkdir()
+    source = root / "source"
+    source.write_bytes(b"abc" * 1000000)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    monkeypatch.setenv("BMS_EXPERIMENT_ARTIFACT_ROOT", str(tmp_path / "blobs"))
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(lambda _: _install_job_blob(str(source), digest, source.stat().st_size, root), range(6)))
+    assert len(set(results)) == 1
+    assert (tmp_path / "blobs" / results[0][2]).read_bytes() == source.read_bytes()
+    assert not list((tmp_path / "blobs" / ".staging").iterdir())
+    outside = tmp_path / "outside"
+    outside.write_bytes(source.read_bytes())
+    (root / "alias").symlink_to(outside)
+    (root / "diralias").symlink_to(tmp_path, target_is_directory=True)
+    for path in (root / "alias", root / "diralias" / "outside", outside, root / ".." / "outside"):
+        with pytest.raises(AdapterError):
+            _install_job_blob(str(path), digest, source.stat().st_size, root)
+    with pytest.raises(AdapterError):
+        _install_job_blob(str(source), "0" * 64, source.stat().st_size, root)
+    with pytest.raises(AdapterError):
+        _install_job_blob(str(source), digest, source.stat().st_size + 1, root)
+    assert not list((tmp_path / "blobs" / ".staging").iterdir())
+
+
+def test_streamed_job_blob_detects_mutation(tmp_path, monkeypatch):
+    import os
+    from services.family_msa import publication
+    from services.global_experiments.adapters import AdapterError
+    root = tmp_path / "results"
+    root.mkdir()
+    source = root / "source"
+    source.write_bytes(b"a" * 3000000)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    monkeypatch.setenv("BMS_EXPERIMENT_ARTIFACT_ROOT", str(tmp_path / "blobs"))
+    original_read = os.read
+    changed = False
+    def racing_read(fd, n):
+        nonlocal changed
+        chunk = original_read(fd, n)
+        if chunk and not changed:
+            changed = True
+            with source.open("r+b") as f:
+                f.seek(2000000)
+                f.write(b"b")
+        return chunk
+    monkeypatch.setattr(publication.os, "read", racing_read)
+    with pytest.raises(AdapterError):
+        publication._install_job_blob(str(source), digest, 3000000, root)
+    assert not list((tmp_path / "blobs" / ".staging").iterdir())
+    assert not list((tmp_path / "blobs").glob("sha256/*/*"))
+
+
+def test_streamed_job_blob_over_four_gib(tmp_path, monkeypatch):
+    import os
+    import resource
+    from services.family_msa.publication import _install_job_blob
+    if os.environ.get("BMS_RUN_LARGE_CUSTODY_TEST") != "1":
+        pytest.skip("opt-in: writes over 4 GiB to scratch")
+    root = tmp_path / "results"
+    root.mkdir()
+    source = root / "sparse"
+    size = 4 * 1024**3 + 1
+    with source.open("wb") as f:
+        f.truncate(size)
+    digest = hashlib.sha256()
+    block = bytes(1024 * 1024)
+    for _ in range(size // len(block)):
+        digest.update(block)
+    digest.update(b"\0" * (size % len(block)))
+    monkeypatch.setenv("BMS_EXPERIMENT_ARTIFACT_ROOT", str(tmp_path / "blobs"))
+    before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    sha, actual, key = _install_job_blob(str(source), digest.hexdigest(), size, root)
+    growth = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before
+    print(f"large custody size={actual} peak_rss_growth_kib={growth}")
+    assert (sha, actual) == (digest.hexdigest(), size)
+    assert (tmp_path / "blobs" / key).stat().st_size == size
+    assert growth < 100 * 1024
+
+
+def test_streamed_job_blob_leaf_swap_race(tmp_path, monkeypatch):
+    import os
+    from services.family_msa import publication
+    from services.global_experiments.adapters import AdapterError
+    root = tmp_path / "results"
+    root.mkdir()
+    source = root / "source"
+    source.write_bytes(b"inside")
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"inside")
+    monkeypatch.setenv("BMS_EXPERIMENT_ARTIFACT_ROOT", str(tmp_path / "blobs"))
+    real_open = os.open
+    def racing_open(path, flags, *args, **kwargs):
+        if path == "source" and kwargs.get("dir_fd") is not None:
+            source.unlink()
+            source.symlink_to(outside)
+        return real_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(publication.os, "open", racing_open)
+    with pytest.raises(AdapterError):
+        publication._install_job_blob(str(source), hashlib.sha256(b"inside").hexdigest(), 6, root)
+    assert not (tmp_path / "blobs" / "sha256").exists()
