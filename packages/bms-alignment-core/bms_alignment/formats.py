@@ -68,6 +68,8 @@ def coordinates(row: Row) -> list[int | None]:
 
 
 def summary(roster: SequenceSet) -> list[dict]:
+    if roster.source_format == 'a3m':
+        raise ValueError('A3M insertion-aware summary unavailable; use project_a3m')
     if not roster.rows:
         return []
     lengths = {len(r.sequence) for r in roster.rows}
@@ -85,27 +87,27 @@ def summary(roster: SequenceSet) -> list[dict]:
     return result
 
 
-def compare(a: SequenceSet, b: SequenceSet) -> dict:
-    def mapped(s):
-        d = {}
-        for r in s.rows:
-            if r.source_member_id is not None and r.occurrence_id is not None:
-                key = (r.source_member_id, r.occurrence_id)
-                if key in d:
-                    raise ValueError('duplicate source occurrence identity')
-                d[key] = r
-        return d
-    left, right = mapped(a), mapped(b)
-    common = sorted(left.keys() & right.keys())
-    rows = []
-    for key in common:
-        x, y = coordinates(left[key]), coordinates(right[key])
-        xi = {v: i for i, v in enumerate(x) if v is not None}
-        yi = {v: i for i, v in enumerate(y) if v is not None}
-        both = sorted(xi.keys() & yi.keys())
-        rows.append({'source_member_id': key[0], 'occurrence_id': key[1],
-                     'positions': [{'source': p, 'left_column': xi[p], 'right_column': yi[p]} for p in both],
-                     'left_only_positions': sorted(xi.keys() - yi.keys()), 'right_only_positions': sorted(yi.keys() - xi.keys()),
-                     'mapping_unknown': left[key].source_offset is None or right[key].source_offset is None})
-    return {'rows': rows, 'left_excluded': len(a.rows)-len(common), 'right_excluded': len(b.rows)-len(common),
-            'identity_policy': 'explicit source member and occurrence only'}
+def project_a3m(roster: SequenceSet) -> list[dict]:
+    """Separate match columns from lowercase/dot insertion slots, without realignment.
+
+    Slot zero precedes the first match; slot N follows match N. Original text
+    remains authoritative. Insertion strings need not have equal lengths.
+    """
+    if roster.source_format != 'a3m':
+        raise ValueError('projection requires A3M input')
+    result = []
+    for row in roster.rows:
+        matches = []
+        insertions = ['']
+        for symbol in row.sequence:
+            if symbol.islower() or symbol == '.':
+                insertions[-1] += symbol
+            else:
+                matches.append(symbol)
+                insertions.append('')
+        result.append({'row_id': row.row_id, 'match_columns': ''.join(matches),
+                       'insertions_after_match_count': insertions})
+    return result
+
+
+from .comparison import compare

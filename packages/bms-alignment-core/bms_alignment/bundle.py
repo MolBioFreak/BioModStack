@@ -13,7 +13,7 @@ def _safe_name(name):
             and name != 'manifest.json')
 
 
-def make_bundle(source: Path, destination: Path, filenames: list[str]) -> dict:
+def make_bundle(source: Path, destination: Path, filenames: list[str], *, excluded: list[str] | None = None) -> dict:
     if len(set(filenames)) != len(filenames) or not all(_safe_name(n) for n in filenames):
         raise ValueError('unsafe or duplicate bundle path')
     destination.mkdir(parents=True, exist_ok=True)
@@ -29,7 +29,7 @@ def make_bundle(source: Path, destination: Path, filenames: list[str]) -> dict:
             raise ValueError('destination escapes bundle root')
         dst.write_bytes(data)
         entries.append({'path': name, 'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data)})
-    manifest = {'schema': 'bms.alignment-bundle.v1', 'files': entries, 'dependencies': {'included': filenames, 'excluded': []}}
+    manifest = {'schema': 'bms.alignment-bundle.v1', 'files': entries, 'dependencies': {'included': filenames, 'excluded': list(excluded or [])}}
     (destination/'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
     return manifest
 
