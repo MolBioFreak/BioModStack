@@ -34,6 +34,7 @@ import { useGlobalExperimentContext } from '../experiments/GlobalExperimentConte
 import { rawSignalWaveformPoints } from './RawReadInspector';
 
 const RAW_WAVEFORM_POLL_ATTEMPTS = 130;
+const RUN_HISTORY_PAGE_SIZE = 100;
 
 interface OntInstrumentPanelProps {
     onAnalyzeExistingData: () => void;
@@ -264,13 +265,20 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
         retry: false,
     });
 
-    const durableRunsQuery = useQuery({
+    const durableRunsQuery = useInfiniteQuery({
         queryKey: ['ont-instrument-runs', exactDomainExperimentId],
-        queryFn: () => fetchOntInstrumentRuns(100),
+        initialPageParam: 0,
+        queryFn: ({ pageParam }) => fetchOntInstrumentRuns(RUN_HISTORY_PAGE_SIZE, {
+            experimentGroup: exactDomainExperimentId as string,
+            offset: pageParam,
+        }),
+        getNextPageParam: (lastPage, pages) => lastPage.length < RUN_HISTORY_PAGE_SIZE
+            ? undefined
+            : pages.reduce((count, page) => count + page.length, 0),
         enabled: exactDomainExperimentId !== null,
         retry: false,
-        refetchInterval: (query) => query.state.data?.some((run) =>
-            run.experiment_group === exactDomainExperimentId && ['starting', 'running', 'stopping', 'unknown'].includes(run.status))
+        refetchInterval: (query) => query.state.data?.pages.some((page) => page.some((run) =>
+            run.experiment_group === exactDomainExperimentId && ['starting', 'running', 'stopping', 'unknown'].includes(run.status)))
             ? jobPollingInterval(3000, query) : false,
     });
     const externalPod5CandidatesQuery = useQuery({
@@ -280,7 +288,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
     });
     const durableRuns = useMemo(
         () => exactDomainExperimentId
-            ? (durableRunsQuery.data ?? []).filter((run) => run.experiment_group === exactDomainExperimentId)
+            ? (durableRunsQuery.data?.pages.flat() ?? []).filter((run) => run.experiment_group === exactDomainExperimentId)
             : [],
         [durableRunsQuery.data, exactDomainExperimentId],
     );
@@ -773,6 +781,21 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                         {durableRuns.map((run: OntRunSummary) => <option key={runSelectionKey(run)} value={runSelectionKey(run)}>{run.sample_id || run.run_id} · {run.status} · version {run.observed_generation}</option>)}
                     </select>
                 </label>
+                {exactDomainExperimentId && durableRunsQuery.isSuccess ? (
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--text-secondary)]">
+                        <span>{durableRuns.length} {durableRuns.length === 1 ? 'run' : 'runs'} loaded{durableRunsQuery.hasNextPage ? ' · older runs available' : ''}</span>
+                        {durableRunsQuery.hasNextPage ? (
+                            <button
+                                type="button"
+                                disabled={durableRunsQuery.isFetchingNextPage}
+                                onClick={() => void durableRunsQuery.fetchNextPage()}
+                                className="text-sm text-[var(--text-action)] disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {durableRunsQuery.isFetchingNextPage ? 'Loading older runs…' : 'Load older runs'}
+                            </button>
+                        ) : null}
+                    </div>
+                ) : null}
                 {requestedRunGeneration ? <p className="text-xs text-[var(--text-secondary)]">Reopening URL-owned exact run generation {requestedRunGeneration.runId} · {requestedRunGeneration.observedGeneration}.</p> : null}
                 {selectedGenerationQuery.isLoading ? <p className="text-sm text-[var(--text-secondary)]">Loading exact persisted run generation…</p> : null}
                 {selectedGenerationQuery.isError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Exact run generation could not be reopened: {errorMessage(selectedGenerationQuery.error, 'unknown generation query failure')}</p> : null}

@@ -1067,19 +1067,34 @@ async def get_instrument_run(run_id: str) -> dict[str, Any] | None:
         return await _run_response(session, record) if record else None
 
 
-async def list_instrument_runs(*, limit: int = 100) -> list[dict[str, Any]]:
-    """List only persisted safe run summaries; never contact MinKNOW."""
+async def list_instrument_runs(
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    experiment_group: str | None = None,
+) -> list[dict[str, Any]]:
+    """List only persisted safe run summaries; never contact MinKNOW.
+
+    ``experiment_group`` (the exact Project id) is applied before paging so a
+    Project's older runs are never hidden behind other Projects' newer runs.
+    """
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
         raise ValueError("ONT run list limit must be between 1 and 500")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ValueError("ONT run list offset must be a non-negative integer")
+    statement = select(OntInstrumentRun)
+    if experiment_group is not None:
+        statement = statement.where(OntInstrumentRun.experiment_group == experiment_group)
     async with async_session() as session:
         records = list(
             (
                 await session.execute(
-                    select(OntInstrumentRun)
+                    statement
                     .order_by(
                         OntInstrumentRun.created_at.desc(),
                         OntInstrumentRun.id.desc(),
                     )
+                    .offset(offset)
                     .limit(limit)
                 )
             ).scalars()

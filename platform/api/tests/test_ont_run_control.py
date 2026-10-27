@@ -1428,3 +1428,51 @@ async def test_host_502_does_not_falsely_mark_ambiguous_acquisition_failed(monke
         await ont_run_control.validate_armed_intent_start(
             intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]})
     assert (await ont_run_control.get_instrument_run(intent["id"]))["state"] == "unknown"
+
+
+def test_run_list_filters_exact_project_before_limit_and_pages_with_offset() -> None:
+    from datetime import datetime, timedelta
+
+    base = datetime(2026, 1, 1)
+
+    async def seed() -> None:
+        async with ont_run_control.async_session() as session:
+            # Three older runs for project-a, then five newer runs for project-b.
+            for index in range(8):
+                group = "project-a" if index < 3 else "project-b"
+                session.add(
+                    OntInstrumentRun(
+                        id=f"ont-run-page-{index}",
+                        position_id="X1",
+                        state="completed",
+                        observed_at=base + timedelta(minutes=index),
+                        observed_generation=1,
+                        experiment_group=group,
+                        output_directories={},
+                        output_files={},
+                        created_at=base + timedelta(minutes=index),
+                    )
+                )
+            await session.commit()
+
+    asyncio.run(seed())
+    app = FastAPI()
+    app.include_router(ont_runs.router, prefix="/api/ont")
+    with TestClient(app) as client:
+        unfiltered = client.get("/api/ont/runs", params={"limit": 3})
+        project_a = client.get("/api/ont/runs", params={"limit": 3, "experiment_group": "project-a"})
+        first_page = client.get("/api/ont/runs", params={"limit": 2, "experiment_group": "project-a"})
+        second_page = client.get(
+            "/api/ont/runs", params={"limit": 2, "offset": 2, "experiment_group": "project-a"},
+        )
+        prefix_only = client.get("/api/ont/runs", params={"experiment_group": "project"})
+        negative_offset = client.get("/api/ont/runs", params={"offset": -1})
+
+    assert unfiltered.status_code == 200
+    # Existing callers keep the global newest-first behaviour.
+    assert [run["run_id"] for run in unfiltered.json()] == ["ont-run-page-7", "ont-run-page-6", "ont-run-page-5"]
+    assert [run["run_id"] for run in project_a.json()] == ["ont-run-page-2", "ont-run-page-1", "ont-run-page-0"]
+    assert [run["run_id"] for run in first_page.json()] == ["ont-run-page-2", "ont-run-page-1"]
+    assert [run["run_id"] for run in second_page.json()] == ["ont-run-page-0"]
+    assert prefix_only.json() == []
+    assert negative_offset.status_code == 422
