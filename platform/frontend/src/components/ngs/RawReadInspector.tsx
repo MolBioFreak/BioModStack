@@ -443,7 +443,7 @@ export function RawReadInspector({
                         {reads.map((read) => (
                             <tr key={`${read.read_id}:${read.start_1based ?? 0}:${read.flags}`} className="border-b border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]">
                                 <td className="max-w-[250px] truncate px-2 py-1 font-mono text-[var(--text-primary)]" title={read.read_id}>{read.read_id}</td>
-                                <td className="px-2 py-1 font-mono text-[var(--accent-secondary)]">{formatMetric(metricValue(read, sortBy), sortBy)}</td>
+                                <td className="px-2 py-1 font-mono text-[var(--text-action)]">{formatMetric(metricValue(read, sortBy), sortBy)}</td>
                                 <td className="px-2 py-1">Q{read.mean_quality?.toFixed(1) ?? 'n/a'} / {read.mapq ?? 'n/a'}</td>
                                 <td className="px-2 py-1">{read.contig || 'unmapped'}{read.start_1based ? `:${read.start_1based}` : ''} · {read.cigar || 'no CIGAR'}</td>
                                 <td className="whitespace-nowrap px-2 py-1">
@@ -455,7 +455,7 @@ export function RawReadInspector({
                         ))}
                     </tbody>
                 </table>
-                {cursor && <button type="button" onClick={() => void loadPage(cursor)} disabled={loading} className="w-full px-3 py-2 text-xs text-[var(--accent-secondary)]">{loading ? 'Loading…' : 'Load 50 more'}</button>}
+                {cursor && <button type="button" onClick={() => void loadPage(cursor)} disabled={loading} className="w-full px-3 py-2 text-xs text-[var(--text-action)]">{loading ? 'Loading…' : 'Load 50 more'}</button>}
                 {!loading && locusSlice && reads.length === 0 && <div className="p-3 text-xs text-[var(--text-secondary)]">No reads matched.</div>}
                 {loading && reads.length === 0 && <div className="p-3 text-xs text-[var(--text-secondary)]">Loading reads…</div>}
             </div>

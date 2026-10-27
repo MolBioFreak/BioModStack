@@ -1217,7 +1217,7 @@ export function ReadAndSignalWorkbench({
                                 if (candidate.value === 'pileup') {
                                     setRenderParams((current) => ({ ...current, loose_bound: false }));
                                 }
-                            }} disabled={candidate.disabled} className={`rounded border px-2 py-1 text-[10px] disabled:opacity-40 ${mode === candidate.value ? 'border-[var(--accent-secondary)] text-[var(--accent-secondary)]' : 'border-[var(--border-primary)]'}`}>{candidate.label}</button>
+                            }} disabled={candidate.disabled} className={`rounded border px-2 py-1 text-[10px] disabled:opacity-40 ${mode === candidate.value ? 'border-[var(--accent-secondary)] text-[var(--text-action)]' : 'border-[var(--border-primary)]'}`}>{candidate.label}</button>
                         ))}
                         {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && <button type="button" onClick={() => setAdvancedOpen((value) => !value)} className="ml-auto rounded border border-[var(--border-primary)] px-2 py-1 text-[10px]">{advancedOpen ? 'Hide' : 'Render settings'}</button>}
                     </div>
@@ -1270,7 +1270,7 @@ export function ReadAndSignalWorkbench({
                         </div>
                     )}
                     {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && <div className="flex items-center gap-2">
-                        <button type="button" onClick={() => void render()} disabled={busy || !mappingArtifact} className="rounded bg-[var(--accent-secondary)] px-3 py-1.5 text-xs text-white disabled:opacity-40">{busy ? 'Working…' : `Render ${mode}`}</button>
+                        <button type="button" onClick={() => void render()} disabled={busy || !mappingArtifact} className="rounded bg-[var(--accent-primary)] px-3 py-1.5 text-xs text-[var(--text-on-accent)] disabled:opacity-40">{busy ? 'Working…' : `Render ${mode}`}</button>
                         {viewJob && <span className={`rounded px-1.5 py-0.5 text-[10px] ${stateBadge(viewJob.state)}`}>{viewJob.state}: {viewJob.reason_code}</span>}
                         {viewJob && !TERMINAL_STATES.has(viewJob.state) && <button type="button" onClick={() => void cancelViewForIdentity(viewJob)} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px]">Cancel render</button>}
                     </div>}

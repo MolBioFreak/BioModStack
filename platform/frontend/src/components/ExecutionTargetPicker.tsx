@@ -62,11 +62,11 @@ export function ExecutionTargetPicker({ value, onChange, disabled = false, workf
     };
 
     return (
-        <section className="mb-5 rounded-xl border border-slate-700 bg-slate-900/80 p-4" aria-label="Execution target">
+        <section className="mb-5 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4" aria-label="Execution target">
             <div>
                 <h2 className="text-sm font-semibold text-slate-100">Execution target</h2>
                 <p className="mt-1 text-xs text-slate-400">
-                    BMS keeps the Job, scheduler, lineage, and results local. A selected Vast worker executes the compiled workflow only.
+                    BNS keeps jobs, history and results on this system. A selected worker runs the analysis.
                 </p>
             </div>
 

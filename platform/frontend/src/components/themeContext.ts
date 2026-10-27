@@ -6,97 +6,78 @@ export interface ThemeConfig {
     id: ThemeId;
     name: string;
     description: string;
-    preview: {
-        bg: string;
-        accent: string;
-        text: string;
-    };
 }
 
 export const THEMES: ThemeConfig[] = [
     {
         id: 'midnight',
         name: 'Midnight',
-        description: 'Deep slate with purple accents',
-        preview: { bg: '#0f172a', accent: '#a855f7', text: '#f1f5f9' }
+        description: 'Ink navy with blue-violet accents'
     },
     {
         id: 'black',
         name: 'Black',
-        description: 'True black with neutral grays',
-        preview: { bg: '#000000', accent: '#fafafa', text: '#fafafa' }
+        description: 'True black with neutral grays'
     },
     {
         id: 'light',
         name: 'Light',
-        description: 'Clean white with violet accents',
-        preview: { bg: '#ffffff', accent: '#7c3aed', text: '#0f172a' }
+        description: 'Clean white with violet accents'
     },
     {
         id: 'clean_light',
         name: 'Clean Light',
-        description: 'Bright white with blue accents',
-        preview: { bg: '#fafafa', accent: '#3b82f6', text: '#1e293b' }
+        description: 'Bright white with blue accents'
     },
     {
         id: 'slate_dark',
         name: 'Slate Dark',
-        description: 'Dark gray with teal accents',
-        preview: { bg: '#1e293b', accent: '#14b8a6', text: '#f1f5f9' }
+        description: 'Dark gray with teal accents'
     },
     {
         id: 'desert',
         name: 'Desert',
-        description: 'Warm adobe parchment with clay and mineral accents',
-        preview: { bg: '#e7dcc8', accent: '#b56d3a', text: '#433022' }
+        description: 'Warm adobe parchment with clay and mineral accents'
     },
     {
         id: 'solarized',
         name: 'Solarized',
-        description: 'Classic developer scheme',
-        preview: { bg: '#002b36', accent: '#268bd2', text: '#fdf6e3' }
+        description: 'Classic developer scheme'
     },
     {
         id: 'nord',
         name: 'Nord',
-        description: 'Arctic blue-gray',
-        preview: { bg: '#2e3440', accent: '#88c0d0', text: '#eceff4' }
+        description: 'Arctic blue-gray'
     },
     {
         id: 'dracula',
         name: 'Dracula',
-        description: 'Gothic purple & pink',
-        preview: { bg: '#282a36', accent: '#bd93f9', text: '#f8f8f2' }
+        description: 'Gothic purple & pink'
     },
     {
         id: 'forest',
         name: 'Forest',
-        description: 'Deep woodland greens',
-        preview: { bg: '#1a2418', accent: '#4caf50', text: '#e8f4e5' }
+        description: 'Deep woodland greens'
     },
     {
         id: 'ember',
         name: 'Ember',
-        description: 'Warm sunset oranges',
-        preview: { bg: '#1f1410', accent: '#ff6b35', text: '#fff4e8' }
+        description: 'Warm sunset oranges'
     },
     {
         id: 'retro',
         name: 'Retro Terminal',
-        description: 'CRT workstation with phosphor mint and amber',
-        preview: { bg: '#101311', accent: '#68e39b', text: '#e2eadf' }
+        description: 'CRT workstation with phosphor mint and amber'
     },
     {
         id: 'cyberpunk',
         name: 'Cyberpunk',
-        description: 'Neon pink & cyan',
-        preview: { bg: '#1a0a2e', accent: '#f0abfc', text: '#22d3ee' }
+        description: 'Neon pink & cyan'
     },
     {
         id: 'ocean',
         name: 'Ocean Depths',
-        description: 'Deep blues with teal',
-        preview: { bg: '#0c1929', accent: '#14b8a6', text: '#e0f2fe' }
+        description: 'Deep blues with teal'
     }
 ];
 

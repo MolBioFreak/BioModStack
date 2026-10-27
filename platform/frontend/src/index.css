@@ -51,6 +51,7 @@
 /* Theme: Midnight (Default) - Ink navy with restrained blue-violet accents */
 :root,
 [data-theme="midnight"] {
+  color-scheme: dark;
   --bg-primary: #0b1020;
   --bg-secondary: #151e33;
   --bg-tertiary: #1b2740;
@@ -74,16 +75,16 @@
   --error: #ff6b78;
   --link: #83a7ff;
   --link-hover: #b8cbff;
-  --surface-page: #0b1020;
-  --surface-card: #151e33;
-  --surface-control: #1b2740;
-  --surface-control-strong: #253456;
-  --surface-plot: #10182a;
-  --chart-grid: #263650;
-  --chart-axis: #8493ad;
-  --chart-legend: #a6b3ca;
-  --control-track: #2a3855;
-  --control-thumb: #83a7ff;
+  --surface-page: var(--bg-primary);
+  --surface-card: var(--card-bg);
+  --surface-control: var(--bg-tertiary);
+  --surface-control-strong: var(--card-hover);
+  --surface-plot: var(--bg-secondary);
+  --chart-grid: var(--border-primary);
+  --chart-axis: var(--text-muted);
+  --chart-legend: var(--text-secondary);
+  --control-track: var(--bg-tertiary);
+  --control-thumb: var(--accent-primary);
   --overlay-scrim: rgba(3, 7, 18, 0.76);
   --shadow-card: 0 10px 28px rgba(2, 7, 20, 0.25);
   --text-action: #83a7ff;
@@ -140,6 +141,7 @@
 
 /* Theme: Light - Clean white with violet accents */
 [data-theme="light"] {
+  color-scheme: light;
   --bg-primary: #ffffff;
   --bg-secondary: #f8fafc;
   --bg-tertiary: #e2e8f0;
@@ -170,10 +172,12 @@
   --text-success: #107837;
   --text-warning: #9d5604;
   --text-error: #ca2323;
+  --shadow-card: 0 3px 14px rgba(27, 46, 78, 0.08);
 }
 
 /* Theme: Clean Light - Bright white with blue accents (no purple) */
 [data-theme="clean_light"] {
+  color-scheme: light;
   --bg-primary: #f7f9fc;
   --bg-secondary: #ffffff;
   --bg-tertiary: #f3f6fa;
@@ -181,7 +185,7 @@
   --bg-gradient-via: #f4f7fb;
   --bg-gradient-to: #f7f9fc;
   --text-primary: #172033;
-  --text-secondary: #64718a;
+  --text-secondary: #5d6980;
   --text-muted: #626d80;
   --accent-primary: #2768d8;
   --accent-secondary: #1598c8;
@@ -252,6 +256,7 @@
 
 /* Theme: Desert - Warm adobe parchment with clay and mineral accents */
 [data-theme="desert"] {
+  color-scheme: light;
   --bg-primary: #efe6d6;
   --bg-secondary: #eadfcd;
   --bg-tertiary: #e2d5bf;
@@ -282,6 +287,7 @@
   --text-success: #566145;
   --text-warning: #7f5423;
   --text-error: #8c4c3a;
+  --shadow-card: 0 3px 14px rgba(75, 54, 38, 0.08);
 }
 
 /* Theme: Solarized Dark - Classic developer color scheme */
@@ -293,7 +299,7 @@
   --bg-gradient-via: #073642;
   --bg-gradient-to: #002b36;
   --text-primary: #fdf6e3;
-  --text-secondary: #93a1a1;
+  --text-secondary: #a6b3b3;
   --text-muted: #9da9a7;
   --accent-primary: #268bd2;
   --accent-secondary: #2aa198;
@@ -328,7 +334,7 @@
   --bg-gradient-to: #2e3440;
   --text-primary: #eceff4;
   --text-secondary: #d8dee9;
-  --text-muted: #b4bfce;
+  --text-muted: #b8c3d2;
   --accent-primary: #88c0d0;
   --accent-secondary: #81a1c1;
   --accent-gradient-from: #88c0d0;
@@ -464,7 +470,7 @@
   --bg-gradient-to: #101311;
   --text-primary: #e2eadf;
   --text-secondary: #a7b8aa;
-  --text-muted: #839286;
+  --text-muted: #8c9b8f;
   --accent-primary: #68e39b;
   --accent-secondary: #92f0bc;
   --accent-gradient-from: #54d58d;

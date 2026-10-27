@@ -516,7 +516,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                         <h2 className="text-xl font-semibold text-[var(--text-primary)]">ONT instrument control</h2>
                         <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-100">Mk1D / MinKNOW</span>
                     </div>
-                    <p className="max-w-2xl text-sm text-[var(--text-secondary)]">Pick a Mk1D position, choose the kit and run length, and start sequencing. BMS tracks the run and picks up its reads when it finishes. Reconnect only works on this computer, not over Tailnet.</p>
+                    <p className="max-w-2xl text-sm text-[var(--text-secondary)]">Pick a Mk1D position, choose the kit and run length, and start sequencing. BNS tracks the run and picks up its reads when it finishes. Reconnect only works on this computer, not over Tailnet.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                     <button type="button" onClick={onAnalyzeExistingData} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]">Data Analysis</button>
@@ -524,7 +524,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                         type="button"
                         disabled={reconnectMk1d.isPending}
                         onClick={() => {
-                            if (window.confirm('Reconnect Mk1D is a fixed recovery action for this local BMS host only. It starts MinKNOW only when inactive and recreates bms-host-agent. It does not start sequencing, a hardware check, alter a flow cell, or restart active MinKNOW. Continue?')) {
+                            if (window.confirm('Reconnect Mk1D is a fixed recovery action for this local BNS host only. It starts MinKNOW only when inactive and recreates bms-host-agent. It does not start sequencing, a hardware check, alter a flow cell, or restart active MinKNOW. Continue?')) {
                                 reconnectMk1d.mutate();
                             }
                         }}
@@ -623,7 +623,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
 
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
-                    <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Instrument positions</h3><p className="text-xs text-[var(--text-secondary)]">Mk1D positions reported by MinKNOW.</p></div><button type="button" onClick={() => void deviceStatus.refetch()} className="text-sm text-[var(--accent-secondary)]">Refresh</button></div>
+                    <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Instrument positions</h3><p className="text-xs text-[var(--text-secondary)]">Mk1D positions reported by MinKNOW.</p></div><button type="button" onClick={() => void deviceStatus.refetch()} className="text-sm text-[var(--text-action)]">Refresh</button></div>
                     {data?.message ? <p className="rounded-lg bg-slate-900/40 p-2 text-xs text-[var(--text-secondary)]">{data.message}</p> : null}
                     <div className="grid gap-3 md:grid-cols-2">
                         {devices.length === 0 && !data?.message ? <div className="rounded-lg border border-dashed border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 text-sm text-[var(--text-secondary)] md:col-span-2">{minknowReachable ? 'No Mk1D positions found. Check the device is plugged in, then Refresh.' : 'MinKNOW is not reachable. Use Reconnect Mk1D, then Refresh.'}</div> : devices.map((device) => <button key={device.position} type="button" onClick={() => setSelectedPosition(device.position)} className={`rounded-xl border p-4 text-left transition ${selectedDevice?.position === device.position ? 'border-cyan-400 bg-cyan-500/10' : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] hover:border-cyan-500/50'}`}><div className="text-base font-semibold text-[var(--text-primary)]">{device.position}</div><div className="text-xs text-[var(--text-secondary)]">Mk1D · {deviceStateLabel(device)}</div><div className="mt-3 text-xs text-[var(--text-secondary)]">Flow cell: {device.flow_cell.present ? 'present' : 'absent'} · Running: {device.running ? 'yes' : 'no'}</div></button>)}
@@ -631,7 +631,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                 </div>
 
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
-                    <div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">New sequencing run</h3><p className="text-xs text-[var(--text-secondary)]">BMS picks the matching MinKNOW protocol and default basecalling model for the kit and flow cell.</p></div>
+                    <div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">New sequencing run</h3><p className="text-xs text-[var(--text-secondary)]">BNS picks the matching MinKNOW protocol and default basecalling model for the kit and flow cell.</p></div>
                     <label className="block text-xs font-semibold text-[var(--text-secondary)]">Sample
                         <select
                             value={selectedSample?.id ?? ''}
@@ -686,7 +686,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                         onClick={() => {
                             if (window.confirm(`Start sequencing on ${selectedDevice?.position} with ${selectedKit} for ${runHours} h? This uses the flow cell.`)) startRun.mutate();
                         }}
-                        className="rounded-lg bg-[var(--accent-secondary)] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        className="rounded-lg bg-[var(--accent-primary)] px-4 py-2 text-sm font-semibold text-[var(--text-on-accent)] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         {startRun.isPending ? 'Starting…' : 'Start sequencing'}
                     </button>
@@ -756,7 +756,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                         <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Run history</h3>
                         <p className="mt-1 text-xs text-[var(--text-secondary)]">Sequencing runs saved to this Project.</p>
                     </div>
-                    <button type="button" disabled={!exactDomainExperimentId} onClick={() => void durableRunsQuery.refetch()} className="text-sm text-[var(--accent-secondary)] disabled:cursor-not-allowed disabled:opacity-50">Refresh history</button>
+                    <button type="button" disabled={!exactDomainExperimentId} onClick={() => void durableRunsQuery.refetch()} className="text-sm text-[var(--text-action)] disabled:cursor-not-allowed disabled:opacity-50">Refresh history</button>
                 </div>
                 {durableRunsQuery.isError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Durable ONT runs could not be loaded: {errorMessage(durableRunsQuery.error, 'unknown run-ledger failure')}</p> : null}
                 <label className="block text-xs font-semibold text-[var(--text-secondary)]">Saved run
@@ -930,7 +930,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                 run_id: selectedGeneration.run_id,
                                 observed_generation: String(selectedGeneration.observed_generation),
                             })}
-                            className="inline-flex rounded-lg border border-[var(--border-primary)] px-3 py-2 font-semibold text-[var(--accent-secondary)] hover:bg-[var(--bg-tertiary)]"
+                            className="inline-flex rounded-lg border border-[var(--border-primary)] px-3 py-2 font-semibold text-[var(--text-action)] hover:bg-[var(--bg-tertiary)]"
                         >
                             Reopen exact persisted generation
                         </Link>
