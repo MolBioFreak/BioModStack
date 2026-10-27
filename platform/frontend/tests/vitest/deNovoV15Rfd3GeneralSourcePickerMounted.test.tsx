@@ -31,7 +31,8 @@ beforeEach(() => {
     api.defaults.adapter = async config => {
         const url = String(config.url), body = config.data ? JSON.parse(config.data) : undefined; requests.push({ url, body });
         let data: any;
-        if (url.endsWith('/generation-settings')) data = inventory;
+        if (url === '/api/models/protein_modification_experimental') data = { engine_references: {} };
+        else if (url.endsWith('/generation-settings')) data = inventory;
         else if (url === '/api/files/materialize-structure') {
             if (defer) await new Promise<void>(resolve => pending.push({ body, finish: resolve }));
             data = { path: body.path, source_path: body.path, source_structure: { ...body, expected_sha256: 'fixture-sha256' }, format: 'pdb', native_format: 'pdb', model_number: body.model_number ?? null, model_numbers: [1, 2], source_positions: [], author_residues: [] };

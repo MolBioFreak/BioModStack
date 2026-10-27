@@ -629,6 +629,7 @@ export function JobSubmission() {
                     const draft = deNovoSavedValues(data.model_id, data.mode, {
                         ...data.params, pinned_gpu: data.pinned_gpu,
                         ...(Object.hasOwn(data, 'sequence_design') ? { sequence_design: data.sequence_design } : {}),
+                        ...(!Object.hasOwn(data, 'sequence_design') && !Object.hasOwn(data.params, 'sequence_design') ? { sequence_design_omitted: true } : {}),
                         ...(Object.hasOwn(data, 'native_sources') ? { native_sources: data.native_sources } : {}),
                         ...(Object.hasOwn(data, 'source_structure') ? { source_structure: data.source_structure } : {}),
                         ...(Object.hasOwn(data, 'execution_policy') ? { execution_policy: data.execution_policy } : {}),

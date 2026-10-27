@@ -328,10 +328,14 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const retainedAlternativeParams = Object.fromEntries(Object.entries(initialValues).filter(([key]) => key.startsWith(`${backend}_`) && key !== 'laproteina_motif_inspection'));
     const [error, setError] = useState<string | null>(null);
     const [sequenceDesign, setSequenceDesign] = useState(() => hydrateGeneralSequenceDesign(initialValues));
+    const [sequenceOmitted, setSequenceOmitted] = useState(() => initialValues.sequence_design_omitted === true);
+    const [sequenceNull, setSequenceNull] = useState(() => initialValues.sequence_design === null || initialValues.sequence_design_null === true);
 
     const draftJson = JSON.stringify({
         ...retainedAlternativeParams,
         ...sequenceDesign,
+        ...(sequenceOmitted ? { sequence_design_omitted: true } : {}),
+        ...(sequenceNull ? { sequence_design_null: true } : {}),
         ...nativeControls,
         ...rfd3Settings,
         ...Object.fromEntries(['laproteina_checkpoint_dir', 'laproteina_data_path', 'disco_checkpoint_path', 'disco_cutlass_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => [key, initialValues[key]])),
@@ -376,7 +380,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     });
 
     const buildAlternativeWorkflowRequest = () => ({
-            ...generalSequenceRequest(sequenceDesign),
+            ...(sequenceOmitted ? {} : generalSequenceRequest(sequenceDesign)),
+            ...(sequenceNull ? { sequence_design: null } : {}),
             name: jobName.trim(),
             model_id: 'protein_modification_experimental',
             mode: 'de_novo_design',
@@ -452,7 +457,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     };
 
     const buildDeNovoWorkflowRequest = () => ({
-            ...generalSequenceRequest(sequenceDesign),
+            ...(sequenceOmitted ? {} : generalSequenceRequest(sequenceDesign)),
+            ...(sequenceNull ? { sequence_design: null } : {}),
             name: jobName.trim(),
             model_id: 'protein_modification_experimental',
             mode: 'de_novo_design',
@@ -532,13 +538,13 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 <select className={fieldClass} value={lengthMode} onChange={event => setLengthMode(event.target.value as 'exact' | 'range')}><option value="range">Length range</option><option value="exact">Exact length</option></select>
             </label>
             {lengthMode === 'exact' ? <label className={labelClass}>Exact length
-                <input className={fieldClass} type="number" min={rfd3Bounds?.min_length.minimum} value={exactLength} onChange={event => setExactLength(editedNumber(event.target.value))} />
+                <input className={fieldClass} type="number" min={rfd3Bounds?.min_length.minimum} max={rfd3Bounds?.min_length.maximum} value={exactLength} onChange={event => setExactLength(editedNumber(event.target.value))} />
             </label> : <>
             <label className={labelClass}>Minimum length
-                <input className={fieldClass} type="number" min={rfd3Bounds?.min_length.minimum} value={minLength} onChange={event => setMinLength(editedNumber(event.target.value))} />
+                <input className={fieldClass} type="number" min={rfd3Bounds?.min_length.minimum} max={rfd3Bounds?.min_length.maximum} value={minLength} onChange={event => setMinLength(editedNumber(event.target.value))} />
             </label>
             <label className={labelClass}>Maximum length
-                <input className={fieldClass} type="number" min={rfd3Bounds?.max_length.minimum} value={maxLength} onChange={event => setMaxLength(editedNumber(event.target.value))} />
+                <input className={fieldClass} type="number" min={rfd3Bounds?.max_length.minimum} max={rfd3Bounds?.max_length.maximum} value={maxLength} onChange={event => setMaxLength(editedNumber(event.target.value))} />
             </label></>}
             <label className={labelClass}>Number of designs
                 <input className={fieldClass} type="number" min={1} value={numDesigns} onChange={event => setNumDesigns(editedNumber(event.target.value))} />
@@ -685,7 +691,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 <ModelDocumentationLinks topics={generator === 'rfd3' ? ['rfdiffusion'] : backend === 'laproteina' ? ['laproteina'] : ['disco']} compact />
             </div>
             <div hidden={section !== 'Sequence Design'}>
-                <GeneralSequenceDesignSettings value={sequenceDesign} onChange={setSequenceDesign} />
+                <GeneralSequenceDesignSettings value={sequenceDesign} onChange={next => { setSequenceOmitted(false); setSequenceNull(false); setSequenceDesign(next); }} />
             </div>
             <details className="space-y-3 rounded-xl border p-4" style={themedInsetStyle}>
                 <summary className="cursor-pointer text-sm font-medium">Run details</summary>

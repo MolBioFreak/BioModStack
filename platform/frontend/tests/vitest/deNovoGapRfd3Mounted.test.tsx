@@ -24,7 +24,7 @@ afterEach(async () => { if (root) await act(async () => root.unmount()); client?
 async function render(node: React.ReactNode) {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (...args) => { unexpected.push(`fetch:${String(args[0])}`); throw Error('Unexpected fetch'); });
     vi.spyOn(XMLHttpRequest.prototype, 'send').mockImplementation(() => { unexpected.push('XMLHttpRequest'); throw Error('Unexpected XMLHttpRequest'); });
-    api.defaults.adapter = async config => { const name = String(config.url); requests.push(`${name}:${config.params?.generator}`); if (!name.endsWith('/generation-settings')) { unexpected.push(name); throw Error(name); } return { data: inventories.rfd3, config, status: 200, statusText: 'OK', headers: {} }; };
+    api.defaults.adapter = async config => { const name = String(config.url); if (name === '/api/models/protein_modification_experimental') return { data: { engine_references: {} }, config, status: 200, statusText: 'OK', headers: {} }; requests.push(`${name}:${config.params?.generator}`); if (!name.endsWith('/generation-settings')) { unexpected.push(name); throw Error(name); } return { data: inventories.rfd3, config, status: 200, statusText: 'OK', headers: {} }; };
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host); client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter>{node}</MemoryRouter></QueryClientProvider>); });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });

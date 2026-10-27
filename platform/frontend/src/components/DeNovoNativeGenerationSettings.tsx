@@ -81,7 +81,8 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
     const currentVisual = visual && visual.binding === JSON.stringify(nativeDraft.sources?.[visual.slot]) ? visual : undefined;
     const [name, setName] = useState(typeof initialValues.job_name === 'string' ? initialValues.job_name : model);
     const [sequence, setSequence] = useState(() => hydrateGeneralSequenceDesign(initialValues));
-    const [explicitSequenceNull] = useState(() => initialValues.sequence_design === null || initialValues.sequence_design_null === true);
+    const [explicitSequenceNull, setExplicitSequenceNull] = useState(() => initialValues.sequence_design === null || initialValues.sequence_design_null === true);
+    const [sequenceOmitted, setSequenceOmitted] = useState(() => initialValues.sequence_design_omitted === true);
     const [section, setSection] = useState('Design');
     useEffect(() => { if (suiteView) setSection(suiteView === 'advanced' ? 'Native settings' : 'Design'); }, [suiteView]);
     const navigate = useNavigate(); const client = useQueryClient();
@@ -90,13 +91,14 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         staleTime: 60_000, retry: false });
     const schema = inventory.data?.parameter_schema ?? inventory.data?.schema;
     const contract = inventory.data?.contract ?? (typeof schema?.$id === 'string' ? schema.$id : schema?.properties?.schema_version?.const !== undefined ? `${model}:${schema.properties.schema_version.const}` : typeof initialValues.native_contract === 'string' ? initialValues.native_contract : `${model}:unversioned`);
-    const payload = { ...generalSequenceRequest(sequence), name, model_id: model, mode: activeMode,
+    const payload = { ...(sequenceOmitted ? {} : generalSequenceRequest(sequence)), name, model_id: model, mode: activeMode,
         ...(!sequence.invocation_draft && !sequence.sequence_design.enabled && explicitSequenceNull ? { sequence_design: null } : {}),
         ...(Object.hasOwn(initialValues, 'pinned_gpu') ? { pinned_gpu: initialValues.pinned_gpu } : {}),
         ...(Object.hasOwn(initialValues, 'source_structure') ? { source_structure: initialValues.source_structure } : {}),
         params: { [field]: request, ...(nativeDraft.sources !== undefined ? { native_sources: nativeDraft.sources } : {}) } };
     const draft = JSON.stringify({ ...sequence, job_name: name, [field]: request, native_mode: activeMode, ...(recipe ? { native_recipe: recipe } : {}),
         ...(explicitSequenceNull ? { sequence_design_null: true } : {}),
+        ...(sequenceOmitted ? { sequence_design_omitted: true } : {}),
         ...(Object.hasOwn(initialValues, 'pinned_gpu') ? { pinned_gpu: initialValues.pinned_gpu } : {}),
         ...(nativeDraft.sources !== undefined ? { native_sources: nativeDraft.sources } : {}),
         ...(Object.hasOwn(initialValues, 'source_structure') ? { source_structure: initialValues.source_structure } : {}),
@@ -204,7 +206,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
                 {() => renderField(key, child)}
             </NativeSettingsDisclosure>)}
         </ProteinDesignPanel></div>
-        <div hidden={section !== 'Optional operations'}><GeneralSequenceDesignSettings value={sequence} onChange={setSequence} /></div>
+        <div hidden={section !== 'Optional operations'}><GeneralSequenceDesignSettings value={sequence} onChange={next => { setSequenceOmitted(false); setExplicitSequenceNull(false); setSequence(next); }} /></div>
         <ProteinDesignRun jobName={name} onJobNameChange={setName} pending={submit.isPending} onSubmit={() => submit.mutate()} submitLabel={model === 'complexa' && request.operation === 'design' ? 'Generate, filter, evaluate and analyze' : model === 'complexa' && request.operation === 'analysis' ? 'Evaluate and analyze' : activeMode === 'evaluate' ? 'Evaluate candidates' : 'Generate candidates'}>
             <ExecutionTargetPicker workflowRequest={payload as Partial<Job>} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
             {runDetails}{submit.error && <p role="alert">{submit.error.message}</p>}
