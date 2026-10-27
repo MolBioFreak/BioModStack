@@ -1,0 +1,26 @@
+Bootstrap: docker
+From: ubuntu@sha256:8a2321a92b438238f93b4346fff61bc4259c99fdd4d9b52ee86f153fee0c344f
+
+%files
+    apptainer/msa_engines_build.sh /root/msa_engines_build.sh
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends build-essential cmake git curl ca-certificates python3 libboost-program-options-dev libboost-system-dev libboost-filesystem-dev libtbb-dev zlib1g-dev
+    sh /root/msa_engines_build.sh
+    rm /root/msa_engines_build.sh
+    rm -rf /var/lib/apt/lists/*
+
+%environment
+    export PATH=/opt/msa/bin:$PATH
+
+%labels
+    org.bms.runtime msa-engines-cpu
+    org.bms.base ubuntu-22.04-amd64-sha256-8a2321a92b438238f93b4346fff61bc4259c99fdd4d9b52ee86f153fee0c344f
+
+%test
+    /opt/msa/bin/mafft --version
+    /opt/msa/bin/muscle -version
+    /opt/msa/bin/famsa -h >/dev/null 2>&1 || true
+    /opt/msa/bin/twilight -h >/dev/null
