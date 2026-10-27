@@ -13,6 +13,7 @@ export default defineConfig({
         setupFiles: ['./tests/vitest/setup.ts'],
         include: [
             './tests/vitest/alignmentPage.test.tsx',
+            './tests/vitest/alignmentEditorProject.test.tsx',
             './tests/vitest/alignmentWorkspace.test.tsx',
             './tests/vitest/bioxpCanvasThermalIntegrationMounted.test.tsx',
             './tests/vitest/bioxpProfilesMounted.test.tsx',

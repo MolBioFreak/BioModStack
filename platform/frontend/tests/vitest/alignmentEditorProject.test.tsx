@@ -103,3 +103,50 @@ describe('alignment handoff recovery', () => {
   await act(async()=>root.unmount());
  });
 });
+
+it('resets project draft and ignores a delayed dataset response from the previous project', async()=>{
+ vi.clearAllMocks(); mocked.active=true; const original=mocked.setup;
+ let finish!: (x:any)=>void;
+ mocked.setup={...original,project_id:'old',setup_context_id:'old',draft:{...original.draft,datasetRows:[{selection:{project_id:'old',dataset_id:'x',revision_id:'r',revision_sha256:'h',members:[{ordinal:0,member_identity:'old',member_sha256:'m',role:'sequence',receipt:null}]},resolved:{status:'unavailable',reason:'gone'}}]}} as any;
+ mocked.datasets.mockImplementation((project:string)=>project==='old' ? new Promise(r=>finish=r) : Promise.resolve({items:[{dataset_id:'new',name:'New'}],next_cursor:null})); mocked.save.mockResolvedValue({});
+ const div=document.createElement('div'),root=createRoot(div);
+ await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
+ expect(div.textContent).toContain('gone');
+ mocked.setup={...original,project_id:'new',setup_context_id:'new',draft:{} as any};
+ await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
+ await act(async()=>finish({items:[{dataset_id:'old',name:'Old'}],next_cursor:null}));
+ expect(div.textContent).not.toContain('gone'); expect(div.textContent).not.toContain('Old —'); expect(div.textContent).toContain('New —');
+ await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click()});
+ expect(mocked.save.mock.calls[0][0].editor_state.datasetRows).toEqual([]); expect(mocked.save.mock.calls[0][0].editor_state.fasta).toBe('');
+ await act(async()=>root.unmount()); mocked.setup=original;
+});
+it('records excluded occurrences and identity discrepancies without excluding resolved rows',async()=>{
+ vi.clearAllMocks(); mocked.active=true; const original=mocked.setup;
+ const selection={project_id:'p',dataset_id:'ds',revision_id:'r',revision_sha256:'hash',members:[{ordinal:1,role:'sequence',member_identity:'m',member_sha256:'mh',receipt:{entity_kind:'molecular',entity_id:'expected',content_digest:'digest'}}]};
+ mocked.setup={...original,draft:{...original.draft,datasetRows:[{selection,resolved:{status:'unavailable',reason:'not found'}},{selection:{...selection,members:[{...selection.members[0],ordinal:2}]},resolved:{status:'resolved',sequence:'AA',source_identity:'other',source_digest:'wrong',ordinal:99}}]}} as any;
+ mocked.datasets.mockResolvedValue({items:[],next_cursor:null}); mocked.save.mockResolvedValue({});
+ const div=document.createElement('div'),root=createRoot(div); await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
+ await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click()});
+ const roster=mocked.save.mock.calls[0][0].native_job_request.params.roster;
+ expect(roster.source_evidence.map((x:any)=>x.included)).toEqual([false,true]); expect(roster.source_evidence[0].selection).toEqual(selection);
+ expect(roster.source_evidence[1].identity_mismatches).toEqual(expect.arrayContaining(['ordinal','source_identity','source_digest']));
+ expect(roster.rows.at(-1).sequence).toBe('AA'); expect(div.textContent).toContain('identity evidence');
+ await act(async()=>root.unmount()); mocked.setup=original;
+});
+
+it('fences late revision and add responses after switching dataset',async()=>{
+ vi.clearAllMocks(); mocked.active=true; mocked.datasets.mockResolvedValue({items:[{dataset_id:'a',name:'A'},{dataset_id:'b',name:'B'}],next_cursor:null});
+ let revA!: (v:any)=>void, freeze!: (v:any)=>void;
+ mocked.revisions.mockImplementation((_p:string,_g:string,_d:string,id:string)=>id==='a' ? new Promise(r=>revA=r) : Promise.resolve({items:[{revision_id:'br',revision_number:2}],next_cursor:null}));
+ mocked.get.mockResolvedValue({data:{items:[{ordinal:0,role:'sequence',member_identity:'m',member_sha256:'h',receipt:null}],next_offset:null,total:1}});
+ mocked.post.mockImplementation(()=>new Promise(r=>freeze=r)); mocked.save.mockResolvedValue({});
+ const div=document.createElement('div'),root=createRoot(div); await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
+ const select=async(label:string,value:string)=>{const el=div.querySelector(`[aria-label="${label}"]`) as HTMLSelectElement; await act(async()=>{el.value=value;el.dispatchEvent(new Event('change',{bubbles:true}));});};
+ await select('Dataset','a'); await select('Dataset','b'); await act(async()=>revA({items:[{revision_id:'ar',revision_number:1}],next_cursor:null}));
+ expect(div.textContent).not.toContain('Revision 1 — ar'); await select('Dataset revision','br');
+ await act(async()=>{(div.querySelector('input[type=checkbox]') as HTMLInputElement).click()});
+ await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Add selected resources')!.click()});
+ await select('Dataset','a'); await act(async()=>freeze({data:{project_id:'p',dataset_id:'b',revision_id:'br',revision_sha256:'h',members:[{ordinal:0}]}}));
+ await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click()});
+ expect(mocked.save.mock.calls[0][0].editor_state.datasetRows).toEqual([]); await act(async()=>root.unmount());
+});

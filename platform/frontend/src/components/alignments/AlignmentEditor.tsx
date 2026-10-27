@@ -36,6 +36,12 @@ function MappingInput({value, onChange}: {value: Record<string,string>; onChange
     const [text, setText] = useState(() => Object.entries(value).map(([a,b])=>`${a}\t${b}`).join('\n'));
     return <textarea className={`${inputClass} block w-full`} aria-label="Leaf mapping" placeholder="One leaf and row ID per line, separated by a tab" value={text} onChange={e=>{ const next=e.target.value; setText(next); onChange(Object.fromEntries(next.split('\n').filter(line=>line.includes('\t')).map(line=>{const [a,...rest]=line.split('\t'); return [a,rest.join('\t')];}))); }}/>;
 }
+function requestIdentityWarning(rows: DatasetRow[]) {
+    return rows.some(({selection:s,resolved:r}) => {
+        const m=s.members[0];
+        return Object.entries({project_id:s.project_id,dataset_id:s.dataset_id,revision_id:s.revision_id,revision_sha256:s.revision_sha256,ordinal:m.ordinal,member_identity:m.member_identity,member_sha256:m.member_sha256}).some(([k,v])=>r[k as keyof typeof r] !== v) || Boolean((m.receipt?.entity_id && r.source_identity && m.receipt.entity_id !== r.source_identity) || (m.receipt?.content_digest && r.source_digest && m.receipt.content_digest !== r.source_digest));
+    });
+}
 export default function AlignmentEditor({ model }: { model: string }) {
     const setup = useProjectWorkflowSetup();
     const navigate = useNavigate();
@@ -66,21 +72,31 @@ export default function AlignmentEditor({ model }: { model: string }) {
         if (hydrated.current === id) return;
         hydrated.current = id;
         const editor = (setup.setup.draft?.editor_state ?? setup.setup.draft) as {molecule?:Molecule;engine?:Engine;drafts?:Record<Engine,Settings>;fasta?:string;datasetRows?:DatasetRow[]} | undefined;
-        if (editor?.molecule) setMolecule(editor.molecule); if (editor?.engine && defaults[editor.engine]) setEngine(editor.engine);
-        if (editor?.drafts) setDrafts({...structuredClone(defaults),...editor.drafts}); if (typeof editor?.fasta === 'string') setFasta(editor.fasta);
-        if (Array.isArray(editor?.datasetRows)) setDatasetRows(editor.datasetRows);
+        setMolecule(editor?.molecule ?? (model === 'family_msa_nucleic' ? 'dna' : 'protein')); setEngine(editor?.engine && defaults[editor.engine] ? editor.engine : 'mafft');
+        setDrafts({...structuredClone(defaults),...editor?.drafts}); setFasta(typeof editor?.fasta === 'string' ? editor.fasta : '');
+        setDatasetRows(Array.isArray(editor?.datasetRows) ? editor.datasetRows : []);
     }, [setup.setup]);
     const settings = drafts[engine];
     const update = (key:string,value:Value) => setDrafts(previous=>({...previous,[engine]:{...previous[engine],[key]:value}}));
     const request = () => {
         const roster = fastaRoster(fasta,molecule);
+        const source_evidence = datasetRows.map(x => {
+            const member=x.selection.members[0]; const expected={project_id:x.selection.project_id,dataset_id:x.selection.dataset_id,revision_id:x.selection.revision_id,revision_sha256:x.selection.revision_sha256,ordinal:member.ordinal,member_identity:member.member_identity,member_sha256:member.member_sha256};
+            const mismatches=Object.entries(expected).filter(([key,value]) => x.resolved[key as keyof typeof x.resolved] != null && x.resolved[key as keyof typeof x.resolved] !== value).map(([key])=>key);
+            const missing=Object.keys(expected).filter(key=>x.resolved[key as keyof typeof x.resolved] == null);
+            if (member.receipt?.entity_id && x.resolved.source_identity && member.receipt.entity_id !== x.resolved.source_identity) mismatches.push('source_identity');
+            if (member.receipt?.content_digest && x.resolved.source_digest && member.receipt.content_digest !== x.resolved.source_digest) mismatches.push('source_digest');
+            const freeze_mismatches:string[] = x.freeze_requested ? (['project_id','dataset_id','revision_id'] as const).filter(key=>x.freeze_requested![key] !== x.selection[key]) : [];
+            if (x.freeze_requested && !x.freeze_requested.ordinals.includes(member.ordinal)) freeze_mismatches.push('ordinal');
+            return {selection:x.selection, freeze_requested:x.freeze_requested, freeze_mismatches, resolution:x.resolved, included:x.resolved.status === 'resolved' && typeof x.resolved.sequence === 'string', identity_mismatches:mismatches, identity_missing:missing};
+        });
         const rows = [...roster.rows, ...datasetRows.filter(x=>x.resolved.status === 'resolved' && typeof x.resolved.sequence === 'string').map((x,i)=>({
             row_id:`dataset_${String(i+1).padStart(8,'0')}`, header:x.resolved.label || x.selection.members[0].member_identity,
             sequence:x.resolved.sequence!, source_member_id:x.selection.members[0].member_identity,
             occurrence_id:JSON.stringify([x.selection.project_id,x.selection.dataset_id,x.selection.revision_id,x.selection.revision_sha256,x.selection.members[0].ordinal,x.selection.members[0].member_sha256]),
             source_offset:x.resolved.start, transformation_provenance:JSON.stringify({source_identity:x.resolved.source_identity,source_digest:x.resolved.source_digest,start:x.resolved.start,end:x.resolved.end})
         }))];
-        return {name:'Family alignment',model_id:model,mode:'family_msa',params:{roster:{...roster,rows,source_text:rows.length === roster.rows.length ? roster.source_text : null},settings}};
+        return {name:'Family alignment',model_id:model,mode:'family_msa',params:{roster:{...roster,rows,source_evidence,source_text:rows.length === roster.rows.length ? roster.source_text : null},settings}};
     };
     const draft = (allowIncomplete = false) => {
         const editor_state = {molecule,engine,drafts,fasta,datasetRows};
@@ -150,7 +166,8 @@ export default function AlignmentEditor({ model }: { model: string }) {
             <label className="block">Engine <select aria-label="Engine" className={inputClass} value={engine} onChange={e=>setEngine(e.target.value as Engine)}>{(['mafft','famsa','muscle','twilight'] as Engine[]).map(x=><option key={x} value={x} disabled={(molecule === 'protein' && x === 'twilight') || (molecule !== 'protein' && x === 'famsa')}>{x}{(molecule === 'protein' && x === 'twilight') || (molecule !== 'protein' && x === 'famsa') ? ' — unavailable for molecule' : ''}</option>)}</select></label>
             <label className="block">FASTA roster <textarea aria-label="FASTA roster" className={`${inputClass} block w-full font-mono`} rows={8} value={fasta} onChange={e=>setFasta(e.target.value)}/></label>
             <p className="text-sm">FASTA headers and duplicate sequences are retained. Resolved Dataset occurrences are appended as separate rows; unavailable sources are shown but not added to the roster.</p>
-            {setup.active && setup.setup && <ProjectDatasetPicker projectId={setup.setup.project_id} globalId={setup.setup.global_experiment_id} domainId={setup.setup.domain_experiment_id} rows={datasetRows} onChange={setDatasetRows}/>}
+            {setup.active && setup.setup && <ProjectDatasetPicker key={`${setup.setup.project_id}:${setup.setup.setup_context_id}`} projectId={setup.setup.project_id} globalId={setup.setup.global_experiment_id} domainId={setup.setup.domain_experiment_id} rows={datasetRows} onChange={setDatasetRows}/>}
+            {requestIdentityWarning(datasetRows) && <p role="status">Some source identity evidence is missing or differs from the frozen selection; review the saved request evidence.</p>}
             {datasetRows.some(x=>x.resolved.status === 'resolved' && x.resolved.molecule && x.resolved.molecule !== molecule) && <p role="status">Some resolved sources have a different molecule type from the selected roster. Review the source and molecule before running.</p>}
             <div className="grid gap-3 sm:grid-cols-2"><label>Threads <input aria-label="Threads" className={inputClass} type="number" min={1} step={1} value={String(settings.threads)} onChange={e=>update('threads',e.target.value === '' ? null : Number(e.target.value))}/></label>
             {fields[engine].map(field => <label key={field.key} className="block">{field.label} {' '}{field.kind === 'boolean' ? <input type="checkbox" checked={Boolean(settings[field.key])} onChange={e=>update(field.key,e.target.checked)}/> : field.kind === 'select' ? <select className={inputClass} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,field.key === 'acc_mode' ? Number(e.target.value) : e.target.value)}>{field.options?.map(x=><option key={x}>{x}</option>)}</select> : field.kind === 'mapping' ? <MappingInput value={(settings[field.key] || {}) as Record<string,string>} onChange={value=>update(field.key,value)}/> : field.kind === 'text' ? <textarea className={`${inputClass} block w-full`} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value || null)}/> : <input className={inputClass} type="number" step={field.kind === 'integer' ? 1 : 'any'} min={field.min} value={settings[field.key] == null ? '' : String(settings[field.key])} onChange={e=>update(field.key,e.target.value === '' ? null : Number(e.target.value))}/>}</label>)}

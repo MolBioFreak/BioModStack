@@ -40,3 +40,12 @@ def test_native_compiled_command(tmp_path, molecule, sequence):
                           cwd=tmp_path, capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
     assert len(parse(proc.stdout, 'fasta', molecule).rows) == 2
+
+
+def test_source_evidence_survives_request_projection():
+    evidence = [{'selection': {'project_id': 'p', 'revision_sha256': 'digest', 'members': [{'ordinal': 3, 'member_sha256': 'member'}]}, 'included': False, 'resolution': {'status': 'unavailable', 'reason': 'missing'}}]
+    request = {'roster': {'molecule': 'dna', 'rows': [], 'source_evidence': evidence}, 'settings': {}}
+    _, effective = prepare_request(request)
+    assert effective['roster']['source_evidence'] == evidence
+    assert effective['_family_msa_requested']['roster']['source_evidence'] == evidence
+    assert prepare_request(effective)[1] == effective
