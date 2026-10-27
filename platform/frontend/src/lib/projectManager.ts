@@ -1933,7 +1933,7 @@ export function parseFamilyAlignmentCapabilities(value: unknown): FamilyAlignmen
     const record = exactRecord(value, 'family alignment inventory', ['schema', 'capabilities']);
     if (record.schema !== 'bms.family-msa-project-workflow-picker.v1') throw new Error('Family alignment inventory schema is unsupported.');
     return requireArray(record.capabilities, 'family alignment inventory.capabilities', (value, label) => {
-        const row = exactRecord(value, label, ['capability_id', 'label', 'domain_kind', 'project_setup_state', 'project_setup_adapter_id', 'project_native_owner_id', 'safe_setup_destination', 'launch_mode', 'product_taxonomy']);
+        const row = exactRecord(value, label, ['capability_id', 'label', 'domain_kind', 'project_setup_state', 'project_setup_adapter_id', 'project_native_owner_id', 'safe_setup_destination', 'launch_mode', 'product_taxonomy', 'scientific_capabilities', 'result_adapter_ids']);
         const id = requireLiteral(row.capability_id, `${label}.capability_id`, ['family_msa_protein', 'family_msa_nucleic'] as const);
         const domain = requireLiteral(row.domain_kind, `${label}.domain_kind`, ['protein_in_silico', 'ngs_molbio'] as const);
         if (domain !== (id === 'family_msa_protein' ? 'protein_in_silico' : 'ngs_molbio') || row.project_setup_state !== 'ready' || row.project_native_owner_id !== `${id}:family_msa` || row.safe_setup_destination !== `/alignments?model=${id}&mode=family_msa` || row.launch_mode !== 'typed_launcher_handoff') throw new Error(`${label} has an invalid alignment setup contract.`);

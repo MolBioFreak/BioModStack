@@ -9,7 +9,7 @@ import { api } from '../../src/lib/api';
 
 const getSetup = vi.hoisted(() => vi.fn());
 vi.mock('../../src/lib/projectManager', async original => ({ ...(await original<Record<string, unknown>>()), getProjectWorkflowSetup: getSetup }));
-const row = (id: string, domain: string) => ({ capability_id: id, label: id, domain_kind: domain, project_setup_state: 'ready', project_setup_adapter_id: 'adapter', project_native_owner_id: `${id}:family_msa`, safe_setup_destination: `/alignments?model=${id}&mode=family_msa`, launch_mode: 'typed_launcher_handoff', product_taxonomy: { family: 'family_alignment' } });
+const row = (id: string, domain: string) => ({ capability_id: id, label: id, domain_kind: domain, project_setup_state: 'ready', project_setup_adapter_id: 'adapter', project_native_owner_id: `${id}:family_msa`, safe_setup_destination: `/alignments?model=${id}&mode=family_msa`, launch_mode: 'typed_launcher_handoff', product_taxonomy: { family: 'family_alignment' }, scientific_capabilities: { mafft: ['protein', 'dna', 'rna'], muscle: ['protein', 'dna', 'rna'], famsa: ['protein'], twilight: ['dna', 'rna'] }, result_adapter_ids: [`bms.family-msa.${id}.adapter.v1`] });
 
 describe('alignment route receiver', () => {
     it('polls a running Job through publication and opens its document', async () => {
