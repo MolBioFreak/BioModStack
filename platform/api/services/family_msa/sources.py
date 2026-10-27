@@ -60,7 +60,7 @@ def _statement(project_id: str, revision_id: str):
             .order_by(member.ordinal))
 
 
-async def _ancestry(session, dataset_id, revision, row):
+async def _ancestry(session, dataset_id, revision, row, *, revisions=None, members=None, payloads=None):
     """Validate each claimed link against immutable revision and member evidence.
 
     This establishes consistency, not who authored a declaration: the generic
@@ -76,14 +76,19 @@ async def _ancestry(session, dataset_id, revision, row):
                 raise ValueError("ancestry_cycle")
             seen.add(key)
             path.append(revision.resource_id)
-            payload = json.loads(revision.canonical_payload)
-            if (canonical_json(payload) != revision.canonical_payload or
-                    sha256_text(revision.canonical_payload) != revision.payload_sha256):
-                raise ValueError("invalid_revision_hash")
-            members = payload.get("members")
-            if not isinstance(members, list) or row.ordinal >= len(members):
+            if payloads is None or revision.resource_id not in payloads:
+                payload = json.loads(revision.canonical_payload)
+                if (canonical_json(payload) != revision.canonical_payload or
+                        sha256_text(revision.canonical_payload) != revision.payload_sha256):
+                    raise ValueError("invalid_revision_hash")
+                if payloads is not None:
+                    payloads[revision.resource_id] = payload
+            else:
+                payload = payloads[revision.resource_id]
+            payload_members = payload.get("members")
+            if not isinstance(payload_members, list) or row.ordinal >= len(payload_members):
                 raise ValueError("member_not_in_revision")
-            item = members[row.ordinal]
+            item = payload_members[row.ordinal]
             if not isinstance(item, dict):
                 raise ValueError("invalid_member")
             value = item.get("value", item)
@@ -103,13 +108,15 @@ async def _ancestry(session, dataset_id, revision, row):
                     set(origin) != {"revision_id", "revision_sha256", "ordinal", "member_sha256"} or
                     not isinstance(origin["revision_id"], str) or type(origin["ordinal"]) is not int or origin["ordinal"] < 0):
                 raise ValueError("invalid_origin_declaration")
-            parent = await session.get(ExperimentRevision, origin["revision_id"])
+            parent = (await session.get(ExperimentRevision, origin["revision_id"])
+                      if revisions is None else revisions.get(origin["revision_id"]))
             if (parent is None or parent.subject_id != dataset_id or parent.revision_number >= revision.revision_number or
                     parent.payload_sha256 != origin["revision_sha256"]):
                 raise ValueError("origin_revision_mismatch")
-            source = (await session.execute(select(ExperimentDatasetRevisionMember).where(
+            source = ((await session.execute(select(ExperimentDatasetRevisionMember).where(
                 ExperimentDatasetRevisionMember.revision_id == parent.resource_id,
                 ExperimentDatasetRevisionMember.ordinal == origin["ordinal"]))).scalar_one_or_none()
+                if members is None else members.get(parent.resource_id, {}).get(origin["ordinal"]))
             if (source is None or source.content_sha256 != origin["member_sha256"] or
                     source.role != row.role or source.semantic_identity != row.semantic_identity or
                     source.media_type != row.media_type or canonical_json(value["source_value"]) != source.value_json):
@@ -123,12 +130,48 @@ async def _ancestry(session, dataset_id, revision, row):
 async def _render_with_ancestry(session, dataset_id, revision, rows):
     # Check the complete roster at each traversed revision, not only the page
     # or selected subset. Two descendants of one root cannot be paired safely.
+    # Load complete reachable rosters in breadth-first batches. Invalid claims are
+    # still evaluated by _ancestry; discovery must not make them valid or fail.
+    revisions = {revision.resource_id: revision}
+    members = {}
+    pending = {revision.resource_id}
+    while pending:
+        ids = sorted(pending)
+        pending = set()
+        for start in range(0, len(ids), 500):
+            batch = ids[start:start + 500]
+            unknown = [key for key in batch if key not in revisions]
+            if unknown:
+                found = (await session.execute(select(ExperimentRevision).where(
+                    ExperimentRevision.resource_id.in_(unknown)))).scalars().all()
+                revisions.update({key: None for key in unknown})
+                revisions.update({rev.resource_id: rev for rev in found})
+            valid = [key for key in batch if revisions[key] is not None
+                     and revisions[key].subject_id == dataset_id]
+            if not valid:
+                continue
+            for key in valid:
+                members[key] = {}
+            found_members = (await session.execute(select(ExperimentDatasetRevisionMember).where(
+                ExperimentDatasetRevisionMember.revision_id.in_(valid)))).scalars().all()
+            for member in found_members:
+                members[member.revision_id][member.ordinal] = member
+                try:
+                    value = json.loads(member.value_json)
+                    origin = value.get("origin") if isinstance(value, dict) else None
+                    parent_id = origin.get("revision_id") if isinstance(origin, dict) else None
+                    if (isinstance(value, dict) and value.get("schema") == "bms.dataset-derived-member.v1"
+                            and isinstance(parent_id, str) and parent_id not in revisions):
+                        pending.add(parent_id)
+                except (ValueError, TypeError):
+                    pass
     cache = {}
+    payloads = {}
     async def roster(rev):
         if rev.resource_id not in cache:
-            members = (await session.execute(select(ExperimentDatasetRevisionMember).where(
-                ExperimentDatasetRevisionMember.revision_id == rev.resource_id))).scalars().all()
-            values = {m.ordinal: await _ancestry(session, dataset_id, rev, m) for m in members}
+            values = {m.ordinal: await _ancestry(session, dataset_id, rev, m,
+                      revisions=revisions, members=members, payloads=payloads)
+                      for m in members.get(rev.resource_id, {}).values()}
             counts = {}
             for value in values.values():
                 if value["status"] == "resolved":
@@ -144,7 +187,7 @@ async def _render_with_ancestry(session, dataset_id, revision, rows):
         if ancestry["status"] == "resolved":
             key = canonical_json(ancestry["occurrence"])
             for revision_id in ancestry.pop("_path"):
-                ancestor_revision = await session.get(ExperimentRevision, revision_id)
+                ancestor_revision = revisions[revision_id]
                 _, counts = await roster(ancestor_revision)
                 if counts.get(key, 0) > 1:
                     ancestry = {"status": "unknown", "reason": "repeated_origin_ambiguous"}
