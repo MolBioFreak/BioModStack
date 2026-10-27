@@ -1834,12 +1834,14 @@ function parseProteinProjectCapability(value: unknown, label: string): ProteinPr
         throw new Error(`${label} is ready without a safe native setup destination and adapter.`);
     }
     const destinationUrl = new URL(destination, 'https://project-setup.invalid');
-    if (
-        destinationUrl.pathname !== '/submit'
-        || destinationUrl.hash
-        || destinationUrl.searchParams.getAll('template').length !== 1
-        || destinationUrl.searchParams.get('template') !== nativeOwnerId
-    ) {
+    const alignmentModels = ['family_msa_protein', 'family_msa_nucleic'];
+    const alignmentOwner = alignmentModels.find((model) => nativeOwnerId === `${model}:family_msa`);
+    const alignmentDestination = alignmentOwner !== undefined
+        && destination === `/alignments?model=${alignmentOwner}&mode=family_msa`;
+    const submitDestination = destinationUrl.pathname === '/submit'
+        && destinationUrl.searchParams.getAll('template').length === 1
+        && destinationUrl.searchParams.get('template') === nativeOwnerId;
+    if (destinationUrl.hash || (!alignmentDestination && !submitDestination)) {
         throw new Error(`${label} native owner does not match its setup destination.`);
     }
     return {

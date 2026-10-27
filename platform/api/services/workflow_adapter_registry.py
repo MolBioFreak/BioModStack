@@ -92,6 +92,13 @@ for _model, _modes in {
         }
 
 
+for _model in ("family_msa_protein", "family_msa_nucleic"):
+    PROJECT_NATIVE_OWNER_REGISTRY[f"{_model}:family_msa"] = {
+        "setup_path": "/alignments", "setup_query": {"model": [_model], "mode": ["family_msa"]},
+        "supports_initial_values": True, "supports_draft_reporting": True,
+    }
+
+
 def register_workflow_adapter(workflow_family: str, adapter_id: str) -> None:
     """Register a server-owned workflow adapter; callers cannot register via HTTP."""
     WORKFLOW_ADAPTER_REGISTRY.setdefault(workflow_family, set()).add(adapter_id)
@@ -122,7 +129,7 @@ def is_project_native_owner_registered(native_owner_id: Any) -> bool:
             "supports_initial_values",
             "supports_draft_reporting",
         }, {"setup_path", "setup_query", "supports_initial_values", "supports_draft_reporting"})
-        and contract["setup_path"] == "/submit"
+        and contract["setup_path"] in {"/submit", "/alignments"}
         and contract["supports_initial_values"] is True
         and contract["supports_draft_reporting"] is True
         and ("setup_query" not in contract or (
@@ -147,6 +154,9 @@ def is_project_native_destination_registered(native_owner_id: Any, destination: 
     contract = PROJECT_NATIVE_OWNER_REGISTRY[native_owner_id]
     if parsed.scheme or parsed.netloc or parsed.fragment or parsed.path != contract["setup_path"]:
         return False
+    if parsed.path == "/alignments":
+        expected = contract["setup_query"]
+        return destination == f"/alignments?model={expected['model'][0]}&mode={expected['mode'][0]}"
     if "setup_query" in contract:
         return query == contract["setup_query"]
     return query.get("template") == [native_owner_id]
