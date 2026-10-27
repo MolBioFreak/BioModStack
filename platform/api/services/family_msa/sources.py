@@ -1,13 +1,13 @@
-"""Read pinned Project Dataset resources without assuming they are Designs.
+"""Read exact Project Dataset resource occurrences and supported owner sequences.
 
-This is a resource inventory, not a sequence parser or execution authority.
-Callers must resolve each resource with its producer-owned reader before using
-it as an alignment input. No paths or payloads are inferred from labels.
+Unknown resources remain visible; missing producer evidence is reported rather
+than converted into an execution rule. No payload is inferred from labels.
 """
 from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import parse_qs, urlencode
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,3 +95,66 @@ async def freeze_dataset_resources(session: AsyncSession, *, project_id: str, da
     return {"schema": "bms.family-msa.dataset-resource-selection.v1", "project_id": project_id,
             "dataset_id": dataset_id, "revision_id": revision_id,
             "revision_sha256": revision.payload_sha256, "members": [_render(*row) for row in rows]}
+
+
+async def resolve_molecular_member(project_session: AsyncSession, core_session: AsyncSession,
+                                   molbio_session: AsyncSession, *, project_id: str,
+                                   dataset_id: str, revision_id: str, ordinal: int,
+                                   start: int | None = None, end: int | None = None,
+                                   adapter=None) -> dict[str, Any]:
+    """Read one exact nucleotide revision through its owner; coordinates are 0-based half-open.
+
+    This is an optional read, not an admission check. The returned occurrence
+    remains distinct even when multiple Dataset members reference the same receipt.
+    The caller owns persistence of selections and must not infer it from this read.
+    """
+    from molbio_models import MolecularRevision
+    from services.global_experiments.adapters import AdapterError, registry
+    from services.molbio_ngs_receipts import _snapshot_sequence
+
+    selection = await freeze_dataset_resources(project_session, project_id=project_id,
+        dataset_id=dataset_id, revision_id=revision_id, ordinals=[ordinal])
+    member = selection["members"][0]
+    receipt = member["receipt"]
+    result = {"schema": "bms.family-msa.resolved-member.v1", "project_id": project_id,
+              "dataset_id": dataset_id, "revision_id": revision_id,
+              "revision_sha256": selection["revision_sha256"], "ordinal": ordinal,
+              "member_identity": member["member_identity"], "member_sha256": member["member_sha256"]}
+    supported = {"bms.molbio.member-molecular-revision.adapter.v1", "bms.molbio.revision-reference.adapter.v1",
+                 "bms.molbio.construct-reference.adapter.v1"}
+    if receipt is None or receipt["adapter_id"] not in supported:
+        return {**result, "status": "unavailable", "reason": "unsupported_or_missing_receipt"}
+    try:
+        identity = parse_qs(receipt["entity_id"], strict_parsing=True, keep_blank_values=True)
+        if set(identity) != {"sequence_id", "revision_id"} or any(len(v) != 1 or not v[0] for v in identity.values()):
+            raise ValueError("invalid molecular identity")
+        owner = adapter or registry.get(receipt["adapter_id"])
+        verification_id = receipt["entity_id"]
+        if receipt["adapter_id"] == "bms.molbio.member-molecular-revision.adapter.v1":
+            head = await project_session.get(ExperimentAggregateHead, dataset_id)
+            verification_id += "&" + urlencode({"domain_experiment_id": head.parent_id})
+        fresh = await owner.verify(core_session, verification_id)
+        persisted = await project_session.get(ExperimentExternalEntityReceipt, receipt["receipt_id"])
+        acknowledgement = json.loads(persisted.acknowledgement_json or "{}")
+        fields = ("store_id", "entity_kind", "entity_id", "entity_revision_id", "content_digest", "contract_digest", "verifier_id", "reopen_uri")
+        if any(fresh.get(k) != acknowledgement.get(k) for k in fields) or (
+            persisted.store_id, persisted.entity_kind, persisted.entity_id, persisted.generation_or_revision, persisted.content_digest
+        ) != (fresh.get("store_id"), fresh.get("entity_kind"), fresh.get("entity_id"), str(fresh.get("entity_revision_id")), fresh.get("content_digest")):
+            raise ValueError("receipt differs from producer authority")
+        revision = await molbio_session.get(MolecularRevision, identity["revision_id"][0])
+        if revision is None or revision.document_id != identity["sequence_id"][0]:
+            raise ValueError("molecular revision missing")
+        sequence = _snapshot_sequence(revision)
+        if revision.content_sha256 != receipt["content_digest"] or len(sequence) != revision.content_length:
+            raise ValueError("molecular sequence differs from receipt")
+    except (AdapterError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        return {**result, "status": "unavailable", "reason": str(exc)}
+    first = 0 if start is None else start
+    last = len(sequence) if end is None else end
+    if type(first) is not int or type(last) is not int or first < 0 or last <= first or last > len(sequence):
+        raise ValidationFailure("invalid sequence region")
+    return {**result, "status": "resolved", "source_kind": "molecular_revision",
+            "source_identity": receipt["entity_id"], "source_digest": revision.content_sha256,
+            "molecule": str((revision.snapshot or {}).get("sequence_type") or "dna").lower(),
+            "label": (revision.snapshot or {}).get("name"), "start": first, "end": last,
+            "sequence": sequence[first:last]}
