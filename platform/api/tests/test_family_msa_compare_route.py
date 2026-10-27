@@ -23,3 +23,36 @@ async def test_comparison_roster_maps_only_explicit_identity_and_positions():
     report = compare(changed, changed)
     assert report['rows'][0]['mapping_unknown']
     assert report['rows'][0]['positions'] == []
+
+
+@pytest.mark.asyncio
+async def test_compare_checks_both_project_receipts_and_propagates_denial(monkeypatch):
+    from fastapi import HTTPException
+    from routers import family_msa_results as route
+    seen = []
+    async def result(request, session, project_id, receipt_id):
+        seen.append((project_id, receipt_id))
+        if receipt_id == 'right':
+            raise HTTPException(404, detail='Result not found')
+        return [], None
+    monkeypatch.setattr(route, 'project_result', result)
+    payload = route.ComparisonInput(left_receipt_id='left', left_artifact_id='a', right_receipt_id='right', right_artifact_id='b')
+    with pytest.raises(HTTPException) as exc:
+        await route.compare_project_results(None, 'project', payload, None)
+    assert exc.value.status_code == 404
+    assert seen == [('project', 'left'), ('project', 'right')]
+
+
+@pytest.mark.asyncio
+async def test_compare_propagates_corrupt_retained_artifact(monkeypatch):
+    from fastapi import HTTPException
+    from routers import family_msa_results as route
+    async def result(request, session, project_id, receipt_id):
+        async def read(key):
+            raise HTTPException(409, detail='Retained artifact unavailable')
+        return [{'id': 'a', 'role': 'alignment'}, {'id': 'receipt', 'role': 'receipt'}], read
+    monkeypatch.setattr(route, 'project_result', result)
+    payload = route.ComparisonInput(left_receipt_id='left', left_artifact_id='a', right_receipt_id='right', right_artifact_id='a')
+    with pytest.raises(HTTPException) as exc:
+        await route.compare_project_results(None, 'project', payload, None)
+    assert exc.value.status_code == 409

@@ -55,7 +55,7 @@ export default function AlignmentWorkspace({ projectLabel, projectId, receiptId,
         <button type="button" onClick={() => { const anchor = anchorAt(document, rowId, Number(column) - 1); if (anchor) select(anchor) }}>Inspect</button>
       </fieldset>
       {currentSelection && <p>Row {currentSelection.rowId}, column {currentSelection.column + 1}, {currentSelection.residue === null ? 'gap' : `residue ${currentSelection.residue + 1}`}{currentSelection.sourcePosition === undefined ? '; source coordinate unknown' : `; source coordinate ${currentSelection.sourcePosition + 1}`}</p>}
-      {projectId && receiptId && <AlignmentShared key={`${projectId}:${receiptId}:${document.resultId}`} projectId={projectId} receiptId={receiptId} artifactId={document.resultId} selection={currentSelection} viewer={viewerId} applyViewer={value => { if (value in viewerNames) setViewerId(value as AlignmentViewerId) }}/>}
+      {projectId && receiptId && <AlignmentShared key={projectId} projectId={projectId} receiptId={receiptId} artifactId={document.resultId} selection={currentSelection} viewer={viewerId} applyViewer={value => { if (value in viewerNames) setViewerId(value as AlignmentViewerId) }}/>}
     </>}
     {localDownloads.length > 0 && <section aria-label="Downloads"><h2>Downloads</h2><ul>{localDownloads.map(item => <li key={`${item.label}:${item.href}`}><a href={item.href} download>{item.label}</a></li>)}</ul></section>}
   </main>
