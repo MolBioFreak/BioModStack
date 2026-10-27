@@ -9,13 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Job, JobArtifact, get_session
 from experiment_database import get_experiment_session
-from experiment_models import ExperimentArtifact, ExperimentExternalEntityReceipt, ExperimentResource
-from experiment_services import ExperimentServiceError, ValidationFailure
+from experiment_models import ExperimentArtifact, ExperimentExternalEntityReceipt, ExperimentResource, ExperimentAggregateHead, ExperimentRevision
+from experiment_services import ExperimentServiceError, ValidationFailure, create_dataset, save_dataset_revision, sha256_text
 from molbio_database import get_molbio_session
 from routers.experiment_workspaces import _error, _operator_principal, _require_mutation_owner
 from services.family_msa.sources import browse_dataset_resources, freeze_dataset_resources, resolve_molecular_member
 from services.family_msa.publication import CustodyError, retained_path
 from services.family_msa.read_model import alignment_document
+from services.family_msa.shared import SharedState
 from services.global_experiments.adapters import AdapterError, _read_verified_file, registry
 from services.global_experiments.result_surfaces import _acknowledgement, _validate_persisted_authority
 from services.job_result_roots import resolve_persisted_job_result_root
@@ -266,3 +267,78 @@ async def get_project_artifact(request: Request, project_id: str, receipt_id: st
 async def get_project_document(request: Request, project_id: str, receipt_id: str, artifact_id: str, session: AsyncSession = Depends(get_experiment_session)):
     entries, read = await project_result(request, session, project_id, receipt_id)
     return await document(entries, read, artifact_id)
+
+
+SHARED_KIND = 'family_msa.shared_state.v1'
+
+
+class SharedCreate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=255)
+    domain_experiment_id: str = Field(min_length=1, max_length=128)
+    state: SharedState
+
+
+class SharedSave(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    expected_head_generation: StrictInt = Field(ge=0)
+    state: SharedState
+
+
+def shared_revision(head, revision):
+    return {'id': head.aggregate_id, 'project_id': head.workspace_id,
+            'head_generation': head.head_generation, 'revision_id': revision.resource_id,
+            'revision_number': revision.revision_number, 'payload_sha256': revision.payload_sha256,
+            'state': json.loads(revision.canonical_payload)}
+
+
+async def shared_head(session, project_id, dataset_id):
+    head = await session.get(ExperimentAggregateHead, dataset_id)
+    if not head or head.workspace_id != project_id or head.aggregate_kind != 'dataset' or head.dataset_kind != SHARED_KIND:
+        raise HTTPException(404, detail='Shared alignment state not found')
+    return head
+
+
+@router.post('/projects/{project_id}/shared-state', status_code=201)
+async def create_shared_state(request: Request, project_id: str, payload: SharedCreate,
+                              session: AsyncSession = Depends(get_experiment_session)):
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    try:
+        head = await create_dataset(session, project_id, payload.name, SHARED_KIND,
+                                    experiment_id=payload.domain_experiment_id)
+        revision = await save_dataset_revision(session, head.aggregate_id, payload.state.model_dump(by_alias=True),
+                                               expected_head_generation=head.head_generation)
+        await session.commit()
+        return shared_revision(head, revision)
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
+@router.put('/projects/{project_id}/shared-state/{dataset_id}')
+async def save_shared_state(request: Request, project_id: str, dataset_id: str, payload: SharedSave,
+                            session: AsyncSession = Depends(get_experiment_session)):
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    head = await shared_head(session, project_id, dataset_id)
+    try:
+        revision = await save_dataset_revision(session, dataset_id, payload.state.model_dump(by_alias=True),
+                                               expected_head_generation=payload.expected_head_generation)
+        await session.commit()
+        await session.refresh(head)
+        return shared_revision(head, revision)
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
+@router.get('/projects/{project_id}/shared-state/{dataset_id}')
+async def get_shared_state(request: Request, project_id: str, dataset_id: str, revision_id: str | None = None,
+                           session: AsyncSession = Depends(get_experiment_session)):
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    head = await shared_head(session, project_id, dataset_id)
+    revision = await session.get(ExperimentRevision, revision_id or head.current_revision_id)
+    if not revision or revision.subject_id != dataset_id:
+        raise HTTPException(404, detail='Shared alignment revision not found')
+    if sha256_text(revision.canonical_payload) != revision.payload_sha256:
+        raise HTTPException(409, detail='Shared alignment revision corrupt')
+    return shared_revision(head, revision)
