@@ -25,8 +25,22 @@ def parse(text: str | bytes, fmt: str, molecule: str) -> SequenceSet:
                 observations.append('A3M rows have unequal match column counts')
     elif fmt in ('stockholm', 'clustal'):
         by_id = {}
+        record = 1
+        ended = False
         for line in text.removeprefix('\ufeff').splitlines():
             stripped = line.strip()
+            if fmt == 'stockholm':
+                if stripped == '//':
+                    ended = True
+                    continue
+                if ended and (not stripped or (stripped.startswith('#') and not stripped.startswith(('# STOCKHOLM', '#=')))):
+                    continue
+                if ended and stripped:
+                    record += 1
+                    ended = False
+                if stripped.startswith('# STOCKHOLM') and record == 1 and (records or annotations):
+                    record += 1
+
             if fmt == 'stockholm' and stripped.startswith('#='):
                 parts = stripped.split(None, 3)
                 kind = parts[0][2:]
@@ -40,8 +54,12 @@ def parse(text: str | bytes, fmt: str, molecule: str) -> SequenceSet:
                     # GF values can contain spaces; GC values are normally one token.
                     short = stripped.split(None, 2)
                     annotations.append({'kind': kind, 'feature': short[1], 'value': short[2]})
+                if record > 1:
+                    annotations[-1]['record'] = record
                 continue
-            if not stripped or stripped.startswith(('#', '//', 'CLUSTAL', 'MUSCLE')) or line[0].isspace():
+            if not stripped or stripped.startswith(('#', '//', 'CLUSTAL', 'MUSCLE')) or (fmt == 'clustal' and line[0].isspace()):
+                continue
+            if fmt == 'stockholm' and record > 1:
                 continue
             parts = line.split()
             if len(parts) >= 2:
@@ -52,11 +70,15 @@ def parse(text: str | bytes, fmt: str, molecule: str) -> SequenceSet:
             else:
                 observations.append('Malformed block line retained in original: ' + line)
         if fmt == 'stockholm':
+            if record > 1:
+                observations.append(f'Stockholm contains {record} records; only the first is displayed. Additional records and annotations remain in the original file.')
             if not text.removeprefix('\ufeff').lstrip().startswith('# STOCKHOLM 1.0'):
                 observations.append('Missing Stockholm header')
             if not any(line.strip() == '//' for line in text.splitlines()):
                 observations.append('Missing Stockholm terminator')
             for item in annotations:
+                if item.get('record', 1) != 1:
+                    continue
                 if item.get('sequence_id') and item['sequence_id'] not in by_id:
                     observations.append('Annotation references unknown sequence: ' + item['sequence_id'])
             widths = {len(seq) for _, seq in records}
@@ -66,7 +88,7 @@ def parse(text: str | bytes, fmt: str, molecule: str) -> SequenceSet:
                 width = next(iter(widths))
                 tracks = {}
                 for item in annotations:
-                    if item['kind'] in ('GR', 'GC'):
+                    if item.get('record', 1) == 1 and item['kind'] in ('GR', 'GC'):
                         key = (item['kind'], item.get('sequence_id'), item['feature'])
                         tracks[key] = tracks.get(key, '') + item['value']
                 for key, value in tracks.items():
@@ -106,6 +128,7 @@ def export(roster: SequenceSet, fmt: str, original: bool = False) -> tuple[str, 
     warnings = []
     if roster.source_format == 'stockholm':
         warnings.append('Stockholm annotations are not represented in this conversion; retain original')
+        warnings.extend(x for x in roster.format_observations if x.startswith('Stockholm contains '))
     if fmt == 'fasta':
         return ''.join(f'>{r.header}\n{r.sequence}\n' for r in roster.rows), warnings
     if fmt in ('stockholm', 'clustal'):

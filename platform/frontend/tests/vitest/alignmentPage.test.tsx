@@ -67,6 +67,21 @@ describe('alignment route receiver', () => {
         expect(() => parseProteinProjectCapabilityInventory({...inventory, capabilities: [{...capability, setup_destination: '/submit?model=laproteina&mode=generate'}]})).toThrow();
         expect(() => parseProteinProjectCapabilityInventory({...inventory, capabilities: [{...capability, setup_destination: '/submit?model=laproteina&mode=evaluate&mode=generate'}]})).toThrow();
     });
+    it('shows retained source observations beside the first-record document', async () => {
+        const get = vi.spyOn(api, 'get').mockImplementation(async url => {
+            const path = String(url);
+            if (path.includes('/documents/')) return {data: {result_id:'a', rows:[{row_id:'r', label:'x', aligned:'AC'}]}};
+            if (path.includes('/artifacts/meta')) return {data: {format_observations:['Stockholm contains 2 records; only the first is displayed. Additional records and annotations remain in the original file.']}};
+            return {data: {artifacts:[{id:'a', role:'alignment'}, {id:'meta', role:'source_metadata'}, {id:'raw', role:'source'}]}};
+        });
+        const div = document.createElement('div'); const root = createRoot(div); const client = new QueryClient();
+        await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/alignments?project_id=p&receipt_id=r']}><Routes><Route path="/alignments" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>));
+        for (let i = 0; i < 5; i++) await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+        expect(div.textContent).toContain('only the first is displayed');
+        expect(div.textContent).toContain('Result: a');
+        expect(div.querySelector('a[href="/api/family-msa/projects/p/receipts/r/artifacts/raw"]')).not.toBeNull();
+        await act(async () => root.unmount()); client.clear(); get.mockRestore();
+    });
     it('reopens exact retained Project documents and downloads', async () => {
         const get = vi.spyOn(api, 'get').mockImplementation(async (url) => ({data: String(url).includes('/documents/') ? {result_id:'a', rows:[{row_id:'r', label:'one', aligned:'AC'}]} : {artifacts:[{id:'a', role:'alignment'}]}}));
         const div = document.createElement('div'); const root = createRoot(div); const client = new QueryClient();

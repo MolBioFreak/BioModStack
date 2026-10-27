@@ -188,7 +188,7 @@ def test_real_portable_import_export_roundtrip(tmp_path, monkeypatch):
             import httpx
             samples = {
                 'fasta': b'>same\r\nAC-G\r\n>same\r\nACGG\r\n',
-                'stockholm': b'# STOCKHOLM 1.0\r\n#=GF ID test\r\n#=GS a DE annotated\r\na AC-G\r\nb ACGG\r\n#=GR a SS HHHH\r\n#=GC RF xxxx\r\n//\r\n',
+                'stockholm': b'# STOCKHOLM 1.0\r\n#=GF ID test\r\n#=GS a DE annotated\r\n  a AC-G\r\n b ACGG\r\n#=GR a SS HHHH\r\n#=GC RF xxxx\r\n//\r\n# STOCKHOLM 1.0\r\n#=GF ID second\r\na GT\r\n//\r\n',
                 'clustal': b'CLUSTAL W\n\na AC-G\nb ACGG\n',
                 'a3m': b'>a\nACx-G\n>b\nACGG\n',
             }
@@ -212,7 +212,9 @@ def test_real_portable_import_export_roundtrip(tmp_path, monkeypatch):
                     roster = SequenceSet.model_validate_json((await c.get(base + '/artifacts/' + native['id'])).content)
                     assert export_bytes(roster, fmt, original=True)[0] == raw
                     if fmt == 'stockholm':
-                        assert [a['kind'] for a in roster.stockholm_annotations] == ['GF', 'GS', 'GR', 'GC']
+                        assert [a['kind'] for a in roster.stockholm_annotations] == ['GF', 'GS', 'GR', 'GC', 'GF']
+                        assert roster.stockholm_annotations[-1]['record'] == 2
+                        assert any('only the first is displayed' in x for x in roster.format_observations)
                     aligned = next(item for item in listing if item['role'] == 'alignment')
                     doc = await c.get(base + '/documents/' + aligned['id'])
                     assert doc.status_code == 200, doc.text
@@ -229,5 +231,12 @@ def test_real_portable_import_export_roundtrip(tmp_path, monkeypatch):
             native = next(x for x in inventory['artifacts'] if x['role'] == 'source_metadata')
             roster = SequenceSet.model_validate_json((destination / native['path']).read_bytes())
             assert export_bytes(roster, fmt, original=True)[0] == raw
+            if fmt == 'stockholm':
+                assert any('only the first is displayed' in x for x in roster.format_observations)
+                reopened = client.import_project_bundle(project, destination, replay_key='stockholm-reopen')
+                base = f'/api/family-msa/projects/{project}/receipts/{reopened.receipt_id}'
+                listing = client._request('GET', base)['artifacts']
+                aligned = next(item for item in listing if item['role'] == 'alignment')
+                assert [r['aligned'] for r in client._request('GET', base + '/documents/' + aligned['id'])['rows']] == ['AC-G', 'ACGG']
     finally:
         asyncio.run(engine.dispose())

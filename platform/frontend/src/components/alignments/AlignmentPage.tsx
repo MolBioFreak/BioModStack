@@ -47,6 +47,12 @@ export default function AlignmentPage() {
     }, [job.data?.status, base]);
     const artifacts = manifest.data?.artifacts ?? [];
     const alignments = artifacts.filter(x => x.role === 'alignment');
+    const sourceMetadata = artifacts.find(x => x.role === 'source_metadata');
+    const observations = useQuery({
+        queryKey: ['alignment-source-observations', base, sourceMetadata?.id],
+        queryFn: async ({ signal }) => (await api.get<{format_observations?: string[]}>(`${base}/artifacts/${encodeURIComponent(sourceMetadata!.id)}`, { signal })).data.format_observations ?? [],
+        enabled: Boolean(base && sourceMetadata), retry: false,
+    });
     const selected = selection.base === base ? selection.id : '';
     const member = selected || (alignments.length === 1 ? alignments[0].id : '');
     const documentQuery = useQuery({
@@ -73,6 +79,8 @@ export default function AlignmentPage() {
         {base && !manifest.data && !error && <p role="status">Waiting for alignment result{job.data?.status ? ` (Job ${job.data.status})` : ''}…</p>}
         {base && manifest.data && !alignments.length && <p role="status">No alignment artifact is available in this result. <button onClick={() => void manifest.refetch()}>Retry</button></p>}
         {error && <div role="alert">Alignment result unavailable: {String(error)} <button onClick={() => { if (job.error) void job.refetch(); if (manifest.error) void manifest.refetch(); if (documentQuery.error) void documentQuery.refetch(); }}>Retry</button></div>}
+        {observations.error && <p role="status">Source format observations unavailable; the original file remains downloadable.</p>}
+        {Boolean(observations.data?.length) && <section aria-label="Source format observations"><h2>Source format observations</h2><ul>{observations.data?.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
         {base && alignments.length > 1 && <label>Alignment member <select value={selected} onChange={e => setSelection({base, id: e.target.value})}><option value="">Choose a member</option>{alignments.map((x, index) => <option key={x.id} value={x.id}>{x.logical_path || `Alignment ${index + 1}`}</option>)}</select></label>}
         {!base && !resultId && section === 'New' && <>{!queryModel && <label>Alignment family <select aria-label="Alignment family" value={model} onChange={e => setSelectedModel(e.target.value)}><option value="family_msa_protein">Protein</option><option value="family_msa_nucleic">Nucleic acid</option></select></label>}<AlignmentEditor key={model} model={model}/></>}
         {!base && !resultId && section === 'Library' && <AlignmentLibrary initialProject={projectId}/>}

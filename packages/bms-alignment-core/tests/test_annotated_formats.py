@@ -29,6 +29,18 @@ def test_stockholm_annotations_and_relocated_bytes(tmp_path):
     assert export_bytes(restored, 'stockholm', original=True)[0] == raw
 
 
+def test_stockholm_distinct_records_and_indented_rows():
+    raw = (b'# STOCKHOLM 1.0\r\n#=GF ID first\r\n  x AC\r\n  x -G\r\n//\r\n'
+           b'# STOCKHOLM 1.0\r\n#=GF ID second\r\n#=GR x SS HH\r\n  x GT\r\n//\r\n')
+    roster = parse(raw, 'stockholm', 'dna')
+    assert [(r.header, r.sequence) for r in roster.rows] == [('x', 'AC-G')]
+    assert roster.stockholm_annotations[-1]['record'] == 2
+    assert any('2 records; only the first is displayed' in x for x in roster.format_observations)
+    assert export_bytes(roster, 'stockholm') == (raw, [])
+    assert any('only the first' in x for x in export(roster, 'fasta')[1])
+    assert parse('# STOCKHOLM 1.0\nx AC\n//\n', 'stockholm', 'dna').rows[0].sequence == 'AC'
+
+
 def test_malformed_annotations_and_unknown_references():
     roster = parse('# STOCKHOLM 1.0\n#=GR x\n#=GS absent DE hi\nx AC\n', 'stockholm', 'dna')
     assert roster.stockholm_annotations[0]['kind'] == 'unknown'
