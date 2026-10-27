@@ -862,7 +862,12 @@ async def test_reconcile_observes_active_then_completed_once_and_materializes_te
             {"status": "completed", "minknow_run_id": "PRIVATE-MINKNOW-RUN", "output_files": {"fastq": [str(fastq)], "pod5": [], "bam": []}},
         ]
     )
-    monkeypatch.setattr(ont_run_control, "request_host_agent", lambda *_args, **_kwargs: next(snapshots))
+    def observed_or_unreachable(*_args, **_kwargs):
+        try:
+            return next(snapshots)
+        except StopIteration:
+            raise RuntimeError("host-agent is unreachable after the terminal observation") from None
+    monkeypatch.setattr(ont_run_control, "request_host_agent", observed_or_unreachable)
 
     active = await ont_run_control.reconcile_instrument_run(run_id)
     completed = await ont_run_control.reconcile_instrument_run(run_id)
@@ -1279,6 +1284,7 @@ async def test_start_sends_sealed_protocol_to_minknow_and_tracks_the_run(monkeyp
     assert start_call[0] == "POST"
     assert start_call[2] == {
         "confirm_start": True,
+        "start_request_id": intent["id"],
         "protocol_id": "sequencing/sequencing_MIN114_DNA_e8_2_400K:FLO-MIN114:SQK-LSK114",
         "basecalling_enabled": True,
         "simplex_model": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0",
@@ -1374,3 +1380,51 @@ async def test_monitor_polls_every_active_minknow_run(monkeypatch) -> None:
 
     assert await ont_run_control.reconcile_active_runs_once() == 1
     assert seen == ["ont-run-server-observed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["accepted", "unknown", "rejected", "wrong_position"])
+@pytest.mark.parametrize("poll_owner", ["monitor", "raw_worker"])
+async def test_lost_start_reply_is_polled_and_only_matching_receipt_can_recover(monkeypatch, outcome, poll_owner) -> None:
+    _catalog, intent = await _armed_intent(monkeypatch)
+    monkeypatch.setattr(ont_run_control, "request_host_agent",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("lost reply")))
+    with pytest.raises(RuntimeError, match="Lost contact"):
+        await ont_run_control.validate_armed_intent_start(
+            intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]})
+    calls = []
+    def recover(method, path, payload=None, **kwargs):
+        calls.append((method, path))
+        assert method == "GET", "recovery must never send another start"
+        if "/start-requests/" in path:
+            return {"position": "X2" if outcome == "wrong_position" else "X1",
+                    "start_request_id": intent["id"],
+                    "start_outcome": "accepted" if outcome == "wrong_position" else outcome,
+                    "minknow_run_id": "recovered-minknow-run" if outcome in {"accepted", "wrong_position"} else None}
+        assert path == "/ont/runs/recovered-minknow-run"
+        return {"status": "running", "minknow_run_id": "recovered-minknow-run", "output_files": {}}
+    monkeypatch.setattr(ont_run_control, "request_host_agent", recover)
+    if poll_owner == "raw_worker":
+        from services.ont_raw_signal_worker import OntRawSignalWorker
+        poll = OntRawSignalWorker(ont_run_control.async_session)._reconcile_live_runs_once
+    else:
+        poll = ont_run_control.reconcile_active_runs_once
+    assert await poll() == 1
+    persisted = await ont_run_control.get_instrument_run(intent["id"])
+    expected = {"accepted": "running", "rejected": "failed"}.get(outcome, "unknown")
+    assert persisted["state"] == expected
+    summary = (await ont_run_control.list_instrument_runs())[0]
+    assert summary["can_stop"] is (outcome == "accepted")
+    assert calls[0] == ("GET", f"/ont/positions/X1/start-requests/{intent['id']}")
+
+
+@pytest.mark.asyncio
+async def test_host_502_does_not_falsely_mark_ambiguous_acquisition_failed(monkeypatch) -> None:
+    _catalog, intent = await _armed_intent(monkeypatch)
+    def ambiguous(*a, **kw):
+        raise ont_run_control.HostAgentRequestError(status_code=502, detail={"start_outcome": "unknown"}, url="host")
+    monkeypatch.setattr(ont_run_control, "request_host_agent", ambiguous)
+    with pytest.raises(RuntimeError, match="Lost contact"):
+        await ont_run_control.validate_armed_intent_start(
+            intent["id"], {"confirm_start": True, "intent_generation": intent["observed_generation"]})
+    assert (await ont_run_control.get_instrument_run(intent["id"]))["state"] == "unknown"

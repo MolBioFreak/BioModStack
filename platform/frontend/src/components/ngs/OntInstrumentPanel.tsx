@@ -116,10 +116,7 @@ function runSelectionKey(run: { run_id: string; observed_generation: number }): 
 
 export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = false }: OntInstrumentPanelProps) {
     const {
-        workspaceId,
-        globalExperimentId,
         selectedDomainExperiment,
-        availability,
         contextHref,
     } = useGlobalExperimentContext();
     const location = useLocation();
@@ -272,6 +269,9 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
         queryFn: () => fetchOntInstrumentRuns(100),
         enabled: exactDomainExperimentId !== null,
         retry: false,
+        refetchInterval: (query) => query.state.data?.some((run) =>
+            run.experiment_group === exactDomainExperimentId && ['starting', 'running', 'stopping', 'unknown'].includes(run.status))
+            ? jobPollingInterval(3000, query) : false,
     });
     const externalPod5CandidatesQuery = useQuery({
         queryKey: ['ont-external-pod5-candidates'],
@@ -447,7 +447,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
 
     const startRun = useMutation({
         mutationFn: async () => {
-            if (!exactDomainExperimentId) throw new Error(availability.reason || 'Select an exact NGS/MolBio Domain Experiment.');
+            if (!exactDomainExperimentId) throw new Error('Choose a Project to start sequencing.');
             if (!selectedDevice?.position || !selectedOption) throw new Error('No server-issued protocol option is available');
             const intent = await createOntRunIntent(selectedDevice.position, {
                 option_id: selectedOption.option_id,
@@ -491,7 +491,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
     const blockers = effectiveProtocolOptions?.blockers ?? [];
     const domainIntentBlocker = exactDomainExperimentId
         ? null
-        : (availability.reason || 'Select an exact NGS/MolBio Domain Experiment.');
+        : 'Choose a Project to start sequencing.';
     const canStart = Boolean(
         !instrumentEvidenceError
         && !domainIntentBlocker
@@ -501,7 +501,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
         && !startRun.isPending
     );
     const availableKits = effectiveProtocolOptions?.available_kits ?? [];
-    const activeRuns = durableRuns.filter((run) => ['starting', 'running', 'stopping', 'unknown'].includes(run.status));
+    const activeRuns = durableRuns.filter((run) => run.can_stop || run.status === 'stopping');
     const availableCount = useMemo(() => devices.filter((device) => device.available_for_run).length, [devices]);
     const selectedGeneration = selectedGenerationQuery.data;
 
@@ -534,17 +534,12 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                 </div>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-3">
-                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Project / workspace ID</div><div className="mt-1 break-all font-mono text-sm font-semibold text-[var(--text-primary)]">{workspaceId ?? 'not selected'}</div></div>
-                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Global Experiment ID</div><div className="mt-1 break-all font-mono text-sm font-semibold text-[var(--text-primary)]">{globalExperimentId ?? 'not selected'}</div></div>
-                <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Domain Experiment ID</div><div className="mt-1 break-all font-mono text-sm font-semibold text-[var(--text-primary)]">{exactDomainExperimentId ?? 'not selected'}</div></div>
-            </div>
-
-            <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
+            {requestedSampleRevision || requestedReferenceRevision || requestedPinnedRevisions.sample.error || requestedPinnedRevisions.reference.error ? (
+            <details className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4" open>
+                <summary className="cursor-pointer text-sm font-semibold text-[var(--text-primary)]">Saved sample and reference versions</summary>
                 <div>
-                    <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">URL-owned pinned revision inspection</h3>
                     <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                        Current-head browsing remains separate. Exact pinned sample and reference views are read-only and never advance to current heads.
+                        These saved versions are read-only. Opening this link keeps the recorded versions selected.
                     </p>
                 </div>
                 {requestedPinnedRevisions.sample.error ? (
@@ -594,10 +589,8 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                         </div>
                     </div>
                 ) : null}
-                {!requestedSampleRevision && !requestedReferenceRevision && !requestedPinnedRevisions.sample.error && !requestedPinnedRevisions.reference.error ? (
-                    <p className="text-xs text-[var(--text-secondary)]">No exact pinned sample or reference revision was requested in the URL.</p>
-                ) : null}
-            </div>
+            </details>
+            ) : null}
 
             <div className="grid gap-3 md:grid-cols-3">
                 <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Mk1D link</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{deviceStatus.isLoading ? 'Checking…' : statusLabel(data?.implementation_status)}</div></div>
@@ -605,8 +598,8 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                 <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Available</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{availableCount}</div></div>
             </div>
 
-            {domainIntentBlocker ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Run intent disabled: {domainIntentBlocker}</p> : null}
-            {instrumentEvidenceError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Device or protocol status could not be refreshed. Run validation is unavailable until both reload successfully.</p> : null}
+            {domainIntentBlocker ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">{domainIntentBlocker}</p> : null}
+            {instrumentEvidenceError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Device or protocol status could not be refreshed. Refresh the connection before starting sequencing.</p> : null}
 
             {reconnectMk1d.isPending || reconnectMk1d.data || reconnectMk1d.isError ? (
                 <div className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 p-4 text-sm text-cyan-50">
@@ -658,9 +651,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                             <div className="mt-1">Sample revision (for reference): <span className="break-all font-mono text-[var(--text-primary)]">{selectedSample.current_revision_id}</span></div>
                         </div>
                     ) : null}
-                    <label className="block text-xs font-semibold text-[var(--text-secondary)]">Experiment group (exact Domain Experiment ID)
-                        <input readOnly value={exactDomainExperimentId ?? ''} placeholder="Select an exact Domain Experiment" className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)]" />
-                    </label>
                     <label className="block text-xs font-semibold text-[var(--text-secondary)]">Sequencing kit
                         <select
                             aria-label="Sequencing kit"
@@ -668,10 +658,13 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                             onChange={(event) => setSelectedKit(event.target.value)}
                             className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]"
                         >
-                            <option value="">{availableKits.length ? 'Select the kit used for this library…' : 'Insert a flow cell to list kits'}</option>
+                            <option value="">{availableKits.length ? 'Select the kit used for this library…' : effectiveProtocolOptions?.flow_cell_present ? 'No compatible sequencing kits reported' : 'Insert a flow cell to list kits'}</option>
                             {availableKits.map((kit) => <option key={kit} value={kit}>{kit}</option>)}
                         </select>
                     </label>
+                    {effectiveProtocolOptions?.flow_cell_present && !availableKits.length ? (
+                        <p role="status" className="text-xs text-[var(--text-secondary)]">MinKNOW detects this flow cell but offers no compatible sequencing kits. Check the flow-cell type and installed MinKNOW protocols.</p>
+                    ) : null}
                     <label className="block text-xs font-semibold text-[var(--text-secondary)]">Run length (hours)
                         <input
                             aria-label="Run length in hours"
@@ -759,13 +752,13 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
             <div className="space-y-4 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                        <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Durable BMS ONT run ledger</h3>
-                        <p className="mt-1 text-xs text-[var(--text-secondary)]">This persisted-only list reads the BMS ledger. Loading or reopening it does not contact MinKNOW.</p>
+                        <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Run history</h3>
+                        <p className="mt-1 text-xs text-[var(--text-secondary)]">Sequencing runs saved to this Project.</p>
                     </div>
-                    <button type="button" disabled={!exactDomainExperimentId} onClick={() => void durableRunsQuery.refetch()} className="text-sm text-[var(--accent-secondary)] disabled:cursor-not-allowed disabled:opacity-50">Refresh ledger</button>
+                    <button type="button" disabled={!exactDomainExperimentId} onClick={() => void durableRunsQuery.refetch()} className="text-sm text-[var(--accent-secondary)] disabled:cursor-not-allowed disabled:opacity-50">Refresh history</button>
                 </div>
                 {durableRunsQuery.isError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Durable ONT runs could not be loaded: {errorMessage(durableRunsQuery.error, 'unknown run-ledger failure')}</p> : null}
-                <label className="block text-xs font-semibold text-[var(--text-secondary)]">Persisted run and observed generation
+                <label className="block text-xs font-semibold text-[var(--text-secondary)]">Saved run
                     <select
                         value={effectiveSelectedRunGeneration ? runSelectionKey({ run_id: effectiveSelectedRunGeneration.runId, observed_generation: effectiveSelectedRunGeneration.observedGeneration }) : ''}
                         onChange={(event) => {
@@ -775,8 +768,8 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                         disabled={!exactDomainExperimentId || durableRunsQuery.isLoading}
                         className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] disabled:opacity-50"
                     >
-                        <option value="">Select a persisted run generation…</option>
-                        {durableRuns.map((run: OntRunSummary) => <option key={runSelectionKey(run)} value={runSelectionKey(run)}>{run.run_id} · {run.status} · generation {run.observed_generation}</option>)}
+                        <option value="">Choose a run…</option>
+                        {durableRuns.map((run: OntRunSummary) => <option key={runSelectionKey(run)} value={runSelectionKey(run)}>{run.sample_id || run.run_id} · {run.status} · version {run.observed_generation}</option>)}
                     </select>
                 </label>
                 {requestedRunGeneration ? <p className="text-xs text-[var(--text-secondary)]">Reopening URL-owned exact run generation {requestedRunGeneration.runId} · {requestedRunGeneration.observedGeneration}.</p> : null}

@@ -5706,6 +5706,7 @@ export const updatePcrExperimentReviewState = (
 export interface OntRunSummary {
     run_id: string;
     position_id: string;
+    can_stop?: boolean;
     status: 'armed' | 'starting' | 'running' | 'stopping' | 'stopped' | 'completed' | 'failed' | 'unknown';
     observed_at: string;
     observed_generation: number;

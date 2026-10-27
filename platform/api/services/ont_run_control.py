@@ -11,6 +11,7 @@ of starting, stopping, or polling physical hardware.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -589,6 +590,7 @@ async def _run_summary_response(
         "run_id": record.id,
         "position_id": record.position_id,
         "status": record.state,
+        "can_stop": bool(record.minknow_run_id) and record.state in {"starting", "running", "unknown"},
         "observed_at": _json_datetime(record.observed_at),
         "observed_generation": record.observed_generation,
         "created_at": _json_datetime(record.created_at),
@@ -726,7 +728,7 @@ async def issue_position_protocol_catalog(
         raise ValueError("kit must be an ONT kit code such as SQK-LSK114")
     if isinstance(run_hours, bool) or not 0 < float(run_hours) <= 96:
         raise ValueError("run_hours must be greater than 0 and at most 96")
-    host_payload = get_position_protocol_options(position, kit)
+    host_payload = await asyncio.to_thread(get_position_protocol_options, position, kit)
     if not isinstance(host_payload, dict):
         raise RuntimeError(f"host-agent returned non-object protocol options payload: {host_payload!r}")
     blockers = _catalog_blockers(host_payload)
@@ -935,7 +937,7 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
         # compared against the real flow-cell and capability data without
         # sending it back to the browser.
         snapshot_kit = (preflight.source_snapshot or {}).get("kit") if isinstance(preflight.source_snapshot, dict) else None
-        live = get_position_protocol_options(record.position_id, snapshot_kit)
+        live = await asyncio.to_thread(get_position_protocol_options, record.position_id, snapshot_kit)
         invalid_reason = None
         if str(live.get("position") or record.position_id) != record.position_id:
             invalid_reason = "position_mismatch"
@@ -949,7 +951,7 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
         ):
             invalid_reason = "position_protocol_changed"
         else:
-            fresh_catalog = get_position_protocol_options(record.position_id, snapshot_kit)
+            fresh_catalog = await asyncio.to_thread(get_position_protocol_options, record.position_id, snapshot_kit)
             if not isinstance(fresh_catalog, dict):
                 invalid_reason = "protocol_capability_unavailable"
             elif str(fresh_catalog.get("device_type") or "").strip().lower() != "mk1d":
@@ -990,6 +992,7 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
         simplex_models = basecalling.get("simplex_models") or []
         start_request = {
             "confirm_start": True,
+            "start_request_id": record.id,
             "protocol_id": snapshot.get("protocol_id"),
             "basecalling_enabled": snapshot.get("basecalling_enabled") is True,
             "simplex_model": simplex_models[0] if simplex_models else None,
@@ -1004,11 +1007,18 @@ async def validate_armed_intent_start(run_id: str, payload: dict[str, Any]) -> d
                                   minknow_payload={"protocol_id": start_request["protocol_id"]})
         await session.commit()
         try:
-            started = request_host_agent(
+            started = await asyncio.to_thread(request_host_agent,
                 "POST", f"/ont/positions/{record.position_id}/protocol-runs", start_request, timeout=60.0,
             )
         except HostAgentRequestError as exc:
             detail = exc.detail.get("detail") if isinstance(exc.detail, dict) else exc.detail
+            known_rejection = (exc.status_code < 500 or
+                               isinstance(exc.detail, dict) and exc.detail.get("start_outcome") == "rejected")
+            if not known_rejection:
+                await _append_observation(session, record, event_type="start_outcome_unknown", state="unknown",
+                                          minknow_payload={"reason": "host_start_outcome_unknown"})
+                await session.commit()
+                raise RuntimeError("Lost contact with MinKNOW while starting. Check MinKNOW before retrying.") from exc
             await _append_observation(session, record, event_type="start_failed", state="failed",
                                       minknow_payload={"status_code": exc.status_code})
             await session.commit()
@@ -1040,7 +1050,7 @@ async def stop_instrument_run(run_id: str, *, confirm_stop: bool) -> dict[str, A
         if record.state not in {"starting", "running", "unknown"} or not record.minknow_run_id:
             raise ValueError(f"run is {record.state}; only an active MinKNOW run can be stopped")
         try:
-            request_host_agent("POST", f"/ont/runs/{record.minknow_run_id}/stop", {"confirm_stop": True}, timeout=30.0)
+            await asyncio.to_thread(request_host_agent, "POST", f"/ont/runs/{record.minknow_run_id}/stop", {"confirm_stop": True}, timeout=30.0)
         except HostAgentRequestError as exc:
             detail = exc.detail.get("detail") if isinstance(exc.detail, dict) else exc.detail
             raise ValueError(f"MinKNOW did not stop the run: {detail}") from exc
@@ -1162,9 +1172,32 @@ async def reconcile_instrument_run(run_id: str) -> dict[str, Any]:
     async with async_session() as session:
         record = await _load_run(session, run_id)
         if not record.minknow_run_id:
-            return await _run_response(session, record)
+            if record.state not in {"starting", "unknown"}:
+                return await _run_response(session, record)
+            try:
+                receipt = await asyncio.to_thread(
+                    request_host_agent, "GET",
+                    f"/ont/positions/{record.position_id}/start-requests/{record.id}",
+                )
+            except Exception:  # noqa: BLE001 - a missing response never authorizes another start
+                return await _run_response(session, record)
+            if (not isinstance(receipt, dict) or receipt.get("start_request_id") != record.id
+                    or receipt.get("position") != record.position_id):
+                return await _run_response(session, record)
+            if receipt.get("start_outcome") == "rejected":
+                await _append_observation(session, record, event_type="start_failed", state="failed",
+                                          minknow_payload={"source": "host_start_receipt"})
+                await session.commit()
+                return await _run_response(session, record)
+            recovered_id = str(receipt.get("minknow_run_id") or "").strip()
+            if receipt.get("start_outcome") != "accepted" or not recovered_id:
+                return await _run_response(session, record)
+            record.minknow_run_id = recovered_id
+            await _append_observation(session, record, event_type="start_accepted", state="starting",
+                                      minknow_payload={"source": "host_start_receipt"})
+            await session.commit()
         try:
-            host_payload = request_host_agent("GET", f"/ont/runs/{record.minknow_run_id}")
+            host_payload = await asyncio.to_thread(request_host_agent, "GET", f"/ont/runs/{record.minknow_run_id}")
         except Exception:  # noqa: BLE001 - terminal state must survive host loss
             if record.state in TERMINAL_RUN_STATES:
                 return await _run_response(session, record)
@@ -1445,7 +1478,7 @@ async def reconcile_active_runs_once(*, limit: int = 100) -> int:
     async with async_session() as session:
         run_ids = list((await session.execute(
             select(OntInstrumentRun.id)
-            .where(OntInstrumentRun.state.in_(ACTIVE_RUN_STATES), OntInstrumentRun.minknow_run_id.is_not(None))
+            .where(OntInstrumentRun.state.in_(ACTIVE_RUN_STATES))
             .order_by(OntInstrumentRun.observed_at, OntInstrumentRun.id)
             .limit(limit)
         )).scalars())
