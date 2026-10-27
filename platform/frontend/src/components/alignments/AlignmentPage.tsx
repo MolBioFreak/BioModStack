@@ -20,7 +20,8 @@ export default function AlignmentPage() {
     const query = new URLSearchParams(location.search);
     // Historical receipts can still carry the Job query form.
     const jobId = routeJobId || (location.pathname === '/alignments' ? query.get('job_id') : null);
-    const projectId = query.get('project_id');
+    // Project Results continuations use workspace_id; direct setup routes use project_id.
+    const projectId = query.get('project_id') || query.get('workspace_id');
     const receiptId = query.get('receipt_id') || resultId;
     const base = projectId && receiptId ? `/api/family-msa/projects/${encodeURIComponent(projectId)}/receipts/${encodeURIComponent(receiptId)}` : jobId ? `/api/family-msa/jobs/${encodeURIComponent(jobId)}` : null;
     const [selection, setSelection] = useState<{base: string | null; id: string}>({base: null, id: ''});

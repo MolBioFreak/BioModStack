@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import AlignmentPage from '../../src/components/alignments/AlignmentPage';
-import { parseFamilyAlignmentCapabilities } from '../../src/lib/projectManager';
+import { parseFamilyAlignmentCapabilities, parseProteinProjectCapabilityInventory } from '../../src/lib/projectManager';
 import { api } from '../../src/lib/api';
 
 const getSetup = vi.hoisted(() => vi.fn());
@@ -60,6 +60,13 @@ describe('alignment route receiver', () => {
         expect(parseFamilyAlignmentCapabilities(inventory).map(x => x.domain_kind)).toEqual(['protein_in_silico', 'ngs_molbio']);
         expect(() => parseFamilyAlignmentCapabilities({ ...inventory, capabilities: [row('family_msa_nucleic', 'protein_in_silico')] })).toThrow();
     });
+    it('accepts a model/mode native setup only when it matches its owner', () => {
+        const capability = { capability_id: 'protein.native.laproteina.evaluate', label: 'evaluate', state: 'ready', adapter_id: 'adapter', native_owner_id: 'laproteina:evaluate', setup_destination: '/submit?model=laproteina&mode=evaluate', source_requirements: [], follow_up_compatible_capability_ids: [] };
+        const inventory = {schema: 'bms.protein-project-workflow-picker.v1', capabilities: [capability]};
+        expect(parseProteinProjectCapabilityInventory(inventory).capabilities).toHaveLength(1);
+        expect(() => parseProteinProjectCapabilityInventory({...inventory, capabilities: [{...capability, setup_destination: '/submit?model=laproteina&mode=generate'}]})).toThrow();
+        expect(() => parseProteinProjectCapabilityInventory({...inventory, capabilities: [{...capability, setup_destination: '/submit?model=laproteina&mode=evaluate&mode=generate'}]})).toThrow();
+    });
     it('reopens exact retained Project documents and downloads', async () => {
         const get = vi.spyOn(api, 'get').mockImplementation(async (url) => ({data: String(url).includes('/documents/') ? {result_id:'a', rows:[{row_id:'r', label:'one', aligned:'AC'}]} : {artifacts:[{id:'a', role:'alignment'}]}}));
         const div = document.createElement('div'); const root = createRoot(div); const client = new QueryClient();
@@ -69,6 +76,15 @@ describe('alignment route receiver', () => {
         expect(div.querySelector('iframe[title="JBrowseMSA"]')?.getAttribute('sandbox')).toBe('allow-scripts');
         expect(div.textContent).not.toContain('JBrowseMSA is not connected');
         expect(div.querySelector('a[href="/api/family-msa/projects/p/receipts/r/artifacts/a"]')).not.toBeNull();
+        expect(get).toHaveBeenCalledWith('/api/family-msa/projects/p/receipts/r/documents/a', expect.anything());
+        await act(async () => root.unmount()); client.clear(); get.mockRestore();
+    });
+    it('receives the workspace_id Project Results continuation', async () => {
+        const get = vi.spyOn(api, 'get').mockImplementation(async url => ({data: String(url).includes('/documents/') ? {result_id:'a', rows:[{row_id:'r', label:'one', aligned:'AC'}]} : {artifacts:[{id:'a', role:'alignment'}]}}));
+        const div = document.createElement('div'); const root = createRoot(div); const client = new QueryClient();
+        await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/alignments?workspace_id=p&receipt_id=r']}><Routes><Route path="/alignments" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>); });
+        await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+        expect(div.textContent).toContain('Result: a');
         expect(get).toHaveBeenCalledWith('/api/family-msa/projects/p/receipts/r/documents/a', expect.anything());
         await act(async () => root.unmount()); client.clear(); get.mockRestore();
     });

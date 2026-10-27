@@ -1838,9 +1838,14 @@ function parseProteinProjectCapability(value: unknown, label: string): ProteinPr
     const alignmentOwner = alignmentModels.find((model) => nativeOwnerId === `${model}:family_msa`);
     const alignmentDestination = alignmentOwner !== undefined
         && destination === `/alignments?model=${alignmentOwner}&mode=family_msa`;
-    const submitDestination = destinationUrl.pathname === '/submit'
-        && destinationUrl.searchParams.getAll('template').length === 1
-        && destinationUrl.searchParams.get('template') === nativeOwnerId;
+    const submitDestination = destinationUrl.pathname === '/submit' && (
+        (destinationUrl.searchParams.getAll('template').length === 1
+            && destinationUrl.searchParams.get('template') === nativeOwnerId)
+        || (destinationUrl.searchParams.size === 2
+            && destinationUrl.searchParams.getAll('model').length === 1
+            && destinationUrl.searchParams.getAll('mode').length === 1
+            && `${destinationUrl.searchParams.get('model')}:${destinationUrl.searchParams.get('mode')}` === nativeOwnerId)
+    );
     if (destinationUrl.hash || (!alignmentDestination && !submitDestination)) {
         throw new Error(`${label} native owner does not match its setup destination.`);
     }
