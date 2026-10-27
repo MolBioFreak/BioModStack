@@ -1,6 +1,7 @@
 """Native fixed-family adapters; subprocess outcomes and observations remain separate."""
 import json
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from .formats import parse
@@ -64,6 +65,7 @@ def run_engine(request: AlignmentRequest, workdir: Path, executable=None, mafft=
     if s.engine == 'mafft': return run_mafft(request, workdir, executable or mafft, env)
     workdir = Path(workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
+    workdir = Path(tempfile.mkdtemp(prefix='attempt-', dir=workdir))
     # Synthetic, whitespace-free native IDs make duplicate/unsafe display IDs reversible.
     ids = [f'bmsrow{i:08d}' for i in range(1, len(request.roster.rows) + 1)]
     row_map = dict(zip(ids, [r.row_id for r in request.roster.rows]))
@@ -82,12 +84,15 @@ def run_engine(request: AlignmentRequest, workdir: Path, executable=None, mafft=
             start = time.monotonic()
             prep = run_mafft(prep_request, workdir/'guide-preparation', mafft, env)
             prep['wall_seconds'] = time.monotonic() - start
-            raw_path = workdir/'guide-preparation'/'input.fasta.tree'
+            raw_path = Path(prep['attempt_dir'])/'input.fasta.tree'
             if not raw_path.exists():
-                receipt = {'returncode': prep['returncode'] or 1, 'preparation': prep, 'error': 'MAFFT guide tree unavailable'}
+                receipt = {'attempt_dir': str(workdir), 'returncode': prep['returncode'] or 1, 'preparation': prep, 'error': 'MAFFT guide tree unavailable'}
                 (workdir/'receipt.json').write_text(json.dumps(receipt, indent=2)); return receipt
             raw = raw_path.read_text()
             mapped, report = map_mafft_tree(raw, ids)
+            # TWILIGHT's Newick reader requires compact, unquoted synthetic IDs.
+            mapped, _ = map_tree(mapped, {ident: ident for ident in ids}, ids)
+            mapped = ''.join(token for token in _TOKEN.findall(mapped) if not token.isspace()) + '\n'
         else:
             raw = s.guide_tree or ''
             reverse = {v: k for k, v in row_map.items()}
@@ -111,7 +116,7 @@ def run_engine(request: AlignmentRequest, workdir: Path, executable=None, mafft=
                 'missing_ids': sorted(set(ids)-set(headers)), 'unexpected_ids': sorted(set(headers)-set(ids))})
         except (ValueError, OSError) as exc:
             observations.append({'artifact': file.name, 'parse_error': str(exc)})
-    receipt = {'returncode': p.returncode, 'requested': request.model_dump(mode='json'),
+    receipt = {'attempt_dir': str(workdir), 'returncode': p.returncode, 'requested': request.model_dump(mode='json'),
         'effective_settings': s.model_dump(mode='json'), 'argv': args, 'wall_seconds': time.monotonic()-start,
         'artifacts': [p.name for p in workdir.iterdir() if p.is_file() and p.name != 'receipt.json'],
         'members': [p.name for p in files], 'observations': observations}

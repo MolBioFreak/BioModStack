@@ -98,3 +98,11 @@ class TwilightSettings(Closed):
 class AlignmentRequest(Closed):
     roster: SequenceSet
     settings: MafftSettings | FamsaSettings | MuscleSettings | TwilightSettings = Field(discriminator='engine')
+
+
+    @model_validator(mode='before')
+    @classmethod
+    def default_mafft_discriminator(cls, value):
+        if isinstance(value, dict) and isinstance(value.get('settings'), dict) and 'engine' not in value['settings']:
+            value = {**value, 'settings': {'engine': 'mafft', **value['settings']}}
+        return value

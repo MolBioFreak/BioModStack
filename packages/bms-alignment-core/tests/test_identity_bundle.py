@@ -57,4 +57,5 @@ def test_receipt_has_portable_arguments(tmp_path):
     result = run_mafft(request, tmp_path / 'work', str(binary))
     assert result['returncode'] == 0
     assert result['argv'][0] == 'engine' and result['argv'][-1] == 'input.fasta'
-    assert str(tmp_path) not in (tmp_path / 'work' / 'receipt.json').read_text()
+    from pathlib import Path
+    assert str(tmp_path) not in (Path(result['attempt_dir']) / 'receipt.json').read_text()
