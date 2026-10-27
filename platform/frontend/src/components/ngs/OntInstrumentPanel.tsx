@@ -157,6 +157,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
     const [sampleSelection, setSampleSelection] = useState<{ domainId: string; sampleId: string } | null>(null);
     const [selectedRunGeneration, setSelectedRunGeneration] = useState<SelectedRunGeneration | null>(null);
     const [selectedExternalPod5CandidateId, setSelectedExternalPod5CandidateId] = useState('');
+    const [rawSourceMode, setRawSourceMode] = useState<'upload' | 'existing'>('upload');
     const [rawUpload, setRawUpload] = useState<File | null>(null);
     const [rawIndexUpload, setRawIndexUpload] = useState<File | null>(null);
     const uploadedRawFiles = useRef(new Map<File, string>());
@@ -717,45 +718,68 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
 
             </> : null}
             <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4 text-[var(--text-primary)]">
-                <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Upload raw signal</h3>
-                <p className="text-xs text-[var(--text-secondary)]">Register POD5, SLOW5 or indexed BLOW5 in the selected Project. File provenance and validation stay in the ONT ledger. SLOW5 is retained as source data; waveform and Squigualiser views use validated indexed BLOW5.</p>
-                {!exactDomainExperimentId && rawSignalOnly ? <p role="status" className="text-sm text-[var(--text-secondary)]">Choose a Project (Projects button above) to import raw signal.</p> : null}
-                <fieldset disabled={importRawSignal.isPending} className="grid gap-3 sm:grid-cols-2">
-                    <label className="text-xs">Raw-signal file<input key={exactDomainExperimentId ?? 'no-project'} aria-label="Raw-signal file" type="file" accept=".pod5,.slow5,.blow5" onChange={(e) => { setRawUpload(e.target.files?.[0] ?? null); setRawIndexUpload(null); uploadedRawFiles.current.clear(); rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`; }} className="mt-1 block w-full text-sm" /></label>
-                    {rawUpload?.name.toLowerCase().endsWith('.blow5') ? <label className="text-xs">Matching BLOW5 index<input aria-label="BLOW5 index" type="file" accept=".idx" onChange={(e) => { setRawIndexUpload(e.target.files?.[0] ?? null); uploadedRawFiles.current = new Map(); rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`; }} className="mt-1 block w-full text-sm" /></label> : null}
-                </fieldset>
-                <button type="button" disabled={!exactDomainExperimentId || !rawUpload || importRawSignal.isPending || (rawUpload.name.toLowerCase().endsWith('.blow5') && !rawIndexUpload)} onClick={() => importRawSignal.mutate()} className="rounded-lg border border-[var(--accent-primary)] px-3 py-2 text-sm font-semibold text-[var(--accent-primary)] disabled:opacity-50">{importRawSignal.isPending ? 'Importing raw signal…' : 'Import raw signal'}</button>
-                {importRawSignal.isError ? <p role="alert" className="text-sm text-[var(--text-primary)]">{errorMessage(importRawSignal.error, 'Raw-signal import failed.')}</p> : null}
-                {importRawSignal.isSuccess ? <p role="status" className="text-sm text-[var(--text-secondary)]">{message}</p> : null}
-            </div>
-            <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
                 <div>
-                    <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Register existing POD5</h3>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Use a POD5 already on this computer instead of uploading it. The file is not moved or changed.</p>
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Add raw signal</h3>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Register POD5, SLOW5 or indexed BLOW5 in the selected Project. File provenance and validation stay in the ONT ledger. SLOW5 is retained as source data; waveform and Squigualiser views use validated indexed BLOW5.</p>
                 </div>
-                {externalPod5CandidatesQuery.isError ? <p role="alert" className="text-sm text-amber-100">Existing POD5 candidates are unavailable: {errorMessage(externalPod5CandidatesQuery.error, 'unknown candidate-list failure')}</p> : null}
-                <select
-                    aria-label="Existing POD5 candidate"
-                    value={selectedExternalPod5CandidateId}
-                    onChange={(event) => setSelectedExternalPod5CandidateId(event.target.value)}
-                    disabled={externalPod5CandidatesQuery.isLoading || registerExternalPod5.isPending}
-                    className="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] disabled:opacity-50"
-                >
-                    <option value="">Select one existing POD5…</option>
-                    {(externalPod5CandidatesQuery.data?.candidates ?? []).map((candidate) => (
-                        <option key={candidate.candidate_id} value={candidate.candidate_id}>
-                            {candidate.display_name} · {(candidate.size_bytes / (1024 ** 3)).toFixed(2)} GiB
-                        </option>
+                {!exactDomainExperimentId && rawSignalOnly ? <p role="status" className="text-sm text-[var(--text-secondary)]">Choose a Project (Projects button above) to import raw signal.</p> : null}
+                <div role="radiogroup" aria-label="Raw-signal source" className="flex flex-wrap gap-2">
+                    {([
+                        ['upload', 'Upload a file', 'POD5, SLOW5 or BLOW5 (with its .idx index)'],
+                        ['existing', 'Use a POD5 on this computer', 'Registered in place instead of uploading; the file is not moved or changed'],
+                    ] as const).map(([value, label, detail]) => (
+                        <button
+                            key={value}
+                            type="button"
+                            role="radio"
+                            aria-checked={rawSourceMode === value}
+                            onClick={() => setRawSourceMode(value)}
+                            className={`rounded-lg border px-3 py-2 text-left text-sm ${rawSourceMode === value
+                                ? 'border-[var(--accent-primary)] bg-[var(--bg-secondary)] font-semibold text-[var(--text-primary)]'
+                                : 'border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]'}`}
+                        >
+                            <span className="block">{label}</span>
+                            <span className="block text-xs font-normal text-[var(--text-secondary)]">{detail}</span>
+                        </button>
                     ))}
-                </select>
-                <button
-                    type="button"
-                    disabled={!exactDomainExperimentId || !selectedExternalPod5CandidateId || registerExternalPod5.isPending}
-                    onClick={() => registerExternalPod5.mutate()}
-                    className="rounded-lg border border-cyan-500/50 px-3 py-2 text-sm font-semibold text-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                    {registerExternalPod5.isPending ? 'Registering POD5…' : 'Register selected POD5'}
-                </button>
+                </div>
+                {rawSourceMode === 'upload' ? (
+                    <div className="space-y-3">
+                        <fieldset disabled={importRawSignal.isPending} className="grid gap-3 sm:grid-cols-2">
+                            <label className="text-xs">Raw-signal file<input key={exactDomainExperimentId ?? 'no-project'} aria-label="Raw-signal file" type="file" accept=".pod5,.slow5,.blow5" onChange={(e) => { setRawUpload(e.target.files?.[0] ?? null); setRawIndexUpload(null); uploadedRawFiles.current.clear(); rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`; }} className="mt-1 block w-full text-sm" /></label>
+                            {rawUpload?.name.toLowerCase().endsWith('.blow5') ? <label className="text-xs">Matching BLOW5 index<input aria-label="BLOW5 index" type="file" accept=".idx" onChange={(e) => { setRawIndexUpload(e.target.files?.[0] ?? null); uploadedRawFiles.current = new Map(); rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`; }} className="mt-1 block w-full text-sm" /></label> : null}
+                        </fieldset>
+                        <button type="button" disabled={!exactDomainExperimentId || !rawUpload || importRawSignal.isPending || (rawUpload.name.toLowerCase().endsWith('.blow5') && !rawIndexUpload)} onClick={() => importRawSignal.mutate()} className="rounded-lg border border-[var(--accent-primary)] px-3 py-2 text-sm font-semibold text-[var(--accent-primary)] disabled:opacity-50">{importRawSignal.isPending ? 'Importing raw signal…' : 'Import raw signal'}</button>
+                        {importRawSignal.isError ? <p role="alert" className="text-sm text-[var(--text-primary)]">{errorMessage(importRawSignal.error, 'Raw-signal import failed.')}</p> : null}
+                        {importRawSignal.isSuccess ? <p role="status" className="text-sm text-[var(--text-secondary)]">{message}</p> : null}
+                    </div>
+                ) : (
+                    <div className="space-y-3">
+                        {externalPod5CandidatesQuery.isError ? <p role="alert" className="text-sm text-amber-100">Existing POD5 candidates are unavailable: {errorMessage(externalPod5CandidatesQuery.error, 'unknown candidate-list failure')}</p> : null}
+                        <select
+                            aria-label="Existing POD5 candidate"
+                            value={selectedExternalPod5CandidateId}
+                            onChange={(event) => setSelectedExternalPod5CandidateId(event.target.value)}
+                            disabled={externalPod5CandidatesQuery.isLoading || registerExternalPod5.isPending}
+                            className="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] disabled:opacity-50"
+                        >
+                            <option value="">Select one existing POD5…</option>
+                            {(externalPod5CandidatesQuery.data?.candidates ?? []).map((candidate) => (
+                                <option key={candidate.candidate_id} value={candidate.candidate_id}>
+                                    {candidate.display_name} · {(candidate.size_bytes / (1024 ** 3)).toFixed(2)} GiB
+                                </option>
+                            ))}
+                        </select>
+                        <button
+                            type="button"
+                            disabled={!exactDomainExperimentId || !selectedExternalPod5CandidateId || registerExternalPod5.isPending}
+                            onClick={() => registerExternalPod5.mutate()}
+                            className="rounded-lg border border-cyan-500/50 px-3 py-2 text-sm font-semibold text-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            {registerExternalPod5.isPending ? 'Registering POD5…' : 'Register selected POD5'}
+                        </button>
+                    </div>
+                )}
             </div>
 
             <div className="space-y-4 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">

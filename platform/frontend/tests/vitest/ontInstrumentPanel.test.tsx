@@ -295,4 +295,24 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
         const options = [...container.querySelectorAll('option')].map((option) => option.textContent);
         expect(options).toContain('project-run-101 · completed · version 1');
     });
+    it('offers upload and existing-POD5 registration as two choices in one Add raw signal card', async () => {
+        const fetchCandidates = (await import('../../src/lib/api')).fetchOntExternalPod5Candidates as unknown as ReturnType<typeof vi.fn>;
+        fetchCandidates.mockResolvedValueOnce({ candidates: [{ candidate_id: 'pod5-candidate-1', display_name: 'run.pod5', size_bytes: 1024 ** 3 }] });
+        await act(async () => root.render(panel(true)));
+        await flush();
+        const headings = [...container.querySelectorAll('h3')].map((h) => h.textContent);
+        expect(headings).toContain('Add raw signal');
+        expect(headings).not.toContain('Upload raw signal');
+        expect(headings).not.toContain('Register existing POD5');
+        const choices = [...container.querySelectorAll('[role="radiogroup"][aria-label="Raw-signal source"] [role="radio"]')];
+        expect(choices.map((choice) => choice.getAttribute('aria-checked'))).toEqual(['true', 'false']);
+        expect(container.querySelector('input[aria-label="Raw-signal file"]')).not.toBeNull();
+        expect(container.querySelector('select[aria-label="Existing POD5 candidate"]')).toBeNull();
+        await act(async () => (choices[1] as HTMLButtonElement).click());
+        expect(container.querySelector('input[aria-label="Raw-signal file"]')).toBeNull();
+        const select = container.querySelector<HTMLSelectElement>('select[aria-label="Existing POD5 candidate"]')!;
+        expect(select).not.toBeNull();
+        expect([...select.options].map((option) => option.value)).toContain('pod5-candidate-1');
+        expect([...container.querySelectorAll('button')].some((b) => b.textContent === 'Register selected POD5')).toBe(true);
+    });
 });
