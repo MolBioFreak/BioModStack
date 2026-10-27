@@ -2909,9 +2909,15 @@ async def launch_nextflow_job(
         await launch_msa_batch_job(job_id, params, output_dir)
         return
 
+    if model_id in {'family_msa_protein', 'family_msa_nucleic'} and transient_runner:
+        from services.family_msa.execution import run_owned_job
+        await run_owned_job(job_id, params, output_dir, async_session)
+        return
+
     # Use a mutable launch-params copy so retries can downshift Protenix safely.
     from services.msa_policy import apply_msa_policy
-    launch_params: Dict[str, Any] = apply_msa_policy(model_id, params)
+    launch_params: Dict[str, Any] = (dict(params) if model_id in {'family_msa_protein', 'family_msa_nucleic'}
+                                     else apply_msa_policy(model_id, params))
 
     structure_validator = str(launch_params.get("structure_validator", "")).strip().lower()
     uses_protenix_validation = _is_protenix_job(model_id, launch_params) or structure_validator == "protenix"
@@ -3026,7 +3032,7 @@ async def launch_nextflow_job(
             and launch_workflow_id == "ont_fastq_qc"
             and launch_input_mode == "fastq"
         )
-        if model_id not in {"conformational_mapping", "frustrampnn"} and not is_fastq_only_ont_launch:
+        if model_id not in {"conformational_mapping", "frustrampnn", "family_msa_protein", "family_msa_nucleic"} and not is_fastq_only_ont_launch:
             dynamic_gpu_cpus = await _resolve_dynamic_gpu_cpu_share(session, job, launch_params)
         if dynamic_gpu_cpus is not None:
             launch_params["cpus_per_gpu"] = dynamic_gpu_cpus
@@ -3051,7 +3057,7 @@ async def launch_nextflow_job(
                 msa_params = {**launch_params, **prepared_invocation.native_parameters}
             # Provider work is controller-owned; transfer is independent of
             # result-return policy. Only prepared artifact fields bind science.
-            prepared_params = launch_params if checkpoint_resume else await _prepare_launch_msa_on_controller(
+            prepared_params = launch_params if checkpoint_resume or model_id in {'family_msa_protein', 'family_msa_nucleic'} else await _prepare_launch_msa_on_controller(
                 session, job, model_id, msa_params, Path(output_dir) / 'prepared-msa', remote_launch_authority,
                 native_invocation=prepared_invocation)
             if model_id in {'esmfold2', 'esmfold2_experimental'} and 'esmf_msa_preparation' in prepared_params:
