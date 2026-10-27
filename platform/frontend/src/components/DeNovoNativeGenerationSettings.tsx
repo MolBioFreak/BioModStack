@@ -71,6 +71,10 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
     const [recipe, setRecipe] = useState<string | undefined>(() => typeof initialValues.native_recipe === 'string' ? initialValues.native_recipe : undefined);
     const [controlDrafts, setControlDrafts] = useState(() => record(initialValues.native_control_drafts));
     const activeMode = model === 'complexa' ? ['evaluate', 'analysis'].includes(String(request.operation ?? mode)) ? 'evaluate' : 'generate' : mode;
+    const readbackIdentity = JSON.stringify([model, activeMode, request]);
+    const readbackGeneration = useRef({ identity: readbackIdentity, value: 0 });
+    if (readbackGeneration.current.identity !== readbackIdentity) readbackGeneration.current = { identity: readbackIdentity, value: readbackGeneration.current.value + 1 };
+    const [effectiveReadback, setEffectiveReadback] = useState<{ generation: number; effective: Record<string, any> }>();
     const [inspections, setInspections] = useState<Record<string, { receipt: StructureMaterialization; binding: string }>>({});
     const [visual, setVisual] = useState<{ slot: string; receipt: StructureMaterialization; binding: string; identities: Rfd4NativeSelectionIdentity[] }>();
     const visualResult = useMemo(() => visual ? buildRfd4NativeSelection(visual.identities, { ...visual.receipt, documentId: visual.receipt.path }) : undefined, [visual]);
@@ -194,8 +198,8 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
             <DeNovoNativePreview request={payload as Partial<Job>} />
         </ProteinDesignPanel></div>
         <div hidden={section !== 'Native settings'}><ProteinDesignPanel title="Native settings" description="Unchanged settings use the selected profile.">
-            <NativeProfileSnapshot model={model} mode={activeMode} request={request} discovery={record(inventory.data).native_profile_defaults} />
-            {schema && model === 'rfd4_proteina' && <Rfd4ExpertSettings discovery={record(inventory.data).native_profile_defaults} request={request} schema={schema} onChange={changeRequest} fileSlots={Object.fromEntries(Object.entries(nativeDraft.sources ?? {}).filter(([, value]) => 'kind' in value && value.kind === 'file').map(([key, value]) => [key, value.path ?? '']))} />}
+            <NativeProfileSnapshot model={model} mode={activeMode} request={request} discovery={record(inventory.data).native_profile_defaults} generation={readbackGeneration.current.value} onReadback={(generation, effective) => setEffectiveReadback(effective ? { generation, effective } : undefined)} />
+            {schema && model === 'rfd4_proteina' && <Rfd4ExpertSettings discovery={record(inventory.data).native_profile_defaults} effectiveConfig={effectiveReadback?.generation === readbackGeneration.current.value ? effectiveReadback.effective : undefined} request={request} schema={schema} onChange={changeRequest} fileSlots={Object.fromEntries(Object.entries(nativeDraft.sources ?? {}).filter(([, value]) => 'kind' in value && value.kind === 'file').map(([key, value]) => [key, value.path ?? '']))} />}
             {schema && model === 'complexa' && Object.entries(schema.properties ?? {}).filter(([key]) => !primary.has(key)).map(([key, child]) => <NativeSettingsDisclosure key={key} summary={<span>{child.title ?? key.replaceAll('_', ' ')}</span>}>
                 {() => renderField(key, child)}
             </NativeSettingsDisclosure>)}

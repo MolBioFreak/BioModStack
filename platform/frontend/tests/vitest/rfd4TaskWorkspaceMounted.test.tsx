@@ -260,6 +260,28 @@ it.skipIf(!process.env.BMS_TEST_NATIVE_READBACK)('replays actual installed combi
     await click('Design'); await edit('Seed','1'); await click('Native settings');
     expect(document.querySelector('[aria-label="Selected native effective configuration"]')).toBeNull(); expect(document.body.textContent).toContain('Request changed since readback');
 });
+it('projects selected effective scalar values without authoring them and invalidates A→B→A readback', async () => {
+    const adapter = api.defaults.adapter as Function;
+    api.defaults.adapter = async config => {
+        if (config.url?.endsWith('/generation-settings/preview')) return { config, data: { effective_config: { seed: 0, batch_size: 9, verbose: false, generation: { n_recycle: 4 } } }, status: 200, statusText: 'OK', headers: {} };
+        return adapter(config);
+    };
+    await mount('rfd4_proteina', { rfd4_request: {} });
+    await click('Native settings'); await disclose('Profile reference'); await click('Read selected effective configuration');
+    await disclose('Primary amount overrides'); await disclose('Runtime, output and retained assets');
+    expect((document.querySelector('[aria-label="Random seed"]') as HTMLInputElement).value).toBe('0');
+    const batch = document.querySelector<HTMLInputElement>('[data-rfd4-override="batch_size"] input')!;
+    expect(batch.value).toBe('9');
+    expect((document.querySelector('[aria-label="Verbose"]') as HTMLInputElement).checked).toBe(false);
+    expect(draft.rfd4_request).toEqual({});
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(batch, '3'); batch.dispatchEvent(new Event('input', { bubbles: true })); });
+    const reset = document.querySelector<HTMLButtonElement>('[aria-label="Use profile value for batch_size"]')!;
+    await act(async () => reset.click()); await settle();
+    expect(draft.rfd4_request).toEqual({});
+    expect(document.querySelector<HTMLInputElement>('[data-rfd4-override="batch_size"] input')!.value).toBe('');
+    expect(document.body.textContent).toContain('Request changed since readback');
+});
+
 it('native readback failure is observational and does not alter request or run availability', async () => {
     const adapter = api.defaults.adapter as Function;
     api.defaults.adapter = async config => {

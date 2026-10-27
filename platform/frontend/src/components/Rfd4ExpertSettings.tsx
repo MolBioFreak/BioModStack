@@ -29,8 +29,8 @@ function selectedGenerationSnapshot(request: Record<string, any>, schema: Schema
     return nativeRecord(nativeRecord(data.generation_by_group)[group])[String(selection)];
 }
 
-function ExpertScalar({ label, schema, value, inherited, onChange }: {
-    label: string; schema: Schema; value: unknown; inherited: unknown; onChange: (value: unknown) => void;
+function ExpertScalar({ label, schema, value, inherited, inheritedSource, onChange }: {
+    label: string; schema: Schema; value: unknown; inherited: unknown; inheritedSource?: string; onChange: (value: unknown) => void;
 }) {
     const types = Array.isArray(schema.type) ? schema.type : [schema.type];
     const kind = types.find(type => type !== 'null');
@@ -43,7 +43,8 @@ function ExpertScalar({ label, schema, value, inherited, onChange }: {
         {schema.description && <p className="text-sm text-slate-400">{schema.description}</p>}
         {kind === 'boolean' ? <label className="flex items-center gap-2"><input aria-label={title} type="checkbox" ref={node => { if (node) node.indeterminate = shown === undefined || shown === null; }} checked={shown === true} onChange={event => onChange(event.target.checked)} />{title}</label>
             : <label className="block text-sm">{title}<input aria-label={title} className={controlClasses} type="number" step={kind === 'integer' ? 1 : 'any'} min={schema.minimum} max={schema.maximum} value={typeof shown === 'number' || typeof shown === 'string' ? shown : ''} placeholder={known ? undefined : 'Not reported for this selection'} onChange={event => onChange(event.target.value === '' ? '' : Number(event.target.value))} /></label>}
-        <p className="text-xs text-slate-400">{value === undefined ? known ? `Inherited profile reference: ${JSON.stringify(inherited)}. Not a requested override.` : 'Inherited value not reported for this selection. Read selected effective configuration in Profile reference.' : value === '' ? 'Cleared override retained. Enter a value or use the profile value.' : `Requested override: ${JSON.stringify(value)}`}</p>
+        <p className="text-xs text-slate-400">{value === undefined ? known ? `${inheritedSource ?? 'Inherited profile reference'}: ${JSON.stringify(inherited)}. Not a requested override.` : 'Inherited value not reported for this selection. Read selected effective configuration in Profile reference.' : value === '' ? 'Cleared override retained. Enter a value or use the profile value.' : `Requested override: ${JSON.stringify(value)}`}</p>
+        {shown === null && <p className="text-xs text-slate-400">Auto / none (native null)</p>}
         {(schema.minimum !== undefined || schema.maximum !== undefined || schema.exclusiveMinimum !== undefined || schema.exclusiveMaximum !== undefined) && <p className="text-xs text-slate-400">Native range: {schema.minimum !== undefined ? `≥ ${schema.minimum}` : schema.exclusiveMinimum !== undefined ? `> ${schema.exclusiveMinimum}` : 'unbounded'} to {schema.maximum !== undefined ? `≤ ${schema.maximum}` : schema.exclusiveMaximum !== undefined ? `< ${schema.exclusiveMaximum}` : 'unbounded'}</p>}
         {schema['x-units'] != null && <p>Units: {String(schema['x-units'])}</p>}
         {types.includes('null') && <button type="button" onClick={() => onChange(null)}>Set explicit null for {title}</button>}
@@ -66,16 +67,18 @@ function collectionKind(child: Schema, root: Schema, seen = new Set<string>()): 
         if (kind) return kind;
     }
 }
-export function NativeProfileSnapshot({ model, mode, request, discovery }: { model: string; mode: string; request: Record<string, any>; discovery: unknown }) {
+export function NativeProfileSnapshot({ model, mode, request, discovery, generation, onReadback }: { model: string; mode: string; request: Record<string, any>; discovery: unknown; generation: number; onReadback?: (generation: number, effective: Record<string, any> | undefined) => void }) {
     const identity = JSON.stringify([model, mode, request]);
-    const [readback, setReadback] = useState<{ identity: string; result?: Record<string, any>; error?: string }>();
+    const [readback, setReadback] = useState<{ identity: string; generation: number; result?: Record<string, any>; error?: string }>();
     const [busy, setBusy] = useState(false);
     const inspect = async () => {
         setBusy(true);
+        onReadback?.(generation, undefined);
         try {
             const response = await api.post(`/api/models/${model}/generation-settings/preview`, request, { params: { mode } });
-            setReadback({ identity, result: response.data });
-        } catch (error) { setReadback({ identity, error: error instanceof Error ? error.message : String(error) }); }
+            setReadback({ identity, generation, result: response.data });
+            if (response.data?.effective_config && typeof response.data.effective_config === 'object' && !Array.isArray(response.data.effective_config)) onReadback?.(generation, response.data.effective_config);
+        } catch (error) { setReadback({ identity, generation, error: error instanceof Error ? error.message : String(error) }); }
         finally { setBusy(false); }
     };
 
@@ -89,8 +92,8 @@ export function NativeProfileSnapshot({ model, mode, request, discovery }: { mod
         {snapshots.map(([label, value]) => <section key={String(label)}><h4>{String(label)}</h4><pre className="whitespace-pre-wrap break-all max-h-96 overflow-auto" aria-label={`Native snapshot ${label}`}>{value === undefined ? 'Snapshot not reported for this selection.' : JSON.stringify(value, null, 2)}</pre></section>)}
         {model === 'rfd4_proteina' && <section><button type="button" disabled={busy} onClick={() => void inspect()} className="rounded border px-3 py-2">{busy ? 'Reading native composition…' : 'Read selected effective configuration'}</button>
             <p>Reads configuration only. Does not run a model.</p>
-            {readback && readback.identity !== identity && <p role="status">Request changed since readback. Read again for current effective values.</p>}
-            {readback?.identity === identity && (readback.error ? <p role="status">Native readback unavailable: {readback.error}. Requested values are unchanged.</p> : <><p className="break-all">Selected runtime: {String(readback.result?.runtime_image ?? 'not reported')}</p><pre aria-label="Selected native effective configuration" className="whitespace-pre-wrap break-all max-h-96 overflow-auto">{JSON.stringify(readback.result?.effective_config, null, 2)}</pre></>)}
+            {readback && (readback.identity !== identity || readback.generation !== generation) && <p role="status">Request changed since readback. Read again for current effective values.</p>}
+            {readback?.identity === identity && readback.generation === generation && (readback.error ? <p role="status">Native readback unavailable: {readback.error}. Requested values are unchanged.</p> : <><p className="break-all">Selected runtime: {String(readback.result?.runtime_image ?? 'not reported')}</p><pre aria-label="Selected native effective configuration" className="whitespace-pre-wrap break-all max-h-96 overflow-auto">{JSON.stringify(readback.result?.effective_config, null, 2)}</pre></>)}
         </section>}
         <p>Requested overrides</p>
         <pre className="whitespace-pre-wrap break-all max-h-64 overflow-auto" aria-label="Snapshot requested overrides">{JSON.stringify(request, null, 2)}</pre>
@@ -98,7 +101,7 @@ export function NativeProfileSnapshot({ model, mode, request, discovery }: { mod
 }
 
 /** Named model-specific expert sections reuse native typed leaves, not a second schema/composer. */
-export function Rfd4ExpertSettings({ request, schema, onChange, fileSlots = {}, discovery }: { request: Record<string, any>; schema: Schema; onChange: (v: Record<string, any>) => void; fileSlots?: Record<string, string>; discovery?: unknown }) {
+export function Rfd4ExpertSettings({ request, schema, onChange, fileSlots = {}, discovery, effectiveConfig }: { request: Record<string, any>; schema: Schema; onChange: (v: Record<string, any>) => void; fileSlots?: Record<string, string>; discovery?: unknown; effectiveConfig?: Record<string, any> }) {
     const generationSnapshot = selectedGenerationSnapshot(request, schema, discovery);
     const [step, setStep] = useState('');
     const [metricQuery, setMetricQuery] = useState('');
@@ -134,9 +137,10 @@ export function Rfd4ExpertSettings({ request, schema, onChange, fileSlots = {}, 
         const kind = collectionKind(child, schema);
         const types = Array.isArray(child.type) ? child.type : [child.type];
         const scalar = !child.enum && !Object.hasOwn(child, 'const') && types.some(type => ['integer', 'number', 'boolean'].includes(String(type))) && types.every(type => ['integer', 'number', 'boolean', 'null'].includes(String(type)));
-        const inherited = path[0] === 'settings' && path[1] === 'generation' ? path.slice(2).reduce<any>((v, key) => v?.[key], generationSnapshot) : undefined;
+        const effective = path[0] === 'settings' ? path.slice(1).reduce<any>((v, key) => v?.[key], effectiveConfig) : undefined;
+        const inherited = effective !== undefined ? effective : path[0] === 'settings' && path[1] === 'generation' ? path.slice(2).reduce<any>((v, key) => v?.[key], generationSnapshot) : undefined;
         return <div key={label} data-rfd4-override={label}>
-            {scalar ? <ExpertScalar label={label} schema={child} value={value} inherited={inherited} onChange={v => changeLeaf(path, v)} /> : kind && value === undefined ? <fieldset className="space-y-2 rounded-lg border border-slate-700 p-3"><legend>{readableLabel(label, child)}</legend>
+            {scalar ? <ExpertScalar label={label} schema={child} value={value} inherited={inherited} inheritedSource={effective !== undefined ? 'Selected native effective value' : undefined} onChange={v => changeLeaf(path, v)} /> : kind && value === undefined ? <fieldset className="space-y-2 rounded-lg border border-slate-700 p-3"><legend>{readableLabel(label, child)}</legend>
                 <code className="block text-xs text-slate-400">{String(child['x-native-mapping'] ?? path.join('.'))}</code>
                 <p>From selected profile</p>
                 {inherited !== undefined && <p className="text-xs text-slate-400 break-all">Profile reference (not a requested override): {JSON.stringify(inherited)}</p>}
