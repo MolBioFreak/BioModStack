@@ -113,6 +113,48 @@ it('keeps RFD3 selected for DNA intent and offers five engines with official lin
     expect(mocks.submit).not.toHaveBeenCalled();
 });
 
+it('makes RFD3 context optional explicit and submits the selected source-free request', async () => {
+    await mount('/submit?template=protein_modification_experimental&generator=rfd3');
+    await select('Goal', 'dna_conditioned');
+    expect(document.body.textContent).toContain('does not automatically add context or conditions');
+    await select('Length selection', 'exact');
+    const exact = [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Exact length')!.querySelector('input')!;
+    exact.setAttribute('data-exact-length', ''); await input('[data-exact-length]', '147');
+    await select('Length selection', 'range');
+    expect([...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Minimum length')!.querySelector('input')!.value).toBe('100');
+    await select('Length selection', 'exact');
+    expect([...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Exact length')!.querySelector('input')!.value).toBe('147');
+    await click('Advanced'); await click('Simple');
+    await click('Generate candidates');
+    expect(mocks.submit).toHaveBeenCalledTimes(1);
+    const payload = mocks.submit.mock.calls[0][0] as any;
+    expect(payload.params).toMatchObject({ generator: 'rfd3', generation_mode: 'unconditional_monomer', min_length: 147, max_length: 147 });
+    expect(payload.params).not.toHaveProperty('input_structure');
+    expect(payload.params).not.toHaveProperty('design_task');
+});
+
+it('retains the last task of an inactive engine through template save and load', async () => {
+    await mount('/submit?template=protein_modification_experimental&generator=rfd3');
+    await select('Goal', 'rna_conditioned');
+    await select('Engine', 'disco');
+    await click('Advanced');
+    await click('Template Manager');
+    await input('input[placeholder="e.g., My Boltz Config"]', 'Task memory');
+    await click('Save Template');
+    expect(mocks.saved[0].params.editor_state).toMatchObject({ suite_view: 'advanced', suite_last_tasks: { rfd3: 'rna_conditioned', disco: 'unconditional' } });
+    await click('Load');
+    await select('Engine', 'rfd3');
+    const goal = [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Goal')!.querySelector('select')!;
+    expect(goal.value).toBe('rna_conditioned');
+    expect(document.querySelector('button[aria-pressed="true"]')?.textContent).toBeTruthy();
+});
+
+it('does not infer RFD3 from shared legacy lengths', async () => {
+    await mount('/submit', { model_id: 'protein_modification_experimental', mode: 'de_novo_design', name: 'Legacy', params: { min_length: 73, max_length: 99 } });
+    const engine = [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Engine')!.querySelector('select')!;
+    expect(engine.value).toBe('rfd4_proteina');
+});
+
 it('navigation metadata preserves context, native aliases and false/empty scientific values', () => {
     expect(deNovoRouteValues(new URLSearchParams('template=protein_local_redesign'))).toMatchObject({ modification_mode: 'rfd3_local_redesign' });
     const values = { backend: 'disco', disco_na_sequence: '', dump_trajectories: false, seed: 0 };

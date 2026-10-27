@@ -68,8 +68,9 @@ const initialString = (values: Record<string, unknown> | undefined, key: string,
     return typeof value === 'string' ? value : fallback;
 };
 
-const initialNumber = (values: Record<string, unknown> | undefined, key: string, fallback: number): number | '' => {
+const initialNumber = (values: Record<string, unknown> | undefined, key: string, fallback: number | ''): number | '' => {
     if (values?.[key] === '') return '';
+    if (values?.[key] === undefined) return fallback;
     const value = Number(values?.[key]);
     return Number.isFinite(value) ? value : fallback;
 };
@@ -85,7 +86,7 @@ const resolveNavigation = (values?: Record<string, unknown>): DeNovoNavigationSt
     if (modification_mode !== 'de_novo_design') return { modification_mode, ...(values?.generator === 'rfd4_proteina' ? { generator: 'rfd4_proteina', design_task: 'refine', ...nativeMode } : {}) };
     const engine = values?.generator ?? values?.backend;
     // Historical RFD3 drafts often predate an explicit generator field.
-    const legacyRfd3 = ['generation_mode', 'min_length', 'max_length', 'dump_trajectories'].some(key => Object.hasOwn(values ?? {}, key));
+    const legacyRfd3 = values?.generation_mode === 'unconditional_monomer';
     return {
         modification_mode,
         ...nativeMode,
@@ -119,7 +120,11 @@ export function ProteinModificationTemplate({
         initialized.current = true;
     }
     const callbacks = useRef({ onDraftChange, onNavigationChange });
-    const lastTaskByEngine = useRef<Record<string, string>>({ [navigation.generator ?? 'rfd4_proteina']: navigation.design_task ?? 'unconditional' });
+    const lastTaskByEngine = useRef<Record<string, string>>({
+        ...(initialValues?.suite_last_tasks && typeof initialValues.suite_last_tasks === 'object' && !Array.isArray(initialValues.suite_last_tasks) ? initialValues.suite_last_tasks as Record<string, string> : {}),
+        [navigation.generator ?? 'rfd4_proteina']: navigation.design_task ?? 'unconditional',
+    });
+    const [suiteView, setSuiteView] = useState<'simple' | 'advanced'>(initialValues?.suite_view === 'advanced' ? 'advanced' : 'simple');
     const activeRequest = useRef<Record<string, unknown>>({});
     callbacks.current = { onDraftChange, onNavigationChange };
     const validatedRedesign = navigation.modification_mode === 'region_redesign';
@@ -136,8 +141,8 @@ export function ProteinModificationTemplate({
         const { native_job_request, ...editor } = draft;
         activeRequest.current = Object.hasOwn(draft, 'native_job_request') ? { native_job_request } : {};
         drafts.current[activeKey] = { ...editor, modification_mode: savedMode };
-        callbacks.current.onDraftChange?.({ ...draft, ...navigation, ...(navigation.generator === 'complexa' && typeof draft.native_mode === 'string' ? { native_mode: draft.native_mode } : {}), modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) });
-    }, [activeKey, navigation.modification_mode, navigation.generator, navigation.design_task, navigation.native_mode, savedMode]);
+        callbacks.current.onDraftChange?.({ ...draft, ...navigation, suite_view: suiteView, suite_last_tasks: { ...lastTaskByEngine.current }, ...(navigation.generator === 'complexa' && typeof draft.native_mode === 'string' ? { native_mode: draft.native_mode } : {}), modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) });
+    }, [activeKey, navigation.modification_mode, navigation.generator, navigation.design_task, navigation.native_mode, savedMode, suiteView]);
     const changeNavigation = (state: DeNovoNavigationState) => {
         const next = resolveNavigation({ ...state });
         // Only shared intent seeds an untouched engine draft. Never translate
@@ -184,6 +189,9 @@ export function ProteinModificationTemplate({
                     aria-pressed={mode === card.id} onClick={() => chooseMode(card.id)}
                     className={`rounded-lg px-3 py-1.5 text-sm ${mode === card.id ? 'bg-[var(--bg-tertiary)] text-[var(--accent-primary)]' : ''}`}>{card.label}</button>)}
             </nav>
+            <div role="group" aria-label="Editor detail" className="flex gap-2">
+                {(['simple', 'advanced'] as const).map(view => <button type="button" key={view} aria-pressed={suiteView === view} onClick={() => setSuiteView(view)} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">{view === 'simple' ? 'Simple' : 'Advanced'}</button>)}
+            </div>
             {mode === 'de_novo_design' ? <>
                 <div className="grid grid-cols-2 gap-3 lg:grid-cols-3" data-de-novo-context>
                     {!['rfd4_proteina', 'complexa'].includes(generator) && <label className={labelClass}>Goal
@@ -192,9 +200,9 @@ export function ProteinModificationTemplate({
                             changeNavigation({ ...navigation, design_task });
                         }}>
                             <option value="unconditional">Explore new folds</option>
-                            {generator !== 'laproteina' && <><option value="dna_conditioned">Design around DNA</option>
-                            <option value="rna_conditioned">Design around RNA</option>
-                            <option value="ligand_conditioned">Design around a small molecule</option></>}
+                            {generator !== 'laproteina' && <><option value="dna_conditioned">{generator === 'rfd3' ? 'Configure DNA context' : 'Design around DNA'}</option>
+                            <option value="rna_conditioned">{generator === 'rfd3' ? 'Configure RNA context' : 'Design around RNA'}</option>
+                            <option value="ligand_conditioned">{generator === 'rfd3' ? 'Configure small-molecule context' : 'Design around a small molecule'}</option></>}
                             {generator === 'laproteina' && <option value="motif_scaffolding">Scaffold a motif</option>}
                             {generator === 'disco' && <option value="custom_json">Use a native input document</option>}
                             {!['unconditional', ...(generator !== 'laproteina' ? ['dna_conditioned', 'rna_conditioned', 'ligand_conditioned'] : []), ...(generator === 'laproteina' ? ['motif_scaffolding'] : []), ...(generator === 'disco' ? ['custom_json'] : [])].includes(task) && <option value={task}>Saved goal ({task})</option>}
@@ -210,7 +218,7 @@ export function ProteinModificationTemplate({
                 {generator === 'laproteina' && navigation.native_mode === 'evaluate' ? <LaProteinaEvaluation key={activeKey} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />
                     : generator === 'rfd4_proteina' || generator === 'complexa' ? <DeNovoNativeGenerationSettings key={activeKey} model={generator}
                     mode={navigation.native_mode ?? 'generate'}
-                    initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />
+                    initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} />
                     : ['rfd3', 'disco', 'laproteina'].includes(generator) ? <GenerationEditor key={activeKey} initialValues={childValues.current.values} generator={generator}
                     designTask={task} runDetails={runDetails} onDraftChange={reportDraft} /> : <p role="alert">No native editor registered for {generator}. Retained settings have not been translated to another engine.</p>}
             </> : mode === 'rfd3_iteration' ? <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} /> : <ProteinLocalRedesignTemplate key={activeKey} embedded
@@ -220,7 +228,7 @@ export function ProteinModificationTemplate({
                 : <ShapeBlueprintTemplate launchContextId={launchContextId} key={activeKey} embedded initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />}
             {onOpenTemplateManager && <button type="button" className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm"
                 onClick={() => onOpenTemplateManager({
-                    currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...navigation, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) },
+                    currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...navigation, suite_view: suiteView, suite_last_tasks: { ...lastTaskByEngine.current }, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) },
                     currentModelId: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? generator : mode === 'rfd3_iteration' && !validatedRedesign ? 'protein_local_redesign' : 'protein_modification_experimental',
                     baseTemplateId: 'protein_modification_experimental',
                     currentMode: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? navigation.native_mode ?? 'generate' : mode === 'rfd3_iteration' ? validatedRedesign ? 'region_redesign' : 'rfd3_local_redesign' : mode,
@@ -245,6 +253,10 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [numDesigns, setNumDesigns] = useState(initialNumber(initialValues, 'num_designs', 8));
     const [minLength, setMinLength] = useState(initialNumber(initialValues, 'min_length', 100));
     const [maxLength, setMaxLength] = useState(initialNumber(initialValues, 'max_length', 200));
+    const [lengthMode, setLengthMode] = useState<'exact' | 'range'>(initialValues.length_mode === 'exact' ? 'exact' : 'range');
+    const [exactLength, setExactLength] = useState(initialNumber(initialValues, 'exact_length', typeof initialValues.min_length === 'number' && initialValues.min_length === initialValues.max_length ? initialValues.min_length : ''));
+    const requestMinLength = lengthMode === 'exact' ? exactLength : minLength;
+    const requestMaxLength = lengthMode === 'exact' ? exactLength : maxLength;
     const [seed, setSeed] = useState(initialNumber(initialValues, 'seed', 0));
     const [dumpTrajectories, setDumpTrajectories] = useState(initialValues?.dump_trajectories === true);
     const [targetLengths, setTargetLengths] = useState(initialString(initialValues, 'target_lengths', '100,200'));
@@ -281,8 +293,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         const next = { ...previous }; delete next.input_structure; delete next.source_model; delete next.source_mapping; return next;
     });
     const rfd3Bounds = useRfd3GenerationBounds(generator === 'rfd3');
-    const rfd3LengthsInvalid = Number(minLength) > Number(maxLength) ||
-        [minLength, maxLength].some((value, index) => {
+    const rfd3LengthsInvalid = Number(requestMinLength) > Number(requestMaxLength) ||
+        [requestMinLength, requestMaxLength].some((value, index) => {
             const bound = rfd3Bounds?.[index === 0 ? 'min_length' : 'max_length'];
             return (bound?.minimum != null && Number(value) < bound.minimum) || (bound?.maximum != null && Number(value) > bound.maximum);
         });
@@ -304,6 +316,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         num_designs: numDesigns,
         min_length: minLength,
         max_length: maxLength,
+        length_mode: lengthMode,
+        exact_length: exactLength,
         seed: seed,
         dump_trajectories: dumpTrajectories,
         target_lengths: targetLengths,
@@ -423,8 +437,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 generation_mode: 'unconditional_monomer',
                 ...rfd3Settings,
                 generator: 'rfd3',
-                min_length: minLength,
-                max_length: maxLength,
+                min_length: requestMinLength,
+                max_length: requestMaxLength,
                 num_designs: numDesigns,
                 seed,
                 dump_trajectories: dumpTrajectories,
@@ -491,12 +505,18 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     </label>;
     const generationControls = <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {generator === 'rfd3' ? <>
+            <label className={labelClass}>Length selection
+                <select className={fieldClass} value={lengthMode} onChange={event => setLengthMode(event.target.value as 'exact' | 'range')}><option value="range">Length range</option><option value="exact">Exact length</option></select>
+            </label>
+            {lengthMode === 'exact' ? <label className={labelClass}>Exact length
+                <input className={fieldClass} type="number" min={rfd3Bounds?.min_length.minimum} value={exactLength} onChange={event => setExactLength(editedNumber(event.target.value))} />
+            </label> : <>
             <label className={labelClass}>Minimum length
-                <input className={fieldClass} type="number" min={rfd3Bounds?.min_length.minimum} max={rfd3Bounds?.min_length.maximum} value={minLength} onChange={event => setMinLength(editedNumber(event.target.value))} />
+                <input className={fieldClass} type="number" min={rfd3Bounds?.min_length.minimum} value={minLength} onChange={event => setMinLength(editedNumber(event.target.value))} />
             </label>
             <label className={labelClass}>Maximum length
-                <input className={fieldClass} type="number" min={rfd3Bounds?.max_length.minimum} max={rfd3Bounds?.max_length.maximum} value={maxLength} onChange={event => setMaxLength(editedNumber(event.target.value))} />
-            </label>
+                <input className={fieldClass} type="number" min={rfd3Bounds?.max_length.minimum} value={maxLength} onChange={event => setMaxLength(editedNumber(event.target.value))} />
+            </label></>}
             <label className={labelClass}>Number of designs
                 <input className={fieldClass} type="number" min={1} value={numDesigns} onChange={event => setNumDesigns(editedNumber(event.target.value))} />
             </label>
@@ -518,7 +538,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             <ProteinDesignSections label="Generation sections" sections={[inputSection, 'Sampling', 'Sequence Design']} active={section} onChange={setSection} />
             {/* Section navigation is presentation only. Source tools and viewers stay mounted. */}
             <div hidden={section !== inputSection} className="space-y-5">
-                {designTask === 'unconditional' || generator === 'rfd3' ? <ProteinDesignPanel title="Generation" description={generator === 'rfd3' && designTask !== 'unconditional' ? 'Add a source and configure its conditions under Sampling.' : 'Generate new protein candidates.'}>
+                {designTask === 'unconditional' || generator === 'rfd3' ? <ProteinDesignPanel title="Generation" description={generator === 'rfd3' && designTask !== 'unconditional' ? 'This goal does not automatically add context or conditions. Supply an input structure and configure the desired conditions under Sampling; without them the request remains source-free.' : 'Generate new protein candidates.'}>
                     {generationControls}
                     <p className="text-xs text-[var(--text-secondary)]">{countHelp}</p>
                     {generator === 'rfd3' && <details><summary>Input structure (optional)</summary>
@@ -639,7 +659,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     <div><dt className="text-[var(--text-secondary)]">Engine</dt><dd>{engineName}</dd></div>
                     <div><dt className="text-[var(--text-secondary)]">Sequence design</dt><dd>{sequenceDesign.invocation_draft ? (sequenceDesign.invocation_draft.enabled ? 'Selected optional operations' : 'Off · generation only') : sequenceDesign.sequence_design.enabled ? generalSequenceNames[sequenceDesign.sequence_design.model_id] : 'Off · generation only'}</dd></div>
                     <div><dt className="text-[var(--text-secondary)]">Goal</dt><dd>{designTask === 'unconditional' ? 'Explore new folds' : DE_NOVO_TASK_OPTIONS[backend].find(task => task.value === designTask)?.label}</dd></div>
-                    <div><dt className="text-[var(--text-secondary)]">Lengths</dt><dd>{generator === 'rfd3' ? `${minLength}–${maxLength}` : targetLengths || 'Not specified'}</dd></div>
+                    <div><dt className="text-[var(--text-secondary)]">Lengths</dt><dd>{generator === 'rfd3' ? lengthMode === 'exact' ? String(exactLength) : `${minLength}–${maxLength}` : targetLengths || 'Not specified'}</dd></div>
                     {discoInputJson && generator === 'disco' && <div><dt className="text-[var(--text-secondary)]">Native input override</dt><dd className="break-all">{discoInputJson}</dd></div>}
                 </dl>
             </details>

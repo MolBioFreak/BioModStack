@@ -53,9 +53,9 @@ export function LegacyNativeGenerationControls({ model, task, value, onChange }:
 }
 
 /** Presentation of the native owner's schema, never a second scientific compiler. */
-export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initialValues, onDraftChange, runDetails }: {
+export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initialValues, onDraftChange, runDetails, suiteView }: {
     model: 'rfd4_proteina' | 'complexa'; mode?: string; initialValues: Record<string, unknown>;
-    onDraftChange: (draft: Record<string, unknown>) => void; runDetails?: ReactNode;
+    onDraftChange: (draft: Record<string, unknown>) => void; runDetails?: ReactNode; suiteView?: 'simple' | 'advanced';
 }) {
     const field = model === 'rfd4_proteina' ? 'rfd4_request' : 'complexa_request';
     const [nativeDraft, setNativeDraft] = useState(() => {
@@ -79,6 +79,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
     const [sequence, setSequence] = useState(() => hydrateGeneralSequenceDesign(initialValues));
     const [explicitSequenceNull] = useState(() => initialValues.sequence_design === null || initialValues.sequence_design_null === true);
     const [section, setSection] = useState('Design');
+    useEffect(() => { if (suiteView) setSection(suiteView === 'advanced' ? 'Native settings' : 'Design'); }, [suiteView]);
     const navigate = useNavigate(); const client = useQueryClient();
     const inventory = useQuery({ queryKey: ['de-novo-native-settings', model, mode],
         queryFn: async () => (await fetchNativeGenerationSettings(model, mode)).data,
