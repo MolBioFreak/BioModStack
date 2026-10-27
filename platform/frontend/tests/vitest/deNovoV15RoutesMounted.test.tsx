@@ -158,6 +158,19 @@ it('does not infer RFD3 from shared legacy lengths', async () => {
     expect(engine.value).toBe('rfd4_proteina');
 });
 
+it('retains a native operation while another engine is active and after template load', async () => {
+    await mount('/submit?template=protein_modification_experimental&generator=rfd4_proteina');
+    await select('Operation', 'evaluate');
+    await select('Engine', 'disco');
+    await click('Template Manager');
+    await input('input[placeholder="e.g., My Boltz Config"]', 'Operation memory');
+    await click('Save Template');
+    expect(mocks.saved[0].params.editor_state.suite_last_modes.rfd4_proteina).toBe('evaluate');
+    await click('Load');
+    await select('Engine', 'rfd4_proteina');
+    expect(document.querySelector<HTMLSelectElement>('[aria-label="Native mode"]')?.value).toBe('evaluate');
+});
+
 it('navigation metadata preserves context, native aliases and false/empty scientific values', () => {
     expect(deNovoRouteValues(new URLSearchParams('template=protein_local_redesign'))).toMatchObject({ modification_mode: 'rfd3_local_redesign' });
     const values = { backend: 'disco', disco_na_sequence: '', dump_trajectories: false, seed: 0 };

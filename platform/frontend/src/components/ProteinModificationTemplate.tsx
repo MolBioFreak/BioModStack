@@ -124,6 +124,10 @@ export function ProteinModificationTemplate({
         ...(initialValues?.suite_last_tasks && typeof initialValues.suite_last_tasks === 'object' && !Array.isArray(initialValues.suite_last_tasks) ? initialValues.suite_last_tasks as Record<string, string> : {}),
         [navigation.generator ?? 'rfd4_proteina']: navigation.design_task ?? 'unconditional',
     });
+    const lastModeByEngine = useRef<Record<string, string>>({
+        ...(initialValues?.suite_last_modes && typeof initialValues.suite_last_modes === 'object' && !Array.isArray(initialValues.suite_last_modes) ? initialValues.suite_last_modes as Record<string, string> : {}),
+        ...(navigation.generator && navigation.native_mode ? { [navigation.generator]: navigation.native_mode } : {}),
+    });
     const [suiteView, setSuiteView] = useState<'simple' | 'advanced'>(initialValues?.suite_view === 'advanced' ? 'advanced' : 'simple');
     const activeRequest = useRef<Record<string, unknown>>({});
     callbacks.current = { onDraftChange, onNavigationChange };
@@ -141,7 +145,10 @@ export function ProteinModificationTemplate({
         const { native_job_request, ...editor } = draft;
         activeRequest.current = Object.hasOwn(draft, 'native_job_request') ? { native_job_request } : {};
         drafts.current[activeKey] = { ...editor, modification_mode: savedMode };
-        callbacks.current.onDraftChange?.({ ...draft, ...navigation, suite_view: suiteView, suite_last_tasks: { ...lastTaskByEngine.current }, ...(navigation.generator === 'complexa' && typeof draft.native_mode === 'string' ? { native_mode: draft.native_mode } : {}), modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) });
+        // Complexa derives its operation inside the request; its navigation key
+        // stays stable while that operation changes.
+        if (navigation.generator && navigation.generator !== 'complexa' && typeof draft.native_mode === 'string') lastModeByEngine.current[navigation.generator] = draft.native_mode;
+        callbacks.current.onDraftChange?.({ ...draft, ...navigation, suite_view: suiteView, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, ...(navigation.generator === 'complexa' && typeof draft.native_mode === 'string' ? { native_mode: draft.native_mode } : {}), modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) });
     }, [activeKey, navigation.modification_mode, navigation.generator, navigation.design_task, navigation.native_mode, savedMode, suiteView]);
     const changeNavigation = (state: DeNovoNavigationState) => {
         const next = resolveNavigation({ ...state });
@@ -155,6 +162,7 @@ export function ProteinModificationTemplate({
             );
         }
         if (next.modification_mode === 'de_novo_design' && next.generator) lastTaskByEngine.current[next.generator] = next.design_task ?? 'unconditional';
+        if (next.generator && next.native_mode) lastModeByEngine.current[next.generator] = next.native_mode;
         setNavigation(next);
         callbacks.current.onNavigationChange?.(next);
     };
@@ -209,7 +217,7 @@ export function ProteinModificationTemplate({
                         </select>
                     </label>}
                     <label className={labelClass}>Engine
-                        <select className={fieldClass} value={generator} onChange={event => changeNavigation({ modification_mode: mode, generator: event.target.value, design_task: lastTaskByEngine.current[event.target.value] ?? 'unconditional' })}>
+                        <select className={fieldClass} value={generator} onChange={event => changeNavigation({ modification_mode: mode, generator: event.target.value, design_task: lastTaskByEngine.current[event.target.value] ?? 'unconditional', native_mode: lastModeByEngine.current[event.target.value] })}>
                             {['rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa'].map(engine => <option key={engine} value={engine}>{engine === 'rfd3' ? 'RFD3' : engine === 'disco' ? 'DISCO' : engine === 'laproteina' ? 'La-Proteina' : engine === 'rfd4_proteina' ? 'RFD4-Proteina' : engine === 'complexa' ? 'Complexa' : engine}</option>)}
                         </select>
                     </label>
@@ -228,7 +236,7 @@ export function ProteinModificationTemplate({
                 : <ShapeBlueprintTemplate launchContextId={launchContextId} key={activeKey} embedded initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />}
             {onOpenTemplateManager && <button type="button" className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm"
                 onClick={() => onOpenTemplateManager({
-                    currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...navigation, suite_view: suiteView, suite_last_tasks: { ...lastTaskByEngine.current }, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) },
+                    currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...navigation, suite_view: suiteView, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) },
                     currentModelId: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? generator : mode === 'rfd3_iteration' && !validatedRedesign ? 'protein_local_redesign' : 'protein_modification_experimental',
                     baseTemplateId: 'protein_modification_experimental',
                     currentMode: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? navigation.native_mode ?? 'generate' : mode === 'rfd3_iteration' ? validatedRedesign ? 'region_redesign' : 'rfd3_local_redesign' : mode,
