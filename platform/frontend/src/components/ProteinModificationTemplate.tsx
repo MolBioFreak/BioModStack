@@ -293,6 +293,19 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [nucleicSequence, setNucleicSequence] = useState(initialString(initialValues, 'disco_na_sequence', ''));
     const [nativeControls, setNativeControls] = useState<Record<string, unknown>>(() => Object.fromEntries(
         ['pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => { let value = initialValues[key]; if (key.endsWith('_json') && typeof value === 'string') { try { value = JSON.parse(value); } catch { /* Retain invalid saved input for explicit repair. */ } } return [key, value]; })));
+    const nativeOverrideKey = `pcad_${backend}_settings_json`;
+    const rawOverrides = nativeControls[nativeOverrideKey];
+    const nativeOverrides = rawOverrides && typeof rawOverrides === 'object' && !Array.isArray(rawOverrides) ? rawOverrides as Record<string, unknown> : {};
+    const effectiveOverride = (key: string, fallback: unknown) => Object.hasOwn(nativeOverrides, key) ? nativeOverrides[key] : fallback;
+    const setEffectiveOverride = (key: string, value: unknown, setPrimary: () => void) => {
+        if (!Object.hasOwn(nativeOverrides, key)) { setPrimary(); return; }
+        setNativeControls(current => ({ ...current, [nativeOverrideKey]: { ...nativeOverrides, [key]: value } }));
+    };
+    const resetOverride = (key: string) => setNativeControls(current => {
+        const next = { ...nativeOverrides }; delete next[key];
+        return { ...current, [nativeOverrideKey]: next };
+    });
+    const overrideNote = (key: string) => Object.hasOwn(nativeOverrides, key) && <span className="block text-xs text-[var(--text-secondary)]">Native override ({key}): {JSON.stringify(nativeOverrides[key])}. <button type="button" aria-label={`Use primary value for ${key}`} onClick={() => resetOverride(key)}>Use primary value</button></span>;
     const [rfd3Settings, setRfd3Settings] = useState(() => retainedRfd3Draft(initialValues));
     const [rfd3SourceInspection, setRfd3SourceInspection] = useState<{ receipt: StructureMaterialization; path: string; model?: number }>();
     const rfd3Source = typeof rfd3Settings.input_structure === 'string' && rfd3Settings.input_structure ? {
@@ -567,28 +580,32 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                         {rfd3Source && <button type="button" onClick={clearRfd3Source}>Clear input structure</button>}
                     </details>}
                 </ProteinDesignPanel> : isMotif ? <>
-                    <LaProteinaMotifInput path={motifPdb} contig={motifContig} segmentOrder={motifSegmentOrder}
-                        atomSpec={motifAtomSpec} initialInspection={motifInspection} onInspectionChange={setMotifInspection} onChange={patch => {
+                    <LaProteinaMotifInput path={motifPdb} contig={String(effectiveOverride('contig_string', motifContig) ?? '')} segmentOrder={String(effectiveOverride('segment_order', motifSegmentOrder) ?? '')}
+                        atomSpec={effectiveOverride('motif_atom_spec', motifAtomSpec) as string | null | undefined} initialInspection={motifInspection} onInspectionChange={setMotifInspection} onChange={patch => {
                         if (patch.path !== undefined) setMotifPdb(patch.path);
-                        if (patch.atomSpec !== undefined) { setMotifAtomSpec(patch.atomSpec); authorLaMotif('motif_atom_spec', patch.atomSpec); }
-                        if (patch.contig !== undefined) { setMotifContig(patch.contig); authorLaMotif('contig_string', patch.contig); }
-                        if (patch.segmentOrder !== undefined) { setMotifSegmentOrder(patch.segmentOrder); authorLaMotif('segment_order', patch.segmentOrder); }
+                        if (patch.atomSpec !== undefined) { if (!Object.hasOwn(nativeOverrides, 'motif_atom_spec')) setMotifAtomSpec(patch.atomSpec); authorLaMotif('motif_atom_spec', patch.atomSpec); }
+                        if (patch.contig !== undefined) { if (!Object.hasOwn(nativeOverrides, 'contig_string')) setMotifContig(patch.contig); authorLaMotif('contig_string', patch.contig); }
+                        if (patch.segmentOrder !== undefined) { if (!Object.hasOwn(nativeOverrides, 'segment_order')) setMotifSegmentOrder(patch.segmentOrder); authorLaMotif('segment_order', patch.segmentOrder); }
                     }} />
+                    {['contig_string', 'segment_order', 'motif_atom_spec'].map(key => <div key={key}>{overrideNote(key)}</div>)}
                     <ProteinDesignPanel title="Motif conditioning">
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                             {presetControl}
                             <label className={labelClass}>Atom selection
-                                <select className={fieldClass} value={motifAtomSelectionMode} onChange={event => { setMotifAtomSelectionMode(event.target.value); authorLaMotif('atom_selection_mode', event.target.value); }}>
+                                <select className={fieldClass} value={String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? '')} onChange={event => { if (!Object.hasOwn(nativeOverrides, 'atom_selection_mode')) setMotifAtomSelectionMode(event.target.value); authorLaMotif('atom_selection_mode', event.target.value); }}>
                                     <option value="all_atom">All atom</option><option value="tip_atoms">Tip atoms</option>
                                     <option value="bb3o">Backbone N, Cα, C, O</option><option value="ca">Cα only</option>
-                                    {!['all_atom', 'tip_atoms', 'bb3o', 'ca'].includes(motifAtomSelectionMode) && <option value={motifAtomSelectionMode}>{motifAtomSelectionMode} · retained historical value (not a native mode)</option>}
+                                    {!['all_atom', 'tip_atoms', 'bb3o', 'ca'].includes(String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? '')) && <option value={String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? '')}>{String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? 'null')} · retained historical value</option>}
                                 </select>
+                                {overrideNote('atom_selection_mode')}
                             </label>
                             <label className={labelClass}>Motif minimum length
-                                <input className={fieldClass} type="number" min={1} max={2000} value={motifMinLength} onChange={event => { setMotifMinLength(event.target.value); authorLaMotif('motif_min_length', event.target.value === '' ? null : Number(event.target.value)); }} placeholder="From target lengths" />
+                                <input className={fieldClass} type="number" min={1} max={2000} value={String(effectiveOverride('motif_min_length', motifMinLength) ?? '')} onChange={event => { if (!Object.hasOwn(nativeOverrides, 'motif_min_length')) setMotifMinLength(event.target.value); authorLaMotif('motif_min_length', event.target.value === '' ? null : Number(event.target.value)); }} placeholder="From target lengths" />
+                                {overrideNote('motif_min_length')}
                             </label>
                             <label className={labelClass}>Motif maximum length
-                                <input className={fieldClass} type="number" min={1} max={2000} value={motifMaxLength} onChange={event => { setMotifMaxLength(event.target.value); authorLaMotif('motif_max_length', event.target.value === '' ? null : Number(event.target.value)); }} placeholder="From target lengths" />
+                                <input className={fieldClass} type="number" min={1} max={2000} value={String(effectiveOverride('motif_max_length', motifMaxLength) ?? '')} onChange={event => { if (!Object.hasOwn(nativeOverrides, 'motif_max_length')) setMotifMaxLength(event.target.value); authorLaMotif('motif_max_length', event.target.value === '' ? null : Number(event.target.value)); }} placeholder="From target lengths" />
+                                {overrideNote('motif_max_length')}
                             </label>
                         </div>
                         <details className="rounded-lg border p-3" style={themedInsetStyle}>
@@ -608,7 +625,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             </div>
             {generator === 'disco' && <DiscoJobsInput value={nativeControls.pcad_disco_jobs_json} path={discoInputJson} sourcePath={nativeControls.pcad_disco_jobs_source_path as string | undefined} onChange={(jobs, sourcePath) => setNativeControls(current => { const next = { ...current }; if (jobs === undefined) { delete next.pcad_disco_jobs_json; delete next.pcad_disco_jobs_source_path; } else { next.pcad_disco_jobs_json = jobs; if (sourcePath !== undefined) next.pcad_disco_jobs_source_path = sourcePath; } return next; })} />}
             <div hidden={section !== 'Sampling'} className="space-y-5">
-                <OtherDeNovoSettings generalConditions={generator === 'rfd3'} model={generator as 'rfd3' | DeNovoBackend} task={generator === 'rfd3' ? 'unconditional_monomer' : designTask} value={generator === 'rfd3' ? rfd3Settings : nativeControls} onChange={generator === 'rfd3' ? setRfd3Settings : setNativeControls} />
+                <OtherDeNovoSettings generalConditions={generator === 'rfd3'} model={generator as 'rfd3' | DeNovoBackend} task={generator === 'rfd3' ? 'unconditional_monomer' : designTask} value={generator === 'rfd3' ? rfd3Settings : nativeControls} onChange={generator === 'rfd3' ? setRfd3Settings : setNativeControls}
+                    primaryOverrideFields={generator === 'laproteina' ? ['num_steps', ...(isMotif ? ['contig_string', 'segment_order', 'motif_atom_spec', 'atom_selection_mode', 'motif_min_length', 'motif_max_length'] : [])] : generator === 'disco' ? ['experiment', 'effort', 'num_inference_seeds', 'use_deepspeed_evo_attention'] : []} />
                 {designTask !== 'unconditional' && <ProteinDesignPanel title="Generation" description={countHelp}>{generationControls}</ProteinDesignPanel>}
                 <ProteinDesignPanel title={`${engineName} sampling`}>
                     {generator === 'rfd3' ? <div className="grid gap-4 sm:grid-cols-2">
@@ -621,23 +639,28 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     </div> : backend === 'laproteina' ? <div className="grid gap-4 sm:grid-cols-2">
                         {!isMotif && presetControl}
                         <label className={labelClass}>Sampling steps
-                            <input className={fieldClass} type="number" min={50} max={2000} value={laproteinaSteps} onChange={event => setLaproteinaSteps(editedNumber(event.target.value))} />
+                            <input className={fieldClass} type="number" min={50} max={2000} value={String(effectiveOverride('num_steps', laproteinaSteps) ?? '')} onChange={event => { const value = editedNumber(event.target.value); setEffectiveOverride('num_steps', value, () => setLaproteinaSteps(value)); }} />
+                            {overrideNote('num_steps')}
                         </label>
                     </div> : <>
                         <div className="grid gap-4 sm:grid-cols-2">
                             <label className={labelClass}>DISCO experiment
-                                <select className={fieldClass} value={discoExperiment} onChange={event => setDiscoExperiment(event.target.value)}>
+                                <select className={fieldClass} value={String(effectiveOverride('experiment', discoExperiment) ?? '')} onChange={event => setEffectiveOverride('experiment', event.target.value, () => setDiscoExperiment(event.target.value))}>
                                     <option value="designable">Designable</option><option value="diverse">Diverse</option>
+                                    {!['designable', 'diverse'].includes(String(effectiveOverride('experiment', discoExperiment) ?? '')) && <option value={String(effectiveOverride('experiment', discoExperiment) ?? '')}>{String(effectiveOverride('experiment', discoExperiment) ?? 'null')} (saved)</option>}
                                 </select>
+                                {overrideNote('experiment')}
                             </label>
                             <label className={labelClass}>Inference effort
-                                <select className={fieldClass} value={discoEffort} onChange={event => setDiscoEffort(event.target.value)}>
+                                <select className={fieldClass} value={String(effectiveOverride('effort', discoEffort) ?? '')} onChange={event => setEffectiveOverride('effort', event.target.value, () => setDiscoEffort(event.target.value))}>
                                     <option value="fast">Fast</option><option value="max">Max</option>
-                                    {!['fast', 'max'].includes(discoEffort) && <option value={discoEffort}>{discoEffort} (saved)</option>}
+                                    {!['fast', 'max'].includes(String(effectiveOverride('effort', discoEffort) ?? '')) && <option value={String(effectiveOverride('effort', discoEffort) ?? '')}>{String(effectiveOverride('effort', discoEffort) ?? 'null')} (saved)</option>}
                                 </select>
+                                {overrideNote('effort')}
                             </label>
                             <label className={labelClass}>Inference seed count
-                                <input className={fieldClass} type="number" min={1} max={1024} value={discoInferenceSeeds} onChange={event => setDiscoInferenceSeeds(editedNumber(event.target.value))} />
+                                <input className={fieldClass} type="number" min={1} max={1024} value={String(effectiveOverride('num_inference_seeds', discoInferenceSeeds) ?? '')} onChange={event => { const value = editedNumber(event.target.value); setEffectiveOverride('num_inference_seeds', value, () => setDiscoInferenceSeeds(value)); }} />
+                                {overrideNote('num_inference_seeds')}
                             </label>
                             <label className={labelClass}>Exact seeds
                                 <input className={fieldClass} value={discoSeeds} onChange={event => setDiscoSeeds(event.target.value)} placeholder="Optional comma-separated integers" />
@@ -647,8 +670,9 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                         <details className="rounded-lg border p-3" style={themedInsetStyle}>
                             <summary className="cursor-pointer text-sm font-medium">Advanced inference</summary>
                             <label className="mt-3 flex items-center gap-3 text-sm">
-                                <input type="checkbox" checked={discoAttention} onChange={event => setDiscoAttention(event.target.checked)} />DeepSpeed Evoformer attention
+                                <input type="checkbox" ref={node => { if (node) node.indeterminate = effectiveOverride('use_deepspeed_evo_attention', discoAttention) === null; }} checked={effectiveOverride('use_deepspeed_evo_attention', discoAttention) === true} onChange={event => setEffectiveOverride('use_deepspeed_evo_attention', event.target.checked, () => setDiscoAttention(event.target.checked))} />DeepSpeed Evoformer attention
                             </label>
+                            {overrideNote('use_deepspeed_evo_attention')}
                             <p className="mt-2 text-xs text-[var(--text-secondary)]">Uses the managed CUTLASS runtime when enabled.</p>
                         </details>
                         {designTask !== 'custom_json' && <details open={Boolean(discoInputJson)} className="rounded-lg border p-3" style={themedInsetStyle}>

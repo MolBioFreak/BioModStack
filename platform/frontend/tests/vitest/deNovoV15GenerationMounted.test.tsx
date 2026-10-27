@@ -2,6 +2,7 @@ import React, { act, useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { isolateDeNovoTransport } from './deNovoTransport';
 
@@ -112,6 +113,48 @@ it('exposes real conditional engines, retains independent goal drafts, and submi
     await edit('Engine', 'disco'); await edit('Goal', 'ligand_conditioned');
     expect(control('Engine').value).toBe('disco');
     expect(control('Ligand SDF path')).toBeTruthy();
+});
+
+it('edits active DISCO native overrides at the primary controls without losing inactive values', async () => {
+    const draft = vi.fn();
+    await render({ initialValues: { generator: 'disco', disco_effort: 'fast', disco_num_inference_seeds: 8, pcad_disco_settings_json: { effort: 'max', num_inference_seeds: 3, deterministic: false } }, onDraftChange: draft });
+    await click('Sampling');
+    expect(control('Inference effort').value).toBe('max');
+    expect(control('Inference seed count').value).toBe('3');
+    await edit('Inference seed count', '5');
+    expect(latest(draft).pcad_disco_settings_json).toEqual({ effort: 'max', num_inference_seeds: 5, deterministic: false });
+    await click('Generate candidates');
+    expect(latest(mocks.submit).params).toMatchObject({ disco_num_inference_seeds: 8, pcad_disco_settings_json: { effort: 'max', num_inference_seeds: 5, deterministic: false } });
+    const projected = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python', ['-c', 'import json,sys; from scripts.lib.protein_cad_settings import settings_projection; print(json.dumps(settings_projection(json.load(sys.stdin))))'], { cwd: '../..', input: JSON.stringify(latest(mocks.submit).params), encoding: 'utf8' }));
+    expect(projected.pcad_disco_settings_json).toMatchObject({ effort: 'max', num_inference_seeds: 5, deterministic: false });
+    const saved = JSON.parse(JSON.stringify(latest(draft)));
+    await act(async () => root.unmount()); document.body.replaceChildren();
+    await render({ initialValues: saved, onDraftChange: draft }); await click('Sampling');
+    expect(control('Inference effort').value).toBe('max'); expect(control('Inference seed count').value).toBe('5');
+});
+
+it('edits active La-Proteina native sampling steps without overwriting its retained primary value', async () => {
+    const draft = vi.fn();
+    await render({ initialValues: { generator: 'laproteina', laproteina_num_steps: 400, pcad_laproteina_settings_json: { num_steps: 600, self_cond: false } }, onDraftChange: draft });
+    await click('Sampling'); expect(control('Sampling steps').value).toBe('600');
+    await edit('Sampling steps', '650');
+    await click('Generate candidates');
+    expect(latest(mocks.submit).params).toMatchObject({ laproteina_num_steps: 400, pcad_laproteina_settings_json: { num_steps: 650, self_cond: false } });
+    const projected = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python', ['-c', 'import json,sys; from scripts.lib.protein_cad_settings import settings_projection; print(json.dumps(settings_projection(json.load(sys.stdin))))'], { cwd: '../..', input: JSON.stringify(latest(mocks.submit).params), encoding: 'utf8' }));
+    expect(projected.pcad_laproteina_settings_json).toMatchObject({ num_steps: 650, self_cond: false });
+});
+
+it('shows and edits the active La motif override, then restores the retained primary value', async () => {
+    const draft = vi.fn();
+    await render({ initialValues: { generator: 'laproteina', design_task: 'motif_scaffolding', laproteina_contig_string: '5/A1/5', pcad_laproteina_settings_json: { contig_string: '10/A1/10', motif_min_length: null } }, onDraftChange: draft });
+    expect(control('Motif contig').value).toBe('10/A1/10');
+    await edit('Motif contig', '20/A1/20');
+    expect(latest(draft).pcad_laproteina_settings_json).toMatchObject({ contig_string: '20/A1/20', motif_min_length: null });
+    expect(latest(draft).laproteina_contig_string).toBe('5/A1/5');
+    const reset = document.querySelector<HTMLButtonElement>('[aria-label="Use primary value for contig_string"]')!;
+    await act(async () => reset.click());
+    expect(control('Motif contig').value).toBe('5/A1/5');
+    expect(latest(draft).pcad_laproteina_settings_json).toEqual({ motif_min_length: null });
 });
 
 it('retains explicit generation clears, zero and false through engine switches and saved reopen', async () => {

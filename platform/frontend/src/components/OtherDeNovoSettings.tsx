@@ -23,8 +23,9 @@ export function useRfd3GenerationBounds(enabled: boolean) {
 }
 
 /** Presentation groups only. Types and scientific defaults come from the current model owner. */
-export function OtherDeNovoSettings({ model, task, value, onChange, sourceConditions = false, generalConditions = false }: {
+export function OtherDeNovoSettings({ model, task, value, onChange, sourceConditions = false, generalConditions = false, primaryOverrideFields = [] }: {
     sourceConditions?: boolean; generalConditions?: boolean;
+    primaryOverrideFields?: string[];
     model: 'rfd3' | 'laproteina' | 'disco'; task: string; value: Record<string, unknown>;
     onChange: (value: Record<string, unknown>) => void;
 }) {
@@ -49,6 +50,7 @@ export function OtherDeNovoSettings({ model, task, value, onChange, sourceCondit
     const groups = new Map<string, [string, Schema][]>();
     for (const [field, schema] of Object.entries(root.properties ?? {})) {
         if (model === 'rfd3' && field === 'dump_trajectories') continue; // Existing primary control.
+        if (primaryOverrideFields.includes(field)) continue; // The active-value control owns the same override.
         const typedSchema = model === 'rfd3' && field === 'inference_sampler' ? { ...schema, properties: Object.fromEntries(Object.entries(schema.properties ?? {}).map(([name, leaf]) => [name, { anyOf: [leaf.type === 'string_array' ? { ...leaf, type: 'array', items: { type: 'string' } } : leaf, { type: 'null' }] }])) } : schema;
         const label = group(field); groups.set(label, [...(groups.get(label) ?? []), [field, typedSchema]]);
     }
