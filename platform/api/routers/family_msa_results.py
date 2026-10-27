@@ -635,14 +635,15 @@ async def import_bundle_stream(request: Request, project_id: str,
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             iterator = request.stream().__aiter__()
-            pending = b''
+            # Retain a view instead of repeatedly copying a potentially large ASGI chunk.
+            pending = memoryview(b'')
             async def take(n):
                 nonlocal pending
                 parts = []
                 while n:
                     if not pending:
                         try:
-                            pending = await iterator.__anext__()
+                            pending = memoryview(await iterator.__anext__())
                         except StopAsyncIteration:
                             raise ValueError('truncated upload')
                         if not pending:
@@ -652,7 +653,17 @@ async def import_bundle_stream(request: Request, project_id: str,
                     n -= len(piece)
                 return b''.join(parts)
             header_size = int.from_bytes(await take(8), 'big')
-            metadata = json.loads(await take(header_size))
+            # Spool the declared header before parsing: an incomplete upload must not
+            # accumulate its entire received prefix in memory.  json.load still
+            # materializes complete metadata, as required by the existing model.
+            with tempfile.TemporaryFile(mode='w+b', dir=directory) as header:
+                remaining = header_size
+                while remaining:
+                    chunk = await take(min(remaining, 1024 * 1024))
+                    header.write(chunk)
+                    remaining -= len(chunk)
+                header.seek(0)
+                metadata = json.load(header)
             payload = ImportBundle.model_validate({**metadata, 'files': {}})
             manifest = payload.manifest
             descriptors = manifest['files']
