@@ -12,6 +12,49 @@ vi.mock('../../src/lib/projectManager', async original => ({ ...(await original<
 const row = (id: string, domain: string) => ({ capability_id: id, label: id, domain_kind: domain, project_setup_state: 'ready', project_setup_adapter_id: 'adapter', project_native_owner_id: `${id}:family_msa`, safe_setup_destination: `/alignments?model=${id}&mode=family_msa`, launch_mode: 'typed_launcher_handoff', product_taxonomy: { family: 'family_alignment' } });
 
 describe('alignment route receiver', () => {
+    it('polls a running Job through publication and opens its document', async () => {
+        let published = false;
+        const get = vi.spyOn(api, 'get').mockImplementation(async url => {
+            const path = String(url);
+            if (path === '/api/jobs/live') return {data: {status: 'running'}};
+            if (path.includes('/documents/')) return {data: {result_id: 'a', rows: [{row_id: 'r', label: 'one', aligned: 'AC'}]}};
+            if (!published) throw new Error('manifest pending (409)');
+            return {data: {artifacts: [{id: 'a', role: 'alignment'}]}};
+        });
+        const div = document.createElement('div'); const root = createRoot(div); const client = new QueryClient();
+        await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/alignments/jobs/live']}><Routes><Route path="/alignments/jobs/:jobId" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>); await new Promise(r => setTimeout(r, 50)); });
+        await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+        expect(div.textContent).toContain('manifest pending');
+        published = true;
+        await act(async () => { await new Promise(r => setTimeout(r, 6200)); });
+        await act(async () => { await new Promise(r => setTimeout(r, 100)); });
+        expect(div.textContent).toContain('Result: a');
+        expect(div.textContent).not.toContain('manifest pending');
+        await act(async () => root.unmount()); client.clear(); get.mockRestore();
+    }, 10000);
+    it('cancels the old Job request on identity switch and permits retry after terminal failure', async () => {
+        let oldSignal: AbortSignal | undefined; let available = false;
+        const get = vi.spyOn(api, 'get').mockImplementation(async (url, config) => {
+            const path = String(url);
+            if (path === '/api/jobs/old') return {data: {status: 'running'}};
+            if (path === '/api/family-msa/jobs/old') { oldSignal = config?.signal as AbortSignal; return await new Promise(() => {}); }
+            if (path === '/api/jobs/new') return {data: {status: 'failed'}};
+            if (path.includes('/documents/')) return {data: {result_id: 'b', rows: []}};
+            if (!available) throw new Error('missing manifest');
+            return {data: {artifacts: [{id: 'b', role: 'alignment'}]}};
+        });
+        const div = document.createElement('div'); const root = createRoot(div); const client = new QueryClient();
+        const render = (id: string) => <QueryClientProvider client={client}><MemoryRouter key={id} initialEntries={[`/alignments/jobs/${id}`]}><Routes><Route path="/alignments/jobs/:jobId" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>;
+        await act(async () => { root.render(render('old')); await new Promise(r => setTimeout(r, 30)); });
+        await act(async () => { root.render(render('new')); await new Promise(r => setTimeout(r, 50)); });
+        expect(oldSignal?.aborted).toBe(true);
+        expect(div.textContent).toContain('missing manifest');
+        available = true;
+        await act(async () => { div.querySelector('button')!.click(); await new Promise(r => setTimeout(r, 60)); });
+        await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+        expect(div.textContent).toContain('Result: b');
+        await act(async () => root.unmount()); client.clear(); get.mockRestore();
+    });
     it('parses both server capability domains and rejects mismatched routes', () => {
         const inventory = { schema: 'bms.family-msa-project-workflow-picker.v1', capabilities: [row('family_msa_protein', 'protein_in_silico'), row('family_msa_nucleic', 'ngs_molbio')] };
         expect(parseFamilyAlignmentCapabilities(inventory).map(x => x.domain_kind)).toEqual(['protein_in_silico', 'ngs_molbio']);
