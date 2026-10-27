@@ -35,7 +35,7 @@ async def test_shared_state_owner_conflicts_and_reopen(tmp_path, monkeypatch):
     state = {'marks': [
         {'id': 'a', 'label': 'column', 'coordinate': {'scope': 'artifact_columns', 'artifact_id': 'art', 'start': 1, 'end': 2}},
         {'id': 'b', 'label': 'source', 'coordinate': {'scope': 'source_positions', 'source_member_id': 'm', 'occurrence_id': 'o', 'start': 3, 'end': 4}}],
-        'views': [{'id': 'v', 'name': 'view', 'artifact_id': 'art', 'hidden_row_ids': ['row']}],
+        'views': [{'id': 'v', 'name': 'view', 'artifact_id': 'art', 'hidden_row_ids': ['row'], 'row_order': ['row', 'other'], 'selected_row_id': 'other', 'selected_column': 0, 'viewer': 'biojs'}],
         'comparisons': [{'id': 'c', 'name': 'compare', 'left_artifact_id': 'art', 'right_artifact_id': 'art2', 'method': 'source', 'report': {'rows': []}}]}
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
@@ -58,6 +58,8 @@ async def test_shared_state_owner_conflicts_and_reopen(tmp_path, monkeypatch):
             assert reopened.json()['state']['views'] == []
             old = await client.get(url, params={'revision_id': original['revision_id']})
             assert old.json()['state'] == original['state']
+            assert old.json()['state']['views'][0]['selected_column'] == 0
+            assert old.json()['state']['views'][0]['row_order'] == ['row', 'other']
             assert reopened.json()['state']['marks'][1]['coordinate']['scope'] == 'source_positions'
             assert reopened.json()['state']['comparisons'][0]['report'] == {'rows': []}
             bad = dict(state, marks=[{'id': 'x', 'label': '', 'coordinate': {'scope': 'source_positions', 'artifact_id': 'art', 'start': 0, 'end': 1}}])

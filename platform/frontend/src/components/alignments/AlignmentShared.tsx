@@ -4,14 +4,14 @@ import type { ResidueAnchor } from '../../lib/alignmentCoordinates'
 
 type Coordinate = {scope: 'artifact_columns'; artifact_id: string; start: number; end: number} | {scope: 'source_positions'; source_member_id: string; occurrence_id: string; start: number; end: number}
 type Mark = {id: string; label: string; coordinate: Coordinate; note: string; provenance: Record<string, unknown>}
-type View = {id: string; name: string; artifact_id: string; hidden_row_ids: string[]; row_order: string[]; selected_marks: string[]; viewer: string | null}
+export type View = {id: string; name: string; artifact_id: string; hidden_row_ids: string[]; row_order: string[]; selected_marks: string[]; viewer: string | null; selected_row_id?: string | null; selected_column?: number | null}
 type Comparison = {id: string; name: string; left_artifact_id: string; right_artifact_id: string; method: string; report: Record<string, unknown>; provenance: Record<string, unknown>}
 type State = {schema: 'bms.family-msa.shared-state.v1'; marks: Mark[]; views: View[]; comparisons: Comparison[]}
 type Revision = {id: string; head_generation: number; revision_id: string; state: State}
 const empty = (): State => ({schema: 'bms.family-msa.shared-state.v1', marks: [], views: [], comparisons: []})
 const id = () => crypto.randomUUID()
 
-export default function AlignmentShared({projectId, receiptId, artifactId, selection, viewer, applyViewer}: {projectId: string; receiptId: string; artifactId: string; selection?: ResidueAnchor; viewer: string; applyViewer: (viewer: string) => void}) {
+export default function AlignmentShared({projectId, receiptId, artifactId, selection, viewer, applyViewer, rowOrder = [], hiddenRowIds = [], selectedRowId, applyView}: {projectId: string; receiptId: string; artifactId: string; selection?: ResidueAnchor; viewer: string; applyViewer: (viewer: string) => void; rowOrder?: string[]; hiddenRowIds?: string[]; selectedRowId?: string; applyView?: (view: View) => void}) {
   const base = `/api/family-msa/projects/${encodeURIComponent(projectId)}`
   const [dataset, setDataset] = useState('')
   const [domain, setDomain] = useState('')
@@ -55,9 +55,9 @@ export default function AlignmentShared({projectId, receiptId, artifactId, selec
       <p>Dataset {revision.id} · revision {revision.revision_id} · generation {revision.head_generation}</p>
       <label>Name <input value={name} onChange={e => setName(e.target.value)}/></label>{' '}
       <button disabled={!selection || selection.resultId !== artifactId} onClick={() => { if (selection) edit(current => ({...current, marks: [...current.marks, {id: id(), label: name, coordinate: {scope: 'artifact_columns', artifact_id: artifactId, start: selection.column, end: selection.column}, note: '', provenance: {}}]})) }}>Add selected column mark</button>{' '}
-      <button disabled={!name} onClick={() => edit(current => ({...current, views: [...current.views, {id: id(), name, artifact_id: artifactId, hidden_row_ids: [], row_order: [], selected_marks: [], viewer}]}))}>Save current viewer as view</button>
+      <button disabled={!name} onClick={() => edit(current => ({...current, views: [...current.views, {id: id(), name, artifact_id: artifactId, hidden_row_ids: hiddenRowIds, row_order: rowOrder, selected_marks: [], viewer, selected_row_id: selection?.rowId ?? (selectedRowId || null), selected_column: selection?.column ?? null}]}))}>Save current viewer as view</button>
       <h3>Marks</h3><ul>{draft.marks.map(mark => <li key={mark.id}>{mark.label}: {mark.coordinate.scope === 'artifact_columns' ? `${mark.coordinate.artifact_id} columns ${mark.coordinate.start}–${mark.coordinate.end}` : `${mark.coordinate.source_member_id} / ${mark.coordinate.occurrence_id} positions ${mark.coordinate.start}–${mark.coordinate.end}`}</li>)}</ul>
-      <h3>Saved views</h3><ul>{draft.views.map(view => <li key={view.id}>{view.name} ({view.artifact_id}) {view.artifact_id === artifactId && view.viewer && <button onClick={() => applyViewer(view.viewer!)}>Apply viewer</button>}</li>)}</ul>
+      <p>Saved views capture host row order, visibility, selection and viewer. Renderer viewport, colors, column visibility and mark selection are not captured or restored.</p><h3>Saved views</h3><ul>{draft.views.map(view => <li key={view.id}>{view.name} ({view.artifact_id}) {view.artifact_id === artifactId && view.viewer && <button onClick={() => { if (applyView) applyView(view); else applyViewer(view.viewer!) }}>Apply viewer</button>}</li>)}</ul>
       <h3>Compare retained alignments</h3><label>Right receipt ID <input value={rightReceipt} onChange={e => setRightReceipt(e.target.value)}/></label>{' '}<label>Right artifact ID <input value={rightArtifact} onChange={e => setRightArtifact(e.target.value)}/></label>{' '}
       <button disabled={busy || !rightReceipt || !rightArtifact || !name} onClick={() => void run(async () => { const result = (await api.post<{method: string; report: Record<string, unknown>}>(`${base}/compare`, {left_receipt_id: receiptId, left_artifact_id: artifactId, right_receipt_id: rightReceipt, right_artifact_id: rightArtifact})).data; edit(current => ({...current, comparisons: [...current.comparisons, {id: id(), name, left_artifact_id: artifactId, right_artifact_id: rightArtifact, method: result.method, report: result.report, provenance: {left_receipt_id: receiptId, right_receipt_id: rightReceipt}}]})) })}>Compare</button>
       <ul>{draft.comparisons.map(item => <li key={item.id}><details><summary>{item.name}: {item.left_artifact_id} ↔ {item.right_artifact_id}</summary><pre>{JSON.stringify(item.report, null, 2)}</pre></details></li>)}</ul>

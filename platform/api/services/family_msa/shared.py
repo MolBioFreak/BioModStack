@@ -53,6 +53,8 @@ class View(Closed):
     row_order: list[str] = Field(default_factory=list)
     selected_marks: list[str] = Field(default_factory=list)
     viewer: str | None = None
+    selected_row_id: str | None = None
+    selected_column: int | None = Field(default=None, ge=0)
 
 
 class Comparison(Closed):
