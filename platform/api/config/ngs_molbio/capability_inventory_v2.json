@@ -1683,7 +1683,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "187923d939618ac17dd0b5710ac132c58627165bc7569f6567a19f836ea9a139",
+      "inventory_sha256": "a4490118287162ec81fc99ead2ca34704be0a35d3f9575e848a69235a2ba5af5",
       "label": "ONT DNA Basecalling",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -1709,7 +1709,7 @@
         "trim_adapters"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.basecall_dna.v1",
-      "parameter_schema_sha256": "f54d88241fff3eac22312d7d8086702a78f0cc7173b3caa5212bc1bde5816fc5",
+      "parameter_schema_sha256": "c02df5b94e7fa0bab095919f991f536be3364c0731aab56b91dfbe7357b1d708",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -1805,7 +1805,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "972380f112e8aef295c1cb60f2aca1801b3b573913c84d8c12cb002c422714ae",
+      "inventory_sha256": "367d55023c21e246488d354f1b2f548bceb2f626b21fdb7b7f85ead8da4e5c3f",
       "label": "ONT RNA Basecalling",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -1828,7 +1828,7 @@
         "trim_adapters"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.basecall_rna.v1",
-      "parameter_schema_sha256": "df51eab5c88cdebdbac7e3d6255f70764cbc5fd8bb5e2a9210711350ebb1016f",
+      "parameter_schema_sha256": "42f053d66f910ab4cc5f362df11e48b03ec8d8a7abfdf9034e8bac199996c536",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -1946,7 +1946,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "73d849b6160766b455a7df8775d6bb9cf03fde22c9928f3f86f83858f9af1ad7",
+      "inventory_sha256": "12ee5302ed097d76d2d0c088a4ff813f8c03722c73d711f3d04fdfd7d8e4c40b",
       "label": "ONT Clone Validation",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -1992,7 +1992,7 @@
         "wf_clone_trim_length"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.clone_validation.v1",
-      "parameter_schema_sha256": "37af416c78b8d0f97e43cfb716e88975595fe81d7a3d3d50201930e4db3b2975",
+      "parameter_schema_sha256": "a67766bd7340f0be7ff6752bfb22609cd950a84413feda2d30d291bce9d50149",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -2125,7 +2125,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "ab731ffa326ab631c12eab4b77af249200d13ff1c9ec8e4b847d20eb4a456f3b",
+      "inventory_sha256": "8d539c8285700a7b0370851bd6f1f5a57a4721d837318eae94ae3e1e877517ca",
       "label": "ONT Construct Screening",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -2182,7 +2182,7 @@
         "wf_clone_trim_length"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.construct_screening.v1",
-      "parameter_schema_sha256": "ba6990657c99441d65a0a8ba4bf6e85509aeb12b2513e0876acafa882c6de752",
+      "parameter_schema_sha256": "eb0d85c3f8cbf27900f76844ce48aa464ccb35f93ed7bb65d7b0bbe933b400fd",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -2419,7 +2419,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "85c154eeba18f9f32d52c744e5691b9a6abcebc41c26cd5927bfe3a814d6b4f3",
+      "inventory_sha256": "190a76d24e87a0f8c3e876f4291a92a438c2451775ca1541b4b3995802a73e18",
       "label": "ONT Methylation Analysis",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -2447,7 +2447,7 @@
         "trim_adapters"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.methylation_analysis.v1",
-      "parameter_schema_sha256": "aac83932c2561db616e1809a4f692af89e5894fd7b0071000ea4b9178303c22e",
+      "parameter_schema_sha256": "b1728b4a5cab97bccf2cb1204cd84c411c61e0bab1adaff89f1b83dfd9cb8d3b",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -2564,7 +2564,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "1eeb934616d0e16e94bddd085d7e1c42689e2a0d0dde5a179b4002c02f99b6b1",
+      "inventory_sha256": "ee64b3c0ed75a75391ef22314363be28354e3100b506dd226412717aa418a4c0",
       "label": "ONT Plasmid QC",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -2606,7 +2606,7 @@
         "trim_adapters"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.plasmid_qc.v1",
-      "parameter_schema_sha256": "c02d773d946b58cc8508692a272fb3dcd96e0f9071d0ee2d9cfc4506be9baff5",
+      "parameter_schema_sha256": "1d4a2002451dc7bf9c7f943c02098628bf5e05ee50e3696ebe082d7b892537f8",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -2820,7 +2820,7 @@
       ],
       "entrypoint_owner": "services.ont_signal_worker.OntSignalWorker",
       "exposure_state": "experimental",
-      "inventory_sha256": "32493f08ade3761f59e7fd4eec8b24e3a07faf70645d9986090f6eae5d154a1c",
+      "inventory_sha256": "249acd6e7116ffad4f54f2dbb4aa896db628a579d51b04b3ca222c72116b0d0c",
       "label": "Squigulator ideal trace comparison",
       "launch_mode": "domain_operation",
       "materializer_owner": "services.ont_signal_worker.OntSignalWorker",
@@ -2844,7 +2844,7 @@
         "remove_signal_outliers"
       ],
       "parameter_schema_id": "bms.ont-squigulator-ideal-comparison.v1",
-      "parameter_schema_sha256": "a703b10b33047871b98dcf96dc43c4ce421c48ae4f6d9f92bfec447ad85580af",
+      "parameter_schema_sha256": "1cb581e807162434fb6b2ce267ce4d58627849dba15f19c44c1b6ab5a1f3a313",
       "parity_ledger": [
         {
           "evidence": "Squigulator 0.5.0 and Squigualiser 0.7.0 source, runtime, and option identities are pinned.",
@@ -3023,7 +3023,7 @@
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "fa1be86b477a68f1b0bfa801808763f96235f2eeb627d023958464015917ec8e",
+  "content_sha256": "7b26770edcabb8908946571a55c28bf1a5bb40872a8a87075b5f4790f66a7228",
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",
@@ -3049,7 +3049,7 @@
   ],
   "payload_ownership_manifest_sha256": "a0a8e0ae952565e5f8dacbd84567e65853c8fbd1ab6b1bb7454ceefcab4aa6cb",
   "schema": "bms.ngs-molbio.capability-inventory.v2",
-  "schema_registry_sha256": "0d91d8c7a54bb827424504a33a2bdd0d406975e5e6669107d9f248b80fa72856",
+  "schema_registry_sha256": "6edc8e82198f8c7c964b947e4bdf506efc0e58c13167f0e9644cf32dddaf03e7",
   "schema_version": 2,
   "source_pin_sha256": "c24afa91cc42054da3899c0f9a024769be96b444a444e8ab714443836856f1a4"
 }

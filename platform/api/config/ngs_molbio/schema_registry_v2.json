@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "1d41fb50300a4e574670f6a02a0345e597ac9ed4",
   "baseline_source_tree": "af85061039a5fafdcb828336f09ea6355713d1a9",
-  "content_sha256": "5ea03a6c09b47d7976d44d32afa144a53c8f916c578090d55a9eec93f482bece",
+  "content_sha256": "8deaca2df440c76973ee5ac2f19c362967eeba2544b0ccbbee5a261dee7a8837",
   "entries": [
     {
       "path": "schemas/ngs_molbio/domain-experiment-v2.schema.json",
@@ -239,9 +239,9 @@
     },
     {
       "path": "platform/api/config/ont_signal_workbench/squigulator_ideal_comparison_schema_v1.json",
-      "schema_canonical_sha256": "1fd016fb724546f5082b21c52e441517649f11d4116db627ca914a9d42a9b86a",
+      "schema_canonical_sha256": "9fcdbd085d16e578461ae16c25a962694d696c6d178c26afc9d50d6d0e0c6a5d",
       "schema_id": "bms.ont-squigulator-ideal-comparison.v1",
-      "schema_sha256": "a703b10b33047871b98dcf96dc43c4ce421c48ae4f6d9f92bfec447ad85580af"
+      "schema_sha256": "1cb581e807162434fb6b2ce267ce4d58627849dba15f19c44c1b6ab5a1f3a313"
     },
     {
       "path": "schemas/ngs_molbio/opaque-keyset-page-v1.schema.json",
@@ -443,27 +443,27 @@
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-basecall_dna-v1.schema.json",
-      "schema_canonical_sha256": "e94bbc832831871a761ca49a29bb296fdbfbc2aad8911fa035f2062fa763bb1c",
+      "schema_canonical_sha256": "aabf6b4754c0d6b79579dd42564bebaf0eb0dd4e0f1241a00c928d62c2e360c6",
       "schema_id": "bms.workflow-parameters.ngs.ont.basecall_dna.v1",
-      "schema_sha256": "f54d88241fff3eac22312d7d8086702a78f0cc7173b3caa5212bc1bde5816fc5"
+      "schema_sha256": "c02df5b94e7fa0bab095919f991f536be3364c0731aab56b91dfbe7357b1d708"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-basecall_rna-v1.schema.json",
-      "schema_canonical_sha256": "b47ab5c7d5e72552db5553d4546baacab7ce1cbf927ec01a68a41af98e2ec49b",
+      "schema_canonical_sha256": "ee3ba3404ac38b6fb8a6f7f60c64278e2b7f9a1c41e587d1c4dbc61ec0f8b451",
       "schema_id": "bms.workflow-parameters.ngs.ont.basecall_rna.v1",
-      "schema_sha256": "df51eab5c88cdebdbac7e3d6255f70764cbc5fd8bb5e2a9210711350ebb1016f"
+      "schema_sha256": "42f053d66f910ab4cc5f362df11e48b03ec8d8a7abfdf9034e8bac199996c536"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-clone_validation-v1.schema.json",
-      "schema_canonical_sha256": "77e4e4e8528bb45253c28f1091ff0f6f58b53b3d232aac03b6ed2ff2d08580ad",
+      "schema_canonical_sha256": "ff55ff67f2a28047ea32c1b2186ec975ac58b0c289123199188af61a52014dcd",
       "schema_id": "bms.workflow-parameters.ngs.ont.clone_validation.v1",
-      "schema_sha256": "37af416c78b8d0f97e43cfb716e88975595fe81d7a3d3d50201930e4db3b2975"
+      "schema_sha256": "a67766bd7340f0be7ff6752bfb22609cd950a84413feda2d30d291bce9d50149"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-construct_screening-v1.schema.json",
-      "schema_canonical_sha256": "59dd7fb4b702ff6a1e22bac494e8f2fbf4af55b26710158c438af58e0ef679cc",
+      "schema_canonical_sha256": "85bd14642428bb4c4108cd12bbecd99eea37b04c2bfaa96bf3bd6a26a7ae156c",
       "schema_id": "bms.workflow-parameters.ngs.ont.construct_screening.v1",
-      "schema_sha256": "ba6990657c99441d65a0a8ba4bf6e85509aeb12b2513e0876acafa882c6de752"
+      "schema_sha256": "eb0d85c3f8cbf27900f76844ce48aa464ccb35f93ed7bb65d7b0bbe933b400fd"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-fastq_qc-v1.schema.json",
@@ -473,15 +473,15 @@
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-methylation_analysis-v1.schema.json",
-      "schema_canonical_sha256": "1b0e03c6d634675494d44bb0016a0ac4581ec596f1e0844c9c19bc442186ced9",
+      "schema_canonical_sha256": "b19445648b2c6593c6a21869de1110d7a3696c661fa916ccd451c82528db35bd",
       "schema_id": "bms.workflow-parameters.ngs.ont.methylation_analysis.v1",
-      "schema_sha256": "aac83932c2561db616e1809a4f692af89e5894fd7b0071000ea4b9178303c22e"
+      "schema_sha256": "b1728b4a5cab97bccf2cb1204cd84c411c61e0bab1adaff89f1b83dfd9cb8d3b"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-plasmid_qc-v1.schema.json",
-      "schema_canonical_sha256": "442ce34bc7e63885e1d14672adbbeea056aa182126bfd570289250600a6eb0aa",
+      "schema_canonical_sha256": "b2185d5df5a0dcedacb62d81e4107fbd88b916772bf932cc79700fd231b5dd31",
       "schema_id": "bms.workflow-parameters.ngs.ont.plasmid_qc.v1",
-      "schema_sha256": "c02d773d946b58cc8508692a272fb3dcd96e0f9071d0ee2d9cfc4506be9baff5"
+      "schema_sha256": "1d4a2002451dc7bf9c7f943c02098628bf5e05ee50e3696ebe082d7b892537f8"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-pooled_reference_assignment-v1.schema.json",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -894,7 +895,12 @@ def _build_file_projection_from_pinned_root(job: Job, root: Path, **pagination) 
             job_output_dir=root,
             pinned_root_descriptor=True,
         )
-    except ngs_alignment_sessions.AlignmentSessionError:
+    except ngs_alignment_sessions.AlignmentSessionError as exc:
+        # Inventory-level failure has no session identity to report; keep the
+        # result readable but leave an operator-visible cause.
+        logging.getLogger(__name__).warning(
+            "FASTQ-QC alignment session inventory unavailable for job %s: %s", job.id, exc,
+        )
         governed_alignment_sessions = []
     alignment_sessions = [
         {

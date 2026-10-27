@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import re
 from typing import Any, Callable, Iterable
 
 DEFAULT_MINKNOW_HOST = "localhost"
@@ -407,6 +408,22 @@ def stop_protocol(minknow_run_id: str, payload: dict[str, Any]) -> tuple[int, di
     }
 
 
+_MINKNOW_RUN_FOLDER_RE = re.compile(r"^\d{8}_\d{4}_[^/]+_([0-9A-Za-z]{8})$")
+
+
+def _run_folder_matches(part: str, minknow_run_id: str) -> bool:
+    """Match MinKNOW's run folder to the bound protocol run identity.
+
+    MinKNOW names run folders ``{date}_{time}_{device}_{flow_cell}_{short_id}``
+    where ``short_id`` is the first eight characters of the protocol run ID;
+    the full ID is never a path component under the default layout.
+    """
+    if part == minknow_run_id:
+        return True
+    match = _MINKNOW_RUN_FOLDER_RE.fullmatch(part)
+    return bool(match) and len(minknow_run_id) >= 8 and match.group(1).lower() == minknow_run_id[:8].lower()
+
+
 def _discover_run_outputs(output_directories: dict[str, Any], minknow_run_id: str) -> dict[str, list[str]]:
     """Discover bounded regular outputs below MinKNOW-issued roots without links."""
     result: dict[str, list[str]] = {"fastq": [], "pod5": [], "bam": []}
@@ -445,8 +462,13 @@ def _discover_run_outputs(output_directories: dict[str, Any], minknow_run_id: st
                         continue
                     candidate = str(Path(directory) / name)
                     relative_parts = Path(candidate).relative_to(root).parts[:-1]
-                    run_like_parts = [part for part in relative_parts if len(part) >= 20]
-                    if run_like_parts and minknow_run_id not in relative_parts:
+                    run_like_parts = [
+                        part for part in relative_parts
+                        if len(part) >= 20 or _MINKNOW_RUN_FOLDER_RE.fullmatch(part)
+                    ]
+                    if run_like_parts and not any(
+                        _run_folder_matches(part, minknow_run_id) for part in relative_parts
+                    ):
                         continue
                     result[kind].append(candidate)
                     discovered += 1
