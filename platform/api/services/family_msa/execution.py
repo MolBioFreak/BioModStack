@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import signal
+import shutil
 import sys
 import uuid
 from datetime import datetime
@@ -23,14 +24,25 @@ def compile_command(payload: dict, executable: str, input_path: str) -> list[str
 async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_factory) -> None:
     """Run MAFFT in the transient unit; the unit owns and cancels its children."""
     from database import Job, JobArtifact
-    from sqlalchemy import or_, update
+    from services.execution_ownership import cancellation_intent_requested, latest_execution_attempt
+    from sqlalchemy import text
 
     async with session_factory() as session:
         job = await session.get(Job, job_id)
-        if not job or job.status != 'running' or job.queue_status == 'cancelling':
+        if not job or job.status != 'running' or cancellation_intent_requested(job):
             return
         attempt = job.retry_count or 0
         run_identity = os.environ.get('BMS_TRANSIENT_WORKFLOW_UNIT_NAME') or job.nextflow_run_id
+        nonce = os.environ.get('BMS_TRANSIENT_WORKFLOW_OWNER_NONCE', '')
+        invocation = os.environ.get('INVOCATION_ID', '')
+        authority = latest_execution_attempt(job.params)
+        if invocation and (not authority or authority.get('unit') != run_identity
+                           or authority.get('owner_nonce') != nonce
+                           or authority.get('invocation_id') != invocation
+                           or authority.get('state') != 'started'):
+            return
+        original_run_id = job.nextflow_run_id
+        original_retry = job.retry_count
     # A unique directory also isolates re-entry after an interrupted attempt.
     work = Path(output_dir).resolve() / 'family_msa' / f'attempt-{attempt}-{uuid.uuid4().hex}'
     work.mkdir(parents=True)
@@ -41,10 +53,23 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
     code = None
     error = None
     argv = []
+    runtime = None
     try:
         request = AlignmentRequest.model_validate({key: payload[key] for key in ('roster', 'settings')})
         input_file.write_text(''.join(f'>{r.row_id}\n{r.sequence}\n' for r in request.roster.rows), encoding='utf8')
         image = os.environ.get('BMS_FAMILY_MSA_SIF', '').strip()
+        if image:
+            runtime = {'kind': 'image', 'path': image}
+            try:
+                digest = hashlib.sha256()
+                with open(image, 'rb') as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                        digest.update(chunk)
+                runtime['sha256'] = digest.hexdigest()
+            except OSError as exc:
+                runtime['identity_error'] = str(exc)
+        else:
+            runtime = {'kind': 'host', 'executable': shutil.which(request.settings.engine)}
         if request.settings.engine == 'mafft':
             if image:
                 argv = ['apptainer', 'exec', '--cleanenv', '--no-home', '--bind', f'{work}:{work}', image]
@@ -78,7 +103,7 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
         with log.open('a', encoding='utf8') as stream:
             stream.write(error + '\n')
     receipt_path.write_text(json.dumps({'requested': payload, 'argv': argv, 'returncode': code,
-        'effective_settings': payload.get('settings'), 'error': error}, indent=2) + '\n', encoding='utf8')
+        'effective_settings': payload.get('settings'), 'runtime': runtime, 'error': error}, indent=2) + '\n', encoding='utf8')
     files = [(input_file, 'input', 'text/x-fasta'),
              (log, 'engine_log', 'text/plain'), (receipt_path, 'receipt', 'application/json')]
     if payload.get('settings', {}).get('engine', 'mafft') == 'mafft':
@@ -99,21 +124,28 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
             media = 'text/x-fasta' if name.endswith('.fasta') else 'application/json' if name.endswith('.json') else 'text/plain'
             files.append((path, role, media))
     async with session_factory() as session:
-        # Cancellation and a successor attempt must never be overwritten.
-        result = await session.execute(update(Job).where(Job.id == job_id, Job.status == 'running',
-            Job.queue_status != 'cancelling', or_(Job.nextflow_run_id == run_identity,
-                                                  Job.nextflow_run_id.is_(None))).values(
-            status='failed' if error else 'completed', queue_status='failed' if error else 'completed',
-            completed_at=datetime.utcnow(), error_message=error, assigned_gpu=None))
-        if result.rowcount:
-            for path, role, media_type in files:
-                if path.is_file():
-                    digest = hashlib.sha256()
-                    with path.open('rb') as stream:
-                        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-                            digest.update(chunk)
-                    session.add(JobArtifact(id=str(uuid.uuid4()), owner_job_id=job_id, attempt=attempt,
-                        logical_path=str(path.relative_to(Path(output_dir).resolve())), storage_path=str(path),
-                        sha256=digest.hexdigest(), bytes=path.stat().st_size, media_type=media_type,
-                        provenance={'role': role, 'run_identity': run_identity}))
+        # Serialize the authority read and terminal write with cancellation.
+        await session.execute(text('BEGIN IMMEDIATE'))
+        job = await session.get(Job, job_id)
+        if (not job or job.status != 'running' or cancellation_intent_requested(job)
+                or job.retry_count != original_retry
+                or latest_execution_attempt(job.params) != authority
+                or (job.nextflow_run_id != original_run_id and
+                    not (authority and original_run_id is None and job.nextflow_run_id == run_identity))):
+            return
+        job.status = 'failed' if error else 'completed'
+        job.queue_status = job.status
+        job.completed_at = datetime.utcnow()
+        job.error_message = error
+        job.assigned_gpu = None
+        for path, role, media_type in files:
+            if path.is_file():
+                digest = hashlib.sha256()
+                with path.open('rb') as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                        digest.update(chunk)
+                session.add(JobArtifact(id=str(uuid.uuid4()), owner_job_id=job_id, attempt=attempt,
+                    logical_path=str(path.relative_to(Path(output_dir).resolve())), storage_path=str(path),
+                    sha256=digest.hexdigest(), bytes=path.stat().st_size, media_type=media_type,
+                    provenance={'role': role, 'run_identity': run_identity}))
         await session.commit()

@@ -32,3 +32,13 @@ async def test_create_and_resubmit_cpu_job(admission, molecule, model):
     assert again.vram_estimate_mb == 0 and again.pinned_gpu is None
     assert again.params['roster'] == row.params['roster']
     assert estimate_vram(model, 10000, payload) == 0
+
+
+@pytest.mark.asyncio
+async def test_mixed_case_family_identity_is_canonical(admission):
+    payload = {'roster': {'molecule': 'dna', 'rows': [
+        {'row_id': 'r1', 'header': 'one', 'sequence': 'ACGT'}]}, 'settings': {}}
+    created = await jobs._create_job(JobCreate(name='canonical', model_id=' FAMILY_MSA_NUCLEIC ',
+        mode=' FAMILY_MSA ', params=payload), BackgroundTasks(), admission)
+    row = await admission.get(Job, created.id)
+    assert (row.model_id, row.mode) == ('family_msa_nucleic', 'family_msa')

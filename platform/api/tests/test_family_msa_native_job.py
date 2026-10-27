@@ -1,5 +1,7 @@
 """Scratch scheduler-to-owned-runner tests with a real MAFFT container."""
 import asyncio
+import hashlib
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,6 +34,7 @@ from tests.test_core_protein_scientific_admission import admission
       for mol in ('dna', 'rna') for method in ('pairwise', 'tcs')],
 ])
 async def test_scheduler_adapter_to_native_owned_runner(admission, monkeypatch, molecule, model, settings, members):
+    monkeypatch.delenv('INVOCATION_ID', raising=False)
     image = os.environ.get('BMS_TEST_FAMILY_MSA_SIF')
     if not image:
         pytest.skip('set BMS_TEST_FAMILY_MSA_SIF to the isolated native image')
@@ -81,6 +84,8 @@ async def test_scheduler_adapter_to_native_owned_runner(admission, monkeypatch, 
     artifacts = (await admission.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))).all()
     roles = {a.provenance['role']: a for a in artifacts}
     assert {'input', 'alignment', 'engine_log', 'receipt'} <= roles.keys()
+    runtime = json.loads(Path(roles['receipt'].storage_path).read_text())['runtime']
+    assert runtime['sha256'] == hashlib.sha256(Path(image).read_bytes()).hexdigest()
     alignments = [a for a in artifacts if a.provenance['role'] == 'alignment']
     assert len(alignments) == members
     assert all(Path(a.storage_path).stat().st_size > 0 for a in alignments)
@@ -94,6 +99,7 @@ async def test_scheduler_adapter_to_native_owned_runner(admission, monkeypatch, 
 @pytest.mark.asyncio
 async def test_owned_runner_cancellation_reaps_process(admission, monkeypatch, tmp_path):
     from services.family_msa.execution import run_owned_job
+    monkeypatch.delenv('INVOCATION_ID', raising=False)
     executable = tmp_path / 'mafft'
     executable.write_text('#!/bin/sh\nprintf "%s" "$$" > "$PID_FILE"\nexec sleep 120\n')
     executable.chmod(0o755)
@@ -126,6 +132,7 @@ async def test_owned_runner_cancellation_reaps_process(admission, monkeypatch, t
 async def test_cancel_api_stops_owned_runner(admission, monkeypatch, tmp_path):
     from services.family_msa.execution import run_owned_job
     from services import job_control
+    monkeypatch.delenv('INVOCATION_ID', raising=False)
     executable = tmp_path / 'famsa'
     executable.write_text('#!/bin/sh\nprintf "%s" "$$" > "$PID_FILE"\nexec sleep 120\n')
     executable.chmod(0o755)
@@ -160,3 +167,52 @@ async def test_cancel_api_stops_owned_runner(admission, monkeypatch, tmp_path):
     assert job.params['cancellation_receipt']['remote_stop_verified'] is True
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mutation', ['canceling', 'receipt', 'successor', 'owner'])
+async def test_terminal_publication_fenced_by_live_authority(admission, monkeypatch, tmp_path, mutation):
+    from services.family_msa.execution import run_owned_job
+    executable = tmp_path / 'mafft'
+    executable.write_text('#!/bin/sh\ntouch "$READY"\nwhile [ ! -f "$RELEASE" ]; do sleep 0.05; done\n')
+    executable.chmod(0o755)
+    monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
+    monkeypatch.setenv('READY', str(tmp_path / 'ready'))
+    monkeypatch.setenv('RELEASE', str(tmp_path / 'release'))
+    monkeypatch.delenv('BMS_FAMILY_MSA_SIF', raising=False)
+    monkeypatch.delenv('BMS_TRANSIENT_WORKFLOW_UNIT_NAME', raising=False)
+    monkeypatch.delenv('INVOCATION_ID', raising=False)
+    payload = {'roster': {'molecule': 'dna', 'rows': [
+        {'row_id': 'r1', 'header': 'one', 'sequence': 'ACGT'}]}, 'settings': {'threads': 1}}
+    if mutation == 'owner':
+        monkeypatch.setenv('BMS_TRANSIENT_WORKFLOW_UNIT_NAME', 'unit-a')
+        monkeypatch.setenv('BMS_TRANSIENT_WORKFLOW_OWNER_NONCE', 'nonce-a')
+        monkeypatch.setenv('INVOCATION_ID', 'invocation-a')
+        payload['execution_attempts'] = [{'unit': 'unit-a', 'owner_nonce': 'nonce-a',
+            'invocation_id': 'invocation-a', 'state': 'started'}]
+    job = Job(id='race-' + mutation, name='race', model_id='family_msa_nucleic', mode='family_msa',
+              params=payload, status='running', queue_status='running', nextflow_run_id=None)
+    admission.add(job)
+    await admission.commit()
+    factory = async_sessionmaker(admission.bind, expire_on_commit=False)
+    task = asyncio.create_task(run_owned_job(job.id, payload, str(tmp_path / 'output'), factory))
+    for _ in range(200):
+        if (tmp_path / 'ready').exists():
+            break
+        await asyncio.sleep(0.05)
+    assert (tmp_path / 'ready').exists()
+    if mutation == 'canceling':
+        job.queue_status = 'canceling'
+    elif mutation == 'receipt':
+        job.params = {**payload, 'cancellation_receipt': {'schema': 'bms.workflow-cancellation.v1', 'state': 'requested'}}
+    elif mutation == 'owner':
+        job.params = {**payload, 'execution_attempts': [*payload['execution_attempts'],
+            {'unit': 'unit-b', 'owner_nonce': 'nonce-b', 'invocation_id': 'invocation-b', 'state': 'started'}]}
+    else:
+        job.retry_count = (job.retry_count or 0) + 1
+    await admission.commit()
+    (tmp_path / 'release').touch()
+    await task
+    await admission.refresh(job)
+    assert job.status == 'running'
+    assert not (await admission.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))).all()

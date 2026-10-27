@@ -6015,6 +6015,8 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
             raise HTTPException(422, detail=str(exc)) from exc
         if selected != normalized_model_id or normalized_mode != MODE:
             raise HTTPException(422, detail='Family alignment model or mode does not match request')
+        job_data.model_id = selected
+        job_data.mode = MODE
         job_data.params = payload
         return job_data
     from services.sequence_designer_settings import normalize_historical_sequence_settings
@@ -6975,9 +6977,12 @@ async def _create_job(
         if not capability_digest or len(capability_digest) != 64:
             raise HTTPException(status_code=500, detail="trusted Nanopore submission is missing alignment authorization")
 
-    job_data.params = normalize_job_request(
+    normalized_request = normalize_job_request(
         job_data, registry=registry, md_input_resolver=md_input_resolver,
-    ).params
+    )
+    job_data.params = normalized_request.params
+    if normalized_model_id in {'family_msa_protein', 'family_msa_nucleic'}:
+        job_data.model_id, job_data.mode = normalized_request.model_id, normalized_request.mode
     is_mutagenesis = 'mutagenesis_variants' in job_data.params
 
     _validate_protenix_template_requirements(job_data.model_id, job_data.params)
