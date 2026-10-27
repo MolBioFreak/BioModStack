@@ -43,10 +43,12 @@ def inspect_project_bundle(root: Path) -> dict:
     included = set(manifest['dependencies']['included'])
     if 'project-export.json' not in included:
         raise ValueError('bundle has no Project export inventory')
-    inventory = json.loads((root / 'project-export.json').read_text(encoding='utf-8'))
-    if not isinstance(inventory, dict) or inventory.get('schema') != 'bms.family-msa.project-export.v1':
-        raise ValueError('invalid Project export inventory')
+    from .project_remap import ProjectInventory
+    inventory = ProjectInventory.model_validate_json((root / 'project-export.json').read_text(encoding='utf-8')).model_dump(by_alias=True)
     entries = inventory.get('artifacts'), inventory.get('shared_states')
+    for group in entries:
+        if len({entry['id'] for entry in group}) != len(group):
+            raise ValueError('duplicate Project export identifiers')
     if any(not isinstance(group, list) for group in entries):
         raise ValueError('invalid Project export entries')
     paths = []
