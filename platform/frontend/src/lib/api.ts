@@ -3797,7 +3797,7 @@ export interface MolBioRawDnaImportRow {
 }
 
 export interface MolBioSequenceImportPayload {
-    source_format: 'fasta' | 'genbank' | 'raw_dna';
+    source_format: 'fasta' | 'genbank' | 'csv' | 'raw_dna';
     source_text?: string;
     raw_rows?: MolBioRawDnaImportRow[];
     topology_default: 'circular' | 'linear';

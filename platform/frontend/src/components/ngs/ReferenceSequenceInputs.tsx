@@ -27,7 +27,7 @@ export function ReferenceSequenceInputs({ onAdded }: { onAdded: (records: Record
     useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
     const client = useQueryClient();
     const [tab, setTab] = useState<'paste' | 'files' | 'saved'>('paste');
-    const [format, setFormat] = useState<'fasta' | 'genbank' | 'raw_dna'>('fasta');
+    const [format, setFormat] = useState<'fasta' | 'genbank' | 'csv' | 'raw_dna'>('fasta');
     const [text, setText] = useState('');
     const [name, setName] = useState('');
     const [topology, setTopology] = useState<'circular' | 'linear'>('circular');
@@ -58,12 +58,12 @@ export function ReferenceSequenceInputs({ onAdded }: { onAdded: (records: Record
             const payloads: Array<{ payload: MolBioSequenceImportPayload; label: string }> = [];
             const common = { origin_surface: 'ngs' as const, topology_default: topology };
             if (tab === 'files') {
-                if (!files.length) throw new Error('Choose FASTA or GenBank files. You can select several files at once.');
+                if (!files.length) throw new Error('Choose FASTA, GenBank or CSV files. You can select several files at once.');
                 if (files.length > 256) throw new Error('Choose at most 256 sequence files per batch.');
                 if (files.reduce((sum, file) => sum + file.size, 0) > MAX_BYTES) throw new Error('Choose at most 10 MiB of sequence files per batch.');
                 for (const file of files) {
-                    const sourceFormat = /\.(gb|gbk|gbff|genbank)$/i.test(file.name) ? 'genbank' : /\.(fa|fas|fasta|fna|fsa)$/i.test(file.name) ? 'fasta' : null;
-                    if (!sourceFormat) throw new Error(`Unsupported sequence file: ${file.name}. Choose FASTA or GenBank.`);
+                    const sourceFormat = /\.(gb|gbk|gbff|genbank)$/i.test(file.name) ? 'genbank' : /\.(fa|fas|fasta|fna|fsa)$/i.test(file.name) ? 'fasta' : /\.csv$/i.test(file.name) ? 'csv' : null;
+                    if (!sourceFormat) throw new Error(`Unsupported sequence file: ${file.name}. Choose FASTA, GenBank or CSV.`);
                     payloads.push({ label: file.name, payload: { ...common, source_format: sourceFormat, source_text: await file.text(), source_provider: 'upload', source_id: file.name.slice(0,255), idempotency_key: crypto.randomUUID() } });
                 }
             } else {
@@ -151,7 +151,7 @@ export function ReferenceSequenceInputs({ onAdded }: { onAdded: (records: Record
     const valid = previews.length > 0 && previews.every(item => item.result.valid && !item.result.errors.length);
     return <section className="space-y-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3" data-testid="molbio-sequence-import-panel">
         <h3 className="text-sm font-semibold text-[var(--text-primary)]">Add expected sequences</h3>
-        <p className="text-xs text-[var(--text-secondary)]">Add one plasmid or a batch. Each FASTA or GenBank record stays a separate saved sequence with its own version.</p>
+        <p className="text-xs text-[var(--text-secondary)]">Add one plasmid or a batch. Each FASTA, GenBank or CSV record stays a separate saved sequence with its own version.</p>
         <p className="text-xs text-[var(--text-secondary)]">For barcoded plasmids, add all expected sequences here. Use Basecall DNA with your barcode kit and sample names, then map the demultiplexed barcodes to these plasmids in Runs.</p>
         <div className="flex flex-wrap gap-2" role="group" aria-label="Sequence input method">{([['paste','Paste sequence'],['files','Browse sequence files'],['saved','Saved MolBio sequences']] as const).map(([id,label]) => <button type="button" key={id} disabled={busy} aria-pressed={tab===id} onClick={() => { setTab(id); resetPreview(); }} className={`${BUTTON} ${tab===id ? 'border-[var(--accent-primary)] bg-[var(--bg-tertiary)]' : ''}`}>{label}</button>)}</div>
         {tab === 'saved' ? <>
@@ -167,11 +167,12 @@ export function ReferenceSequenceInputs({ onAdded }: { onAdded: (records: Record
             <button type="button" className={BUTTON} disabled={busy || !Object.keys(selected).length || !canAttach} onClick={() => add.mutate()}>Add {Object.keys(selected).length || 'selected'} saved sequences to Project</button>
         </> : <>
             <label className="block text-xs">Default topology<select aria-label="Import topology default" value={topology} disabled={busy} onChange={event => { setTopology(event.target.value as typeof topology); resetPreview(); }} className={`${CONTROL} mt-1`}><option value="circular">Circular plasmids</option><option value="linear">Linear sequences</option></select></label>
-            {tab === 'files' ? <label className="block text-sm">FASTA or GenBank files<input type="file" aria-label="Sequence files" multiple accept=".fa,.fas,.fasta,.fna,.fsa,.gb,.gbk,.gbff,.genbank" disabled={busy} onChange={event => { setFiles(Array.from(event.target.files ?? [])); resetPreview(); }} className={`${CONTROL} mt-1`} /><span className="mt-1 block text-xs text-[var(--text-secondary)]">Browse this computer; select several files or one file containing multiple records. Maximum 256 sequences / 10 MiB per batch.</span>{files.map((file,index) => <span className="block text-xs" key={`${file.name}:${index}`}>{file.name}</span>)}</label> : <>
-                <label className="block text-xs">Sequence format<select aria-label="Pasted sequence format" value={format} disabled={busy} onChange={event => { setFormat(event.target.value as typeof format); resetPreview(); }} className={`${CONTROL} mt-1`}><option value="fasta">FASTA — one or multiple records</option><option value="genbank">GenBank — one or multiple records</option><option value="raw_dna">Plain DNA sequence</option></select></label>
+            {tab === 'files' ? <label className="block text-sm">FASTA, GenBank or CSV files<input type="file" aria-label="Sequence files" multiple accept=".fa,.fas,.fasta,.fna,.fsa,.gb,.gbk,.gbff,.genbank,.csv" disabled={busy} onChange={event => { setFiles(Array.from(event.target.files ?? [])); resetPreview(); }} className={`${CONTROL} mt-1`} /><span className="mt-1 block text-xs text-[var(--text-secondary)]">Browse this computer; select several files or one file containing multiple records. Maximum 256 sequences / 10 MiB per batch.</span>{files.map((file,index) => <span className="block text-xs" key={`${file.name}:${index}`}>{file.name}</span>)}</label> : <>
+                <label className="block text-xs">Sequence format<select aria-label="Pasted sequence format" value={format} disabled={busy} onChange={event => { setFormat(event.target.value as typeof format); resetPreview(); }} className={`${CONTROL} mt-1`}><option value="fasta">FASTA — one or multiple records</option><option value="genbank">GenBank — one or multiple records</option><option value="csv">CSV — one sequence per row</option><option value="raw_dna">Plain DNA sequence</option></select></label>
                 {format==='raw_dna' && <input aria-label="Sequence name" placeholder="Plasmid name" value={name} disabled={busy} onChange={event => { setName(event.target.value); resetPreview(); }} className={CONTROL} />}
-                <textarea aria-label="Paste expected sequences" rows={7} value={text} disabled={busy} onChange={event => { setText(event.target.value); resetPreview(); }} placeholder={format==='fasta' ? '>plasmid_1\nPaste sequence here\n>plasmid_2\nPaste another sequence here' : format==='genbank' ? 'Paste complete GenBank records here' : 'Paste DNA bases here'} className={`${CONTROL} font-mono`} />
+                <textarea aria-label="Paste expected sequences" rows={7} value={text} disabled={busy} onChange={event => { setText(event.target.value); resetPreview(); }} placeholder={format==='fasta' ? '>plasmid_1\nPaste sequence here\n>plasmid_2\nPaste another sequence here' : format==='genbank' ? 'Paste complete GenBank records here' : format==='csv' ? 'name,sequence,topology\nplasmid_1,ACGTACGT,circular\nplasmid_2,TGCATGCA,linear' : 'Paste DNA bases here'} className={`${CONTROL} font-mono`} />
             </>}
+            {(tab === 'files' || format === 'csv') && <p className="text-xs text-[var(--text-secondary)]">CSV: use a header row with <code>name,sequence</code> and one sequence per row. Optional columns: <code>topology</code> (circular or linear), <code>description</code>, <code>accession</code>, <code>organism</code>. Blank topology uses the default above. Other columns are not imported; barcode assignments are configured separately.</p>}
             {canAttach && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={addToProject} disabled={busy} onChange={event => setAddToProject(event.target.checked)} />Add saved sequences to this Project</label>}
             <div className="flex flex-wrap gap-2"><button type="button" disabled={busy} className={BUTTON} onClick={() => preview.mutate()}>{preview.isPending ? 'Checking sequences…' : 'Check sequences'}</button><button type="button" disabled={busy || !valid} className={BUTTON} onClick={() => add.mutate()}>{add.isPending ? 'Adding sequences…' : canAttach && addToProject ? 'Save and add to Project' : 'Save sequences to MolBio'}</button></div>
         </>}
