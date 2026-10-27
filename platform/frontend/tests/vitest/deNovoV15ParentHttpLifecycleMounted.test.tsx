@@ -165,6 +165,18 @@ suite('ordinary parent Complexa inactive reward controls survive cold SQLite Tem
     expect(restored.params.native_job_request.params).not.toHaveProperty('native_control_drafts');
 },30000);
 const clone = { name:'Parent retained exact', model_id:'rfd4_proteina', mode:'generate', execution_target_id:null, sequence_design:null, params:{rfd4_request:nativeRequest} };
+suite.each(['omitted', 'null'])('cloned %s optional-operation envelope survives real SQLite Template cold Load', async presence => {
+    const source: any = { ...clone };
+    if (presence === 'omitted') delete source.sequence_design;
+    await mount(undefined, source);
+    const saved = await saveTemplate(`Optional operation ${presence}`);
+    expect(Object.hasOwn(saved.params.native_job_request, 'sequence_design')).toBe(presence === 'null');
+    if (presence === 'null') expect(saved.params.native_job_request.sequence_design).toBeNull();
+    await coldLoad(saved);
+    const reopened = await saveTemplate(`Optional operation ${presence} reopened`);
+    expect(Object.hasOwn(reopened.params.native_job_request, 'sequence_design')).toBe(presence === 'null');
+    if (presence === 'null') expect(reopened.params.native_job_request.sequence_design).toBeNull();
+}, 30000);
 suite('all five populated engine drafts survive real SQLite template Save and cold Load', async () => {
     await mount(undefined, clone);
     const named = (name: string) => [...document.querySelectorAll('label')].find(node => !node.closest('[hidden]') && node.firstChild?.textContent === name)?.querySelector('input,select') as HTMLInputElement | HTMLSelectElement;
