@@ -20,6 +20,7 @@ import {
     fetchOntProtocolOptions,
     requestMk1dReconnect,
     startOntRunIntent,
+    stopOntInstrumentRun,
     type OntInstrumentRun,
     type OntLiveDevice,
     type OntProtocolOption,
@@ -109,16 +110,6 @@ function errorMessage(error: unknown, fallback: string): string {
     return responseDetail(error) ?? (error instanceof Error ? error.message : fallback);
 }
 
-function isPhysicalStartDisabledAfterRevalidation(error: unknown): boolean {
-    if (!error || typeof error !== 'object') return false;
-    const response = (error as { response?: unknown }).response;
-    if (!response || typeof response !== 'object') return false;
-    const status = (response as { status?: unknown }).status;
-    const detail = responseDetail(error)?.replace(/[.]+$/, '');
-    return status === 501
-        && detail === 'MinKNOW protocol start remains disabled pending separately authorized supervised commissioning';
-}
-
 function runSelectionKey(run: { run_id: string; observed_generation: number }): string {
     return `${run.run_id}\u0000${run.observed_generation}`;
 }
@@ -163,6 +154,8 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
     const requestedReferenceRevision = requestedPinnedRevisions.reference.value;
 
     const [selectedPosition, setSelectedPosition] = useState('');
+    const [selectedKit, setSelectedKit] = useState('');
+    const [runHours, setRunHours] = useState(24);
     const [sampleSelection, setSampleSelection] = useState<{ domainId: string; sampleId: string } | null>(null);
     const [selectedRunGeneration, setSelectedRunGeneration] = useState<SelectedRunGeneration | null>(null);
     const [selectedExternalPod5CandidateId, setSelectedExternalPod5CandidateId] = useState('');
@@ -194,8 +187,8 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
     const selectedDevice = devices.find((device) => device.position === selectedPosition) ?? devices[0];
     const selectedPositionForQuery = selectedDevice?.position ?? '';
     const protocolOptions = useQuery({
-        queryKey: ['ont-protocol-options', selectedPositionForQuery],
-        queryFn: async () => (await fetchOntProtocolOptions(selectedPositionForQuery)).data,
+        queryKey: ['ont-protocol-options', selectedPositionForQuery, selectedKit, runHours],
+        queryFn: async () => (await fetchOntProtocolOptions(selectedPositionForQuery, { kit: selectedKit, run_hours: runHours })).data,
         enabled: !rawSignalOnly && Boolean(selectedPositionForQuery),
         refetchInterval: (query) => jobPollingInterval(10000, query),
     });
@@ -467,28 +460,32 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
             // Select and refresh the durable BMS ledger immediately. The subsequent
             // physical-start revalidation never becomes the sole run-history authority.
             refreshDurableRuns(intent.data);
-            setMessage(`BMS run ${intent.data.id} is armed; revalidating before physical start.`);
-            try {
-                const started = await startOntRunIntent(intent.data.id, {
-                    confirm_start: true,
-                    intent_generation: intent.data.observed_generation,
-                });
-                return { run: started.data, revalidated: false };
-            } catch (error) {
-                if (isPhysicalStartDisabledAfterRevalidation(error)) {
-                    return { run: intent.data, revalidated: true };
-                }
-                throw error;
-            }
+            setMessage(`Starting run ${intent.data.id} in MinKNOW…`);
+            const started = await startOntRunIntent(intent.data.id, {
+                confirm_start: true,
+                intent_generation: intent.data.observed_generation,
+            });
+            return started.data;
         },
-        onSuccess: ({ run, revalidated }) => {
+        onSuccess: (run) => {
             refreshDurableRuns(run);
-            setMessage(revalidated
-                ? `BMS run ${run.id} remains armed after fresh revalidation; physical MinKNOW start remains disabled.`
-                : 'Intent was freshly checked; physical MinKNOW start remains disabled.');
+            setMessage(`Run ${run.id} started in MinKNOW (${run.status}).`);
             void deviceStatus.refetch();
         },
-        onError: (error) => setMessage(errorMessage(error, 'ONT intent validation failed')),
+        onError: (error) => {
+            setMessage(errorMessage(error, 'The run could not be started'));
+            void durableRunsQuery.refetch();
+        },
+    });
+
+    const stopRun = useMutation({
+        mutationFn: async (runId: string) => (await stopOntInstrumentRun(runId)).data,
+        onSuccess: (run) => {
+            refreshDurableRuns(run);
+            setMessage(`Stop sent to MinKNOW for run ${run.id} (${run.status}). Data collected so far is kept.`);
+            void deviceStatus.refetch();
+        },
+        onError: (error) => setMessage(errorMessage(error, 'The run could not be stopped')),
     });
 
     const blockers = effectiveProtocolOptions?.blockers ?? [];
@@ -503,6 +500,8 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
         && effectiveProtocolOptions?.can_start
         && !startRun.isPending
     );
+    const availableKits = effectiveProtocolOptions?.available_kits ?? [];
+    const activeRuns = durableRuns.filter((run) => ['starting', 'running', 'stopping', 'unknown'].includes(run.status));
     const availableCount = useMemo(() => devices.filter((device) => device.available_for_run).length, [devices]);
     const selectedGeneration = selectedGenerationQuery.data;
 
@@ -516,7 +515,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                         <h2 className="text-xl font-semibold text-[var(--text-primary)]">ONT instrument control</h2>
                         <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-100">Mk1D / MinKNOW</span>
                     </div>
-                    <p className="max-w-2xl text-sm text-[var(--text-secondary)]">Select a server-discovered Mk1D position and submit its opaque protocol intent. Reconnect is a trusted local BMS-host recovery action; it is not available through Tailnet.</p>
+                    <p className="max-w-2xl text-sm text-[var(--text-secondary)]">Pick a Mk1D position, choose the kit and run length, and start sequencing. BMS tracks the run and picks up its reads when it finishes. Reconnect only works on this computer, not over Tailnet.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                     <button type="button" onClick={onAnalyzeExistingData} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]">Data Analysis</button>
@@ -638,7 +637,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                 </div>
 
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
-                    <div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Run intent</h3><p className="text-xs text-[var(--text-secondary)]">Protocol and output policy are server-issued opaque handles.</p></div>
+                    <div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">New sequencing run</h3><p className="text-xs text-[var(--text-secondary)]">BMS picks the matching MinKNOW protocol and default basecalling model for the kit and flow cell.</p></div>
                     <label className="block text-xs font-semibold text-[var(--text-secondary)]">Current domain sample revision
                         <select
                             value={selectedSample?.id ?? ''}
@@ -662,8 +661,54 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                     <label className="block text-xs font-semibold text-[var(--text-secondary)]">Experiment group (exact Domain Experiment ID)
                         <input readOnly value={exactDomainExperimentId ?? ''} placeholder="Select an exact Domain Experiment" className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)]" />
                     </label>
-                    <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">{selectedOption ? `${selectedOption.protocol_label} · ${selectedOption.output_policy_label}` : 'No protocol option is currently available.'}{blockers.length ? <div className="mt-2 text-amber-100">Preflight blockers: {blockers.join(', ')}</div> : null}</div>
-                    <button type="button" disabled={!canStart} title={domainIntentBlocker ?? undefined} onClick={() => startRun.mutate()} className="rounded-lg bg-[var(--accent-secondary)] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Validate run intent</button>
+                    <label className="block text-xs font-semibold text-[var(--text-secondary)]">Sequencing kit
+                        <select
+                            aria-label="Sequencing kit"
+                            value={selectedKit}
+                            onChange={(event) => setSelectedKit(event.target.value)}
+                            className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]"
+                        >
+                            <option value="">{availableKits.length ? 'Select the kit used for this library…' : 'Insert a flow cell to list kits'}</option>
+                            {availableKits.map((kit) => <option key={kit} value={kit}>{kit}</option>)}
+                        </select>
+                    </label>
+                    <label className="block text-xs font-semibold text-[var(--text-secondary)]">Run length (hours)
+                        <input
+                            aria-label="Run length in hours"
+                            type="number"
+                            min={0.5}
+                            max={96}
+                            step={0.5}
+                            value={runHours}
+                            onChange={(event) => setRunHours(Math.min(96, Math.max(0.5, Number(event.target.value) || 24)))}
+                            className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]"
+                        />
+                    </label>
+                    <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">{selectedOption ? `${selectedOption.protocol_label} · basecalling ${selectedOption.basecalling_enabled ? 'on' : 'off'}` : selectedKit ? 'MinKNOW has no sequencing protocol for this kit and flow cell.' : 'Choose a kit to prepare the run.'}{blockers.length ? <div className="mt-2 text-amber-100">Not ready: {blockers.join(', ')}</div> : null}</div>
+                    <button
+                        type="button"
+                        disabled={!canStart}
+                        title={domainIntentBlocker ?? undefined}
+                        onClick={() => {
+                            if (window.confirm(`Start sequencing on ${selectedDevice?.position} with ${selectedKit} for ${runHours} h? This uses the flow cell.`)) startRun.mutate();
+                        }}
+                        className="rounded-lg bg-[var(--accent-secondary)] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {startRun.isPending ? 'Starting…' : 'Start sequencing'}
+                    </button>
+                    {activeRuns.map((run) => (
+                        <button
+                            key={run.run_id}
+                            type="button"
+                            disabled={stopRun.isPending || run.status === 'stopping'}
+                            onClick={() => {
+                                if (window.confirm(`Stop run ${run.run_id}? Data collected so far is kept.`)) stopRun.mutate(run.run_id);
+                            }}
+                            className="w-full rounded-lg border border-red-500/50 px-4 py-2 text-sm font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            {run.status === 'stopping' ? `Stopping ${run.run_id}…` : `Stop run ${run.run_id} (${run.status})`}
+                        </button>
+                    ))}
                     {message ? <p className="text-xs text-[var(--text-secondary)]">{message}</p> : null}
                 </div>
             </div>

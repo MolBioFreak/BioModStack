@@ -136,7 +136,7 @@ class OntRawSignalWorker:
                     await session.execute(
                         select(OntInstrumentRun.id)
                         .where(
-                            OntInstrumentRun.state.in_(("starting", "running", "stopping")),
+                            OntInstrumentRun.state.in_(("starting", "running", "stopping", "unknown")),
                             OntInstrumentRun.minknow_run_id.is_not(None),
                         )
                         .order_by(OntInstrumentRun.observed_at, OntInstrumentRun.id)

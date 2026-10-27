@@ -25,6 +25,7 @@ from lib.ont_minknow_host import begin_hardware_check as begin_ont_hardware_chec
 from lib.ont_minknow_host import refresh_position as refresh_ont_position
 from lib.ont_minknow_host import restart_position as restart_ont_position
 from lib.ont_minknow_host import stop_protocol as stop_ont_protocol
+from lib.ont_minknow_host import start_protocol as start_ont_protocol
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROJECT = "biomodstack-core-runtime"
@@ -358,6 +359,9 @@ def ont_post_route_payload(path: str, payload: dict[str, Any]) -> tuple[int, dic
     if route_path.startswith("/ont/positions/") and route_path.endswith("/restart"):
         position = unquote(route_path.removeprefix("/ont/positions/").removesuffix("/restart")).strip().rstrip("/")
         return restart_ont_position(position, payload)
+    if route_path.startswith("/ont/positions/") and route_path.endswith("/protocol-runs"):
+        position = unquote(route_path.removeprefix("/ont/positions/").removesuffix("/protocol-runs")).strip().rstrip("/")
+        return start_ont_protocol(position, payload)
     if route_path.startswith("/ont/runs/") and route_path.endswith("/stop"):
         minknow_run_id = unquote(route_path.removeprefix("/ont/runs/").removesuffix("/stop")).strip().rstrip("/")
         return stop_ont_protocol(minknow_run_id, payload)

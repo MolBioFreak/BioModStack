@@ -77,6 +77,7 @@ _orchestrator: GPUOrchestrator = None
 _global_experiment_worker: GlobalExperimentWorker | None = None
 _ont_raw_signal_worker: OntRawSignalWorker | None = None
 _ont_signal_worker: OntSignalWorker | None = None
+_ont_run_monitor = None
 
 
 async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
@@ -125,6 +126,7 @@ async def lifespan(app: FastAPI):
     global _global_experiment_worker
     global _ont_raw_signal_worker
     global _ont_signal_worker
+    global _ont_run_monitor
     
     # Required checked-in scientific authority must be complete before workers start.
     catalog_authority.require()
@@ -206,6 +208,14 @@ async def lifespan(app: FastAPI):
         _ont_raw_signal_worker = None
         logger.info("[STARTUP] ONT raw-signal worker disabled: pinned runtime identity absent")
 
+    # The raw-signal worker already polls active runs; otherwise run a plain
+    # status monitor so MinKNOW runs started from BMS still reach completion.
+    if _ont_raw_signal_worker is None and os.getenv("BMS_ONT_MINKNOW_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        from services.ont_run_control import OntRunMonitor
+        _ont_run_monitor = OntRunMonitor(poll_interval=10.0)
+        await _ont_run_monitor.start()
+        logger.info("[STARTUP] ONT run status monitor started")
+
     try:
         OntSignalWorker._runtime_identity()
     except (OSError, RuntimeError):
@@ -237,6 +247,9 @@ async def lifespan(app: FastAPI):
     if _ont_raw_signal_worker:
         await _ont_raw_signal_worker.stop()
         logger.info("[SHUTDOWN] ONT raw-signal lease-recovery worker stopped")
+    if _ont_run_monitor:
+        await _ont_run_monitor.stop()
+        logger.info("[SHUTDOWN] ONT run status monitor stopped")
     if _ont_signal_worker:
         await _ont_signal_worker.stop()
         logger.info("[SHUTDOWN] ONT signal-workbench worker stopped")
