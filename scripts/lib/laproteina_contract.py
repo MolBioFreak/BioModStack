@@ -99,8 +99,40 @@ _CONTROL_HELP = {
 }
 
 
+# Discovery-only snapshot of Hydra 1.3.1 composition at SOURCE_REVISION.
+# Verified against all seven upstream configs; never used to construct a request.
+_PROFILE_COMMON = {
+    "seed": 5, "num_steps": 400, "self_cond": True, "save_trajectory_every": 0,
+    "bb_ca_schedule_mode": "log", "bb_ca_schedule_p": 2.0, "bb_ca_gt_mode": "1/t",
+    "bb_ca_gt_p": 1.0, "bb_ca_gt_clamp_val": None, "bb_ca_sampling_mode": "sc",
+    "bb_ca_sc_scale_noise": 0.1, "bb_ca_sc_scale_score": 1.0,
+    "bb_ca_t_lim_ode": 0.98, "bb_ca_t_lim_ode_below": 0.02,
+    "local_latents_schedule_mode": "power", "local_latents_schedule_p": 2.0,
+    "local_latents_gt_mode": "tan", "local_latents_gt_p": 1.0,
+    "local_latents_gt_clamp_val": None, "local_latents_sampling_mode": "sc",
+    "local_latents_sc_scale_noise": 0.1, "local_latents_sc_scale_score": 1.0,
+    "local_latents_t_lim_ode": 0.98, "local_latents_t_lim_ode_below": 0.02,
+    "local_latents_center_every_step": False,
+}
+
+
+def native_profile_defaults() -> dict:
+    """Informational source defaults, before BMS or user overrides, not execution state."""
+    profiles = {}
+    for name in PROFILES:
+        unconditional = name.startswith("ucond_")
+        values = {**_PROFILE_COMMON, "max_nsamples_per_batch": 10 if unconditional else 5,
+                  "bb_ca_center_every_step": unconditional}
+        if name == "ucond_notri_long":
+            values.update(bb_ca_sc_scale_noise=0.15, local_latents_sc_scale_noise=0.05)
+        profiles[name] = values
+    return {"source_revision": SOURCE_REVISION, "composition": "upstream Hydra 1.3.1 profile before BMS and user overrides",
+            "scope": "Discovery only; motif task fields depend on the selected task and are not included.",
+            "profiles": profiles}
+
+
 def settings_schema() -> dict:
-    """Typed meanings, not fabricated resolved profile defaults."""
+    """Typed meanings; profile observations are separate from schema defaults."""
     properties = {}
     for key, spec in (CONTROLS | MOTIF_CONTROLS).items():
         modality = next((prefix for prefix in ("bb_ca_", "local_latents_") if key.startswith(prefix)), "")
@@ -112,7 +144,8 @@ def settings_schema() -> dict:
         properties[key] = {**{k: v for k, v in spec.items() if k in {"type", "enum"}},
                            "title": title, "description": f"{help_text} {applicability} Native: {spec['native']}.",
                            "x-native-key": spec["native"], "x-applicability": applicability,
-                           "x-default-source": "selected native composition; not resolved by discovery"}
+                           "x-default-source": ("native_profile_defaults; upstream composition before overrides" if key in CONTROLS
+                                                else "selected motif task composition; not resolved by discovery")}
     return {"type": "object", "additionalProperties": False, "properties": properties}
 
 
