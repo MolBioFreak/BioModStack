@@ -15,7 +15,8 @@ def test_contract_projection(molecule, model):
     request = {'roster': {'molecule': molecule, 'rows': []}, 'settings': {}}
     selected, effective = prepare_request(request)
     assert (selected, MODE) == (model, 'family_msa')
-    assert effective == AlignmentRequest.model_validate(request).model_dump(mode='json')
+    assert effective['_family_msa_requested'] == request
+    assert {k: v for k, v in effective.items() if k != '_family_msa_requested'} == AlignmentRequest.model_validate(request).model_dump(mode='json')
     assert request_schema() == AlignmentRequest.model_json_schema()
     cmd = compile_command(effective, '/path with space/mafft', '/input with space.fa')
     assert cmd[0] == '/path with space/mafft' and cmd[-1] == '/input with space.fa'

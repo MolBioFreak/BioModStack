@@ -84,7 +84,10 @@ async def test_scheduler_adapter_to_native_owned_runner(admission, monkeypatch, 
     artifacts = (await admission.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))).all()
     roles = {a.provenance['role']: a for a in artifacts}
     assert {'input', 'alignment', 'engine_log', 'receipt'} <= roles.keys()
-    runtime = json.loads(Path(roles['receipt'].storage_path).read_text())['runtime']
+    receipt = json.loads(Path(roles['receipt'].storage_path).read_text())
+    assert receipt['requested'] == payload
+    assert receipt['effective_settings']['engine'] == settings['engine']
+    runtime = receipt['runtime']
     assert runtime['sha256'] == hashlib.sha256(Path(image).read_bytes()).hexdigest()
     alignments = [a for a in artifacts if a.provenance['role'] == 'alignment']
     assert len(alignments) == members

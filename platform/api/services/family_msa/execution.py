@@ -15,7 +15,7 @@ from bms_alignment.native import compile_mafft
 
 
 def compile_command(payload: dict, executable: str, input_path: str) -> list[str]:
-    request = AlignmentRequest.model_validate(payload)
+    request = AlignmentRequest.model_validate({key: value for key, value in payload.items() if key != '_family_msa_requested'})
     if request.settings.engine != 'mafft':
         raise ValueError('compile_command is MAFFT-only; use the native engine adapter')
     return compile_mafft(request, executable, input_path)
@@ -57,9 +57,10 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
     try:
         request = AlignmentRequest.model_validate({key: payload[key] for key in ('roster', 'settings')})
         input_file.write_text(''.join(f'>{r.row_id}\n{r.sequence}\n' for r in request.roster.rows), encoding='utf8')
-        image = os.environ.get('BMS_FAMILY_MSA_SIF', '').strip()
+        from services.family_msa.runtime import select_runtime
+        image, selection = select_runtime()
         if image:
-            runtime = {'kind': 'image', 'path': image}
+            runtime = {'kind': 'image', 'path': image, **selection}
             try:
                 digest = hashlib.sha256()
                 with open(image, 'rb') as stream:
@@ -69,14 +70,14 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
             except OSError as exc:
                 runtime['identity_error'] = str(exc)
         else:
-            runtime = {'kind': 'host', 'executable': shutil.which(request.settings.engine)}
+            runtime = {'kind': 'host', 'executable': shutil.which(request.settings.engine), **selection}
         if request.settings.engine == 'mafft':
             if image:
                 argv = ['apptainer', 'exec', '--cleanenv', '--no-home', '--bind', f'{work}:{work}', image]
             argv += compile_mafft(request, 'mafft', str(input_file))
         else:
             (work / 'request.json').write_text(request.model_dump_json(), encoding='utf8')
-            argv = [sys.executable, str(Path(__file__).with_name('worker.py')), str(work)]
+            argv = [sys.executable, str(Path(__file__).with_name('worker.py')), str(work), image]
         with output.open('wb') as stdout, log.open('wb') as stderr:
             process = await asyncio.create_subprocess_exec(*argv, cwd=str(work), stdout=stdout, stderr=stderr,
                                                            start_new_session=True)
@@ -102,8 +103,8 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
         error = f'{type(exc).__name__}: {exc}'
         with log.open('a', encoding='utf8') as stream:
             stream.write(error + '\n')
-    receipt_path.write_text(json.dumps({'requested': payload, 'argv': argv, 'returncode': code,
-        'effective_settings': payload.get('settings'), 'runtime': runtime, 'error': error}, indent=2) + '\n', encoding='utf8')
+    receipt_path.write_text(json.dumps({'requested': payload.get('_family_msa_requested', payload), 'argv': argv, 'returncode': code,
+        'effective_settings': request.settings.model_dump(mode='json') if 'request' in locals() else payload.get('settings'), 'runtime': runtime, 'error': error}, indent=2) + '\n', encoding='utf8')
     files = [(input_file, 'input', 'text/x-fasta'),
              (log, 'engine_log', 'text/plain'), (receipt_path, 'receipt', 'application/json')]
     if payload.get('settings', {}).get('engine', 'mafft') == 'mafft':

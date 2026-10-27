@@ -15,6 +15,7 @@ def request_schema() -> dict:
 
 
 def prepare_request(payload: dict) -> tuple[str, dict]:
-    request = AlignmentRequest.model_validate(payload)
+    requested = payload.get('_family_msa_requested', payload)
+    request = AlignmentRequest.model_validate({key: value for key, value in payload.items() if key != '_family_msa_requested'})
     model = MODEL_PROTEIN if request.roster.molecule == 'protein' else MODEL_NUCLEIC
-    return model, request.model_dump(mode='json')
+    return model, {**request.model_dump(mode='json'), '_family_msa_requested': requested}

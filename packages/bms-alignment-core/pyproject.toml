@@ -11,5 +11,8 @@ dependencies = ["pydantic>=2,<3"]
 [project.scripts]
 bms-alignment = "bms_alignment.cli:main"
 
+[tool.setuptools]
+packages = ["bms_alignment"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
