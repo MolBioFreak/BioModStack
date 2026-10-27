@@ -75,8 +75,9 @@ def test_real_twilight(tmp_path, molecule, method, source):
     request = req('twilight', molecule, method=method, guide_source=source)
     if source == 'supplied':
         rows = request.roster.rows
-        request.settings.guide_tree = '((a:0.1,b:0.1):0.1,c:0.1);'
-        request.settings.leaf_mapping = dict(zip(['a', 'b', 'c'], [r.row_id for r in rows]))
+        for row, name in zip(rows, ["id,one", "id'two", 'id:three']): row.row_id = name
+        request.settings.guide_tree = "(('a,b':0.1,'b''x':0.1):0.1,'c:d':0.1);"
+        request.settings.leaf_mapping = dict(zip(['a,b', "b'x", 'c:d'], [r.row_id for r in rows]))
     result = run_engine(request, tmp_path, binary, mafft)
     attempt = Path(result['attempt_dir'])
     assert result['returncode'] == 0, (attempt/'engine.log').read_text() if (attempt/'engine.log').exists() else result

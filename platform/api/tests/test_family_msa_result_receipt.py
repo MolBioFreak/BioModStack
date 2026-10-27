@@ -50,6 +50,10 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
         assert job.status == 'completed'
         artifacts = (await core.scalars(select(JobArtifact))).all()
         assert {a.provenance['role'] for a in artifacts} == {'result_manifest', 'input', 'engine_log', 'receipt', 'alignment'}
+        receipt = next(a for a in artifacts if a.provenance['role'] == 'receipt')
+        observation = json.loads((output / receipt.logical_path).read_text())['observations']
+        assert observation['output_headers'] == ['r1']
+        assert observation['missing_ids'] == [] and observation['changed_residue_ids'] == []
         from services.global_experiments.adapters import registry, AdapterError
         adapter = registry.get(f'bms.family-msa.{model}.adapter.v1')
         alignment = next(a for a in artifacts if a.provenance['role'] == 'alignment')

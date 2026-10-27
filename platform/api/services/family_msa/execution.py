@@ -103,8 +103,13 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
         error = f'{type(exc).__name__}: {exc}'
         with log.open('a', encoding='utf8') as stream:
             stream.write(error + '\n')
+    observations = None
+    if 'request' in locals() and request.settings.engine == 'mafft':
+        from bms_alignment.observations import observe_alignment
+        observations = observe_alignment(output, request.roster)
     receipt_path.write_text(json.dumps({'requested': payload.get('_family_msa_requested', payload), 'argv': argv, 'returncode': code,
-        'effective_settings': request.settings.model_dump(mode='json') if 'request' in locals() else payload.get('settings'), 'runtime': runtime, 'error': error}, indent=2) + '\n', encoding='utf8')
+        'effective_settings': request.settings.model_dump(mode='json') if 'request' in locals() else payload.get('settings'), 'runtime': runtime, 'error': error,
+        'observations': observations}, indent=2) + '\n', encoding='utf8')
     files = [(input_file, 'input', 'text/x-fasta'),
              (log, 'engine_log', 'text/plain'), (receipt_path, 'receipt', 'application/json')]
     if payload.get('settings', {}).get('engine', 'mafft') == 'mafft':

@@ -1,5 +1,6 @@
 """Native fixed-family adapters; subprocess outcomes and observations remain separate."""
 import json
+import re
 import subprocess
 import tempfile
 import time
@@ -22,7 +23,7 @@ def map_tree(tree, mapping, expected):
             name = token[1:-1].replace("''", "'") if token.startswith("'") else token
             if name in mapping:
                 target = mapping[name]
-                tokens[i] = target
+                tokens[i] = target if re.fullmatch(r'[A-Za-z0-9.-]+', target) else "'" + target.replace("'", "''") + "'"
                 used.append(target)
             else: unknown.append(name)
             leaf = False

@@ -24,6 +24,10 @@ def family_msa_capability(capability_id: str):
         'project_native_owner_id': f'{capability_id}:family_msa',
         'safe_setup_destination': destination, 'launch_mode': 'typed_launcher_handoff',
         'product_taxonomy': {'family': 'family_alignment'},
+        # Descriptive scientific scope, not a request admission rule.
+        'scientific_capabilities': {'mafft': ['protein', 'dna', 'rna'],
+                                    'muscle': ['protein', 'dna', 'rna'],
+                                    'famsa': ['protein'], 'twilight': ['dna', 'rna']},
         'result_adapter_ids': [f'bms.family-msa.{capability_id}.adapter.v1'],
     }
     schema = {

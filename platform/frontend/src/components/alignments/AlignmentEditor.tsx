@@ -80,6 +80,7 @@ export default function AlignmentEditor({ model }: { model: string }) {
             <button type="button" onClick={()=>void run('launch')} className={inputClass}>Start run</button>
         </fieldset>
         {error && <p role="alert">{error}</p>}{job && <p role="status">Job submitted: <Link to={`/alignments/jobs/${encodeURIComponent(job)}`}>{job}</Link></p>}
+        <p className="text-sm">Scientific scope: MAFFT and MUSCLE support protein, DNA and RNA; FAMSA supports protein; TWILIGHT supports DNA and RNA. Direct API requests may specify other combinations; these descriptors do not validate them.</p>
         <p className="text-sm">Execution availability depends on the installed Job dispatcher and native engines. No alternative engine is selected automatically.</p>
     </section>;
 }

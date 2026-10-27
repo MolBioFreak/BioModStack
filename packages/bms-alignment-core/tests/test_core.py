@@ -62,7 +62,9 @@ def test_real_mafft(tmp_path, molecule, sequences):
     request = AlignmentRequest(roster=roster, settings={'engine':'mafft','treeout':True})
     result = run_mafft(request, tmp_path, binary)
     assert result['returncode'] == 0
-    assert result['observations'] == {'missing_ids': [], 'unexpected_ids': []}
+    assert not result['observations']['missing_ids']
+    assert not result['observations']['unexpected_ids']
+    assert not result['observations']['changed_residue_ids']
     raw = (Path(result['attempt_dir'])/'input.fasta.tree').read_text()
     _, report = map_mafft_tree(raw, [r.row_id for r in roster.rows])
     assert not report['missing'] and not report['unmapped'] and not report['duplicate_mapped']

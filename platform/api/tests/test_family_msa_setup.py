@@ -20,6 +20,8 @@ async def test_discover_create_save_and_reopen(tmp_path, model, domain):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
         response = await client.get('/api/family-msa-project-capabilities')
     assert response.status_code == 200
+    assert response.json()['capabilities'][0]['scientific_capabilities']['famsa'] == ['protein']
+    assert response.json()['capabilities'][0]['scientific_capabilities']['twilight'] == ['dna', 'rna']
     item = next(c for c in response.json()['capabilities'] if c['capability_id'] == model)
     assert item['domain_kind'] == domain
     WorkflowSetupCreateRequest.model_validate({'schema': 'bms.project-workflow-setup.create.v1',
