@@ -41,8 +41,14 @@ export function fastaRoster(text: string, molecule: Molecule) {
 }
 const inputClass = 'rounded border border-slate-500 bg-slate-900 p-1 text-white';
 function MappingInput({value, onChange}: {value: Record<string,string>; onChange: (value: Record<string,string>) => void}) {
-    const [text, setText] = useState(() => Object.entries(value).map(([a,b])=>`${a}\t${b}`).join('\n'));
-    return <textarea className={`${inputClass} block w-full`} aria-label="Leaf mapping" placeholder="One leaf and row ID per line, separated by a tab" value={text} onChange={e=>{ const next=e.target.value; setText(next); onChange(Object.fromEntries(next.split('\n').filter(line=>line.includes('\t')).map(line=>{const [a,...rest]=line.split('\t'); return [a,rest.join('\t')];}))); }}/>;
+    const serialize = (mapping: Record<string,string>) => Object.entries(mapping).map(([a,b])=>`${a}\t${b}`).join('\n');
+    const [text, setText] = useState(() => serialize(value));
+    const emitted = useRef(JSON.stringify(value));
+    useEffect(() => {
+        const incoming = JSON.stringify(value);
+        if (incoming !== emitted.current) { emitted.current = incoming; setText(serialize(value)); }
+    }, [value]);
+    return <textarea className={`${inputClass} block w-full`} aria-label="Leaf mapping" placeholder="One leaf and row ID per line, separated by a tab" value={text} onChange={e=>{ const next=e.target.value; setText(next); const mapping = Object.fromEntries(next.split('\n').filter(line=>line.includes('\t')).map(line=>{const [a,...rest]=line.split('\t'); return [a,rest.join('\t')];})); emitted.current = JSON.stringify(mapping); onChange(mapping); }}/>;
 }
 function requestIdentityWarning(rows: DatasetRow[]) {
     return rows.some(({selection:s,resolved:r}) => {
@@ -93,7 +99,7 @@ export default function AlignmentEditor({ model }: { model: string }) {
         hydrated.current = id;
         const editor = (setup.setup.draft?.editor_state ?? setup.setup.draft) as {molecule?:Molecule;engine?:Engine;drafts?:Record<Engine,Settings>;fasta?:string;datasetRows?:DatasetRow[]} | undefined;
         setMolecule(editor?.molecule ?? (model === 'family_msa_nucleic' ? 'dna' : 'protein')); setEngine(editor?.engine && defaults[editor.engine] ? editor.engine : 'mafft');
-        setDrafts(previous => Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(name => [name,{...previous[name],...editor?.drafts?.[name]}])) as Record<Engine,Settings>); setFasta(typeof editor?.fasta === 'string' ? editor.fasta : '');
+        setDrafts(Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(name => [name,{...structuredClone(defaults[name]),...editor?.drafts?.[name]}])) as Record<Engine,Settings>); setFasta(typeof editor?.fasta === 'string' ? editor.fasta : '');
         setDatasetRows(Array.isArray(editor?.datasetRows) ? editor.datasetRows : []);
     }, [setup.setup]);
     const settings = drafts[engine];

@@ -119,8 +119,23 @@ it('resets project draft and ignores a delayed dataset response from the previou
  expect(div.textContent).not.toContain('gone'); expect(div.textContent).not.toContain('Old —'); expect(div.textContent).toContain('New —');
  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click()});
  expect(mocked.save.mock.calls[0][0].editor_state.datasetRows).toEqual([]); expect(mocked.save.mock.calls[0][0].editor_state.fasta).toBe('');
+ expect(mocked.save.mock.calls[0][0].editor_state.drafts.muscle.threads).not.toBe(3);
  await act(async()=>root.unmount()); mocked.setup=original;
 });
+it('updates visible leaf mapping when another Project draft hydrates', async()=>{
+ vi.clearAllMocks(); mocked.active=true; const original=mocked.setup;
+ mocked.datasets.mockResolvedValue({items:[],next_cursor:null});
+ const draft=(mapping:Record<string,string>)=>({molecule:'dna',engine:'twilight',drafts:{twilight:{engine:'twilight',leaf_mapping:mapping}}});
+ mocked.setup={...original,project_id:'a',setup_context_id:'a',draft:draft({leaf:'row_a'})} as any;
+ const div=document.createElement('div'),root=createRoot(div);
+ await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_nucleic"/></MemoryRouter>));
+ expect((div.querySelector('[aria-label="Leaf mapping"]') as HTMLTextAreaElement).value).toBe('leaf\trow_a');
+ mocked.setup={...original,project_id:'b',setup_context_id:'b',draft:draft({leaf:'row_b'})} as any;
+ await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_nucleic"/></MemoryRouter>));
+ expect((div.querySelector('[aria-label="Leaf mapping"]') as HTMLTextAreaElement).value).toBe('leaf\trow_b');
+ await act(async()=>root.unmount()); mocked.setup=original;
+});
+
 it('records excluded occurrences and identity discrepancies without excluding resolved rows',async()=>{
  vi.clearAllMocks(); mocked.active=true; const original=mocked.setup;
  const selection={project_id:'p',dataset_id:'ds',revision_id:'r',revision_sha256:'hash',members:[{ordinal:1,role:'sequence',member_identity:'m',member_sha256:'mh',receipt:{entity_kind:'molecular',entity_id:'expected',content_digest:'digest'}}]};
