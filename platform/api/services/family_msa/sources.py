@@ -193,12 +193,25 @@ async def resolve_design_member(project_session, core_session, *, project_id, da
         parser = MMCIFParser(QUIET=True) if path.suffix.lower() in ('.cif', '.mmcif') else PDBParser(QUIET=True)
         structure = parser.get_structure('design', io.StringIO(raw.decode('utf-8')))
         model = next(structure.get_models())
+        is_mmcif = path.suffix.lower() in ('.cif', '.mmcif')
+        # Bio.PDB synthesizes a serial when the input has no model number.
+        has_model_number = ('_atom_site.pdbx_PDB_model_num' in parser._mmcif_dict if is_mmcif
+                            else any(line.startswith(b'MODEL ') for line in raw.splitlines()))
+        model_serial = model.serial_num if has_model_number else None
         sequences = {}
+        residue_maps = {}
         for item in model:
             residues = [r for r in item if Polypeptide.is_aa(r, standard=False)]
             sequence = ''.join(Polypeptide.protein_letters_3to1_extended.get(r.resname.upper(), 'X') for r in residues)
             if sequence:
                 sequences[item.id] = sequence
+                residue_maps[item.id] = [
+                    {'observed_index': i, 'chain_id': item.id,
+                     'model_index': model.id, 'model_serial': model_serial,
+                     'sequence_number': r.id[1], 'insertion_code': r.id[2].strip(),
+                     'hetero_flag': r.id[0].strip(), 'residue_name': r.resname}
+                    for i, r in enumerate(residues)
+                ]
         if not sequences:
             raise ValueError('no observed protein chains')
     except (AdapterError, OSError, ValueError, KeyError, TypeError, StopIteration, UnicodeError) as exc:
@@ -213,4 +226,9 @@ async def resolve_design_member(project_session, core_session, *, project_id, da
     last = len(sequence) if end is None else end
     if type(first) is not int or type(last) is not int or first < 0 or last <= first or last > len(sequence):
         raise ValidationFailure('invalid sequence region')
-    return {**common, 'status': 'resolved', 'chain': chain, 'label': f'{design.name} chain {chain}', 'start': first, 'end': last, 'source_positions': list(range(first, last)), 'sequence': sequence[first:last]}
+    return {**common, 'status': 'resolved', 'chain': chain, 'label': f'{design.name} chain {chain}', 'start': first, 'end': last, 'source_positions': list(range(first, last)), 'sequence': sequence[first:last],
+            'structure_residue_map': {'schema': 'bms.family-msa.structure-residue-map.v1',
+                'source_identity': receipt['entity_id'], 'source_digest': receipt['content_digest'],
+                'format': 'mmcif' if path.suffix.lower() in ('.cif', '.mmcif') else 'pdb',
+                'numbering': 'Bio.PDB author residue ids', 'model_selection': 'first parsed model',
+                'entries': residue_maps[chain][first:last]}}

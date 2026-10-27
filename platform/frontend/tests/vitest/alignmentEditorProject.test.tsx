@@ -158,7 +158,8 @@ it('selects a Design chain and retains its region and occurrence in the draft', 
  mocked.revisions.mockResolvedValue({items:[{revision_id:'rev',revision_number:1}],next_cursor:null});
  const member={ordinal:0,role:'design',member_identity:'q',member_sha256:'h',receipt:{entity_kind:'design',entity_id:'design',content_digest:'digest'}};
  const base={project_id:'p',dataset_id:'ds',revision_id:'rev',revision_sha256:'rh',ordinal:0,member_identity:'q',member_sha256:'h',source_identity:'design',source_digest:'digest',molecule:'protein'};
- mocked.get.mockImplementation(async (url:string,options:any)=>url.endsWith('/design') ? {data:options?.params?.chain ? {...base,status:'resolved',chain:'B',sequence:'Y',label:'design chain B',start:1,end:2,source_positions:[1]} : {...base,status:'choose_chain',chains:[{chain_id:'A',length:2},{chain_id:'B',length:2}]}} : {data:{items:[member],next_offset:null,total:1}});
+ const residueMap={schema:'bms.family-msa.structure-residue-map.v1',source_identity:'design',source_digest:'digest',format:'pdb',numbering:'Bio.PDB author residue ids',model_selection:'first parsed model',entries:[{observed_index:1,chain_id:'B',model_index:0,model_serial:7,sequence_number:9,insertion_code:'B',hetero_flag:'',residue_name:'TYR'}]};
+ mocked.get.mockImplementation(async (url:string,options:any)=>url.endsWith('/design') ? {data:options?.params?.chain ? {...base,status:'resolved',chain:'B',sequence:'Y',label:'design chain B',start:1,end:2,source_positions:[1],structure_residue_map:residueMap} : {...base,status:'choose_chain',chains:[{chain_id:'A',length:2},{chain_id:'B',length:2}]}} : {data:{items:[member],next_offset:null,total:1}});
  mocked.post.mockResolvedValue({data:{project_id:'p',dataset_id:'ds',revision_id:'rev',revision_sha256:'rh',members:[member]}}); mocked.save.mockResolvedValue({});
  const div=document.createElement('div'),root=createRoot(div);
  await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
@@ -170,6 +171,10 @@ it('selects a Design chain and retains its region and occurrence in the draft', 
  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click()});
  const row=mocked.save.mock.calls[0][0].native_job_request.params.roster.rows.at(-1);
  expect(row.sequence).toBe('Y'); expect(row.source_positions).toEqual([1]); expect(JSON.parse(row.transformation_provenance).chain).toBe('B');
+ expect(JSON.parse(row.transformation_provenance).structure_residue_map).toEqual(residueMap);
+ expect(mocked.save.mock.calls[0][0].editor_state.datasetRows[0].resolved.structure_residue_map).toEqual(residueMap);
+ const link=div.querySelector('a[download="structure-residue-map.json"]') as HTMLAnchorElement;
+ expect(JSON.parse(decodeURIComponent(link.getAttribute('href')!.split(',')[1]))).toEqual(residueMap);
  expect(JSON.parse(row.source_member_id)).toEqual(['q','observed_chain','B']);
  await act(async()=>root.unmount()); mocked.datasets.mockResolvedValue({items:[],next_cursor:null});
 });

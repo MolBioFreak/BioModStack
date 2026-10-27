@@ -24,7 +24,7 @@ async def test_design_chain_real_dataset_occurrences(tmp_path, monkeypatch):
     root = tmp_path / 'results' / 'job'
     root.mkdir(parents=True)
     path = root / 'design.pdb'
-    path.write_text('ATOM      1  CA  ALA A   1      10.000  10.000  10.000  1.00 20.00           C\nATOM      2  CA  GLY A   2      11.000  10.000  10.000  1.00 20.00           C\nATOM      3  CA  SER B   1      12.000  10.000  10.000  1.00 20.00           C\nATOM      4  CA  TYR B   2      13.000  10.000  10.000  1.00 20.00           C\nEND\n')
+    path.write_text('MODEL        7\nATOM      1  CA  ALA A  10      10.000  10.000  10.000  1.00 20.00           C\nATOM      2  CA  GLY A  10A     11.000  10.000  10.000  1.00 20.00           C\nATOM      3  CA  SER B   3      12.000  10.000  10.000  1.00 20.00           C\nATOM      4  CA  TYR B   9B     13.000  10.000  10.000  1.00 20.00           C\nENDMDL\nMODEL        8\nATOM      5  CA  TRP A  99      10.000  10.000  10.000  1.00 20.00           C\nENDMDL\nEND\n')
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest = {'schema': 'bms.review-artifacts.v1', 'structure': {'kind':'structure','state':'ready','path':str(path),'sha256':digest,'bytes':path.stat().st_size}, 'roles':{'result_role':'structure'}}
     core = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "core.db"}')
@@ -52,6 +52,10 @@ async def test_design_chain_real_dataset_occurrences(tmp_path, monkeypatch):
             first = await resolve_design_member(p,c,ordinal=0,chain='A',**args)
             second = await resolve_design_member(p,c,ordinal=1,chain='B',start=1,end=2,**args)
             assert (first['sequence'],second['sequence'],second['source_positions']) == ('AG','Y',[1])
+            mapping = first['structure_residue_map']
+            assert mapping['source_identity'] == 'design' and mapping['source_digest'] == digest
+            assert [(r['observed_index'], r['sequence_number'], r['insertion_code'], r['chain_id'], r['model_index'], r['model_serial']) for r in mapping['entries']] == [(0,10,'','A',0,7),(1,10,'A','A',0,7)]
+            assert [(r['observed_index'],r['sequence_number'],r['insertion_code']) for r in second['structure_residue_map']['entries']] == [(1,9,'B')]
             assert first['ordinal'] != second['ordinal'] and first['source_identity'] == second['source_identity']
             async def project_session():
                 async with ps() as session: yield session
@@ -67,6 +71,7 @@ async def test_design_chain_real_dataset_occurrences(tmp_path, monkeypatch):
                 response = await client.get(base + '/1/design', params={'chain':'B','start':1,'end':2})
                 assert response.status_code == 200, response.text
                 assert response.json()['sequence'] == 'Y' and response.json()['source_positions'] == [1]
+                assert response.json()['structure_residue_map'] == second['structure_residue_map']
             path.unlink()
             assert (await resolve_design_member(p,c,ordinal=0,chain='A',**args))['status'] == 'unavailable'
     finally:

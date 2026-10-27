@@ -115,6 +115,7 @@ class ResolvedMember(BaseModel):
     end: int | None = None
     sequence: str | None = None
     source_positions: list[int] | None = None
+    structure_residue_map: dict[str, Any] | None = None
     chain: str | None = None
     chains: list[dict[str, Any]] | None = None
 
