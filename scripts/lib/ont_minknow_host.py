@@ -397,8 +397,9 @@ def protocol_options(
                 if kit:
                     tools = _protocols_module()
                     found = tools.find_protocol(connection, product_code=product, kit=kit, experiment_type="sequencing")
-                    # minknow_api.tools.protocols.find_protocol returns Optional[str].
-                    protocol_id = _string_or_none(found) if isinstance(found, str) else None
+                    # SDK releases return either the identifier or ProtocolInfo;
+                    # the installed SDK's return annotation does not match its object result.
+                    protocol_id = _string_or_none(found if isinstance(found, str) else _safe_get(found, "identifier"))
                     if protocol_id and basecalling_enabled:
                         sample_rate = (device.get("flow_cell") or {}).get("sample_rate")
                         configs = manager.find_basecall_configurations(product, kit, sample_rate)

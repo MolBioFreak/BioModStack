@@ -110,6 +110,15 @@ and MinKNOW itself remains `unknown`: check MinKNOW before starting another run.
 The bridge never retries an uncertain physical start or guesses a binding from
 sample names. Hardware checks and power cycling are done from MinKNOW itself.
 
+The installed MinKNOW catalog was checked read-only for DNA V14
+(`FLO-MIN114` / `SQK-LSK114`, 5 kHz) and direct RNA004
+(`FLO-MIN004RA` / `SQK-RNA004`, 4 kHz). Both resolve their sequencing protocols
+and MinKNOW's default HAC model through the BNS bridge. This catalog check uses
+sequencing-cell fixtures; it does not qualify physical acquisition with the
+test cell inserted. The test cell is for hardware checks, and its empty
+sequencing-kit list does not mean DNA or RNA support is missing. The bridge
+accepts both string identifiers and native `ProtocolInfo` lookup results.
+
 Configure `BMS_ONT_CONTAINER_RUNTIME=podman` and `BMS_CONTAINER_RUNTIME=podman`
 in the supported host environment for rootless Podman. Managed units preserve
 both selectors. Rootless worker commands keep the host UID so their output

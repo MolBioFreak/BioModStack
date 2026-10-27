@@ -33,14 +33,46 @@ def fake_instrument(monkeypatch, tmp_path):
     return calls, tools, payload
 
 
-def test_native_find_protocol_returns_string_not_message(monkeypatch, fake_instrument):
+@pytest.mark.parametrize("protocol", ["protocol-one", NS(identifier="protocol-one")])
+def test_native_find_protocol_accepts_identifier_and_protocol_info(monkeypatch, fake_instrument, protocol):
     _calls, tools, _payload = fake_instrument
-    tools.find_protocol = lambda *a, **kw: "protocol-one"
+    tools.find_protocol = lambda *a, **kw: protocol
     status = {"live_devices": [{"position": "X1", "device_type": "mk1d", "running": False,
                                "flow_cell": {"present": True}, "output_directories": {"reads": "/data"}}]}
     result = host.protocol_options("X1", kit="SQK-LSK114", basecalling_enabled=False, status=status)
     assert result["protocol_id"] == "protocol-one"
     assert result["can_start"] is True
+
+
+@pytest.mark.parametrize("product,kit,sample_rate,model_name", [
+    ("FLO-MIN114", "SQK-LSK114", 5000, "dna_r10.4.1_e8.2_400bps_hac@v5.2.0"),
+    ("FLO-MIN004RA", "SQK-RNA004", 4000, "rna004_130bps_hac@v5.1.0"),
+])
+def test_dna_and_rna_protocol_options_preserve_native_chemistry_and_model(
+    monkeypatch, fake_instrument, product, kit, sample_rate, model_name,
+):
+    _calls, tools, _payload = fake_instrument
+    connection = NS(device=NS(get_flow_cell_info=lambda: NS(product_code=product)),
+                    protocol=NS(list_protocols=lambda: NS(protocols=[])))
+    configs = [NS(name="configuration")]
+    def find_configs(requested_product, requested_kit, requested_rate):
+        assert (requested_product, requested_kit, requested_rate) == (product, kit, sample_rate)
+        return configs
+    def find_protocol(_connection, **kwargs):
+        assert kwargs == {"product_code": product, "kit": kit, "experiment_type": "sequencing"}
+        return NS(identifier="protocol-" + kit)
+    def find_model(_connection, requested_kit, requested_rate, available):
+        assert (requested_kit, requested_rate, available) == (kit, sample_rate, configs)
+        return configs[0], NS(name=model_name, default_q_score_cutoff=9)
+    monkeypatch.setattr(host, "_connect_position", lambda *a, **kw: (NS(find_basecall_configurations=find_configs), connection))
+    tools.find_protocol = find_protocol
+    tools.find_default_simplex_model = find_model
+    status = {"live_devices": [{"position": "X1", "device_type": "mk1d", "running": False,
+                               "flow_cell": {"present": True, "sample_rate": sample_rate},
+                               "output_directories": {"reads": "/data"}}]}
+    result = host.protocol_options("X1", kit=kit, status=status)
+    assert result["can_start"] is True
+    assert result["basecalling_options"] == {"simplex_models": [model_name], "min_qscore": 9}
 
 
 def test_success_receipt_survives_lost_reply_and_prevents_second_physical_start(fake_instrument):

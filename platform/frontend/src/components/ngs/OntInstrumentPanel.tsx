@@ -663,7 +663,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                         </select>
                     </label>
                     {effectiveProtocolOptions?.flow_cell_present && !availableKits.length ? (
-                        <p role="status" className="text-xs text-[var(--text-secondary)]">MinKNOW detects this flow cell but offers no compatible sequencing kits. Check the flow-cell type and installed MinKNOW protocols.</p>
+                        <p role="status" className="text-xs text-[var(--text-secondary)]">MinKNOW detects this cell but offers no sequencing kits for it. Test cells are used for hardware checks in MinKNOW. DNA and RNA sequencing kits appear with their matching sequencing cell.</p>
                     ) : null}
                     <label className="block text-xs font-semibold text-[var(--text-secondary)]">Run length (hours)
                         <input
