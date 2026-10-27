@@ -171,6 +171,32 @@ class AlignmentClient:
                                  {'replay_key': replay_key, 'manifest': manifest, 'files': files})
         return ImportReceipt.model_validate(response)
 
+    def import_project_bundle_streaming(self, project_id: str, directory, *, replay_key: str) -> "ImportReceipt":
+        """Upload verified portable files in bounded chunks without base64 encoding."""
+        from pathlib import Path
+        from .bundle import inspect_project_bundle
+        root = Path(directory)
+        inspect_project_bundle(root)
+        manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+        metadata = json.dumps({'replay_key': replay_key, 'manifest': manifest}).encode('utf-8')
+        def body():
+            yield len(metadata).to_bytes(8, 'big')
+            yield metadata
+            for item in manifest['files']:
+                with (root / item['path']).open('rb') as source:
+                    while chunk := source.read(1024 * 1024):
+                        yield chunk
+        headers = {**self.headers, 'Accept': 'application/json',
+                   'Content-Type': 'application/vnd.bms.alignment-bundle-stream',
+                   'Content-Length': str(8 + len(metadata) + sum(item['size'] for item in manifest['files']))}
+        path = '/api/family-msa/projects/' + quote(project_id, safe='') + '/imports/stream'
+        request = Request(self.base_url + path, data=body(), headers=headers, method='POST')
+        try:
+            with self._opener.open(request, timeout=self.timeout) as response:
+                return ImportReceipt.model_validate(json.load(response))
+        except HTTPError as exc:
+            raise BmsHttpError(exc.code, exc.read()) from exc
+
     def model(self, model_id: Literal['family_msa_protein', 'family_msa_nucleic']) -> ModelInfo:
         return ModelInfo.model_validate(self._request('GET', '/api/models/' + quote(model_id, safe='')))
 

@@ -451,23 +451,67 @@ class ImportReceipt(BaseModel):
     shared_state: str
 
 
+async def _import_directory(project_id, replay_key, manifest, root, session):
+    import hashlib
+    from bms_alignment.bundle import inspect_project_bundle
+    from experiment_services import _resource, canonical_json
+    from services.family_msa.publication import retain_artifact
+
+    inspection = inspect_project_bundle(root)
+    inventory = inspection['inventory']
+    raw_entries = inventory['artifacts']
+    if not raw_entries or any(not isinstance(x.get('id'), str) or not isinstance(x.get('role'), str) or not x['role'] for x in raw_entries):
+        raise ValueError('invalid artifact inventory')
+    if len({x['id'] for x in raw_entries}) != len(raw_entries):
+        raise ValueError('duplicate artifact identity')
+    hashes = {item['path']: item['sha256'] for item in manifest['files']}
+    digest = hashlib.sha256(canonical_json({'manifest': manifest, 'files': hashes}).encode()).hexdigest()
+    receipt_id = 'msa-import-' + hashlib.sha256(canonical_json([project_id, replay_key]).encode()).hexdigest()
+    existing = await session.get(ExperimentExternalEntityReceipt, receipt_id)
+    if existing:
+        if existing.workspace_id != project_id or existing.entity_kind != 'family_msa_import' or existing.content_digest != digest:
+            raise HTTPException(409, detail='Import replay key conflicts with different content')
+        return {'receipt_id': receipt_id, 'replayed': True, 'shared_state': 'retained_unmapped'}
+    await _resource(session, kind='external_entity_receipt', workspace_id=project_id, lifecycle_owner_id=project_id, resource_id=receipt_id)
+    entries = []
+    groups = [(x, x['role']) for x in raw_entries] + [(x, 'shared_state_snapshot') for x in inventory['shared_states']]
+    descriptors = {x['path']: x for x in manifest['files']}
+    for index, (entry, role) in enumerate(groups):
+        artifact_id = receipt_id + '-' + str(index)
+        descriptor = descriptors[entry['path']]
+        with (root / entry['path']).open('rb') as source:
+            artifact = await retain_artifact(session, source=source, workspace_id=project_id,
+                lifecycle_owner_id=receipt_id, resource_id=artifact_id, logical_role=role,
+                logical_key=entry.get('logical_path') or entry['path'], schema_name='bms.family-msa.import',
+                schema_version='1', media_type='application/octet-stream', expected_sha256=descriptor['sha256'],
+                expected_size=descriptor['size'], provenance={'producer': 'portable_import', 'source_id': entry['id']})
+        entries.append({'id': artifact_id, 'role': role, 'logical_path': entry.get('logical_path'), 'sha256': artifact.blob_sha256})
+    ack = {'schema': 'bms.family-msa.import.v1', 'artifacts': entries,
+           'source_project_id': inventory.get('project_id'), 'source_receipt_id': inventory.get('receipt_id'),
+           'dependencies': inspection['dependencies'], 'shared_state': 'retained_unmapped'}
+    session.add(ExperimentExternalEntityReceipt(id=receipt_id, workspace_id=project_id, resource_id=receipt_id,
+        store_id='experiment', entity_kind='family_msa_import', entity_id=digest,
+        generation_or_revision='1', content_digest=digest, availability='available',
+        verification_authority='bms.family-msa.import.v1', acknowledgement_json=canonical_json(ack)))
+    await session.commit()
+    return {'receipt_id': receipt_id, 'replayed': False, 'shared_state': 'retained_unmapped'}
+
+
 @router.post('/projects/{project_id}/imports', response_model=ImportReceipt)
 async def import_bundle(request: Request, project_id: str, payload: ImportBundle,
                         session: AsyncSession = Depends(get_experiment_session)):
-    """Retain verified uploaded Project export bytes; never acquire client paths."""
+    """Legacy JSON import; retained for existing clients."""
     import base64
-    import hashlib
-    import io
     import tempfile
     from pathlib import Path
-    from bms_alignment.bundle import inspect_project_bundle, _safe_name
-    from experiment_services import _resource, canonical_json
-    from services.family_msa.publication import retain_artifact
+    from bms_alignment.bundle import _safe_name
     await _require_mutation_owner(request, session, resource_id=project_id)
     try:
         decoded = {name: base64.b64decode(value, validate=True) for name, value in payload.files.items()}
         if any(not _safe_name(name) for name in decoded):
             raise ValueError('unsafe bundle path')
+        if set(decoded) != set(payload.manifest['dependencies']['included']):
+            raise ValueError('uploaded files differ from manifest')
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'manifest.json').write_text(json.dumps(payload.manifest), encoding='utf-8')
@@ -475,44 +519,71 @@ async def import_bundle(request: Request, project_id: str, payload: ImportBundle
                 target = root / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
-            inspection = inspect_project_bundle(root)
-            if set(decoded) != set(payload.manifest['dependencies']['included']):
-                raise ValueError('uploaded files differ from manifest')
-        inventory = inspection['inventory']
-        raw_entries = inventory['artifacts']
-        if not raw_entries or any(not isinstance(x.get('id'), str) or not isinstance(x.get('role'), str) or not x['role'] for x in raw_entries):
-            raise ValueError('invalid artifact inventory')
-        if len({x['id'] for x in raw_entries}) != len(raw_entries):
-            raise ValueError('duplicate artifact identity')
-        digest = hashlib.sha256(canonical_json({'manifest': payload.manifest, 'files': {k: hashlib.sha256(v).hexdigest() for k,v in decoded.items()}}).encode()).hexdigest()
-        receipt_id = 'msa-import-' + hashlib.sha256(canonical_json([project_id, payload.replay_key]).encode()).hexdigest()
-        existing = await session.get(ExperimentExternalEntityReceipt, receipt_id)
-        if existing:
-            if existing.workspace_id != project_id or existing.entity_kind != 'family_msa_import' or existing.content_digest != digest:
-                raise HTTPException(409, detail='Import replay key conflicts with different content')
-            return {'receipt_id': receipt_id, 'replayed': True, 'shared_state': 'retained_unmapped'}
-        await _resource(session, kind='external_entity_receipt', workspace_id=project_id, lifecycle_owner_id=project_id, resource_id=receipt_id)
-        entries = []
-        # Shared state is retained verbatim, not falsely asserted to be a live mapped annotation.
-        groups = [(x, x['role']) for x in raw_entries] + [(x, 'shared_state_snapshot') for x in inventory['shared_states']]
-        for index, (entry, role) in enumerate(groups):
-            data = decoded[entry['path']]
-            artifact_id = receipt_id + '-' + str(index)
-            artifact = await retain_artifact(session, source=io.BytesIO(data), workspace_id=project_id,
-                lifecycle_owner_id=receipt_id, resource_id=artifact_id, logical_role=role,
-                logical_key=entry.get('logical_path') or entry['path'], schema_name='bms.family-msa.import',
-                schema_version='1', media_type='application/octet-stream',
-                provenance={'producer': 'portable_import', 'source_id': entry['id']})
-            entries.append({'id': artifact_id, 'role': role, 'logical_path': entry.get('logical_path'), 'sha256': artifact.blob_sha256})
-        ack = {'schema': 'bms.family-msa.import.v1', 'artifacts': entries,
-               'source_project_id': inventory.get('project_id'), 'source_receipt_id': inventory.get('receipt_id'),
-               'dependencies': inspection['dependencies'], 'shared_state': 'retained_unmapped'}
-        session.add(ExperimentExternalEntityReceipt(id=receipt_id, workspace_id=project_id, resource_id=receipt_id,
-            store_id='experiment', entity_kind='family_msa_import', entity_id=digest,
-            generation_or_revision='1', content_digest=digest, availability='available',
-            verification_authority='bms.family-msa.import.v1', acknowledgement_json=canonical_json(ack)))
-        await session.commit()
-        return {'receipt_id': receipt_id, 'replayed': False, 'shared_state': 'retained_unmapped'}
+            return await _import_directory(project_id, payload.replay_key, payload.manifest, root, session)
+    except HTTPException:
+        await session.rollback()
+        raise
+    except (ValueError, KeyError, TypeError, OSError, CustodyError) as exc:
+        await session.rollback()
+        raise HTTPException(400, detail='Invalid or unavailable import bundle') from exc
+
+
+@router.post('/projects/{project_id}/imports/stream', response_model=ImportReceipt)
+async def import_bundle_stream(request: Request, project_id: str,
+                               session: AsyncSession = Depends(get_experiment_session)):
+    """Length-prefixed JSON metadata followed by manifest-ordered raw file bytes."""
+    import tempfile
+    from pathlib import Path
+    from bms_alignment.bundle import _safe_name
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            iterator = request.stream().__aiter__()
+            pending = b''
+            async def take(n):
+                nonlocal pending
+                parts = []
+                while n:
+                    if not pending:
+                        try:
+                            pending = await iterator.__anext__()
+                        except StopAsyncIteration:
+                            raise ValueError('truncated upload')
+                        if not pending:
+                            raise ValueError('truncated upload')
+                    piece, pending = pending[:n], pending[n:]
+                    parts.append(piece)
+                    n -= len(piece)
+                return b''.join(parts)
+            header_size = int.from_bytes(await take(8), 'big')
+            metadata = json.loads(await take(header_size))
+            payload = ImportBundle.model_validate({**metadata, 'files': {}})
+            manifest = payload.manifest
+            descriptors = manifest['files']
+            if not isinstance(descriptors, list):
+                raise ValueError('invalid file descriptors')
+            seen = set()
+            for item in descriptors:
+                name, size = item['path'], item['size']
+                if not _safe_name(name) or name in seen or type(size) is not int or size < 0:
+                    raise ValueError('invalid file descriptor')
+                seen.add(name)
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with target.open('wb') as dest:
+                    remaining = size
+                    while remaining:
+                        chunk = await take(min(remaining, 1024 * 1024))
+                        dest.write(chunk)
+                        remaining -= len(chunk)
+            if pending:
+                raise ValueError('trailing upload bytes')
+            async for chunk in iterator:
+                if chunk:
+                    raise ValueError('trailing upload bytes')
+            (root / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+            return await _import_directory(project_id, payload.replay_key, manifest, root, session)
     except HTTPException:
         await session.rollback()
         raise

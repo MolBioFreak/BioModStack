@@ -88,8 +88,12 @@ def verify_bundle(root: Path) -> dict:
             errors.append(f'unsafe path: {name}'); continue
         if not path.is_file():
             errors.append(f'missing: {name}'); continue
-        data = path.read_bytes()
-        if len(data) != item['size'] or hashlib.sha256(data).hexdigest() != item['sha256']:
+        digest, size = hashlib.sha256(), 0
+        with path.open('rb') as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+                size += len(chunk)
+        if size != item['size'] or digest.hexdigest() != item['sha256']:
             errors.append(f'mismatch: {name}')
     if deps['included'] != names or any(not isinstance(x, str) for x in deps['excluded']):
         errors.append('invalid dependency list')

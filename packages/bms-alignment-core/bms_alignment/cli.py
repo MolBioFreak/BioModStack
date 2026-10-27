@@ -27,7 +27,7 @@ def main():
         p = api.add_parser(action); p.add_argument('file', help='JobSubmission JSON')
     p = api.add_parser('job'); p.add_argument('job_id')
     p = api.add_parser('export-project'); p.add_argument('project_id'); p.add_argument('receipt_id'); p.add_argument('directory'); p.add_argument('--shared-state', action='append', default=[])
-    p = api.add_parser('import-project'); p.add_argument('project_id'); p.add_argument('directory'); p.add_argument('--replay-key', required=True)
+    p = api.add_parser('import-project'); p.add_argument('project_id'); p.add_argument('directory'); p.add_argument('--replay-key', required=True); p.add_argument('--stream', action='store_true', help='upload raw bundle files in chunks')
     a = parser.parse_args()
     read = lambda f: json.loads(Path(f).read_text())
     if a.command == 'schema': result = AlignmentRequest.model_json_schema()
@@ -43,7 +43,9 @@ def main():
         if a.api_action == 'model': result = client.model(a.model_id)
         elif a.api_action == 'job': result = client.job(a.job_id)
         elif a.api_action == 'export-project': result = client.export_project_bundle(a.project_id, a.receipt_id, a.directory, shared_state_ids=a.shared_state)
-        elif a.api_action == 'import-project': result = client.import_project_bundle(a.project_id, a.directory, replay_key=a.replay_key)
+        elif a.api_action == 'import-project':
+            method = client.import_project_bundle_streaming if a.stream else client.import_project_bundle
+            result = method(a.project_id, a.directory, replay_key=a.replay_key)
         else: result = getattr(client, a.api_action)(JobSubmission.model_validate(read(a.file)))
         if not isinstance(result, dict):
             result = result.model_dump(mode='json', by_alias=True)
