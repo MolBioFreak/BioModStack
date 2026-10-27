@@ -19,7 +19,9 @@ import {
 } from '../lib/api';
 import { useSystemStatus } from '../lib/useSystemStatus';
 import { jobPollingInterval } from '../lib/queryPolling';
-import { isNgsJob as isNgsJobIdentity } from '../lib/ngsResultRouting';
+import { isCategoryVisible } from '../lib/jobCategories';
+import { useJobCategoryVisibility } from '../lib/useJobCategoryVisibility';
+import { JobCategoryFilter } from './dashboard/JobCategoryFilter';
 import { buildGpuCatalog, formatGpuLabel, listGpuCatalogEntries, type GpuCatalogEntry, type GpuCatalogLike } from './gpuCatalog';
 import { formatGpuList, resolveQueueGpuDisplay } from './jobQueueGpuDisplay';
 import { BMS_PANEL_OVERFLOW } from './ui/bmsStyle';
@@ -330,7 +332,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     const queryClient = useQueryClient();
     const [expanded, setExpanded] = useState(true);
     const [showCancelled, setShowCancelled] = useState(false);
-    const [showNgsJobs, setShowNgsJobs] = useState(true);
+    const [categoryVisibility, setCategoryVisibility] = useJobCategoryVisibility('queue', { ngs: true, alignments: true });
     // Keep elapsed badges roughly fresh without repainting the whole panel every second.
     const [elapsedNowMs, setElapsedNowMs] = useState(() => Date.now());
 
@@ -463,8 +465,8 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
         cancelMutation.isPending || pinMutation.isPending || cancelAllMutation.isPending || killActiveMutation.isPending || forceLaunchMutation.isPending;
 
     const genericCancelled = cancelledJobsRaw.filter(j => !isMolecularDynamicsJob(j.model_id, j.mode));
-    const visibleQueue = showNgsJobs ? queue : queue.filter(j => !isNgsJobIdentity({ model_id: j.model_id, mode: j.mode }));
-    const cancelledJobs = showNgsJobs ? genericCancelled : genericCancelled.filter(j => !isNgsJobIdentity({ model_id: j.model_id, mode: j.mode }));
+    const visibleQueue = queue.filter(j => isCategoryVisible({ model_id: j.model_id, mode: j.mode }, categoryVisibility));
+    const cancelledJobs = genericCancelled.filter(j => isCategoryVisible({ model_id: j.model_id, mode: j.mode }, categoryVisibility));
 
     // Separate running, paused, queued, and pending_msa jobs
     const runningJobs = visibleQueue.filter(j => j.queue_status === 'running' && !remoteResultsState(j));
@@ -476,12 +478,11 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     const queuedJobs = visibleQueue.filter(j => j.queue_status === 'queued' && !j.paused);
     const pendingMsaJobs = visibleQueue.filter(j => j.queue_status === 'pending_msa');
     const awaitingJobs = visibleQueue.filter(j => remoteResultsState(j));
-    const hiddenQueuedCount = showNgsJobs
-        ? 0
-        : Math.max(
-            0,
-            queue.filter(j => j.queue_status === 'queued' && !j.paused).length - queuedJobs.length
-        );
+    const hiddenClearableCount = queue.filter(j =>
+        !isMolecularDynamicsJob(j.model_id, j.mode)
+        && (j.queue_status === 'queued' || j.queue_status === 'paused' || j.paused)
+        && !isCategoryVisible({ model_id: j.model_id, mode: j.mode }, categoryVisibility)
+    ).length;
     const clearableJobs = visibleQueue.filter(j =>
         !isMolecularDynamicsJob(j.model_id, j.mode)
         && (j.queue_status === 'queued' || j.queue_status === 'paused' || j.paused)
@@ -489,10 +490,10 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
 
     const handleCancelAll = () => {
         if (clearableJobs.length === 0) return;
-        const hiddenNgsNote = hiddenQueuedCount > 0
-            ? ` This will also clear ${hiddenQueuedCount} hidden NGS job(s).`
+        const hiddenNote = hiddenClearableCount > 0
+            ? ` This will also clear ${hiddenClearableCount} hidden queued/paused job(s).`
             : '';
-        if (confirm(`Clear ${clearableJobs.length} queued/paused jobs from database?${hiddenNgsNote}`)) {
+        if (confirm(`Clear ${clearableJobs.length} visible queued/paused jobs from database?${hiddenNote}`)) {
             cancelAllMutation.mutate();
         }
     };
@@ -559,14 +560,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                             Clear Queue
                         </button>
                     )}
-                    {/* Tab toggle */}
-                    <button
-                        onClick={() => setShowNgsJobs(!showNgsJobs)}
-                        className={`px-2 py-1 rounded text-xs ${showNgsJobs ? 'bg-cyan-600/30 text-cyan-300' : 'bg-slate-700/50 text-slate-400 hover:text-white'}`}
-                        title={showNgsJobs ? 'Hide NGS jobs' : 'Show NGS jobs'}
-                    >
-                        {showNgsJobs ? 'Hide NGS' : 'Show NGS'}
-                    </button>
+                    <JobCategoryFilter value={categoryVisibility} onChange={setCategoryVisibility} />
                     <button
                         onClick={() => setShowCancelled(!showCancelled)}
                         className={`px-2 py-1 rounded text-xs ${showCancelled ? 'bg-slate-600 text-white' : 'bg-slate-700/50 text-slate-400 hover:text-white'}`}

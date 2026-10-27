@@ -1046,6 +1046,7 @@ export const fetchJobs = async (params?: {
     include_children?: boolean;
     summary?: boolean;
     exclude_ngs?: boolean;
+    exclude_alignments?: boolean;
 }, previous?: { data: { jobs: Job[]; total: number }; headers: Record<string, unknown> }, signal?: AbortSignal) => {
     const etag = previous?.headers.etag;
     const response = await api.get<{ jobs: Job[]; total: number }>('/api/jobs', {

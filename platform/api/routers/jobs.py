@@ -5456,6 +5456,7 @@ async def list_jobs(
     model_ids: Optional[list[str]] = Query(None),
     q_ignore_case_id: bool = False,  # NGS historically searches IDs case-insensitively
     exclude_ngs: bool = False,  # Dashboard Show NGS Jobs filter, before paging/count
+    exclude_alignments: bool = False,  # Family-MSA display filter, before paging/count
     include_children: bool = False,  # New param: show child jobs if True
     scientific_family_job_id: Optional[str] = None,
     summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
@@ -5570,6 +5571,11 @@ async def list_jobs(
         filters.append(~or_(model_identity.in_(ngs_models), and_(
             model_identity == "", or_(workflow_identity.in_(ngs_workflows),
                                       mode_identity.in_((*ngs_workflows, "nanopore_methylation"))))))
+    if exclude_alignments:
+        # Match jobCategories.jobCategory: family MSA only, not folding msa_batch.
+        whitespace = " \t\n\v\f\r\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+        model_identity = func.lower(func.trim(func.coalesce(Job.model_id, ""), whitespace))
+        filters.append(~model_identity.in_(("family_msa_protein", "family_msa_nucleic")))
     if projection == "binder_navigation":
         rows = (await session.execute(select(*navigation_columns()).where(*filters).order_by(
             Job.created_at.desc(), Job.id).limit(limit).offset(offset))).mappings().all()
