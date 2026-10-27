@@ -17,4 +17,10 @@ describe('alignment coordinates', () => {
     expect(correspondingColumns(doc, 'member-1', 11).map(a => [a.rowId, a.column])).toEqual([['row-1', 2]])
     expect(correspondingColumns(doc, 'same', 0)).toEqual([])
   })
+  it('preserves explicit noncontiguous positions and occurrence', () => {
+    const mapped: AlignmentDocument = {resultId: 'r', rows: [{rowId: 'a', label: 'same', aligned: 'A-CG', sourceMemberId: 'm', occurrenceId: 'o', sourcePositions: [8, null, 10, 13]}]}
+    expect(anchorAt(mapped, 'a', 2)).toMatchObject({sourcePosition: 10, sourceMemberId: 'm', occurrenceId: 'o'})
+    expect(anchorAt(mapped, 'a', 1)?.sourcePosition).toBeUndefined()
+    expect(correspondingColumns(mapped, 'm', 13).map(x => x.column)).toEqual([3])
+  })
 })

@@ -79,8 +79,8 @@ export default function AlignmentPage() {
     const documentQuery = useQuery({
         queryKey: ['alignment-result-document', base, member],
         queryFn: async ({ signal }) => {
-            const { data } = await api.get<{result_id: string; rows: {row_id: string; label: string; aligned: string}[]}>(`${base}/documents/${encodeURIComponent(member)}`, { signal });
-            return {resultId: data.result_id, rows: data.rows.map(row => ({rowId: row.row_id, label: row.label, aligned: row.aligned}))} satisfies AlignmentDocument;
+            const { data } = await api.get<{result_id: string; rows: {row_id: string; label: string; aligned: string; source_member_id?: string | null; occurrence_id?: string | null; source_positions?: (number | null)[] | null}[]}>(`${base}/documents/${encodeURIComponent(member)}`, { signal });
+            return {resultId: data.result_id, rows: data.rows.map(row => ({rowId: row.row_id, label: row.label, aligned: row.aligned, sourceMemberId: row.source_member_id ?? undefined, occurrenceId: row.occurrence_id ?? undefined, sourcePositions: row.source_positions ?? undefined}))} satisfies AlignmentDocument;
         },
         enabled: Boolean(base && member), retry: false,
     });

@@ -23,3 +23,11 @@ def test_invalid_or_ambiguous_alignment(fasta):
 def test_missing_rows_not_invented():
     result = alignment_document(result_id='result', fasta='>a\nAC\n', roster=ROSTER)
     assert [row.row_id for row in result.rows] == ['a']
+
+
+def test_source_positions_only_when_residues_match():
+    source = {'row_id': 'a', 'header': 'same', 'sequence': 'AcG', 'source_member_id': 'm', 'occurrence_id': 'o', 'source_positions': [8, 10, 13]}
+    row = alignment_document(result_id='x', fasta='>a\nA-CG\n', roster=[source]).rows[0]
+    assert (row.source_member_id, row.occurrence_id, row.source_positions) == ('m', 'o', [8, None, 10, 13])
+    assert alignment_document(result_id='x', fasta='>a\nA-CT\n', roster=[source]).rows[0].source_positions is None
+    assert alignment_document(result_id='x', fasta='>a\nA-CG\n', roster=[dict(source, source_positions=[8])]).rows[0].source_positions is None
