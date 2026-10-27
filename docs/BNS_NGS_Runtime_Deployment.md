@@ -70,6 +70,22 @@ clone-validation image URIs. `scripts/provision_wf_clone_runtime.py
 bytes without overwriting a conflicting artifact. Build outputs, model weights,
 databases, recorded input data and runtime logs stay outside Git.
 
+Alignment sessions, read pages and FASTQ-QC result views run samtools from the
+same Dorado SIF named by `config/ngs/dorado_v2.1.2.lock.json`. Publish the
+edition SIF into the shared image store and select it for the API lane:
+
+```sh
+python scripts/publish_runtime_images.py --store-root "$BMS_RUNTIME_IMAGE_STORE" \
+  --lane development --manifest <manifest.json>
+# manifest: {"BMS_NGS_RUNTIME_SIF": {"source": "<edition dorado.sif>",
+#            "sha256": "<dorado.sif_sha256 from the lock>"}}
+```
+
+An upstream BMS Dorado object in the store does not satisfy this lock. Without
+the edition object every alignment session reports `pinned NGS samtools runtime
+is unavailable or does not match the Dorado lock`; the rest of the result stays
+readable.
+
 Configure `BMS_ONT_CONTAINER_RUNTIME=podman` and `BMS_CONTAINER_RUNTIME=podman`
 in the supported host environment for rootless Podman. Managed units preserve
 both selectors. Rootless worker commands keep the host UID so their output

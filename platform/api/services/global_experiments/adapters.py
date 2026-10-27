@@ -72,7 +72,7 @@ from services.ont_ngs_contract import normalized_fasta_sequence_sha256
 from services.ont_barcode_batches import BarcodeBatchError, get_reference_set
 from services.result_contracts import resolve_result_contract
 from services.sequence_qc_manifest import SequenceQcManifestError, load_sequence_qc_manifest
-from services.ont_run_control import TERMINAL_RUN_STATES, _valid_terminal_manifest
+from services.ont_run_control import TERMINAL_RUN_STATES, _valid_terminal_manifest, terminal_artifact_roots
 from services.job_result_roots import resolve_persisted_job_result_root
 from services.molbio_ngs_member_receipts import (
     ExternalMemberReceipt,
@@ -1809,7 +1809,11 @@ class OntInstrumentRunAdapter:
             for artifact in raw_artifacts:
                 resolved = resolve_runtime_data_path(str(artifact["path"])).resolve()
                 root = next(
-                    (candidate.resolve() for candidate in (get_results_dir(), get_inputs_dir()) if resolved.is_relative_to(candidate.resolve())),
+                    (
+                        candidate.resolve()
+                        for candidate in terminal_artifact_roots(run, get_results_dir(), get_inputs_dir())
+                        if resolved.is_relative_to(candidate.resolve())
+                    ),
                     None,
                 )
                 if root is None:

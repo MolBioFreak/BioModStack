@@ -278,6 +278,21 @@ def _approved_output_roots(record: OntInstrumentRun) -> tuple[Path, ...]:
     return tuple(roots)
 
 
+def terminal_artifact_roots(record: OntInstrumentRun, *server_roots: Path) -> tuple[Path, ...]:
+    """Roots a sealed terminal manifest may reference for this exact run.
+
+    Manifest artifacts are admitted below the run's own MinKNOW output/read
+    roots when the manifest is sealed. Receivers must accept that same bound
+    set (plus their server-owned roots), never an arbitrary host path.
+    """
+    roots: list[Path] = []
+    for root in (*server_roots, *_approved_output_roots(record)):
+        candidate = Path(root)
+        if candidate not in roots:
+            roots.append(candidate)
+    return tuple(roots)
+
+
 def _open_absolute_directory_nofollow(path: Path) -> int:
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     current_fd = os.open(os.sep, flags)

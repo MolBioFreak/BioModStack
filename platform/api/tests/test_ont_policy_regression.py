@@ -77,7 +77,7 @@ async def test_pooled_release_real_job_persistence_and_replay(policy_context, mo
         read = await context.client.get(f"/api/jobs/{job_id}/pooled-assignment/{suffix}")
         assert read.status_code == 200, read.text
     async with async_sessionmaker(context.engine)() as reader:
-        assert (await reader.execute(select(Job).where(Job.parent_job_id == job_id))).scalars().all() == []
+        assert (await reader.execute(select(Job).where(Job.id != job_id, Job.batch_id.is_not(None)))).scalars().all() == []
         assert (await reader.execute(select(NgsPooledAssignmentRelease))).scalars().all() == []
 
     if fail_second_child:
@@ -96,7 +96,7 @@ async def test_pooled_release_real_job_persistence_and_replay(policy_context, mo
     if fail_second_child:
         assert response.status_code == 422, response.text
         async with async_sessionmaker(context.engine)() as reader:
-            assert (await reader.execute(select(Job).where(Job.parent_job_id == job_id))).scalars().all() == []
+            assert (await reader.execute(select(Job).where(Job.id != job_id, Job.batch_id.is_not(None)))).scalars().all() == []
             assert (await reader.execute(select(NgsPooledAssignmentRelease))).scalars().all() == []
             assert (await reader.execute(select(NgsPooledAssignmentReleaseTarget))).scalars().all() == []
         monkeypatch.setattr(jobs, "create_job", _REAL_CREATE)
@@ -106,7 +106,7 @@ async def test_pooled_release_real_job_persistence_and_replay(policy_context, mo
     assert replay.status_code == 201, replay.text
     assert replay.json() == response.json()
     async with async_sessionmaker(context.engine)() as reader:
-        children = (await reader.execute(select(Job).where(Job.parent_job_id == job_id))).scalars().all()
+        children = (await reader.execute(select(Job).where(Job.batch_id.in_(select(NgsPooledAssignmentRelease.id).where(NgsPooledAssignmentRelease.assignment_job_id == job_id))))).scalars().all()
         assert len(children) == 2
         assert len((await reader.execute(select(NgsPooledAssignmentRelease))).scalars().all()) == 1
         assert len((await reader.execute(select(NgsPooledAssignmentReleaseTarget))).scalars().all()) == 2

@@ -7,6 +7,7 @@ import hashlib
 import fcntl
 import heapq
 import json
+import logging
 import math
 import mimetypes
 import os
@@ -41,6 +42,8 @@ if str(_SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_ROOT))
 from lib.container_runtime import container_executable
 from lib.shared_runtime_images import SharedRuntimeImageError, publish_image, verify_image
+
+logger = logging.getLogger(__name__)
 
 SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,255}$")
 SAFE_CONTIG_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,255}$")
@@ -1187,8 +1190,15 @@ def _validate_alignment_bundle(
     reference_sha256: str | None = None,
     reference_size: int | None = None,
 ) -> tuple[bool, str | None]:
-    samtools = _samtools_command()
-    samtools.verify_runtime()
+    # Runtime admission failure belongs to this session's readiness. Raising it
+    # would discard every session inventory entry, including its reason.
+    try:
+        samtools = _samtools_command()
+        samtools.verify_runtime()
+    except AlignmentSessionError as exc:
+        # Host paths stay server-side; the public reason names the failed gate.
+        logger.warning("alignment session runtime admission failed: %s", exc)
+        return False, "pinned NGS samtools runtime is unavailable or does not match the Dorado lock"
     snapshots: list[BinaryIO] = []
     try:
         if bam_sha256 is None or bam_size is None:
