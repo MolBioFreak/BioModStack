@@ -295,7 +295,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         const next = { ...previous }; delete next.input_structure; delete next.source_model; delete next.source_mapping; return next;
     });
     const rfd3Bounds = useRfd3GenerationBounds(generator === 'rfd3');
-    const rfd3LengthsInvalid = Number(requestMinLength) > Number(requestMaxLength) ||
+    const rfd3LengthsInvalid = requestMinLength === '' || requestMaxLength === '' || !Number.isInteger(requestMinLength) || !Number.isInteger(requestMaxLength) || Number(requestMinLength) > Number(requestMaxLength) ||
         [requestMinLength, requestMaxLength].some((value, index) => {
             const bound = rfd3Bounds?.[index === 0 ? 'min_length' : 'max_length'];
             return (bound?.minimum != null && Number(value) < bound.minimum) || (bound?.maximum != null && Number(value) > bound.maximum);

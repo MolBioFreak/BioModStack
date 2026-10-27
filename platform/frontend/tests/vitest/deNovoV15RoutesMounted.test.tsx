@@ -119,6 +119,9 @@ it('makes RFD3 context optional explicit and submits the selected source-free re
     expect(document.body.textContent).toContain('does not automatically add context or conditions');
     await select('Length selection', 'exact');
     const exact = [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Exact length')!.querySelector('input')!;
+    expect(exact.value).toBe('');
+    await click('Generate candidates');
+    expect(mocks.submit).not.toHaveBeenCalled();
     exact.setAttribute('data-exact-length', ''); await input('[data-exact-length]', '147');
     await select('Length selection', 'range');
     expect([...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Minimum length')!.querySelector('input')!.value).toBe('100');
