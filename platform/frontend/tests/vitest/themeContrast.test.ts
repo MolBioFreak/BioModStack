@@ -37,7 +37,7 @@ function parseBlocks(css: string): { name: string; tokens: Record<string, string
     let match: RegExpExecArray | null;
     while ((match = re.exec(css))) {
         const tokens: Record<string, string> = {};
-        for (const decl of match[2].matchAll(/(--[a-z0-9-]+):\s*(#[0-9a-fA-F]{6})\s*;/g)) {
+        for (const decl of match[2].matchAll(/(--[a-z0-9-]+):\s*(#[0-9a-fA-F]{6}|var\(--[a-z0-9-]+\))\s*;/g)) {
             tokens[decl[1]] = decl[2].toLowerCase();
         }
         for (const selector of match[1].split(',')) {
@@ -52,6 +52,25 @@ const css = readFileSync(resolve(__dirname, '../../src/index.css'), 'utf8');
 const blocks = parseBlocks(css);
 const rootTokens = blocks.find(block => block.name === ':root')?.tokens ?? {};
 
+function themeTokens(block: (typeof blocks)[number]): Record<string, string> {
+    const tokens = { ...rootTokens, ...block.tokens };
+    const resolveToken = (name: string, seen = new Set<string>()): string => {
+        if (seen.has(name)) throw new Error(`Circular theme token: ${name}`);
+        seen.add(name);
+        const value = tokens[name];
+        const alias = value?.match(/^var\((--[a-z0-9-]+)\)$/)?.[1];
+        return alias ? resolveToken(alias, seen) : value;
+    };
+    return Object.fromEntries(Object.keys(tokens).map((name) => [name, resolveToken(name)]));
+}
+
+function mix(a: string, b: string, fraction: number): string {
+    return '#' + [1, 3, 5].map((offset) => Math.round(
+        parseInt(a.slice(offset, offset + 2), 16) * fraction
+        + parseInt(b.slice(offset, offset + 2), 16) * (1 - fraction),
+    ).toString(16).padStart(2, '0')).join('');
+}
+
 describe('theme contrast', () => {
     it('defines the muted token for the default theme', () => {
         expect(rootTokens['--text-muted']).toBeTruthy();
@@ -60,7 +79,7 @@ describe('theme contrast', () => {
     it('keeps muted help copy readable on every surface, per theme cascade', () => {
         const failures: string[] = [];
         for (const block of blocks) {
-            const tokens = { ...rootTokens, ...block.tokens };
+            const tokens = themeTokens(block);
             const muted = tokens['--text-muted'];
             if (!muted) continue;
             for (const surface of SURFACES) {
@@ -77,7 +96,7 @@ describe('theme contrast', () => {
 
     it('keeps muted distinct from secondary so hierarchy is preserved', () => {
         for (const block of blocks) {
-            const tokens = { ...rootTokens, ...block.tokens };
+            const tokens = themeTokens(block);
             const muted = tokens['--text-muted'];
             const secondary = tokens['--text-secondary'];
             if (!muted || !secondary) continue;
@@ -90,7 +109,7 @@ describe('theme contrast', () => {
 describe('native MolBio and Project readability', () => {
     it('keeps action and status text readable on every theme surface', () => {
         for (const block of blocks) {
-            const tokens = { ...rootTokens, ...block.tokens };
+            const tokens = themeTokens(block);
             for (const token of ['--text-action', '--text-success', '--text-warning', '--text-error']) {
                 expect(tokens[token], `${block.name} ${token}`).toBeTruthy();
                 for (const surface of [...SURFACES, '--card-bg', '--card-hover']) if (tokens[surface])
@@ -101,7 +120,7 @@ describe('native MolBio and Project readability', () => {
     });
     it('keeps every nucleotide palette readable in all 14 themes, including the selected region', () => {
         for (const block of blocks) {
-            const tokens = { ...rootTokens, ...block.tokens };
+            const tokens = themeTokens(block);
             const background = tokens['--bg-secondary'];
             const foreground = tokens['--text-primary'];
             const selected = '#' + [1,3,5].map((offset) => Math.round(parseInt(background.slice(offset, offset+2),16)*.92 + parseInt(foreground.slice(offset, offset+2),16)*.08).toString(16).padStart(2,'0')).join('');
@@ -110,5 +129,35 @@ describe('native MolBio and Project readability', () => {
                 for (const surface of [background, selected]) expect(contrastRatio(adjusted, surface), `${block.name} ${palette}/${base} on ${surface}`).toBeGreaterThanOrEqual(4.5);
             }
         }
+    });
+});
+
+describe('NGS themed surfaces', () => {
+    it('covers every selectable theme and resolves inherited surfaces against that theme', () => {
+        expect(blocks.filter(block => block.name !== ':root')).toHaveLength(14);
+        for (const block of blocks) {
+            const tokens = themeTokens(block);
+            for (const surface of ['--surface-page', '--surface-card', '--surface-control', '--surface-plot']) {
+                expect(tokens[surface], `${block.name} ${surface}`).toMatch(/^#[0-9a-f]{6}$/);
+            }
+            if (['[data-theme="light"]', '[data-theme="clean_light"]', '[data-theme="desert"]'].includes(block.name)) {
+                expect(luminance(tokens['--surface-plot'])).toBeGreaterThan(.5);
+                expect(luminance(tokens['--surface-card'])).toBeGreaterThan(.5);
+            }
+        }
+    });
+    it('keeps NGS labels and selected workflow descriptions readable across all themes', () => {
+        const failures: string[] = [];
+        for (const block of blocks) {
+            const tokens = themeTokens(block);
+            const selected = mix(tokens['--accent-primary'], tokens['--bg-secondary'], .1);
+            for (const foreground of ['--text-primary', '--text-secondary', '--text-muted']) {
+                for (const background of [tokens['--bg-primary'], tokens['--bg-secondary'], tokens['--bg-tertiary'], selected]) {
+                    const ratio = contrastRatio(tokens[foreground], background);
+                    if (ratio < 4.5) failures.push(`${block.name} ${foreground} on ${background}: ${ratio.toFixed(2)}`);
+                }
+            }
+        }
+        expect(failures).toEqual([]);
     });
 });

@@ -4483,7 +4483,7 @@ export function NGSToolkit() {
                                 href={link.href}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="px-2.5 py-1 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-xs text-[var(--text-primary)] hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)] transition-colors"
+                                className="px-2.5 py-1 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-xs text-[var(--text-primary)] hover:border-[var(--accent-secondary)] hover:text-[var(--text-action)] transition-colors"
                             >
                                 {link.label}
                             </a>
@@ -4550,8 +4550,8 @@ export function NGSToolkit() {
                             <h2 className="text-sm font-semibold text-[var(--text-primary)]">Nanopore Jobs</h2>
                             <button
                                 onClick={() => selectView('launch')}
-                                className="px-3 py-1.5 text-xs rounded text-white transition-colors"
-                                style={{ backgroundColor: 'var(--accent-secondary)' }}
+                                className="px-3 py-1.5 text-xs rounded text-[var(--text-on-accent)] transition-colors"
+                                style={{ backgroundColor: 'var(--accent-primary)' }}
                             >
                                 New Nanopore Run
                             </button>
@@ -4645,8 +4645,8 @@ export function NGSToolkit() {
                                                                     : !fullJobQuery.isSuccess
                                                                         ? 'Loading full job detail before parameter reuse.'
                                                                         : undefined}
-                                                            className="px-2 py-1 text-xs rounded text-white disabled:opacity-40 disabled:cursor-not-allowed"
-                                                            style={{ backgroundColor: 'var(--accent-secondary)' }}
+                                                            className="px-2 py-1 text-xs rounded text-[var(--text-on-accent)] disabled:opacity-40 disabled:cursor-not-allowed"
+                                                            style={{ backgroundColor: 'var(--accent-primary)' }}
                                                         >
                                                             Reuse Params
                                                         </button>
@@ -4696,7 +4696,7 @@ export function NGSToolkit() {
                                             : !rawSignalRunId || !rawSignalObservedGeneration
                                                 ? 'This job is not bound to an immutable ONT run generation.'
                                                 : 'Open the dataset-scoped read and signal workbench; reference controls remain gated until alignment is available.'}
-                                        className="px-3 py-1.5 text-xs rounded border transition-colors text-[var(--accent-secondary)] border-[var(--accent-secondary)]/50 hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
+                                        className="px-3 py-1.5 text-xs rounded border transition-colors text-[var(--text-action)] border-[var(--accent-secondary)]/50 hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
                                     >
                                         Read &amp; Signal Workbench
                                     </button>
@@ -5675,7 +5675,7 @@ export function NGSToolkit() {
                                     else openSignalWorkbench();
                                 }}
                                 disabled={!signalDatasetId || !rawSignalRunId || !rawSignalObservedGeneration}
-                                className="px-2 py-0.5 text-[11px] rounded border border-[var(--accent-secondary)]/50 text-[var(--accent-secondary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
+                                className="px-2 py-0.5 text-[11px] rounded border border-[var(--accent-secondary)]/50 text-[var(--text-action)] hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
                             >
                                 {signalWorkbenchRequested ? 'Hide signal' : 'Signal'}
                             </button>

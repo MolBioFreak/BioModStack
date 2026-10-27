@@ -135,6 +135,8 @@ export default defineConfig({
             './tests/vitest/nativeAtomViewerMounted.test.tsx',
             './tests/vitest/nativeOpacityAdapter.test.ts',
             './tests/vitest/themeContrast.test.ts',
+            './tests/vitest/themeSelectorMounted.test.tsx',
+            './tests/vitest/pod5UploadMounted.test.tsx',
             './tests/vitest/molBioThemeReadability.test.tsx',
             './tests/vitest/spatialTrackMounted.test.tsx',
             './tests/vitest/scientificViewerIdentity.test.ts',

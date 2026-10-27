@@ -48,9 +48,10 @@ import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { NanoporeWorkflowChooser, type WorkflowKey } from './ngs/NanoporeWorkflowChooser';
 import { buildNanoporeOperatorStageParams } from '../lib/nanoporeLaunchPayload';
 import { normalizeNanoporeWorkflowChoice } from '../lib/nanoporeWorkflow';
+import { Pod5Upload } from './ngs/Pod5Upload';
 
-const TASK_FLOW_PANEL = 'rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_75%,#000)] p-5 shadow-[0_18px_45px_rgba(0,0,0,0.32)]';
-const TASK_FLOW_CARD = 'rounded-xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-tertiary)_70%,#000)] p-4';
+const TASK_FLOW_PANEL = 'rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 shadow-[var(--shadow-card)]';
+const TASK_FLOW_CARD = 'min-w-0 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4';
 const TASK_FLOW_LABEL = 'text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--text-secondary)]';
 
 
@@ -774,7 +775,7 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse, e
             <div className="flex flex-wrap items-center gap-2">
                 <button type="button" onClick={() => setTargets((previous) => previous.length < 96 ? [...previous, createPooledTarget(previous.length)] : previous)} disabled={targets.length >= 96} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-primary)] disabled:opacity-40">Add target</button>
                 <button type="button" onClick={() => setTargets((previous) => previous.length > 2 ? previous.slice(0, -1) : previous)} disabled={targets.length <= 2} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-secondary)] disabled:opacity-40">Remove last target</button>
-                <button type="button" onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending} className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white disabled:cursor-not-allowed disabled:opacity-40">{submitMutation.isPending ? 'Submitting pooled assignment…' : 'Submit pooled assignment'}</button>
+                <button type="button" onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending} className="rounded bg-blue-600 px-3 py-1.5 text-xs text-[var(--text-on-accent)] disabled:cursor-not-allowed disabled:opacity-40">{submitMutation.isPending ? 'Submitting pooled assignment…' : 'Submit pooled assignment'}</button>
                 {message && <span className="text-xs text-[var(--text-secondary)]">{message}</span>}
             </div>
         </section>
@@ -838,6 +839,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     });
     const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
     const [pod5Dir, setPod5Dir] = useState(initialValues?.pod5Dir as string || '');
+    const [pod5Uploading, setPod5Uploading] = useState(false);
     const [bamPath, setBamPath] = useState(initialValues?.bamPath as string || '');
     const [bamForceRealign, setBamForceRealign] = useState<boolean>(
         (initialValues?.bamForceRealign as boolean | undefined)
@@ -1231,6 +1233,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (!jobName.trim()) blockers.push('Enter a job name.');
         if (!executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1) blockers.push('Select one GPU or Scheduler auto before submitting this NGS job.');
         if (inputSource === 'pod5' && !pod5Dir.trim()) blockers.push('Please specify a POD5 data directory.');
+        if (inputSource === 'pod5' && pod5Uploading) blockers.push('Wait for the POD5 upload to finish.');
         if (inputSource === 'pod5' && doradoMolecule === 'rna' && doradoMode === 'duplex') blockers.push('RNA duplex is unsupported by the locked Dorado runtime.');
         if (inputSource === 'pod5' && doradoMode === 'duplex' && !duplexPairs.trim()) blockers.push('Duplex basecalling requires a confined read-pairs file.');
         if (inputSource === 'pod5' && doradoMode === 'duplex' && barcodeKit) blockers.push('Barcode classification and duplex cannot be combined in the locked runtime.');
@@ -1672,8 +1675,17 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // ============================================================================
     // Render
     // ============================================================================
+    const inputOptions = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening'
+        ? [{ key: 'pod5' as const, label: 'POD5 raw reads' }, { key: 'bam' as const, label: 'Existing BAM' }, { key: 'fastq' as const, label: 'FASTQ reads' }]
+        : selectedWorkflow === 'modified'
+            ? [{ key: 'pod5' as const, label: 'POD5 raw reads' }, { key: 'bam' as const, label: 'Existing BAM with MM/ML tags' }]
+            : selectedWorkflow === 'pooledAssignment' || selectedWorkflow === 'fastqQc'
+                ? [{ key: 'fastq' as const, label: 'FASTQ reads' }]
+                : selectedWorkflow === 'bamQc'
+                    ? [{ key: 'bam' as const, label: 'Existing BAM' }]
+                    : [{ key: 'pod5' as const, label: 'POD5 raw reads' }];
     return (
-        <div className="nanopore-template mx-auto max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_25%,#000)] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.38)] lg:p-6">
+        <div className="nanopore-template mx-auto w-full max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4 text-[var(--text-primary)] shadow-[var(--shadow-card)] lg:p-6">
             {review && review.key === requestKey && <ExecutionPlanApproval preview={review.prepared.preview} finish={review.finish} />}
             {/* Header */}
             <div className="flex items-center justify-between">
@@ -1686,7 +1698,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             <path fillRule="evenodd" d="M17 10a.75.75 0 01-.75.75H5.612l4.158 3.96a.75.75 0 11-1.04 1.08l-5.5-5.25a.75.75 0 010-1.08l5.5-5.25a.75.75 0 111.04 1.08L5.612 9.25H16.25A.75.75 0 0117 10z" clipRule="evenodd" />
                         </svg>
                     </button>
-                    <div className="text-[var(--accent-secondary)]">
+                    <div className="text-[var(--text-action)]">
                         <NanoporeIcon />
                     </div>
                     <div>
@@ -1743,28 +1755,15 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
             {/* Data Source */}
             <div className={TASK_FLOW_CARD}>
-                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Primary Input *</label>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
-                    {(selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening'
-                        ? [
-                            { key: 'pod5' as const, label: 'POD5 Raw Reads' },
-                            { key: 'bam' as const, label: 'Existing BAM' },
-                            { key: 'fastq' as const, label: 'FASTQ Analysis' },
-                        ]
-                        : selectedWorkflow === 'modified'
-                            ? [{ key: 'pod5' as const, label: 'POD5 Raw Reads' }, { key: 'bam' as const, label: 'Existing BAM with MM/ML tags' }]
-                            : selectedWorkflow === 'pooledAssignment' || selectedWorkflow === 'fastqQc'
-                                ? [{ key: 'fastq' as const, label: 'FASTQ Analysis' }]
-                                : selectedWorkflow === 'bamQc'
-                                    ? [{ key: 'bam' as const, label: 'Existing BAM' }]
-                                    : [{ key: 'pod5' as const, label: 'POD5 Raw Reads' }]
-                    ).map((source) => (
+                <p className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Primary input *</p>
+                <div className="flex flex-wrap gap-2 mb-3">
+                    {inputOptions.length === 1 ? <p className="text-sm text-[var(--text-primary)]">{inputOptions[0].label}</p> : inputOptions.map((source) => (
                         <button
                             key={source.key}
                             type="button"
                             onClick={() => setInputSource(source.key)}
                             aria-pressed={inputSource === source.key}
-                            className={`px-3 py-2 rounded border text-sm text-left transition-colors ${inputSource === source.key
+                            className={`min-w-0 flex-1 basis-32 px-3 py-2 rounded border text-sm text-left transition-colors ${inputSource === source.key
                                 ? ''
                                 : 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
                                 }`}
@@ -1781,8 +1780,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
                 {inputSource === 'pod5' && (
                     <>
-                        <div className="flex items-center gap-2">
-                            <div className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 min-h-10">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <div className="min-w-0 flex-1 basis-40 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 min-h-10">
                                 {pod5Dir ? (
                                     <span className="text-[var(--text-primary)] font-mono text-sm break-all">{formatPathDisplay(pod5Dir)}</span>
                                 ) : (
@@ -1790,13 +1789,18 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 )}
                             </div>
                             <button
+                                type="button"
+                                disabled={pod5Uploading}
+                                aria-label="Browse POD5 folder"
                                 onClick={() => openPathPicker({ field: 'pod5Dir', title: 'Select POD5 Directory', mode: 'directory', filter: 'unknown' })}
                                 className="px-3 py-2 rounded border border-[var(--border-primary)] text-[var(--text-primary)] text-sm hover:bg-[var(--bg-tertiary)] transition-colors"
                             >
-                                Browse
+                                Browse folder
                             </button>
                             {pod5Dir && (
                                 <button
+                                    type="button"
+                                    disabled={pod5Uploading}
                                     onClick={() => setPod5Dir('')}
                                     className="px-3 py-2 rounded border border-[var(--border-primary)] text-[var(--text-secondary)] text-sm hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
                                 >
@@ -1804,6 +1808,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 </button>
                             )}
                         </div>
+                        <Pod5Upload selectedDirectory={pod5Dir} onSelectDirectory={setPod5Dir} onBusyChange={setPod5Uploading} />
                     </>
                 )}
 
@@ -2143,7 +2148,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             {inputSource === 'pod5' && (
                 <div className={TASK_FLOW_CARD}>
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
-                        Basecall Quality Filter — <span className="text-[var(--accent-secondary)] font-semibold">Q{minQscore}</span>
+                        Basecall Quality Filter — <span className="text-[var(--text-action)] font-semibold">Q{minQscore}</span>
                         <span className="ml-2 text-xs font-normal text-[var(--text-secondary)]">{getQscoreLabel(minQscore)}</span>
                     </label>
                     <input
@@ -2169,7 +2174,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             {inputSource === 'bam' && (
                 <div className={TASK_FLOW_CARD}>
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
-                        Alignment Quality Filter — <span className="text-[var(--accent-secondary)] font-semibold">MAPQ {'>='} {bamMinMapq}</span>
+                        Alignment Quality Filter — <span className="text-[var(--text-action)] font-semibold">MAPQ {'>='} {bamMinMapq}</span>
                     </label>
                     <input
                         type="range"
@@ -2207,7 +2212,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             checked={trimAdapters}
                             onChange={(e) => setTrimAdapters(e.target.checked)}
                             disabled={doradoMolecule === 'rna' || doradoMode === 'duplex'}
-                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">Trim adapters{doradoMolecule === 'rna' ? ' (required for RNA)' : doradoMode === 'duplex' ? ' (fixed by duplex mode)' : ''}</span>
@@ -2222,7 +2227,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             type="checkbox"
                             checked={bamForceRealign}
                             onChange={(e) => setBamForceRealign(e.target.checked)}
-                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">Force BAM realignment (Dorado aligner)</span>
@@ -2241,7 +2246,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 if (selectedWorkflow === 'constructScreening') setRunAssembly(e.target.checked);
                             }}
                             disabled={selectedWorkflow === 'clone'}
-                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)] disabled:cursor-not-allowed"
+                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)] disabled:cursor-not-allowed"
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">Consensus assembly (wf-clone-validation)</span>
@@ -2273,7 +2278,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             type="checkbox"
                             checked={runFastqQc}
                             onChange={(e) => setRunFastqQc(e.target.checked)}
-                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">FASTQ plasmid QC</span>
@@ -2345,7 +2350,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 type="checkbox"
                                 checked={fastqMinimap2AllowSecondary}
                                 onChange={(e) => setFastqMinimap2AllowSecondary(e.target.checked)}
-                                className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                                className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                             />
                             <span className="text-xs text-[var(--text-secondary)]">Keep secondary alignments</span>
                         </label>
@@ -2393,7 +2398,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                     type="checkbox"
                                     checked={emitSummary}
                                     onChange={(e) => setEmitSummary(e.target.checked)}
-                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                                 />
                                 <span className="text-sm text-[var(--text-primary)]">Emit sequencing summary TSV</span>
                             </label>
@@ -2408,7 +2413,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                     checked={doradoMode === 'simplex' && emitMoves}
                                     disabled={doradoMode === 'duplex'}
                                     onChange={(e) => setEmitMoves(e.target.checked)}
-                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                                 />
                                 <span className="text-sm text-[var(--text-primary)]">Emit move tags for aligned signal views</span>
                             </label>
@@ -2420,7 +2425,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                     type="checkbox"
                                     checked={runModkit}
                                     onChange={(e) => setRunModkit(e.target.checked)}
-                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                                 />
                                 <div>
                                     <span className="text-sm text-[var(--text-primary)]">Generate methylation tables</span>
@@ -2546,7 +2551,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Plasmid dimer QC</div>
                                 <label className="flex items-center gap-2 cursor-pointer">
-                                    <input type="checkbox" checked={enableRotatingReferenceFrames} onChange={(e) => setEnableRotatingReferenceFrames(e.target.checked)} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)]" />
+                                    <input type="checkbox" checked={enableRotatingReferenceFrames} onChange={(e) => setEnableRotatingReferenceFrames(e.target.checked)} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)]" />
                                     <span className="text-xs text-[var(--text-secondary)]">Evaluate circular-reference rotations</span>
                                 </label>
                                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -2666,11 +2671,11 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                         <input type="number" min={0} max={10} value={wfClonePrimerMismatch} onChange={(e) => setWfClonePrimerMismatch(coerceIntegerInput(e.target.value, 2, 0, 10))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
                                     </label>
                                     <label className="flex items-center gap-2 cursor-pointer">
-                                        <input type="checkbox" checked={wfCloneNonUniformCoverage} onChange={(e) => setWfCloneNonUniformCoverage(e.target.checked)} disabled={assemblyTool !== 'flye'} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)] disabled:opacity-40" />
+                                        <input type="checkbox" checked={wfCloneNonUniformCoverage} onChange={(e) => setWfCloneNonUniformCoverage(e.target.checked)} disabled={assemblyTool !== 'flye'} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)] disabled:opacity-40" />
                                         <span className="text-xs text-[var(--text-secondary)]">Non-uniform coverage / Flye metagenome mode</span>
                                     </label>
                                     <label className="flex items-center gap-2 cursor-pointer">
-                                        <input type="checkbox" checked={wfCloneCanuFast} onChange={(e) => setWfCloneCanuFast(e.target.checked)} disabled={assemblyTool !== 'canu'} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)] disabled:opacity-40" />
+                                        <input type="checkbox" checked={wfCloneCanuFast} onChange={(e) => setWfCloneCanuFast(e.target.checked)} disabled={assemblyTool !== 'canu'} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)] disabled:opacity-40" />
                                         <span className="text-xs text-[var(--text-secondary)]">Canu fast mode (may reduce contiguity)</span>
                                     </label>
                                     <label className="flex items-center gap-2 cursor-pointer md:col-span-2">
@@ -2678,7 +2683,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                             type="checkbox"
                                             checked={wfCloneLargeConstruct}
                                             onChange={(e) => setWfCloneLargeConstruct(e.target.checked)}
-                                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                                         />
                                         <span className="text-xs text-[var(--text-secondary)]">Enable large construct mode</span>
                                     </label>
@@ -2713,8 +2718,8 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             onClick={handleSubmit}
                             disabled={!canSubmit || submissionPending}
                             title={reviewBlocker || undefined}
-                            className={`rounded-lg px-4 py-2 text-xs font-semibold transition-all ${canSubmit && !submissionPending ? 'text-[var(--text-primary)] shadow-lg' : 'cursor-not-allowed bg-[var(--bg-secondary)] text-[var(--text-secondary)]'}`}
-                            style={canSubmit && !submissionPending ? { backgroundColor: 'var(--accent-secondary)', boxShadow: '0 10px 20px color-mix(in srgb, var(--accent-secondary) 30%, transparent)' } : undefined}
+                            className={`rounded-lg px-4 py-2 text-xs font-semibold transition-all ${canSubmit && !submissionPending ? 'text-[var(--text-on-accent)] shadow-lg' : 'cursor-not-allowed bg-[var(--bg-secondary)] text-[var(--text-secondary)]'}`}
+                            style={canSubmit && !submissionPending ? { backgroundColor: 'var(--accent-primary)', boxShadow: '0 10px 20px color-mix(in srgb, var(--accent-secondary) 30%, transparent)' } : undefined}
                         >
                             {submissionPending ? 'Submitting…' : 'Review and submit'}
                         </button>
@@ -2808,7 +2813,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                                         : 'border-transparent opacity-50 cursor-default'
                                                     }`}
                                             >
-                                                <svg className={`w-4 h-4 flex-shrink-0 ${isDirectory ? 'text-[var(--accent-secondary)]' : 'text-[var(--text-secondary)]'}`} viewBox="0 0 20 20" fill="currentColor">
+                                                <svg className={`w-4 h-4 flex-shrink-0 ${isDirectory ? 'text-[var(--text-action)]' : 'text-[var(--text-secondary)]'}`} viewBox="0 0 20 20" fill="currentColor">
                                                     {isDirectory ? (
                                                         <path d="M2 5.25A2.25 2.25 0 014.25 3h3.38a2.25 2.25 0 011.59.66l.47.47a.75.75 0 00.53.22h5.5A2.25 2.25 0 0118 6.6v7.15A2.25 2.25 0 0115.75 16H4.25A2.25 2.25 0 012 13.75v-8.5z" />
                                                     ) : (

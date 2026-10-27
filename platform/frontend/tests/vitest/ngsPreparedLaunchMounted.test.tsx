@@ -66,10 +66,12 @@ beforeEach(() => {
     window.sessionStorage.clear(); window.localStorage.clear();
     api.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
         const url = config.url ?? '';
-        const body = config.data ? JSON.parse(config.data as string) : {};
+        const body = config.data instanceof FormData ? { path: config.data.get('path'), file: config.data.get('file') }
+            : config.data ? JSON.parse(config.data as string) : {};
         calls.push({ url, body, context: config.headers.get('X-BMS-Launch-Context-ID') });
         let data: unknown;
-        if (url.endsWith('/prepare')) data = await prepare(body, url.split('/').at(-2)!);
+        if (url === '/api/files/upload') data = { path: `${body.path}/${(body.file as File).name}` };
+        else if (url.endsWith('/prepare')) data = await prepare(body, url.split('/').at(-2)!);
         else if (url.endsWith('/submit')) data = { id: 'new-job' };
         else if (url === '/api/execution-targets') data = [{ id: 'worker-1', name: 'Test worker', active: true, state: 'ready', capabilities: { gpu_count: 1, gpu_name: 'fixture' } }];
         else if (url === '/api/sequences/') data = [molecular];
@@ -117,6 +119,22 @@ const submits = () => calls.filter(call => call.url.endsWith('/submit'));
 async function remoteReview() { await click('Vast · Test worker'); await click('Review and submit'); await until(() => expect(button('Approve and submit')).toBeTruthy()); }
 
 describe('ordinary NGS prepared launch through mounted consumers and real API transport', () => {
+    it('uploads POD5 files through shared transport and submits their server-returned folder', async () => {
+        await mount();
+        const upload = container.querySelector<HTMLInputElement>('input[aria-label="Upload POD5 files"]')!;
+        const files = ['one.pod5', 'two.pod5'].map(name => new File(['fixture'], name));
+        Object.defineProperty(upload, 'files', { configurable: true, value: files });
+        await act(async () => upload.dispatchEvent(new Event('change', { bubbles: true })));
+        await until(() => expect(container.textContent).toContain('2 POD5 files uploaded'));
+        const uploads = calls.filter(call => call.url === '/api/files/upload');
+        expect(uploads).toHaveLength(2);
+        expect(uploads.map(call => call.body.file)).toEqual(files);
+        expect(uploads[1].body.path).toBe(uploads[0].body.path);
+        expect(uploads[0].body.path).toMatch(/^inputs\/ont-analysis\/[0-9a-f-]+$/);
+        await click('Review and submit');
+        await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params.pod5_dir).toBe(uploads[0].body.path);
+    });
     it.each([['simplex', '64 (default)'], ['duplex', '32 (default)']])('preserves the %s default when batch is omitted', async (doradoMode, placeholder) => {
         await mount({ ...base, doradoMode, duplexPairs: '/data/pairs.txt' }); await click('Show advanced controls');
         const control = container.querySelector<HTMLInputElement>('input[aria-label="Dorado batch size"]')!;
@@ -320,7 +338,7 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
 
     it('keeps Local reference-free and retains every workflow without duplicate option cards', async () => {
         await mount({ ...base, doradoModel: 'fast', batchSize: 0, emitSummary: false, emitMoves: false });
-        expect(container.querySelectorAll('[data-ngs-workflow-key]')).toHaveLength(8);
+        expect(container.querySelectorAll('[data-ngs-workflow-key]')).toHaveLength(6);
         for (const quality of ['Super Accurate (SUP)', 'High Accuracy (HAC)', 'Fast']) {
             expect(Array.from(container.querySelectorAll('button')).some(node => node.textContent?.includes(quality))).toBe(true);
         }

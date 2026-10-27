@@ -17,6 +17,7 @@ const apiMocks = vi.hoisted(() => ({
     importMolBioNgsBrowserReference: vi.fn(),
     issueMolBioNgsReceipt: vi.fn(),
     previewMolBioSequenceImport: vi.fn(),
+    uploadFile: vi.fn(),
     submitOntNgsJob: vi.fn(),
     submitPooledReferenceAssignment: vi.fn(),
 }));
@@ -237,9 +238,9 @@ describe('mounted NGS settings to submit payload', () => {
             ngsReferenceRevisionId: 'reference-revision-1',
         });
 
-        const pod5 = buttonWithText('POD5 Raw Reads');
+        const pod5 = buttonWithText('POD5 raw reads');
         const bam = buttonWithText('Existing BAM');
-        const fastq = buttonWithText('FASTQ Analysis');
+        const fastq = buttonWithText('FASTQ reads');
         expect(pod5?.getAttribute('aria-pressed')).toBe('false');
         expect(bam?.getAttribute('aria-pressed')).toBe('false');
         expect(fastq?.getAttribute('aria-pressed')).toBe('true');
