@@ -549,6 +549,19 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
             else:
                 for i, state in enumerate(params.get('structures', [])):
                     visit(state['path'], None, ('structures', i, 'path'))
+    if model_id in {'esmfold2', 'esmfold2_experimental'}:
+        # Preview sees public components before the compiler writes their native
+        # document. Reuse its typed MSA fields and the existing visit/roots owner;
+        # esmf_use_msa controls search, not explicitly supplied component inputs.
+        components = params.get('complex_components') or []
+        prefix = ('complex_components',)
+        if isinstance(components, dict):
+            key = 'components' if 'components' in components else 'sequences'
+            components = components.get(key, [])
+            prefix += (key,)
+        for selector, value, role in native_reference_fields(
+                {'components': components}, 'boltz-complex'):
+            visit(value, None, (*prefix, *selector[1:]), role)
     if model_id == 'molecular_dynamics':
         spec_input = (params.get('md_job_spec') or {}).get('input') or {}
         if spec_input.get('structure'):
