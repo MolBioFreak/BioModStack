@@ -19,6 +19,7 @@ export default defineConfig({
             './tests/vitest/alignmentWorkspace.test.tsx',
             './tests/vitest/alignmentShared.test.tsx',
             './tests/vitest/alignmentCompareShared.test.tsx',
+            './tests/vitest/alignmentEnsembleSupport.test.tsx',
             './tests/vitest/alignmentViewStateMounted.test.tsx',
             './tests/vitest/bioxpCanvasThermalIntegrationMounted.test.tsx',
             './tests/vitest/bioxpProfilesMounted.test.tsx',

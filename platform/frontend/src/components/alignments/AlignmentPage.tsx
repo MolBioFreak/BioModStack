@@ -13,6 +13,27 @@ import type { AlignmentDocument } from '../../lib/alignmentCoordinates';
 import { ProjectWorkflowSetupBanner, useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup';
 import { projectManagerErrorMessage } from '../../lib/projectManager';
 
+type SupportSample = {artifact_id: string; logical_path: string | null; numerator: number; denominator: number; fraction: number | null; matched_rows: number; rows_with_unknown_mapping: number};
+type Support = {receipt_id: string; reference_artifact_id: string; report: {method: string; interpretation: string; denominator_policy: string; sample_count: number; numerator: number; denominator: number; fraction: number | null; samples: SupportSample[]}};
+
+export function EnsembleSupport({projectId, receiptId, reference, artifacts}: {projectId: string; receiptId: string; reference: string; artifacts: {id: string; logical_path?: string | null}[]}) {
+    const [selected, setSelected] = useState<string[]>([]);
+    const [result, setResult] = useState<Support>();
+    const [error, setError] = useState('');
+    const [busy, setBusy] = useState(false);
+    const fraction = (x: number | null) => x === null ? 'undefined' : x.toFixed(3);
+    return <section aria-label="Ensemble support"><h2>Ensemble support</h2>
+        <p>Reference: {reference}. Select retained samples explicitly; including the reference counts it as a sample. Observed agreement is not probability of alignment truth.</p>
+        {artifacts.map(a => <label key={a.id}><input type="checkbox" checked={selected.includes(a.id)} onChange={e => setSelected(old => e.target.checked ? [...old, a.id] : old.filter(id => id !== a.id))}/>{a.logical_path || a.id} ({a.id}) </label>)}
+        <button disabled={busy || !selected.length} onClick={async () => { setBusy(true); setError(''); setResult(undefined); try {
+            setResult((await api.post<Support>(`/api/family-msa/projects/${encodeURIComponent(projectId)}/ensemble-support`, {receipt_id: receiptId, reference_artifact_id: reference, member_artifact_ids: selected})).data);
+        } catch (e) { setError(String(e)); } finally { setBusy(false); } }}>Compute ensemble support</button>
+        {error && <p role="alert">Ensemble support failed: {error}</p>}
+        {result && <div><p>Method: {result.report.method}; samples: {result.report.sample_count}; pooled retention: {result.report.numerator} / {result.report.denominator} = {fraction(result.report.fraction)}. {result.report.denominator_policy}. {result.report.interpretation}.</p>
+            <ul>{result.report.samples.map((s, i) => <li key={`${s.artifact_id}:${i}`}>{s.logical_path || s.artifact_id} ({s.artifact_id}): {s.numerator} / {s.denominator} = {fraction(s.fraction)}; matched rows {s.matched_rows}; unknown mapping rows {s.rows_with_unknown_mapping}</li>)}</ul></div>}
+    </section>;
+}
+
 /** Receives exact Job or Project receipt identities. */
 export default function AlignmentPage() {
     const { jobId: routeJobId, resultId } = useParams<{ jobId?: string; resultId?: string }>();
@@ -82,6 +103,7 @@ export default function AlignmentPage() {
         {observations.error && <p role="status">Source format observations unavailable; the original file remains downloadable.</p>}
         {Boolean(observations.data?.length) && <section aria-label="Source format observations"><h2>Source format observations</h2><ul>{observations.data?.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
         {base && alignments.length > 1 && <label>Alignment member <select value={selected} onChange={e => setSelection({base, id: e.target.value})}><option value="">Choose a member</option>{alignments.map((x, index) => <option key={x.id} value={x.id}>{x.logical_path || `Alignment ${index + 1}`}</option>)}</select></label>}
+        {projectId && receiptId && member && alignments.length > 1 && <EnsembleSupport key={`${projectId}:${receiptId}:${member}`} projectId={projectId} receiptId={receiptId} reference={member} artifacts={alignments}/>}
         {!base && !resultId && section === 'New' && <>{!queryModel && <label>Alignment family <select aria-label="Alignment family" value={model} onChange={e => setSelectedModel(e.target.value)}><option value="family_msa_protein">Protein</option><option value="family_msa_nucleic">Nucleic acid</option></select></label>}<AlignmentEditor key={model} model={model}/></>}
         {!base && !resultId && section === 'Library' && <AlignmentLibrary initialProject={projectId}/>}
         {!base && !resultId && section === 'Compare' && <p role="status">Alignment comparison is not connected yet.</p>}

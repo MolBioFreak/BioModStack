@@ -390,6 +390,13 @@ class ComparisonInput(BaseModel):
     right_artifact_id: str = Field(min_length=1)
 
 
+class EnsembleSupportInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    receipt_id: str = Field(min_length=1)
+    reference_artifact_id: str = Field(min_length=1)
+    member_artifact_ids: list[str]
+
+
 class PairAgreement(BaseModel):
     method: str
     matched_rows: int
@@ -455,6 +462,23 @@ async def compare_project_results(request: Request, project_id: str, payload: Co
     left = await comparison_roster(left_entries, left_read, payload.left_artifact_id)
     right = await comparison_roster(right_entries, right_read, payload.right_artifact_id)
     return {'method': 'explicit-source-occurrence.v1', 'report': compare(left, right)}
+
+
+@router.post('/projects/{project_id}/ensemble-support')
+async def project_ensemble_support(request: Request, project_id: str, payload: EnsembleSupportInput,
+                                   session: AsyncSession = Depends(get_experiment_session)):
+    import asyncio
+    from bms_alignment import ensemble_support
+    entries, read = await project_result(request, session, project_id, payload.receipt_id)
+    reference = await comparison_roster(entries, read, payload.reference_artifact_id)
+    members = [await comparison_roster(entries, read, artifact_id) for artifact_id in payload.member_artifact_ids]
+    report = await asyncio.to_thread(ensemble_support, reference, members)
+    by_id = {entry['id']: entry for entry in entries if entry['role'] == 'alignment'}
+    for sample, artifact_id in zip(report['samples'], payload.member_artifact_ids):
+        sample.update({'receipt_id': payload.receipt_id, 'artifact_id': artifact_id,
+                       'logical_path': by_id[artifact_id].get('logical_path')})
+    return {'receipt_id': payload.receipt_id, 'reference_artifact_id': payload.reference_artifact_id,
+            'reference_logical_path': by_id[payload.reference_artifact_id].get('logical_path'), 'report': report}
 
 
 SHARED_KIND = 'family_msa.shared_state.v1'
