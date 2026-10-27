@@ -77,6 +77,9 @@ def test_de_novo_public_references_are_serialized_from_model_registry(monkeypatc
         assert entry['name'] and entry['description']
         assert all(entry[key].startswith('https://') for key in ('github', 'paper', 'docs'))
         assert entry['version'] is None
+    for key in references:
+        definition = registry.get_model(key)
+        assert references[key]['registry_version'] == (definition.version if definition else None)
 
 
 def test_public_model_routes_hide_internal_and_disabled_models(

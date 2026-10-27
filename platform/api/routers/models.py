@@ -527,7 +527,10 @@ async def get_model(model_id: str):
         "category": model.category,
         "description": model.description,
         "container": model.container,
-        "engine_references": {key: reference.model_dump() for key, reference in model.engine_references.items()},
+        "engine_references": {
+            key: {**reference.model_dump(), "registry_version": definition.version if (definition := registry.get_model(key)) else None}
+            for key, reference in model.engine_references.items()
+        },
         "inputs": model.inputs,
         "outputs": model.outputs,
         "modes": [
