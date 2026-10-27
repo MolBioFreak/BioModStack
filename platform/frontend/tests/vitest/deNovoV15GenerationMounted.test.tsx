@@ -54,6 +54,19 @@ async function click(name: string) {
 }
 const latest = (spy: ReturnType<typeof vi.fn>) => spy.mock.calls.at(-1)![0];
 
+it.each([
+    { generator: 'rfd3', min_length: 73, max_length: 99, seed: 0, dump_trajectories: false },
+    { generator: 'disco', disco_effort: 'fast', pcad_disco_settings_json: { deterministic: false, seeds: [] } },
+    { generator: 'laproteina', pcad_laproteina_settings_json: { self_cond: false, motif_atom_spec: null } },
+])('Simple and Advanced preserve the native request for $generator', async initialValues => {
+    const draft = vi.fn(); await render({ initialValues, onDraftChange: draft });
+    const before = JSON.stringify(latest(draft).native_job_request);
+    await click('Advanced'); await click('Simple'); await click('Advanced');
+    expect(JSON.stringify(latest(draft).native_job_request)).toBe(before);
+    expect(latest(draft).suite_view).toBe('advanced');
+    expect(mocks.submit).not.toHaveBeenCalled();
+});
+
 it('preserves explicit cleared numeric drafts across engine switching and JSON reopen without converting them to zero', async () => {
     const draft = vi.fn();
     await render({ initialValues: { generator: 'rfd3' }, onDraftChange: draft });
