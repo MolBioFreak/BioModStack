@@ -151,3 +151,24 @@ it('fences late revision and add responses after switching dataset',async()=>{
  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click()});
  expect(mocked.save.mock.calls[0][0].editor_state.datasetRows).toEqual([]); await act(async()=>root.unmount());
 });
+
+it('selects a Design chain and retains its region and occurrence in the draft', async()=>{
+ vi.clearAllMocks(); mocked.active=true;
+ mocked.datasets.mockResolvedValue({items:[{dataset_id:'ds',name:'Set'}],next_cursor:null});
+ mocked.revisions.mockResolvedValue({items:[{revision_id:'rev',revision_number:1}],next_cursor:null});
+ const member={ordinal:0,role:'design',member_identity:'q',member_sha256:'h',receipt:{entity_kind:'design',entity_id:'design',content_digest:'digest'}};
+ const base={project_id:'p',dataset_id:'ds',revision_id:'rev',revision_sha256:'rh',ordinal:0,member_identity:'q',member_sha256:'h',source_identity:'design',source_digest:'digest',molecule:'protein'};
+ mocked.get.mockImplementation(async (url:string,options:any)=>url.endsWith('/design') ? {data:options?.params?.chain ? {...base,status:'resolved',chain:'B',sequence:'Y',label:'design chain B',start:1,end:2,source_positions:[1]} : {...base,status:'choose_chain',chains:[{chain_id:'A',length:2},{chain_id:'B',length:2}]}} : {data:{items:[member],next_offset:null,total:1}});
+ mocked.post.mockResolvedValue({data:{project_id:'p',dataset_id:'ds',revision_id:'rev',revision_sha256:'rh',members:[member]}}); mocked.save.mockResolvedValue({});
+ const div=document.createElement('div'),root=createRoot(div);
+ await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
+ const select=async(label:string,value:string)=>{const el=div.querySelector(`[aria-label="${label}"]`) as HTMLSelectElement; await act(async()=>{el.value=value;el.dispatchEvent(new Event('change',{bubbles:true}));});};
+ await select('Dataset','ds'); await select('Dataset revision','rev');
+ await act(async()=>{(div.querySelector('input[type=checkbox]') as HTMLInputElement).click()});
+ await select('Chain for occurrence 0','B');
+ await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Add selected resources')!.click()});
+ await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click()});
+ const row=mocked.save.mock.calls[0][0].native_job_request.params.roster.rows.at(-1);
+ expect(row.sequence).toBe('Y'); expect(row.source_positions).toEqual([1]); expect(JSON.parse(row.transformation_provenance).chain).toBe('B');
+ await act(async()=>root.unmount()); mocked.datasets.mockResolvedValue({items:[],next_cursor:null});
+});

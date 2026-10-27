@@ -159,3 +159,58 @@ async def resolve_molecular_member(project_session: AsyncSession, core_session: 
             "label": (revision.snapshot or {}).get("name"), "start": first, "end": last,
             "source_positions": list(range(first, last)),
             "sequence": sequence[first:last]}
+
+
+async def resolve_design_member(project_session, core_session, *, project_id, dataset_id,
+                                revision_id, ordinal, chain=None, start=None, end=None):
+    """Read a Design occurrence's observed protein residues from verified structure bytes."""
+    import hashlib
+    import io
+    from pathlib import Path
+    from Bio.PDB import PDBParser, MMCIFParser, Polypeptide
+    from database import Design
+    from services.global_experiments.adapters import AdapterError, registry
+    from paths import resolve_runtime_data_path
+
+    selection = await freeze_dataset_resources(project_session, project_id=project_id, dataset_id=dataset_id, revision_id=revision_id, ordinals=[ordinal])
+    member = selection['members'][0]
+    receipt = member['receipt']
+    result = {'schema': 'bms.family-msa.resolved-member.v1', 'project_id': project_id, 'dataset_id': dataset_id, 'revision_id': revision_id, 'revision_sha256': selection['revision_sha256'], 'ordinal': ordinal, 'member_identity': member['member_identity'], 'member_sha256': member['member_sha256']}
+    if not receipt or receipt['adapter_id'] != 'bms.core.protein-result-reference.adapter.v1':
+        return {**result, 'status': 'unavailable', 'reason': 'unsupported_or_missing_receipt'}
+    try:
+        fresh = await registry.get(receipt['adapter_id']).verify(core_session, receipt['entity_id'])
+        persisted = await project_session.get(ExperimentExternalEntityReceipt, receipt['receipt_id'])
+        acknowledgement = json.loads(persisted.acknowledgement_json or '{}')
+        fields = ('store_id', 'entity_kind', 'entity_id', 'entity_revision_id', 'content_digest', 'contract_digest', 'verifier_id', 'reopen_uri')
+        if any(fresh.get(k) != acknowledgement.get(k) for k in fields) or (persisted.store_id, persisted.entity_kind, persisted.entity_id, persisted.generation_or_revision, persisted.content_digest) != (fresh.get('store_id'), fresh.get('entity_kind'), fresh.get('entity_id'), str(fresh.get('entity_revision_id')), fresh.get('content_digest')):
+            raise ValueError('receipt differs from producer authority')
+        design = await core_session.get(Design, receipt['entity_id'])
+        path = Path(resolve_runtime_data_path(design.pdb_path))
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != receipt['content_digest']:
+            raise ValueError('structure differs from receipt')
+        parser = MMCIFParser(QUIET=True) if path.suffix.lower() in ('.cif', '.mmcif') else PDBParser(QUIET=True)
+        structure = parser.get_structure('design', io.StringIO(raw.decode('utf-8')))
+        model = next(structure.get_models())
+        sequences = {}
+        for item in model:
+            residues = [r for r in item if Polypeptide.is_aa(r, standard=False)]
+            sequence = ''.join(Polypeptide.protein_letters_3to1_extended.get(r.resname.upper(), 'X') for r in residues)
+            if sequence:
+                sequences[item.id] = sequence
+        if not sequences:
+            raise ValueError('no observed protein chains')
+    except (AdapterError, OSError, ValueError, KeyError, TypeError, StopIteration, UnicodeError) as exc:
+        return {**result, 'status': 'unavailable', 'reason': str(exc)}
+    common = {**result, 'source_kind': 'design_chain', 'source_identity': receipt['entity_id'], 'source_digest': receipt['content_digest'], 'molecule': 'protein', 'chains': [{'chain_id': k, 'length': len(v)} for k, v in sequences.items()]}
+    if chain is None:
+        return {**common, 'status': 'choose_chain'}
+    if chain not in sequences:
+        return {**common, 'status': 'unavailable', 'reason': 'chain not found'}
+    sequence = sequences[chain]
+    first = 0 if start is None else start
+    last = len(sequence) if end is None else end
+    if type(first) is not int or type(last) is not int or first < 0 or last <= first or last > len(sequence):
+        raise ValidationFailure('invalid sequence region')
+    return {**common, 'status': 'resolved', 'chain': chain, 'label': f'{design.name} chain {chain}', 'start': first, 'end': last, 'source_positions': list(range(first, last)), 'sequence': sequence[first:last]}

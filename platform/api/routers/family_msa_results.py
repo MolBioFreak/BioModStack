@@ -13,7 +13,7 @@ from experiment_models import ExperimentArtifact, ExperimentExternalEntityReceip
 from experiment_services import ExperimentServiceError, ValidationFailure, create_dataset, save_dataset_revision, sha256_text
 from molbio_database import get_molbio_session
 from routers.experiment_workspaces import _error, _operator_principal, _require_mutation_owner
-from services.family_msa.sources import browse_dataset_resources, freeze_dataset_resources, resolve_molecular_member
+from services.family_msa.sources import browse_dataset_resources, freeze_dataset_resources, resolve_molecular_member, resolve_design_member
 from services.family_msa.publication import CustodyError, retained_path
 from services.family_msa.read_model import alignment_document
 from services.family_msa.shared import SharedState
@@ -97,6 +97,9 @@ class ResolvedMember(BaseModel):
     start: int | None = None
     end: int | None = None
     sequence: str | None = None
+    source_positions: list[int] | None = None
+    chain: str | None = None
+    chains: list[dict[str, Any]] | None = None
 
 
 SOURCE_PATH = '/projects/{project_id}/datasets/{dataset_id}/revisions/{revision_id}'
@@ -136,6 +139,17 @@ async def source_molecular(request: Request, project_id: str, dataset_id: str, r
     try:
         return await resolve_molecular_member(session, core, molbio, project_id=project_id,
             dataset_id=dataset_id, revision_id=revision_id, ordinal=ordinal, start=start, end=end)
+    except ExperimentServiceError as exc:
+        raise _error(exc) from exc
+
+
+@router.get(SOURCE_PATH + '/resources/{ordinal}/design', response_model=ResolvedMember)
+async def source_design(request: Request, project_id: str, dataset_id: str, revision_id: str,
+                        ordinal: int, chain: str | None = None, start: int | None = None, end: int | None = None,
+                        session: AsyncSession = Depends(get_experiment_session), core: AsyncSession = Depends(get_session)):
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    try:
+        return await resolve_design_member(session, core, project_id=project_id, dataset_id=dataset_id, revision_id=revision_id, ordinal=ordinal, chain=chain, start=start, end=end)
     except ExperimentServiceError as exc:
         raise _error(exc) from exc
 
