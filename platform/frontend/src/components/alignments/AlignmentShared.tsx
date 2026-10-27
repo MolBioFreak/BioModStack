@@ -53,6 +53,14 @@ export default function AlignmentShared({projectId, receiptId, artifactId, selec
     <button disabled={busy || !domain} onClick={() => void run(async () => received((await api.post<Revision>(`${base}/shared-state`, {name: name || 'Alignment shared state', domain_experiment_id: domain, state: empty()})).data))}>Create shared state</button>
     {revision && <>
       <p>Dataset {revision.id} · revision {revision.revision_id} · generation {revision.head_generation}</p>
+      <button disabled={busy} onClick={() => void run(async () => {
+        const response = await api.post<Blob>(`${base}/receipts/${encodeURIComponent(receiptId)}/bundle`,
+          {shared_state_ids: [revision.id]}, {responseType: 'blob'})
+        const url = URL.createObjectURL(response.data)
+        const link = document.createElement('a'); link.href = url; link.download = 'alignment-project-bundle.zip'; link.click()
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
+      })}>Export result and saved shared state</button>
+      <p>Export includes the saved revision, not unsaved edits. Extract the ZIP before importing its bundle directory.</p>
       <label>Name <input value={name} onChange={e => setName(e.target.value)}/></label>{' '}
       <button disabled={!selection || selection.resultId !== artifactId} onClick={() => { if (selection) edit(current => ({...current, marks: [...current.marks, {id: id(), label: name, coordinate: {scope: 'artifact_columns', artifact_id: artifactId, start: selection.column, end: selection.column}, note: '', provenance: {}}]})) }}>Add selected column mark</button>{' '}
       <button disabled={!name} onClick={() => edit(current => ({...current, views: [...current.views, {id: id(), name, artifact_id: artifactId, hidden_row_ids: hiddenRowIds, row_order: rowOrder, selected_marks: [], viewer, selected_row_id: selection?.rowId ?? (selectedRowId || null), selected_column: selection?.column ?? null}]}))}>Save current viewer as view</button>

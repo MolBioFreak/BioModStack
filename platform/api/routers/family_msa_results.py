@@ -336,6 +336,52 @@ async def get_project_document(request: Request, project_id: str, receipt_id: st
     return await document(entries, read, artifact_id)
 
 
+class BrowserExport(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    shared_state_ids: list[str] = Field(default_factory=list)
+
+
+@router.post('/projects/{project_id}/receipts/{receipt_id}/bundle')
+async def export_browser_bundle(request: Request, project_id: str, receipt_id: str, payload: BrowserExport,
+                                session: AsyncSession = Depends(get_experiment_session)):
+    """Export selected Project state and the exact retained receipt as a portable ZIP."""
+    import io
+    import tempfile
+    import zipfile
+    from pathlib import Path
+    from bms_alignment.bundle import make_bundle
+    entries, read = await project_result(request, session, project_id, receipt_id)
+    if not entries or len(set(payload.shared_state_ids)) != len(payload.shared_state_ids):
+        raise HTTPException(400, detail='Invalid export selection')
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary) / 'source'; root.mkdir()
+        inventory, states, files = [], [], []
+        for index, entry in enumerate(entries):
+            path = f'artifacts/{index:06d}'
+            target = root / path; target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(await read(entry['id']))
+            files.append(path)
+            inventory.append({'id': entry['id'], 'role': entry['role'], 'logical_path': entry.get('logical_path'), 'path': path})
+        for index, state_id in enumerate(payload.shared_state_ids):
+            state = await get_shared_state(request, project_id, state_id, session=session)
+            path = f'shared-state/{index:06d}.json'
+            target = root / path; target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(state, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+            files.append(path); states.append({'id': state_id, 'path': path})
+        (root / 'project-export.json').write_text(json.dumps({'schema': 'bms.family-msa.project-export.v1',
+            'project_id': project_id, 'receipt_id': receipt_id, 'artifacts': inventory, 'shared_states': states},
+            ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        bundle = Path(temporary) / 'bundle'
+        make_bundle(root, bundle, ['project-export.json', *files], excluded=[
+            'Project shared states not explicitly selected', 'External dependencies not retained in the Project receipt'])
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for path in ['manifest.json', 'project-export.json', *files]:
+                archive.write(bundle / path, path)
+        return Response(output.getvalue(), media_type='application/zip',
+                        headers={'Content-Disposition': 'attachment; filename="alignment-project-bundle.zip"'})
+
+
 class ComparisonInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     left_receipt_id: str = Field(min_length=1)

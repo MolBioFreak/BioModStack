@@ -175,6 +175,11 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
         headers={'x-test-actor':'owner'}, json={'name':'test marks', 'domain_experiment_id':domain_id, 'state':state})
     assert response.status_code == 201, response.text
     state_id = response.json()['id']
+    import io, zipfile
+    browser = await client.post(url + '/bundle', headers={'x-test-actor':'owner'}, json={'shared_state_ids':[state_id]})
+    assert browser.status_code == 200, browser.text
+    with zipfile.ZipFile(io.BytesIO(browser.content)) as archive:
+        archive.extractall(tmp_path / 'browser-portable')
     # Exercise SDK against the real mounted scratch API without network sockets.
     import asyncio
     import io
@@ -198,6 +203,9 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
             return io.BytesIO(response.content)
     sdk = AlignmentClient('http://test', headers={'x-test-actor':'owner'})
     sdk._opener = AsgiOpener()
+    browser_import = await asyncio.to_thread(sdk.import_project_bundle, project_id, tmp_path / 'browser-portable', replay_key='browser-roundtrip', domain_experiment_id=domain_id)
+    browser_state = await client.get(f"/api/family-msa/projects/{project_id}/shared-state/{browser_import.shared_states[0]['dataset_id']}", headers={'x-test-actor':'owner'})
+    assert browser_state.status_code == 200 and len(browser_state.json()['state']['marks']) == 3
     destination = tmp_path / 'portable'
     await asyncio.to_thread(sdk.export_project_bundle, project_id, receipt_id, destination, shared_state_ids=[state_id])
     exported = inspect_project_bundle(destination)

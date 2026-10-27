@@ -99,12 +99,26 @@ def test_real_portable_import_export_roundtrip(tmp_path, monkeypatch):
         assert list(scratch.iterdir()) == []
         tracemalloc.start()
         first = client.import_project_bundle_streaming(project, original, replay_key='first')
+        async def browser_export():
+            import httpx
+            import io
+            import zipfile
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test', headers=client.headers) as c:
+                response = await c.post(f'/api/family-msa/projects/{project}/receipts/{first.receipt_id}/bundle', json={'shared_state_ids': []})
+                assert response.status_code == 200, response.text
+                assert response.headers['content-type'] == 'application/zip'
+                with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+                    archive.extractall(tmp_path / 'browser-export')
+                assert inspect_project_bundle(tmp_path / 'browser-export')['inventory']['artifacts']
+                missing = await c.post(f'/api/family-msa/projects/{project}/receipts/{first.receipt_id}/bundle', json={'shared_state_ids': ['missing']})
+                assert missing.status_code == 404
         page = client._request('GET', f'/api/family-msa/projects/{project}/receipts')
         assert page['items'] == [{'receipt_id': first.receipt_id, 'entity_kind': 'family_msa_import', 'availability': 'available'}]
         assert page['next_cursor'] is None
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
         assert peak < 16 * 1024 * 1024, peak
+        asyncio.run(browser_export())
         assert list(scratch.iterdir()) == []
         assert client.import_project_bundle(project, original, replay_key='first').replayed
         assert not first.replayed and first.shared_state == 'retained_unmapped'
