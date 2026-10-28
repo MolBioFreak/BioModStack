@@ -17,19 +17,24 @@ vi.mock('../../src/components/GeneralSequenceDesignSettings', () => ({ GeneralSe
 vi.mock('../../src/components/LaProteinaMotifInput', () => ({ LaProteinaMotifInput: () => null }));
 vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: () => null }));
 import { ProteinModificationTemplate } from '../../src/components/ProteinModificationTemplate';
-const inventories = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python3', ['-c', `import json
-from scripts.lib.rfd3_scientific_settings import scientific_inventory
-from scripts.lib.laproteina_contract import settings_schema, PROFILES, resolve_profile
-from scripts.lib.disco_contract import NativeSettings
-from pydantic import TypeAdapter
-print(json.dumps({'rfd3':scientific_inventory(),'laproteina':{'parameter_schema':settings_schema(),'profiles':{k:resolve_profile(k) for k in PROFILES}},'disco':{'parameter_schema':TypeAdapter(NativeSettings).json_schema()}}))`], { cwd: '../..', encoding: 'utf8' }));
+const inventories = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python3', ['-c', `import json, asyncio, sys
+sys.path.insert(0, 'platform/api')
+from routers.models import get_model, get_generation_settings
+async def capture():
+    model = 'protein_modification_experimental'
+    tasks = ['generate', 'unconditional_monomer', 'unconditional', 'motif_scaffolding', 'custom_json', 'dna_conditioned', 'rna_conditioned', 'ligand_conditioned']
+    result = {'detail': await get_model(model)}
+    for generator in ['rfd3', 'laproteina', 'disco']:
+        result[generator] = {task: await get_generation_settings(model, 'de_novo_design', generator=generator, task=task) for task in tasks}
+    return result
+print(json.dumps(asyncio.run(capture())))`], { cwd: '../..', encoding: 'utf8' }));
 let root: Root; let client: QueryClient; const previous = api.defaults.adapter;
 let requests: string[] = []; let unexpected: string[] = [];
 let scratch = '';
 function bridge(payload: any) { return JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python3', ['tests/disco_import_bridge.py'], { cwd: '../api', env: { ...process.env, PYTHONPATH: '.' }, input: JSON.stringify({ root: scratch, ...payload }), encoding: 'utf8' })); }
 afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); if (scratch) rmSync(scratch, { recursive: true, force: true }); scratch = ''; document.body.replaceChildren(); api.defaults.adapter = previous; vi.restoreAllMocks(); expect(unexpected).toEqual([]); requests = []; unexpected = []; });
 async function render(node: React.ReactNode) {
-    api.defaults.adapter = async config => { const name = String(config.url); requests.push(`${name}:${config.params?.generator}`); if (name.startsWith('/api/files/disco-jobs/')) { const result = bridge({ operation: 'import', path: decodeURIComponent(name.split('/disco-jobs/')[1]) }); if (result.status !== 200) throw Error(JSON.stringify(result)); return { data: result.data, config, status: 200, statusText: 'OK', headers: {} }; } if (!name.endsWith('/generation-settings')) { unexpected.push(name); throw Error(name); } return { data: inventories[config.params.generator], config, status: 200, statusText: 'OK', headers: {} }; };
+    api.defaults.adapter = async config => { const name = String(config.url); requests.push(`${name}:${config.params?.generator}`); if (name === '/api/models/protein_modification_experimental') return { data: inventories.detail, config, status: 200, statusText: 'OK', headers: {} }; if (name.startsWith('/api/files/disco-jobs/')) { const result = bridge({ operation: 'import', path: decodeURIComponent(name.split('/disco-jobs/')[1]) }); if (result.status !== 200) throw Error(JSON.stringify(result)); return { data: result.data, config, status: 200, statusText: 'OK', headers: {} }; } if (!name.endsWith('/generation-settings')) { unexpected.push(name); throw Error(name); } const data = inventories[config.params.generator]?.[config.params.task ?? 'generate']; if (!data || config.params.mode !== 'de_novo_design') { unexpected.push(`${name}:${JSON.stringify(config.params)}`); throw Error('Unmatched native discovery transport'); } return { data, config, status: 200, statusText: 'OK', headers: {} }; };
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host); client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter>{node}</MemoryRouter></QueryClientProvider>); });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
@@ -51,14 +56,24 @@ it('managed import/edit/save/cold reopen reaches real normalizer and native prep
         { name: 'second', sequences: [{ ion: { ion: 'MG', count: 2 } }] }], null, 2);
     const source = join(scratch, 'inputs/native/jobs.json'); writeFileSync(source, original);
     const draft = vi.fn();
-    await render(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} initialValues={{ generator: 'disco', design_task: 'custom_json', disco_input_json_path: 'inputs/native/jobs.json' }} />);
+    await render(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} initialValues={{ target_length_list: '30', generator: 'disco', design_task: 'custom_json', disco_input_json_path: 'inputs/native/jobs.json' }} />);
     expect(requests.some(x => x.startsWith('/files/'))).toBe(false);
     expect(document.body.textContent).toContain('Active input: Native JSON file');
     await click('Import into editor');
     expect(document.querySelector('[aria-label="DISCO job 1 name"]'), document.querySelector('[role="alert"]')?.textContent ?? document.body.textContent).toBeTruthy();
     await edit('DISCO job 1 name', 'edited');
     await edit('Job 1 entity 3 sequence', 'AGGT');
+    for (const [entity, position, ccd] of [[1, '2', 'CCD_SEP'], [3, '2', 'CCD_5CM'], [4, '3', 'CCD_PSU']] as const) {
+        await click(`Add modification to entity ${entity}`);
+        await edit(`Job 1 entity ${entity} modification 1 position`, position);
+        await edit(`Job 1 entity ${entity} modification 1 CCD`, ccd);
+    }
+    await edit('Job 1 entity 3 copies', '2');
     const saved = JSON.parse(JSON.stringify(draft.mock.calls.at(-1)![0]));
+    expect(saved.pcad_disco_jobs_json[0].sequences[0].proteinChain.modifications).toEqual([{ ptmPosition: 2, ptmType: 'CCD_SEP' }]);
+    expect(saved.pcad_disco_jobs_json[0].sequences[2].dnaSequence).toEqual({ sequence: 'AGGT', count: 2, modifications: [{ basePosition: 2, modificationType: 'CCD_5CM' }] });
+    expect(saved.pcad_disco_jobs_json[0].sequences[3].rnaSequence.modifications).toEqual([{ basePosition: 3, modificationType: 'CCD_PSU' }]);
+    expect(saved.pcad_disco_jobs_json[0].sequences).toHaveLength(4);
     expect(saved.pcad_disco_jobs_json[0].sequences[1].ligand.ligand).toBe('FILE_ligands/context.sdf');
     expect(saved.pcad_disco_jobs_source_path).toBe(source);
     await act(async () => root.unmount()); client.clear(); document.body.replaceChildren();
@@ -90,7 +105,7 @@ it.each([
     [{ laproteina_preset: 'motif_idx_aa', laproteina_contig_string: 'A1-2', pcad_laproteina_settings_json: { contig_string: '' } }, 'motif_idx_aa', false],
 ])('La parent keeps literal profile and effective sparse prerequisite %j', async (overrides, preset, active) => {
     const draft = vi.fn();
-    await render(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} initialValues={{ generator: 'laproteina', design_task: 'motif_scaffolding', laproteina_motif_pdb: '/source.pdb', pcad_laproteina_settings_json: { contig_string: 'A1-2' }, ...overrides }} />);
+    await render(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} initialValues={{ target_length_list: '30', generator: 'laproteina', design_task: 'motif_scaffolding', laproteina_motif_pdb: '/source.pdb', pcad_laproteina_settings_json: { contig_string: 'A1-2' }, ...overrides }} />);
     const saved = JSON.parse(JSON.stringify(draft.mock.calls.at(-1)![0]));
     expect(saved.laproteina_preset).toBe(preset);
     const request = JSON.parse(document.querySelector('[data-request]')!.textContent!);

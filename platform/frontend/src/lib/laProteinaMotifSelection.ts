@@ -4,6 +4,16 @@
  * residue bounds. Therefore upload a real motif-only derivative, never the source.
  * This adapter changes neither atom selection nor scientific defaults.
  */
+export type LaProteinaFragment = { token: string; kind: 'native' } | { token: string; kind: 'length' | 'motif'; chain?: string; start: string; end?: string };
+export function parseLaProteinaFragments(contig: string): LaProteinaFragment[] {
+    if (contig === '') return [];
+    return contig.split('/').map(token => {
+        const match = /^([A-Z])?(\d*)(?:-(\d*))?$/.exec(token);
+        if (!match || !token || !(match[1] || match[2])) return { kind: 'native', token };
+        return { token, kind: match[1] ? 'motif' : 'length', chain: match[1], start: match[2], ...(match[3] !== undefined ? { end: match[3] } : {}) };
+    });
+}
+
 export function materializeLaProteinaMotifSelection(
     pdb: string, selected: ReadonlySet<string>, contig: string,
 ): { pdb: string; contig: string } {
