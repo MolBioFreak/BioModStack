@@ -11,7 +11,7 @@ import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { api, completeCurrentLaunchContext, submitJob, type StructureMaterialization, type Job } from '../lib/api';
+import { api, completeCurrentLaunchContext, submitJob, type NativeGenerationSourceBinding, type StructureMaterialization, type Job } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { ModelReferenceCard } from './ModelReferenceCard';
 import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
@@ -362,6 +362,11 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         path: rfd3Settings.input_structure, output_format: 'native' as const,
         ...(typeof rfd3Settings.source_model === 'number' ? { model_number: rfd3Settings.source_model } : {}),
     } : undefined;
+    // The exact binding the picker just acquired, so the integrated viewer does not re-read a source it already holds.
+    const [rfd3Acquired, setRfd3Acquired] = useState<Extract<NativeGenerationSourceBinding, { path?: string }> & { model_number?: number }>();
+    const rfd3Binding = rfd3Source && rfd3Acquired && rfd3Acquired.path === rfd3Source.path && rfd3Acquired.model_number === rfd3Source.model_number ? rfd3Acquired : rfd3Source;
+    // Source reading starts only once the optional section is opened; closed/source-free forms issue no extra requests.
+    const [rfd3SourceOpen, setRfd3SourceOpen] = useState(false);
     const rfd3Visual = rfd3Picks ? { ...rfd3Picks, inputPath: rfd3Source?.path ?? '', sourceModel: rfd3Source?.model_number, sourceMapping: rfd3Settings.source_mapping as string | undefined } : undefined;
     const rfd3Selected = rfd3Visual && !projectRfd3SourceSelection(rfd3Visual).issue ? [...rfd3Visual.identities] : [];
     useEffect(() => { setRfd3Picks(undefined); }, [rfd3Source?.path, rfd3Source?.model_number]);
@@ -650,15 +655,17 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 {designTask === 'unconditional' || generator === 'rfd3' ? <ProteinDesignPanel title="Generation" description={generator === 'rfd3' && designTask !== 'unconditional' ? 'This goal does not automatically add context or conditions. Supply an input structure and configure the desired conditions under Sampling; without them the request remains source-free.' : 'Generate new protein candidates.'}>
                     {generationControls}
                     <p className="text-xs text-[var(--text-secondary)]">{countHelp}</p>
-                    {generator === 'rfd3' && <details><summary>Input structure (optional)</summary>
+                    {generator === 'rfd3' && <details onToggle={event => setRfd3SourceOpen(event.currentTarget.open)}><summary>Input structure (optional)</summary>
+                        {rfd3SourceOpen && <>
                         <NativeSourceInput integrated label="RFD3 input structure"
                             selectedIdentities={rfd3Selected}
                             onSelection={(_slot, receipt, selection) => setRfd3Picks({ identities: selection.identities.flatMap(identity => 'first' in identity && 'second' in identity ? [identity.first, identity.second] : [identity]) as Rfd3SourceSelection['identities'],
                                 source: { documentId: receipt.path, source_positions: receipt.source_positions, model_number: receipt.model_number, model_numbers: receipt.model_numbers },
                                 inputPath: rfd3Source?.path ?? '', sourceModel: rfd3Source?.model_number,
-                                retainedBinding: { receipt, inputPath: rfd3Source?.path ?? '', sourceModel: rfd3Source?.model_number } })} value={rfd3Source ? 'input' : ''} bindings={rfd3Source ? { input: rfd3Source } : undefined}
+                                retainedBinding: { receipt, inputPath: rfd3Source?.path ?? '', sourceModel: rfd3Source?.model_number } })} value={rfd3Source ? 'input' : ''} bindings={rfd3Binding ? { input: rfd3Binding } : undefined}
                             onChange={slot => { if (slot === '') clearRfd3Source(); }}
                             onAcquire={source => {
+                                if (!('kind' in source)) setRfd3Acquired(source);
                                 if (!('kind' in source)) setRfd3Settings(previous => {
                                     const next: Record<string, unknown> = { ...previous, input_structure: source.path };
                                     if (source.model_number == null) delete next.source_model; else next.source_model = source.model_number;
@@ -687,6 +694,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                             }}
                             onHighlight={setRfd3Picks} />
                         {rfd3Source && <button type="button" onClick={clearRfd3Source}>Clear input structure</button>}
+                        </>}
                     </details>}
                 </ProteinDesignPanel> : isMotif ? <>
                     <LaProteinaMotifInput

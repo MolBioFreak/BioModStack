@@ -170,7 +170,7 @@ it('honors canonical flat presence over pcad aliases, including zero and false',
 
 it('shows historical motif overrides, authors deliberate edits, and resets named motifs to inheritance', async () => {
     await mount({ generator: 'laproteina', design_task: 'motif_scaffolding', target_lengths: '120', pcad_laproteina_motif_task_name: 'retained-task', pcad_laproteina_contig_string: '5/A1/5', pcad_laproteina_motif_atom_spec: null, laproteina_settings: { contig_string: '10/A1/10', motif_min_length: null, atom_selection_mode: 'ca' } });
-    expect(control('Upstream motif task').value).toBe('retained-task');
+    expect(control('La native motif task').value).toBe('retained-task');
     expect(control('Motif contig').value).toBe('10/A1/10'); expect(control('Atom selection').value).toBe('ca');
     expect(project(params()).pcad_laproteina_settings_json).toMatchObject({ contig_string: '10/A1/10', motif_min_length: null });
     await edit('Motif contig', '20/A1/20'); expect(project(params()).pcad_laproteina_settings_json.contig_string).toBe('20/A1/20');

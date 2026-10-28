@@ -70,7 +70,7 @@ it.each([undefined, 'bms.rfd3.source-map.v1'])('optional source/MODEL acquisitio
     expect(request().params).not.toHaveProperty('input_structure');
     await pick();
     expect(requests.filter(row => row.url.includes('materialize'))).toEqual([{ url: '/api/files/materialize-structure', body: { path: '/retained/two-models.pdb', output_format: 'native' } }]);
-    await labeledClick('Inspect structure for RFD3 input structure');
+    // Integrated parent source keeps the receipt and MODEL control visible; no separate Inspect toggle exists.
     await edit('Source MODEL for input', '2');
     expect(requests.filter(row => row.url.includes('materialize')).at(-1)!.body).toMatchObject({ path: '/retained/two-models.pdb', model_number: 2, output_format: 'native' });
     expect(request().params).toMatchObject({ input_structure: '/retained/two-models.pdb', source_model: 2, conditioning });
