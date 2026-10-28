@@ -114,6 +114,7 @@ describe('alignment route receiver', () => {
         await act(async () => root.unmount()); client.clear(); get.mockRestore();
     });
     it('loads Project setup then offers its exact return link', async () => {
+        const get = vi.spyOn(api, 'get').mockRejectedValue(new Error('Authoring API excluded from route fixture'));
         let resolve!: (value: unknown) => void;
         getSetup.mockReturnValueOnce(new Promise(r => { resolve = r; }));
         const div = document.createElement('div'); const root = createRoot(div); const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -122,6 +123,6 @@ describe('alignment route receiver', () => {
         await act(async () => { resolve({ project_label: 'Project P', experiment_label: 'Experiment E', workflow_label: 'Alignment', state: 'open', return_uri: '/projects/p?focus=e', field_errors: {} }); await new Promise(r => setTimeout(r, 10)); });
         expect(div.textContent).toContain('Project P');
         expect(div.querySelector('a[ href="/projects/p?focus=e" ]')).not.toBeNull();
-        await act(async () => root.unmount()); client.clear();
+        await act(async () => root.unmount()); client.clear(); get.mockRestore();
     });
 });

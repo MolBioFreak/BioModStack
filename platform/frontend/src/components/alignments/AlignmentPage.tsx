@@ -1,34 +1,43 @@
 import { Link, useLocation, useParams } from 'react-router-dom';
 import AlignmentWorkspace from './AlignmentWorkspace';
-import JbrowseViewer from './JbrowseViewer';
-import Av2Viewer from './Av2Viewer';
-import BiojsViewer from './BiojsViewer';
+import { alignmentViewers } from './lazyViewers';
 import AlignmentEditor from './AlignmentEditor';
 import AlignmentLibrary from './AlignmentLibrary';
+import AlignmentComparison from './AlignmentComparison';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { jobPollingInterval } from '../../lib/queryPolling';
 import { api } from '../../lib/api';
 import type { AlignmentDocument } from '../../lib/alignmentCoordinates';
 import { ProjectWorkflowSetupBanner, useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup';
-import { projectManagerErrorMessage } from '../../lib/projectManager';
+import { projectManagerErrorMessage, listGlobalExperiments, listDomainExperiments } from '../../lib/projectManager';
 
 type SupportSample = {artifact_id: string; logical_path: string | null; numerator: number; denominator: number; fraction: number | null; matched_rows: number; rows_with_unknown_mapping: number};
 type Support = {receipt_id: string; reference_artifact_id: string; report: {method: string; interpretation: string; denominator_policy: string; sample_count: number; numerator: number; denominator: number; fraction: number | null; samples: SupportSample[]}};
 
 export function EnsembleSupport({projectId, receiptId, reference, artifacts}: {projectId: string; receiptId: string; reference: string; artifacts: {id: string; logical_path?: string | null}[]}) {
     const [selected, setSelected] = useState<string[]>([]);
-    const [result, setResult] = useState<Support>();
+    const [domain, setDomain] = useState('');
+    const [molecule, setMolecule] = useState('protein');
+    const [jobId, setJobId] = useState('');
+    const prefix = `/api/family-msa/projects/${encodeURIComponent(projectId)}`;
+    const domains = useQuery({queryKey: ['alignment-ensemble-domains', projectId], queryFn: async () => (await Promise.all((await listGlobalExperiments(projectId)).map(async e => (await listDomainExperiments(projectId, e.id)).map(d => ({id: d.id, label: `${e.name} / ${d.name}`}))))).flat()});
+    const operation = useQuery({queryKey: ['alignment-ensemble-operation', projectId, jobId], enabled: Boolean(jobId), queryFn: async ({signal}) => (await api.get<{status: string; artifact_url: string | null; error_message: string | null}>(`${prefix}/operations/${encodeURIComponent(jobId)}`, {signal})).data, refetchInterval: q => !q.state.data || ['queued', 'running', 'pending'].includes(q.state.data.status) ? jobPollingInterval(3000, q) : false, refetchIntervalInBackground: false});
+    const report = useQuery({queryKey: ['alignment-ensemble-report', projectId, jobId], enabled: Boolean(operation.data?.artifact_url), queryFn: async ({signal}) => (await api.get<Support>(`${prefix}/operations/${encodeURIComponent(jobId)}/artifact`, {signal})).data});
+    const result = report.data;
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
     const fraction = (x: number | null) => x === null ? 'undefined' : x.toFixed(3);
     return <section aria-label="Ensemble support"><h2>Ensemble support</h2>
         <p>Reference: {reference}. Select retained samples explicitly; including the reference counts it as a sample. Observed agreement is not probability of alignment truth.</p>
+        <label>Molecule <select value={molecule} onChange={e => setMolecule(e.target.value)}><option value="protein">Protein</option><option value="dna">DNA</option><option value="rna">RNA</option></select></label>
+        <label>Destination domain <select value={domain} onChange={e => setDomain(e.target.value)}><option value="">Choose a domain</option>{domains.data?.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></label>
         {artifacts.map(a => <label key={a.id}><input type="checkbox" checked={selected.includes(a.id)} onChange={e => setSelected(old => e.target.checked ? [...old, a.id] : old.filter(id => id !== a.id))}/>{a.logical_path || a.id} ({a.id}) </label>)}
-        <button disabled={busy || !selected.length} onClick={async () => { setBusy(true); setError(''); setResult(undefined); try {
-            setResult((await api.post<Support>(`/api/family-msa/projects/${encodeURIComponent(projectId)}/ensemble-support`, {receipt_id: receiptId, reference_artifact_id: reference, member_artifact_ids: selected})).data);
+        <button disabled={busy || !domain || !selected.length || Boolean(jobId && (!operation.data || ['queued', 'running', 'pending'].includes(operation.data.status)))} onClick={async () => { setBusy(true); setError(''); setJobId(''); try {
+            setJobId((await api.post<{job_id: string}>(`${prefix}/operations`, {operation: 'ensemble-support', molecule, domain_experiment_id: domain, name: 'Ensemble support', inputs: {receipt_id: receiptId, reference_artifact_id: reference, member_artifact_ids: selected}})).data.job_id);
         } catch (e) { setError(String(e)); } finally { setBusy(false); } }}>Compute ensemble support</button>
-        {error && <p role="alert">Ensemble support failed: {error}</p>}
+        {jobId && <p role="status">Managed ensemble Job {jobId}: {operation.data?.status || 'submitted'}</p>}
+        {(error || domains.error || operation.error || report.error || operation.data?.error_message) && <p role="alert">Ensemble support failed: {error || String(domains.error || operation.error || report.error || operation.data?.error_message)}</p>}
         {result && <div><p>Method: {result.report.method}; samples: {result.report.sample_count}; pooled retention: {result.report.numerator} / {result.report.denominator} = {fraction(result.report.fraction)}. {result.report.denominator_policy}. {result.report.interpretation}.</p>
             <ul>{result.report.samples.map((s, i) => <li key={`${s.artifact_id}:${i}`}>{s.logical_path || s.artifact_id} ({s.artifact_id}): {s.numerator} / {s.denominator} = {fraction(s.fraction)}; matched rows {s.matched_rows}; unknown mapping rows {s.rows_with_unknown_mapping}</li>)}</ul></div>}
     </section>;
@@ -106,7 +115,7 @@ export default function AlignmentPage() {
         {projectId && receiptId && member && alignments.length > 1 && <EnsembleSupport key={`${projectId}:${receiptId}:${member}`} projectId={projectId} receiptId={receiptId} reference={member} artifacts={alignments}/>}
         {!base && !resultId && section === 'New' && <>{!queryModel && <label>Alignment family <select aria-label="Alignment family" value={model} onChange={e => setSelectedModel(e.target.value)}><option value="family_msa_protein">Protein</option><option value="family_msa_nucleic">Nucleic acid</option></select></label>}<AlignmentEditor key={model} model={model}/></>}
         {!base && !resultId && section === 'Library' && <AlignmentLibrary initialProject={projectId}/>}
-        {!base && !resultId && section === 'Compare' && <p role="status">Alignment comparison is not connected yet.</p>}
-        <AlignmentWorkspace importedStateIds={(manifest.data?.import_provenance?.shared_states ?? []).flatMap(item => item.dataset_id ? [item.dataset_id] : [])} viewers={{ jbrowse: JbrowseViewer, 'alignment-viewer-2': Av2Viewer, biojs: BiojsViewer }} projectLabel={setup.setup?.project_label || projectId || undefined} projectId={projectId || undefined} receiptId={projectId ? receiptId || undefined : undefined} document={document} downloads={base ? artifacts.map(x => ({label: x.role === 'source' ? `Original file (${x.logical_path || 'source'})` : `${x.role}${x.logical_path ? ` (${x.logical_path})` : ''}`, href: `${base}/artifacts/${encodeURIComponent(x.id)}`})) : []} />
+        {!base && !resultId && section === 'Compare' && <AlignmentComparison key={projectId || ''} initialProject={projectId} savedState={query.get('shared_state_id')} operationJob={query.get('operation_job_id')}/> }
+        {base && <AlignmentWorkspace importedStateIds={(manifest.data?.import_provenance?.shared_states ?? []).flatMap(item => item.dataset_id ? [item.dataset_id] : [])} viewers={alignmentViewers} projectLabel={setup.setup?.project_label || projectId || undefined} projectId={projectId || undefined} receiptId={projectId ? receiptId || undefined : undefined} document={document} downloads={base ? artifacts.map(x => ({label: x.role === 'source' ? `Original file (${x.logical_path || 'source'})` : `${x.role}${x.logical_path ? ` (${x.logical_path})` : ''}`, href: `${base}/artifacts/${encodeURIComponent(x.id)}`})) : []} /> }
     </div>;
 }

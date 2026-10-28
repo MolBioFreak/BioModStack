@@ -28,6 +28,28 @@ def main():
     p = api.add_parser('job'); p.add_argument('job_id')
     p = api.add_parser('export-project'); p.add_argument('project_id'); p.add_argument('receipt_id'); p.add_argument('directory'); p.add_argument('--shared-state', action='append', default=[])
     p = api.add_parser('import-project'); p.add_argument('project_id'); p.add_argument('directory'); p.add_argument('--replay-key', required=True); p.add_argument('--domain-experiment-id'); p.add_argument('--stream', action='store_true', help='upload raw bundle files in chunks')
+    p = api.add_parser('settings-schema')
+    p = api.add_parser('receipts'); p.add_argument('project_id'); p.add_argument('--after')
+    for action in ('result', 'document', 'artifact', 'export-zip'):
+        p = api.add_parser(action); p.add_argument('project_id'); p.add_argument('receipt_id')
+        if action in ('document', 'artifact'): p.add_argument('artifact_id')
+        if action in ('artifact', 'export-zip'): p.add_argument('destination')
+        if action == 'export-zip': p.add_argument('--shared-state', action='append', default=[])
+    for action in ('resources', 'freeze', 'resolve'):
+        p = api.add_parser(action); p.add_argument('project_id'); p.add_argument('dataset_id'); p.add_argument('revision_id')
+        if action == 'resources': p.add_argument('--offset', type=int, default=0); p.add_argument('--limit', type=int, default=50)
+        else: p.add_argument('file', help='Closed request JSON')
+    for action in ('compare', 'ensemble-support', 'create-shared-state', 'save-shared-state'):
+        p = api.add_parser(action); p.add_argument('project_id')
+        if action == 'save-shared-state': p.add_argument('dataset_id')
+        p.add_argument('file', help='Closed request JSON')
+    p = api.add_parser('shared-state'); p.add_argument('project_id'); p.add_argument('dataset_id'); p.add_argument('--revision-id')
+    p = api.add_parser('import-alignment'); p.add_argument('project_id'); p.add_argument('file'); p.add_argument('--format', required=True, choices=['fasta', 'stockholm', 'clustal', 'a3m']); p.add_argument('--molecule', required=True, choices=['protein', 'dna', 'rna']); p.add_argument('--replay-key', required=True)
+    p = api.add_parser('import-zip'); p.add_argument('project_id'); p.add_argument('file'); p.add_argument('--replay-key', required=True); p.add_argument('--domain-experiment-id')
+    p = api.add_parser('submit-operation'); p.add_argument('project_id'); p.add_argument('file', help='ManagedOperation JSON')
+    for action in ('operation', 'operation-artifact'):
+        p = api.add_parser(action); p.add_argument('project_id'); p.add_argument('job_id')
+        if action == 'operation-artifact': p.add_argument('destination')
     a = parser.parse_args()
     read = lambda f: json.loads(Path(f).read_text())
     if a.command == 'schema': result = AlignmentRequest.model_json_schema()
@@ -38,7 +60,10 @@ def main():
     elif a.command == 'inspect': result = summary(SequenceSet.model_validate(read(a.file)))
     elif a.command == 'compare': result = compare(SequenceSet.model_validate(read(a.left)), SequenceSet.model_validate(read(a.right)))
     elif a.command == 'api':
-        from .http import AlignmentClient, JobSubmission
+        from .http import (AlignmentClient, JobSubmission, AlignmentImport, BrowserExport,
+                           ComparisonInput, EnsembleSupportInput, FreezeRequest, ResolveRequest,
+                           SharedCreate, SharedSave, ManagedOperation)
+        from pydantic import TypeAdapter
         client = AlignmentClient(a.url)
         if a.api_action == 'model': result = client.model(a.model_id)
         elif a.api_action == 'job': result = client.job(a.job_id)
@@ -46,6 +71,30 @@ def main():
         elif a.api_action == 'import-project':
             method = client.import_project_bundle_streaming if a.stream else client.import_project_bundle
             result = method(a.project_id, a.directory, replay_key=a.replay_key, domain_experiment_id=a.domain_experiment_id)
+        elif a.api_action == 'submit-operation': result = client.submit_operation(a.project_id, TypeAdapter(ManagedOperation).validate_python(read(a.file)))
+        elif a.api_action == 'operation': result = client.operation(a.project_id, a.job_id)
+        elif a.api_action == 'operation-artifact':
+            data = client.operation_artifact(a.project_id, a.job_id); Path(a.destination).write_bytes(data)
+            result = {'destination': a.destination, 'bytes': len(data)}
+        elif a.api_action == 'settings-schema': result = client.settings_schema()
+        elif a.api_action == 'receipts': result = client.receipts(a.project_id, after=a.after)
+        elif a.api_action == 'resources': result = client.resources(a.project_id, a.dataset_id, a.revision_id, offset=a.offset, limit=a.limit)
+        elif a.api_action in ('freeze', 'resolve'):
+            contract = FreezeRequest if a.api_action == 'freeze' else ResolveRequest
+            result = getattr(client, a.api_action)(a.project_id, a.dataset_id, a.revision_id, contract.model_validate(read(a.file)))
+        elif a.api_action == 'result': result = client.result(a.project_id, a.receipt_id)
+        elif a.api_action == 'document': result = client.document(a.project_id, a.receipt_id, a.artifact_id)
+        elif a.api_action in ('artifact', 'export-zip'):
+            data = client.artifact(a.project_id, a.receipt_id, a.artifact_id) if a.api_action == 'artifact' else client.export_project_zip(a.project_id, a.receipt_id, BrowserExport(shared_state_ids=a.shared_state))
+            Path(a.destination).write_bytes(data)
+            result = {'destination': a.destination, 'bytes': len(data)}
+        elif a.api_action == 'import-alignment': result = client.import_alignment(a.project_id, Path(a.file).read_bytes(), AlignmentImport(format=a.format, molecule=a.molecule, replay_key=a.replay_key))
+        elif a.api_action == 'import-zip': result = client.import_project_zip(a.project_id, Path(a.file).read_bytes(), replay_key=a.replay_key, domain_experiment_id=a.domain_experiment_id)
+        elif a.api_action == 'shared-state': result = client.shared_state(a.project_id, a.dataset_id, revision_id=a.revision_id)
+        elif a.api_action == 'save-shared-state': result = client.save_shared_state(a.project_id, a.dataset_id, SharedSave.model_validate(read(a.file)))
+        elif a.api_action in ('compare', 'ensemble-support', 'create-shared-state'):
+            contract = {'compare': ComparisonInput, 'ensemble-support': EnsembleSupportInput, 'create-shared-state': SharedCreate}[a.api_action]
+            result = getattr(client, a.api_action.replace('-', '_'))(a.project_id, contract.model_validate(read(a.file)))
         else: result = getattr(client, a.api_action)(JobSubmission.model_validate(read(a.file)))
         if not isinstance(result, dict):
             result = result.model_dump(mode='json', by_alias=True)
