@@ -98,6 +98,30 @@ class PreloadRequest(StrictModel):
 class WorkflowPackSelection(StrictModel):
     kind: Literal["workflow_pack"]
     workflow_id: Literal["structure_prediction", "antibody_denovo", "de_novo_design"]
+    component_ids: list[str] | None = Field(default=None, description=(
+        "Preparation components from provision/catalog. Omitted or null selects the full pack; "
+        "an explicit list selects only those components and their native dependencies. "
+        "An empty list selects nothing. Does not change inference settings or remove assets."))
+
+    @model_validator(mode="after")
+    def valid_components(self):
+        if self.component_ids is not None:
+            from model_registry import workflow_pack_components
+            available = {item['model_id'] for item in workflow_pack_components(self.workflow_id)}
+            if set(self.component_ids) - available:
+                raise ValueError('Unknown workflow preparation component')
+            self.component_ids = sorted(set(self.component_ids))
+        return self
+
+
+class WorkflowPackComponent(StrictModel):
+    model_id: str
+    label: str
+    selected_by_default: bool
+
+
+class WorkflowPackCatalogEntry(WorkflowPackSelection):
+    components: list[WorkflowPackComponent] = Field(default_factory=list)
 
 
 class WorkflowPackRequest(WorkflowPackSelection):

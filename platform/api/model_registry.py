@@ -309,8 +309,31 @@ def workflow_pack_weight_owners(workflow_id: str) -> dict[str, str]:
             for member in groups[group]}
 
 
-def workflow_pack_dependencies(workflow_id: str):
-    """Input-free union of the selected workflow's declared managed assets."""
+def workflow_pack_components(workflow_id: str):
+    """Selectable preparation leaves, not inference settings or dependency copies."""
+    if workflow_id != 'structure_prediction':
+        return ()
+    registry = get_registry()
+    return tuple({'model_id': model_id, 'label': registry.get_internal_model_definition(model_id).name,
+                  'selected_by_default': model_id in {'protenix', 'frustrampnn'}}
+                 for model_id in ('protenix', 'frustrampnn', 'esmfold2', 'boltz2', 'boltz_cp_experimental'))
+
+
+def workflow_pack_dependencies(workflow_id: str, component_ids=None):
+    """Input-free union; omission retains historical whole-pack preparation."""
+    if component_ids is not None:
+        available = {item['model_id'] for item in workflow_pack_components(workflow_id)}
+        if set(component_ids) - available:
+            raise ValueError('Unknown workflow preparation component')
+        refs = []
+        for model_id in component_ids:
+            if model_id == 'protenix':
+                refs.extend(model_image_dependencies(model_id))
+                refs.extend(native_checkpoint_dependencies('ProtenixFromComplex', {
+                    'protenix_anchor_target': True, 'protenix_use_template': False})[0])
+            else:
+                refs.extend(model_runtime_dependencies(model_id, internal=model_id == 'frustrampnn'))
+        return tuple({(ref.kind, ref.relative_path): ref for ref in refs}.values())
     groups = workflow_pack_weight_groups(workflow_id)  # closed supported identity
     if workflow_id == 'de_novo_design':
         from native_components import LABEL_ASSETS
@@ -346,17 +369,8 @@ def workflow_pack_dependencies(workflow_id: str):
         refs.extend(RuntimeDependencyRef(kind='weights', relative_path=member)
                     for members in groups.values() for member in members)
         return tuple(dict.fromkeys(refs))
-    refs = []
-    for model_id in ('boltz2', 'protenix', 'esmfold2'):
-        refs.extend(ref for ref in model_runtime_dependencies(model_id)
-                    if not (model_id == 'protenix' and ref.kind == 'weights'))
-    refs.extend(model_image_dependencies('boltz_cp_experimental'))
-    refs.extend(model_runtime_dependencies('frustrampnn', internal=True))
-    # Retain ordinary weights and target metadata, never the bulk template corpus.
-    members, _ = native_checkpoint_dependencies('ProtenixFromComplex', {
-        'protenix_anchor_target': True, 'protenix_use_template': False})
-    refs.extend(members)
-    return tuple({(ref.kind, ref.relative_path): ref for ref in refs}.values())
+    return workflow_pack_dependencies(workflow_id, [item['model_id']
+        for item in workflow_pack_components(workflow_id)])
 
 
 def _native_metadata_bytes(root, relative):

@@ -10,7 +10,7 @@ from database import get_session
 from services.remote_execution.contracts import (
     ExecutionTargetActivateRequest,
     PreloadRequest, ProvisionRequest, ProvisionSelection, ProvisionPreview, ObservedArtifactInventory,
-    WorkflowProvisionSelection, WorkflowProvisionRequest, WorkflowPackSelection, WorkflowPackRequest,
+    WorkflowProvisionSelection, WorkflowProvisionRequest, WorkflowPackSelection, WorkflowPackRequest, WorkflowPackCatalogEntry,
     ExecutionTargetInventoryResponse,
     ExecutionTargetResponse, ExecutionTargetDetails, CachedArtifactPage, PreloadArtifactPage,
     HFAssetLinkStatus,
@@ -158,14 +158,15 @@ async def preload_execution_target(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.get("/provision/catalog", response_model=list[ProvisionSelection | WorkflowPackSelection])
+@router.get("/provision/catalog", response_model=list[ProvisionSelection | WorkflowPackCatalogEntry])
 async def provision_catalog():
-    from model_registry import INDEPENDENT_RUNTIME_MODELS, INDEPENDENT_RUNTIME_IMAGES, get_registry
+    from model_registry import INDEPENDENT_RUNTIME_MODELS, INDEPENDENT_RUNTIME_IMAGES, get_registry, workflow_pack_components
     return [ProvisionSelection(kind=kind, model_id=model_id)
         for kind, models in (("model", INDEPENDENT_RUNTIME_MODELS), ("image", INDEPENDENT_RUNTIME_IMAGES))
         for model_id in sorted(models)
         if get_registry().get_model(model_id) is not None] + [
-            WorkflowPackSelection(kind="workflow_pack", workflow_id=workflow_id)
+            WorkflowPackCatalogEntry(kind="workflow_pack", workflow_id=workflow_id,
+                                     components=list(workflow_pack_components(workflow_id)))
             for workflow_id in ("structure_prediction", "antibody_denovo", "de_novo_design")]
 
 

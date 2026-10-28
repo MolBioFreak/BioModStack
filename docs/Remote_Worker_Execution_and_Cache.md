@@ -79,11 +79,21 @@ Preview `storage_bytes` estimates persistent selected payloads: one body per ima
 
 Independent preparation uses the existing `/provision/catalog`, `/provision/preview` and `/provision` routes. Image scope selects an image; model scope selects its reviewed asset binding; configured `workflow` scope derives dependencies from the typed scientific request. These remain distinct from an input-free whole-workflow pack.
 
-### Whole Structure workflow preparation
+### Selective Structure workflow preparation
 
-The preload menu offers **Prepare entire workflow** for Structure Prediction. One deliberate click previews the server-owned asset set and starts the existing operation with that fresh preview digest. Opening the menu, polling, and switching selections do not start preparation. A late preview cannot start work on a worker or selection the operator has left.
+The preload menu offers **Components to send** for Structure Prediction. Protenix and FrustraMPNN are initially checked; ESMFold2, Boltz-2 and Fold-CP can be checked independently. **All components (full workflow)** retains explicit full-pack preparation. Other workflow groups retain their existing full-pack defaults. These choices select downloads, not scientific predictor settings.
 
-The shared browser/API request is:
+Use **Preview artifact downloads** to inspect the exact selected dependency union and its download/storage estimates before **Start provision**, or **Prepare selected components** to preview and start in one deliberate action with the fresh digest. Opening the menu, polling, and switching checkboxes never start preparation. Editing a selection invalidates its preview; a late response cannot start work for a selection or worker the operator has left.
+
+The catalog at `/api/execution-targets/provision/catalog` exposes typed `components` entries (`model_id`, registry-owned `label`, `selected_by_default`). Browser and agents send the same request, without that discovery metadata:
+
+```json
+{"kind":"workflow_pack","workflow_id":"structure_prediction","component_ids":["frustrampnn","protenix"]}
+```
+
+`component_ids` is an explicit set of catalog component identities, canonicalized in sorted order. Omission or `null` preserves historical full-pack callers; `[]` selects no scientific assets, and the UI leaves preparation inactive until a component is chosen. Dependencies are closed at their existing native owners and deduplicated before estimation and transfer. Deselecting ESMFold2 excludes its image and weights unless required by a selected dependency. Deselecting any component does not remove assets already on the worker or change inference settings. Only complete selected consumer weight layouts are published; partial combined layouts are not advertised.
+
+The explicit full-pack request remains:
 
 ```json
 {"kind":"workflow_pack","workflow_id":"structure_prediction"}

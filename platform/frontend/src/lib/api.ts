@@ -587,6 +587,10 @@ export interface CatalogProvisionSelection {
 export interface WorkflowPackSelection {
     kind: 'workflow_pack';
     workflow_id: 'structure_prediction' | 'antibody_denovo' | 'de_novo_design';
+    component_ids?: string[] | null;
+}
+export interface WorkflowPackCatalogEntry extends WorkflowPackSelection {
+    components: Array<{ model_id: string; label: string; selected_by_default: boolean }>;
 }
 export interface MdLaunchPreviewRequest {
     schema_version: 'bms.md.launch-preview-request.v1';
@@ -604,7 +608,7 @@ export const provisionSelectionLabel = (selection: ProvisionSelection | Critical
     'workflow_request' in selection
         ? 'workflow_type' in selection.workflow_request ? selection.workflow_request.workflow_type
             : `${selection.workflow_request.model_id} / ${selection.workflow_request.mode}`
-        : 'workflow_id' in selection ? selection.workflow_id : selection.model_id;
+        : 'workflow_id' in selection ? `${selection.workflow_id}${selection.component_ids == null ? ' (full pack)' : ` (${selection.component_ids.join(', ') || 'no components'})`}` : selection.model_id;
 
 export interface CachedArtifactReceipt {
     name: string;
@@ -807,8 +811,8 @@ export const fetchHuggingFaceAssetStatus = async (signal?: AbortSignal): Promise
     (await api.get<HuggingFaceAssetLinkStatus>('/api/execution-targets/providers/huggingface', { signal })).data;
 export const checkHuggingFaceAssetConnection = async (): Promise<HuggingFaceAssetLinkStatus> =>
     (await api.post<HuggingFaceAssetLinkStatus>('/api/execution-targets/providers/huggingface/check', {})).data;
-export const fetchProvisionCatalog = async (): Promise<Array<CatalogProvisionSelection | WorkflowPackSelection>> =>
-    (await api.get<Array<CatalogProvisionSelection | WorkflowPackSelection>>('/api/execution-targets/provision/catalog')).data;
+export const fetchProvisionCatalog = async (): Promise<Array<CatalogProvisionSelection | WorkflowPackCatalogEntry>> =>
+    (await api.get<Array<CatalogProvisionSelection | WorkflowPackCatalogEntry>>('/api/execution-targets/provision/catalog')).data;
 
 export const previewExecutionTargetProvision = async (targetId: string, selection: ProvisionSelection): Promise<ProvisionPreview> =>
     (await api.post<ProvisionPreview>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision/preview`, selection)).data;

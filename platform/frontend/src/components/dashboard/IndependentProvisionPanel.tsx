@@ -10,7 +10,7 @@ import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/
 import {
   fetchModels, fetchTemplates, fetchProvisionCatalog, fetchHuggingFaceAssetStatus, checkHuggingFaceAssetConnection, previewExecutionTargetProvision, provisionExecutionTarget,
   cancelExecutionTargetProvision, retryExecutionTargetProvision,
-  provisionSelectionLabel, type WorkflowProvisionRequest, type CatalogProvisionSelection, type WorkflowPackSelection,
+  provisionSelectionLabel, type WorkflowProvisionRequest, type CatalogProvisionSelection, type WorkflowPackSelection, type WorkflowPackCatalogEntry,
   type CachedArtifactReceipt, type ExecutionTarget, type ProvisionSelection,
 } from '../../lib/api';
 
@@ -30,7 +30,7 @@ const WORKFLOW_PACKS: Record<string, WorkflowPackSelection['workflow_id']> = {
   protein_modification_experimental: 'de_novo_design',
 };
 const SCOPE_HINTS: Record<string, string> = {
-  workflow: 'Every model, image and weight set the workflow can use.',
+  workflow: 'Choose the components to send, or prepare the full workflow. Shared dependencies are included once.',
   model: 'One model: its container image and its managed weights.',
   image: 'One container image only. Weights are not downloaded.',
 };
@@ -143,7 +143,7 @@ function ProvisionChooser({ target, onChanged, inventoryVisible = true }: Props)
   const formWorkflows = workflows.filter(item => !packWorkflows.includes(item));
   const valid = kind !== 'workflow' && selections.some(item => item.model_id === modelId);
   const selectedWorkflow = kind === 'workflow' ? workflows.find(item => item.id === modelId) : undefined;
-  const pack = catalog.data?.find((item): item is WorkflowPackSelection =>
+  const pack = catalog.data?.find((item): item is WorkflowPackCatalogEntry =>
     item.kind === 'workflow_pack' && item.workflow_id === (WORKFLOW_PACKS[modelId] ?? modelId));
   const operation = target.preload;
   const live = Boolean(operation) && (ACTIVE_PHASES.includes(operation!.phase) || Boolean(operation!.recovery_required));
@@ -155,12 +155,12 @@ function ProvisionChooser({ target, onChanged, inventoryVisible = true }: Props)
     {live && <PreparationStatus target={target} onChanged={onChanged} />}
     <div className="grid gap-3 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
       <label className="text-sm">Prepare<select aria-label="Provision scope" className={selectClass} value={kind} onChange={event => { setKind(event.target.value as CatalogProvisionSelection['kind'] | 'workflow'); setModelId(''); }}>
-        <option value="workflow">Whole workflow</option><option value="model">Model (image + weights)</option><option value="image">Container image only</option>
+        <option value="workflow">Workflow components</option><option value="model">Model (image + weights)</option><option value="image">Container image only</option>
       </select></label>
       <label className="text-sm">{kind === 'workflow' ? 'Workflow' : kind === 'model' ? 'Model' : 'Image'}<select aria-label={kind === 'workflow' ? 'Preparation workflow' : 'Provision model'} className={selectClass} value={modelId} onChange={event => setModelId(event.target.value)} disabled={kind !== 'workflow' && catalog.isPending}>
         <option value="">{kind === 'workflow' ? 'Select a workflow' : 'Select a model'}</option>
         {kind === 'workflow' ? <>
-          {packWorkflows.length > 0 && <optgroup label="Prepare everything here">
+          {packWorkflows.length > 0 && <optgroup label="Prepare here">
             {packWorkflows.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
           </optgroup>}
           {formWorkflows.length > 0 && <optgroup label="Prepare from the launch form">
@@ -184,7 +184,7 @@ function ProvisionChooser({ target, onChanged, inventoryVisible = true }: Props)
           : pack.workflow_id === 'antibody_denovo'
           ? 'The binder generators, sequence designers, validators and optional operation assets. Jobs keep their own settings and biological inputs.'
           : 'The workflow’s supported local predictors and shared assets, including optional analysis assets. Inputs and MSA requests stay with each job.'}</p>
-        <ProvisionActions key={JSON.stringify(pack)} target={target} onChanged={onChanged} selection={pack} prepareInOneClick />
+        <WorkflowPackChooser key={pack.workflow_id} target={target} onChanged={onChanged} pack={pack} />
       </> : <>
       <p className="text-[var(--text-secondary)]">{selectedWorkflow.name} prepares its dependencies from its launch form: choose settings and this worker there, then use “Preview artifact downloads”. Nothing is launched.</p>
       <a className={buttonClass} href={`${import.meta.env.BASE_URL}submit?template=${encodeURIComponent(selectedWorkflow.id)}`}>Open {selectedWorkflow.name} form</a>
@@ -206,6 +206,32 @@ function ProvisionChooser({ target, onChanged, inventoryVisible = true }: Props)
     </details>
   </section>;
 }
+function WorkflowPackChooser({ target, onChanged, pack }: Props & { pack: WorkflowPackCatalogEntry }) {
+  const components = pack.components ?? [];
+  const [selected, setSelected] = useState<string[]>(() => components.filter(item => item.selected_by_default).map(item => item.model_id));
+  const [full, setFull] = useState(components.length === 0 || components.every(item => item.selected_by_default));
+  // Discovery metadata must never leak into the strict preview/start contract.
+  const selection: WorkflowPackSelection = { kind: 'workflow_pack', workflow_id: pack.workflow_id,
+    ...(full ? {} : { component_ids: [...selected].sort() }) };
+  return <div className="space-y-3">
+    {components.length > 0 && <fieldset className="space-y-2">
+      <legend>Components to send</legend>
+      <label className="flex items-center gap-2"><input type="checkbox" checked={full}
+        onChange={event => { setFull(event.target.checked); setSelected(event.target.checked ? components.map(item => item.model_id) : []); }} />All components (full workflow)</label>
+      {components.map(item => <label key={item.model_id} className="flex items-center gap-2">
+        <input type="checkbox" checked={full || selected.includes(item.model_id)} onChange={event => {
+          const current = full ? components.map(component => component.model_id) : selected;
+          setFull(false);
+          setSelected(event.target.checked ? [...current, item.model_id] : current.filter(id => id !== item.model_id));
+        }} />{item.label}
+      </label>)}
+      <p className="text-xs text-[var(--text-muted)]">Only selected components and their shared dependencies are prepared. Existing assets are kept; job settings do not change.</p>
+    </fieldset>}
+    {!full && selected.length === 0 && <p role="status">Select at least one component to prepare.</p>}
+    <ProvisionActions target={target} onChanged={onChanged} selection={!full && selected.length === 0 ? null : selection} prepareInOneClick />
+  </div>;
+}
+
 export function WorkflowProvisionPanel({ target, onChanged, workflowRequest }: Props & { workflowRequest: WorkflowProvisionRequest }) {
   const selection: ProvisionSelection = { kind: 'workflow', workflow_request: workflowRequest };
   const binding = JSON.stringify([selection, target.id, target.provider_instance_id, target.host, target.port, target.username, target.remote_root,
@@ -263,7 +289,9 @@ function BoundProvisionActions({ target, onChanged, selection, retryOperationId,
   // Server-normalized workflow selections may contain additional schema defaults.
   function matchesSelection(observed?: ProvisionSelection) {
     if (!selection || !observed || observed.kind !== selection.kind) return false;
-    if (selection.kind === 'workflow_pack') return observed.kind === 'workflow_pack' && observed.workflow_id === selection.workflow_id;
+    if (selection.kind === 'workflow_pack') return observed.kind === 'workflow_pack' && observed.workflow_id === selection.workflow_id
+      && JSON.stringify(observed.component_ids == null ? null : [...observed.component_ids].sort())
+        === JSON.stringify(selection.component_ids == null ? null : [...selection.component_ids].sort());
     if (selection.kind === 'workflow') return true;
     return 'model_id' in observed && observed.model_id === selection.model_id;
   }
@@ -303,12 +331,11 @@ function BoundProvisionActions({ target, onChanged, selection, retryOperationId,
   }
   return <div className="space-y-3">
     <div className="flex flex-wrap gap-2">
-      {prepareInOneClick ? <button type="button" className={buttonClass}
+      {prepareInOneClick && <button type="button" className={buttonClass}
         disabled={!allowed || !selection || preview.isPending || provision.isPending || (consumed && provision.isSuccess)}
-        onClick={() => void prepareWorkflow()}>{preview.isPending ? 'Reading workflow download metadata…' : provision.isPending ? 'Starting preparation…' : 'Prepare entire workflow'}</button> : <>
+        onClick={() => void prepareWorkflow()}>{preview.isPending ? 'Reading workflow download metadata…' : provision.isPending ? 'Starting preparation…' : selection?.kind === 'workflow_pack' && selection.component_ids != null ? 'Prepare selected components' : 'Prepare entire workflow'}</button>}
       <button type="button" className={buttonClass} disabled={!allowed || !selection || preview.isPending} onClick={() => void requestPreview()}>{preview.isPending ? 'Reading download metadata…' : 'Preview artifact downloads'}</button>
       <button type="button" className={buttonClass} disabled={!allowed || !data || !!data.blockers?.length || preview.isPending} onClick={() => void start()}>{provision.isPending ? 'Starting provision…' : retryOperationId ? 'Retry provision with fresh preview' : 'Start provision'}</button>
-      </>}
     </div>
     {!allowed && <p className="text-xs text-[var(--text-muted)]">Needs an attached, ready worker with no preparation already running.</p>}
     {(preview.error || provision.error) && <p role="alert" className="text-sm text-[var(--error)]">{errorText(preview.error || provision.error)}</p>}

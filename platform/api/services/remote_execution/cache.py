@@ -623,7 +623,7 @@ def _independent_dependencies(selection):
     from model_registry import (model_runtime_dependencies, model_image_dependencies,
                                 workflow_pack_dependencies)
     if selection.kind == 'workflow_pack':
-        return workflow_pack_dependencies(selection.workflow_id)
+        return workflow_pack_dependencies(selection.workflow_id, selection.component_ids)
     return (model_image_dependencies(selection.model_id) if selection.kind == 'image'
             else model_runtime_dependencies(selection.model_id))
 
@@ -637,6 +637,10 @@ def workflow_pack_weight_layouts(selection, entries):
     """
     from model_registry import workflow_pack_weight_groups
     groups = workflow_pack_weight_groups(selection.workflow_id)
+    if selection.component_ids is not None:
+        # Never publish a partial combined layout as a complete consumer layout.
+        selected = {ref.relative_path for ref in _independent_dependencies(selection) if ref.kind == "weights"}
+        groups = {name: members for name, members in groups.items() if set(members) <= selected}
     return {name: tuple(entry for entry in entries if any(
         entry.remote_destination == 'weights/' + member or
         entry.remote_destination.startswith('weights/' + member + '/')

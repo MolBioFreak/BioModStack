@@ -1,4 +1,7 @@
 import React, { act } from 'react';
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import blockedPreviewWire from '../fixtures/blocked-preparation-preview.json?raw';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -60,6 +63,74 @@ beforeEach(() => {
   };
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); api.defaults.adapter = adapter; vi.restoreAllMocks(); });
+
+const nativeCatalog = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python', ['-c',
+  'import asyncio,json; from routers.execution_targets import provision_catalog; print(json.dumps([x.model_dump(mode="json") for x in asyncio.run(provision_catalog())]))'],
+  { cwd: resolve('../api'), encoding: 'utf8', env: { ...process.env, PYTHONPATH: '.:../..' } }));
+const component = (id: string) => {
+  const label = nativeCatalog.find((item: any) => item.workflow_id === 'structure_prediction').components.find((item: any) => item.model_id === id).label;
+  return [...container.querySelectorAll('label')].find(item => item.textContent === label)!.querySelector<HTMLInputElement>('input')!;
+};
+const toggleComponent = async (id: string) => { await act(async () => { component(id).click(); await settle(); }); };
+const mountNativeCatalog = async () => {
+  client.setQueryData(['remote-provision-catalog'], nativeCatalog);
+  await render(); await select('Preparation workflow', 'structure_prediction');
+};
+
+it('sends exact native catalog checkbox defaults, edits and full-pack through Axios preview and provision', async () => {
+  await mountNativeCatalog();
+  expect(component('protenix').checked).toBe(true);
+  expect(component('frustrampnn').checked).toBe(true);
+  expect(component('esmfold2').checked).toBe(false);
+  expect(component('boltz2').checked).toBe(false);
+  expect(component('boltz_cp_experimental').checked).toBe(false);
+  expect(posts).toEqual([]);
+  await click('Preview artifact downloads');
+  const defaults = { kind: 'workflow_pack', workflow_id: 'structure_prediction', component_ids: ['frustrampnn', 'protenix'] };
+  expect(posts[0].body).toEqual(defaults);
+  expect(button('Start provision').disabled).toBe(false);
+  await toggleComponent('esmfold2');
+  expect(button('Start provision').disabled).toBe(true);
+  expect(container.querySelector('[aria-label="Provision preview"]')).toBeNull();
+  await click('Preview artifact downloads');
+  expect(posts.at(-1)?.body).toEqual({ ...defaults, component_ids: ['esmfold2', 'frustrampnn', 'protenix'] });
+  await toggleComponent('esmfold2');
+  await click('Prepare selected components', true);
+  expect(posts.slice(-2).map(item => item.body)).toEqual([defaults, { ...defaults, preview_sha256: 'b'.repeat(64) }]);
+  // The explicit all checkbox retains the historical request, without discovery metadata.
+  await act(async () => { [...container.querySelectorAll('label')].find(item => item.textContent === 'All components (full workflow)')!.querySelector<HTMLInputElement>('input')!.click(); await settle(); });
+  await click('Prepare entire workflow');
+  expect(posts.slice(-2).map(item => item.body)).toEqual([
+    { kind: 'workflow_pack', workflow_id: 'structure_prediction' },
+    { kind: 'workflow_pack', workflow_id: 'structure_prediction', preview_sha256: 'b'.repeat(64) },
+  ]);
+  await toggleComponent('esmfold2');
+  await click('Preview artifact downloads');
+  expect(posts.at(-1)?.body).toEqual({ ...defaults, component_ids: ['boltz2', 'boltz_cp_experimental', 'frustrampnn', 'protenix'] });
+  if (process.env.BMS_PROVISION_COMPONENT_WIRE) writeFileSync(process.env.BMS_PROVISION_COMPONENT_WIRE, JSON.stringify(posts.map(item => item.body)));
+});
+
+it('keeps an explicitly cleared component choice empty without preview or transmission', async () => {
+  await mountNativeCatalog();
+  await toggleComponent('protenix'); await toggleComponent('frustrampnn');
+  expect(container.textContent).toContain('Select at least one component to prepare.');
+  expect(button('Preview artifact downloads').disabled).toBe(true);
+  expect(button('Start provision').disabled).toBe(true);
+  expect(posts).toEqual([]);
+});
+
+it.each(['late edit', 'wrong subset'])('does not start a %s component preview', async mode => {
+  await mountNativeCatalog();
+  let finish!: (value: ReturnType<typeof response>) => void;
+  const post = vi.spyOn(api, 'post').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await click('Prepare selected components');
+  if (mode === 'late edit') await toggleComponent('esmfold2');
+  await act(async () => { finish(response(preview({ kind: 'workflow_pack', workflow_id: 'structure_prediction',
+    component_ids: mode === 'late edit' ? ['frustrampnn', 'protenix'] : ['esmfold2'] }))); await settle(); });
+  expect(post).toHaveBeenCalledTimes(1);
+  expect(posts).toEqual([]);
+  expect(button('Start provision').disabled).toBe(true);
+});
 
 it('preserves the whole-workflow choice across claim arrival and release without posting', async () => {
   target = { ...target, active_job_ids: ['one', 'two'], progress: null, job_progress: [] };

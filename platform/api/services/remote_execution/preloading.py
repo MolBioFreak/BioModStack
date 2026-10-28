@@ -218,7 +218,7 @@ class PreloadController:
                 raise ExecutionTargetError("Preload requires an attached ready worker with current inventory")
             target = TargetSnapshot.capture(target)
             independent = isinstance(request, (ProvisionRequest, WorkflowProvisionRequest, WorkflowPackRequest))
-            selection = (WorkflowPackSelection(kind="workflow_pack", workflow_id=request.workflow_id)
+            selection = (WorkflowPackSelection(kind="workflow_pack", workflow_id=request.workflow_id, component_ids=request.component_ids)
                 if isinstance(request, WorkflowPackRequest) else
                 WorkflowProvisionSelection(kind="workflow", workflow_request=request.workflow_request)
                 if isinstance(request, WorkflowProvisionRequest) else
