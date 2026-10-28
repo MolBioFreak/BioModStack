@@ -1,0 +1,1146 @@
+diff --git a/docs/INTEGRATIONS.md b/docs/INTEGRATIONS.md
+index 6b7a640..a57e65d 100644
+--- a/docs/INTEGRATIONS.md
++++ b/docs/INTEGRATIONS.md
+@@ -104,7 +104,7 @@ selection changes.
+ 
+ ```js
+ window.addEventListener("atomworks-studio", (event) => {
+-  if (event.detail.type === "changed") refreshMyPanel(event.detail.sessionId);
++  if (event.detail.type === "changed") refreshMyPanel(event.detail.session_id);
+ });
+ await window.atomworksStudio.openExample("motif_scaffolding");
+ await window.atomworksStudio.renderFrame(cif, "step 12", { keepCamera: true });
+@@ -230,3 +230,11 @@ Playback is view-only. **Back to design** restores the session's editable final
+ structure. Opening a different document or editing the result removes the old
+ trajectory association. Model hosts control whether snapshots are recorded,
+ their retention, and access to the trajectory file.
++
++### Patched document ownership and persistence
++
++`renderFrame` is display-only: picks do not address the editable document until `showDocument` or `openSession` restores it. Use `openSession` to edit a different result; there is no assumed frame index mapping. Mol* overlays remain display-only. Document-local indices are not original-source identities.
++
++Session responses include `persistence.state`: `saved`, `ephemeral`, or `memory_only`. A memory-committed edit whose disk snapshot failed returns its actual structure/revision with `memory_only`, not a false rollback. Export immediately or POST `/api/v1/sessions/{session_id}/persistence/retry`; unsaved and active sessions are not pruned. This is not durable project storage, and restart does not restore Undo/revision.
++
++Activate a sequence segment button to edit its length and explicit before/after anchor. `/segments/edit` takes the segment's current `atom_index`, bounds, optional `anchor_index`, `before`, and `expected_revision`. Moves are one Undo transaction and preserve atom/pair annotations. Structural residue IDs are reordered for parseable export; author identity annotations are retained.
+diff --git a/packages/api/annotation_studio/main.py b/packages/api/annotation_studio/main.py
+index f3af203..4c8a0e3 100644
+--- a/packages/api/annotation_studio/main.py
++++ b/packages/api/annotation_studio/main.py
+@@ -63,6 +63,8 @@ class DocumentStore:
+     ) -> None:
+         self._documents: dict[str, tuple[float, str, StudioDocument]] = {}
+         self._document_locks: dict[str, RLock] = {}
++        self._active: dict[str, int] = {}
++        self._persistence_errors: dict[str, str] = {}
+         self._lock = RLock()
+         self._session_dir = session_dir
+         from atomworks_studio_editing.conditions import CONDITION_PROVIDER
+@@ -89,31 +91,50 @@ class DocumentStore:
+     def _forget(self, session_id: str, *, delete_file: bool) -> None:
+         self._documents.pop(session_id, None)
+         self._document_locks.pop(session_id, None)
++        self._persistence_errors.pop(session_id, None)
+         if delete_file and (path := self._session_file(session_id)) is not None:
+             path.unlink(missing_ok=True)
+ 
++    def _protected(self, session_id: str) -> bool:
++        return bool(self._active.get(session_id)) or session_id in self._persistence_errors
++
+     def _prune(self, *, reserve_slot: bool = False) -> None:
+         memory_cutoff = time.monotonic() - SESSION_TTL_SECONDS
+         for session_id, (used, _, _) in list(self._documents.items()):
+-            if used < memory_cutoff:
++            if used < memory_cutoff and not self._protected(session_id):
+                 self._forget(session_id, delete_file=self._session_dir is None)
+ 
+         if self._session_dir is not None:
+             file_cutoff = time.time() - SESSION_TTL_SECONDS
+             files = list(self._session_dir.glob("*.session"))
+             for path in files:
+-                if path.stat().st_mtime < file_cutoff:
++                if path.stat().st_mtime < file_cutoff and not self._protected(path.stem):
+                     self._forget(path.stem, delete_file=True)
+             files = sorted(self._session_dir.glob("*.session"), key=lambda path: path.stat().st_mtime)
+             limit = MAX_SESSIONS - 1 if reserve_slot else MAX_SESSIONS
+-            while len(files) > limit:
+-                oldest = files.pop(0)
+-                self._forget(oldest.stem, delete_file=True)
++            while len(set(self._documents) | {path.stem for path in files}) > limit:
++                oldest = next((path for path in files if not self._protected(path.stem)), None)
++                memory_only = [key for key in self._documents
++                               if key not in {path.stem for path in files} and not self._protected(key)]
++                if oldest is not None:
++                    files.remove(oldest)
++                    self._forget(oldest.stem, delete_file=True)
++                elif memory_only:
++                    self._forget(min(memory_only, key=lambda key: self._documents[key][0]), delete_file=False)
++                else:
++                    # Defer eviction while every candidate is pinned; do not add
++                    # a new admission refusal for native editing operations.
++                    break
+             return
+ 
+         limit = MAX_SESSIONS - 1 if reserve_slot else MAX_SESSIONS
+         while len(self._documents) > limit:
+-            oldest = min(self._documents, key=lambda key: self._documents[key][0])
++            candidates = [key for key in self._documents if not self._protected(key)]
++            if not candidates:
++                # Capacity is reclaimed on the next prune once a call finishes
++                # or its snapshot is recovered, never by evicting active edits.
++                break
++            oldest = min(candidates, key=lambda key: self._documents[key][0])
+             self._forget(oldest, delete_file=False)
+ 
+     def _persist(self, session_id: str, document: StudioDocument) -> None:
+@@ -132,6 +153,27 @@ class DocumentStore:
+         temporary.chmod(0o600)
+         temporary.replace(path)
+ 
++    def _save_snapshot(self, session_id: str, document: StudioDocument) -> None:
++        try:
++            self._persist(session_id, document)
++        except OSError:
++            # The native edit already committed. Do not claim rollback or lose its Undo.
++            LOGGER.exception("Session snapshot failed for %s; edits remain in memory", session_id)
++            with self._lock:
++                self._persistence_errors[session_id] = "Snapshot write failed; export or retry before restart."
++        else:
++            with self._lock:
++                self._persistence_errors.pop(session_id, None)
++
++    def persistence_status(self, session_id: str) -> dict[str, Any]:
++        with self._lock:
++            entry = self._documents.get(session_id)
++            if entry is None or entry[1] != current_owner():
++                raise SessionNotFoundError(session_id)
++            error = self._persistence_errors.get(session_id)
++            return {"state": "memory_only" if error else ("saved" if self.persistent else "ephemeral"),
++                    "revision": entry[2].revision, "message": error}
++
+     def _load(self, session_id: str) -> tuple[str, StudioDocument] | None:
+         path = self._session_file(session_id)
+         if path is None or not path.is_file():
+@@ -158,7 +200,7 @@ class DocumentStore:
+             session_id = secrets.token_urlsafe(24)
+             self._documents[session_id] = (time.monotonic(), current_owner(), document)
+             self._document_locks[session_id] = RLock()
+-            self._persist(session_id, document)
++            self._save_snapshot(session_id, document)
+             return session_id
+ 
+     def get(self, session_id: str) -> StudioDocument:
+@@ -176,7 +218,10 @@ class DocumentStore:
+                 raise KeyError(session_id)
+             self._documents[session_id] = (time.monotonic(), entry[1], entry[2])
+             if (path := self._session_file(session_id)) is not None:
+-                path.touch()
++                try:
++                    path.touch()
++                except OSError:
++                    self._persistence_errors[session_id] = "Snapshot touch failed; export or retry before restart."
+             return entry[2]
+ 
+     def call[T](
+@@ -192,14 +237,27 @@ class DocumentStore:
+             except KeyError:
+                 raise SessionNotFoundError(session_id) from None
+             document_lock = self._document_locks[session_id]
+-        with document_lock:
++            # Pin both queued and executing calls before releasing the registry lock.
++            self._active[session_id] = self._active.get(session_id, 0) + 1
++        try:
++            with document_lock:
++                with self._lock:
++                    if self._documents.get(session_id, (None, None, None))[2] is not document:
++                        raise SessionNotFoundError(session_id)
++                result = operation(document)
++                if persist:
++                    self._save_snapshot(session_id, document)
++                return result
++        finally:
+             with self._lock:
+-                if self._documents.get(session_id, (None, None, None))[2] is not document:
+-                    raise SessionNotFoundError(session_id)
+-            result = operation(document)
+-            if persist:
+-                self._persist(session_id, document)
+-            return result
++                remaining = self._active[session_id] - 1
++                if remaining:
++                    self._active[session_id] = remaining
++                else:
++                    self._active.pop(session_id, None)
++                if session_id in self._documents:
++                    _, owner, document = self._documents[session_id]
++                    self._documents[session_id] = (time.monotonic(), owner, document)
+ 
+     def delete(self, session_id: str) -> None:
+         """Remove an owned document and snapshot after any active operation finishes."""
+@@ -286,7 +344,8 @@ async def security_headers(
+ 
+ def _session_response(session_id: str, structure: dict) -> dict:
+     query = urlencode({"session": session_id, "embed": "1"})
+-    return {"session_id": session_id, "editor_path": f"/?{query}", "structure": structure}
++    return {"session_id": session_id, "editor_path": f"/?{query}", "structure": structure,
++            "persistence": store.persistence_status(session_id)}
+ 
+ 
+ class SelectionRequest(BaseModel):
+@@ -351,6 +410,19 @@ class ConditionMutation(ConfirmableSelectionRequest):
+         return value
+ 
+ 
++class ChainRoleMutation(ConfirmableSelectionRequest):
++    role: Literal["fixed", "backbone", "folded", "designed"]
++
++
++class SegmentEditMutation(BaseModel):
++    atom_index: int = Field(ge=0)
++    minimum: int = Field(ge=1)
++    maximum: int = Field(ge=1)
++    anchor_index: int | None = Field(default=None, ge=0)
++    before: bool = True
++    expected_revision: int = Field(ge=0)
++
++
+ class SelectionResolve(ScopedSelectionRequest):
+     pass
+ 
+@@ -777,6 +849,27 @@ def set_condition(session_id: str, mutation: ConditionMutation) -> dict:
+     )
+ 
+ 
++@app.post("/api/sessions/{session_id}/chain-role")
++def set_chain_role(session_id: str, mutation: ChainRoleMutation) -> dict:
++    return _apply(session_id, lambda document: document.set_chain_role(
++        mutation.atom_indices, mutation.role, expected_revision=mutation.expected_revision,
++        allow_target_discard=mutation.allow_target_discard))
++
++
++@app.post("/api/sessions/{session_id}/persistence/retry")
++def retry_persistence(session_id: str) -> dict:
++    structure = _call(session_id, lambda document: document.summary(), persist=True)
++    return _session_response(session_id, structure)
++
++
++@app.post("/api/sessions/{session_id}/segments/edit")
++def edit_segment(session_id: str, mutation: SegmentEditMutation) -> dict:
++    return _apply(session_id, lambda document: document.edit_segment(
++        mutation.atom_index, mutation.minimum, mutation.maximum,
++        anchor_index=mutation.anchor_index, before=mutation.before,
++        expected_revision=mutation.expected_revision))
++
++
+ @app.post("/api/sessions/{session_id}/conditions/batch")
+ def set_conditions(session_id: str, mutation: ConditionBatchMutation) -> dict:
+     return _apply(
+@@ -1016,7 +1109,7 @@ def undo(session_id: str) -> dict:
+     )
+     if structure is None:
+         raise HTTPException(status_code=409, detail="undo history is empty")
+-    return {"session_id": session_id, "structure": structure}
++    return _session_response(session_id, structure)
+ 
+ 
+ @app.post("/api/sessions/{session_id}/combine")
+diff --git a/packages/editing/atomworks_studio_editing/document.py b/packages/editing/atomworks_studio_editing/document.py
+index 2b2b44d..b75651e 100644
+--- a/packages/editing/atomworks_studio_editing/document.py
++++ b/packages/editing/atomworks_studio_editing/document.py
+@@ -744,6 +744,28 @@ class StudioDocument:
+             "message": f"{'Applied' if enabled else 'Removed'} {spec.label} on {len(selected)} atoms.",
+         }
+ 
++    def set_chain_role(
++        self, indices: list[int], role: str, *, allow_target_discard: bool = False,
++        expected_revision: int | None = None,
++    ) -> dict[str, Any]:
++        """Assign a role with exact atom masks in one native confirmation/Undo transaction."""
++        if role not in {"fixed", "backbone", "folded", "designed"}:
++            raise ValueError("unsupported chain role")
++        selected = self.resolve_indices(indices, "atom")
++        backbone = selected[np.isin(self.array.atom_name[selected], ["N", "CA", "C", "O"])]
++        cleared = selected[~np.isin(selected, backbone)] if role == "backbone" else selected
++        edits = []
++        if len(cleared):
++            edits.append({"condition": "coordinate", "atom_indices": cleared.tolist(),
++                          "scope": "atom", "enabled": role == "fixed"})
++        if role == "backbone" and len(backbone):
++            edits.append({"condition": "coordinate", "atom_indices": backbone.tolist(),
++                          "scope": "atom", "enabled": True})
++        edits.append({"condition": "sequence", "atom_indices": selected.tolist(),
++                      "scope": "residue", "enabled": role in {"fixed", "folded"}})
++        return self.set_conditions(edits, allow_target_discard=allow_target_discard,
++                                   expected_revision=expected_revision)
++
+     def set_conditions(
+         self,
+         edits: Sequence[Mapping[str, Any]],
+@@ -1128,6 +1150,62 @@ class StudioDocument:
+                 new_chain_type=chain_type,
+             )
+ 
++    def edit_segment(
++        self, atom_index: int, minimum: int, maximum: int, *,
++        anchor_index: int | None = None, before: bool = True,
++        expected_revision: int | None = None,
++    ) -> None:
++        """Edit bounds and optionally move a complete segment beside a document item.
++
++        Indices belong to the expected document revision. Slicing AtomArrayPlus
++        remaps bonds and 2-D pair annotations; no delete/reinsert loses annotations.
++        A realized run retains its existing realization until explicitly collapsed.
++        """
++        if expected_revision is not None and expected_revision != self.revision:
++            raise DocumentRevisionConflictError(expected_revision, self.revision)
++        if minimum < 1 or maximum < minimum:
++            raise ValueError("segment bounds require 1 <= minimum <= maximum")
++        self.resolve_indices([atom_index])
++        segment = next((item for chain in self.sequence_view() for item in chain["items"]
++                        if item["kind"] == "segment" and atom_index in item["atom_indices"]), None)
++        if segment is None:
++            raise ValueError("selected atom is not an expandable segment")
++        moving = segment["atom_indices"]
++        anchor = None
++        if anchor_index is not None:
++            self.resolve_indices([anchor_index])
++            anchor = next(item for chain in self.sequence_view() for item in chain["items"]
++                          if anchor_index in item["atom_indices"])
++            if anchor_index in moving:
++                raise ValueError("segment cannot be anchored to itself")
++        with self.edit():
++            S_SEGMIN.annotation(self.array)[moving] = minimum
++            S_SEGMAX.annotation(self.array)[moving] = maximum
++            if not segment["realized"]:
++                label = f"{minimum}-{maximum}"
++                names = self.array.res_name.astype(np.result_type(self.array.res_name.dtype, np.array([label]).dtype))
++                names[moving] = label
++                self.array.set_annotation("res_name", names)
++            if anchor is not None:
++                moving_set = set(moving)
++                rest = [index for index in range(len(self.array)) if index not in moving_set]
++                boundary = anchor["atom_indices"][0 if before else -1]
++                offset = rest.index(boundary) + (0 if before else 1)
++                # A moved segment belongs to its explicit target chain, never an inferred duplex.
++                for key in ("chain_id", "chain_iid", "chain_type"):
++                    if key in self.array.get_annotation_categories():
++                        self.array.get_annotation(key)[moving] = self.array.get_annotation(key)[boundary]
++                self.array = self.array[np.array(rest[:offset] + moving + rest[offset:], dtype=int)]
++                # Structural label residue numbering must follow the explicit new order.
++                # Preserve auth_seq_id and other imported identity annotations.
++                bounds = struc.get_residue_starts(self.array, add_exclusive_stop=True)
++                counters: dict[str, int] = {}
++                for start, stop in zip(bounds[:-1], bounds[1:]):
++                    chain = str(self.array.chain_id[start])
++                    counters[chain] = counters.get(chain, 0) + 1
++                    self.array.res_id[start:stop] = counters[chain]
++                refresh_chain_derived_annotations(self.array)
++
+     def realize_segments(self, seed: int | None = None) -> None:
+         with self.edit():
+             self.array = realize_expandable_segments(self.array, np.random.default_rng(seed))
+diff --git a/packages/web/index.html b/packages/web/index.html
+index 91b7d13..3354a2d 100644
+--- a/packages/web/index.html
++++ b/packages/web/index.html
+@@ -388,5 +388,19 @@
+       </footer>
+     </main>
+     <script type="module" src="/src/main.ts"></script>
+-  </body>
++    <dialog id="segment-editor" aria-labelledby="segment-editor-title">
++    <h2 id="segment-editor-title">Edit expandable segment</h2>
++    <p>Change length or move before/after an explicit item. One edit, one Undo.</p>
++    <label>Minimum length <input id="segment-edit-min" type="number" min="1" step="1" required></label>
++    <label>Maximum length <input id="segment-edit-max" type="number" min="1" step="1" required></label>
++    <label>Anchor <select id="segment-edit-anchor"></select></label>
++    <label>Position <select id="segment-edit-side"><option value="before">Before anchor</option><option value="after">After anchor</option></select></label>
++    <button id="segment-edit-apply" type="button">Apply segment edit</button>
++    <form method="dialog"><button>Cancel</button></form>
++  </dialog>
++  <aside id="persistence-warning" role="status" hidden>
++    Edits are in memory but the session snapshot could not be saved. Export now or retry before restart.
++    <button id="persistence-retry" type="button">Retry snapshot</button>
++  </aside>
++</body>
+ </html>
+diff --git a/packages/web/src/main.ts b/packages/web/src/main.ts
+index c4b021f..63ce1d5 100644
+--- a/packages/web/src/main.ts
++++ b/packages/web/src/main.ts
+@@ -118,6 +118,12 @@ const selectionController = new SelectionController(
+ 
+ function persistSession(response: SessionResponse, message?: string): void {
+   persistSessionStorage(response, message);
++  const warning = element("persistence-warning");
++  warning.hidden = response.persistence?.state !== "memory_only";
++  element<HTMLButtonElement>("persistence-retry").onclick = () => {
++    if (sessionId) void api<SessionResponse>(`/api/sessions/${sessionId}/persistence/retry`, { method: "POST" })
++      .then(result => persistSession(result)).catch(error => log(String(error), "error"));
++  };
+ }
+ 
+ /** Show an error the user can do something about. Without `retry` the banner just reports it. */
+@@ -210,6 +216,8 @@ function updateSelectionActions(count: number, hasSession: boolean): void {
+  * and `sequence` keeps the residue identities. "Partly fixed" is what a mixture reads as, so it can be shown but
+  * not chosen.
+  */
++let editableDisplay = true;
++
+ const SETTABLE_ROLES: Array<{ role: ChainRole; coordinate: boolean; sequence: boolean }> = [
+   { role: "fixed", coordinate: true, sequence: true },
+   { role: "backbone", coordinate: true, sequence: false },
+@@ -221,12 +229,10 @@ const SETTABLE_ROLES: Array<{ role: ChainRole; coordinate: boolean; sequence: bo
+ async function setChainRole(chain: ChainSummary, role: ChainRole): Promise<void> {
+   const target = SETTABLE_ROLES.find((entry) => entry.role === role);
+   if (!target || !chain.atomIndices.length) return;
+-  await mutate("/conditions/batch", {
++  await mutate("/chain-role", {
+     expected_revision: lastSummary?.revision,
+-    edits: [
+-      { condition: "coordinate", atom_indices: chain.atomIndices, scope: "residue", enabled: target.coordinate },
+-      { condition: "sequence", atom_indices: chain.atomIndices, scope: "residue", enabled: target.sequence },
+-    ],
++    atom_indices: chain.atomIndices,
++    role,
+   });
+ }
+ 
+@@ -298,6 +304,34 @@ function renderSummary(summary: StructureSummary): void {
+   viewerToolbarController?.renderDrawers();
+ }
+ 
++function openSegmentEditor(item: import("./types").SequenceSegment): void {
++  const panel = element<HTMLDialogElement>("segment-editor");
++  element<HTMLInputElement>("segment-edit-min").value = String(item.minimum);
++  element<HTMLInputElement>("segment-edit-max").value = String(item.maximum);
++  const anchor = element<HTMLSelectElement>("segment-edit-anchor");
++  anchor.replaceChildren(new Option("Keep position", ""));
++  for (const chain of lastSummary?.sequence ?? []) {
++    for (const entry of chain.items) {
++      if (entry.atom_indices.some(index => item.atom_indices.includes(index))) continue;
++      anchor.add(new Option(entry.kind === "segment"
++        ? `${chain.chain_id} segment [${entry.minimum}–${entry.maximum}]`
++        : `${chain.chain_id}/${entry.residue_name} ${entry.residue_id}`, String(entry.atom_indices[0])));
++    }
++  }
++  const revision = lastSummary?.revision;
++  element<HTMLButtonElement>("segment-edit-apply").onclick = () => {
++    void mutate("/segments/edit", {
++      atom_index: item.atom_indices[0],
++      minimum: Number(element<HTMLInputElement>("segment-edit-min").value),
++      maximum: Number(element<HTMLInputElement>("segment-edit-max").value),
++      anchor_index: anchor.value === "" ? null : Number(anchor.value),
++      before: element<HTMLSelectElement>("segment-edit-side").value === "before",
++      expected_revision: revision,
++    }, true).then(() => panel.close()).catch(error => log(String(error), "error"));
++  };
++  panel.showModal();
++}
++
+ function enableSessionControls(enabled: boolean): void {
+   for (const id of [
+     "download", "validate", "close-structure", "reset-conditions", "reset-residues",
+@@ -313,6 +347,7 @@ function enableSessionControls(enabled: boolean): void {
+  * the camera, so an edit no longer throws away the view the user had set up. A different document loads normally.
+  */
+ async function loadViewerCif(cif: string, name: string, live = false): Promise<void> {
++  editableDisplay = false;
+   const wasmSummary = inspect_cif(cif) as {
+     atom_count: number;
+     finite_atom_count: number;
+@@ -334,6 +369,7 @@ async function loadViewerCif(cif: string, name: string, live = false): Promise<v
+   }
+   if (live) await molecularViewer.renderLiveCif(cif, name, { keepCamera: true });
+   else await molecularViewer.loadCif(cif, name);
++  editableDisplay = true;
+   if (!molecularViewer.initialized) {
+     log(
+       `Imported ${wasmSummary.atom_count} atoms while the renderer is unavailable; ` +
+@@ -349,7 +385,7 @@ async function loadViewerCif(cif: string, name: string, live = false): Promise<v
+ }
+ 
+ async function handleAtomPicked({ atomIndex, label, scope: hitScope = "atom" }: AtomPick): Promise<void> {
+-  if (!sessionId || trajectoryController?.active) return;
++  if (!sessionId || !editableDisplay || trajectoryController?.active) return;
+   if (hitScope === "atom") {
+     if (await conditionController?.handleAtomPicked(atomIndex)) return;
+     if (await analysisController?.handleAtomPicked(atomIndex, label)) return;
+@@ -473,7 +509,7 @@ function mutate(path: string, body?: unknown, propagateError = false): Promise<v
+         || response.structure.atom_count !== lastSummary?.atom_count;
+       if (resetConditions) await molecularViewer.resetView();
+       else if (structural) await molecularViewer.clearAllVisuals();
+-      const annotationEdit = path === "/internal-coords"
++      const annotationEdit = path === "/internal-coords" || path === "/chain-role"
+         || /^\/(?:conditions|groups|centroids|distance-restraints)(?:\/|$)/.test(path);
+       if (annotationEdit && response.edit_result?.changed !== false) {
+         selectionController.clear();
+@@ -609,6 +645,7 @@ async function initialize(): Promise<void> {
+   sequenceController = new SequenceController({
+     selection: selectionController,
+     inspectAtom: (atomIndex) => annotationController!.inspectAtom(atomIndex),
++    editSegment: (item) => openSegmentEditor(item),
+   });
+   structureEditController = new StructureEditController({
+     viewer: () => molecularViewer,
+@@ -675,6 +712,8 @@ async function initialize(): Promise<void> {
+     version: __STUDIO_VERSION__,
+     renderFrame: (cif, name, options) => runVisualUpdate(async () => {
+       if (!molecularViewer.initialized) return;
++      editableDisplay = false;
++      selectionController.clear();
+       element("empty-state").hidden = true;
+       element("unpositioned-state").hidden = true;
+       element("coordinate-summary").hidden = true;
+diff --git a/packages/web/src/studio/annotation-controller.ts b/packages/web/src/studio/annotation-controller.ts
+index 4958229..8bc63da 100644
+--- a/packages/web/src/studio/annotation-controller.ts
++++ b/packages/web/src/studio/annotation-controller.ts
+@@ -184,6 +184,26 @@ export class AnnotationController {
+   private renderDetail(annotation: AnnotationSummary): void {
+     const values = annotation.values.filter(value => value.atom_indices?.length);
+     this.detail.textContent = `${annotation.label}: ${annotation.count} ${annotation.unit}\n`;
++    for (const value of values) {
++      const details = document.createElement("details");
++      const heading = document.createElement("summary");
++      heading.textContent = `${value.label}: exact document atoms and stored target`;
++      const text = document.createElement("pre");
++      text.textContent = `Atoms: ${(value.atom_indices ?? []).join(", ")}\nStored value: ${JSON.stringify(value.value ?? null)}`;
++      const select = document.createElement("button");
++      select.type = "button";
++      select.textContent = "Select these exact atoms for editing";
++      select.addEventListener("click", () => this.options.selection.replace(value.atom_indices ?? []));
++      const atom = document.createElement("select");
++      atom.setAttribute("aria-label", "Inspect applied condition on document atom");
++      for (const index of value.atom_indices ?? []) atom.add(new Option(String(index), String(index)));
++      const inspect = document.createElement("button");
++      inspect.type = "button";
++      inspect.textContent = "Inspect atom targets";
++      inspect.addEventListener("click", () => void this.inspectAtom(Number(atom.value)));
++      details.append(heading, text, select, atom, inspect);
++      this.detail.append(details);
++    }
+     if (values.length <= ANNOTATION_PALETTE.length) {
+       this.detail.append(values.map((value, index) => this.formatValue(value, index, annotation.unit)).join("\n"));
+       return;
+diff --git a/packages/web/src/studio/condition-controller.ts b/packages/web/src/studio/condition-controller.ts
+index f9f5504..0171190 100644
+--- a/packages/web/src/studio/condition-controller.ts
++++ b/packages/web/src/studio/condition-controller.ts
+@@ -105,6 +105,8 @@ export class ConditionController {
+     this.enabledInput.addEventListener("change", () => {
+       const value = this.conditionValue.querySelector<HTMLElement>("[data-condition-input]");
+       if (value) value.hidden = !this.enabledInput.checked;
++      const input = this.conditionValue.querySelector<HTMLInputElement>("#condition-value-input");
++      if (input) input.disabled = !this.enabledInput.checked;
+       this.updateSelectionUi(this.hasSession);
+     });
+     this.applyButton.addEventListener("click", () => {
+diff --git a/packages/web/src/studio/sequence-controller.ts b/packages/web/src/studio/sequence-controller.ts
+index aac9a17..9c52adf 100644
+--- a/packages/web/src/studio/sequence-controller.ts
++++ b/packages/web/src/studio/sequence-controller.ts
+@@ -7,6 +7,7 @@ import { sequenceRangeSelection } from "./sequence-selection";
+ export interface SequenceControllerOptions {
+   selection: SelectionController;
+   inspectAtom: (atomIndex: number) => Promise<void>;
++  editSegment?: (segment: import("../types").SequenceSegment) => void;
+ }
+ 
+ export class SequenceController {
+@@ -106,10 +107,13 @@ export class SequenceController {
+       const track = document.createElement("div");
+       track.className = "sequence-track";
+       for (const item of chain.items) {
+-        const token: HTMLElement = document.createElement(item.kind === "segment" ? "span" : "button");
++        const token: HTMLElement = document.createElement("button");
+         token.className = "sequence-token";
+         if (item.kind === "segment") {
++          (token as HTMLButtonElement).type = "button";
+           token.classList.add("sequence-segment");
++          token.addEventListener("click", () => this.options.editSegment?.(item));
++          token.setAttribute("aria-label", `Edit expandable segment ${item.minimum} to ${item.maximum} in chain ${chain.chain_id}`);
+           token.classList.toggle("realized", item.realized);
+           token.textContent = item.realized
+             ? `${item.realized_length ?? 0}×X`
+diff --git a/packages/web/src/types.ts b/packages/web/src/types.ts
+index 0c65ad3..8a1e9ab 100644
+--- a/packages/web/src/types.ts
++++ b/packages/web/src/types.ts
+@@ -93,6 +93,7 @@ export type StructureSummary = {
+ };
+ 
+ export type SessionResponse = {
++  persistence?: { state: "saved" | "ephemeral" | "memory_only"; revision: number; message?: string | null };
+   session_id: string;
+   editor_path?: string;
+   structure: StructureSummary;
+diff --git a/packages/web/src/viewers/molstar.ts b/packages/web/src/viewers/molstar.ts
+index 8ab1db5..be37b61 100644
+--- a/packages/web/src/viewers/molstar.ts
++++ b/packages/web/src/viewers/molstar.ts
+@@ -184,6 +184,10 @@ export class MolstarAdapter implements ViewerAdapter {
+       if (button !== ButtonsType.Flag.Primary) return;
+       const loci = Bond.isLoci(current.loci) ? Bond.toFirstStructureElementLoci(current.loci) : current.loci;
+       if (!StructureElement.Loci.is(loci) || loci.elements.length === 0) return;
++      // Only the current editable structure owns document-local sourceIndex values.
++      // Display overlays and comparison structures may reuse the same integers.
++      const documentStructure = this.viewer!.plugin.state.data.cells.get(this.documentStructureRef ?? "")?.obj?.data;
++      if (!documentStructure || loci.structure.root !== documentStructure.root) return;
+       const scope = StructureElement.Loci.size(loci) > 1 ? "residue" : "atom";
+       if (scope === "residue") {
+         this.viewer!.plugin.managers.structure.focus.setFromLoci(loci);
+@@ -209,6 +213,7 @@ export class MolstarAdapter implements ViewerAdapter {
+   async loadCif(cif: string, name: string, options?: ViewerLoadOptions): Promise<void> {
+     if (!this.viewer) throw new Error("Mol* is not initialized");
+     this.liveDataRef = undefined;
++    this.documentStructureRef = undefined;
+     this.displayComponents.clear();
+     this.comparisonColors.clear();
+     this.annotationGroups = [];
+@@ -323,6 +328,8 @@ export class MolstarAdapter implements ViewerAdapter {
+     dataset[`overlay_${key}`] = String(component ? structure.obj?.data.elementCount ?? 0 : 0);
+   }
+ 
++  private documentStructureRef?: string;
++
+   private async loadPositionedStructure(cif: string, name: string): Promise<string> {
+     const plugin = this.viewer!.plugin;
+     const data = await plugin.builders.data.rawData({ data: cif, label: name });
+@@ -332,6 +339,7 @@ export class MolstarAdapter implements ViewerAdapter {
+     const structure = await plugin.state.data.build().to(model).apply(PositionedStructure, {
+       excluded: unpositionedAtomIndices(cif),
+     }).commit();
++    this.documentStructureRef = structure.ref;
+     if (structure.obj?.data.elementCount) {
+       await plugin.builders.structure.representation.applyPreset(structure, "auto");
+       // The preset colours by Mol*'s order-based chain palette, which drifts from the sequence bar as chains are
+@@ -369,6 +377,7 @@ export class MolstarAdapter implements ViewerAdapter {
+     if (!this.viewer) throw new Error("Mol* is not initialized");
+     // Comparison mode has no single structure to update in place.
+     this.liveDataRef = undefined;
++    this.documentStructureRef = undefined;
+     this.unpositionedAtoms.clear();
+     this.displayComponents.clear();
+     this.comparisonColors.clear();
+diff --git a/packages/web/tests/bms-s03-before.mjs b/packages/web/tests/bms-s03-before.mjs
+new file mode 100644
+index 0000000..48a5460
+--- /dev/null
++++ b/packages/web/tests/bms-s03-before.mjs
+@@ -0,0 +1,67 @@
++import fs from 'node:fs';
++import {execFileSync} from 'node:child_process';
++import vm from 'node:vm';
++import assert from 'node:assert/strict';
++import { stripTypeScriptTypes } from 'node:module';
++const root='';
++const read = path => execFileSync('git', ['show', '04fe5fbd03fea8b7d49a767156d7d33bd10e5d13:'+path.replace(/^\//,'')], {encoding:'utf8'});
++// Execute the actual controller after Node's built-in TS transform, with a minimal DOM.
++class El {
++  children=[]; events={}; value=''; checked=false; disabled=false; hidden=false; dataset={};
++  classList={toggle(){}};
++  append(...xs){this.children.push(...xs)} appendChild(x){this.append(x)}
++  replaceChildren(){this.children=[]} addEventListener(n,f){this.events[n]=f}
++  closest(){return new El()}
++  querySelector(s){return this.querySelectorAll(s)[0]??null}
++  querySelectorAll(s){const all=this.children.flatMap(x=>[x,...(x.querySelectorAll?.('*')??[])]);return s==='*'?all:all.filter(x=>s.startsWith('#')?x.id===s.slice(1):s==='[data-condition-input]'?x.dataset?.conditionInput!==undefined:false)}
++}
++const els=new Map();const element=id=>{if(!els.has(id))els.set(id,new El());return els.get(id)};
++let src=read(root+'/packages/web/src/studio/condition-controller.ts','utf8').replace(/^import .*;\n/gm,'');
++src=stripTypeScriptTypes(src,{mode:'transform'}).replace('export class ConditionController','class ConditionController');
++const ctx={element,document:{createElement:()=>new El()},Option:class{},api:()=>{throw Error('No network allowed')},console};
++vm.createContext(ctx);vm.runInContext(src+'\nglobalThis.Controller=ConditionController;',ctx);
++const controller=new ctx.Controller({selection:{size:1,values:new Set([0])},log(){},getRevision:()=>1,getSessionId:()=> 'local',mutate:async()=>{}});
++controller.schema={conditions:{scalar:{kind:'scalar',label:'Scalar',default:1,level:'atom'},text:{kind:'text',label:'Text',default:'x',level:'atom'}}};
++controller.bind();
++for(const kind of ['scalar','text']){
++ element('enabled').checked=false;element('condition').value=kind;controller.renderValue();
++ const input=element('condition-value').querySelector('#condition-value-input');
++ assert.equal(input.disabled,true);
++ element('enabled').checked=true;element('enabled').events.change();
++ assert.equal(element('condition-value').querySelector('[data-condition-input]').hidden,false);
++ assert.equal(input.disabled,true);
++ console.log('CONFIRMED disabled-input defect: '+kind+' remains disabled after re-enable');
++}
++// Execute the actual renderFrame callback and pick handler with spies, no molecular data/network.
++const main=read(root+'/packages/web/src/main.ts','utf8');
++const frame=main.slice(main.indexOf('    renderFrame: ')+17,main.indexOf('\n    setOverlay:',main.indexOf('    renderFrame: '))).replace(/,\s*$/,'');
++let rendered;
++ctx.runVisualUpdate=async f=>f();ctx.molecularViewer={initialized:true,renderLiveCif:async(cif,name)=>{rendered={cif,name}}};
++const renderFrame=vm.runInContext('('+frame+')',ctx);
++await renderFrame('synthetic frame sentinel','foreign-frame');
++assert.equal(rendered.name,'foreign-frame');
++const start=main.indexOf('async function handleAtomPicked(');const end=main.indexOf('\nasync function ',start+1);
++let handler=stripTypeScriptTypes(main.slice(start,end),{mode:'transform'});
++let selected;
++Object.assign(ctx,{sessionId:'original-document',trajectoryController:null,conditionController:{handleAtomPicked:async()=>false},analysisController:{handleAtomPicked:async()=>false},selectionController:{pickingScope:'atom',applyResolved:async(_action,resolve)=>{selected=Array.from(await resolve());return false}},annotationController:{inspectAtom:async()=>{}},log(){}});
++vm.runInContext(handler,ctx);
++await ctx.handleAtomPicked({atomIndex:2,label:'foreign-frame atom'});
++assert.deepEqual(selected,[2]);assert.equal(ctx.sessionId,'original-document');
++console.log('CONFIRMED renderFrame identity seam: displayed frame pick 2 enters original session selection 2; no mapping or document switch occurs. Synthetic spies, not GPU/browser verification.');
++const molstar=read(root+'/packages/web/src/viewers/molstar.ts','utf8');
++const callbackStart=molstar.indexOf('({ current, button }) => {');
++const callbackEnd=molstar.indexOf('\n    });',callbackStart);
++const callback=molstar.slice(callbackStart,callbackEnd)+'\n}';
++let dispatched;
++Object.assign(ctx,{ButtonsType:{Flag:{Primary:1}},Bond:{isLoci:()=>false},StructureElement:{Loci:{is:()=>true,size:()=>1},Location:{create:structure=>({structure})}},OrderedSet:{size:a=>a.length,getAt:(a,i)=>a[i]},StructureProperties:{atom:{sourceIndex:()=>2,label_atom_id:()=> 'X'},chain:{auth_asym_id:()=> 'OVERLAY'},residue:{auth_seq_id:()=>1}},adapter:{context:{onPick:hit=>{dispatched=hit}}}});
++vm.runInContext(stripTypeScriptTypes('adapter.callback=(function(){return '+callback+'}).call(adapter)',{mode:'transform'}),ctx);
++ctx.adapter.callback({button:1,current:{loci:{structure:{id:'overlay-not-document'},elements:[{unit:{elements:[2]},indices:[0]}]}}});
++assert.equal(dispatched.atomIndex,2);assert.equal(dispatched.label,'OVERLAY/1/X');
++console.log('CONFIRMED Mol* callback forwards overlay-structure loci as document index 2 without ownership filtering; actual GPU hit testing not run.');
++const integration=read(root+'/docs/INTEGRATIONS.md','utf8');
++assert.ok(integration.includes('event.detail.sessionId'));assert.ok(main.includes('session_id: sessionId'));
++console.log('CONFIRMED docs event-field mismatch: example reads sessionId, emitted key is session_id.');
++const annotation=read(root+'/packages/web/src/studio/annotation-controller.ts','utf8');
++const editorTest=read(root+'/packages/web/tests/editor-qol.mjs','utf8');
++assert.ok(editorTest.includes('#annotation-list details > summary'));assert.ok(!annotation.includes('createElement("details")'));assert.ok(!annotation.includes('annotation-field-row'));
++console.log('CONFIRMED stale official editor-qol test asks for removed raw-field DOM (source contract check, not browser execution).');
+diff --git a/packages/web/tests/bms-s03-browser.mjs b/packages/web/tests/bms-s03-browser.mjs
+new file mode 100644
+index 0000000..f8502e4
+--- /dev/null
++++ b/packages/web/tests/bms-s03-browser.mjs
+@@ -0,0 +1,99 @@
++import assert from 'node:assert/strict';
++import {readFileSync} from 'node:fs';
++import {chromium} from 'playwright-core';
++import {chromiumLaunchOptions} from '../../../scripts/browser.mjs';
++
++// Real Chromium/Mol* WebGL, real isolated HTTP document; no viewer/pick doubles.
++const base=process.env.ANNOTATION_STUDIO_URL;
++assert.ok(base, 'Set isolated ANNOTATION_STUDIO_URL');
++const browser=await chromium.launch({...chromiumLaunchOptions(), headless:true});
++try {
++  const page=await browser.newPage({viewport:{width:1500,height:1000}});
++  const errors=[];page.on('pageerror',error=>errors.push(error.message));
++  await page.goto(`${base}?viewer=molstar&service_worker=0`);
++  await page.waitForFunction(()=>document.querySelector('#status')?.textContent?.includes('Ready.'));
++  const upload=page.waitForResponse(r=>r.url().endsWith('/sessions') && r.request().method()==='POST');
++  await page.locator('#file-input').setInputFiles(new URL('../../../tests/fixtures/minimal_multichain.cif',import.meta.url).pathname);
++  const loaded=await (await upload).json();
++  await page.waitForFunction(()=>!document.querySelector('#viewer-mode')?.disabled);
++  assert.equal(await page.locator('#viewer canvas').count()>0,true);
++  await page.locator('#editor-tab-annotations').click();
++  await page.locator('#enabled').uncheck();
++  await page.locator('#condition').selectOption('cath_label');
++  assert.equal(await page.locator('#condition-value-input').isDisabled(),true);
++  await page.locator('#enabled').check();
++  await page.locator('#condition-value-input').fill('2.60.40');
++  assert.equal(await page.locator('#condition-value-input').inputValue(),'2.60.40');
++  console.log('PASS real browser CATH text toggle/edit');
++
++  // Inline segment bounds plus explicit after-anchor reorder, exported and undone.
++  await page.evaluate(async id=>{
++    await window.atomworksStudio.applyEdit('/segments',{minimum:3,maximum:5,atom_index:0,before:true});
++  },loaded.session_id);
++  const token=page.locator('.sequence-segment').first();
++  await token.click();
++  await page.locator('#segment-edit-min').fill('7');await page.locator('#segment-edit-max').fill('11');
++  const anchor=await page.locator('#segment-edit-anchor option').nth(1).getAttribute('value');
++  await page.locator('#segment-edit-anchor').selectOption(anchor);
++  await page.locator('#segment-edit-side').selectOption('after');
++  const edited=page.waitForResponse(r=>r.url().endsWith('/segments/edit'));
++  await page.locator('#segment-edit-apply').click();
++  const response=await edited;assert.equal(response.status(),200,await response.text());
++  const result=await response.json();
++  assert.equal(result.structure.sequence[0].items[0].kind,'residue');
++  assert.equal(result.structure.sequence[0].items[1].minimum,7);
++  assert.equal(result.structure.sequence[0].items[1].maximum,11);
++  const exported=await page.request.post(`${base}api/v1/sessions/${loaded.session_id}/export`);
++  assert.equal(exported.status(),200);
++  assert.match((await exported.json()).cif,/expsegmin/);
++  await page.waitForFunction(()=>!document.querySelector('#viewer-mode')?.disabled);
++  await page.evaluate(()=>window.atomworksStudio.applyEdit('/undo'));
++  console.log('PASS real browser inline length / after-anchor reorder / export / Undo');
++
++  // Restore the compact document before measuring click locations.
++  await page.evaluate(()=>window.atomworksStudio.applyEdit('/undo'));
++  const cif=readFileSync(new URL('../../../tests/fixtures/minimal_multichain.cif',import.meta.url),'utf8');
++  const overlay=cif.replaceAll('GLY A','GLY OVERLAY').replaceAll(' A N ',' OVERLAY N ').replaceAll(' A CA ',' OVERLAY CA ')
++    .replace(/^ATOM [34].*\n/gm,'');
++  await page.evaluate(async cif=>window.atomworksStudio.setOverlay('foreign',cif,{color:0xff0000,sizeAspectRatio:1.5}),overlay);
++  const canvas=page.locator('#viewer canvas').first();
++  await page.waitForTimeout(500);
++  const png=await canvas.screenshot();
++  const points=await page.evaluate(async data=>{
++    const image=await createImageBitmap(await (await fetch(`data:image/png;base64,${data}`)).blob());
++    const canvas=new OffscreenCanvas(image.width,image.height),context=canvas.getContext('2d');
++    context.drawImage(image,0,0);const pixels=context.getImageData(0,0,image.width,image.height).data;
++    const points=[];for(let y=20;y<image.height-20;y+=5)for(let x=20;x<image.width-20;x+=5){const i=(y*image.width+x)*4;
++      if(pixels[i]>170 && pixels[i+1]<75 && pixels[i+2]<75)points.push({x,y});}
++    return points;
++  },png.toString('base64'));
++  assert.ok(points.length>0,'real WebGL overlay has visible red pixels');
++  let overlayHit=false;
++  for(const point of points.filter((_,i)=>i%Math.max(1,Math.floor(points.length/20))===0)){
++    await canvas.hover({position:point});await page.waitForTimeout(80);
++    const tooltip=await page.locator('.msp-highlight-info').allTextContents();
++    if(tooltip.join(' ').includes('OVERLAY')){
++      await canvas.click({position:point});overlayHit=true;break;
++    }
++  }
++  assert.ok(overlayHit,'visible overlay hit confirmed by real Mol* hover identity');
++  assert.deepEqual(await page.evaluate(()=>window.atomworksStudio.getSelection()),[]);
++  console.log('PASS real WebGL overlay hover identity and click do not select document atoms');
++  await page.evaluate(()=>window.atomworksStudio.setOverlay('foreign',null));
++  await page.evaluate(async cif=>window.atomworksStudio.renderFrame(cif,'foreign-frame'),cif);
++  // Confirm a real frame atom hit by Mol* hover identity, not an injected callback.
++  let framePoint;
++  for(const point of points.filter((_,i)=>i%Math.max(1,Math.floor(points.length/20))===0)){
++    await canvas.hover({position:point});await page.waitForTimeout(80);
++    if((await page.locator('.msp-highlight-info').allTextContents()).join(' ').includes('GLY')){
++      framePoint=point;await canvas.click({position:point});break;
++    }
++  }
++  assert.ok(framePoint,'real displayed frame atom hit');
++  assert.deepEqual(await page.evaluate(()=>window.atomworksStudio.getSelection()),[]);
++  await page.evaluate(()=>window.atomworksStudio.showDocument());
++  await canvas.click({position:framePoint});
++  await page.waitForFunction(()=>window.atomworksStudio.getSelection().length>0);
++  console.log('PASS real rendered frame display isolation and document restore');
++  assert.deepEqual(errors,[]);
++} finally {await browser.close();}
+diff --git a/packages/web/tests/bms-s03-regressions.mjs b/packages/web/tests/bms-s03-regressions.mjs
+new file mode 100644
+index 0000000..6dbf184
+--- /dev/null
++++ b/packages/web/tests/bms-s03-regressions.mjs
+@@ -0,0 +1,76 @@
++import fs from 'node:fs';
++import vm from 'node:vm';
++import assert from 'node:assert/strict';
++import { stripTypeScriptTypes } from 'node:module';
++const root=process.cwd();
++// Execute the actual controller after Node's built-in TS transform, with a minimal DOM.
++class El {
++  children=[]; events={}; value=''; checked=false; disabled=false; hidden=false; dataset={};
++  classList={toggle(){}};
++  append(...xs){this.children.push(...xs)} appendChild(x){this.append(x)}
++  replaceChildren(){this.children=[]} addEventListener(n,f){this.events[n]=f}
++  closest(){return new El()}
++  querySelector(s){return this.querySelectorAll(s)[0]??null}
++  querySelectorAll(s){const all=this.children.flatMap(x=>[x,...(x.querySelectorAll?.('*')??[])]);return s==='*'?all:all.filter(x=>s.startsWith('#')?x.id===s.slice(1):s==='[data-condition-input]'?x.dataset?.conditionInput!==undefined:false)}
++}
++const els=new Map();const element=id=>{if(!els.has(id))els.set(id,new El());return els.get(id)};
++let src=fs.readFileSync(root+'/packages/web/src/studio/condition-controller.ts','utf8').replace(/^import .*;\n/gm,'');
++src=stripTypeScriptTypes(src,{mode:'transform'}).replace('export class ConditionController','class ConditionController');
++const ctx={element,document:{createElement:()=>new El()},Option:class{},api:()=>{throw Error('No network allowed')},console};
++vm.createContext(ctx);vm.runInContext(src+'\nglobalThis.Controller=ConditionController;',ctx);
++const controller=new ctx.Controller({selection:{size:1,values:new Set([0])},log(){},getRevision:()=>1,getSessionId:()=> 'local',mutate:async()=>{}});
++controller.schema={conditions:{scalar:{kind:'scalar',label:'Scalar',default:1,level:'atom'},text:{kind:'text',label:'Text',default:'x',level:'atom'}}};
++controller.bind();
++for(const kind of ['scalar','text']){
++ element('enabled').checked=false;element('condition').value=kind;controller.renderValue();
++ const input=element('condition-value').querySelector('#condition-value-input');
++ assert.equal(input.disabled,true);
++ element('enabled').checked=true;element('enabled').events.change();
++ assert.equal(element('condition-value').querySelector('[data-condition-input]').hidden,false);
++ assert.equal(input.disabled,false);
++ console.log('PASS scalar/text re-enable: '+kind);
++}
++// Execute the actual renderFrame callback and pick handler with spies, no molecular data/network.
++const main=fs.readFileSync(root+'/packages/web/src/main.ts','utf8');
++const frame=main.slice(main.indexOf('    renderFrame: ')+17,main.indexOf('\n    setOverlay:',main.indexOf('    renderFrame: '))).replace(/,\s*$/,'');
++let rendered;
++ctx.editableDisplay=true;ctx.selectionController={clear(){}};ctx.runVisualUpdate=async f=>f();ctx.molecularViewer={initialized:true,renderLiveCif:async(cif,name)=>{rendered={cif,name}}};
++const renderFrame=vm.runInContext('('+frame+')',ctx);
++await renderFrame('synthetic frame sentinel','foreign-frame');
++assert.equal(rendered.name,'foreign-frame');
++const start=main.indexOf('async function handleAtomPicked(');const end=main.indexOf('\nasync function ',start+1);
++let handler=stripTypeScriptTypes(main.slice(start,end),{mode:'transform'});
++let selected;
++Object.assign(ctx,{sessionId:'original-document',trajectoryController:null,conditionController:{handleAtomPicked:async()=>false},analysisController:{handleAtomPicked:async()=>false},selectionController:{pickingScope:'atom',applyResolved:async(_action,resolve)=>{selected=Array.from(await resolve());return false}},annotationController:{inspectAtom:async()=>{}},log(){}});
++vm.runInContext(handler,ctx);
++await ctx.handleAtomPicked({atomIndex:2,label:'foreign-frame atom'});
++assert.equal(selected,undefined);assert.equal(ctx.sessionId,'original-document');
++console.log('PASS corrected display ownership / documentation source contract');
++const molstar=fs.readFileSync(root+'/packages/web/src/viewers/molstar.ts','utf8');
++const callbackStart=molstar.indexOf('({ current, button }) => {');
++const callbackEnd=molstar.indexOf('\n    });',callbackStart);
++const callback=molstar.slice(callbackStart,callbackEnd)+'\n}';
++let dispatched;
++Object.assign(ctx, {
++  ButtonsType: {Flag: {Primary: 1}}, Bond: {isLoci: () => false},
++  StructureElement: {Loci: {is: () => true, size: () => 1}, Location: {create: structure => ({structure})}},
++  OrderedSet: {size: a => a.length, getAt: (a, i) => a[i]},
++  StructureProperties: {atom: {sourceIndex: () => 2, label_atom_id: () => 'X'}, chain: {auth_asym_id: () => 'OVERLAY'}, residue: {auth_seq_id: () => 1}},
++  adapter: {viewer: {plugin: {state: {data: {cells: new Map([['', {obj: {data: {root: {}}}}]])}}}}, context: {onPick: hit => {dispatched = hit}}},
++});
++vm.runInContext(stripTypeScriptTypes('adapter.callback=(function(){return '+callback+'}).call(adapter)',{mode:'transform'}),ctx);
++const overlay={id:'overlay-not-document',root:{}};
++ctx.adapter.callback({button:1,current:{loci:{structure:overlay,elements:[{unit:{elements:[2]},indices:[0]}]}}});
++assert.equal(dispatched,undefined);
++// A document-owned locus still dispatches its index.
++const docRoot={};ctx.adapter.viewer.plugin.state.data.cells.set('', {obj:{data:{root:docRoot}}});
++ctx.adapter.callback({button:1,current:{loci:{structure:{root:docRoot},elements:[{unit:{elements:[2]},indices:[0]}]}}});
++assert.equal(dispatched.atomIndex,2);
++console.log('PASS corrected display ownership / documentation source contract');
++const integration=fs.readFileSync(root+'/docs/INTEGRATIONS.md','utf8');
++assert.ok(integration.includes('event.detail.session_id'));assert.ok(main.includes('session_id: sessionId'));
++console.log('PASS corrected display ownership / documentation source contract');
++const annotation=fs.readFileSync(root+'/packages/web/src/studio/annotation-controller.ts','utf8');
++const editorTest=fs.readFileSync(root+'/packages/web/tests/editor-qol.mjs','utf8');
++assert.ok(!editorTest.includes('#annotation-list details > summary'));assert.ok(!annotation.includes('annotation-field-row'));
++console.log('PASS corrected display ownership / documentation source contract');
+diff --git a/packages/web/tests/editor-qol.mjs b/packages/web/tests/editor-qol.mjs
+index d95e3be..66a16b5 100644
+--- a/packages/web/tests/editor-qol.mjs
++++ b/packages/web/tests/editor-qol.mjs
+@@ -1,4 +1,5 @@
+ import assert from "node:assert/strict";
++import { unpositionedAtomIndices } from "../src/viewers/unpositioned-atoms.ts";
+ import { resolve } from "node:path";
+ import { fileURLToPath } from "node:url";
+ import { chromium } from "playwright-core";
+@@ -76,8 +77,12 @@ try {
+   await edit("#group-add", "/groups");
+   assert.match(await ui.locator("#selection-count").innerText(), /^1 atom/);
+   const inspected = (await (await page.request.get(`${baseUrl}api/v1/sessions/${session}/annotations/index_group`)).json()).annotation;
+-  assert.equal(Number(await ui.locator("#viewer").getAttribute("data-annotation-atoms")),
+-    new Set(inspected.values.flatMap((value) => value.atom_indices)).size);
++  const inspectedCif = await (await page.request.get(`${baseUrl}api/v1/sessions/${session}/cif`)).text();
++  const hiddenAtoms = new Set(unpositionedAtomIndices(inspectedCif));
++  const visibleAnnotatedAtoms = new Set(inspected.values.flatMap(value => value.atom_indices)
++    .filter(index => !hiddenAtoms.has(index))).size;
++  await ui.waitForFunction(count => Number(document.querySelector("#viewer")?.dataset.annotationAtoms) === count,
++    visibleAnnotatedAtoms);
+   await edit("#group-delete", "/groups");
+   assert.ok(!(await summary()).condition_editors.groups.index_group.some((entry) => entry.id === group));
+   await edit("#undo", "/undo");
+@@ -104,9 +109,11 @@ try {
+   await ui.waitForFunction(() => document.querySelector("#viewer")?.dataset.centroidMarkers === "1");
+   const field = (await summary()).stored_fields.find((entry) => /centroid/i.test(entry.name));
+   assert.ok(field);
+-  await ui.locator("#annotation-list details > summary").click();
+-  await ui.locator(".annotation-field-row").filter({ hasText: field.label }).click();
+-  await ui.waitForFunction(() => document.querySelector("#annotation-detail")?.textContent?.includes("Raw field preview"));
++  // Raw fields are preserved through export, not exposed as obsolete DOM rows.
++  assert.equal(await ui.locator("#annotation-list details").count(), 0);
++  const exported = await ui.evaluate(async (id) =>
++    (await fetch(`/api/v1/sessions/${id}/export`, { method: "POST" })).json(), session);
++  assert.ok(exported.cif.includes(field.name), "export retains centroid raw field");
+   await edit("#undo", "/undo");
+   assert.doesNotMatch(await ui.locator("#status").textContent(), /Error:/);
+   assert.equal(await ui.locator("#viewer").getAttribute("data-centroid-markers"), "0");
+diff --git a/tests/test_bms_s03.py b/tests/test_bms_s03.py
+new file mode 100644
+index 0000000..c5b0b4b
+--- /dev/null
++++ b/tests/test_bms_s03.py
+@@ -0,0 +1,214 @@
++"""Reviewed S03 regressions against real upstream document/store implementations."""
++from concurrent.futures import ThreadPoolExecutor
++from pathlib import Path
++from threading import Event
++import os
++import time
++import numpy as np
++import pytest
++from annotation_studio import main
++from annotation_studio.main import DocumentStore
++from atomworks_studio_editing.document import StudioDocument
++from atomworks_studio_rfd4 import CONDITION_PROVIDER
++from atomworks_studio_rfd4.model import C_CRD
++from fastapi.testclient import TestClient
++
++FIXTURE = Path(__file__).parent / 'fixtures' / 'inverse_folding_2kl8.cif'
++
++def document():
++    return StudioDocument.from_cif(FIXTURE.read_text(), condition_provider=CONDITION_PROVIDER)
++
++
++def test_backbone_exact_atoms_one_undo():
++    doc = document()
++    indices = list(range(len(doc.array)))
++    before = doc.array.copy()
++    doc.set_chain_role(indices, 'backbone', expected_revision=0, allow_target_discard=True)
++    expected = np.isin(doc.array.atom_name, ['N', 'CA', 'C', 'O'])
++    np.testing.assert_array_equal(C_CRD.mask(doc.array), expected)
++    assert doc.revision == 1
++    assert doc.undo()
++    np.testing.assert_array_equal(C_CRD.mask(doc.array), C_CRD.mask(before))
++
++
++@pytest.mark.parametrize('persistent', [False, True])
++def test_pruning_does_not_evict_active_mutation(tmp_path, monkeypatch, persistent):
++    documents = DocumentStore(tmp_path if persistent else None)
++    sid = documents.add(document())
++    started, finish = Event(), Event()
++    def change(doc):
++        started.set()
++        assert finish.wait(10)
++        doc.set_charge([0], value=3)
++    with ThreadPoolExecutor() as pool:
++        pending = pool.submit(documents.call, sid, change, persist=True)
++        assert started.wait(10)
++        with documents._lock:
++            _, owner, doc = documents._documents[sid]
++            documents._documents[sid] = (time.monotonic() - main.SESSION_TTL_SECONDS - 5, owner, doc)
++            if persistent:
++                old = time.time() - main.SESSION_TTL_SECONDS - 5
++                os.utime(documents._session_file(sid), (old, old))
++            documents._prune(reserve_slot=True)
++            survived = sid in documents._documents
++        finish.set()
++        pending.result(timeout=10)
++    assert survived
++    assert documents.call(sid, lambda doc: int(doc.array.charge[0])) == 3
++
++
++def test_persistence_failure_is_visible_recoverable_and_not_evicted(tmp_path, monkeypatch):
++    documents = DocumentStore(tmp_path)
++    monkeypatch.setattr(main, 'store', documents)
++    sid = documents.add(document())
++    original = documents._persist
++    def fail(*args):
++        raise OSError('disk unavailable')
++    monkeypatch.setattr(documents, '_persist', fail)
++    client = TestClient(main.app)
++    response = client.post(f'/api/sessions/{sid}/charges', json={'atom_indices':[0], 'value':3})
++    assert response.status_code == 200, response.text
++    state = response.json()['persistence']
++    assert state['state'] == 'memory_only'
++    assert state['revision'] == 1
++    assert documents.call(sid, lambda doc: int(doc.array.charge[0])) == 3
++    undone = client.post(f'/api/sessions/{sid}/undo')
++    assert undone.status_code == 200, undone.text
++    assert undone.json()['persistence']['state'] == 'memory_only'
++    assert undone.json()['persistence']['revision'] == 2
++    assert client.post(f'/api/sessions/{sid}/charges', json={'atom_indices':[0], 'value':3}).status_code == 200
++    with documents._lock:
++        _, owner, doc = documents._documents[sid]
++        documents._documents[sid] = (0, owner, doc)
++        documents._prune(reserve_slot=True)
++        assert sid in documents._documents
++    monkeypatch.setattr(documents, '_persist', original)
++    retry = client.post(f'/api/sessions/{sid}/persistence/retry')
++    assert retry.status_code == 200, retry.text
++    assert retry.json()['persistence']['state'] == 'saved'
++    cold = DocumentStore(tmp_path)
++    assert cold.call(sid, lambda doc: int(doc.array.charge[0])) == 3
++    assert cold.call(sid, lambda doc: doc.revision) == 0  # restart does not promise history
++
++
++@pytest.mark.usefixtures('stable_cif_metadata')
++def test_segment_length_anchor_order_export_and_undo():
++    doc = document()
++    doc.insert_segment(3, 5, 0, before=True)
++    segment = next(i for c in doc.sequence_view() for i in c['items'] if i['kind'] == 'segment')
++    start = segment['atom_indices'][0]
++    anchor = next(i['atom_indices'][0] for c in doc.sequence_view() for i in c['items'] if i['kind'] == 'residue')
++    before = doc.to_cif()
++    doc.edit_segment(start, 7, 11, anchor_index=anchor, before=False, expected_revision=1)
++    items = doc.sequence_view()[0]['items']
++    assert items[0]['kind'] == 'residue'
++    assert items[1]['kind'] == 'segment'
++    assert (items[1]['minimum'], items[1]['maximum']) == (7, 11)
++    cold = StudioDocument.from_cif(doc.to_cif(), condition_provider=CONDITION_PROVIDER)
++    assert [(i['kind'], i.get('minimum'), i.get('maximum')) for i in cold.sequence_view()[0]['items']] == [(i['kind'], i.get('minimum'), i.get('maximum')) for i in items]
++    assert doc.undo()
++    assert doc.to_cif() == before
++    doc.edit_segment(start, 12345, 23456, expected_revision=doc.revision)
++    assert doc.array.res_name[start] == "12345-23456"
++    cold = StudioDocument.from_cif(doc.to_cif(), condition_provider=CONDITION_PROVIDER)
++    assert cold.sequence_view()[0]['items'][0]['minimum'] == 12345
++
++
++def test_segment_conflict_and_bad_anchor_are_atomic():
++    doc = document()
++    doc.insert_segment(3, 5, 0)
++    start = doc.sequence_view()[0]['items'][0]['atom_indices'][0]
++    before = doc.export_state()
++    with pytest.raises(ValueError):
++        doc.edit_segment(start, 9, 2, expected_revision=doc.revision)
++    assert doc.export_state() == before
++    from atomworks_studio_editing.contracts import DocumentRevisionConflictError
++    with pytest.raises(DocumentRevisionConflictError):
++        doc.edit_segment(start, 2, 9, expected_revision=0)
++    assert doc.export_state() == before
++
++
++
++def test_reviewed_backbone_shortcut_reproduction_on_native_document():
++    """The released UI's exact residue-wide recipe retains sidechains, not just BB."""
++    doc = document()
++    indices = list(range(len(doc.array)))
++    doc.set_conditions([
++        {'condition':'coordinate', 'atom_indices':indices, 'scope':'residue', 'enabled':True},
++        {'condition':'sequence', 'atom_indices':indices, 'scope':'residue', 'enabled':False},
++    ], allow_target_discard=True)
++    sidechain = ~np.isin(doc.array.atom_name, ['N','CA','C','O'])
++    assert sidechain.any()
++    assert C_CRD.mask(doc.array)[sidechain].any()  # defect reproduction, not acceptance
++
++
++def test_chain_role_http_preserves_unrelated_internal_targets_and_confirmation(monkeypatch):
++    from atomworks_studio_rfd4.model import C_INTCRD
++    doc = document()
++    # Valid internal group outside the selected first residue.
++    doc.set_condition("coordinate_group", [len(doc.array)-2,len(doc.array)-1], value=7)
++    targets = C_INTCRD.default_annotation(doc.array)
++    targets[-2:] = [[1.,2.,3.],[2.,3.,4.]]
++    C_INTCRD.set_annotation(doc.array, targets)
++    documents = DocumentStore()
++    monkeypatch.setattr(main, 'store', documents)
++    sid = documents.add(doc)
++    client = TestClient(main.app)
++    selected = doc.sequence_view()[0]['items'][0]['atom_indices']
++    response = client.post(f'/api/sessions/{sid}/chain-role', json={
++        'atom_indices':selected, 'role':'backbone', 'expected_revision':doc.revision,
++    })
++    assert response.status_code == 200, response.text
++    np.testing.assert_equal(C_INTCRD.annotation(doc.array)[-2:], [[1.,2.,3.],[2.,3.,4.]])
++    original = doc.export_state()
++    response = client.post(f'/api/sessions/{sid}/chain-role', json={
++        'atom_indices':[len(doc.array)-1], 'role':'fixed', 'expected_revision':doc.revision,
++    })
++    assert response.status_code == 409, response.text
++    assert response.json()['detail']['code'] == 'target_discard_confirmation_required'
++    assert doc.export_state() == original
++
++
++def test_segment_reorder_remaps_pair_annotations_and_preserves_targets():
++    from atomworks_studio_rfd4.model import C_INTCRD
++    doc = document()
++    doc.insert_segment(3,5,0)
++    from atomworks_studio_editing.conditions import CONDITION_PROVIDER as PUBLIC_PROVIDER
++    doc.condition_provider = PUBLIC_PROVIDER
++    doc.edit_distance_restraint(1,2,'set',4.25)
++    targets = C_INTCRD.default_annotation(doc.array)
++    targets[1] = [1.,2.,3.]
++    C_INTCRD.set_annotation(doc.array, targets)
++    # Stable author/atom identities allow observing the same target after permutation.
++    atom_name = str(doc.array.atom_name[1])
++    author_id = str(doc.array.auth_seq_id[1])
++    doc.edit_segment(0,4,8,anchor_index=2,before=False,expected_revision=doc.revision)
++    np.testing.assert_equal(C_INTCRD.annotation(doc.array)[0], [1.,2.,3.])
++    assert str(doc.array.atom_name[0]) == atom_name
++    assert str(doc.array.auth_seq_id[0]) == author_id
++    assert doc.distance_restraints()[0]['atom1'] == 0
++    assert doc.distance_restraints()[0]['atom2'] == 1
++    assert doc.distance_restraints()[0]['distance'] == 4.25
++
++
++def test_all_pinned_capacity_defers_eviction_without_new_refusal(tmp_path, monkeypatch):
++    monkeypatch.setattr(main, "MAX_SESSIONS", 1)
++    documents = DocumentStore(tmp_path)
++    sid = documents.add(document())
++    started, finish = Event(), Event()
++    def hold(doc):
++        started.set()
++        assert finish.wait(10)
++    with ThreadPoolExecutor() as pool:
++        pending = pool.submit(documents.call, sid, hold)
++        assert started.wait(10)
++        try:
++            second = documents.add(document())
++            assert sid in documents._documents
++            assert second in documents._documents
++        finally:
++            finish.set()
++        pending.result(timeout=10)
++    with documents._lock:
++        documents._prune()
++    assert len(documents._documents) == 1
