@@ -16,7 +16,7 @@ import groovy.json.JsonSlurper
 
 include { ProtenixPredict ; ProtenixFromComplex ; PrepProtenixComplex } from './protenix.nf'
 include { ESMFold2Predict } from './esmfold2_experimental.nf'
-include { ESMFold2MSAPredict; esmfold2ContractInputs } from './esmfold2_experimental.nf'
+include { ESMFold2MSAPredict; esmfold2ContractInputs; esmfold2ComponentDocument } from './esmfold2_experimental.nf'
 
 def resolveBooleanParam(value, defaultValue) {
     if (value == null) {
@@ -141,6 +141,9 @@ def canonicalProducerOutputs(outputs, producerMethod) {
             'producer_submission_id', 'producer_submission_name',
             'original_submission_identity',
         ] as Set
+        if (producerMetadata.containsKey('producer_components')) {
+            requiredFields = (requiredFields - 'producer_sequence') + 'producer_components'
+        }
         if ((producerMetadata.keySet() as Set) != requiredFields ||
             producerMetadata.producer_artifact_id != producerMetadata.producer_artifact_key ||
             producerMetadata.producer_sample != producerMetadata.producer_artifact_id) {
@@ -191,16 +194,23 @@ def canonicalProducerOutputs(outputs, producerMethod) {
 }
 
 def sequenceProducerMetadata(sequence, sequenceName) {
-    def authority = sequenceName?.toString()?.trim()
     def sequenceValue = sequence?.toString()?.trim()
-    if (!(authority ==~ /[A-Za-z0-9][A-Za-z0-9._-]*/) || !sequenceValue) {
+    if (!sequenceValue) {
+        throw new IllegalArgumentException('sequence producer identity and sequence must be non-empty and safe')
+    }
+    return producerSubmissionMetadata(sequenceName) + [producer_sequence: sequenceValue]
+}
+
+// Complex input has a native component document, not a synthetic single sequence.
+def producerSubmissionMetadata(sequenceName) {
+    def authority = sequenceName?.toString()?.trim()
+    if (!(authority ==~ /[A-Za-z0-9][A-Za-z0-9._-]*/)) {
         throw new IllegalArgumentException('sequence producer identity and sequence must be non-empty and safe')
     }
     return [
         producer_artifact_id: authority,
         producer_artifact_key: authority,
         producer_sample: authority,
-        producer_sequence: sequenceValue,
         producer_fold: null,
         producer_rank: null,
         producer_submission_id: authority,
@@ -264,7 +274,7 @@ def validateSequenceProducerMetadata(rawMetadata, sequence, sequenceName) {
     return metadata
 }
 
-def normalizeSequenceProducerInputs(inputChannel) {
+def normalizeSequenceProducerInputs(inputChannel, complexDocument = null) {
     return inputChannel.collect(flat: false).flatMap { rawRecords ->
         def records = rawRecords ?: []
         def normalized = records.collect { rawRecord ->
@@ -280,6 +290,10 @@ def normalizeSequenceProducerInputs(inputChannel) {
             else if (values.size() == 2) {
                 sequence = values[0]
                 sequenceName = values[1]
+                if (complexDocument) {
+                    return tuple(producerSubmissionMetadata(sequenceName) +
+                        [producer_components: complexDocument], sequence.toString(), sequenceName.toString())
+                }
                 metadata = sequenceProducerMetadata(sequence, sequenceName)
             }
             else {
@@ -1729,7 +1743,8 @@ workflow structure_prediction_wf {
     def pred_method = params.pred_method ?: 'boltz'
     def boltz_use_msa = resolveBooleanParam(params.boltz_use_msa, false)
     def protenix_use_msa = resolveBooleanParam(params.protenix_use_msa, true)
-    typed_inputs = normalizeSequenceProducerInputs(input_ch)
+    def esmComplexDocument = pred_method == 'esmfold2' ? esmfold2ComponentDocument(params) : null
+    typed_inputs = normalizeSequenceProducerInputs(input_ch, esmComplexDocument)
     if (pred_method in ['boltz', 'boltz_protenix']) {
         typed_inputs = checkedBoltzInputs(typed_inputs,
             boltz_use_msa ? 'BoltzFromSequenceWithMSATask' : 'BoltzFromSequenceTask')

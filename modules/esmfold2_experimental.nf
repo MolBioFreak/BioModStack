@@ -12,25 +12,31 @@ def boolString(value) {
 }
 
 
+// Share native document parsing between producer identity and task input.
+def esmfold2ComponentDocument(settings) {
+    def components = settings.get('esmf_complex_components') ?: settings.get('complex_components') ?: []
+    def componentsFile = settings.get('esmf_complex_components_file')
+    if (componentsFile) {
+        components = new groovy.json.JsonSlurper().parse(new File(componentsFile.toString()))
+    }
+    def raw = settings.get('esmf_complex_components_json') ?: settings.get('complex_components_json')
+    if (raw) {
+        if (components) throw new IllegalArgumentException('conflicting component sources')
+        components = new groovy.json.JsonSlurper().parseText(raw.toString())
+    }
+    return components
+}
+
+
 def esmfold2ContractInputs(inputs, settings) {
     def marker = settings.get('core_protein_scientific_contract')
     if (!(marker instanceof Integer) || marker != 1) {
         throw new IllegalArgumentException('core_protein_scientific_contract must be integer 1')
     }
     def request = new LinkedHashMap(settings as Map)
-    def componentsFile = request.get('esmf_complex_components_file')
-    if (componentsFile) {
-        def parsed = new groovy.json.JsonSlurper().parse(new File(componentsFile.toString()))
-        request.esmf_complex_components = parsed
-        request.remove('esmf_complex_components_file')
-    }
-    def components = request.get('esmf_complex_components') ?: request.get('complex_components') ?: []
-    def rawComponents = request.get('esmf_complex_components_json') ?: request.get('complex_components_json')
-    if (rawComponents) {
-        if (components) throw new IllegalArgumentException('conflicting component sources')
-        components = new groovy.json.JsonSlurper().parseText(rawComponents.toString())
-        request.esmf_complex_components = components
-    }
+    def components = esmfold2ComponentDocument(request)
+    if (components) request.esmf_complex_components = components
+    request.remove('esmf_complex_components_file')
     def sources = []
     ['msa_path', 'pdb_sequence_path'].each { key ->
         def a = request.get(key)
@@ -94,7 +100,7 @@ def esmfold2experimentalPublishMode(workDir, outputDir) {
 }
 
 process ESMFold2MSAPredict {
-    tag "${producer_meta.id}"
+    tag "${request.esmf_sequence_name}"
     label 'ESMFold2'
     label 'gpu'
     stageInMode 'copy'

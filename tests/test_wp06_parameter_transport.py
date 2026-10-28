@@ -103,7 +103,7 @@ def test_component_msa_keeps_own_scope(tmp_path):
     argv, receipt = compile_request({'core_protein_scientific_contract': 1,
         'complex_components': [{'type': 'protein', 'id': 'B', 'sequence': 'AC', 'msa_path': 'source', 'msa_remove_insertions': False}]}, {'source': str(msa)})
     args = runner.build_parser().parse_args(argv)
-    component = json.loads(args.complex_components_json)[0]
+    component = json.loads(args.complex_components_json)['components'][0]
     assert component['msa_path'] == str(msa)
     assert component['msa_remove_insertions'] is False
     assert args.msa_path == ''
@@ -310,7 +310,8 @@ workflow {{
         prepare_receipt(owner, captures[0].parent, damaged_path)
     assert captured['msa_sha256'] == hashlib.sha256(msa.read_bytes()).hexdigest()
     assert captured['msa_sha256'] == receipt['sources'][0]['sha256']
-    components = json.loads(captured['parsed']['complex_components_json'] or '[]')
+    document = json.loads(captured['parsed']['complex_components_json'] or '[]')
+    components = document['components'] if isinstance(document, dict) else document
     used = components[0] if component_mode else captured['parsed']
     assert used['msa_remove_insertions'] is (True if component_mode == 'hosted-wire' or remove is None else remove)
     assert captured['parsed']['seed'] == 0
