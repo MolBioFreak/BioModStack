@@ -262,6 +262,8 @@ def native_reference_fields(document, format):
         # and requested_* settings are provenance, never fresh input reads.
         for i, source in enumerate(document.get("native_input_sources", [])):
             yield from field(source, "path", ("native_input_sources", i))
+    elif format == "rfd3-generation":
+        yield from field(document.get("source", {}), "path", ("source",), "structure")
     elif format == "laproteina-evaluation":
         for key in ("source_directory", "config_path"):
             yield from field(document, key, (), "native-snapshot")
@@ -308,6 +310,8 @@ def bind_native_document(document, format, *, owner=None):
 
 def _format(document, path):
     if isinstance(document, dict):
+        if document.get("schema") == "bms.rfd3.generation.request.v1":
+            return "rfd3-generation"
         if document.get("schema") == "laproteina_evaluation_request_v1":
             return "laproteina-evaluation"
         if document.get('schema_version') == 1 and 'native_request' in document and 'upstream_commit' in document:
@@ -347,6 +351,11 @@ def prepared_generation_source_fields(model_id, mode, params):
                       mode == 'de_novo_design' and params.get('generator') == 'rfd4_proteina'))
     if rfd4_selected and params.get('rfd4_input_closure'):
         return {'rfd4_request', 'native_sources'}
+    complexa_selected = (model_id == 'complexa' or
+                        (model_id == 'protein_modification_experimental' and
+                         mode == 'de_novo_design' and params.get('generator') == 'complexa'))
+    if complexa_selected and params.get('complexa_request_dir'):
+        return {'complexa_request', 'native_sources'}
     if (model_id == 'protein_modification_experimental' and mode == 'shape_blueprint'
             and params.get('shape_request_path')):
         return {'shape_requested_sequence_settings', 'shape_requested_rfd3_settings',
@@ -514,6 +523,9 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
     # The CAD compiler consumes the public names and emits pcad_* slots.
     # Discover the same immutable documents after compilation so nested FILE_
     # references reach the existing portable binding owner, not a JSON rewrite.
+    if (model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
+            and params.get('generator', 'rfd3') == 'rfd3'):
+        keys.add('rfd3_generation_request_path')
     keys.update({'pcad_laproteina_motif_pdb', 'pcad_disco_input_json_path', 'pcad_disco_jobs_source_path',
                  'pcad_disco_ligand_sdf'})
     if model_id in {'antibody_denovo', 'template_antibody_denovo'} and mode in {
@@ -598,6 +610,11 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
     if generation_model == 'rfd4_proteina':
         keys.add('rfd4_input_closure')
     elif generation_model == 'complexa':
+        if params.get('complexa_request_dir'):
+            # Checked structures and explicitly consumed companions are already
+            # retained by Complexa's preparation owner. Source ledgers are
+            # provenance, not another native document/path discovery surface.
+            visit(params['complexa_request_dir'], None, ('complexa_request_dir',), 'native-snapshot')
         keys.add('complexa_request_dir')
     if model_id == 'bindcraft2':
         keys.add('bc2_compilation')

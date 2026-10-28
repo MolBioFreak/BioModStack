@@ -27,7 +27,7 @@ def test_pack_runtime_data_uses_data_root_not_weights(tmp_path, monkeypatch):
     leaf = data / selected[0].relative_path
     leaf.parent.mkdir(parents=True)
     leaf.write_bytes(b'@EXPLICIT\n# inert transport fixture\n')
-    entries = cache.independent_plan(SimpleNamespace(kind='workflow_pack'), dependencies=selected, publication={})
+    entries = cache.independent_plan(SimpleNamespace(kind='workflow_pack', workflow_id='de_novo_design'), dependencies=selected, publication={})
     assert [(e.source, e.remote_destination, e.sha256) for e in entries] == [
         (leaf, 'data/' + selected[0].relative_path, hashlib.sha256(leaf.read_bytes()).hexdigest())]
     assert not weights.exists()

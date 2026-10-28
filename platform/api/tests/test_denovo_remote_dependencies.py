@@ -276,8 +276,18 @@ def test_selected_rfd3_generation_and_native_redesign_remain_narrow(model, mode,
 
 
 @pytest.mark.asyncio
-async def test_family_cold_install_and_warm_reuse(assets, tmp_path, local_transport):
+async def test_family_cold_install_and_warm_reuse(assets, tmp_path, local_transport, monkeypatch):
     """Real cache/install helpers; local transport and inert bytes, not science."""
+    import subprocess
+    repo = tmp_path / 'source-repo'
+    repo.mkdir()
+    (repo / 'main.nf').write_bytes(b'// inert workflow source fixture\n')
+    subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+    subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True)
+    subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Fixture', '-c',
+                    'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture'], check=True)
+    monkeypatch.setattr(cache, 'get_code_root', lambda: repo)
+    monkeypatch.setattr(cache, 'get_data_root', lambda: assets['data'])
     import hashlib
     import uuid
     from types import SimpleNamespace
