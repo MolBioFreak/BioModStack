@@ -70,7 +70,13 @@
 .alignment-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1.25rem; }
 .alignment-page .alignment-actions .alignment-action { min-width: 9rem; font-weight: 600; background: var(--accent-primary); color: var(--text-on-accent, #071020); border-color: var(--accent-primary); }
 .alignment-page label.alignment-setting-check { align-self: end; min-height: 2.6rem; }
+/* Keep exact receipt selectors and their reopen links together. */
+.alignment-comparison-side { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem 1rem; margin: .75rem 0; }
+.alignment-page .alignment-comparison-side label { display: flex; flex-direction: column; align-items: stretch; min-width: 0; margin: 0; flex: 1 1 14rem; }
+.alignment-page .alignment-comparison-side label:first-child { flex-basis: 28rem; }
+.alignment-comparison-side > a { display: inline-block; white-space: nowrap; padding: .5rem 0; }
 @media (max-width: 760px) {
+  .alignment-page .alignment-empty > a { display: flex; width: fit-content; margin: .5rem 0 0; }
   .alignment-imports { grid-template-columns: minmax(0, 1fr); }
   .alignment-page-header { align-items: flex-start; flex-direction: column; }
   .alignment-page > section, .alignment-page .alignment-empty { padding: 1rem; }
