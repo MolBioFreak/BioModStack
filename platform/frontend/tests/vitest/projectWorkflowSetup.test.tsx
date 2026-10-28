@@ -63,6 +63,13 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); document.body.replaceChildren(); });
 
 describe('Project workflow setup', () => {
+    it('opens the BNS alignment-only picker without requesting removed protein workflows', async () => {
+        await render(<NewProjectExperimentDialog projectId="project-1" open alignmentOnly onClose={() => undefined}/>);
+        await waitUntil(() => expect(container.textContent).toContain('Nucleic acid family alignment'));
+        expect(api.listProteinProjectCapabilities).not.toHaveBeenCalled();
+        expect(container.textContent).not.toContain(ready.label);
+        expect(container.textContent).not.toContain('Loading workflow choices');
+    });
     it('creates a nucleic alignment setup with its native domain and route', async () => {
         api.createProjectWorkflowSetup.mockResolvedValue({ ...setup, setup_destination: '/alignments?model=family_msa_nucleic&mode=family_msa' });
         await render(<NewProjectExperimentDialog projectId="project-1" globalExperimentId="experiment-1" open onClose={() => undefined}/>);
