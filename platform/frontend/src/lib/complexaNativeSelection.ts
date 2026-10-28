@@ -1,5 +1,14 @@
 import type { Rfd4NativeSelectionIdentity, Rfd4NativeSelectionSource } from './rfd4NativeSelection';
 export interface ComplexaAtomSelection { chain: string; residue: number; insertion_code: string; atoms: string[] }
+/** The pinned target parser uses comma-separated inclusive ranges and hotspot
+ * chain+residue tokens; unlike motif preparation it cannot address insertions. */
+export function complexaTargetSelection(atoms: readonly ComplexaAtomSelection[]): { input_spec?: string; target_hotspots?: string[]; issue?: string } {
+    if (!atoms.length) return { issue: 'No residues selected for target adoption.' };
+    if (atoms.some(a => !/^[A-Za-z]$/.test(a.chain) || !Number.isSafeInteger(a.residue) || a.residue < 0 || a.insertion_code))
+        return { issue: 'Native target ranges/hotspots cannot represent this author insertion or chain identity. Manual native values remain unchanged.' };
+    const tokens = [...new Set(atoms.map(a => `${a.chain}${a.residue}`))];
+    return { input_spec: [...new Set(atoms.map(a => `${a.chain}${a.residue}-${a.residue}`))].join(', '), target_hotspots: tokens };
+}
 const text = (v: unknown) => typeof v === 'string' && !['.', '?'].includes(v) ? v : '';
 const rows = (v: unknown): Record<string, any>[] => Array.isArray(v) ? v : [];
 /** Complexa's source preparer consumes author PDB identities, NOT RFD4 label queries.

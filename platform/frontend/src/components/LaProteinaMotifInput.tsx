@@ -5,6 +5,8 @@ import { EpitopeSelector } from './EpitopeSelector';
 import { createBC2SourceSession, type BC2Document } from '../lib/bindcraft2StructureInputs';
 import { materializeStructureTarget } from '../lib/api';
 import { laMotifAtoms, laAtomKey, laMotifAtomSpec } from '../lib/laProteinaAtomSelection';
+import { LaProteinaTaskCatalog } from './LaProteinaTaskCatalog';
+import { LaProteinaFragments } from './LaProteinaFragments';
 import { materializeLaProteinaMotifSelection } from '../lib/laProteinaMotifSelection';
 import { ProteinDesignPanel, themedInsetStyle, themedInputStyle, themedSelectedStyle } from './ProteinDesignWorkflow';
 
@@ -19,6 +21,11 @@ export interface LaProteinaMotifInputProps {
     contig: string;
     segmentOrder: string;
     atomSpec?: string | null;
+    taskName?: string;
+    taskCatalog?: Record<string, Record<string, unknown>>;
+    onTaskChange?: (key: string) => void;
+    atomSelectionMode?: 'all_atom' | 'ca' | 'bb3o' | 'tip_atoms';
+    onAtomSelectionModeChange?: (mode: 'all_atom' | 'ca' | 'bb3o' | 'tip_atoms' | undefined) => void;
     onChange: (patch: { path?: string; contig?: string; segmentOrder?: string; atomSpec?: string | null }) => void;
     initialInspection?: LaProteinaMotifInspection;
     onInspectionChange?: (inspection: LaProteinaMotifInspection) => void;
@@ -26,7 +33,7 @@ export interface LaProteinaMotifInputProps {
 
 /** Inspection is independent of native inputs. Only an explicit action replaces
  * the motif path with a motif-only derivative; manual values are never normalized. */
-export function LaProteinaMotifInput({ path, contig, segmentOrder, atomSpec, onChange, initialInspection, onInspectionChange }: LaProteinaMotifInputProps) {
+export function LaProteinaMotifInput({ path, contig, segmentOrder, atomSpec, taskName, taskCatalog, onTaskChange, atomSelectionMode, onAtomSelectionModeChange, onChange, initialInspection, onInspectionChange }: LaProteinaMotifInputProps) {
     const [session] = useState(createBC2SourceSession);
     const [source, setSource] = useState<SelectedTarget | null>(initialInspection?.source?.path ? initialInspection.source : null);
     const [pickerOpen, setPickerOpen] = useState(!initialInspection?.source?.path && !path);
@@ -44,9 +51,12 @@ export function LaProteinaMotifInput({ path, contig, segmentOrder, atomSpec, onC
     const epoch = useRef(0);
     const readEpoch = useRef(0);
     const ownPath = useRef<string | undefined>(undefined);
-    const current = useRef({ path, contig, segmentOrder, selected });
-    current.current = { path, contig, segmentOrder, selected };
+    const current = useRef({ path, contig, segmentOrder, atomSpec, selected });
+    current.current = { path, contig, segmentOrder, atomSpec, selected };
     useEffect(() => () => { epoch.current++; }, []);
+    // External draft/template edits must also invalidate in-flight adoption,
+    // including A → B → A values that match the old snapshot again.
+    useEffect(() => { epoch.current++; setBusy(false); }, [contig, segmentOrder, atomSpec]);
     useEffect(() => {
         if (ownPath.current === path) { ownPath.current = undefined; return; }
         if (firstPath.current) {
@@ -101,7 +111,7 @@ export function LaProteinaMotifInput({ path, contig, segmentOrder, atomSpec, onC
             const motif = materializeLaProteinaMotifSelection(active.content, selected, contig);
             setBusy(true);
             const retained = await materializeStructureTarget({ name: 'laproteina-motif.pdb', file: new File([motif.pdb], 'laproteina-motif.pdb', { type: 'chemical/x-pdb' }) }, 'inputs');
-            if (token !== epoch.current || current.current.path !== snapshot.path || current.current.contig !== snapshot.contig || current.current.segmentOrder !== snapshot.segmentOrder || current.current.selected !== snapshot.selected) return;
+            if (token !== epoch.current || current.current.path !== snapshot.path || current.current.contig !== snapshot.contig || current.current.segmentOrder !== snapshot.segmentOrder || current.current.atomSpec !== snapshot.atomSpec || current.current.selected !== snapshot.selected) return;
             ownPath.current = retained;
             onChange({ path: retained, contig: motif.contig, segmentOrder: snapshot.segmentOrder, ...(withAtoms ? { atomSpec: laMotifAtomSpec(atoms, selectedAtoms) } : {}) });
         } catch (reason) {
@@ -110,6 +120,8 @@ export function LaProteinaMotifInput({ path, contig, segmentOrder, atomSpec, onC
     };
     const selectResidues = (value: Set<string>) => { epoch.current++; setBusy(false); setSelected(value); setSelectedAtoms(new Set()); };
     return <ProteinDesignPanel title="La-Proteina motif input">
+        {onTaskChange && <LaProteinaTaskCatalog task={taskName ?? ''} catalog={taskCatalog ?? {}} customSource={Boolean(path)} onChange={onTaskChange} />}
+        {onAtomSelectionModeChange && <label>Native motif extraction scope<select aria-label="La motif extraction scope" value={atomSelectionMode ?? ''} onChange={e => onAtomSelectionModeChange(e.target.value === '' ? undefined : e.target.value as NonNullable<LaProteinaMotifInputProps['atomSelectionMode']>)}><option value="">Inherit selected task</option><option value="all_atom">All available atoms</option><option value="ca">CA only</option><option value="bb3o">Backbone N / CA / C / O</option><option value="tip_atoms">Native residue-specific tip atoms</option></select><small>{atomSpec ? 'Explicit motif atom specification takes precedence; this scope remains retained but is not used.' : 'Native null/omitted atom specification uses contig-based extraction. This scope is independent of the trained all/tip checkpoint family.'}</small></label>}
         <details open={pickerOpen} onToggle={event => setPickerOpen(event.currentTarget.open)} className="rounded-lg border p-3" style={themedInsetStyle}>
             <summary className="cursor-pointer text-sm font-medium">{source ? `Source: ${source.name} · change source` : 'Choose motif source'}</summary>
             <div className="mt-3"><TargetAntigenSelector key={pickerKey} label="Motif source structure" requiredFormat="pdb" selectedTarget={source} onSelect={choose} /></div>
@@ -121,6 +133,7 @@ export function LaProteinaMotifInput({ path, contig, segmentOrder, atomSpec, onC
             <EpitopeSelector chains={active.chains} selectedResidues={selected} onSelectionChange={selectResidues} selectedLabel="Motif residues" />
         </div>}
         <p className="text-sm text-[var(--text-secondary)]">Select motif residues in 3D or the sequence grid. Specify block order and scaffold lengths below, then apply the selection. Only existing source atoms are retained.</p>
+        <LaProteinaFragments contig={contig} onChange={contig => change({ contig })} />
         <label className="block text-sm space-y-1"><span>Ordered motif blocks and scaffold lengths</span><input className="w-full rounded-lg border px-3 py-2 text-sm font-mono outline-none" style={themedInputStyle} aria-label="Motif contig" value={contig} onChange={event => change({ contig: event.target.value })} placeholder="10/A25-27/5/B40/10" /></label>
         <label className="block text-sm space-y-1"><span>Native segment order</span><input className="w-full rounded-lg border px-3 py-2 text-sm font-mono outline-none" style={themedInputStyle} aria-label="Segment order" value={segmentOrder} onChange={event => change({ segmentOrder: event.target.value })} /></label>
         <button type="button" className="rounded-lg border px-4 py-2 text-sm font-medium disabled:opacity-50" style={themedSelectedStyle('var(--accent-primary)')} disabled={busy} onClick={() => void apply()}>{busy ? 'Saving motif…' : 'Use selected residues'}</button>

@@ -7,6 +7,13 @@ export function parseDiscoJobs(text: string): DiscoRow[] {
     return jobs;
 }
 export const discoEntityKinds = ['proteinChain', 'dnaSequence', 'rnaSequence', 'ligand', 'ion'] as const;
+export const discoEntityLabels = { proteinChain: 'Protein sequence / masks', dnaSequence: 'DNA strand (5′ → 3′)', rnaSequence: 'RNA strand (5′ → 3′)', ligand: 'Ligand / cofactor', ion: 'Ion' };
+export interface DiscoProteinModification { ptmPosition: number; ptmType: string }
+export interface DiscoNucleicModification { basePosition: number; modificationType: string }
+/** Native dialects share no position conversion: both are one-based CCD records. */
+export function discoModificationKeys(kind: typeof discoEntityKinds[number]) {
+    return kind === 'proteinChain' ? ['ptmPosition', 'ptmType'] as const : ['basePosition', 'modificationType'] as const;
+}
 /** Reorder entities and their one-based bond references together, never alter strands. */
 export function moveDiscoEntity(job: DiscoRow, from: number, to: number): DiscoRow {
     const order = job.sequences.map((_: unknown, i: number) => i) as number[];

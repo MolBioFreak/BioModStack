@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
-import type { ComplexaAtomSelection } from '../lib/complexaNativeSelection';
+import { complexaTargetSelection, type ComplexaAtomSelection } from '../lib/complexaNativeSelection';
 import { NativeNumber, nativeRecord, patchNative } from './Rfd4TaskWorkspace';
+import { ComplexaSearchControls } from './ComplexaSearchControls';
 import { NativeSettingsDisclosure } from './NativeSettingsDisclosure';
 
 export function ComplexaTaskWorkspace({ request, schema, onChange, onTask, renderNative, visual, sourceNames, renderSource, controlDraft, onControlDraft }: {
@@ -54,6 +55,11 @@ export function ComplexaTaskWorkspace({ request, schema, onChange, onTask, rende
             <datalist id="complexa-source-names">{sourceNames.map(s => <option key={s} value={s} />)}</datalist>
             {visual && <div role="status"><p>{visual.issue ?? `Selected from ${visual.slot}: ${visual.atoms?.map(a => `${a.chain}${a.residue}${a.insertion_code} [${a.atoms.join(', ')}]`).join('; ')}`}</p>
                 {visual.slot === source.document_id && atomRoles.map(role => <button key={role} type="button" onClick={() => { if (visual.atoms) sourcePatch(role, [...(source[role] ?? []), ...visual.atoms]); }}>Apply selection to {role === 'motif_atoms' ? 'motif' : 'ligand'} atoms</button>)}
+                {visual.slot === source.document_id && targetContext && <>
+                    <button type="button" onClick={() => { const next = complexaTargetSelection(visual.atoms ?? []); if (next.input_spec !== undefined) sourcePatch('input_spec', next.input_spec); }}>Apply selection to target residues</button>
+                    {tokenTransport && <button type="button" onClick={() => { const next = complexaTargetSelection(visual.atoms ?? []); if (next.target_hotspots !== undefined) sourcePatch('target_hotspots', [...(source.target_hotspots ?? []), ...next.target_hotspots]); }}>Apply selection to target hotspots</button>}
+                    {complexaTargetSelection(visual.atoms ?? []).issue && <p>{complexaTargetSelection(visual.atoms ?? []).issue}</p>}
+                </>}
                 <p>Select atoms, then apply them to a role.</p>
             </div>}
             {sourceFields.map(key => <label key={key} className="flex flex-col">{titles[key]} <small>{key}</small><input aria-label={`Complexa ${key}`} value={source[key] ?? ''} onChange={e => sourcePatch(key, e.target.value)} /><button type="button" onClick={() => sourcePatch(key, undefined)}>Inherit {key}</button></label>)}
@@ -70,6 +76,7 @@ export function ComplexaTaskWorkspace({ request, schema, onChange, onTask, rende
             <NativeSettingsDisclosure summary={<span>Advanced source settings</span>}>{() => schema.properties?.source && renderNative('source', schema.properties.source)}</NativeSettingsDisclosure>
         </fieldset>
         <fieldset><legend>Sampling amount and lengths</legend><p>{request.task === 'monomer_motif_indexed' ? 'Indexed motif nsamples belongs to native MotifFeatures; it is not a length sweep.' : 'Dataset samples, repeats and search branches are distinct; they do not guarantee a final filtered count.'}</p><div className="flex flex-wrap gap-3">{['nsamples', 'min_length', 'max_length', 'batch_size', 'nrepeat_per_sample', 'n_recycle', 'seed'].map(key => <NativeNumber key={key} label={key} value={request[key]} onChange={v => onChange(patchNative(request, key, v))} />)}</div></fieldset>
+        <ComplexaSearchControls request={request} schema={schema} onChange={onChange} controlDraft={controlDraft} onControlDraft={onControlDraft} />
         <NativeSettingsDisclosure summary={<span>Reward activation</span>}>{() => <><label>Native reward state<select aria-label="Native reward state" value={request.reward === null ? 'off' : request.reward === undefined || request.reward === 'profile' ? 'profile' : 'configured'} onChange={e => { if (request.reward !== null && typeof request.reward === 'object') onControlDraft({ ...controlDraft, configured_reward: request.reward }); onChange(patchNative(request, 'reward', e.target.value === 'off' ? null : e.target.value === 'profile' ? 'profile' : controlDraft.configured_reward ?? {})); }}><option value="profile">Inherit selected task profile</option><option value="off">Explicitly off</option><option value="configured">Configured composite</option></select></label><p>Profile rewards are not independent blind prediction. Configure AF2, RF3, TMOL and bioinformatics in Native settings.</p></>}</NativeSettingsDisclosure>
     </div>;
 }
