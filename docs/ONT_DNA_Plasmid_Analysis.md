@@ -23,3 +23,11 @@ Compute location selects the controller or a registered worker. Basecalling devi
 ## Verification scope
 
 Focused tests exercise typed settings/digests, mounted form-to-prepared-request transport, native Nextflow graph compilation, and actual tagged-BAM modkit pileup/summary through both standalone workflows. Tiny tagged BAM fixtures are controls, not biological validation. This change does not claim native GPU basecalling, rented-worker execution, or new native BLOW5/SLOW5 conversion qualification.
+
+## Upstream format references
+
+- [Dorado 2.1 README](https://github.com/nanoporetech/dorado/blob/release-v2.1/README.md): POD5 basecalling; HTS read alignment.
+- [modkit](https://github.com/nanoporetech/modkit): modified bases stored in BAM MM/ML tags.
+- [blue-crab](https://github.com/Psy-Fer/blue-crab): POD5 ↔ SLOW5/BLOW5 conversion; conversion support is not native Dorado input support.
+
+Publication to the edition branch is not deployment of running services.
