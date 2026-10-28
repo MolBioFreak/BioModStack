@@ -24,12 +24,16 @@ export interface OntReadReport {
         references: Array<{ name: string; length: number }>; reads_per_reference: Record<string, number>;
     };
     move_tagged_reads: number;
-    modifications: { probability_threshold: number; by_code: Array<{ code: string; called_sites: number; modified_sites: number; reads: number; modified_fraction: number }> };
+    modifications: {
+        probability_threshold: number;
+        by_code: Array<{ code: string; called_sites: number; modified_sites: number; reads: number; modified_fraction: number }>;
+        by_motif?: Array<{ code: string; motif: string; called_sites: number; modified_sites: number; modified_fraction: number }>;
+    };
     programs: Array<{ id: string; program: string; version: string; command: string }>;
     read_groups: Array<{ id: string; basecall_model: string }>;
 }
 
-/** Plasmids from Dam+/Dcm+ E. coli typically show 6mA well above this; below it reads look unmethylated. */
+/** Dam (6mA at GATC) and Dcm (5mC at CCWGG) sites below this are read as unmethylated; methylated hosts sit near 100%. */
 export const METHYLATED_FRACTION_CUTOFF = 0.05;
 
 export function fetchOntReadReport(jobId: string): Promise<OntReadReport> {
@@ -94,10 +98,34 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
             {report.modifications.by_code.length > 0 && (
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" aria-label="Modification calls">
                     <h4 className="text-sm font-semibold text-[var(--text-primary)]">Modification calls</h4>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Per-read MM/ML calls with P(modified) ≥ {report.modifications.probability_threshold}. Above {pct(METHYLATED_FRACTION_CUTOFF, 0)} 6mA usually indicates Dam-methylated template; run methylation tables for per-site positions.</p>
-                    <table className="mt-2 w-full text-xs">
+                    {(report.modifications.by_motif ?? []).length > 0 && (
+                        <>
+                            <p className="mt-1 text-xs text-[var(--text-secondary)]">Host methylation, scored at its motif (P(modified) ≥ {report.modifications.probability_threshold}). Below {pct(METHYLATED_FRACTION_CUTOFF, 0)} the template is read as unmethylated.</p>
+                            <table className="mt-2 w-full text-xs" aria-label="Methylation by motif">
+                                <thead><tr className="border-b border-[var(--border-primary)] text-left text-[var(--text-secondary)]">
+                                    <th className="px-2 py-1">Methylase</th><th className="px-2 py-1">Sites called</th><th className="px-2 py-1">Modified</th><th className="px-2 py-1">Call</th>
+                                </tr></thead>
+                                <tbody>
+                                    {report.modifications.by_motif!.map(row => {
+                                        const methylase = row.motif === 'GATC' ? 'Dam' : row.motif === 'CCWGG' ? 'Dcm' : row.motif;
+                                        const few = row.called_sites < 20;
+                                        return (
+                                            <tr key={`${row.code}@${row.motif}`} className="border-b border-[var(--border-primary)]/40" data-motif-code={`${row.code}@${row.motif}`}>
+                                                <td className="px-2 py-1">{methylase} <span className="font-mono text-[var(--text-secondary)]">{row.code} at {row.motif}</span></td>
+                                                <td className="px-2 py-1 font-mono">{n(row.called_sites)}</td>
+                                                <td className="px-2 py-1 font-mono">{pct(row.modified_fraction, 1)}</td>
+                                                <td className="px-2 py-1">{few ? 'too few sites' : row.modified_fraction >= METHYLATED_FRACTION_CUTOFF ? 'methylated' : 'not methylated'}</td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </>
+                    )}
+                    <p className="mt-3 text-xs text-[var(--text-secondary)]">All called sites, any context. Whole-read fractions are diluted by unmotivated bases and are not a methylation call.</p>
+                    <table className="mt-1 w-full text-xs">
                         <thead><tr className="border-b border-[var(--border-primary)] text-left text-[var(--text-secondary)]">
-                            <th className="px-2 py-1">Modification</th><th className="px-2 py-1">Called sites</th><th className="px-2 py-1">Modified</th><th className="px-2 py-1">Fraction</th><th className="px-2 py-1">Reads</th><th className="px-2 py-1">Call</th>
+                            <th className="px-2 py-1">Modification</th><th className="px-2 py-1">Called sites</th><th className="px-2 py-1">Modified</th><th className="px-2 py-1">Fraction</th><th className="px-2 py-1">Reads</th>
                         </tr></thead>
                         <tbody>
                             {report.modifications.by_code.map(row => (
@@ -107,7 +135,6 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
                                     <td className="px-2 py-1 font-mono">{n(row.modified_sites)}</td>
                                     <td className="px-2 py-1 font-mono">{pct(row.modified_fraction, 2)}</td>
                                     <td className="px-2 py-1 font-mono">{n(row.reads)}</td>
-                                    <td className="px-2 py-1">{row.modified_fraction >= METHYLATED_FRACTION_CUTOFF ? 'methylated' : 'not methylated'}</td>
                                 </tr>
                             ))}
                         </tbody>

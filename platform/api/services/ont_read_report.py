@@ -61,21 +61,81 @@ def _histogram(lengths: list[int]) -> dict[str, Any]:
     }
 
 
-def _modification_tallies(read: Any, totals: dict[str, dict[str, int]]) -> None:
-    """Count called sites and sites with P(mod) >= 0.5 per modification code."""
+_COMPLEMENT = str.maketrans("ACGTN", "TGCAN")
+_DCM = {"CCAGG", "CCTGG"}
+
+
+def _motif_context(code_name: str, sequence: str, index: int) -> str | None:
+    """Methylase motif at a called base, from the read's own forward sequence.
+
+    Dam methylates the A of GATC; Dcm the second C of CCWGG (either C counts
+    here because both strands' calls are reported per read orientation).
+    """
+    if code_name == "6mA" and sequence[max(0, index - 1):index + 3] == "GATC":
+        return "GATC"
+    if code_name in {"5mC", "5hmC"} and (
+        sequence[max(0, index - 1):index + 4] in _DCM or sequence[index:index + 5] in _DCM
+    ):
+        return "CCWGG"
+    return None
+
+
+def _implicit_modes(read: Any) -> set[tuple[str, str]]:
+    """(canonical, code) pairs whose MM mode is implicit ('.' or omitted).
+
+    In implicit mode a canonical base absent from the MM list was called
+    unmodified (SAMtags 1.7); only explicit '?' leaves unlisted bases uncalled.
+    """
+    if not read.has_tag("MM") and not read.has_tag("Mm"):
+        return set()
+    tag = str(read.get_tag("MM") if read.has_tag("MM") else read.get_tag("Mm"))
+    implicit: set[tuple[str, str]] = set()
+    for entry in tag.split(";"):
+        head = entry.split(",", 1)[0]
+        if len(head) < 3:
+            continue
+        canonical, codes = head[0], head[2:]
+        mode = codes[-1] if codes[-1] in ".?" else "."
+        codes = codes[:-1] if codes[-1] in ".?" else codes
+        if mode != ".":
+            continue
+        for code in ([codes] if codes.isdigit() else list(codes)):
+            implicit.add((canonical, code))
+    return implicit
+
+
+def _modification_tallies(read: Any, totals: dict[str, dict[str, int]],
+                          motifs: dict[str, dict[str, int]] | None = None) -> None:
+    """Count called sites and sites with P(mod) >= 0.5, overall and at Dam/Dcm motifs."""
     try:
         mods = read.modified_bases_forward or read.modified_bases
     except (ValueError, KeyError):
         return
     if not mods:
         return
+    sequence = (read.get_forward_sequence() or "").upper()
+    implicit = _implicit_modes(read)
     for (canonical, _strand, code), calls in mods.items():
         name = MOD_CODE_NAMES.get(str(code), str(code))
         key = f"{canonical}+{name}"
+        probability = {position: (quality + 0.5) / 256 for position, quality in calls}
+        if (canonical, str(code)) in implicit and sequence:
+            sites = [index for index, base in enumerate(sequence) if base == canonical]
+        else:
+            sites = sorted(probability)
         entry = totals[key]
-        entry["called_sites"] += len(calls)
-        entry["modified_sites"] += sum(1 for _position, quality in calls if (quality + 0.5) / 256 >= MOD_PROBABILITY_THRESHOLD)
+        entry["called_sites"] += len(sites)
+        entry["modified_sites"] += sum(1 for index in sites if probability.get(index, 0.0) >= MOD_PROBABILITY_THRESHOLD)
         entry["reads"] += 1
+        if motifs is None or not sequence:
+            continue
+        for index in sites:
+            motif = _motif_context(name, sequence, index)
+            if motif is None:
+                continue
+            bucket = motifs[f"{key}@{motif}"]
+            bucket["called_sites"] += 1
+            bucket["modified_sites"] += int(probability.get(index, 0.0) >= MOD_PROBABILITY_THRESHOLD)
 
 
 def build_read_report(bam_path: Path, *, artifact: dict[str, Any]) -> dict[str, Any]:
@@ -88,6 +148,7 @@ def build_read_report(bam_path: Path, *, artifact: dict[str, Any]) -> dict[str, 
     mapped = unmapped = secondary = supplementary = 0
     contigs: Counter[str] = Counter()
     modifications: dict[str, dict[str, int]] = defaultdict(lambda: {"called_sites": 0, "modified_sites": 0, "reads": 0})
+    motif_calls: dict[str, dict[str, int]] = defaultdict(lambda: {"called_sites": 0, "modified_sites": 0})
     move_tagged = 0
     truncated = False
     try:
@@ -118,7 +179,7 @@ def build_read_report(bam_path: Path, *, artifact: dict[str, Any]) -> dict[str, 
                     contigs[read.reference_name] += 1
                 if read.has_tag("mv"):
                     move_tagged += 1
-                _modification_tallies(read, modifications)
+                _modification_tallies(read, modifications, motif_calls)
     except (OSError, ValueError) as exc:
         raise OntReadReportError(f"reads BAM could not be read: {exc}") from exc
     programs = [
@@ -163,6 +224,13 @@ def build_read_report(bam_path: Path, *, artifact: dict[str, Any]) -> dict[str, 
                 {"code": key, **value,
                  "modified_fraction": round(value["modified_sites"] / value["called_sites"], 6) if value["called_sites"] else 0.0}
                 for key, value in sorted(modifications.items())
+            ],
+            # Dam (6mA@GATC) and Dcm (5mC@CCWGG) status is read at its motif:
+            # whole-read fractions dilute a fully methylated GATC set to ~1%.
+            "by_motif": [
+                {"code": key.split("@")[0], "motif": key.split("@")[1], **value,
+                 "modified_fraction": round(value["modified_sites"] / value["called_sites"], 6) if value["called_sites"] else 0.0}
+                for key, value in sorted(motif_calls.items())
             ],
         },
         "programs": programs,

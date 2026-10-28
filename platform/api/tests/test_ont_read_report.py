@@ -69,6 +69,8 @@ def test_read_report_summarises_yield_quality_mapping_and_modifications(tmp_path
     assert sixma["code"] == "A+6mA"
     assert (sixma["called_sites"], sixma["modified_sites"], sixma["reads"]) == (6, 2, 2)
     assert sixma["modified_fraction"] == round(2 / 6, 6)
+    # read 0 "AAAACCCCGG"*10 has no GATC; read 1 "ACGT"*50 neither -> no Dam sites.
+    assert report["modifications"]["by_motif"] == []
     assert report["programs"][0]["program"] == "dorado"
     assert "modbase_models=" in report["read_groups"][0]["basecall_model"]
     assert sum(bin_["read_count"] for bin_ in report["read_length_histogram"]["bins"]) == 3
@@ -89,3 +91,41 @@ def test_select_reads_bam_prefers_alignment_and_skips_dimer_subsets() -> None:
         {"state": "present", "kind": "alignment_bam", "relative_path": "align/sample.sorted.bam", "artifact_id": "s"},
     ]
     assert select_reads_bam(native)["artifact_id"] == "s"
+
+
+def test_read_report_scores_dam_at_gatc_separately_from_other_adenines(tmp_path: Path) -> None:
+    bam = tmp_path / "calls.bam"
+    with pysam.AlignmentFile(str(bam), "wb", header={"HD": {"VN": "1.6"}}) as handle:
+        read = pysam.AlignedSegment(handle.header)
+        read.query_name = "r"
+        read.query_sequence = "TTGATCTTAATTGATCTT"  # A at 3 and 15 are GATC; A at 8, 9 are not
+        read.is_unmapped = True
+        read.query_qualities = pysam.qualitystring_to_array("5" * 18)
+        read.set_tag("MM", "A+a?,0,0,0,0;")
+        read.set_tag("ML", [250, 5, 5, 250])
+        handle.write(read)
+    report = build_read_report(bam, artifact={})
+    (overall,) = report["modifications"]["by_code"]
+    assert (overall["called_sites"], overall["modified_sites"]) == (4, 2)
+    assert report["modifications"]["by_motif"] == [
+        {"code": "A+6mA", "motif": "GATC", "called_sites": 2, "modified_sites": 2, "modified_fraction": 1.0},
+    ]
+
+
+def test_implicit_mm_mode_counts_unlisted_bases_as_unmodified_calls(tmp_path: Path) -> None:
+    bam = tmp_path / "calls.bam"
+    with pysam.AlignmentFile(str(bam), "wb", header={"HD": {"VN": "1.6"}}) as handle:
+        read = pysam.AlignedSegment(handle.header)
+        read.query_name = "r"
+        read.query_sequence = "TTGATCTTAATTGATCTT"  # four A; only the first GATC A is listed
+        read.is_unmapped = True
+        read.query_qualities = pysam.qualitystring_to_array("5" * 18)
+        read.set_tag("MM", "A+a.,0;")
+        read.set_tag("ML", [250])
+        handle.write(read)
+    report = build_read_report(bam, artifact={})
+    (overall,) = report["modifications"]["by_code"]
+    assert (overall["called_sites"], overall["modified_sites"]) == (4, 1)
+    assert report["modifications"]["by_motif"] == [
+        {"code": "A+6mA", "motif": "GATC", "called_sites": 2, "modified_sites": 1, "modified_fraction": 0.5},
+    ]
