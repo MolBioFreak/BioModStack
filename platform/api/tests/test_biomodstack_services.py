@@ -1679,6 +1679,7 @@ def test_restart_all_container_mode_enables_target_before_restart(monkeypatch, t
                 services.CORE_RUNTIME_SERVICE,
             ),
         ),
+        ("systemctl", ("reset-failed", services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE)),
         ("systemctl", ("start", services.TELEMETRY_SERVICE, services.WORKFLOW_ADAPTER_SERVICE, services.CORE_RUNTIME_SERVICE, services.TARGET_UNIT)),
         ("wait", (services.WORKFLOW_ADAPTER_HEALTH_URL, services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
         ("wait", (services.runtime_api_health_url("container", project_root=project_root), services.CONTAINER_HTTP_WAIT_TIMEOUT_SECONDS)),
@@ -1725,6 +1726,8 @@ def test_restart_all_dev_waits_for_adapter_before_api_and_frontend(
     assert calls.index(("systemctl", ("restart", services.TELEMETRY_SERVICE))) < calls.index(
         ("systemctl", ("stop", services.DEV_TARGET_UNIT, services.FRONTEND_SERVICE))
     )
+    reset = calls.index(("systemctl", ("reset-failed", services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, services.API_SERVICE, services.FRONTEND_SERVICE)))
+    assert reset < next(i for i, call in enumerate(calls) if call[0] == "systemctl" and call[1][0] == "start")
     wait_calls = [call for call in calls if call[0] == "wait"]
     assert wait_calls == [
         (
