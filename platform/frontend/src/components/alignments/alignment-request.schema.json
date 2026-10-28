@@ -278,6 +278,317 @@
           "title": "Treeout",
           "type": "boolean"
         },
+        "pair_method": {
+          "anyOf": [
+            {
+              "enum": [
+                "6merpair",
+                "10merpair",
+                "hybridpair",
+                "localgenafpair",
+                "oldgenafpair",
+                "shortlongpair",
+                "longshortpair"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Explicit native pair method, compiled after strategy; null preserves the original strategy. Native aliases retain their exact spelling. 10mer requires nucleotide input. Hybridpair faults in the pinned synthetic protein probe; no fallback is substituted.",
+          "title": "Pair Method"
+        },
+        "tree_method": {
+          "anyOf": [
+            {
+              "enum": [
+                "large",
+                "memsavetree",
+                "memsavetreex",
+                "stepadd",
+                "youngestlinkage",
+                "pileup",
+                "randomchain"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native tree construction override; native restrictions and failures remain visible, without switching algorithms.",
+          "title": "Tree Method"
+        },
+        "refinement_policy": {
+          "anyOf": [
+            {
+              "enum": [
+                "bestfirst",
+                "adhoc0",
+                "adhoc1",
+                "adhoc2",
+                "simplehillclimbing"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native iterative parallelization policy; aliases are not normalized.",
+          "title": "Refinement Policy"
+        },
+        "alga": {
+          "default": false,
+          "title": "Alga",
+          "type": "boolean"
+        },
+        "allowshift": {
+          "default": false,
+          "description": "Native shift-aware scoring; requires globalpair in the pinned engine.",
+          "title": "Allowshift",
+          "type": "boolean"
+        },
+        "anchors": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact native external anchor table text: seven integers per line, i j starti endi startj endj score. Sequence and position indices are 1-based; i must precede j. Uses roster order, not display labels; retained verbatim.",
+          "format": "mafft-anchors",
+          "title": "Anchors"
+        },
+        "bunkatsunashi": {
+          "default": false,
+          "title": "Bunkatsunashi",
+          "type": "boolean"
+        },
+        "focus": {
+          "default": false,
+          "description": "Native target-focused consistency. Native row names must carry _focus_; use focus_rows to explicitly mark selected roster row IDs.",
+          "title": "Focus",
+          "type": "boolean"
+        },
+        "focus_rows": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One exact roster row ID per line to mark with the native _focus_ prefix. Explicit reversible native row-map is retained. Unknown IDs are observations, not an admission gate; null leaves native identifiers unchanged.",
+          "title": "Focus Rows"
+        },
+        "gep": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native global pairwise offset (--gep), distinct from --ep and --lep.",
+          "title": "Gep"
+        },
+        "gexp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native global pairwise extension (--gexp), distinct from --exp and --lexp.",
+          "title": "Gexp"
+        },
+        "gop": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native global pairwise opening (--gop), distinct from --op and --lop.",
+          "title": "Gop"
+        },
+        "kappa": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kappa"
+        },
+        "leavegappyregion": {
+          "default": false,
+          "description": "Exact native alias of legacygappenalty, preserved in requested settings.",
+          "title": "Leavegappyregion",
+          "type": "boolean"
+        },
+        "lhlimit": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native nodepair local-homology limit; consumed by memory-saving pairwise tree paths.",
+          "title": "Lhlimit"
+        },
+        "minimumweight": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimumweight"
+        },
+        "noscore": {
+          "default": false,
+          "title": "Noscore",
+          "type": "boolean"
+        },
+        "oneiteration": {
+          "default": false,
+          "title": "Oneiteration",
+          "type": "boolean"
+        },
+        "shiftpenalty": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shiftpenalty"
+        },
+        "similaritylevel": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Similaritylevel"
+        },
+        "skipiterate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skipiterate"
+        },
+        "sp": {
+          "default": false,
+          "description": "Rigorous sum-of-pairs scoring; native refinement requires threadit=0.",
+          "title": "Sp",
+          "type": "boolean"
+        },
+        "sparsepickup": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native sparse pickup. Can omit rows; actual output and notused artifact are retained, never silently replenished.",
+          "title": "Sparsepickup"
+        },
+        "terminalmargin": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminalmargin"
+        },
+        "unalignlevel": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unalignlevel"
+        },
+        "nodeout": {
+          "default": false,
+          "title": "Nodeout",
+          "type": "boolean"
+        },
+        "distance_output": {
+          "anyOf": [
+            {
+              "enum": [
+                "distout",
+                "distoutclustalo"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance Output"
+        },
+        "scoreout": {
+          "default": false,
+          "description": "Request native score diagnostics; engine.log retains emitted diagnostics. Pinned L-INS-i synthetic probe faults in tbfast with this option; failure is retained without substitution.",
+          "title": "Scoreout",
+          "type": "boolean"
+        },
         "op": {
           "anyOf": [
             {
@@ -748,6 +1059,78 @@
           ],
           "title": "Mode",
           "type": "string"
+        },
+        "guidetreeout": {
+          "default": false,
+          "description": "Native guide-tree diagnostic: MPC writes guide.native.nwk then exits zero BEFORE alignment, including in ensembles. This is not an alignment-plus-tree option. Random-chain bypasses the writer. No automatic rerun or algorithm replacement.",
+          "title": "Guidetreeout",
+          "type": "boolean"
+        },
+        "hmmin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact MUSCLE HMM parameter file text, retained verbatim as hmmin.txt. Consumed by align and Super5; no parameter conversion.",
+          "format": "muscle-hmm",
+          "title": "Hmmin"
+        },
+        "hmmout": {
+          "default": false,
+          "description": "Native InitProbcons parameter dump (Super5); align initializes its HMM directly and does not write this file. Dump precedes CmdLineUpdate; not a complete effective-parameter receipt.",
+          "title": "Hmmout",
+          "type": "boolean"
+        },
+        "anchor_letter": {
+          "anyOf": [
+            {
+              "maxLength": 1,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native one-character HMM anchor override; no case normalization.",
+          "title": "Anchor Letter"
+        },
+        "randseed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native RNG seed; zero explicitly selects time/process-based seeding. Perturbation may reset the RNG afterwards.",
+          "title": "Randseed"
+        },
+        "accs": {
+          "default": false,
+          "description": "Native accession label parsing. The adapter still supplies opaque row IDs and retains the original row mapping.",
+          "title": "Accs",
+          "type": "boolean"
+        },
+        "randomchaintree": {
+          "default": false,
+          "description": "MPC random-chain guide tree; native tree writer is bypassed in this branch.",
+          "title": "Randomchaintree",
+          "type": "boolean"
+        },
+        "native_log": {
+          "default": false,
+          "description": "Retain MUSCLE internal -log output separately as muscle.native.log; engine.log always retains stdout/stderr.",
+          "title": "Native Log",
+          "type": "boolean"
         },
         "threads": {
           "default": 1,

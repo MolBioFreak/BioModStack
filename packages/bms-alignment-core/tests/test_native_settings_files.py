@@ -30,7 +30,12 @@ def test_explicit_inventory_dispositions_are_unique_and_not_blanket_complete():
     for engine, option in [('mafft', '--treein'), ('mafft', '--aamatrix'), ('famsa', '-gt'), ('twilight', '--matrix'), ('muscle', '-consiters')]:
         row = next(row for row in rows if (row['engine'], row['option']) == (engine, option))
         assert row['disposition'] == 'implemented' and row['field']
-    assert any(row['disposition'].startswith('gap:') for row in rows)
+    # A declaration inventory is not a claim of complete native behavior.
+    assert any(row['disposition'].startswith('Missing auxiliary') for row in rows)
+    for row in rows:
+        if row.get('source_lines') or row['engine'] == 'muscle' and row['option'] in {'-linkage', '-substmx', '-kmerdist', '-treeiters', '-gapopen', '-center', '-mega'}:
+            assert row.get('evidence')
+            assert not row['disposition'].startswith('gap:')
 
 
 def test_files_and_native_zero_false_null_contract():

@@ -95,28 +95,91 @@ not proof of every option's scientific effect, and not a deployed/API/browser
 save/retry/clone acceptance claim. Native invalid interactions are retained as
 native outcomes, not new BMS admission rules.
 
-## Exact remaining scope / qualification gaps
+## Reconciled remaining native controls
 
-MAFFT parser controls not yet exposed/qualified (no blanket exclusion):
+The previous 48 MAFFT and 14 MUSCLE ambiguous rows are now resolved against
+pinned execution consumers, not merely renamed. `option-dispositions.json`
+contains per-option parser lines and execution evidence.
 
-`--10mermultipair`, `--10merpair`, `--6mermultipair`, `--6merpair`, `--GEXP`, `--GOP`, `--adhoc0`, `--adhoc1`, `--adhoc2`, `--alga`, `--allowshift`, `--anchors`, `--bestfirst`, `--bunkatsunashi`, `--focus`, `--gep`, `--gexp`, `--gop`, `--hybridpair`, `--kappa`, `--large`, `--leavegappyregion`, `--lhlimit`, `--localgenafpair`, `--longshortpair`, `--memsavetree`, `--memsavetreex`, `--minimumweight`, `--multipair`, `--noscore`, `--oldgenafpair`, `--oneiteration`, `--pileup`, `--randomchain`, `--shiftpenalty`, `--shortlongpair`, `--similaritylevel`, `--simplehillclimbing`, `--skipiterate`, `--smoothing`, `--sp`, `--sparsepickup`, `--stepadd`, `--terminalmargin`, `--text`, `--textmatrix`, `--unalignlevel`, `--youngestlinkage`.
+- **MAFFT: 40 of those spellings implemented; 8 concretely unavailable/out of scope.**
+  Typed `pair_method`, `tree_method`, and `refinement_policy` preserve the exact
+  selected aliases (including large/memsavetree and adhoc2/simplehillclimbing).
+  The original strategy, scoring controls, and defaults are unchanged; overrides
+  are explicit and both the requested settings and actual argv are retained.
+  Additional scalar controls cover shift/unalign scoring, global pair penalties,
+  local-homology limits, minimum weight, sparse pickup, rigorous SP, iteration
+  scheduling and terminal anchors. `anchors` preserves the original text file:
+  seven integers per row (i, j, starti, endi, startj, endj, score), with 1-based
+  sequence and position indices, as read by `io.c:6378-6445`.
+  `focus_rows` is an explicit one-row-ID-per-line selection. It materializes
+  reversible `_focus_` native IDs and a retained row-map; it does not relabel
+  the source roster or infer focus from a display label. Unknown selected IDs
+  are observations. Native failures are not converted into admission gates.
+- **MAFFT exclusions:** 6mer/10mermultipair's `ktuplesmulti` branch requires
+  fragments (`mafft.tmpl:2657-2667`); multipair explicitly requires
+  addfragments (`1849-1853`). Smoothing sets add2ndhalfarg, rejected without
+  add (`695-696`, `2094-2100`). Uppercase GOP/GEXP are consumed only by the
+  globalgenaf execution branch (`2595-2596`), whose sole parser selection is
+  disabled and exits (`526-532`). Text/textmatrix force a nonbiological extended
+  alphabet and model (`735-752`); biological custom matrices remain available.
+- **MUSCLE: 7 of those controls implemented; 7 concretely excluded.** Implemented:
+  `guidetreeout`, `hmmin`, `hmmout`, `anchor_letter`, `randseed`, `accs`, and
+  `randomchaintree`; plus separate `native_log` retention for native `-log`.
+  HMM files are exact text, and a genuine native Super5 HMM dump is reimported
+  in both align and Super5 tests. The dump precedes CmdLineUpdate and is not
+  represented as a complete effective-parameter report. Align has no hmmout
+  writer; the requested flag is still passed, never silently removed.
+- **MUSCLE exclusions:** linkage readers are in separate upgma5/upgma5_msa
+  commands and M3 configuration; MPC alignment hardcodes LINKAGE_Biased
+  (`mpcflat.cpp:194`). Substmx/kmerdist/treeiters/gapopen/center are consumed
+  by M3/benchmark command paths, not align/Super5's pair-HMM initialization.
+  Mega replaces the FASTA roster reader with rich feature input
+  (`loadinput.cpp:5-8`) and Super5 explicitly rejects it (`super5.cpp:555-556`).
+  Per-row evidence records the actual M3 SetFromCmdLine call sites; shared
+  declaration files are not treated as proof of reachability.
 
-MAFFT auxiliary format/artifact controls remain missing: Clustal/PHYLIP output,
-distance/node/score output, line/name/numeric-header formatting and core/debug
-artifacts; see each native spelling in the inventory. Add/profile/seed,
-external search, arbitrary text alignment and structure-extension operations
-are not implemented. The inventory intentionally retains uncertain expert
-items as gaps rather than claiming user-approved scope changes.
+### Actual artifacts and native limitations
 
-MUSCLE selected-engine/shared-source controls still needing implementation or
-specific reachability qualification:
+MAFFT node/distance/score-output controls are also exposed. The adapter retains
+all actual attempt files, including hat2/clodist, tree, notused and anchors,
+instead of a fixed filename allowlist. Native stdout/stderr stays in engine.log.
+MUSCLE native internal logs are separate muscle.native.log artifacts.
 
-`-linkage`, `-guidetreeout`, `-hmmin`, `-hmmout`, `-anchor_letter`, `-substmx`, `-kmerdist`, `-randseed`, `-treeiters`, `-gapopen`, `-center`, `-accs`, `-randomchaintree`, `-mega`.
+**MUSCLE guidetreeout is a diagnostic, not alignment plus tree:** the pinned
+MPC writer saves the real guide tree and calls `exit(0)` before alignment
+(`mpcflat.cpp:196-203`), including when an ensemble was requested. The typed
+field and editor explicitly disclose this. The empty output, exit status and
+tree are retained; no second invocation or alternate algorithm is substituted.
+Random-chain returns before that writer, so no tree is fabricated in that case.
 
-The other MUSCLE declaration-only or distinct-command rows retain their exact
-consumer files and explicit dispositions. In particular they are not counted
-as proven irrelevant without a transitive scope audit. Full native interaction
-coverage, full browser/API persistence/retry journeys, all native-effective
-algorithm observations, and benchmark accuracy remain open. This document
-supersedes the older statements that FAMSA tree import, MAFFT tree/matrix and
-TWILIGHT matrix were wholly absent; it does not declare whole-module completion.
+Synthetic pinned probes observed MAFFT hybridpair crashing in pairlocalalign
+and scoreout with L-INS-i crashing in tbfast. Those reachable controls remain
+explicit and their genuine failures are tested/retained. They are not described
+as successful alignment configurations. Ten-mer distance succeeds on DNA but
+is natively rejected for proteins. Noscore refinement succeeds with explicit
+threadit=0; allowshift requires an appropriate globalpair/shift penalty.
+No wrapper auto-correction or new submission restriction was added.
+
+`test_remaining_native_controls.py` covers the new controls' typed roundtrip,
+exact argv, native outcomes, actual artifact bytes, row-map identity and
+unchanged degapped source sequence content for produced synthetic alignments.
+The final focused core run passed **138 tests, no skips** (remaining controls,
+native file settings, settings inventory, engines, and core), with the CPU SIF
+and all four native wrapper variables set. The mounted editor/inventory/Project
+run passed **15 tests across 4 files**, including every new control's rendering
+and exact alias/file/zero/false submission; it uses mocked API services and
+printed a jsdom XHR diagnostic from the existing suite. Generated schema
+parity and preservation of every original field/default were also checked.
+It also verifies the guide-only zero-exit and native crash cases as observations,
+not as successful alignments. Native accuracy, exhaustive option interactions,
+and deployed browser/API/retry acceptance are separate claims.
+
+### Outside this bounded reconciliation
+
+The auxiliary MAFFT Clustal/PHYLIP formatting, line/name/numeric-header controls
+and core/debug output workflows remain unimplemented in the inventory. They
+are not relabeled as scientifically excluded. Add/profile/seed, external
+search, nonbiological text and structure-extension operations remain outside
+approved fixed-family sequence MSA. This reconciliation closes the specifically
+listed 48+14 controls, not every upstream declaration or whole-module release
+acceptance. Deployment is handled by the release owner.

@@ -49,11 +49,14 @@ def compile_engine(request, executable, input_path, output_path, tree_path=None)
              '-amino' if request.roster.molecule == 'protein' else '-nt']
         if s.permutation is not None: a += ['-perm', s.permutation]
         if s.perturb is not None: a += ['-perturb', str(s.perturb)]
-        for name in ('consiters', 'refineiters', 'minsuper', 'm_is', 'm_il', 'is_is', 'il_il', 's_is', 's_il'):
+        for name in ('consiters', 'refineiters', 'minsuper', 'm_is', 'm_il', 'is_is', 'il_il', 's_is', 's_il', 'anchor_letter', 'randseed'):
             if getattr(s, name) is not None: a += ['-' + name, str(getattr(s, name))]
         if s.output_order is not None: a.append('-' + s.output_order)
-        for name in ('quiet', 'verbose'):
+        for name in ('quiet', 'verbose', 'accs', 'randomchaintree'):
             if getattr(s, name): a.append('-' + name)
+        if s.hmmin is not None: a += ['-hmmin', str(Path(input_path).parent / 'hmmin.txt')]
+        for name, flag, filename in (('guidetreeout', '-guidetreeout', 'guide.native.nwk'), ('hmmout', '-hmmout', 'hmm.native.txt'), ('native_log', '-log', 'muscle.native.log')):
+            if getattr(s, name): a += [flag, str(Path(input_path).parent / filename)]
         if s.ensemble != 'none': a.append('-' + s.ensemble)
         if s.replicates is not None: a += ['-replicates', str(s.replicates)]
         return a
@@ -83,6 +86,8 @@ def run_engine(request: AlignmentRequest, workdir: Path, executable=None, mafft=
     (workdir/'row-map.json').write_text(json.dumps(row_map, indent=2))
     inp = workdir/'input.fasta'
     inp.write_text(''.join(f'>{n}\n{r.sequence}\n' for n, r in zip(ids, request.roster.rows)))
+    if s.engine == 'muscle' and s.hmmin is not None:
+        (workdir/'hmmin.txt').write_bytes(s.hmmin.encode('utf8'))
     tree_path = None
     prep = None
     report = None
