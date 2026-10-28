@@ -43,6 +43,9 @@ vi.mock('../../src/components/MolecularDynamicsTemplate', () => ({ MolecularDyna
 vi.mock('../../src/components/OligoDesignerTemplate', () => ({ OligoDesignerTemplate: () => null }));
 vi.mock('../../src/components/conformationalMapping/ConformationalMappingLauncher', () => ({ ConformationalMappingLauncher: () => null }));
 import { JobSubmission } from '../../src/components/JobSubmission';
+// Resolve the real lazy editor during collection, outside a case's execution
+// timeout. Cold module transformation is not an authoring-action deadline.
+import '../../src/components/ProteinModificationTemplate';
 
 let root: Root | undefined;
 let client: QueryClient;

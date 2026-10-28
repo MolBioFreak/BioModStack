@@ -1,4 +1,10 @@
+import { createContext } from 'react';
 import { uploadImmutableFile, type StructureSourceSelection } from './api';
+
+/** The mounted native form owns preparation and its scientific serializer. */
+export type DeNovoDraftPreparation = { current: (() => Promise<void>) | null };
+export const DeNovoDraftPreparationContext = createContext<DeNovoDraftPreparation | null>(null);
+export const DocumentCaptureContext = createContext<DocumentCaptureRegistry | null>(null);
 
 /** Durable editor companion, kept outside native scientific params. */
 export interface CapturedAnnotatedDocument {

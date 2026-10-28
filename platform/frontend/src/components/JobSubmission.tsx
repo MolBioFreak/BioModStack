@@ -2,6 +2,7 @@ import { loadPredictionOperationDetour } from '../lib/binderSelectedRound';
 import { isDeNovoDestination, prepareDeNovoContinuation, continuationRoleDefaults, nativeSequenceInput, sequenceDestinations, type DeNovoDestination } from '../lib/deNovoContinuation';
 import { sourceResultReturn } from '../lib/sourceResultReturn';
 import { deNovoAuthoringEnvelope, deNovoEditorState } from '../lib/deNovoAuthoring';
+import { DeNovoDraftPreparationContext, type DeNovoDraftPreparation } from '../lib/deNovoDocumentCapture';
 import { materializeExactStructure, type StructureSourceSelection } from '../lib/api';
 import { launcherWorkflowTemplates, launcherExperimentalTemplates, visibleLauncherTemplates } from '../lib/launcherCatalog';
 
@@ -334,6 +335,12 @@ export function JobSubmission() {
     const hydratedProjectSetup = useRef<string | null>(null);
     const [projectActionError, setProjectActionError] = useState<string | null>(null);
     const [projectActionBusy, setProjectActionBusy] = useState(false);
+    const deNovoPreparation = useRef<DeNovoDraftPreparation['current']>(null);
+    const [deNovoCaptureError, setDeNovoCaptureError] = useState('');
+    const prepareDeNovoDraft = async () => {
+        await deNovoPreparation.current?.();
+        return deNovoAuthoringEnvelope(deNovoDraftRef.current ?? {});
+    };
     const reportDeNovoDraft = useCallback((draft: Record<string, unknown>) => {
         deNovoDraftRef.current = draft;
         if (projectSetup.active) setProjectDraftValues(deNovoAuthoringEnvelope(draft));
@@ -432,14 +439,22 @@ export function JobSubmission() {
         baseTemplateId?: string;
     }>({});
 
-    const openTemplateManager = (context: {
+    const openTemplateManager = async (context: {
         currentParams?: Record<string, UntypedApiValue>;
         currentModelId?: string;
         currentMode?: string;
         baseTemplateId?: string;
     }) => {
-        setTemplateManagerContext(isDeNovoModel(context.currentModelId) || context.baseTemplateId === DE_NOVO_TEMPLATE ? { ...context, currentParams: deNovoAuthoringEnvelope(context.currentParams ?? {}) } : context);
-        setShowTemplateManager(true);
+        const deNovo = isDeNovoModel(context.currentModelId) || context.baseTemplateId === DE_NOVO_TEMPLATE;
+        setDeNovoCaptureError('');
+        try {
+            const prepare = deNovo ? deNovoPreparation.current : null;
+            if (prepare) await prepare();
+            setTemplateManagerContext(deNovo ? { ...context, currentParams: deNovoAuthoringEnvelope(prepare ? deNovoDraftRef.current ?? context.currentParams ?? {} : context.currentParams ?? {}) } : context);
+            setShowTemplateManager(true);
+        } catch (cause) {
+            setDeNovoCaptureError(cause instanceof Error ? cause.message : String(cause));
+        }
     };
 
     // Dedicated templates should not retain stale clone params once user navigates away.
@@ -1672,7 +1687,7 @@ export function JobSubmission() {
             {isSequenceContinuation && (sequencePreparationError || continuationQuery.error) && <p role="alert">{sequencePreparationError || String(continuationQuery.error)}</p>}
             {projectSetup.setup && <><ProjectWorkflowSetupBanner setup={projectSetup.setup}/><section className="mx-auto mb-4 mt-4 flex max-w-[104rem] flex-wrap items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-950/20 p-3"><button type="button" className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-200" disabled={projectActionBusy} onClick={async () => {
                 setProjectActionBusy(true); setProjectActionError(null);
-                try { await projectSetup.saveDraft((isSequenceContinuation ? sequenceDraft() : selectedModelId === 'protonpottsmpnn' ? { ...projectDraftValues, execution_target_id: sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || null } : projectDraftValues) as JsonObject); }
+                try { await projectSetup.saveDraft((selectedTemplateId === DE_NOVO_TEMPLATE ? await prepareDeNovoDraft() : isSequenceContinuation ? sequenceDraft() : selectedModelId === 'protonpottsmpnn' ? { ...projectDraftValues, execution_target_id: sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || null } : projectDraftValues) as JsonObject); }
                 catch (error) { setProjectActionError(error instanceof Error ? error.message : String(error)); }
                 finally { setProjectActionBusy(false); }
             }}>Save draft</button>{selectedTemplateId === 'antibody_denovo'
@@ -1680,7 +1695,7 @@ export function JobSubmission() {
                 : <button type="button" className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white" disabled={projectActionBusy || (isNativeBinderGeneration && !isReady)} onClick={async () => {
                     if (isNativeBinderGeneration) { handleSubmit(); return; }
                     setProjectActionBusy(true); setProjectActionError(null);
-                    try { await projectSetup.startRun((isSequenceContinuation ? sequenceDraft() : selectedModelId === 'protonpottsmpnn' ? { ...projectDraftValues, execution_target_id: sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || null } : projectDraftValues) as JsonObject); }
+                    try { await projectSetup.startRun((selectedTemplateId === DE_NOVO_TEMPLATE ? await prepareDeNovoDraft() : isSequenceContinuation ? sequenceDraft() : selectedModelId === 'protonpottsmpnn' ? { ...projectDraftValues, execution_target_id: sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || null } : projectDraftValues) as JsonObject); }
                     catch (error) { setProjectActionError(error instanceof Error ? error.message : String(error)); }
                     finally { setProjectActionBusy(false); }
                 }}>Start run</button>}{projectActionError && <p role="alert">{projectActionError}</p>}<ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
@@ -1890,6 +1905,8 @@ export function JobSubmission() {
                                     initialValues={clonedValues}
                                 />
                             ) : selectedTemplateId === 'protein_modification_experimental' ? (
+                                <DeNovoDraftPreparationContext.Provider value={deNovoPreparation}>
+                                {deNovoCaptureError && <p role="alert">{deNovoCaptureError}</p>}
                                 <ProteinModificationTemplate
                                     launchContextId={launchContextId}
                                     key={`de-novo:${dedicatedTemplateVersion}`}
@@ -1902,6 +1919,7 @@ export function JobSubmission() {
                                     onDraftChange={reportDeNovoDraft}
                                     runDetails={<details className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3"><summary className="cursor-pointer text-sm text-[var(--text-secondary)]">Transfer policy</summary><ExecutionPolicyControl initialPolicy={initialReturnPolicy} /></details>}
                                 />
+                                </DeNovoDraftPreparationContext.Provider>
 
                             ) : selectedTemplateId === 'molecular_dynamics' ? (
                                 <MolecularDynamicsTemplate

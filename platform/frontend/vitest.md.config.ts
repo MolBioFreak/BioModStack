@@ -133,6 +133,7 @@ export default defineConfig({
             './tests/vitest/rfd3GenerationMounted.test.tsx',
             './tests/vitest/deNovoV15*.test.{ts,tsx}',
             './tests/vitest/deNovoDocumentCapture.test.ts',
+            './tests/vitest/deNovoCaptureReceivingMounted.test.tsx',
             './tests/vitest/deNovoCompleteAuthoringMounted.test.tsx',
             './tests/vitest/generalSequenceDesignMounted.test.tsx',
             './tests/vitest/candidateRoundProgressMounted.test.tsx',
