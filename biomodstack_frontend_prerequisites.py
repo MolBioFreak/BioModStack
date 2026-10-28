@@ -57,6 +57,7 @@ def identity(project_root: Path) -> dict:
     source = project_root.resolve()
     paths = [source / name for name in ("pnpm-lock.yaml", "pnpm-workspace.yaml", "platform/frontend/package.json", "docker/web.Dockerfile")]
     paths += list(source.glob("packages/*/package.json")) + list(source.glob("platform/desktop-electron/package.json"))
+    paths += list(source.glob("platform/frontend/alignment-viewers/*/package.json"))
     paths += [p for p in (source / "patches").rglob("*") if p.is_file()]
     paths += [source / name for name in ("package.json", ".npmrc", ".pnpmfile.cjs") if (source / name).exists()]
     return {"source_root": str(source), "manifests": {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths)}, "pnpm_version": PNPM_VERSION, "policy": "frontend-filter-frozen-ignore-scripts-v1"}
@@ -197,7 +198,7 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
         source_guard(source)
         validate_lock_compatibility(source)
         if action == "frontend-plan":
-            report.update(status="planned", steps=[{"step": "pinned-pnpm", "version": PNPM_VERSION, "network": True}, {"step": "locked-install", "filter": "frontend...", "flags": ["--frozen-lockfile", "--ignore-scripts"], "network": True}, {"step": "offline-check", "network": False}])
+            report.update(status="planned", steps=[{"step": "pinned-pnpm", "version": PNPM_VERSION, "network": True}, {"step": "locked-install", "filter": "frontend...", "additional_filters": ["./platform/frontend/alignment-viewers/**"], "flags": ["--frozen-lockfile", "--ignore-scripts"], "network": True}, {"step": "offline-check", "network": False}])
             return report
         if action == "frontend-verify":
             if not resolve_frontend_environment(source):
@@ -239,7 +240,7 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
         pnpm = root / "toolchain/node_modules/pnpm/bin/pnpm.cjs"
         commands = [
             ("pinned-pnpm", [npm, "install", "--prefix", str(root / "toolchain"), "--ignore-scripts", "--no-audit", "--no-fund", "--package-lock=false", "--registry=https://registry.npmjs.org", f"pnpm@{PNPM_VERSION}"], root),
-            ("locked-install", [node, str(pnpm), "--filter", "frontend...", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile", "--store-dir", str(root / "cache/store"), "--config.manage-package-manager-versions=false"], source),
+            ("locked-install", [node, str(pnpm), "--filter", "frontend...", "--filter", "./platform/frontend/alignment-viewers/**", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile", "--store-dir", str(root / "cache/store"), "--config.manage-package-manager-versions=false"], source),
         ]
         for step, command, cwd in commands:
             row = dict(step=step, command=command, log=str(root / (step + ".log")), status="running")
