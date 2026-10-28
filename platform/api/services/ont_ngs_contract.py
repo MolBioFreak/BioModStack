@@ -117,8 +117,16 @@ def installed_dorado_device() -> str:
     return value
 
 
-def basecall_device_options() -> dict[str, Any]:
+def basecall_device_options(*, execution_target_id: str | None = None) -> dict[str, Any]:
     """Selectable Dorado devices; CUDA is offered only where the host exposes NVIDIA GPUs."""
+    if execution_target_id:
+        # Placement selects the worker; controller observations and installation
+        # defaults say nothing about its GPUs. This is not a hardware admission probe.
+        return {"default": "cuda:0", "cuda_available": None, "options": [
+            {"value": "cpu", "label": "Worker CPU"},
+            {"value": "cuda:0", "label": "Worker CUDA (scheduler assigned)"},
+            {"value": "cuda:all", "label": "All assigned worker CUDA GPUs"},
+        ]}
     import shutil
     cuda_available = shutil.which("nvidia-smi") is not None or Path("/dev/nvidia0").exists()
     options = [{"value": "cpu", "label": "CPU"}]
@@ -214,10 +222,13 @@ class OntWorkflowSpec:
 CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
     "ont_basecall_dna": OntWorkflowSpec(
         workflow_id="ont_basecall_dna",
-        display_name="ONT DNA Basecalling",
-        description="Dorado DNA basecalling from existing POD5 run outputs using configured CUDA resources.",
-        input_modes=("pod5",),
+        display_name="ONT DNA Analysis",
+        description="DNA POD5 basecalling or BAM/FASTQ analysis, with optional shared QC and tandem modkit; CPU or CUDA on the selected execution target.",
+        input_modes=("pod5", "bam", "fastq"),
+        artifact_conditions=(("run_modkit=true", ("modkit_summary", "methylation_bed")),),
         artifact_kinds=(
+            "modkit_summary",
+            "methylation_bed",
             "raw_reads",
             "basecall_reads",
             "alignment_bam",
@@ -251,7 +262,10 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
         display_name="ONT Plasmid QC",
         description="Reference-required plasmid QC supporting POD5/BAM/FASTQ input modes with per-base support, consensus, and evidence artifacts.",
         input_modes=("pod5", "bam", "fastq"),
+        artifact_conditions=(("run_modkit=true", ("modkit_summary", "methylation_bed")),),
         artifact_kinds=(
+            "modkit_summary",
+            "methylation_bed",
             "basecall_reads",
             "alignment_bam",
             "alignment_bai",
@@ -579,7 +593,7 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
                            if any(normalized.get(key) for key in keys)]
         if len(selected_inputs) == 1:
             normalized["ont_input_mode"] = selected_inputs[0]
-    if canonical_id in {"ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"}:
+    if canonical_id in {"ont_basecall_dna", "ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"}:
         normalized["expected_plasmid_size"] = effective_expected_plasmid_size(normalized.get("expected_plasmid_size"))
         consensus_setting = samtools_consensus_setting()
         consensus_config = normalized.setdefault("samtools_consensus_config", consensus_setting["default"])
@@ -666,6 +680,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
         raise ValueError("unsupported barcode kit")
     if barcode_kit and canonical_id != "ont_basecall_dna":
         raise ValueError("inline barcode classification is only supported by ont_basecall_dna")
+    if barcode_kit and (normalized.get("run_modkit") or normalized.get("run_fastq_qc")):
+        raise ValueError("barcoded reads require downstream per-barcode QC/modkit submission")
     if barcode_kit and basecall_mode == "duplex":
         raise ValueError("barcode classification is incompatible with duplex in the locked runtime")
     sample_sheet = str(normalized.get("sample_sheet") or "").strip() or None

@@ -91,7 +91,10 @@
     "expected_plasmid_size": {
       "default": null,
       "minimum": 1,
-      "type": ["integer", "null"],
+      "type": [
+        "integer",
+        "null"
+      ],
       "x-bms-applicability": "always",
       "x-bms-default-policy": "schema_default",
       "x-bms-incompatibilities": [],
@@ -353,6 +356,72 @@
       "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
       "x-bms-ui-control": "checkbox",
       "x-bms-units": "not_applicable"
+    },
+    "modified_bases": {
+      "enum": [
+        "5mC_5hmC",
+        "6mA"
+      ],
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "modified_bases",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Modified-base model",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "select",
+      "x-bms-units": "not_applicable",
+      "default": "none"
+    },
+    "run_modkit": {
+      "const": true,
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "run_modkit",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Methylation pileup execution",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "read_only",
+      "x-bms-units": "not_applicable",
+      "default": false
+    },
+    "modkit_filter_threshold": {
+      "default": 0.5,
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "modkit_filter_threshold",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "float64",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Modification probability filter",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "bounded_number",
+      "x-bms-units": "not_applicable"
+    },
+    "dorado_device": {
+      "default": "cuda:0",
+      "x-bms-applicability": "input_mode=pod5",
+      "x-bms-default-policy": "schema_default",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "dorado_device",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "CPU or CUDA device on the selected execution target",
+      "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "select",
+      "x-bms-units": "not_applicable",
+      "type": "string",
+      "pattern": "^(?:cpu|cuda:(?:all|[0-9]+(?:,[0-9]+)*))$"
     }
   },
   "required": [

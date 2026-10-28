@@ -5826,11 +5826,11 @@ export const fetchOntRawSignalWaveform = (lookupId: string) =>
     apiData(api.get<OntRawSignalWaveform>(`/api/ont/raw-signal/waveforms/${encodeURIComponent(lookupId)}`));
 export interface OntBasecallDeviceOptions {
     default: string;
-    cuda_available: boolean;
+    cuda_available: boolean | null;
     options: Array<{ value: string; label: string }>;
 }
-export const fetchOntBasecallDevices = () =>
-    apiData(api.get<OntBasecallDeviceOptions>('/api/ont/ngs/basecall-devices'));
+export const fetchOntBasecallDevices = (executionTargetId: string | null = null) =>
+    apiData(api.get<OntBasecallDeviceOptions>('/api/ont/ngs/basecall-devices', { params: { execution_target_id: executionTargetId || undefined } }));
 export type OntRawSignalRetentionPolicy = 'pod5_and_blow5' | 'blow5_only';
 export interface OntRawSignalRetentionSettings {
     policy: OntRawSignalRetentionPolicy;

@@ -518,6 +518,9 @@ def _validate_ont_input_contract(canonical_id: str, params: dict[str, Any]) -> t
     if canonical_id in ONT_REFERENCE_REQUIRED_WORKFLOWS and not str(params.get("reference_fasta") or "").strip():
         raise ValueError(f"workflow {canonical_id!r} requires reference_fasta for construct verification")
 
+    if canonical_id == "ont_basecall_dna" and (input_mode == "fastq" or params.get("run_fastq_qc") or params.get("run_modkit")) and not str(params.get("reference_fasta") or "").strip():
+        raise ValueError("DNA reference analysis requires reference_fasta")
+
     if input_mode == "fastq" and bool(params.get("run_modkit")):
         raise ValueError("modkit requires a BAM with meaningful MM/ML tags or POD5 basecalled with modified bases")
 
@@ -619,6 +622,10 @@ def _job_create_for_ont_submit(
         )
 
     spec = get_ont_workflow_spec(canonical_id)
+    # Remote defaults must not inherit the controller installation's CPU choice.
+    # Explicit operator devices survive placement and normalization unchanged.
+    if request.execution_target_id and not submitted_params.get("dorado_device"):
+        submitted_params["dorado_device"] = "cuda:0"
     params = normalize_ont_launch_params(canonical_id, submitted_params)
     path_contract = {
         "pod5_dir": True,
@@ -862,10 +869,10 @@ class OntRawSignalRetentionRequest(BaseModel):
 
 
 @router.get("/ngs/basecall-devices")
-async def ont_basecall_devices() -> dict[str, Any]:
+async def ont_basecall_devices(execution_target_id: str | None = None) -> dict[str, Any]:
     """CPU or CUDA choices for Dorado basecalling on this host."""
     from services.ont_ngs_contract import basecall_device_options
-    return basecall_device_options()
+    return basecall_device_options(execution_target_id=execution_target_id)
 
 
 @router.post("/runs/{run_id}/generations/{observed_generation}/raw-signal/{representation_id}/restore-pod5", status_code=202)

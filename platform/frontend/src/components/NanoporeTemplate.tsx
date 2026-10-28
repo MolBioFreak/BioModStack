@@ -659,7 +659,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         return 'dna';
     });
     const [workflowNoticeDismissed, setWorkflowNoticeDismissed] = useState(false);
-    const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'modified';
+    const workflowRequiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'modified';
     const [pod5Dir, setPod5Dir] = useState(initialValues?.pod5Dir as string || '');
     const [pod5Uploading, setPod5Uploading] = useState(false);
     const [bamPath, setBamPath] = useState(initialValues?.bamPath as string || '');
@@ -766,7 +766,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [runFastqQc, setRunFastqQc] = useState<boolean>(
         (initialValues?.runFastqQc as boolean | undefined)
         ?? (initialValues?.runMultimerQc as boolean | undefined)
-        ?? true
+        ?? (selectedWorkflow !== 'dna')
     );
     // Only initialization reads saved values. Reference/config refreshes never replace edits.
     const savedExpectedSize = initialValues && Object.prototype.hasOwnProperty.call(initialValues, 'expectedPlasmidSize')
@@ -870,9 +870,16 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const validBatchSize = batchSize === null || (Number.isInteger(batchSize) && batchSize >= 0);
     const [emitSummary, setEmitSummary] = useState(initialValues?.emitSummary !== false);
     const [emitMoves, setEmitMoves] = useState(initialValues?.emitMoves !== false);
-    const basecallDevicesQuery = useQuery({ queryKey: ['ont-basecall-devices'], queryFn: fetchOntBasecallDevices, staleTime: 300_000 });
+    const basecallDevicesQuery = useQuery({ queryKey: ['ont-basecall-devices', executionTargetId], queryFn: () => fetchOntBasecallDevices(executionTargetId), staleTime: 300_000 });
     const [doradoDevice, setDoradoDevice] = useState<string>(String(initialValues?.doradoDevice ?? ''));
-    const effectiveDoradoDevice = doradoDevice || basecallDevicesQuery.data?.default || '';
+    const effectiveDoradoDevice = doradoDevice || basecallDevicesQuery.data?.default || (executionTargetId ? 'cuda:0' : '');
+    const doradoDeviceOptions = [...(basecallDevicesQuery.data?.options ?? [
+        { value: 'cpu', label: 'CPU' }, { value: 'cuda:0', label: 'CUDA (scheduler-assigned GPU)' },
+    ])];
+    if (effectiveDoradoDevice && !doradoDeviceOptions.some(option => option.value === effectiveDoradoDevice)) {
+        doradoDeviceOptions.push({ value: effectiveDoradoDevice, label: `${effectiveDoradoDevice} (selected)` });
+    }
+    const requiresReference = workflowRequiresReference || (selectedWorkflow === 'dna' && (inputSource === 'fastq' || runModkit || runFastqQc));
     const [modkitFilterThreshold, setModkitFilterThreshold] = useState<number | null>(
         (initialValues?.modkitFilterThreshold as number | null | undefined) ?? null
     );
@@ -968,7 +975,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         selectedManagedReferenceRevisionId,
     ]);
 
-    const usesExpectedPlasmidSize = ['clone', 'plasmidQc', 'constructScreening', 'fastqQc'].includes(selectedWorkflow);
+    const usesExpectedPlasmidSize = ['dna', 'clone', 'plasmidQc', 'constructScreening', 'fastqQc'].includes(selectedWorkflow);
     const hasValidExpectedPlasmidSize = autoExpectedPlasmidSize || isIntegerInRange(Number(expectedPlasmidSize), 1, FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP);
     const hasValidFastqNumericControls = useMemo(() => (
         hasValidExpectedPlasmidSize
@@ -1052,8 +1059,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         selectedReferenceIsExactStateMember,
         usesMolBioReceiptLane,
     ]);
-    const canRunModkit = selectedWorkflow === 'modified';
-    const fastqQcSettingAvailable = selectedWorkflow === 'plasmidQc'
+    const canRunModkit = ['modified', 'plasmidQc', 'dna'].includes(selectedWorkflow);
+    const fastqQcSettingAvailable = selectedWorkflow === 'dna' || selectedWorkflow === 'plasmidQc'
         || selectedWorkflow === 'fastqQc'
         || ((selectedWorkflow === 'clone' || selectedWorkflow === 'constructScreening') && inputSource === 'fastq');
     const cloneValidationControlsActive = selectedWorkflow === 'clone'
@@ -1069,7 +1076,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         const blockers: string[] = [];
         if (selectedWorkflow === 'pooledAssignment') blockers.push('Use the pooled assignment panel to submit this workflow.');
         if (!jobName.trim()) blockers.push('Enter a job name.');
-        if (!executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1) blockers.push('Select one GPU or Scheduler auto before submitting this NGS job.');
+        if (effectiveDoradoDevice !== 'cpu' && !executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1) blockers.push('Select one GPU or Scheduler auto before submitting this NGS job.');
         if (inputSource === 'pod5' && !pod5Dir.trim()) blockers.push('Please specify a POD5 data directory.');
         if (inputSource === 'pod5' && pod5Uploading) blockers.push('Wait for the POD5 upload to finish.');
         if (inputSource === 'pod5' && barcodeKit && sampleSheetBlocker) blockers.push(sampleSheetBlocker);
@@ -1078,9 +1085,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (inputSource === 'pod5' && doradoMode === 'duplex' && barcodeKit) blockers.push('Barcode classification and duplex cannot be combined in the locked runtime.');
         if (inputSource === 'pod5' && modifiedBases !== 'none' && (doradoMolecule !== 'dna' || doradoModel !== 'hac' || doradoMode !== 'simplex')) blockers.push('Modified-base calling requires DNA HAC simplex.');
         if (inputSource === 'pod5' && canRunModkit && runModkit && modifiedBases === 'none') blockers.push('Choose a modification model before generating methylation tables.');
+        if (inputSource === 'fastq' && canRunModkit && runModkit) blockers.push('FASTQ has no MM/ML modification probabilities. Disable methylation tables or select tagged BAM/POD5.');
         if (inputSource === 'bam' && !bamPath.trim()) blockers.push('Please specify a BAM file path.');
         if (inputSource === 'fastq' && !fastqPath.trim()) blockers.push('Please specify a FASTQ file path.');
-        if (inputSource === 'fastq' && !['clone', 'plasmidQc', 'constructScreening', 'fastqQc', 'pooledAssignment'].includes(selectedWorkflow)) blockers.push('The selected workflow does not accept FASTQ input.');
+        if (inputSource === 'fastq' && !['dna', 'clone', 'plasmidQc', 'constructScreening', 'fastqQc', 'pooledAssignment'].includes(selectedWorkflow)) blockers.push('The selected workflow does not accept FASTQ input.');
         if (molbioRevisionPairError) blockers.push(molbioRevisionPairError);
         if (managedReferenceBlocker) blockers.push(managedReferenceBlocker);
         if (usesExpectedPlasmidSize && runFastqQc && !hasValidExpectedPlasmidSize) blockers.push('Expected plasmid size must be Auto or an integer within the displayed bounds.');
@@ -1110,8 +1118,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             ? 'ALIGNED READS'
             : 'ALREADY BASECALLED';
     const reviewModelLabel = inputSource === 'pod5' ? doradoModel.toUpperCase() : 'N/A';
-    const reviewGpuLabel = inputSource === 'fastq'
-        ? 'CPU ONLY'
+    const reviewGpuLabel = inputSource === 'fastq' || effectiveDoradoDevice === 'cpu'
+        ? (executionTargetId ? 'WORKER CPU' : 'LOCAL CPU')
         : executionTargetId ? 'WORKER SCHEDULER' : pinnedGpus.length === 1 ? `GPU ${pinnedGpus[0]}` : 'AUTO GPU';
     const reviewReferenceLabel = requiresReference ? (reviewReferenceReady ? 'REFERENCE READY' : 'REFERENCE REQUIRED') : 'REFERENCE OPTIONAL';
     const handleValidate = () => {
@@ -1191,7 +1199,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         return {
             name: jobName,
             ...prepareExecutionPlacement({ execution_target_id: executionTargetId, execution_policy: initialReturnPolicy }),
-            pinned_gpu: !executionTargetId && inputSource !== 'fastq' && pinnedGpus.length === 1 ? pinnedGpus[0] : null,
+            pinned_gpu: effectiveDoradoDevice !== 'cpu' && !executionTargetId && inputSource !== 'fastq' && pinnedGpus.length === 1 ? pinnedGpus[0] : null,
             params: {
                 ...(molbioNgsReceiptId && { molbio_ngs_receipt_id: molbioNgsReceiptId }),
                 ...(comparisonPanelReceiptId && { ngs_comparison_panel_receipt_id: comparisonPanelReceiptId }),
@@ -1254,7 +1262,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     wf_clone_expected_identity: wfCloneExpectedIdentity,
                     ...(wfCloneSample.trim() && { wf_clone_sample: wfCloneSample.trim() }),
                 }),
-                ...((selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc') && {
+                ...((selectedWorkflow === 'dna' || selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc') && {
                     samtools_consensus_config: samtoolsConsensusConfig,
                     enable_rotating_reference_frames: enableRotatingReferenceFrames,
                     rotation_scan_step_bp: rotationScanStepBp,
@@ -1505,7 +1513,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // ============================================================================
     // Render
     // ============================================================================
-    const inputOptions = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening'
+    const inputOptions = selectedWorkflow === 'dna' || selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening'
         ? [{ key: 'pod5' as const, label: 'POD5 raw reads' }, { key: 'bam' as const, label: 'Existing BAM' }, { key: 'fastq' as const, label: 'FASTQ reads' }]
         : selectedWorkflow === 'modified'
             ? [{ key: 'pod5' as const, label: 'POD5 raw reads' }, { key: 'bam' as const, label: 'Existing BAM with MM/ML tags' }]
@@ -1550,6 +1558,28 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 <summary className="cursor-pointer text-sm font-medium">Compute location · {executionTargetId ? 'Remote worker selected' : 'Local'}</summary>
                 <div className="mt-3">
                     <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} />
+                        {inputSource === 'pod5' && (
+                            <div>
+                                <label className="text-xs text-[var(--text-secondary)] mb-1 block" htmlFor="dorado-device">Basecalling device</label>
+                                <select
+                                    id="dorado-device"
+                                    aria-label="Basecalling device"
+                                    value={effectiveDoradoDevice}
+                                    onChange={(e) => setDoradoDevice(e.target.value)}
+                                    className="w-48 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-1.5 text-[var(--text-primary)] text-sm"
+                                >
+                                    {doradoDeviceOptions.map((option) => (
+                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                </select>
+                                <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                    {executionTargetId ? 'Device applies to the selected worker, not this controller. CUDA is assigned by its scheduler; availability is reported at execution.' : basecallDevicesQuery.data && !basecallDevicesQuery.data.cuda_available
+                                        ? 'No CUDA device was observed on the controller. The selected device remains explicit; native execution reports availability.'
+                                        : 'CPU works anywhere but is much slower than a CUDA GPU.'}
+                                </p>
+                            </div>
+                        )}
+
                     {executionTargetId && <ExecutionPolicyControl initialPolicy={initialReturnPolicy} onChange={setReturnPolicy} />}
                 </div>
             </details>
@@ -1574,10 +1604,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     />
                     {executionTargetId ? (
                         <p className="mt-4 text-xs text-[var(--text-secondary)]">Worker scheduler owns GPU assignment; controller GPU pins are not sent. Existing POD5, FASTQ and supported BAM computations can run on the selected worker. Instrument acquisition and control remain local.</p>
-                    ) : inputSource === 'fastq' ? (
+                    ) : inputSource === 'fastq' || effectiveDoradoDevice === 'cpu' ? (
                         <div className="mt-4 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/60 px-3 py-2" data-testid="ngs-gpu-cpu-only">
                             <div className="text-sm font-medium text-[var(--text-secondary)]">GPU assignment</div>
-                            <p className="mt-1 text-xs text-[var(--text-secondary)]">CPU only for FASTQ input. GPU pinning is not applicable.</p>
+                            <p className="mt-1 text-xs text-[var(--text-secondary)]">CPU execution selected. GPU pinning is not applicable.</p>
                         </div>
                     ) : (
                     <label className="mt-4 block text-sm font-medium text-[var(--text-secondary)]">
@@ -1594,12 +1624,13 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         </select>
                     </label>
                     )}
-                    {!executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1 && <p role="alert" className="mt-2 text-xs text-[var(--warning)]">This saved job contains multiple GPU pins. Select one GPU or Scheduler auto before submitting this NGS job.</p>}
+                    {effectiveDoradoDevice !== 'cpu' && !executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1 && <p role="alert" className="mt-2 text-xs text-[var(--warning)]">This saved job contains multiple GPU pins. Select one GPU or Scheduler auto before submitting this NGS job.</p>}
                 </div>
 
             {/* Data Source */}
             <div className={TASK_FLOW_CARD}>
                 <p className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Primary input *</p>
+                <p className="mb-3 text-xs text-[var(--text-secondary)]">BLOW5/SLOW5 raw signal uses raw-signal import and Restore POD5 before Dorado basecalling. FASTQ contains bases and quality scores, not MM/ML modification probabilities; tandem modkit needs tagged BAM or modified-base calls from POD5.</p>
                 <div className="flex flex-wrap gap-2 mb-3">
                     {inputOptions.length === 1 ? <p className="text-sm text-[var(--text-primary)]">{inputOptions[0].label}</p> : inputOptions.map((source) => (
                         <button
@@ -1929,7 +1960,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             {inputSource === 'pod5' && doradoMolecule === 'dna' && (
                 <div className={TASK_FLOW_CARD}>
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-3">Modification calling</label>
-                    <p className="mb-3 text-xs text-[var(--text-secondary)]">{selectedWorkflow === 'modified' ? 'Choose which modifications to call before analysis.' : 'Optional per-read modification calls in the BAM. Use Methylation analysis for per-site tables.'}</p>
+                    <p className="mb-3 text-xs text-[var(--text-secondary)]">{selectedWorkflow === 'modified' ? 'Choose which modifications to call before analysis.' : 'Optional per-read modification calls in the BAM. Enable Generate methylation tables for tandem per-site analysis.'}</p>
                     <div className="grid grid-cols-2 gap-3">
                         {(Object.entries(MODIFIED_BASES_OPTIONS) as [ModifiedBases, typeof MODIFIED_BASES_OPTIONS[ModifiedBases]][]).map(([key, opt]) => (
                             <button
@@ -2211,27 +2242,6 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     <div id="ngs-advanced-controls" className="mt-4 space-y-4 pl-6 border-l-2 border-[var(--border-primary)]">
                         {inputSource === 'pod5' && (
                             <div>
-                                <label className="text-xs text-[var(--text-secondary)] mb-1 block" htmlFor="dorado-device">Basecalling device</label>
-                                <select
-                                    id="dorado-device"
-                                    aria-label="Basecalling device"
-                                    value={effectiveDoradoDevice}
-                                    onChange={(e) => setDoradoDevice(e.target.value)}
-                                    className="w-48 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-1.5 text-[var(--text-primary)] text-sm"
-                                >
-                                    {(basecallDevicesQuery.data?.options ?? [{ value: effectiveDoradoDevice || 'cpu', label: effectiveDoradoDevice || 'CPU' }]).map((option) => (
-                                        <option key={option.value} value={option.value}>{option.label}</option>
-                                    ))}
-                                </select>
-                                <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                                    {basecallDevicesQuery.data && !basecallDevicesQuery.data.cuda_available
-                                        ? 'No CUDA GPU on this host; basecalling runs on CPU (fast model suits small runs).'
-                                        : 'CPU works anywhere but is much slower than a CUDA GPU.'}
-                                </p>
-                            </div>
-                        )}
-                        {inputSource === 'pod5' && (
-                            <div>
                                 <label className="text-xs text-[var(--text-secondary)] mb-1 block">Dorado batch size (0 = native auto; positive integer)</label>
                                 <input
                                     type="number"
@@ -2284,7 +2294,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 <div>
                                     <span className="text-sm text-[var(--text-primary)]">Generate methylation tables</span>
                                     <p className="text-xs text-[var(--text-secondary)]">
-                                        {inputSource === 'bam' ? 'Summarize the existing modification calls.' : 'Align and summarize the newly called modifications.'}
+                                        {inputSource === 'fastq' ? 'FASTQ cannot supply modification probabilities; use tagged BAM or POD5, or disable this stage.' : inputSource === 'bam' ? 'Summarize the existing modification calls.' : 'Align and summarize the newly called modifications.'}
                                     </p>
                                 </div>
                             </label>
@@ -2401,7 +2411,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 </div>
                             </div>
                         )}
-                        {(selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc') && (
+                        {(selectedWorkflow === 'dna' || selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc') && (
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Plasmid dimer QC</div>
                                 <label className="flex items-center gap-2 cursor-pointer">

@@ -14,7 +14,7 @@ export function buildNanoporeOperatorStageParams({
     runAssembly,
 }: NanoporeOperatorStageSettings): Record<string, boolean> {
     const params: Record<string, boolean> = {};
-    const fastqQcApplies = selectedWorkflow === 'plasmidQc'
+    const fastqQcApplies = selectedWorkflow === 'dna' || selectedWorkflow === 'plasmidQc'
         || selectedWorkflow === 'fastqQc'
         || ((selectedWorkflow === 'clone' || selectedWorkflow === 'constructScreening') && inputSource === 'fastq');
     if (fastqQcApplies) params.run_fastq_qc = runFastqQc;
