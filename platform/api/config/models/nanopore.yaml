@@ -84,10 +84,12 @@ sequence_qc_contract:
 
 modes:
   - id: basecall_dna
-    name: ONT DNA Basecalling
-    description: Dorado DNA basecalling from existing POD5 run outputs. Legacy FAST5 must be converted and model-qualified outside this workflow.
+    name: ONT DNA Analysis
+    description: POD5 basecalling or BAM/FASTQ analysis with optional shared QC and tandem modkit. BLOW5/SLOW5 use raw import and Restore POD5 first.
     params:
       - pod5_dir
+      - bam_path
+      - fastq_path
       - reference_fasta
       - dorado_model
       - dorado_device
@@ -95,6 +97,25 @@ modes:
       - trim_adapters
       - emit_summary
       - dorado_batch_size
+      - bam_force_realign
+      - bam_min_mapq
+      - run_fastq_qc
+      - expected_plasmid_size
+      - samtools_consensus_config
+      - min_fastq_read_length
+      - fastq_minimap2_preset
+      - fastq_minimap2_allow_secondary
+      - igv_track_window_bp
+      - igv_report_max_sites
+      - igv_report_flanking_bp
+      - enable_rotating_reference_frames
+      - rotation_scan_step_bp
+      - single_ref_split_min_mapq
+      - single_ref_split_min_segment_bp
+      - single_ref_split_max_query_gap_bp
+      - modified_bases
+      - run_modkit
+      - modkit_filter_threshold
 
   - id: basecall_rna
     name: ONT RNA Basecalling
@@ -139,6 +160,9 @@ modes:
       - single_ref_split_min_mapq
       - single_ref_split_min_segment_bp
       - single_ref_split_max_query_gap_bp
+      - modified_bases
+      - run_modkit
+      - modkit_filter_threshold
 
   - id: construct_screening
     name: ONT Construct Screening

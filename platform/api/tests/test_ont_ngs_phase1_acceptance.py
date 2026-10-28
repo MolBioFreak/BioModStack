@@ -174,6 +174,8 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
             sys.executable,
             f"--{param_name}",
             payload,
+            "--code_root",
+            str(ROOT),
             "--out_dir",
             str(tmp_path / "out"),
             "-ansi-log",
@@ -492,6 +494,8 @@ def test_bam_prepare_runtime_handles_output_and_arbitrary_input_basenames(
             str(tmp_path / "work"),
             "--bam",
             str(bam),
+            "--code_root",
+            str(ROOT),
             "--out_dir",
             str(out_dir),
             "-ansi-log",
@@ -598,6 +602,8 @@ def test_nextflow_runtime_rejects_wrong_reference_and_untagged_modkit_bam(tmp_pa
             str(bai),
             "--reference",
             str(reference),
+            "--code_root",
+            str(ROOT),
             "--out_dir",
             str(tmp_path / "validate-out"),
             "-ansi-log",
@@ -635,6 +641,8 @@ def test_nextflow_runtime_rejects_wrong_reference_and_untagged_modkit_bam(tmp_pa
             str(bai),
             "--reference",
             str(matching_reference),
+            "--code_root",
+            str(ROOT),
             "--out_dir",
             str(tmp_path / "matching-out"),
             "-ansi-log",
@@ -672,6 +680,8 @@ def test_nextflow_runtime_rejects_wrong_reference_and_untagged_modkit_bam(tmp_pa
             str(bam),
             "--bai",
             str(bai),
+            "--code_root",
+            str(ROOT),
             "--out_dir",
             str(tmp_path / "modkit-out"),
             "-ansi-log",
@@ -690,7 +700,7 @@ def test_nextflow_runtime_rejects_wrong_reference_and_untagged_modkit_bam(tmp_pa
         path.read_text(encoding="utf-8", errors="replace")
         for path in (tmp_path / "modkit-work").rglob(".command.err")
     )
-    assert "no meaningful paired MM/ML modified-base tags" in combined_output
+    assert "no non-empty paired MM/ML modified-base tags" in combined_output
     assert not (tmp_path / "modkit-out/methylation/methylation.bed").exists()
 
 

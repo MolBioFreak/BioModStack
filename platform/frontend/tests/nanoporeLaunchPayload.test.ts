@@ -46,5 +46,5 @@ test('NGS operator stage payload keeps workflow-owned rules explicit and omits i
         inputSource: 'pod5',
         runFastqQc: true,
         runAssembly: true,
-    }), {});
+    }), { run_fastq_qc: true });
 });

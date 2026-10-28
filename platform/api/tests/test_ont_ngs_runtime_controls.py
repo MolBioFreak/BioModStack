@@ -224,7 +224,8 @@ def test_modified_base_tag_validation_requires_meaningful_pair_on_same_record(
         assert "Error executing process > 'ValidateModifiedBaseBam" in completed.stdout
 
 
-def test_tagged_bam_runs_real_modkit_pileup_and_summary(tmp_path: Path) -> None:
+@pytest.mark.parametrize("workflow", ["ont_plasmid_qc", "ont_basecall_dna"])
+def test_tagged_bam_runs_real_modkit_pileup_and_summary(tmp_path: Path, workflow: str) -> None:
     nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
     samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN", "/home/dalab/micromamba/bin/samtools"))
     apptainer = Path(shutil.which("apptainer") or "/usr/bin/apptainer")
@@ -265,29 +266,12 @@ def test_tagged_bam_runs_real_modkit_pileup_and_summary(tmp_path: Path) -> None:
     modkit_wrapper = wrapper_dir / "modkit"
     modkit_wrapper.write_text(
         "#!/bin/sh\n"
-        f"exec {apptainer} exec {dorado_sif} modkit \"$@\"\n",
+        f"exec {apptainer} exec --bind {tmp_path}:{tmp_path} {dorado_sif} modkit \"$@\"\n",
         encoding="utf-8",
     )
     modkit_wrapper.chmod(0o755)
 
-    harness = tmp_path / "modkit_harness.nf"
-    harness.write_text(
-        "nextflow.enable.dsl=2\n"
-        "params.bam = null\n"
-        "params.bai = null\n"
-        "params.reference = null\n"
-        "params.out_dir = null\n"
-        "params.modkit_filter_threshold = null\n"
-        f"include {{ ValidateModifiedBaseBam; ModkitPileup }} from '{(ROOT / 'modules/ngs/modkit_pileup.nf').as_posix()}'\n"
-        f"include {{ ModkitSummary }} from '{(ROOT / 'modules/ngs/modkit_summary.nf').as_posix()}'\n"
-        "workflow {\n"
-        "  input_bam = Channel.of(tuple(file(params.bam), file(params.bai)))\n"
-        "  ValidateModifiedBaseBam(input_bam)\n"
-        "  ModkitPileup(ValidateModifiedBaseBam.out.bam, Channel.of(file(params.reference)))\n"
-        "  ModkitSummary(ValidateModifiedBaseBam.out.bam)\n"
-        "}\n",
-        encoding="utf-8",
-    )
+    harness = ROOT / f"workflows/ngs/{workflow}.nf"
     config = tmp_path / "local.config"
     config.write_text(
         "process {\n"
@@ -310,12 +294,14 @@ def test_tagged_bam_runs_real_modkit_pileup_and_summary(tmp_path: Path) -> None:
             str(config),
             "-w",
             str(tmp_path / "work"),
-            "--bam",
+            "--bam_path",
             str(bam),
-            "--bai",
-            str(bai),
-            "--reference",
+            "--reference_fasta",
             str(reference),
+            "--run_modkit",
+            "true",
+            "--run_fastq_qc",
+            "false",
             "--code_root",
             str(ROOT),
             "--out_dir",

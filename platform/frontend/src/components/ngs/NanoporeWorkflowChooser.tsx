@@ -15,7 +15,7 @@ const WORKFLOW_PANEL = 'rounded-2xl border border-[var(--border-primary)] bg-[va
 
 const PLASMID_METHODS = [
     { key: 'clone', title: 'Assembly and validation report', description: 'Vendor wf-clone-validation report, de novo assembly and construct evidence.' },
-    { key: 'plasmidQc', title: 'Plasmid read QC', description: 'Per-base support, consensus and multimer evidence against the saved plasmid, from POD5, BAM or FASTQ. No vendor assembly report.' },
+    { key: 'plasmidQc', title: 'Plasmid read QC', description: 'Per-base support, consensus and multimer evidence against the saved plasmid, from POD5, BAM or FASTQ. Optional tandem methylation tables from POD5 or tagged BAM. No vendor assembly report.' },
     { key: 'constructScreening', title: 'Construct screening', description: 'Compare reads against the saved construct and review screening results.' },
 ] as const;
 
@@ -28,9 +28,9 @@ const WORKFLOW_GROUPS: readonly WorkflowGroup[] = [
         choices: [
             {
                 key: 'dna',
-                title: 'Basecall DNA',
-                input: 'DNA POD5',
-                result: 'DNA reads, with optional paired strands, barcodes and modification calls',
+                title: 'DNA analysis',
+                input: 'DNA POD5, BAM or FASTQ',
+                result: 'General DNA reads, optional reference QC and tandem methylation analysis; no plasmid assumption required',
             },
             {
                 key: 'rna',
