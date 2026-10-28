@@ -1,3 +1,6 @@
+import { DocumentCaptureContext, DocumentCaptureRegistry, DeNovoDraftPreparationContext, type CapturedAnnotatedDocument } from '../lib/deNovoDocumentCapture';
+import { DeNovoDocumentEditors, DeNovoDocumentEditorPanels } from './DeNovoDocumentEditors';
+import { materializeLaProteinaStudioCapture } from '../lib/laProteinaStudioCapture';
 import { LaProteinaEvaluation } from './LaProteinaEvaluation';
 import { DeNovoNativeGenerationSettings } from './DeNovoNativeGenerationSettings';
 import { OtherDeNovoSettings, retainedRfd3Draft, rfd3ExecutionKeys, useRfd3GenerationBounds } from './OtherDeNovoSettings';
@@ -8,7 +11,7 @@ import { projectRfd3SourceSelection } from '../lib/rfd3SourceSelection';
 import { NativeSourceInput } from './DeNovoNativeSources';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useContext, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api, completeCurrentLaunchContext, submitJob, type NativeGenerationSourceBinding, type StructureMaterialization, type Job } from '../lib/api';
@@ -308,6 +311,9 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
 }) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const [documentCaptures] = useState(() => new DocumentCaptureRegistry());
+    const preparation = useContext(DeNovoDraftPreparationContext);
+    const [molecularDocuments, setMolecularDocuments] = useState<Record<string, CapturedAnnotatedDocument>>(() => settingsObject(initialValues.molecular_documents) as Record<string, CapturedAnnotatedDocument>);
     const backend: DeNovoBackend = generator === 'laproteina' ? 'laproteina' : 'disco';
     const inputSection = designTask === 'unconditional' ? 'Design' : 'Source and regions';
     const [section, setSection] = useState(inputSection);
@@ -401,7 +407,9 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     } : undefined;
     // The exact binding the picker just acquired, so the integrated viewer does not re-read a source it already holds.
     const [rfd3Acquired, setRfd3Acquired] = useState<Extract<NativeGenerationSourceBinding, { path?: string }> & { model_number?: number }>();
-    const rfd3Binding = rfd3Source && rfd3Acquired && rfd3Acquired.path === rfd3Source.path && rfd3Acquired.model_number === rfd3Source.model_number ? rfd3Acquired : rfd3Source;
+    const retainedRfd3Source = molecularDocuments.input?.source;
+    const rfd3Binding = rfd3Source && rfd3Acquired && rfd3Acquired.path === rfd3Source.path && rfd3Acquired.model_number === rfd3Source.model_number ? rfd3Acquired
+        : rfd3Source && retainedRfd3Source?.path === rfd3Source.path && retainedRfd3Source.model_number === rfd3Source.model_number ? retainedRfd3Source : rfd3Source;
     // Source reading starts only once the optional section is opened; closed/source-free forms issue no extra requests.
     const [rfd3SourceOpen, setRfd3SourceOpen] = useState(false);
     const rfd3Visual = rfd3Picks ? { ...rfd3Picks, inputPath: rfd3Source?.path ?? '', sourceModel: rfd3Source?.model_number, sourceMapping: rfd3Settings.source_mapping as string | undefined } : undefined;
@@ -429,6 +437,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
 
     const draftValues: Record<string, unknown> = {
         ...retainedAlternativeParams,
+        ...(Object.keys(molecularDocuments).length ? { molecular_documents: molecularDocuments } : {}),
         ...sequenceDesign,
         ...(sequenceOmitted ? { sequence_design_omitted: true } : {}),
         ...(sequenceNull ? { sequence_design_null: true } : {}),
@@ -475,7 +484,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const extras = Object.fromEntries(Object.entries(initialValues).filter(([key]) => !Object.hasOwn(draftValues, key) && !clearable.has(key)));
     const draftJson = JSON.stringify({ ...extras, ...draftValues });
     const submitMutation = useMutation({
-        mutationFn: async (payload: Partial<Job>) => submitJob(payload),
+        mutationFn: async () => submitJob(await prepareCurrent.current()),
         onSuccess: async (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             navigate(await completeCurrentLaunchContext(response.data) ?? '/');
@@ -568,7 +577,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             return;
         }
 
-        await submitMutation.mutateAsync(buildAlternativeWorkflowRequest());
+        try { await submitMutation.mutateAsync(); }
+        catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     };
 
     const buildDeNovoWorkflowRequest = () => ({
@@ -608,7 +618,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             return;
         }
 
-        await submitMutation.mutateAsync(buildDeNovoWorkflowRequest());
+        try { await submitMutation.mutateAsync(); }
+        catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     };
 
     const workflowRequest = generator === 'rfd3'
@@ -623,6 +634,76 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         }
         onDraftChange({ ...values, native_job_request: JSON.parse(workflowRequestJson) });
     }, [draftJson, workflowRequestJson, generator, onDraftChange]);
+    const currentCaptureDraft = useRef({ draftJson, workflowRequestJson, onDraftChange, generation: 0 });
+    if (currentCaptureDraft.current.draftJson !== draftJson || currentCaptureDraft.current.workflowRequestJson !== workflowRequestJson) {
+        currentCaptureDraft.current = { draftJson, workflowRequestJson, onDraftChange, generation: currentCaptureDraft.current.generation + 1 };
+    } else currentCaptureDraft.current.onDraftChange = onDraftChange;
+    const captureLifetime = useRef(0);
+    useEffect(() => () => { captureLifetime.current++; }, []);
+    const prepareCurrent = useRef<() => Promise<Partial<Job>>>(async () => ({}));
+    const receiveCaptured = async (captured: Record<string, CapturedAnnotatedDocument>) => {
+        const snapshot = currentCaptureDraft.current;
+        const lifetime = captureLifetime.current;
+        const documentGeneration = documentCaptures.getSnapshot();
+        const exact = JSON.parse(snapshot.draftJson);
+        const request = JSON.parse(snapshot.workflowRequestJson);
+        let motifPath: string | undefined;
+        if (generator === 'laproteina' && captured.motif) {
+            const overrides = { ...settingsObject(exact.laproteina_settings), ...settingsObject(exact.pcad_laproteina_settings_json) };
+            const contig = Object.hasOwn(overrides, 'contig_string') ? overrides.contig_string : exact.laproteina_contig_string;
+            motifPath = await materializeLaProteinaStudioCapture(captured.motif, String(contig ?? ''));
+        }
+        if (lifetime !== captureLifetime.current || snapshot.generation !== currentCaptureDraft.current.generation || documentGeneration !== documentCaptures.getSnapshot()) {
+            throw new Error('The source or native settings changed during capture. Your editor is retained; capture the current draft again.');
+        }
+        if (generator === 'rfd3' && captured.input) {
+            const source = captured.input.source;
+            exact.input_structure = source.path;
+            if (source.model_number === undefined) delete exact.source_model; else exact.source_model = source.model_number;
+            if (request) {
+                request.params.input_structure = source.path;
+                if (source.model_number === undefined) delete request.params.source_model; else request.params.source_model = source.model_number;
+            }
+            setRfd3Acquired(source);
+            setRfd3Settings(previous => {
+                const next: Record<string, unknown> = { ...previous, input_structure: source.path };
+                if (source.model_number === undefined) delete next.source_model; else next.source_model = source.model_number;
+                return next;
+            });
+        }
+        if (motifPath !== undefined) {
+            // Explicit Studio adoption replaces the effective motif path only;
+            // all other native/manual/task overrides retain their precedence.
+            exact.pcad_laproteina_settings_json = { ...settingsObject(exact.pcad_laproteina_settings_json), motif_pdb: motifPath };
+            if (request) request.params.pcad_laproteina_settings_json = exact.pcad_laproteina_settings_json;
+            captured = { ...captured, motif: { ...captured.motif, provenance: { ...captured.motif.provenance, native_motif_path: motifPath } } };
+            setNativeControls(previous => ({ ...previous, pcad_laproteina_settings_json: exact.pcad_laproteina_settings_json }));
+        }
+        if (Object.keys(captured).length) {
+            exact.molecular_documents = { ...settingsObject(exact.molecular_documents), ...captured };
+            setMolecularDocuments(exact.molecular_documents);
+        }
+        for (const key of Object.keys(exact)) {
+            if ((key.startsWith('laproteina_') && generator !== 'laproteina') || (key.startsWith('disco_') && generator !== 'disco')) delete exact[key];
+        }
+        snapshot.onDraftChange({ ...exact, native_job_request: request });
+        return request as Partial<Job>;
+    };
+    const receiveCurrent = useRef(receiveCaptured); receiveCurrent.current = receiveCaptured;
+    prepareCurrent.current = async () => receiveCurrent.current(await documentCaptures.capture());
+    useEffect(() => {
+        if (!preparation) return;
+        const prepare = async () => { await prepareCurrent.current(); };
+        preparation.current = prepare;
+        return () => { if (preparation.current === prepare) preparation.current = null; };
+    }, [preparation]);
+    const effectiveMotifPath = effectiveOverride('motif_pdb', motifPdb);
+    const motifStudioSource = typeof effectiveMotifPath === 'string' && effectiveMotifPath
+        ? molecularDocuments.motif?.provenance?.native_motif_path === effectiveMotifPath
+            ? molecularDocuments.motif.source : { path: effectiveMotifPath, output_format: 'native' as const }
+        : undefined;
+    const studioSources: Record<string, NativeGenerationSourceBinding> | undefined = generator === 'rfd3' ? (rfd3Binding ? { input: rfd3Binding } : undefined)
+        : generator === 'laproteina' && designTask === 'motif_scaffolding' && motifStudioSource ? { motif: motifStudioSource } : undefined;
     const stableWorkflowRequest = useMemo(() => JSON.parse(workflowRequestJson) as typeof workflowRequest, [workflowRequestJson]);
     const isMotif = backend === 'laproteina' && designTask === 'motif_scaffolding';
     const contextTask = ['ligand_conditioned', 'dna_conditioned', 'rna_conditioned', 'custom_json'].includes(designTask)
@@ -685,6 +766,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         </>}
     </div>;
     return (
+        <DocumentCaptureContext.Provider value={documentCaptures}><DeNovoDocumentEditors registry={documentCaptures} sources={studioSources}
+            onAdopt={(slot, document) => { void receiveCurrent.current({ [slot]: document }).catch(cause => setError(cause instanceof Error ? cause.message : String(cause))); }}>
         <div className="w-full space-y-5 text-[var(--text-primary)]" data-bms-protein-generation-workflow={generator}>
             <ProteinDesignSections label="Generation sections" sections={[inputSection, 'Sampling', 'Sequence Design']} active={section} onChange={setSection} />
             {/* Section navigation is presentation only. Source tools and viewers stay mounted. */}
@@ -738,9 +821,10 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                         taskName={String(effectiveOverride('motif_task_name', motifTaskName) ?? '')}
                         taskCatalog={laCatalog.data?.native_task_catalog?.tasks}
                         onTaskChange={name => setEffectiveOverride('motif_task_name', name, () => setMotifTaskName(name))}
-                        path={motifPdb} contig={String(effectiveOverride('contig_string', motifContig) ?? '')} segmentOrder={String(effectiveOverride('segment_order', motifSegmentOrder) ?? '')}
+                        studioSource={motifStudioSource}
+                        path={String(effectiveMotifPath ?? '')} contig={String(effectiveOverride('contig_string', motifContig) ?? '')} segmentOrder={String(effectiveOverride('segment_order', motifSegmentOrder) ?? '')}
                         atomSpec={effectiveOverride('motif_atom_spec', motifAtomSpec) as string | null | undefined} initialInspection={motifInspection} onInspectionChange={setMotifInspection} onChange={patch => {
-                        if (patch.path !== undefined) setMotifPdb(patch.path);
+                        if (patch.path !== undefined) { const path = patch.path; setEffectiveOverride('motif_pdb', path, () => setMotifPdb(path)); }
                         if (patch.atomSpec !== undefined) { if (!Object.hasOwn(nativeOverrides, 'motif_atom_spec')) setMotifAtomSpec(patch.atomSpec); authorLaMotif('motif_atom_spec', patch.atomSpec); }
                         if (patch.contig !== undefined) { if (!Object.hasOwn(nativeOverrides, 'contig_string')) setMotifContig(patch.contig); authorLaMotif('contig_string', patch.contig); }
                         if (patch.segmentOrder !== undefined) { if (!Object.hasOwn(nativeOverrides, 'segment_order')) setMotifSegmentOrder(patch.segmentOrder); authorLaMotif('segment_order', patch.segmentOrder); }
@@ -859,12 +943,15 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     {discoInputJson && generator === 'disco' && <div><dt className="text-[var(--text-secondary)]">Native input override</dt><dd className="break-all">{discoInputJson}</dd></div>}
                 </dl>
             </details>
+            <DeNovoDocumentEditorPanels />
+            {generator === 'rfd3' && <p className="text-xs">Studio captures coordinates and document identity. RFD4 Studio annotations are not translated into RFD3 masks; use the native RFD3 condition controls.</p>}
+            {generator === 'disco' && <p className="text-xs">DISCO accepts explicit native entities, sequences, modifications and bonds, not Studio scaffold coordinates or RFD4 conditions. Author these through Native jobs; existing jobs (including an empty list), unknown fields and FILE_ ownership remain unchanged.</p>}
             <ProteinDesignRun jobName={jobName} onJobNameChange={setJobName} pending={submitMutation.isPending}
                 onSubmit={() => { void (generator === 'rfd3' ? submitDeNovo() : submitAlternative()); }} submitLabel="Generate candidates">
                 {runDetails}
                 <ExecutionTargetPicker workflowRequest={stableWorkflowRequest} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
                 {error && <div role="alert" className="text-sm text-[var(--text-primary)]">{error}</div>}
             </ProteinDesignRun>
-        </div>
+        </div></DeNovoDocumentEditors></DocumentCaptureContext.Provider>
     );
 }

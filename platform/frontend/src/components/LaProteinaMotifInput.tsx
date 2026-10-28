@@ -3,7 +3,8 @@ import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelec
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { EpitopeSelector } from './EpitopeSelector';
 import { createBC2SourceSession, type BC2Document } from '../lib/bindcraft2StructureInputs';
-import { materializeStructureTarget } from '../lib/api';
+import { useDeNovoDocumentEditors } from './DeNovoDocumentEditors';
+import { materializeStructureTarget, type StructureSourceSelection } from '../lib/api';
 import { laMotifAtoms, laAtomKey, laMotifAtomSpec } from '../lib/laProteinaAtomSelection';
 import { LaProteinaTaskCatalog } from './LaProteinaTaskCatalog';
 import { LaProteinaFragments } from './LaProteinaFragments';
@@ -17,6 +18,7 @@ export interface LaProteinaMotifInspection {
     atoms?: string[];
 }
 export interface LaProteinaMotifInputProps {
+    studioSource?: StructureSourceSelection;
     path: string;
     contig: string;
     segmentOrder: string;
@@ -33,7 +35,8 @@ export interface LaProteinaMotifInputProps {
 
 /** Inspection is independent of native inputs. Only an explicit action replaces
  * the motif path with a motif-only derivative; manual values are never normalized. */
-export function LaProteinaMotifInput({ path, contig, segmentOrder, atomSpec, taskName, taskCatalog, onTaskChange, atomSelectionMode, onAtomSelectionModeChange, onChange, initialInspection, onInspectionChange }: LaProteinaMotifInputProps) {
+export function LaProteinaMotifInput({ studioSource, path, contig, segmentOrder, atomSpec, taskName, taskCatalog, onTaskChange, atomSelectionMode, onAtomSelectionModeChange, onChange, initialInspection, onInspectionChange }: LaProteinaMotifInputProps) {
+    const editors = useDeNovoDocumentEditors();
     const [session] = useState(createBC2SourceSession);
     const [source, setSource] = useState<SelectedTarget | null>(initialInspection?.source?.path ? initialInspection.source : null);
     const [pickerOpen, setPickerOpen] = useState(!initialInspection?.source?.path && !path);
@@ -145,6 +148,10 @@ export function LaProteinaMotifInput({ path, contig, segmentOrder, atomSpec, tas
             <button type="button" onClick={() => change({ atomSpec: null })}>Clear atom specification (native null)</button>
         </details>
         {error && <p role="status" className="text-sm text-amber-400">{error}</p>}
+        {editors && studioSource && <>
+            <button type="button" onClick={() => void editors.open('motif', studioSource)}>Edit motif source in Studio</button>
+            <p className="text-xs">Studio capture uses a checked PDB derivative and the explicit ordered motif blocks above to write a real motif-only PDB. Native atom scope and atom specification retain precedence. Studio RFD4 annotations are not La-Proteina conditions. Original/manual motifs and named tasks remain available without opening Studio.</p>
+        </>}
         {path && <p className="text-xs break-all text-[var(--text-secondary)]">Native motif: {path}</p>}
         <details className="rounded-lg border p-3" style={themedInsetStyle}><summary className="cursor-pointer text-sm">Manual native input compatibility</summary>
             <p className="text-xs my-2">Supply an already prepared motif-only PDB and native contig/order verbatim. Visual selection is optional and does not gate launch.</p>
