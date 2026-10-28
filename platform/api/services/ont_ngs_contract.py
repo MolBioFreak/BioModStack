@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Mapping
@@ -102,6 +103,18 @@ def resolve_expected_plasmid_size(params: dict[str, Any], reference_length: int)
     requested = params.get("expected_plasmid_size")
     params["requested_expected_plasmid_size"] = requested
     params["expected_plasmid_size"] = effective_expected_plasmid_size(requested, reference_length)
+
+
+DORADO_DEVICE_ENV = "BMS_ONT_DORADO_DEVICE"
+_DORADO_DEVICE = re.compile(r"^(?:cpu|cuda:(?:all|[0-9]+(?:,[0-9]+)*))$")
+
+
+def installed_dorado_device() -> str:
+    """The host's basecalling device: cuda:0 unless the installation selects cpu or other GPUs."""
+    value = os.environ.get(DORADO_DEVICE_ENV, "").strip().lower() or ONT_QUALITY_MODE_CONTRACT["default_device"]
+    if not _DORADO_DEVICE.fullmatch(value):
+        raise ValueError(f"{DORADO_DEVICE_ENV} must be cpu or cuda:<ids>/cuda:all")
+    return value
 
 
 ONT_QUALITY_MODE_CONTRACT: dict[str, Any] = {
@@ -707,7 +720,7 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
             normalized[key] = value
     normalized["dorado_lock_sha256"] = submitted_lock_sha256 if cached_resume and submitted_lock_sha256 else current_lock_sha256
     if not cached_resume or not normalized.get("dorado_device"):
-        normalized["dorado_device"] = ONT_QUALITY_MODE_CONTRACT["default_device"]
+        normalized["dorado_device"] = installed_dorado_device()
     normalized["manifest_contract"] = MANIFEST_SCHEMA
     raw_emit_moves = normalized.get("emit_moves", basecall_mode == "simplex")
     if not isinstance(raw_emit_moves, bool):

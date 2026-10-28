@@ -71,7 +71,7 @@ def _verified_runtime_location(runtime_sif: Path, expected: str) -> tuple[Path, 
 SCHEMA = "biomodstack.dorado_preflight.v1"
 LOCK_SCHEMA = "biomodstack.dorado_lock.v1"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
-DEVICE = re.compile(r"^cuda:(?:all|[0-9]+(?:,[0-9]+)*)$")
+DEVICE = re.compile(r"^(?:cpu|cuda:(?:all|[0-9]+(?:,[0-9]+)*))$")
 
 
 def _sha256(path: Path) -> str:
@@ -516,7 +516,7 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
         if molecule != "dna" or mode != "simplex" or modified_bases not in mods or quality != mods[modified_bases]["base_quality"]:
             raise ValueError("modified-base model is incompatible with molecule, quality, or basecalling mode")
     if not DEVICE.fullmatch(str(device)):
-        raise ValueError("device must be an explicit CUDA device selection")
+        raise ValueError("device must be cpu or an explicit CUDA device selection")
     policy = lock["policy"]
     batch = batch_size if batch_size is not None else policy["default_batch_size"][mode]
     if isinstance(batch, bool) or not isinstance(batch, int):
