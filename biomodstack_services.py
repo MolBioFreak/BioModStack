@@ -1891,6 +1891,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE={ont_acquisition_pressure}")}
         Environment={systemd_value(f"BMS_ONT_LIVE_CONVERSION_ENABLED={ont_live_conversion_enabled}")}
         Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_RETENTION_POLICY={ont_retention_policy}")}
+        {("Environment=" + systemd_value(f"BMS_ONT_DORADO_DEVICE={os.environ['BMS_ONT_DORADO_DEVICE']}")) if os.environ.get("BMS_ONT_DORADO_DEVICE", "").strip() else ""}
         Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
         Environment={systemd_value(f"BMS_BUILD_ID={build_id}")}
         Environment={systemd_value(f"BMS_BUILD_TIME={build_time}")}

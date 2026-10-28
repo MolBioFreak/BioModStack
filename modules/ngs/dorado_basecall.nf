@@ -112,7 +112,7 @@ process DoradoBasecall {
     [[ "\${model_id}" =~ ^[A-Za-z0-9_.@-]+\$ ]]
     [[ "\${batch_size}" =~ ^[0-9]+\$ ]]
     [[ "\${min_qscore}" =~ ^[0-9]+\$ ]]
-    [[ "\${device}" =~ ^cuda:(all|[0-9]+(,[0-9]+)*)\$ ]]
+    [[ "\${device}" == cpu || "\${device}" =~ ^cuda:(all|[0-9]+(,[0-9]+)*)\$ ]]
     [[ "\${mode}" == simplex || "\${mode}" == duplex ]]
     [[ "\${molecule}" == dna || "\${molecule}" == rna ]]
     trim_adapters=${trimAdapters}
@@ -203,7 +203,7 @@ process DoradoBasecall {
     visible_gpus="\${CUDA_VISIBLE_DEVICES:-0}"
     IFS=',' read -r -a gpu_ids <<<"\${visible_gpus}"
     device_indices="\${device#cuda:}"
-    if [[ "\${device_indices}" != all ]]; then
+    if [[ "\${device}" != cpu && "\${device_indices}" != all ]]; then
       declare -A selected_logical=()
       IFS=',' read -r -a logical_ids <<<"\${device_indices}"
       for logical_id in "\${logical_ids[@]}"; do

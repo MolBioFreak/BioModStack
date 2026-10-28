@@ -7295,6 +7295,10 @@ async def _create_job(
             vram_estimate = 0
             job_data.pinned_gpu = None
             logger.info(f"[QUEUE] FASTQ-only nanopore job '{job_data.name}': CPU-only, vram_estimate=0")
+        elif str(job_data.params.get("dorado_device") or "").strip().lower() == "cpu":
+            vram_estimate = 0
+            job_data.pinned_gpu = None
+            logger.info(f"[QUEUE] CPU Dorado nanopore job '{job_data.name}': vram_estimate=0")
     
     # Generate batch_id if creating multiple jobs
     batch_id = str(uuid.uuid4()) if num_jobs > 1 or original_requested_params.get('mutation_seed_refinement_trigger') else None
