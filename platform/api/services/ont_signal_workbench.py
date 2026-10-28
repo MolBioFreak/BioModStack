@@ -1434,13 +1434,41 @@ async def register_external_move_bam_candidate(
     return _source_public(winner)
 
 
+async def _track_basecall_calls_bam(session: AsyncSession, source_job_id: str | None) -> str:
+    """Track a completed basecall job's own move-tagged calls.bam as its input file.
+
+    The job-owned path checks in register_move_source still apply; this only
+    records the job's published BAM so it can be selected without an upload.
+    """
+    if source_job_id is None:
+        raise OntSignalError("a completed source job authority is required")
+    job = await session.get(Job, source_job_id)
+    if job is None or job.status != "completed":
+        raise OntSignalError("completed source job authority is required")
+    root = _lexical_absolute_path(job.child_output_dir or job.output_dir)
+    if root is None:
+        raise OntSignalError("completed source job has no canonical owned output root")
+    directory = root / "basecall"
+    input_file_id = f"ont-job-calls-{uuid.uuid5(uuid.NAMESPACE_URL, str(job.id)).hex[:24]}"
+    await session.execute(
+        sqlite_insert(InputFile)
+        .values(id=input_file_id, filename="calls.bam", file_type="bam", directory=str(directory),
+                size_bytes=None, uploaded_at=_now())
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    tracked = await session.get(InputFile, input_file_id)
+    if tracked is None or tracked.directory != str(directory) or tracked.filename != "calls.bam":
+        raise OntSignalError("basecall calls.bam tracking authority diverged")
+    return input_file_id
+
+
 async def register_move_source(
     session: AsyncSession,
     *,
     run_id: str,
     observed_generation: int,
     raw_representation_id: str,
-    input_file_id: str,
+    input_file_id: str | None,
     molecule_type: str,
     source_job_id: str | None,
     external_registration_receipt_id: str | None,
@@ -1468,6 +1496,8 @@ async def register_move_source(
     receipts = representation.validation_receipts if isinstance(representation.validation_receipts, dict) else {}
     if representation.format != "blow5" or representation.state != "ready" or receipts.get("adjacent_index") is not True:
         raise OntSignalError("ready indexed BLOW5 authority is required")
+    if input_file_id is None:
+        input_file_id = await _track_basecall_calls_bam(session, source_job_id)
     tracked = await session.get(InputFile, input_file_id)
     if tracked is None:
         raise KeyError("tracked move-table input not found")
