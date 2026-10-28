@@ -1887,7 +1887,10 @@ async def _adapter_transient_owner_liveness(
         )
         return _AdapterTransientOwnerLiveness.ACTIVE
 
-    if owner_state == "inactive" and not cgroup_nonempty:
+    # systemd reports "failed" for a unit whose main process was killed (for
+    # example by the cgroup OOM killer). With an empty cgroup it is as terminal
+    # as "inactive"; holding it left killed jobs "running" indefinitely.
+    if owner_state in {"inactive", "failed"} and not cgroup_nonempty:
         return _AdapterTransientOwnerLiveness.INACTIVE
 
     logger.critical(
