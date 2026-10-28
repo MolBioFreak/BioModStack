@@ -22,7 +22,7 @@ from build_identity import current_build_identity
 from readiness import collect_runtime_readiness, http_readiness
 from dev_issue_screenshot_upload_limit import DevIssueScreenshotUploadLimitMiddleware
 from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
-from routers import atomworks_studio, molecular_construction
+from routers import atomworks_studio, molecular_construction, molecular_geometry
 from routers import binder_blind_pose, binder_continuation
 from routers import ligandmpnn_interface_context, sequence_native, protonpottsmpnn, protonpottsmpnn_prediction
 from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, execution_targets, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, molbio_restriction, molbio_share, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
@@ -391,6 +391,7 @@ app.include_router(gpu.router, prefix="/api/gpu", tags=["gpu"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
 app.include_router(atomworks_studio.router)
 app.include_router(molecular_construction.router)
+app.include_router(molecular_geometry.router)
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(user_sequences.router, prefix="/api/user-sequences", tags=["user-sequences"])
 app.include_router(user_templates.router, prefix="/api/user-templates", tags=["user-templates"])
