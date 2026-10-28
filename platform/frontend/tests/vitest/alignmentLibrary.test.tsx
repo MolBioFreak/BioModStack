@@ -5,6 +5,40 @@ import { expect, it, vi } from 'vitest';
 import AlignmentLibrary from '../../src/components/alignments/AlignmentLibrary';
 import { api } from '../../src/lib/api';
 
+it('keeps fresh entry actionable while Projects load, fail and recover', async () => {
+  let resolve: (value: unknown) => void = () => {};
+  const get = vi.spyOn(api, 'get').mockImplementationOnce(() => new Promise(r => { resolve = r; }) as never);
+  const div = document.createElement('div'); const root = createRoot(div);
+  try {
+    await act(async () => root.render(<MemoryRouter><AlignmentLibrary/></MemoryRouter>));
+    expect(div.textContent).toContain('Loading Projects');
+    expect(div.querySelector('a[href="/alignments/new"]')).not.toBeNull();
+    expect(div.textContent).not.toContain('No Projects found');
+    await act(async () => resolve({data: {items: [], next_cursor: null}}));
+    expect(div.textContent).toContain('No Projects found');
+  } finally { await act(async () => root.unmount()); get.mockRestore(); }
+});
+
+it('distinguishes failed receipt reads from empty results and retries without hiding imports', async () => {
+  let fail = true;
+  const get = vi.spyOn(api, 'get').mockImplementation(async url => {
+    if (String(url).includes('/projects/search')) return {data: {items: [{id: 'p', name: 'Project'}], next_cursor: null}};
+    if (String(url).endsWith('/receipts')) { if (fail) throw new Error('test read failure'); return {data: {items: [], next_cursor: null}}; }
+    return {data: []};
+  });
+  const div = document.createElement('div'); const root = createRoot(div);
+  try {
+    await act(async () => root.render(<MemoryRouter><AlignmentLibrary initialProject="p"/></MemoryRouter>));
+    expect(div.textContent).toContain('Alignment library unavailable');
+    expect(div.textContent).not.toContain('No retained alignment results');
+    expect(div.querySelector('input[aria-label="Alignment file"]')).not.toBeNull();
+    fail = false;
+    await act(async () => Array.from(div.querySelectorAll('button')).find(b => b.textContent === 'Retry results')!.click());
+    expect(div.textContent).not.toContain('Alignment library unavailable');
+    expect(div.textContent).toContain('No retained alignment results');
+  } finally { await act(async () => root.unmount()); get.mockRestore(); }
+});
+
 it('lists authorized Project receipts and links the exact retained result', async () => {
   const get = vi.spyOn(api, 'get').mockImplementation(async url => {
     if (String(url).includes('/projects/search')) return {data: {items: [{id: 'p', name: 'Project'}], next_cursor: null}};

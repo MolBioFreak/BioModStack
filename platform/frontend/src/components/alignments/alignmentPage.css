@@ -1,0 +1,39 @@
+/* Page-local presentation: never style the embedded native viewer documents. */
+.alignment-page { width: 100%; min-width: 0; padding: clamp(1rem, 2vw, 2rem); color: var(--text-primary); }
+.alignment-page-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; padding-bottom: 1.25rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--border-primary); }
+.alignment-page h1 { font-size: 1.5rem; font-weight: 650; }
+.alignment-page h2 { font-size: 1.2rem; font-weight: 600; margin-bottom: .75rem; }
+.alignment-page h3, .alignment-page legend { font-size: 1rem; font-weight: 600; }
+.alignment-page p { margin: .5rem 0 1rem; color: var(--text-secondary); overflow-wrap: anywhere; }
+.alignment-page a { color: var(--link); }
+.alignment-page-nav { display: flex; flex-wrap: wrap; gap: .5rem; }
+.alignment-page-nav a, .alignment-page .alignment-action, .alignment-page button { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-height: 2.5rem; padding: .5rem .9rem; border: 1px solid var(--border-primary); border-radius: .5rem; background: var(--bg-tertiary); color: var(--text-primary); font: inherit; text-decoration: none; }
+.alignment-page-nav a[aria-current="page"], .alignment-page .alignment-action { background: color-mix(in srgb, var(--accent-primary) 18%, var(--bg-secondary)); color: var(--accent-primary); border-color: var(--accent-primary); }
+.alignment-page button:not(:disabled):hover, .alignment-page-nav a:hover { background: var(--card-hover); }
+.alignment-page :is(button,a,input,select,textarea,summary):focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 3px; }
+.alignment-page button:disabled { opacity: .5; }
+.alignment-page > section, .alignment-results, .alignment-empty { min-width: 0; padding: 1.25rem; border: 1px solid var(--border-primary); border-radius: .75rem; background: var(--bg-secondary); }
+.alignment-page label { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .5rem; max-width: 100%; margin: .4rem .75rem .4rem 0; }
+.alignment-page :is(input,select,textarea) { min-width: 0; max-width: 100%; padding: .5rem; border: 1px solid var(--border-secondary); border-radius: .4rem; color: var(--text-primary); background: var(--surface-control); }
+.alignment-page select { text-overflow: ellipsis; }
+.alignment-page textarea { width: 100%; }
+.alignment-page label:has(textarea) { display: block; width: 100%; }
+.alignment-page input:is([type="checkbox"],[type="radio"]) { accent-color: var(--accent-primary); }
+.alignment-page fieldset { min-width: 0; padding: 1rem; margin-top: 1rem; border: 1px solid var(--border-primary); border-radius: .5rem; }
+.alignment-page legend { padding: 0 .4rem; }
+.alignment-page .alignment-empty { margin-top: 1.25rem; padding: 2rem; background: var(--bg-primary); }
+.alignment-empty p { max-width: 52rem; }
+.alignment-empty a + a { margin-left: .75rem; }
+.alignment-page .alignment-results { margin-top: 1.25rem; }
+.alignment-results li { padding: .75rem 0; border-bottom: 1px solid var(--border-primary); overflow-wrap: anywhere; }
+.alignment-imports { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.alignment-imports fieldset { display: flex; flex-direction: column; align-items: flex-start; gap: .5rem; }
+.alignment-page [role="alert"] { padding: 1rem; border-left: 3px solid var(--error); color: var(--text-primary); background: var(--bg-tertiary); overflow-wrap: anywhere; }
+.alignment-page [role="status"] { padding: .75rem; background: var(--bg-tertiary); border-radius: .5rem; }
+@media (max-width: 760px) {
+  .alignment-imports { grid-template-columns: minmax(0, 1fr); }
+  .alignment-page-header { align-items: flex-start; flex-direction: column; }
+  .alignment-page > section, .alignment-page .alignment-empty { padding: 1rem; }
+  .alignment-page label { display: flex; margin-right: 0; }
+  .alignment-page select { width: 100%; }
+}

@@ -124,10 +124,13 @@ export default function AlignmentComparison({initialProject, savedState, operati
     do { const page = await searchProjects({cursor, archive: 'all'}); items.push(...page.items); cursor = page.next_cursor || undefined; } while (cursor);
     return items;
   }});
-  return <section aria-label="Alignment comparison"><h1>Compare alignments</h1>
+  return <section aria-label="Alignment comparison"><h2>Compare alignments</h2>
     <p>Select exact retained results and members. Comparison uses verified source occurrences and coordinates, not matching labels or same-numbered columns. Missing provenance remains unknown.</p>
     <label>Comparison Project <select value={project} onChange={e => setProject(e.target.value)}><option value="">Choose a Project</option>{projects.data?.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-    {projects.error && <p role="alert">Projects unavailable: {String(projects.error)}</p>}
+    {projects.isLoading && <p role="status">Loading Projects…</p>}
+    {projects.error && <p role="alert">Projects unavailable: {String(projects.error)} <button onClick={() => void projects.refetch()}>Retry Projects</button></p>}
+    {!project && <div className="alignment-empty"><h3>Choose a Project to compare retained alignments</h3><p>Select a left and right result, then their alignment members. You can inspect either result before comparing.</p><Link to="/alignments/library">Open alignment library</Link></div>}
+    {projects.isSuccess && !projects.data.length && <p>No Projects found. <Link to="/projects">Open Project Manager</Link>.</p>}
     {project && <ProjectComparison key={`${project}:${operationJob || ''}`} project={project} savedState={project === initialProject ? savedState : undefined} operationJob={project === initialProject ? operationJob : undefined}/>}
   </section>;
 }

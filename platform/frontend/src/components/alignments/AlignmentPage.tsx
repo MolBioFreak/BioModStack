@@ -1,4 +1,5 @@
 import { Link, useLocation, useParams } from 'react-router-dom';
+import './alignmentPage.css';
 import AlignmentWorkspace from './AlignmentWorkspace';
 import { alignmentViewers } from './lazyViewers';
 import AlignmentEditor from './AlignmentEditor';
@@ -101,14 +102,15 @@ export default function AlignmentPage() {
     const queryModel = query.get('model');
     const model = queryModel === 'family_msa_protein' || queryModel === 'family_msa_nucleic' ? queryModel : selectedModel;
     const section = location.pathname.endsWith('/compare') ? 'Compare' : location.pathname.endsWith('/new') || (location.pathname === '/alignments' && query.has('model')) ? 'New' : 'Library';
-    if (jobId && managedOperation) return <div className="mx-auto max-w-7xl p-4"><AlignmentOperationResult jobId={jobId} projectId={managedOperation.project_id} operation={managedOperation.request.operation}/></div>;
-    return <div className="mx-auto max-w-7xl p-4">
+    if (jobId && managedOperation) return <div className="alignment-page"><AlignmentOperationResult jobId={jobId} projectId={managedOperation.project_id} operation={managedOperation.request.operation}/></div>;
+    return <div className="alignment-page">
         {setup.active && setup.isLoading && <p role="status">Loading Project workflow setup…</p>}
         {setup.active && setup.error && <p role="alert">Project workflow setup unavailable: {projectManagerErrorMessage(setup.error)}</p>}
         {setup.setup && <ProjectWorkflowSetupBanner setup={setup.setup} />}
-        <nav aria-label="Alignment sections" className="flex flex-wrap gap-4 py-3">
+        <header className="alignment-page-header"><div><h1>Alignments</h1><p>Build, inspect and compare sequence alignments.</p></div>
+        <nav aria-label="Alignment sections" className="alignment-page-nav">
             {(['Library', 'New', 'Compare'] as const).map(name => <Link key={name} aria-current={section === name ? 'page' : undefined} to={{ pathname: `/alignments/${name.toLowerCase()}`, search: setup.active ? location.search : '' }}>{name}</Link>)}
-        </nav>
+        </nav></header>
         {base && !manifest.data && !error && <p role="status">Waiting for alignment result{job.data?.status ? ` (Job ${job.data.status})` : ''}…</p>}
         {base && manifest.data && !alignments.length && <p role="status">No alignment artifact is available in this result. <button onClick={() => void manifest.refetch()}>Retry</button></p>}
         {error && <div role="alert">Alignment result unavailable: {String(error)} <button onClick={() => { if (job.error) void job.refetch(); if (manifest.error) void manifest.refetch(); if (documentQuery.error) void documentQuery.refetch(); }}>Retry</button></div>}
