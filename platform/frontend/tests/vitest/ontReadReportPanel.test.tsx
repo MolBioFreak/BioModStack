@@ -28,6 +28,9 @@ const REPORT = {
     modifications: { probability_threshold: 0.5, by_code: [
         { code: 'A+6mA', called_sites: 4291, modified_sites: 334, reads: 12, modified_fraction: 0.077837 },
         { code: 'C+5mC', called_sites: 5258, modified_sites: 9, reads: 12, modified_fraction: 0.001712 },
+    ], by_motif: [
+        { code: 'A+6mA', motif: 'GATC', called_sites: 200, modified_sites: 192, modified_fraction: 0.96 },
+        { code: 'C+5mC', motif: 'CCWGG', called_sites: 4, modified_sites: 0, modified_fraction: 0 },
     ] },
     programs: [{ id: 'basecaller', program: 'dorado', version: '2.1.2', command: 'dorado basecaller' }],
     read_groups: [{ id: 'rg', basecall_model: 'runid=r basecall_model=dna_r10.4.1_e8.2_400bps_hac@v6.0.0 modbase_models=x_6mA@v1,x_5mCG_5hmCG@v1' }],
@@ -57,7 +60,7 @@ describe('OntReadReportPanel', () => {
         await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
     }
 
-    it('shows yield, quality, model and calls methylation with the 5% cutoff', async () => {
+    it('shows yield, quality, model and calls Dam/Dcm methylation at their motifs with the 5% cutoff', async () => {
         get.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('ngs-read-report') ? REPORT : url.endsWith('/reads') ? READS : SQUIGGLE }));
         const onOpenSignal = vi.fn();
         await mount(onOpenSignal);
@@ -74,9 +77,13 @@ describe('OntReadReportPanel', () => {
         expect(summary.textContent).toContain('65,630 bp');
         expect(summary.textContent).toContain('5,549 bp');
         expect(container.textContent).toContain('dna_r10.4.1_e8.2_400bps_hac@v6.0.0');
-        expect(container.querySelector('[data-mod-code="A+6mA"]')?.textContent).toContain('methylated');
-        expect(container.querySelector('[data-mod-code="A+6mA"]')?.textContent).not.toContain('not methylated');
-        expect(container.querySelector('[data-mod-code="C+5mC"]')?.textContent).toContain('not methylated');
+        const dam = container.querySelector('[data-motif-code="A+6mA@GATC"]')!.textContent!;
+        expect(dam).toContain('Dam');
+        expect(dam).toContain('96.0%');
+        expect(dam).toMatch(/methylated$/);
+        expect(dam).not.toContain('not methylated');
+        expect(container.querySelector('[data-motif-code="C+5mC@CCWGG"]')?.textContent).toContain('too few sites');
+        expect(container.querySelector('[data-mod-code="A+6mA"]')?.textContent).not.toContain('methylated');
         const open = Array.from(container.querySelectorAll('button')).find(node => node.textContent === 'Open squiggles')!;
         await act(async () => open.click());
         expect(onOpenSignal).toHaveBeenCalled();
