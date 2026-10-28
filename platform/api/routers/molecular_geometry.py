@@ -6,6 +6,15 @@ from services.molecular_geometry_recipe import MolecularGeometryRequest, Molecul
 router = APIRouter(prefix='/api/molecular-geometry', tags=['molecular-geometry'])
 
 
+@router.get('/schema')
+def molecular_geometry_schema():
+    """Discovery only; does not load or execute the optional native runtime."""
+    return {
+        'request': MolecularGeometryRequest.model_json_schema(),
+        'result': MolecularGeometryResult.model_json_schema(),
+    }
+
+
 @router.post('/construct', response_model=MolecularGeometryResult)
 def molecular_geometry(request: MolecularGeometryRequest):
     try:

@@ -32,7 +32,30 @@ export interface ConstructionGraph {
     provenance: Record<string, string>; observations: string[];
     [key: string]: unknown;
 }
-export interface ConstructionSnapshot { editor: ConstructionEditor; graph?: ConstructionGraph; [key: string]: unknown }
+export interface MolecularGeometryRequest {
+    schema_version?: 'bms.molecular-geometry-request.v1';
+    operation: 'create_new_idealized_geometry'; provider: 'ambertools24_fd_helix';
+    form: 'abdna' | 'adna' | 'arna'; topology: 'canonical_antiparallel_duplex';
+    hydrogen_policy: 'heavy_atom_coordinates_graph_implicit_hydrogens'; construction: ConstructionRecipe;
+}
+export interface MolecularGeometryResult {
+    schema_version: 'bms.molecular-geometry.v1'; request: MolecularGeometryRequest;
+    graph: ConstructionGraph; format: 'pdb'; coordinate_text: string;
+    coordinate_sha256: string; coordinate_size_bytes: number;
+    atom_map: Array<{ graph_atom_id: string; pdb_serial: number; native_chain: string; native_residue_number: number; native_component: string; native_atom_name: string; x: number; y: number; z: number; [key: string]: unknown }>;
+    provenance: Record<string, string>; observations: string[]; [key: string]: unknown;
+}
+export interface MolecularGeometryDraft {
+    choices: Partial<Omit<MolecularGeometryRequest, 'construction'>> & Record<string, unknown>;
+    request?: MolecularGeometryRequest | ConstructionEditor;
+    result?: MolecularGeometryResult;
+    [key: string]: unknown;
+}
+export const geometryApi = {
+    schemas: async (): Promise<{ request: Schema; result: Schema }> => (await api.get('/api/molecular-geometry/schema')).data,
+    construct: async (request: ConstructionEditor): Promise<MolecularGeometryResult> => (await api.post('/api/molecular-geometry/construct', request)).data,
+};
+export interface ConstructionSnapshot { editor: ConstructionEditor; graph?: ConstructionGraph; geometry?: MolecularGeometryDraft; [key: string]: unknown }
 /** Durable authoring companion only. Never merge this into scientific params or CIF sources. */
 export interface MolecularConstructionDraft extends ConstructionSnapshot {
     schema_version: 'bms.molecular-construction-editor.v1';
@@ -56,13 +79,19 @@ export function emptyConstructionDraft(): MolecularConstructionDraft {
     return { schema_version: 'bms.molecular-construction-editor.v1', editor: { geometry: 'unpositioned', strands: [] }, complement: {}, undo: [] };
 }
 export function editConstruction(draft: MolecularConstructionDraft, editor: ConstructionEditor): MolecularConstructionDraft {
-    const { editor: prior, graph, undo, ...rest } = draft;
-    return { ...rest, editor: structuredClone(editor), undo: [...undo, { editor: structuredClone(prior), ...(graph ? { graph: structuredClone(graph) } : {}) }] };
+    const { undo, ...snapshot } = draft;
+    const { graph: _graph, geometry, ...rest } = snapshot;
+    const { result: _result, ...retainedGeometry } = geometry ?? { choices: {} };
+    return { ...rest, ...(geometry ? { geometry: retainedGeometry } : {}), editor: structuredClone(editor), undo: [...undo, structuredClone(snapshot)] };
+}
+export function editGeometry(draft: MolecularConstructionDraft, choices: MolecularGeometryDraft['choices']): MolecularConstructionDraft {
+    const next = editConstruction(draft, draft.editor);
+    return { ...next, ...(draft.graph ? { graph: draft.graph } : {}), geometry: { ...next.geometry, choices: structuredClone(choices) } };
 }
 export function undoConstruction(draft: MolecularConstructionDraft): MolecularConstructionDraft {
     if (!draft.undo.length) return draft;
     const snapshot = draft.undo[draft.undo.length - 1];
-    const { graph: _old, ...rest } = draft;
+    const { graph: _old, geometry: _geometry, ...rest } = draft;
     return { ...rest, ...structuredClone(snapshot), undo: draft.undo.slice(0, -1) };
 }
 export function schemaDefinition(root: Schema, name: string): Schema {

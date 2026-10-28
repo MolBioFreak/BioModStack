@@ -1,21 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
+import { MolecularGeometryControls } from './MolecularGeometryControls';
 import { BioXpSchemaInput } from './BioXpSchemaInput';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
-import { constructionApi, constructionError, editConstruction, emptyConstructionDraft, schemaDefinition, schemaEnums, undoConstruction } from '../lib/molecularConstruction';
-import type { ConstructionEditor, ConstructionGraph, ConstructionSchemas, MolecularConstructionDraft } from '../lib/molecularConstruction';
+import { constructionApi, constructionError, geometryApi, editGeometry, editConstruction, emptyConstructionDraft, schemaDefinition, schemaEnums, undoConstruction } from '../lib/molecularConstruction';
+import type { ConstructionEditor, ConstructionGraph, ConstructionSchemas, MolecularConstructionDraft, MolecularGeometryResult } from '../lib/molecularConstruction';
 
 export interface MolecularConstructionWorkbenchProps {
     /** Hydrate at mount; use a parent document key when intentionally loading another draft. */
     initialDraft?: MolecularConstructionDraft;
     onDraftChange: (draft: MolecularConstructionDraft) => void;
-    /** Optional later geometry-owner receiving seam; no geometry API is called here. */
+    /** Successful current geometry only; not source adoption. */
+    onPositioned?: (result: MolecularGeometryResult) => void;
+    /** Successful unpositioned graph only. */
     onGraphReady?: (graph: ConstructionGraph) => void;
 }
 const obj = (v: unknown): ConstructionEditor => v && typeof v === 'object' && !Array.isArray(v) ? v as ConstructionEditor : {};
 const rows = (v: unknown): ConstructionEditor[] => Array.isArray(v) ? v.map(obj) : [];
 const fallback = (label: string, value: unknown, change: (v: unknown) => void) => <label>{label}<textarea aria-label={label} value={JSON.stringify(value, null, 2) ?? ''} onChange={e => { try { change(JSON.parse(e.target.value)); } catch { /* Unknown values remain intact until a valid replacement is authored. */ } }} /></label>;
 
-export function MolecularConstructionWorkbench({ initialDraft, onDraftChange, onGraphReady }: MolecularConstructionWorkbenchProps) {
+export function MolecularConstructionWorkbench({ initialDraft, onDraftChange, onGraphReady, onPositioned }: MolecularConstructionWorkbenchProps) {
     const [draft, setDraft] = useState(() => structuredClone(initialDraft ?? emptyConstructionDraft()));
     const current = useRef(draft);
     const generation = useRef(0);
@@ -23,6 +26,28 @@ export function MolecularConstructionWorkbench({ initialDraft, onDraftChange, on
     const [schemas, setSchemas] = useState<ConstructionSchemas>();
     const [status, setStatus] = useState('Unpositioned recipe draft. No graph requested.');
     const [busy, setBusy] = useState(false);
+    const [geometryOpen, setGeometryOpen] = useState(Boolean(initialDraft?.geometry));
+    const changeGeometry = (choices: NonNullable<MolecularConstructionDraft['geometry']>['choices']) => {
+        generation.current++; operation.current++; setBusy(false);
+        publish(editGeometry(current.current, choices));
+        setStatus('Geometry choices edited; previous result retained in Undo, not current.');
+    };
+    const position = async () => {
+        const at = generation.current, requestId = ++operation.current;
+        const request = { ...structuredClone(current.current.geometry?.choices ?? {}), construction: structuredClone(current.current.editor) };
+        const next = editGeometry(current.current, current.current.geometry?.choices ?? {});
+        publish({ ...next, geometry: { ...next.geometry!, request } });
+        setBusy(true); setStatus('Constructing explicitly requested native idealized geometry…');
+        try {
+            const result = await geometryApi.construct(request);
+            if (at !== generation.current || requestId !== operation.current) return;
+            publish({ ...current.current, geometry: { ...current.current.geometry!, result } });
+            setStatus('Native idealized geometry ready; not adopted as a source.');
+            onPositioned?.(structuredClone(result));
+        } catch (e) {
+            if (at === generation.current && requestId === operation.current) setStatus(`Geometry unavailable: ${constructionError(e)}. Draft retained; graph/import/manual paths and model launch are unchanged.`);
+        } finally { if (at === generation.current && requestId === operation.current) setBusy(false); }
+    };
     useEffect(() => { let live = true; constructionApi.schemas().then(s => { if (live) setSchemas(s); }).catch(e => { if (live) setStatus(`Schema discovery unavailable: ${constructionError(e)}. Model launch is unchanged.`); }); return () => { live = false; generation.current++; operation.current++; }; }, []);
     const publish = (next: MolecularConstructionDraft) => { current.current = next; setDraft(next); onDraftChange(structuredClone(next)); };
     const edit = (editor: ConstructionEditor) => { generation.current++; operation.current++; setBusy(false); publish(editConstruction(current.current, editor)); setStatus('Edited; previous graph retained in Undo, not current.'); };
@@ -82,6 +107,8 @@ export function MolecularConstructionWorkbench({ initialDraft, onDraftChange, on
         </>}
         <button type="button" disabled={busy} onClick={build}>Build connected graph</button>
         <button type="button" disabled={!draft.undo.length} onClick={() => { generation.current++; operation.current++; setBusy(false); publish(undoConstruction(current.current)); setStatus('Exact recipe and graph snapshot restored.'); }}>Undo construction edit</button>
+        <button type="button" onClick={() => setGeometryOpen(true)}>Configure optional geometry</button>
+        {geometryOpen && <MolecularGeometryControls geometry={draft.geometry} busy={busy} onChange={changeGeometry} onConstruct={position} />}
         {draft.graph && <section aria-label="Actual molecular graph"><h4>Retained graph · {draft.graph.geometry}</h4>
             <p>{draft.graph.atoms.length} atoms · {draft.graph.bonds.length} bonds · {draft.graph.connected_components.length} covalent components. Coordinates: none.</p>
             <p>{draft.graph.observations.join(' ')}</p>
