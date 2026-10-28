@@ -1,5 +1,5 @@
-# Version-locked Python 3.12 Linux x86_64 CPU editing environment.
-# Artifact hashes beyond the Studio wheel still require a release lock/receipt.
+# Source pins for the hash-locked Python 3.12 Linux x86_64 CPU editor.
+# Install atomworks-studio.lock, not this regeneration input; wheel verified separately.
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1

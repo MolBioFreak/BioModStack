@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the published Studio wheel and disable its standalone offline worker.
-
-This is packaging preparation, not an authenticated Studio ingress.
-"""
+"""Verify the released editor and prepare private-host transport assets/notices."""
 from __future__ import annotations
 
 import argparse
@@ -10,7 +7,11 @@ import base64
 import csv
 import hashlib
 import io
+import importlib.metadata
+import json
 from pathlib import Path
+import shutil
+import sys
 import zipfile
 
 RELEASE_COMMIT = "04fe5fbd03fea8b7d49a767156d7d33bd10e5d13"
@@ -53,6 +54,49 @@ def disable_worker(index: Path) -> bool:
     return True
 
 
+def prepare_host(web: Path, output: Path) -> None:
+    """Bounded released-asset transport patch; scientific JS remains unchanged."""
+    disable_worker(web / "index.html")
+    bundle = web / "assets/index-CUTfffbv.js"
+    original = 'function Te(e){return e.startsWith(`/api/`)&&!e.startsWith(`/api/v1/`)?`/api/v1/${e.slice(5)}`:e}'
+    replacement = 'function Te(e){return `/api/atomworks-studio`+(e.startsWith(`/api/`)&&!e.startsWith(`/api/v1/`)?`/api/v1/${e.slice(5)}`:e)}'
+    text = bundle.read_text()
+    if replacement not in text:
+        if text.count(original) != 1:
+            raise ValueError("released Studio transport function changed; review patch")
+        bundle.write_text(text.replace(original, replacement))
+    output.mkdir(parents=True, exist_ok=True)
+    notices = output / "notices"
+    notices.mkdir(exist_ok=True)
+    supplements = Path(__file__).resolve().parents[1] / 'docker/atomworks-studio-notices'
+    shutil.copytree(supplements, notices / 'supplements', dirs_exist_ok=True)
+    inventory = []
+    for dist in sorted(importlib.metadata.distributions(), key=lambda d: d.metadata['Name'].lower()):
+        name = dist.metadata['Name']
+        copied = []
+        for item in dist.files or []:
+            # Include full installed license/notice texts, including vendored bundles.
+            if any(token in item.name.lower() for token in ('license', 'licence', 'copying', 'notice', 'copyright')):
+                source = Path(dist.locate_file(item))
+                if source.is_file():
+                    target = notices / name / str(item).replace('../', '_/')
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
+                    copied.append(str(target.relative_to(output)))
+        inventory.append({'name': name, 'version': dist.version, 'license_files': copied,
+                          'license': dist.metadata.get('License-Expression') or dist.metadata.get('License'),
+                          'requires': dist.requires or []})
+    (output / 'receipt.json').write_text(json.dumps({
+        'release_commit': RELEASE_COMMIT, 'wheel_sha256': WHEEL_SHA256,
+        'python': sys.version, 'packages': inventory,
+        'notice_sha256': {str(p.relative_to(output)): hashlib.sha256(p.read_bytes()).hexdigest()
+                          for p in sorted(notices.rglob('*')) if p.is_file()},
+        'modified_web': {str(p.relative_to(web)): hashlib.sha256(p.read_bytes()).hexdigest()
+                         for p in [web / 'index.html', bundle]},
+        'patches': ['service-worker opt-out', 'private API path prefix'],
+    }, indent=2) + '\n')
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -60,8 +104,13 @@ def main() -> None:
     verify.add_argument("wheel", type=Path)
     disable = sub.add_parser("disable-worker")
     disable.add_argument("index", type=Path)
+    host = sub.add_parser("prepare-host")
+    host.add_argument("web", type=Path)
+    host.add_argument("output", type=Path)
     args = parser.parse_args()
-    if args.command == "verify":
+    if args.command == "prepare-host":
+        prepare_host(args.web, args.output)
+    elif args.command == "verify":
         print(f"verified {verify_wheel(args.wheel)} RECORD entries; Studio commit {RELEASE_COMMIT}")
     else:
         print("disabled" if disable_worker(args.index) else "already disabled")

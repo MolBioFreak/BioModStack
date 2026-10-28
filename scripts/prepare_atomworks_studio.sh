@@ -14,12 +14,12 @@ if [ -e "$venv" ]; then
 fi
 python3.12 "$root/scripts/atomworks_studio_package.py" verify "$wheel"
 uv venv --python python3.12 "$venv"
-# Installed assets are patched below: never hardlink them to uv's shared cache.
-UV_LINK_MODE=copy uv pip install --python "$venv/bin/python" --index-url https://download.pytorch.org/whl/cpu 'torch==2.7.1+cpu'
-UV_LINK_MODE=copy uv pip install --python "$venv/bin/python" --constraint "$root/docker/atomworks-studio-requirements.txt" "$wheel"
+# Hash-locked transitive runtime, with CPU Torch only; never resolve Studio extras.
+UV_LINK_MODE=copy uv pip sync --python "$venv/bin/python" --require-hashes --only-binary :all: --index https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match "$root/docker/atomworks-studio.lock"
+UV_LINK_MODE=copy uv pip install --python "$venv/bin/python" --no-deps "$wheel"
 uv pip check --python "$venv/bin/python"
-index=$("$venv/bin/python" -c 'import annotation_studio; from pathlib import Path; print(Path(annotation_studio.__file__).parent / "web" / "index.html")')
-python3.12 "$root/scripts/atomworks_studio_package.py" disable-worker "$index"
-mkdir -p "$venv/share/atomworks-studio/notices"
-cp "$root/docker/atomworks-studio-notices/Patinae-LICENSE" "$venv/share/atomworks-studio/notices/Patinae-LICENSE"
-printf 'Prepared %s. Do not expose Studio directly; authenticated BMS ingress is not wired.\n' "$venv"
+# A metadata-only pip check cannot detect an interrupted binary install.
+"$venv/bin/python" -c 'import torch; from annotation_studio.main import app; assert torch.__version__ == "2.7.1+cpu"'
+web=$("$venv/bin/python" -c 'import annotation_studio; from pathlib import Path; print(Path(annotation_studio.__file__).parent / "web")')
+"$venv/bin/python" "$root/scripts/atomworks_studio_package.py" prepare-host "$web" "$venv/share/atomworks-studio"
+printf 'Prepared %s. Start only behind BMS private Studio router; see docker/atomworks-studio-README.md.\n' "$venv"

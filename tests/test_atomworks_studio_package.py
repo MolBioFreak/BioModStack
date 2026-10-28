@@ -28,6 +28,28 @@ class PackageTests(unittest.TestCase):
                 package.disable_worker(index)
             self.assertEqual(index.read_text(), "unexpected")
 
+    def test_private_host_patch_and_notice_receipt(self):
+        import json
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            web = root / "web"
+            (web / "assets").mkdir(parents=True)
+            (web / "index.html").write_text("<html><head></head></html>")
+            bundle = web / "assets/index-CUTfffbv.js"
+            bundle.write_text('function Te(e){return e.startsWith(`/api/`)&&!e.startsWith(`/api/v1/`)?`/api/v1/${e.slice(5)}`:e}')
+            with patch.object(package.importlib.metadata, "distributions", return_value=[]):
+                package.prepare_host(web, root / "receipt")
+                package.prepare_host(web, root / "receipt")
+            self.assertEqual(bundle.read_text().count('return `/api/atomworks-studio`+'), 1)
+            receipt = json.loads((root / "receipt/receipt.json").read_text())
+            self.assertIn("notices/supplements/Patinae-LICENSE", receipt["notice_sha256"])
+            self.assertIn("notices/supplements/Cython-LICENSE.txt", receipt["notice_sha256"])
+            self.assertEqual(len(receipt["modified_web"]), 2)
+            bundle.write_text("unexpected upgraded client")
+            with self.assertRaises(ValueError):
+                package.prepare_host(web, root / "receipt")
+
     def test_rejects_wrong_wheel(self):
         with tempfile.TemporaryDirectory() as tmp:
             wheel = Path(tmp) / "wrong.whl"
