@@ -34,6 +34,14 @@ IMMUTABLE_STRUCTURE_UPLOAD_MAX_BYTES = 64 * 1024 * 1024
 IMMUTABLE_STRUCTURE_FILENAME_RE = re.compile(
     r"^[A-Za-z0-9_.-]{1,160}-([0-9a-f]{64})\.pdb$"
 )
+IMMUTABLE_ANNOTATED_STRUCTURE_UPLOAD_PATH = "inputs/annotated_structures"
+IMMUTABLE_ANNOTATED_STRUCTURE_FILENAME_RE = re.compile(
+    r"^[A-Za-z0-9_.-]{1,160}-([0-9a-f]{64})\.(?:cif|mmcif)$"
+)
+IMMUTABLE_STRUCTURE_UPLOADS = {
+    IMMUTABLE_STRUCTURE_UPLOAD_PATH: IMMUTABLE_STRUCTURE_FILENAME_RE,
+    IMMUTABLE_ANNOTATED_STRUCTURE_UPLOAD_PATH: IMMUTABLE_ANNOTATED_STRUCTURE_FILENAME_RE,
+}
 GOVERNED_NGS_MANIFEST_SCHEMAS = frozenset(
     {"sequence_qc.manifest.v1", "biomodstack.construct_verification.v2"}
 )
@@ -461,10 +469,10 @@ async def upload_file(
         raise HTTPException(status_code=400, detail="Upload filename must be one plain basename")
     if filename.casefold() == "qc_manifest.json":
         raise HTTPException(status_code=403, detail="Canonical manifests cannot be written through the generic upload route")
-    immutable_dir = _allowed_lexical_path(IMMUTABLE_STRUCTURE_UPLOAD_PATH)
-    if (
-        _lexical_absolute(target_dir) == immutable_dir
-        and IMMUTABLE_STRUCTURE_FILENAME_RE.fullmatch(filename)
+    if any(
+        _lexical_absolute(target_dir) == _allowed_lexical_path(directory)
+        and pattern.fullmatch(filename)
+        for directory, pattern in IMMUTABLE_STRUCTURE_UPLOADS.items()
     ):
         raise HTTPException(status_code=403, detail="Use the immutable structure upload route")
     file_path = target_dir / filename
@@ -497,22 +505,24 @@ async def upload_immutable_structure(
     file: UploadFile = File(...),
     governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
 ):
-    """Atomically publish one SHA-256-addressed RFD3 structure input."""
-    if path.strip().strip("/") != IMMUTABLE_STRUCTURE_UPLOAD_PATH:
-        raise HTTPException(status_code=403, detail="Immutable structure uploads use the RFD3 input directory")
+    """Publish exact source bytes; annotated CIF is never renamed to PDB."""
+    upload_path = path.strip().strip("/")
+    filename_pattern = IMMUTABLE_STRUCTURE_UPLOADS.get(upload_path)
+    if filename_pattern is None:
+        raise HTTPException(status_code=403, detail="Choose an immutable structure input directory")
     expected_sha256 = sha256.strip().lower()
     if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
         raise HTTPException(status_code=400, detail="sha256 must be 64 lowercase hexadecimal characters")
     filename = str(file.filename or "")
-    match = IMMUTABLE_STRUCTURE_FILENAME_RE.fullmatch(filename)
+    match = filename_pattern.fullmatch(filename)
     if match is None or match.group(1) != expected_sha256:
         raise HTTPException(status_code=400, detail="Upload filename must end with its SHA-256")
 
     try:
-        lexical_dir = _allowed_lexical_path(IMMUTABLE_STRUCTURE_UPLOAD_PATH)
+        lexical_dir = _allowed_lexical_path(upload_path)
         if _under_persisted_ngs_root(lexical_dir, governed_roots):
             raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
-        target_dir = resolve_allowed_path(IMMUTABLE_STRUCTURE_UPLOAD_PATH)
+        target_dir = resolve_allowed_path(upload_path)
         if _under_persisted_ngs_root(target_dir, governed_roots):
             raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     except ValueError:
@@ -526,7 +536,7 @@ async def upload_immutable_structure(
         return _immutable_structure_response(file_path, expected_sha256, existing=True)
 
     descriptor, temporary_name = tempfile.mkstemp(
-        prefix=".rfd3-structure-", suffix=".tmp", dir=target_dir
+        prefix=".immutable-structure-", suffix=".tmp", dir=target_dir
     )
     temporary_path = Path(temporary_name)
     try:
