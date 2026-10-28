@@ -34,6 +34,20 @@ it.each(['native_recall', 'partial_diffusion'])('transports %s source roles with
             expect(params.partial_t).toBeNull(); expect(params.sequence_policy).toBe('explicit_positions');
         } else {
             expect(params.region_mode).toBe('interface_shell'); expect(params.interface_cutoff).toBe(4); expect(params.region_padding).toBe(0);
+            const sampling = [...container.querySelectorAll('button')].find(b => b.textContent === 'Sampling')!;
+            await act(async () => sampling.click());
+            const editNoise = async (text: string) => {
+                const input = container.querySelector<HTMLInputElement>('[aria-label="Partial noise exact Å"]')!;
+                expect(input).toBeTruthy();
+                await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, text); input.dispatchEvent(new Event('input', { bubbles: true })); });
+            };
+            await editNoise('27.123456789');
+            expect(changed.mock.lastCall![0].native_job_request.params.partial_t).toBe(27.123456789);
+            await editNoise('');
+            expect(changed.mock.lastCall![0].native_job_request.params.partial_t).toBe('');
+            const saved = JSON.parse(JSON.stringify(changed.mock.lastCall![0]));
+            await act(async () => root.render(<MemoryRouter><QueryClientProvider client={client}><ProteinLocalRedesignTemplate key="cold" embedded onBack={vi.fn()} initialValues={saved} onDraftChange={changed} /></QueryClientProvider></MemoryRouter>));
+            await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 15)); }); expect(changed.mock.lastCall![0].native_job_request.params.partial_t).toBe(''); });
         }
     } finally { await act(async () => root.unmount()); client.clear(); container.remove(); vi.unstubAllGlobals(); restore(); }
 });

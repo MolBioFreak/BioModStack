@@ -9,6 +9,7 @@ import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel
 import { completeCurrentLaunchContext, fetchDesigns, fetchJobById, materializeExactStructure, submitJob, uploadImmutableFile, type Design, type Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
 import { retainedRfd3Conditions } from './Rfd3AdditionalConditions';
+import { Rfd3PartialNoiseInput } from './Rfd3PartialNoiseInput';
 import { OtherDeNovoSettings, retainedRfd3Settings } from './OtherDeNovoSettings';
 import { Rfd3SourceSelector, type Rfd3SelectedSource } from './Rfd3SourceSelector';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -331,7 +332,7 @@ export function ProteinLocalRedesignTemplate({
     const [nativeRecallContig, setNativeRecallContig] = useState(() => String(initialValues?.contig ?? ''));
     const [nativeRecallFixedAtoms, setNativeRecallFixedAtoms] = useState<unknown>(() => initialValues?.select_fixed_atoms);
     const [nativeProfileId, setNativeProfileId] = useState('generic_local_redesign_v1');
-    const [nativePartialT, setNativePartialT] = useState(2.0);
+    const [nativePartialT, setNativePartialT] = useState<number | '' | null>(2.0);
 
     const [nativeInsertionAnchor, setNativeInsertionAnchor] = useState('');
     const [nativeInsertionMinLength, setNativeInsertionMinLength] = useState('3');
@@ -463,7 +464,7 @@ export function ProteinLocalRedesignTemplate({
         if (typeof initialValues.rfd3_extra_config === 'string') setRfd3ExtraConfig(initialValues.rfd3_extra_config);
         if (initialValues.redesign_mode === 'partial_diffusion' || initialValues.redesign_mode === 'minimal_insertion' || initialValues.redesign_mode === 'native_recall') setNativeRedesignMode(initialValues.redesign_mode);
         if (initialValues.profile_id === 'generic_local_redesign_v1' || initialValues.profile_id === 'drt4_datp_gate_v1') setNativeProfileId(initialValues.profile_id);
-        if (typeof initialValues.partial_t === 'number') setNativePartialT(initialValues.partial_t);
+        if (typeof initialValues.partial_t === 'number' || initialValues.partial_t === '' || initialValues.partial_t === null) setNativePartialT(initialValues.partial_t);
 
         if (typeof initialValues.insertion_anchor === 'string') setNativeInsertionAnchor(initialValues.insertion_anchor);
         if (initialValues.insertion_min_length === null || typeof initialValues.insertion_min_length === 'number' || typeof initialValues.insertion_min_length === 'string') setNativeInsertionMinLength(String(initialValues.insertion_min_length ?? ''));
@@ -1471,10 +1472,7 @@ export function ProteinLocalRedesignTemplate({
                                         <option value="drt4_datp_gate_v1">DRT4 dATP gate</option>
                                     </select>
                                 </label>
-                                <label className="space-y-1 text-xs font-medium">
-                                    Partial t
-                                    <input className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} type="number" min="0" step="0.1" value={nativePartialT} onChange={(event) => setNativePartialT(Number(event.target.value))} disabled={nativeRedesignMode !== 'partial_diffusion'} />
-                                </label>
+                                <Rfd3PartialNoiseInput value={nativePartialT} onChange={setNativePartialT} disabled={nativeRedesignMode !== 'partial_diffusion'} />
                             </div>
 
                             {nativeRedesignMode === 'native_recall' && <div className="space-y-2">
