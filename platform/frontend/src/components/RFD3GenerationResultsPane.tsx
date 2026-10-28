@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import MolstarViewer from './MolstarViewer';
+import { DeNovoRepeatSettings } from './DeNovoRepeatSettings';
 import { continuationHref, inspectedResultState, rememberInspectedResult } from '../lib/deNovoContinuation';
 import { useQuery } from '@tanstack/react-query';
 
@@ -48,6 +49,7 @@ export function RFD3GenerationResultsContent({ result }: { result: RFD3Generatio
         : result.candidates.find((candidate) => candidate.candidate_id === selectedCandidateId);
     return (
         <div className="space-y-5" data-bms-result-pane="rfd3-generation">
+            <DeNovoRepeatSettings jobId={result.job_id} />
             <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-5">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Native RFD3 de novo generation</div>
                 <h2 className="mt-1 text-2xl font-semibold text-white">Generation summary</h2>

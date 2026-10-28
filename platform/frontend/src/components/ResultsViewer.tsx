@@ -1859,9 +1859,9 @@ function ResultsViewerContent() {
     const [comparison, setComparison] = useState<{ jobId: string; ids: string[] }>();
     useEffect(() => {
         if (!requestedDesignId || !exactArtifactId) return;
-        writeBinderCandidateDocuments(selectedJobId, { ...readBinderCandidateDocuments(selectedJobId), [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } });
+        writeBinderCandidateDocuments(selectedJobId, { ...readBinderCandidateDocuments(selectedJobId), [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}), ...(returnParams.get('model_number') !== null ? { model: Number(returnParams.get('model_number')) } : {}) } });
         const boundSelection = readRoundStorage<CandidateRef[]>(selectedJobId, 'selection', []);
-        if (!boundSelection.some(ref => ref.kind === 'design' && ref.job_id === selectedJobId && ref.design_id === requestedDesignId && ref.document?.artifact_id === exactArtifactId && (ref.document?.target_state ?? null) === exactTargetState))
+        if (!boundSelection.some(ref => ref.kind === 'design' && ref.job_id === selectedJobId && ref.design_id === requestedDesignId && ref.document?.artifact_id === exactArtifactId && (ref.document?.target_state ?? null) === exactTargetState && (ref.document?.model ?? null) === (returnParams.get('model_number') === null ? null : Number(returnParams.get('model_number')))))
             setSelectedDesignIds(ids => ids.includes(requestedDesignId) ? ids : [...ids, requestedDesignId]);
     }, [selectedJobId, requestedDesignId, exactArtifactId, exactTargetState, setSelectedDesignIds]);
     useEffect(() => {
@@ -1872,6 +1872,7 @@ function ResultsViewerContent() {
             const params = new URLSearchParams(location.search);
             if (selector?.artifact_id) params.set('artifact_id', selector.artifact_id); else params.delete('artifact_id');
             if (selector?.target_state !== undefined) params.set('target_state', selector.target_state); else params.delete('target_state');
+            if (selector?.model !== undefined) params.set('model_number', String(selector.model)); else params.delete('model_number');
             if (params.toString() !== new URLSearchParams(location.search).toString()) navigate(`${location.pathname}?${params}`, { replace: true });
         };
         window.addEventListener('bms:binder-documents', syncDocumentRoute);
@@ -5397,10 +5398,12 @@ function ResultsViewerContent() {
         || !!nativeSequenceResultKind(activeJob) || isRFD3GenerationResultJob(activeJob) || isRFD3LocalRedesignResultJob(activeJob)
         || !!(activeJob.lineage_root_job_id || activeJob.selection_source_job_id || activeJob.source_stage_job_id
             || activeJob.params?.lineage_root_job_id || activeJob.params?.iteration_source_root_job_id));
-    const selectedCandidateDocuments = activeJob ? { ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } } : {}) } : {};
+    const selectedCandidateDocuments = activeJob ? { ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}), ...(returnParams.get('model_number') !== null ? { model: Number(returnParams.get('model_number')) } : {}) } } : {}) } : {};
     const selectedCandidateControls = activeJob && <>
         <BinderSelectedControls key={`binder-${activeJob.id}`}
             sourceJobId={activeJob.id} selectedDesignIds={selectedDesignIds} selectedNativeSources={selectedNativeSources}
+            operationScope={isRFD3GenerationResultJob(activeJob) || isRFD3LocalRedesignResultJob(activeJob) || ['rfd4_proteina', 'complexa'].includes(activeJob.model_id) || ['disco', 'laproteina'].includes(activeJob.params?.backend ?? activeJob.params?.generator) ? 'whole_composition' : undefined}
+            projectDraftRef={returnParams.get('project_id') && returnParams.get('setup_context_id') ? { project_id: returnParams.get('project_id')!, setup_context_id: returnParams.get('setup_context_id')! } : undefined}
             launchContextId={destinationLaunchContextId}
             candidateDocuments={selectedCandidateDocuments}
             inspectDesignId={exactArtifactId ? requestedDesignId : undefined}

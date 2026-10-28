@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { materializeExactStructure } from '../lib/api';
+import { materializeExactStructure, type StructureSourceSelection } from '../lib/api';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
 import { metricKeys, numericMetricKeys, formatMetric, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
@@ -10,6 +10,7 @@ import { readBinderSelection, writeBinderSelection, readBinderNativeSources, wri
 import { BinderCandidateSets } from './BinderCandidateSets';
 import { candidateKey, candidateIdentity, uniqueCandidates, readRoundStorage, writeRoundStorage, type CandidateRef } from '../lib/binderSelectedRound';
 import { continuationHref, continuationLabel, rfd4Destinations } from '../lib/deNovoContinuation';
+import { DeNovoRepeatSettings } from './DeNovoRepeatSettings';
 import { NativeGeneratedSequences } from './NativeGeneratedSequences';
 import { Rfd4RetainedStateContinuation } from './Rfd4RetainedStateContinuation';
 import { buildResultsViewerMolecularDynamicsRoute } from './gen2StartingStructureState';
@@ -61,6 +62,8 @@ export interface Props {
     selectedNativeSources?: NativeCandidateSource[];
     onSelectedNativeSourcesChange?: (sources: NativeCandidateSource[]) => void;
     onInspectDocument?: (row: NativeGenerationRecord, document?: NativeGenerationDocument) => void;
+    /** S04 adoption callback: opens a derivative; publication bytes remain immutable. */
+    onEditExactDocument?: (source: StructureSourceSelection, context: { candidateRef: CandidateRef; returnTo: string }) => void;
     artifactId?: string | null; targetState?: string | null;
 }
 type View = 'candidates' | 'dashboard' | 'analytics' | 'table' | 'structure';
@@ -95,7 +98,7 @@ function Download({ name, content, mime, children }: { name: string; content: st
 export function NativeBinderGenerationResults(props: Props) {
     return <NativeGenerationWorkbench key={`${props.jobId}:${props.adapter?.key ?? "native"}`} {...props} />;
 }
-function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, selectedDesignId, selectedDesignIds = [], onSelectedDesignIdsChange, selectedRecordIds, onSelectedRecordIdsChange, selectedNativeSources, onSelectedNativeSourcesChange, onInspectDocument, artifactId, targetState }: Props) {
+function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, selectedDesignId, selectedDesignIds = [], onSelectedDesignIdsChange, selectedRecordIds, onSelectedRecordIdsChange, selectedNativeSources, onSelectedNativeSourcesChange, onInspectDocument, onEditExactDocument, artifactId, targetState }: Props) {
     const [view, setView] = useState<View>(() => selectedDesignId || artifactId || new URLSearchParams(window.location.search).has('native_candidate') ? 'structure' : 'candidates');
     const [structureOpened, setStructureOpened] = useState(view === 'structure' || view === 'candidates');
     const [analyticsOpened, setAnalyticsOpened] = useState(view === 'dashboard' || view === 'analytics');
@@ -270,7 +273,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const requestedModel = new URLSearchParams(window.location.search).get('model_number');
     const nativeRef = row?.candidate_ref;
     const sourceModel = document?.model ?? (requestedModel ? Number(requestedModel) : nativeRef?.kind === 'design' ? nativeRef.document?.model : nativeRef?.kind === 'native_document' ? nativeRef.model : undefined);
-    const continuationSource = document ? { job_id: jobId,
+    const continuationSource = document ? { job_id: jobId, expected_sha256: document.sha256,
         ...(row?.design_id ? { design_id: row.design_id } : {}),
         document: { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}) },
         ...(sourceModel != null ? { model_number: sourceModel } : {}),
@@ -398,6 +401,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         </nav>
     </section>;
     return <section aria-label="Native initial-generation results" className={`min-w-0 ${adapter?.compact ? "space-y-1" : "space-y-4"} text-[var(--text-primary)]`}>
+        <DeNovoRepeatSettings jobId={jobId} />
         <header style={view === 'analytics' ? { display: 'none' } : undefined} className="flex flex-wrap items-center justify-between gap-3"><h3 className={`${adapter?.compact ? "text-base" : "text-xl"} font-semibold`}>{adapter?.title ?? "Candidates"}</h3><span className="rounded-full border border-[var(--border-color)] px-3 py-1 text-xs">{scopeText}</span></header>
         {!adapter && <BinderPredictionEvidence jobId={jobId} sourceDesignId={row?.design_id} launchContextId={launchContextId} />}
         {query.isLoading && <p role="status">Reading published generation records…</p>}
@@ -452,12 +456,13 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                         </div>{adapter?.related?.(row)}</div>
                         <details className="my-2 text-xs"><summary>Candidate details</summary><label className="block">Exact candidate identifier<input className="block w-full" aria-label="Exact candidate identifier" readOnly value={String(row.candidate_key ?? row.native_input_id ?? '')} onFocus={event => event.target.select()} /></label></details>
                         <NativeGeneratedSequences row={row} />
-                        {rfd4 && continuationSource && <Rfd4RetainedStateContinuation key={document!.artifact_id} candidate={activeId ?? undefined} page={page} source={{ ...continuationSource, expected_sha256: document!.sha256 }} />}
+                        {rfd4 && continuationSource && <Rfd4RetainedStateContinuation key={`${document!.artifact_id}:${document!.target_state}:${sourceModel}`} candidate={activeId ?? undefined} page={page} source={{ ...continuationSource, expected_sha256: document!.sha256 }} />}
                         {document?.artifact_id && <nav aria-label="Continue exact native document">{(rfd4 ? [...rfd4Destinations, 'redesign', 'sequence', 'prediction'] as const : ['redesign', 'sequence', 'prediction'] as const).map(destination => {
                             const href = new URL(continuationHref(continuationSource!, destination), window.location.origin);
                             const back = new URL(href.searchParams.get('return_to')!, window.location.origin);
                             back.searchParams.set('native_candidate', activeId!); back.searchParams.set('artifact_id', document.artifact_id);
                             if (document.target_state != null) back.searchParams.set('target_state', document.target_state); else back.searchParams.delete('target_state');
+                            if (sourceModel != null) back.searchParams.set('model_number', String(sourceModel)); else back.searchParams.delete('model_number');
                             if (adapter) back.searchParams.set('native_scope', adapter.key);
                             if (launchContextId) { href.searchParams.set('launch_context_id', launchContextId); back.searchParams.set('launch_context_id', launchContextId); }
                             href.searchParams.set('return_to', `${back.pathname}${back.search}${back.hash}`);
@@ -472,10 +477,19 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                             const href = buildResultsViewerMolecularDynamicsRoute(jobId, row.design_id ?? null, { sourceRef: { kind: 'candidate', id: jobId, candidate_ref: ref }, returnTo: `${back.pathname}${back.search}${back.hash}` });
                             window.location.assign(launchContextId ? `${href}&launch_context_id=${encodeURIComponent(launchContextId)}` : href);
                         }}>Use as MD starting structure</button></nav>}
+                        {onEditExactDocument && continuationSource && <button type="button" onClick={() => {
+                            const back = new URL(window.location.href);
+                            back.searchParams.set('native_candidate', activeId!);
+                            back.searchParams.set('artifact_id', document!.artifact_id);
+                            if (document!.target_state != null) back.searchParams.set('target_state', document!.target_state); else back.searchParams.delete('target_state');
+                            if (sourceModel != null) back.searchParams.set('model_number', String(sourceModel)); else back.searchParams.delete('model_number');
+                            const selector = { artifact_id: document!.artifact_id, ...(document!.target_state != null ? { target_state: document!.target_state } : {}), ...(sourceModel != null ? { model: sourceModel } : {}) };
+                            onEditExactDocument(continuationSource, { candidateRef: row.design_id ? { kind: 'design', job_id: jobId, design_id: row.design_id, document: selector } : { kind: 'native_document', job_id: jobId, ...selector }, returnTo: `${back.pathname}${back.search}${back.hash}` });
+                        }}>Edit this exact document</button>}
                         {adapter?.inspect?.(row)}
                         {!row.design_id && <details className="my-3"><summary className="cursor-pointer text-sm">Select saved structures for another operation</summary>
-                            {!documents.length ? <p>No saved molecule. This record remains available for inspection and export.</p> : documents.filter(doc => doc.artifact_id).map((doc, index) => <div key={doc.artifact_id} className="my-3 space-y-2"><label className="flex items-start gap-2"><input type="checkbox" aria-label={`Use native document ${doc.artifact_id}`} checked={nativeSources.some(source => source.job_id === jobId && source.artifact_id === doc.artifact_id)} onChange={event => {
-                                const remaining = nativeSources.filter(source => source.job_id !== jobId || source.artifact_id !== doc.artifact_id);
+                            {!documents.length ? <p>No saved molecule. This record remains available for inspection and export.</p> : documents.filter(doc => doc.artifact_id).map((doc, index) => <div key={`${doc.artifact_id}:${doc.target_state}:${doc.model}`} className="my-3 space-y-2"><label className="flex items-start gap-2"><input type="checkbox" aria-label={`Use native document ${doc.artifact_id}`} checked={nativeSources.some(source => source.job_id === jobId && source.artifact_id === doc.artifact_id && source.document?.target_state === doc.target_state && source.document?.model === doc.model)} onChange={event => {
+                                const remaining = nativeSources.filter(source => source.job_id !== jobId || source.artifact_id !== doc.artifact_id || source.document?.target_state !== doc.target_state || source.document?.model !== doc.model);
                                 changeSources(event.target.checked ? [...remaining, { job_id: jobId, artifact_id: doc.artifact_id, document: doc }] : remaining);
                                 if (event.target.checked) { const next = Array.from(new Set([...nativeSelected, selectionId(row)])); setNativeSelected(next); writeBinderSelection(selectionScope, next); }
                             }} /><span>Use saved molecule {index + 1} · {nativeDocumentLabel(doc)}{doc.primary ? ' · primary' : ''}</span></label><details className="text-xs text-[var(--text-secondary)]"><summary>Exact saved molecule identity</summary><code className="block break-all">{doc.logical_path}</code><code className="block break-all">{doc.artifact_id}</code></details></div>)}
