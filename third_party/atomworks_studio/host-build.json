@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "source_manifest_sha256": "e3b6471d72629f6863aa50801a2e92a6da10dd71035cde1f25205de26a791a54",
+  "web_files": {
+    "annotation-studio.svg": "f4a0a81aaf893e5ebb58ba17dad903d3b35d0e96633a9e85386ca11e2af37051",
+    "assets/annotation_studio_core_bg-DG5pCNY4.wasm": "9c0562a03b48c396c60929f43508e6de3e6ca98f54a72b051b0a0315c66355c1",
+    "assets/cells-D9Q81GMa.jpg": "575386d2f4abae16edd181c42d9936abb15d872c764ce5b412a68a0d53fab481",
+    "assets/index-BFvHw4Ox.js": "f40a24515b52da27c562e6094991bc1dc9f2d197ce4c77a6e713c944c2fbc6dc",
+    "assets/index-ITnBYiNj.css": "e87ef6d000e202f6744a23ec24cc025a852925766b82eceafa7f13f6da2115cc",
+    "assets/molstar-BJmpB6bH.js": "7a646d11939fb63bb8fc57e155530531e61a48bf5002b4b103352c92b5b6006f",
+    "assets/molstar-BK3R50bs.css": "83e8244c450ca9a723ed800f1091debbbf6cb0672abc1e2452083f1447b4a1d0",
+    "assets/nebula_back6-DGSZ_tzT.jpg": "1c9d8615b96770a7853eb646c94b0f9858570b0ddb664bde8a7590ca3d312c65",
+    "assets/nebula_bottom4-DgUpJxjp.jpg": "dc41e3a004b9e9410effbee56f83295d949fd51bf58594fcee2f601cdafe2e98",
+    "assets/nebula_front5-CWqbzonZ.jpg": "9dcb306b05a4adf5fa31729a33583fd0a8434ab61d2da534bab01a444f7b8031",
+    "assets/nebula_left2-Da3VdN9a.jpg": "161cd55c3753113f96c2950bd338718dd59068968c765106b57694cb1c3d7fb9",
+    "assets/nebula_right1-BWVtsnot.jpg": "6dbcc60c997c1d7fc690a6a727def09861ae2fde5c914d7bf1409aadf9979c70",
+    "assets/nebula_top3-CfldhfdM.jpg": "0bc77993029148f0691b81d1841a9f603f81251a665aa7a11b988418c9017a28",
+    "assets/patinae-NKUSZmzE.js": "caf9df2e1170b620406ba4c9aba28d43cfee5f4a880144035077094dcb1e23bd",
+    "assets/patinae_web-BJnzZAZI-BErUWgRs.js": "ada51c1e7e972ee856a20cf2e06cd4ca791084170159c2fc56ff51e0feb7e759",
+    "assets/patinae_web_bg.wasm": "3f5f544bb2175c712215aa65b172ebe8be3b2cb94ad0ef2dae55c72c3022e8cc",
+    "atomworks_logo_dark.svg": "464107a0cd83a50e74d05e1bd89d0a4012b7aa426ff449490e42626df05ff64a",
+    "index.html": "0b2f9f99ca8fef12f88a31ca05f16ba1285ec891387403dbe9f7414e3fa8606d",
+    "manifest.webmanifest": "03966e7ce8df64467364aa8f65167e4eeaf1a529911db8783e41cab8f957e7cb",
+    "sw.js": "c8bac7416f641e536b869a8082b2f73ee1c9f463b75328d08807cef3d86ba511"
+  },
+  "transport_asset": "assets/index-BFvHw4Ox.js",
+  "transport_original": "function Ee(e){return e.startsWith(`/api/`)&&!e.startsWith(`/api/v1/`)?`/api/v1/${e.slice(5)}`:e}",
+  "transport_replacement": "function Ee(e){return `/api/atomworks-studio`+(e.startsWith(`/api/`)&&!e.startsWith(`/api/v1/`)?`/api/v1/${e.slice(5)}`:e)}"
+}

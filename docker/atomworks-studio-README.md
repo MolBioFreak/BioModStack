@@ -11,16 +11,37 @@ From the repository root, obtain the PyPI wheel
 `atomworks_studio-0.0.5-py3-none-any.whl`, then:
 
 ```sh
-sh scripts/prepare_atomworks_studio.sh "$NEW_STUDIO_VENV" "$STUDIO_WHEEL"
+git clone https://github.com/RosettaCommons/atomworks-studio.git "$STUDIO_SOURCE"
+git -C "$STUDIO_SOURCE" checkout --detach 04fe5fbd03fea8b7d49a767156d7d33bd10e5d13
+# Provision upstream Node/pnpm/Rust/wasm-pack toolchain in a task-owned build area.
+# Use isolated RUSTUP_HOME/CARGO_HOME and UV_CACHE_DIR; never modify shared caches.
+sh scripts/prepare_atomworks_studio.sh "$NEW_STUDIO_VENV" "$STUDIO_WHEEL" "$STUDIO_SOURCE"
 ```
 
-The installer refuses to overwrite an existing environment. Python 3.12 and `uv`
-are required. It verifies release wheel SHA-256
+The installer refuses to overwrite an existing environment. Python 3.12, `uv`,
+and the upstream web build toolchain are required at packaging time (not runtime). It verifies release wheel SHA-256
 `da60857d956a65d1b4dfe439326303b0a0c97b6fa520cece96fa02d041d0524d`, all 156
 RECORD members, and release commit `04fe5fbd03fea8b7d49a767156d7d33bd10e5d13`.
 `docker/atomworks-studio.lock` hash-locks all 62 transitive runtime packages;
 CPU Torch is `2.7.1+cpu`. No Gradio extra, model weights or inference runner is
 installed. This environment must remain separate from BMS API/model environments.
+The installer applies the tracked S03 patch against the exact release, executes the
+locked WASM/TypeScript/Vite build and compares **every emitted asset** with
+`third_party/atomworks_studio/host-build.json`. It constructs
+`$NEW_STUDIO_VENV-package/atomworks_studio-0.0.5-1bms03-py3-none-any.whl`
+from verified release members, replacing exactly the repaired API/document modules
+and rebuilt web directory. It regenerates and verifies the wheel RECORD. All other
+members (including native RFD4 definitions, metadata, examples and guide) retain
+original bytes. The `1bms03` artifact is explicitly **not the original PyPI wheel**.
+`annotation_studio/bms_build.json` carries patch/source/build provenance. No stale
+checked-in browser assets or editable source paths are used at runtime.
+
+`ANNOTATION_STUDIO_VERSION=0.0.5` and
+`ANNOTATION_STUDIO_REVISION=04fe5fbd03fea8b7d49a767156d7d33bd10e5d13-bms-s03`
+are set explicitly during build: upstream otherwise embeds wall-clock time in
+`sw.js`. Unexpected toolchain output must be reviewed, not accepted by removing
+hash checks. The observed toolchain is recorded in the build receipt; Node
+22.23.2, pnpm 11.16.0, Rust 1.97.1 and wasm-pack 0.15.0 produced this descriptor.
 The installer smoke-imports Torch and the real editor after `uv pip check`.
 An interrupted install can leave metadata present but binary files absent;
 recreate the task-owned environment, or explicitly reinstall the affected locked
@@ -81,12 +102,13 @@ production currently supplies per-user identities.
 - Upstream edits, Undo, Close and the rest of the editor API are forwarded without
   scientific reserialization. Session IDs are ephemeral, not durable source IDs.
 
-The released JS transport function receives one exact, fail-on-drift path-prefix
-patch; the entry page receives upstream's worker opt-out. All other packaged
-scientific/editor assets remain released bytes. This is **not** the separate S03
-upstream repair patch set. Coordinate a rebuilt patched wheel and transport patch
-with its owner before substituting one; the digest and exact asset transform must
-not silently accept an unrelated build.
+The rebuilt JS transport receives one exact, fail-on-drift path-prefix transform
+bound to the complete reviewed build descriptor. The entry page receives upstream's
+worker opt-out. Installed Python and all web members are compared to the rebuilt
+wheel before this host-only transform. The legacy released-asset helper remains
+for its focused regression tests, not as the supported installer path. The published
+wheel verifier still rejects every non-release digest, including our rebuilt wheel.
+The separate RECORD checker establishes integrity only, not release authenticity.
 
 ## Parent UI / custody contract
 
@@ -127,7 +149,9 @@ parent-owned dirty state and must not claim Save succeeded.
 ## Notices and receipt
 
 `share/atomworks-studio/receipt.json` records installed versions/requirements,
-modified asset hashes, release identity and full copied notice hashes. Installed
+modified and complete installed asset hashes, runtime-lock/RECORD hashes, actual
+rebuilt wheel digest, separate base-release digest, S03 source/patch/build identity
+and full copied notice hashes. Installed
 license/LICENCE/COPYING/NOTICE/COPYRIGHT files are collected for every distribution.
 The released Cython wheel omits full texts, so its Apache license/COPYING are
 supplied from digest-verified 3.3.0 source (provenance in
@@ -166,16 +190,22 @@ instrumentation (not runtime dependencies), provision `playwright==1.58.0` into
 uv pip install --python python3.12 --target "$SCRATCH/studio-browser-tools" playwright==1.58.0
 BMS_STUDIO_BROWSER=1 BMS_STUDIO_CHROME="$CHROME" PYTHONPATH="$SCRATCH/studio-browser-tools" \
   STUDIO_TEST_PYTHON="$NEW_STUDIO_VENV/bin/python" STUDIO_RELEASE_WHEEL="$STUDIO_WHEEL" \
+  STUDIO_PATCHED_WHEEL="$NEW_STUDIO_VENV-package/atomworks_studio-0.0.5-1bms03-py3-none-any.whl" \
+  STUDIO_PATCHED_SOURCE="$STUDIO_SOURCE" \
   platform/api/.venv/bin/python -m pytest tests/test_atomworks_studio_http.py \
   tests/test_atomworks_studio_package.py -q --basetemp "$SCRATCH/studio-browser-tests"
 ```
 
 The fixture starts/stops only its own loopback listeners and uses scratch session
-storage. Real Chrome loads the released iframe through the actual BMS receiving
+storage. Real Chrome loads the rebuilt iframe through the actual BMS receiving
 router, imports a bundled unpositioned document, applies a real editor `applyEdit`,
-uses the real Undo button, exports and checks worker/cache isolation. This is not
-3D atom-picking/WebGL overlay acceptance: the fixture document has no positioned
-atoms. React mounted tests separately exercise host notifications, spoof rejection,
+uses the real Undo button, exports and checks worker/cache isolation. That bounded
+iframe probe is not atom-picking evidence. With `STUDIO_PATCHED_SOURCE`, the same
+private router also runs the hash-reviewed S03 genuine positioned Chromium/Mol*
+scenario: CATH input re-enable, inline segment bounds/after-anchor edit/export/Undo,
+visible-pixel and hover-identity-confirmed overlay/frame isolation, and document
+restoration. Only module paths and existing trusted auth headers are adapted;
+no viewer/pick callbacks or scientific snapshots are substituted. React mounted tests separately exercise host notifications, spoof rejection,
 raw export, recovery and A→B→A staleness. Full frontend typecheck/build also runs;
 the wrapper is intentionally not yet imported by the parent production form.
 
@@ -188,14 +218,15 @@ fixture; broad chemistry/offline cache support remains unqualified.
 
 - Parent router registration, NativeSourceRow/context integration, actual
   Save/Template/Project/Generate custody and cold-reopen acceptance.
-- S03 repaired/rebuilt upstream wheel integration; released upstream defects are
-  not declared fixed by this transport lane.
-- Positioned WebGL/WebGPU rendering, atom/frame/overlay picking, arbitrary chemical
-  import and broad offline CCD/PDB cache behavior; legacy worker migration.
-- Native RFD4 featurizer/encoding semantic parity: Studio bundle pin
-  `e519afe329a0963172747e9f71e843a21b6995e8` differs from BMS native
-  `8f7f702e46f944713fbe8ff5c566221aaa54eb0b`; prior four-of-five byte comparison and
-  `conditions.py` encoding-import discrepancy are retained, not resolved here.
+- Patinae/WebGPU, touch/phone, arbitrary chemical import and broad offline CCD/PDB
+  cache behavior; legacy worker migration. The broad upstream picking script is not
+  claimed passing from the focused positioned scenario.
+- Native RFD4 featurizer/inference parity. CPU definition differential now observes
+  native vocabulary 147 versus Studio 34 tokens, matching indices for shared tokens,
+  and differing UNK atom layouts (native N/CA/C/O, Studio empty). All 28 standard
+  polymer sequence-probability channels and their token indices match. This is not
+  full vocabulary or native featurizer equivalence; neither pin was changed. See
+  `third_party/atomworks_studio/HOST-QUALIFICATION.md` for reproduction.
 - Real private ingress/deployment, managed-service installation/restart, final OS
   image/legal audit, inference or enzyme-function validation. No push, deployment,
   live listener change, weights, rentals or scientific run was performed.

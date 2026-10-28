@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -87,12 +88,18 @@ def apply(source: Path, *, verify_only: bool = False, build: bool = False) -> di
     if build:
         # Forward real tool output; a nonzero install/build must not become a receipt.
         for command in (("pnpm", "install", "--frozen-lockfile"), ("pnpm", "build")):
-            subprocess.run(command, cwd=source / "packages" / "web", check=True, stdout=sys.stderr)
-        check_files(source, manifest["files"], "after")
+            subprocess.run(command, cwd=source / "packages" / "web", check=True, stdout=sys.stderr,
+                           env={**os.environ, "ANNOTATION_STUDIO_VERSION": manifest["upstream_version"],
+                                "ANNOTATION_STUDIO_REVISION": manifest["upstream_commit"] + "-bms-s03"})
+        apply(source, verify_only=True)
         dist = source / "packages" / "web" / "dist"
         if not (dist / "index.html").is_file():
             raise ValueError("Build did not produce dist/index.html")
         receipt["web_build"] = "passed"
+        receipt["toolchain"] = {tool: run(source, tool, "--version")
+                                for tool in ("node", "pnpm", "rustc", "cargo", "wasm-pack")}
+        receipt["build_environment"] = {"ANNOTATION_STUDIO_VERSION": manifest["upstream_version"],
+                                        "ANNOTATION_STUDIO_REVISION": manifest["upstream_commit"] + "-bms-s03"}
         receipt["web_files"] = {str(p.relative_to(dist)): digest(p) for p in sorted(dist.rglob("*")) if p.is_file()}
     return receipt
 
