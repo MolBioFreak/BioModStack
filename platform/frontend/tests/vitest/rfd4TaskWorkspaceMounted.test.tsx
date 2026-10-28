@@ -70,6 +70,25 @@ it('retains opaque native editor companions without placing them in the Job requ
     expect(draft.native_job_request.params).not.toHaveProperty('opaque_import');
 });
 
+it('retains exact and range chain drafts outside science through cold reopen and recipe switching', async () => {
+    await mount('rfd4_proteina', { native_recipe: 'source_free', rfd4_request: { input: { kind: 'unconditional', chains: [{ chain_id: 'A' }] } } });
+    await edit('Chain 1 min_length', '17'); await edit('Chain 1 max_length', '1200');
+    await edit('Chain 1 length mode', 'exact'); await edit('Chain 1 exact length', '1321');
+    expect(draft.rfd4_request.input.chains).toEqual([{ chain_id: 'A', min_length: 1321, max_length: 1321 }]);
+    expect(draft.native_job_request.params).not.toHaveProperty('native_control_drafts');
+    expect(Object.values(draft.native_control_drafts)[0]).toMatchObject({ chain_lengths: { 0: { mode: 'exact', exact: 1321, minimum: 17, maximum: 1200 } } });
+    const saved = JSON.parse(JSON.stringify(draft)); await unmount(); await mount('rfd4_proteina', saved);
+    await edit('Chain 1 length mode', 'range');
+    expect(draft.rfd4_request.input.chains[0]).toEqual({ chain_id: 'A', min_length: 17, max_length: 1200 });
+    await edit('Chain 1 length mode', 'exact');
+    expect(draft.rfd4_request.input.chains[0].min_length).toBe(1321);
+    await edit('RFD4 task', 'partial'); await edit('RFD4 task', 'source_free');
+    expect(draft.rfd4_request.input.chains[0].min_length).toBe(1321);
+    await edit('Chain 1 length mode', 'range');
+    expect(draft.rfd4_request.input.chains[0].max_length).toBe(1200);
+    expect(draft.native_job_request.params.rfd4_request).toEqual(draft.rfd4_request);
+});
+
 it('Complexa retained token strings and historical integers remain independently editable', async () => {
     await mount('complexa', { complexa_request: { task: 'protein_binder', source: { document_id: 'target', target_hotspots: [1, 'A1'] } } });
     expect((document.querySelector('[aria-label="Target hotspot 1"]') as HTMLInputElement).type).toBe('number');
@@ -289,7 +308,10 @@ it('projects selected effective scalar values without authoring them and invalid
     expect(document.querySelectorAll('[aria-label="Batch size"]')).toHaveLength(1);
     await edit('Batch size', '3'); await click('Inherit Batch size');
     expect(draft.rfd4_request).toEqual({ settings: {} });
-    expect(batch.value).toBe('');
+    // The stale combined readback (9) must not revive after A→B→A.
+    // A source-qualified schema default remains visible without authoring it.
+    expect(batch.value).toBe(String(inventories.rfd4_proteina.generate.parameter_schema.properties.settings.properties.batch_size.default));
+    expect(batch.value).not.toBe('9');
     await click('Native settings');
     expect(document.body.textContent).toContain('Request changed since readback');
 });

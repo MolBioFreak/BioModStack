@@ -163,7 +163,11 @@ it('shows DISCO retained flat values and seed shorthand as projected', async () 
     expect(projected).toMatchObject({ N_step: 0, deterministic: false, seeds: [0, 12] });
     expect(field('N_step').textContent).toContain('disco_N_step · 0');
     expect(field('deterministic').textContent).toContain('disco_deterministic · false');
-    expect(field('seeds').textContent).toContain('disco_seeds · [0,12]');
+    // Seeds now have one effective primary editor instead of a duplicate
+    // discovery override. Its literal shorthand still lowers identically.
+    expect(field('seeds')).toBeNull();
+    const seeds = [...document.querySelectorAll('label')].find(label => label.firstChild?.textContent === 'Exact seeds')?.querySelector('input');
+    expect(seeds?.value).toBe('0, 12');
 });
 it('uses the exact preset for motif references and reports unlisted values honestly', async () => {
     const changed = vi.fn();

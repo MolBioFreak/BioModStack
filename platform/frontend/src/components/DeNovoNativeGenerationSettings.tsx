@@ -15,7 +15,7 @@ import { generalSequenceRequest, hydrateGeneralSequenceDesign } from '../lib/gen
 import { changeNativeTask, nativeTaskKey, type NativeTaskDrafts } from '../lib/nativeModelDrafts';
 import { buildRfd4NativeSelection, type Rfd4NativeSelectionIdentity } from '../lib/rfd4NativeSelection';
 import { buildComplexaNativeSelection } from '../lib/complexaNativeSelection';
-import { Rfd4TaskWorkspace, rfd4RecipeRequest } from './Rfd4TaskWorkspace';
+import { Rfd4TaskWorkspace, rfd4RecipeRequest, type Rfd4LengthDraft } from './Rfd4TaskWorkspace';
 import { Rfd4ExpertSettings, NativeProfileSnapshot } from './Rfd4ExpertSettings';
 import { ComplexaTaskWorkspace } from './ComplexaTaskWorkspace';
 import type { MetricSelection } from '../structureViewer/metrics/metricContracts';
@@ -95,6 +95,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         staleTime: 60_000, retry: false });
     const schema = inventory.data?.parameter_schema ?? inventory.data?.schema;
     const contract = inventory.data?.contract ?? (typeof schema?.$id === 'string' ? schema.$id : schema?.properties?.schema_version?.const !== undefined ? `${model}:${schema.properties.schema_version.const}` : typeof initialValues.native_contract === 'string' ? initialValues.native_contract : `${model}:unversioned`);
+    const activeControlKey = nativeTaskKey(model, mode, contract, request, recipe);
     const payload = { ...(sequenceOmitted ? {} : generalSequenceRequest(sequence)), name, model_id: model, mode: activeMode,
         ...(!sequence.invocation_draft && !sequence.sequence_design.enabled && explicitSequenceNull ? { sequence_design: null } : {}),
         ...(Object.hasOwn(initialValues, 'pinned_gpu') ? { pinned_gpu: initialValues.pinned_gpu } : {}),
@@ -225,6 +226,8 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
             {schema && (model === 'rfd4_proteina' ? <Rfd4TaskWorkspace request={request} schema={schema} mode={mode} recipe={recipe} onRecipe={changeRecipe} onChange={changeRequest} renderNative={renderField} renderSource={renderSource} sourceNames={Object.keys(nativeDraft.sources ?? {})} effectiveConfig={effectiveReadback?.generation === readbackGeneration.current.value ? effectiveReadback.effective : undefined}
                 sourceChains={Object.fromEntries(Object.entries(inspections).filter(([slot, item]) => item.binding === JSON.stringify(nativeDraft.sources?.[slot]) && !item.receipt.inspection_error && !!item.receipt.source_positions?.length).map(([slot, item]) => [slot, [...new Set(item.receipt.source_positions!.map(row => String(row.label_asym_id ?? '')))]]))}
                 retainedTasks={Object.entries(nativeDraft.inactive).filter(([key]) => { try { const parts = JSON.parse(key); return parts[0] === model && parts[1] === mode && parts[2] === contract && parts[3] !== 'recipe'; } catch { return false; } }).map(([key, value]) => ({ key, label: String(record(value.input).kind ?? 'native request') }))}
+                lengthDrafts={record(record(controlDrafts[activeControlKey]).chain_lengths) as Record<number, Rfd4LengthDraft>}
+                onLengthDraftsChange={chain_lengths => setControlDrafts(previous => ({ ...previous, [activeControlKey]: { ...record(previous[activeControlKey]), chain_lengths } }))}
                 onClearSelection={() => setVisual(undefined)}
                 visual={currentVisual ? { slot: currentVisual.slot, identities: currentVisual.identities, receipt: currentVisual.receipt, ...visualResult } : undefined} /> : <ComplexaTaskWorkspace request={request} schema={schema} onChange={changeRequest} onTask={task => patch('task', task)} renderNative={renderField} renderSource={renderSource} sourceNames={Object.keys(nativeDraft.sources ?? {})}
                 controlDraft={record(controlDrafts[nativeTaskKey(model, mode, contract, request)])} onControlDraft={value => setControlDrafts(previous => ({ ...previous, [nativeTaskKey(model, mode, contract, request)]: value }))}
