@@ -18,6 +18,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shlex
+import shutil
 import signal
 import stat
 import subprocess
@@ -473,6 +474,25 @@ def nvidia_libraries():
     return result
 
 
+def nvidia_bindings(rootfs):
+    """Expose the host driver and its optional telemetry CLI together.
+
+    The image need not ship nvidia-smi. Its absence on the host remains an
+    observation limitation, not a new execution requirement.
+    """
+    directory = rootfs / '.bms-nvidia'
+    directory.mkdir(exist_ok=True)
+    files = nvidia_libraries()
+    executable = shutil.which('nvidia-smi')
+    if executable:
+        files['nvidia-smi'] = str(Path(executable).resolve(strict=True))
+    bindings = []
+    for name, source in files.items():
+        (directory / name).touch(exist_ok=True)
+        bindings.append((source, '/.bms-nvidia/' + name))
+    return bindings
+
+
 def run_owned(command, environment, pass_fds, identity):
     process = subprocess.Popen(command, env=environment, pass_fds=tuple(sorted(set(pass_fds))))
     try:
@@ -545,12 +565,9 @@ def execute(invocation, identity):
                   'for f in /.singularity.d/env/*.sh; do [ ! -f "$f" ] || source "$f"; done']
         script += ['export ' + key + '=' + shlex.quote(value) for key, value in extra.items()]
         if invocation.gpu:
-            directory = rootfs / '.bms-nvidia'
-            directory.mkdir(exist_ok=True)
-            for name, source in nvidia_libraries().items():
-                (directory / name).touch(exist_ok=True)
-                volumes.append((source, '/.bms-nvidia/' + name))
+            volumes.extend(nvidia_bindings(rootfs))
             script.append('export LD_LIBRARY_PATH="/.bms-nvidia${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"')
+            script.append('export PATH="/.bms-nvidia${PATH:+:$PATH}"')
         script.append('exec "$@"')
         entry = rootfs / '.bms-exec.sh'
         entry.write_text('\n'.join(script) + '\n')
