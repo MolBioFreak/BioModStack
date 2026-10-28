@@ -187,12 +187,12 @@ it('each leaf of the selected native settings schema has a typed mounted control
             .replace(/^settings\.settings\.generation\./, '')
             .replace(/^settings\.settings\.search\.checkpoints\.([^.]+(?:\.[^.]+)?)\./, 'Checkpoint $1.')
             .replace(/^settings\.settings\.search\./, '')
-            .replace(/^settings\.settings\.(num_replicates|batch_size|seed)$/, 'Requested $1')
+            .replace(/^settings\.settings\.(num_replicates|batch_size|seed)$/, (_, key: string) => ({ num_replicates: 'Designs per input', batch_size: 'Batch size', seed: 'Seed' })[key]!)
             .replace(/^settings\.settings\./, '');
     }
     const settings = populated(schema, 'settings.settings');
     await mount('rfd4_proteina', 'generate', { ...d20, settings }); await click('Native settings');
-    for (const title of ['Profiles and recycling', 'Integration and partial / inverse sampling', 'Backbone schedule and simulation', 'Sequence latent schedule and simulation', 'Search checkpoint timeline', 'Guidance and dataset transforms', 'Runtime, output and retained assets', 'Primary amount overrides']) await openGroup(title);
+    for (const title of ['Profiles and recycling', 'Integration and partial / inverse sampling', 'Backbone schedule and simulation', 'Sequence latent schedule and simulation', 'Search checkpoint timeline', 'Guidance and dataset transforms', 'Runtime, output and retained assets']) await openGroup(title);
     for (const label of leaves) {
         const translated = controlLabel(label);
         const rootKey = label.match(/^settings\.settings\.(?:(?:search|generation)\.)?([^.\[]+)$/)?.[1];
@@ -206,18 +206,21 @@ it('each leaf of the selected native settings schema has a typed mounted control
 });
 it('every current settings property has its mounted native override control without hydration', async () => {
     await mount('rfd4_proteina', 'generate', { ...d20, settings: {} }); await click('Native settings');
-    for (const title of ['Profiles and recycling', 'Integration and partial / inverse sampling', 'Backbone schedule and simulation', 'Sequence latent schedule and simulation', 'Search checkpoint timeline', 'Guidance and dataset transforms', 'Runtime, output and retained assets', 'Primary amount overrides']) await openGroup(title);
+    for (const title of ['Profiles and recycling', 'Integration and partial / inverse sampling', 'Backbone schedule and simulation', 'Sequence latent schedule and simulation', 'Search checkpoint timeline', 'Guidance and dataset transforms', 'Runtime, output and retained assets']) await openGroup(title);
     const settings = inventories.rfd4_proteina.generate.parameter_schema.properties.settings;
     const inventory: string[] = [];
     for (const key of Object.keys(settings.properties)) {
         const labels = key === 'generation' ? ['Set override for Integration arguments', 'Set override for bb_ca', 'Set override for local_latents', 'Set override for Dataset transforms']
             : key === 'search' ? ['Integration step']
-            : ['num_replicates', 'batch_size', 'seed'].includes(key) ? [`Requested ${key}`]
+            : ['num_replicates', 'batch_size', 'seed'].includes(key) ? [{ num_replicates: 'Designs per input', batch_size: 'Batch size', seed: 'Seed' }[key]!]
             : [[settings.properties[key], ...(settings.properties[key].anyOf ?? []), ...(settings.properties[key].oneOf ?? [])].some((child: any) => ['object', 'array'].includes(child.type) || child.properties || child.items) ? `Set override for ${key}` : key];
         for (const label of labels) {
             const owner = [...document.querySelectorAll<HTMLElement>('[data-rfd4-override]')].find(node => node.dataset.rfd4Override === key);
             const scalar = labels.length === 1 && label === key || ['num_replicates', 'batch_size', 'seed'].includes(key);
-            const matches = scalar ? [...(owner?.querySelectorAll('input,select') ?? [])] : [...document.querySelectorAll('[aria-label]')].filter(node => node.getAttribute('aria-label') === label);
+            const matches = ['num_replicates', 'batch_size', 'seed'].includes(key)
+                ? [...document.querySelectorAll(`[data-rfd4-task-workspace] input[aria-label="${label}"]`)]
+                : scalar ? [...(owner?.querySelectorAll('input,select') ?? [])] : [...document.querySelectorAll('[aria-label]')].filter(node => node.getAttribute('aria-label') === label);
+            if (['num_replicates', 'batch_size', 'seed'].includes(key)) expect(matches).toHaveLength(1);
             // A nullable scalar union can render a branch selector and its value.
             expect(matches.length, `${key}: ${label}`).toBeGreaterThan(0);
             inventory.push(label);

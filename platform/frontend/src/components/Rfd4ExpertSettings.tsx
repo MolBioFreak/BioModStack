@@ -206,6 +206,7 @@ export function Rfd4ExpertSettings({ request, schema, onChange, fileSlots = {}, 
             <p>Profile reference shows declared defaults, not combined effective values.</p>
             <pre className="whitespace-pre-wrap break-all" aria-label="Requested RFD4 values">{JSON.stringify(request, null, 2)}</pre>
         </>)}
-        {section('Primary amount overrides', () => <div className="grid gap-3 sm:grid-cols-2">{['num_replicates', 'batch_size', 'seed'].map(key => leaf(key, settingsSchema?.properties?.[key], settings[key], ['settings', key]))}</div>)}
+        {/* Sampling amounts have one owner in Rfd4TaskWorkspace. The native
+            evaluate schema has no amount settings, so none are hidden there. */}
     </div>;
 }

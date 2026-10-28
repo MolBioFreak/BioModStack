@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
+import { Rfd4TaskWorkspace } from '../../src/components/Rfd4TaskWorkspace';
 import { Rfd4ExpertSettings } from '../../src/components/Rfd4ExpertSettings';
 
 // The actual discovery owner supplies both schema and shipped profile snapshots.
@@ -13,10 +14,10 @@ let root: Root | undefined;
 let latest: Record<string, any>;
 let replace: (request: Record<string, any>) => void;
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; document.body.replaceChildren(); });
-async function mount(initial: Record<string, any> = {}, discovery: unknown = inventory.native_profile_defaults) {
+async function mount(initial: Record<string, any> = {}, discovery: unknown = inventory.native_profile_defaults, withTask = false) {
     function Harness() {
         const [request, setRequest] = useState(initial); latest = request; replace = setRequest;
-        return <Rfd4ExpertSettings request={request} schema={inventory.parameter_schema} discovery={discovery} onChange={setRequest} />;
+        return <>{withTask && <Rfd4TaskWorkspace request={request} schema={inventory.parameter_schema} mode="generate" onRecipe={() => {}} onChange={setRequest} renderNative={() => null} sourceNames={[]} />}<Rfd4ExpertSettings request={request} schema={inventory.parameter_schema} discovery={discovery} onChange={setRequest} /></>;
     }
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     await act(async () => root!.render(<Harness />)); await show('Profiles and recycling');
@@ -81,8 +82,9 @@ it('does not guess an inherited value when discovery is unavailable', async () =
 });
 it('retains cleared and false values on a cold serialized reopen and exposes scalar amounts as numbers', async () => {
     const initial = { settings: { generation: { n_recycle: '', condition_on_recycle_remaining: false }, seed: 0, batch_size: 2 }, guidance: { metrics: [] } };
-    await mount(JSON.parse(JSON.stringify(initial)));
+    await mount(JSON.parse(JSON.stringify(initial)), inventory.native_profile_defaults, true);
     expect(input('Recycling passes').value).toBe(''); expect(input('Condition on remaining recycling passes').checked).toBe(false);
-    await show('Primary amount overrides'); expect(input('Random seed').type).toBe('number'); expect(input('Random seed').value).toBe('0');
+    expect(document.body.textContent).not.toContain('Primary amount overrides');
+    expect(input('Seed').type).toBe('number'); expect(input('Seed').value).toBe('0');
     await edit('Batch size', '4'); expect(latest).toEqual({ ...initial, settings: { ...initial.settings, batch_size: 4 } });
 });

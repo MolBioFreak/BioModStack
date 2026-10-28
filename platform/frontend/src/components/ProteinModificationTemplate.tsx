@@ -63,15 +63,23 @@ const DE_NOVO_TASK_OPTIONS: Record<DeNovoBackend, Array<{ value: string; label: 
 const fieldClass = 'w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)]';
 const labelClass = 'space-y-1 text-sm font-medium text-[var(--text-primary)]';
 
+const initialValue = (values: Record<string, unknown> | undefined, key: string): unknown =>
+    values && Object.hasOwn(values, key) ? values[key] : values?.[`pcad_${key}`];
+const settingsObject = (value: unknown): Record<string, unknown> => {
+    if (typeof value === 'string') { try { value = JSON.parse(value); } catch { return {}; } }
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+};
+
 const initialString = (values: Record<string, unknown> | undefined, key: string, fallback: string): string => {
-    const value = values?.[key];
+    const value = initialValue(values, key);
     return typeof value === 'string' ? value : fallback;
 };
 
 const initialNumber = (values: Record<string, unknown> | undefined, key: string, fallback: number | ''): number | '' => {
-    if (values?.[key] === '') return '';
-    if (values?.[key] === undefined) return fallback;
-    const value = Number(values?.[key]);
+    const saved = initialValue(values, key);
+    if (saved === '') return '';
+    if (saved === undefined) return fallback;
+    const value = Number(saved);
     return Number.isFinite(value) ? value : fallback;
 };
 const editedNumber = (value: string): number | '' => value === '' ? '' : Number(value);
@@ -284,36 +292,62 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [motifTaskName, setMotifTaskName] = useState(initialString(initialValues, 'laproteina_motif_task_name', ''));
     const [motifPdb, setMotifPdb] = useState(initialString(initialValues, 'laproteina_motif_pdb', ''));
     const [motifInspection, setMotifInspection] = useState(initialValues.laproteina_motif_inspection as LaProteinaMotifInspection | undefined);
-    const [motifAtomSpec, setMotifAtomSpec] = useState<string | null | undefined>(initialValues.laproteina_motif_atom_spec as string | null | undefined);
+    const [motifAtomSpec, setMotifAtomSpec] = useState<string | null | undefined>(initialValue(initialValues, 'laproteina_motif_atom_spec') as string | null | undefined);
     const [motifContig, setMotifContig] = useState(initialString(initialValues, 'laproteina_contig_string', ''));
     const [motifSegmentOrder, setMotifSegmentOrder] = useState(initialString(initialValues, 'laproteina_segment_order', ''));
     const [motifAtomSelectionMode, setMotifAtomSelectionMode] = useState(initialString(initialValues, 'laproteina_atom_selection_mode', 'all_atom'));
-    const [motifMinLength, setMotifMinLength] = useState(initialString(initialValues, 'laproteina_motif_min_length', ''));
-    const [motifMaxLength, setMotifMaxLength] = useState(initialString(initialValues, 'laproteina_motif_max_length', ''));
+    const [motifMinLength, setMotifMinLength] = useState<string | number | null>(initialValue(initialValues, 'laproteina_motif_min_length') === null ? null : initialValue(initialValues, 'laproteina_motif_min_length') as string | number ?? '');
+    const [motifMaxLength, setMotifMaxLength] = useState<string | number | null>(initialValue(initialValues, 'laproteina_motif_max_length') === null ? null : initialValue(initialValues, 'laproteina_motif_max_length') as string | number ?? '');
     const [discoExperiment, setDiscoExperiment] = useState(initialString(initialValues, 'disco_experiment', 'designable'));
     const [discoEffort, setDiscoEffort] = useState(initialString(initialValues, 'disco_effort', 'fast'));
-    const [discoInferenceSeeds, setDiscoInferenceSeeds] = useState<number | '' | null>(initialValues.disco_num_inference_seeds === null ? null : initialNumber(initialValues, 'disco_num_inference_seeds', 8));
-    const [discoSeeds, setDiscoSeeds] = useState(initialString(initialValues, 'disco_seeds', ''));
-    const [discoAttention, setDiscoAttention] = useState(initialValues.disco_use_deepspeed_evo_attention === true);
+    const [discoInferenceSeeds, setDiscoInferenceSeeds] = useState<number | '' | null>(initialValue(initialValues, 'disco_num_inference_seeds') === null ? null : initialNumber(initialValues, 'disco_num_inference_seeds', 8));
+    const [discoSeeds, setDiscoSeeds] = useState<string | number[] | null>(() => {
+        const saved = initialValue(initialValues, 'disco_seeds');
+        return saved === null || Array.isArray(saved) ? saved as number[] | null : typeof saved === 'string' ? saved : '';
+    });
+    const [discoSeedText, setDiscoSeedText] = useState<string>();
+    const [discoAttention, setDiscoAttention] = useState(initialValue(initialValues, 'disco_use_deepspeed_evo_attention') === true);
     const [discoInputJson, setDiscoInputJson] = useState(initialString(initialValues, 'disco_input_json_path', ''));
     const [ligandSdf, setLigandSdf] = useState(initialString(initialValues, 'disco_ligand_sdf', ''));
     const [ligandName, setLigandName] = useState(initialString(initialValues, 'disco_ligand_name', ''));
     const [nucleicSequence, setNucleicSequence] = useState(initialString(initialValues, 'disco_na_sequence', ''));
     const [nativeControls, setNativeControls] = useState<Record<string, unknown>>(() => Object.fromEntries(
-        ['pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => { let value = initialValues[key]; if (key.endsWith('_json') && typeof value === 'string') { try { value = JSON.parse(value); } catch { /* Retain invalid saved input for explicit repair. */ } } return [key, value]; })));
+        ['laproteina_settings', 'disco_settings', 'pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => { let value = initialValues[key]; if (key.endsWith('_json') && typeof value === 'string') { try { value = JSON.parse(value); } catch { /* Retain invalid saved input for explicit repair. */ } } return [key, value]; })));
     const nativeOverrideKey = `pcad_${backend}_settings_json`;
-    const rawOverrides = nativeControls[nativeOverrideKey];
-    const nativeOverrides = rawOverrides && typeof rawOverrides === 'object' && !Array.isArray(rawOverrides) ? rawOverrides as Record<string, unknown> : {};
-    const effectiveOverride = (key: string, fallback: unknown) => Object.hasOwn(nativeOverrides, key) ? nativeOverrides[key] : fallback;
+    const historicalOverrideKey = `${backend}_settings`;
+    const newestOverrides = settingsObject(nativeControls[nativeOverrideKey]);
+    const historicalOverrides = settingsObject(nativeControls[historicalOverrideKey]);
+    // Match the native presence-based projection: flat < historical < pcad JSON.
+    // Keep each layer separate so editing/reset never discards a shadowed draft.
+    const nativeOverrides = { ...historicalOverrides, ...newestOverrides };
+    const overrideOwner = (key: string) => Object.hasOwn(newestOverrides, key) ? nativeOverrideKey
+        : Object.hasOwn(historicalOverrides, key) ? historicalOverrideKey : undefined;
+    // Named motifs inherit their native dictionary, not the old flat motif
+    // defaults (the projection deliberately omits those). Do not present a
+    // shadowed flat value as effective when its last native override is reset.
+    const namedMotif = backend === 'laproteina' && Boolean(motifTaskName && !motifPdb);
+    const inheritsNamedMotif = (key: string) => namedMotif && ['contig_string', 'segment_order', 'motif_atom_spec', 'atom_selection_mode', 'motif_min_length', 'motif_max_length'].includes(key);
+    const effectiveOverride = (key: string, fallback: unknown) => Object.hasOwn(nativeOverrides, key) ? nativeOverrides[key] : inheritsNamedMotif(key) ? undefined : fallback;
     const setEffectiveOverride = (key: string, value: unknown, setPrimary: () => void) => {
-        if (!Object.hasOwn(nativeOverrides, key)) { setPrimary(); return; }
-        setNativeControls(current => ({ ...current, [nativeOverrideKey]: { ...nativeOverrides, [key]: value } }));
+        const owner = overrideOwner(key);
+        if (!owner) { setPrimary(); return; }
+        setNativeControls(current => ({ ...current, [owner]: { ...settingsObject(current[owner]), [key]: value } }));
     };
-    const resetOverride = (key: string) => setNativeControls(current => {
-        const next = { ...nativeOverrides }; delete next[key];
-        return { ...current, [nativeOverrideKey]: next };
-    });
-    const overrideNote = (key: string) => Object.hasOwn(nativeOverrides, key) && <span className="block text-xs text-[var(--text-secondary)]">Native override ({key}): {JSON.stringify(nativeOverrides[key])}. <button type="button" aria-label={`Use primary value for ${key}`} onClick={() => resetOverride(key)}>Use primary value</button></span>;
+    const resetOverride = (key: string) => {
+        if (key === 'seeds') setDiscoSeedText(undefined);
+        setNativeControls(current => {
+            const owner = overrideOwner(key);
+            if (!owner) return current;
+            const next = { ...settingsObject(current[owner]) }; delete next[key];
+            return { ...current, [owner]: next };
+        });
+    };
+    const overrideNote = (key: string) => {
+        const owner = overrideOwner(key);
+        if (!owner) return null;
+        const resetLabel = owner === nativeOverrideKey && Object.hasOwn(historicalOverrides, key) ? 'Use retained override' : inheritsNamedMotif(key) ? 'Use named motif profile' : 'Use primary value';
+        return <span className="block text-xs text-[var(--text-secondary)]">Native override ({key}) from {owner}: {JSON.stringify(nativeOverrides[key])}. <button type="button" aria-label={`${resetLabel} for ${key}`} onClick={() => resetOverride(key)}>{resetLabel}</button></span>;
+    };
     const [rfd3Settings, setRfd3Settings] = useState(() => retainedRfd3Draft(initialValues));
     const [rfd3SourceInspection, setRfd3SourceInspection] = useState<{ receipt: StructureMaterialization; path: string; model?: number }>();
     const rfd3Source = typeof rfd3Settings.input_structure === 'string' && rfd3Settings.input_structure ? {
@@ -330,11 +364,11 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             return (bound?.minimum != null && Number(value) < bound.minimum) || (bound?.maximum != null && Number(value) > bound.maximum);
         });
     const hasNativeJobs = Object.hasOwn(nativeControls, 'pcad_disco_jobs_json');
-    const effectiveLaMotif = { motif_task_name: motifTaskName, motif_pdb: motifPdb, contig_string: motifContig, ...(nativeControls.pcad_laproteina_settings_json && typeof nativeControls.pcad_laproteina_settings_json === 'object' && !Array.isArray(nativeControls.pcad_laproteina_settings_json) ? nativeControls.pcad_laproteina_settings_json as Record<string, unknown> : {}) };
+    const effectiveLaMotif = { motif_task_name: motifTaskName, motif_pdb: motifPdb, contig_string: motifContig, ...nativeOverrides };
     const hasEffectiveLaMotif = Boolean(effectiveLaMotif.motif_task_name || (effectiveLaMotif.motif_pdb && effectiveLaMotif.contig_string));
     const authorLaMotif = (key: string, value: unknown) => setNativeControls(current => ({ ...current, pcad_laproteina_settings_json: { ...(current.pcad_laproteina_settings_json && typeof current.pcad_laproteina_settings_json === 'object' && !Array.isArray(current.pcad_laproteina_settings_json) ? current.pcad_laproteina_settings_json as Record<string, unknown> : {}), [key]: value } }));
     const retainedAlternativeParams = Object.fromEntries(Object.entries(initialValues).filter(([key]) =>
-        (key.startsWith(`${backend}_`) || key.startsWith(`pcad_${backend}_`) && !['pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path'].includes(key)) && key !== 'laproteina_motif_inspection'));
+        (key.startsWith(`${backend}_`) || key.startsWith(`pcad_${backend}_`)) && !['laproteina_settings', 'disco_settings', 'pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path'].includes(key) && key !== 'laproteina_motif_inspection'));
     const [error, setError] = useState<string | null>(null);
     const [sequenceDesign, setSequenceDesign] = useState(() => hydrateGeneralSequenceDesign(initialValues));
     const [sequenceOmitted, setSequenceOmitted] = useState(() => initialValues.sequence_design_omitted === true);
@@ -384,7 +418,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     };
     // Retain unrecognized editor imports, without reintroducing cleared fields
     // owned by this child or placing extras in the native request.
-    const clearable = new Set<string>([...rfd3ExecutionKeys, 'conditioning', 'input_structure', 'source_mapping', 'source_model', 'generation_mode', 'native_job_request', 'de_novo_drafts', 'generator', 'backend', 'design_task', 'modification_mode', 'native_mode', 'suite_view', 'suite_last_tasks', 'suite_last_modes', 'sequence_design_null', 'sequence_design_omitted', 'pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path']);
+    const clearable = new Set<string>([...rfd3ExecutionKeys, 'conditioning', 'input_structure', 'source_mapping', 'source_model', 'generation_mode', 'native_job_request', 'de_novo_drafts', 'generator', 'backend', 'design_task', 'modification_mode', 'native_mode', 'suite_view', 'suite_last_tasks', 'suite_last_modes', 'laproteina_settings', 'disco_settings', 'sequence_design_null', 'sequence_design_omitted', 'pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path']);
     const extras = Object.fromEntries(Object.entries(initialValues).filter(([key]) => !Object.hasOwn(draftValues, key) && !clearable.has(key)));
     const draftJson = JSON.stringify({ ...extras, ...draftValues });
     const submitMutation = useMutation({
@@ -396,7 +430,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         onError: (err: Error) => setError(err.message || 'Failed to submit protein modification job'),
     });
 
-    const buildAlternativeWorkflowRequest = () => ({
+    const buildAlternativeWorkflowRequest = () => {
+        const request = {
             ...(sequenceOmitted ? {} : generalSequenceRequest(sequenceDesign)),
             ...(sequenceNull ? { sequence_design: null } : {}),
             name: jobName.trim(),
@@ -404,7 +439,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             mode: 'de_novo_design',
             params: {
                 ...retainedAlternativeParams,
-                ...Object.fromEntries(Object.entries(nativeControls).filter(([key]) => key.startsWith(`pcad_${backend}_`))),
+                ...Object.fromEntries(Object.entries(nativeControls).filter(([key]) => (key.startsWith(`pcad_${backend}_`) || key === `${backend}_settings`))),
                 modification_mode: 'de_novo_design',
                 generator: backend,
                 backend,
@@ -422,14 +457,14 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     laproteina_contig_string: motifContig || undefined,
                     laproteina_segment_order: motifSegmentOrder || undefined,
                     laproteina_atom_selection_mode: motifAtomSelectionMode,
-                    laproteina_motif_min_length: motifMinLength || undefined,
-                    laproteina_motif_max_length: motifMaxLength || undefined,
+                    laproteina_motif_min_length: motifMinLength === '' ? undefined : motifMinLength,
+                    laproteina_motif_max_length: motifMaxLength === '' ? undefined : motifMaxLength,
                 } : {
                     ...Object.fromEntries(['disco_checkpoint_path', 'disco_cutlass_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => [key, initialValues[key]])),
                     disco_experiment: discoExperiment,
                     disco_effort: discoEffort,
                     disco_num_inference_seeds: discoInferenceSeeds,
-                    disco_seeds: discoSeeds || undefined,
+                    disco_seeds: discoSeeds === '' ? undefined : discoSeeds,
                     disco_use_deepspeed_evo_attention: discoAttention,
                     disco_input_json_path: discoInputJson || undefined,
                     disco_ligand_sdf: ligandSdf || undefined,
@@ -437,7 +472,17 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     disco_na_sequence: nucleicSequence || undefined,
                 }),
             },
-        });
+        };
+        // A cleared optional primary must not resurrect a retained pcad_ flat
+        // alias after JSON drops its undefined canonical key. Keep the original
+        // aliases in editor drafts; suppress only shadowed wire aliases here.
+        const params = request.params as Record<string, unknown>;
+        for (const [key, value] of Object.entries(params)) {
+            const alias = `pcad_${key}`;
+            if (value === undefined && Object.hasOwn(params, alias) && params[alias] !== '') delete params[alias];
+        }
+        return request;
+    };
 
     const submitAlternative = async () => {
         setError(null);
@@ -619,13 +664,14 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     }} />
                     {['contig_string', 'segment_order', 'motif_atom_spec'].map(key => <div key={key}>{overrideNote(key)}</div>)}
                     <ProteinDesignPanel title="Motif conditioning">
+                        {namedMotif && <p className="text-xs">Unchanged motif settings inherit the named native motif task. Its effective values are not reported here; retained flat motif values are not requested overrides.</p>}
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                             {presetControl}
                             <label className={labelClass}>Atom selection
                                 <select className={fieldClass} value={String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? '')} onChange={event => { if (!Object.hasOwn(nativeOverrides, 'atom_selection_mode')) setMotifAtomSelectionMode(event.target.value); authorLaMotif('atom_selection_mode', event.target.value); }}>
                                     <option value="all_atom">All atom</option><option value="tip_atoms">Tip atoms</option>
                                     <option value="bb3o">Backbone N, Cα, C, O</option><option value="ca">Cα only</option>
-                                    {!['all_atom', 'tip_atoms', 'bb3o', 'ca'].includes(String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? '')) && <option value={String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? '')}>{String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? 'null')} · retained historical value</option>}
+                                    {!['all_atom', 'tip_atoms', 'bb3o', 'ca'].includes(String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? '')) && <option value={String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? '')}>{inheritsNamedMotif('atom_selection_mode') && effectiveOverride('atom_selection_mode', motifAtomSelectionMode) === undefined ? 'From named motif profile' : `${String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? 'null')} · retained historical value`}</option>}
                                 </select>
                                 {overrideNote('atom_selection_mode')}
                             </label>
@@ -656,7 +702,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             {generator === 'disco' && <DiscoJobsInput value={nativeControls.pcad_disco_jobs_json} path={discoInputJson} sourcePath={nativeControls.pcad_disco_jobs_source_path as string | undefined} onChange={(jobs, sourcePath) => setNativeControls(current => { const next = { ...current }; if (jobs === undefined) { delete next.pcad_disco_jobs_json; delete next.pcad_disco_jobs_source_path; } else { next.pcad_disco_jobs_json = jobs; if (sourcePath !== undefined) next.pcad_disco_jobs_source_path = sourcePath; } return next; })} />}
             <div hidden={section !== 'Sampling'} className="space-y-5">
                 <OtherDeNovoSettings generalConditions={generator === 'rfd3'} model={generator as 'rfd3' | DeNovoBackend} task={generator === 'rfd3' ? 'unconditional_monomer' : designTask} selectedPreset={generator === 'laproteina' ? laproteinaPreset : undefined} requestParams={generator === 'rfd3' ? undefined : JSON.parse(JSON.stringify(buildAlternativeWorkflowRequest().params))} value={generator === 'rfd3' ? rfd3Settings : nativeControls} onChange={generator === 'rfd3' ? setRfd3Settings : setNativeControls}
-                    primaryOverrideFields={generator === 'laproteina' ? ['num_steps', ...(isMotif ? ['contig_string', 'segment_order', 'motif_atom_spec', 'atom_selection_mode', 'motif_min_length', 'motif_max_length'] : [])] : generator === 'disco' ? ['experiment', 'effort', 'num_inference_seeds', 'use_deepspeed_evo_attention'] : []} />
+                    primaryOverrideFields={generator === 'laproteina' ? ['num_steps', ...(isMotif ? ['contig_string', 'segment_order', 'motif_atom_spec', 'atom_selection_mode', 'motif_min_length', 'motif_max_length'] : [])] : generator === 'disco' ? ['experiment', 'effort', 'num_inference_seeds', 'seeds', 'use_deepspeed_evo_attention'] : []} />
                 {designTask !== 'unconditional' && <ProteinDesignPanel title="Generation" description={countHelp}>{generationControls}</ProteinDesignPanel>}
                 <ProteinDesignPanel title={`${engineName} sampling`}>
                     {generator === 'rfd3' ? <div className="grid gap-4 sm:grid-cols-2">
@@ -695,7 +741,13 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                                 {overrideNote('num_inference_seeds')}
                             </label>
                             <label className={labelClass}>Exact seeds
-                                <input className={fieldClass} value={discoSeeds} onChange={event => setDiscoSeeds(event.target.value)} placeholder="Optional comma-separated integers" />
+                                <input className={fieldClass} value={discoSeedText ?? (Array.isArray(effectiveOverride('seeds', discoSeeds)) ? (effectiveOverride('seeds', discoSeeds) as unknown[]).join(',') : String(effectiveOverride('seeds', discoSeeds) ?? ''))} onChange={event => { const text = event.target.value; setDiscoSeedText(text); const tokens = text.split(',').map(token => token.trim()).filter(Boolean); setEffectiveOverride('seeds', tokens.every(token => /^[+-]?\d+$/.test(token)) ? tokens.map(Number) : text, () => setDiscoSeeds(text)); }} placeholder="Optional comma-separated integers" />
+                                {effectiveOverride('seeds', discoSeeds) === null && <span>Native null (no exact seeds)</span>}
+                                {overrideNote('seeds')}
+                                <span className="flex gap-2 text-xs">
+                                    <button type="button" onClick={() => { setDiscoSeedText(undefined); setEffectiveOverride('seeds', null, () => setDiscoSeeds(null)); }}>Set explicit null for seeds</button>
+                                    <button type="button" onClick={() => { setDiscoSeedText(undefined); setEffectiveOverride('seeds', [], () => setDiscoSeeds([])); }}>Set empty seeds list</button>
+                                </span>
                             </label>
                         </div>
                         {['dna_conditioned', 'rna_conditioned', 'ligand_conditioned'].includes(designTask) && <p className="text-sm text-[var(--text-secondary)]">Max effort is recommended for conditional generation. Explicit Fast remains Fast; native overrides take precedence over these controls.</p>}
