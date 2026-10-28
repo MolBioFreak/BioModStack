@@ -9,6 +9,7 @@ import { Rfd3AdditionalConditions } from '../../src/components/Rfd3AdditionalCon
 import { Rfd3PartialNoiseInput } from '../../src/components/Rfd3PartialNoiseInput';
 import { Rfd4TaskWorkspace, Rfd4ChainLengths, type Rfd4LengthDraft } from '../../src/components/Rfd4TaskWorkspace';
 import { projectRfd3SourceSelection, type Rfd3SourceSelection } from '../../src/lib/rfd3SourceSelection';
+import { replayRfd3Observation, type Rfd3SelectionObservations } from '../../src/lib/rfd3SelectionObservations';
 const cwd = resolve('../..');
 const py = process.env.BMS_TEST_API_PYTHON ?? 'python';
 const sourcePath = resolve('tests/fixtures/rfd3-selection-identity.cif');
@@ -104,4 +105,32 @@ it('RFD4 inspection carries exact grouped native rows, fraction precision and in
     const normalized = JSON.parse(execFileSync(py, ['-c', 'import sys,json;from scripts.lib.rfd4_proteina_contract import normalize_request;print(json.dumps(normalize_request(json.loads(sys.argv[1]))))', JSON.stringify(draft)], { cwd, encoding: 'utf8' }));
     expect(normalized.settings.generation.args).toEqual(draft.settings.generation.args);
     await edit('partial_trajectory_fraction_steps', ''); expect(draft.settings.generation.args.partial_trajectory_fraction_steps).toBe('');
+});
+
+const exactReceipt = JSON.parse(execFileSync(py, ['-c', "import sys,json,tempfile;from pathlib import Path;sys.path.insert(0,'platform/api');import paths;from services.binder_source_materialization import materialize_source_bytes;d=tempfile.TemporaryDirectory();p=Path(d.name);paths.get_allowed_roots=lambda:{'fixture':p};r=materialize_source_bytes(Path(sys.argv[1]).read_bytes(),'.cif',p,output_format='native',model_number=2);r['source_structure']={'path':r['original_path'],'model_number':2};print(json.dumps(r))", sourcePath], { cwd, encoding: 'utf8' }));
+const exactVisual = (receipt = exactReceipt): Rfd3SourceSelection => ({ inputPath: receipt.original_path, sourceModel: 2, sourceMapping: 'bms.rfd3.source-map.v1',
+    source: { documentId: receipt.path, source_positions: receipt.source_positions, model_number: receipt.model_number, model_numbers: receipt.model_numbers },
+    retainedBinding: { receipt, inputPath: receipt.original_path, sourceModel: 2 }, identities: visual.identities.map(identity => ({ ...identity, documentId: receipt.path })) });
+it('cold RFD3 inspection replays only a retained exact Apply observation with a current verified receipt', async () => {
+    let retained: Rfd3SelectionObservations = {};
+    const highlight = vi.fn();
+    function Owner({ cold = false, observations = {} }: { cold?: boolean; observations?: Rfd3SelectionObservations }) {
+        const [value, setValue] = useState<Record<string, unknown>>(cold ? { select_fixed_atoms: { AA42B: ['CAX'] }, select_hotspots: 'manual-native-expression' } : {});
+        const [observed, setObserved] = useState(observations); retained = observed; draft = value;
+        return <Rfd3SelectionWorkbench value={value} onChange={setValue} visual={cold ? undefined : exactVisual()} inspectionSource={exactVisual(JSON.parse(JSON.stringify(exactReceipt)))} retainedObservations={observed} onObservationsChange={setObserved} onHighlight={highlight} />;
+    }
+    await mount(<Owner />); await click('Apply RFD3 selection');
+    expect(draft).toEqual({ select_fixed_atoms: { AA42B: ['CAX'] } });
+    const saved = JSON.parse(JSON.stringify(retained)); expect(saved.select_fixed_atoms.source.consumedSha256).toBe(exactReceipt.sha256);
+    await act(async () => root!.unmount()); root = undefined;
+    await mount(<Owner cold observations={saved} />);
+    await click('Inspect select_fixed_atoms'); expect(highlight).toHaveBeenCalledOnce();
+    expect(highlight.mock.calls[0][0].identities).toEqual(exactVisual().identities);
+    expect(document.body.textContent).toContain('Retained Apply observation matches');
+    expect(draft).toEqual({ select_fixed_atoms: { AA42B: ['CAX'] }, select_hotspots: 'manual-native-expression' });
+    await click('Inspect select_hotspots'); expect(highlight).toHaveBeenCalledOnce(); expect(document.body.textContent).toContain('not evaluated in the browser');
+    for (const source of [{ ...exactVisual(), sourceModel: 1 }, { ...exactVisual(), inputPath: 'replaced.cif' }, { ...exactVisual(), sourceMapping: undefined }, exactVisual({ ...exactReceipt, sha256: '0'.repeat(64) })]) {
+        expect(replayRfd3Observation('select_fixed_atoms', saved.select_fixed_atoms.value, saved.select_fixed_atoms, source)).toBeUndefined();
+    }
+    expect(replayRfd3Observation('select_fixed_atoms', { AA42B: ['NX'] }, saved.select_fixed_atoms, exactVisual())).toBeUndefined();
 });

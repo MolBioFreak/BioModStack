@@ -21,9 +21,11 @@ const inventories = JSON.parse(execFileSync(process.env.BMS_TEST_API_PYTHON ?? '
 let root: Root | undefined, client: QueryClient, old: typeof api.defaults.adapter, draft: any;
 let wire: any[], unexpected: string[];
 let xhr: ReturnType<typeof vi.spyOn>, fetchSpy: ReturnType<typeof vi.spyOn>;
+let inspectReply: (body: any) => Promise<any>;
 const source = { path: '/retained/target.cif', model_number: 2, expected_sha256: 'exact-hash', output_format: 'native' };
 const positions = [{ model_number: 2, label_asym_id: 'X', label_seq_id: 7, auth_asym_id: 'A', auth_seq_id: 42, pdbx_PDB_ins_code: 'B', label_comp_id: 'GLY', label_entity_id: '1', atoms: [{ label_atom_id: 'CA', auth_atom_id: 'CA', model_atom_index: 0, type_symbol: 'C', label_alt_id: '.' }] }];
 beforeEach(() => {
+    inspectReply = async body => ({ row: body.row, example_name: body.input.examples[body.row.exampleIndex].name, scope: 'Native row targets', runtime_image: 'transport-double-only', input_as_annotated_cif: false, unresolved_atoms: [], sources: { 'target.v2': { sha256: 'consumed-hash', model_number: 2, model_numbers: [2], identities: [{ modelNumber: 2, labelAsymId: 'X', labelSeqId: 7, atomIndex: 0, labelAtomId: 'CA' }] } } });
     old = api.defaults.adapter; wire = []; unexpected = []; draft = undefined; localStorage.clear(); sessionStorage.clear();
     xhr = vi.spyOn(XMLHttpRequest.prototype, 'open').mockImplementation(() => { unexpected.push('XHR'); throw new Error('No network'); });
     fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -42,7 +44,8 @@ beforeEach(() => {
         const match = url.match(/^\/api\/models\/(rfd4_proteina|complexa)\/generation-settings$/);
         if (match) data = inventories[match[1]][config.params.mode];
         else if (url === '/api/jobs') data = { id: 'inert' };
-        else if (url.includes('materialize')) data = { path: source.path, source_structure: source, source_positions: positions, model_number: 2, model_numbers: [2], author_residues: [], native_format: 'cif', format: 'cif', source_identity: {}, source_path: source.path };
+        else if (url === '/api/models/rfd4_proteina/condition-inspection') data = await inspectReply(body);
+        else if (url.includes('materialize')) data = { path: source.path, sha256: 'consumed-hash', source_structure: source, source_positions: positions, model_number: 2, model_numbers: [2], author_residues: [], native_format: 'cif', format: 'cif', source_identity: {}, source_path: source.path };
         else { unexpected.push(url); throw new Error(`Unexpected HTTP ${url}`); }
         return { config, data, status: 200, statusText: 'OK', headers: {} };
     };
@@ -346,4 +349,85 @@ it('Complexa tasks/counts/reward and authoritative operation survive actual tran
     await mount('complexa'); await edit('Complexa task', 'monomer_motif_indexed'); await edit('Native task name', 'indexed'); await edit('nsamples', '3'); await edit('seed', '0'); await edit('Native operation', 'analysis');
     await disclose('Reward activation'); await edit('Native reward state', 'off'); await click('Evaluate and analyze'); const body = wire.find(w => w.url === '/api/jobs').body;
     expect(body.mode).toBe('evaluate'); expect(body.params.complexa_request).toEqual({ task: 'monomer_motif_indexed', task_name: 'indexed', nsamples: 3, seed: 0, operation: 'analysis', reward: null }); expect(normalize(body.params.complexa_request, 'complexa')).toEqual(body.params.complexa_request);
+});
+
+const currentCondition = () => ({ input: { kind: 'condition_spec', global_args: { input_as_annotated_cif: true }, examples: [{ name: 'current', sources: [{ slot: 'target.v2', input_as_annotated_cif: false }], conditions: { C_IDX: { false: [{ select: 'atom_name == "CA"', group: 'kept' }] } } }] } });
+const inspectedLayers = () => [...document.querySelectorAll('[data-native-viewer]')].flatMap(node => JSON.parse(node.getAttribute('data-layers') ?? '[]')).filter((layer: any) => layer.descriptor.id.startsWith('current-condition:'));
+it('actual parent inspects a cold current row through native transport, separate from temporary picks and scientific payload', async () => {
+    const request = currentCondition();
+    await mount('rfd4_proteina', { rfd4_request: request, native_sources: { 'target.v2': source } });
+    await edit('Retained residue for target.v2', '0'); await click('Add exact selection from target.v2');
+    const selection = document.querySelector('[data-native-viewer]')!.getAttribute('data-selection');
+    await click('Inspect C_IDX false row 1');
+    expect(wire.find(w => w.url.endsWith('/condition-inspection'))?.body).toEqual({ input: request.input, native_sources: { 'target.v2': source }, row: { exampleIndex: 0, family: 'C_IDX', value: 'false', rowIndex: 0, select: 'atom_name == "CA"', group: 'kept' } });
+    expect(inspectedLayers()[0].values).toEqual([{ identity: { documentId: source.path, modelNumber: 2, labelAsymId: 'X', labelSeqId: 7, atomIndex: 0, labelAtomId: 'CA' }, value: 1 }]);
+    expect(document.querySelector('[data-native-viewer]')!.getAttribute('data-selection')).toBe(selection);
+    expect(draft.rfd4_request).toEqual(request);
+    await click('Generate candidates'); expect(wire.find(w => w.url === '/api/jobs').body.params).toEqual({ rfd4_request: request, native_sources: { 'target.v2': source } });
+});
+it.each(['expression', 'policy', 'MODEL', 'source', 'task'])('drops stale A→B→A current-row readback after %s edits', async kind => {
+    const originalReply = inspectReply; let finish!: () => void;
+    inspectReply = body => new Promise(resolve => { finish = () => { void originalReply(body).then(resolve); }; });
+    await mount('rfd4_proteina', { native_recipe: 'motif', rfd4_request: currentCondition(), native_sources: { 'target.v2': source, other: { ...source, expected_sha256: 'other-hash' } } });
+    await click('Inspect C_IDX false row 1');
+    if (kind === 'expression') { await edit('C_IDX false selection 1', 'true'); await edit('C_IDX false selection 1', 'atom_name == "CA"'); }
+    if (kind === 'policy') { await edit('Example 1 source 1 policy', 'true'); await edit('Example 1 source 1 policy', 'false'); }
+    if (kind === 'MODEL') {
+        const adapter = api.defaults.adapter as (config: any) => Promise<any>;
+        api.defaults.adapter = async config => {
+            const response = await adapter(config);
+            if (config.url === '/api/files/materialize-structure') {
+                const binding = JSON.parse(config.data);
+                response.data = { ...response.data, source_structure: binding, model_number: binding.model_number ?? null };
+            }
+            return response;
+        };
+        await edit('Source MODEL for target.v2', ''); await settle();
+        await edit('Source MODEL for target.v2', '2'); await settle();
+    }
+    if (kind === 'source') { await edit('Example 1 source 1', 'other'); await edit('Example 1 source 1', 'target.v2'); }
+    if (kind === 'task') { await edit('RFD4 task', 'partial'); await edit('RFD4 task', 'motif'); }
+    await act(async () => finish()); await settle();
+    expect(inspectedLayers()).toEqual([]); expect(document.querySelector('[data-condition-inspection]')?.textContent).toContain('stale');
+});
+it('native inspection failure and mismatched readback hashes never edit or gate Generate', async () => {
+    await mount('rfd4_proteina', { rfd4_request: currentCondition(), native_sources: { 'target.v2': source } });
+    const before = JSON.stringify(draft.native_job_request);
+    const reply = inspectReply; inspectReply = async body => { const result = await reply(body); result.sources['target.v2'].sha256 = 'different'; return result; };
+    await click('Inspect C_IDX false row 1'); expect(inspectedLayers()).toEqual([]);
+    inspectReply = async () => { throw new Error('Native runtime unavailable'); };
+    await click('Inspect C_IDX false row 1'); expect(document.body.textContent).toContain('Native runtime unavailable');
+    expect(JSON.stringify(draft.native_job_request)).toBe(before);
+    expect([...document.querySelectorAll('button')].find(b => b.textContent === 'Generate candidates')!.disabled).toBe(false);
+});
+it.each(['protein_binder', 'ligand_binder', 'AME', 'monomer_motif_indexed', 'monomer_motif_unindexed'].flatMap(task => ['generate', 'design', 'evaluate', 'analysis'].map(operation => ({ task, operation }))))('Complexa integrated source receiving for $task / $operation preserves explicit roles', async ({ task, operation }) => {
+    const request = { task, operation, source: { document_id: 'target.v2' }, ...(['evaluate', 'analysis'].includes(operation) ? { evaluation_slots: ['candidate'] } : {}) };
+    await mount('complexa', { complexa_request: request, native_sources: { 'target.v2': source, candidate: source } });
+    expect(document.querySelector('[aria-label="Source sequence for target.v2"]')).not.toBeNull();
+    expect(document.querySelector('[data-native-viewer]')?.getAttribute('data-linked')).toBe('false');
+    expect(draft.complexa_request).toEqual(request);
+    const strip = document.querySelector('[aria-label="Source sequence for target.v2"]')!;
+    await act(async () => (strip.querySelector('button') as HTMLButtonElement).click()); await settle();
+    expect(draft.complexa_request).toEqual(request);
+    if (task.includes('motif') || task === 'AME') {
+        await click('Apply selection to motif atoms');
+        expect(draft.complexa_request.source.motif_atoms).toEqual([{ chain: 'A', residue: 42, insertion_code: 'B', atoms: ['CA'] }]);
+        expect(draft.complexa_request.source.ligand_atoms).toBeUndefined();
+    } else if (task === 'ligand_binder') {
+        await click('Apply selection to ligand atoms');
+        expect(draft.complexa_request.source.ligand_atoms).toEqual([{ chain: 'A', residue: 42, insertion_code: 'B', atoms: ['CA'] }]);
+        expect(draft.complexa_request.source.motif_atoms).toBeUndefined();
+    } else {
+        expect(document.body.textContent).toContain('Apply selection to target residues');
+        await click('Apply selection to target residues'); // insertion-coded token stays advisory, never guessed
+        expect(draft.complexa_request.source).toEqual(request.source);
+    }
+    if ('evaluation_slots' in request) {
+        const current = JSON.stringify(draft.complexa_request.source);
+        await act(async () => (document.querySelector('[aria-label="Source sequence for candidate"] button') as HTMLButtonElement).click()); await settle();
+        expect([...document.querySelectorAll('button')].some(b => b.textContent === 'Apply selection to motif atoms' || b.textContent === 'Apply selection to target residues')).toBe(false);
+        expect(JSON.stringify(draft.complexa_request.source)).toBe(current);
+    }
+    const saved = JSON.parse(JSON.stringify(draft)); await unmount(); await mount('complexa', saved);
+    expect(draft.complexa_request).toEqual(saved.complexa_request);
 });

@@ -440,6 +440,16 @@ async def read_bindcraft2_campaign_settings(job_id: str, session: AsyncSession =
     return result
 
 
+@router.post('/rfd4_proteina/condition-inspection')
+async def inspect_rfd4_condition(request: dict, session: AsyncSession = Depends(get_session)):
+    """Optional row observation, never a request mutation or Generate prerequisite."""
+    from services.rfd4_condition_inspection import inspect_rfd4_condition as inspect
+    try:
+        return await inspect(request, session)
+    except (ValueError, OSError, KeyError, IndexError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post('/{model_id}/generation-settings/preview')
 async def preview_generation_settings(model_id: str, request: dict, mode: str = 'generate'):
     """Observational native readback, independent of admission and preparation."""

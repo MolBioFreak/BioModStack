@@ -176,10 +176,13 @@ it('independent task source bindings survive real template save and cold explici
     await unmount(); await mount('complexa', { complexa_request: { task: 'ligand_binder', seed: 999 } });
     await click('Template Manager');
     if ([...document.querySelectorAll('button')].some(n => n.textContent?.trim() === '← Back to list')) await click('← Back to list');
-    await click('Load'); await settle(); await edit('Complexa task', 'protein_binder');
+    await click('Load'); await settle(); await edit('Complexa task', 'protein_binder'); await settle();
+    expect(document.querySelector('[aria-label="Source sequence for selected"]')).not.toBeNull();
     await click('Generate candidates');
     expect(requests.find(r => r.url === '/api/jobs' && r.method === 'post')!.body.params).toEqual({ complexa_request: request, native_sources: { selected: binding } });
-    expect(requests.some(r => r.url.includes('materialize'))).toBe(false);
+    // Integrated Complexa automatically inspects the active source on each mount,
+    // but neither inspection may rebind the retained task or materialize its inactive draft.
+    expect(requests.filter(r => r.url === '/api/files/materialize-structure').map(r => r.body)).toEqual([binding, binding]);
 });
 it('visited source disclosure keeps its inspector without reacquiring source bytes', async () => {
     await mount(); await sources(); await nativeDocuments(); await choose('alternate');

@@ -5,6 +5,21 @@ import shutil
 from pathlib import Path
 
 
+def condition_example_spec(inp, example, paths):
+    """One native example, shared by preparation and advisory row inspection."""
+    spec = dict(inp.get('global_args', {}))
+    spec['input'] = [str(paths[s['slot']]) for s in example['sources']]
+    policies = {s.get('input_as_annotated_cif', spec.get('input_as_annotated_cif', False))
+                for s in example['sources']}
+    if len(policies) != 1:
+        raise ValueError('Native condition_spec requires one input_as_annotated_cif policy per example')
+    spec['input_as_annotated_cif'] = policies.pop()
+    for key in ('contig', 'conditions'):
+        if key in example:
+            spec[key] = example[key]
+    return spec
+
+
 def prepare_inputs(request, bindings, destination, *, sentinel=None):
     # Registration must precede every annotated parse, including refinement.
     import rfproteina.conditions  # noqa: F401
@@ -58,14 +73,7 @@ def prepare_inputs(request, bindings, destination, *, sentinel=None):
         from rfproteina.inference_utils.condition_spec import build_annotated_atom_array_from_condition_spec
         for example in inp['examples']:
             validate_design_id(example['name'])
-            spec=dict(inp.get('global_args',{}))
-            spec['input']=[str(paths[s['slot']]) for s in example['sources']]
-            # condition_spec has one parse policy per example, not one per source.
-            policies={s.get('input_as_annotated_cif',spec.get('input_as_annotated_cif',False)) for s in example['sources']}
-            if len(policies)!=1:raise ValueError('Native condition_spec requires one input_as_annotated_cif policy per example')
-            spec['input_as_annotated_cif']=policies.pop()
-            for key in ('contig','conditions'):
-                if key in example:spec[key]=example[key]
+            spec=condition_example_spec(inp, example, paths)
             a=build_annotated_atom_array_from_condition_spec(spec,spec_dir=originals,example_id=example['name'],validate=False)['atom_array']
             if example.get('pair_conditions'):
                 from rfproteina.conditions import C_BP, BasePairEnum

@@ -5,7 +5,7 @@ import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelec
 import { FileBrowser } from './FileBrowser';
 import MolstarViewer from './MolstarViewer';
 import { DeNovoNativeDocumentPicker } from './DeNovoNativeDocumentPicker';
-import type { MetricSelection } from '../structureViewer/metrics/metricContracts';
+import type { MetricLayer, MetricSelection } from '../structureViewer/metrics/metricContracts';
 import type { Rfd4NativeSelectionIdentity } from '../lib/rfd4NativeSelection';
 import { readSavedConditions, savedConditionLayers, type SavedCondition } from '../lib/rfd4SavedConditions';
 
@@ -84,7 +84,8 @@ function withModel(source: StructureSourceSelection, model: number | undefined):
     return next;
 }
 
-function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selectedIdentities, onInspection, initialReceipt, compact = false, integrated = false }: {
+function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selectedIdentities, onInspection, initialReceipt, inspectionLayers, compact = false, integrated = false }: {
+    inspectionLayers?: (receipt: StructureMaterialization) => MetricLayer[];
     slot: string; value: NativeGenerationSourceBinding; onChange: (value: NativeGenerationSourceBinding) => void;
     selectedIdentities?: Rfd4NativeSelectionIdentity[];
     initialReceipt?: StructureMaterialization;
@@ -203,7 +204,7 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
             <MolstarViewer structureDocumentId={receipt.path} structureUrl={buildFileDownloadUrl(receipt.format === 'bcif' ? receipt.decoded_path ?? receipt.path : receipt.path)} format={receipt.format === 'bcif' ? 'cif' : receipt.format} height={480}
                 hideControls={integrated && !expertTools} showMetricWorkbench={!integrated || expertTools} showM6Workbench={!integrated || expertTools}
                 showMeasurements={!integrated || expertTools} showComplexWorkbench={!integrated || expertTools}
-                metricLayers={receipt.model_numbers.length === 1 || receipt.model_number != null ? savedConditionLayers(savedRows, receipt.path) : []}
+                metricLayers={receipt.model_numbers.length === 1 || receipt.model_number != null ? [...savedConditionLayers(savedRows, receipt.path), ...(inspectionLayers?.(receipt) ?? [])] : []}
                 showSequenceTrack={!integrated || expertTools} controlledResidueSelection={!!onSelection} residueSelections={selectedIdentities ?? []}
                 onMetricSelection={selection => onSelection?.(slot, receipt, selection)} />
             {receipt.inspection_error && <p role="status">Native inspection: {receipt.inspection_error}. The retained source is unchanged.</p>}
@@ -221,7 +222,8 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
 }
 
 /** Task-facing acquisition; the existing row owns materialization and stale reads. */
-export function NativeSourceInput({ label, value, bindings, onChange, onAcquire, onInspection, inspection, onSelection, selectedIdentities, integrated = false }: {
+export function NativeSourceInput({ label, value, bindings, onChange, onAcquire, onInspection, inspection, inspectionLayers, onSelection, selectedIdentities, integrated = false }: {
+    inspectionLayers?: (receipt: StructureMaterialization) => MetricLayer[];
     label: string; value: string; bindings: NativeGenerationSourceBindings | undefined;
     /** Keep the selected structure and sequence visible in the task workbench. */
     integrated?: boolean;
@@ -256,7 +258,7 @@ export function NativeSourceInput({ label, value, bindings, onChange, onAcquire,
         </div>
         {(open || integrated && binding && !fileBinding(binding)) && <div className="space-y-2 min-w-0" style={{ minWidth: 0, width: '100%', maxWidth: '100%' }} role="group" aria-label={`Choose structure for ${label}`}>
             {(!integrated || !binding) && <button type="button" onClick={() => setOpen(false)}>{binding ? 'Close' : 'Cancel'}</button>}
-            <NativeSourceRow compact integrated={integrated} slot={value || label} value={binding && !fileBinding(binding) ? binding : { output_format: 'native' }} initialReceipt={inspection} selectedIdentities={selectedIdentities}
+            <NativeSourceRow compact integrated={integrated} inspectionLayers={inspectionLayers} slot={value || label} value={binding && !fileBinding(binding) ? binding : { output_format: 'native' }} initialReceipt={inspection} selectedIdentities={selectedIdentities}
                 onSelection={onSelection ? (_slot, receipt, selection) => onSelection(committedSlot.current ?? value, receipt, selection) : undefined}
                 onChange={source => { committedSlot.current = latest.current.onAcquire(source); if (integrated || !value) setOpen(false); }}
                 onInspection={(_slot, receipt, source) => latest.current.onInspection?.(committedSlot.current ?? value, receipt, source)} />
