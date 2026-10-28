@@ -442,8 +442,17 @@ def _resume_sync_rollback(root: Path, state_dir: Path, marker: dict[str, object]
         marker = _set_sync_refresh_phase(state_dir, marker, "rolling-back")
     manager = root / "scripts" / "manage_desktop_services.py"
     try:
+        # A timed-out manager can leave the correct old API finishing startup.
+        # Do not restart that now-healthy owner and repeat the same timeout.
+        already_recovered = (
+            recovering_failure
+            and _git(root, "rev-parse", "HEAD") == rollback_revision
+            and not _git(root, "status", "--porcelain")
+            and _deployed_revision(root) == rollback_revision
+        )
         _git(root, "reset", "--hard", rollback_revision)
-        _run(root, sys.executable, str(manager), "restart", "--runtime", "dev")
+        if not already_recovered:
+            _run(root, sys.executable, str(manager), "restart", "--runtime", "dev")
         rollback_deployed = _deployed_revision(root)
         if rollback_deployed != rollback_revision:
             raise RuntimeError(
