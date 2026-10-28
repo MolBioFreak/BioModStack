@@ -47,7 +47,8 @@ export function OtherDeNovoSettings({ model, task, value, onChange, sourceCondit
             samplerState.current = { identity: samplerIdentity, retainEmpty: Object.hasOwn(value, 'inference_sampler') };
         }
     }, [samplerIdentity, value]);
-    const root: Schema = inventory.data?.parameter_schema ?? { type: 'object', properties: inventory.data?.execution ?? {} };
+    // Display metadata is private to this editor; it is never a requested value.
+    const root: Schema = structuredClone(inventory.data?.parameter_schema ?? { type: 'object', properties: inventory.data?.execution ?? {} });
     const profile = model === 'laproteina' && selectedPreset ? inventory.data?.native_profile_defaults?.profiles?.[selectedPreset] : undefined;
     let legacySettings = requestParams[`${model}_settings`];
     if (typeof legacySettings === 'string') { try { legacySettings = JSON.parse(legacySettings); } catch { legacySettings = undefined; } }
@@ -60,6 +61,15 @@ export function OtherDeNovoSettings({ model, task, value, onChange, sourceCondit
     };
     const discoSelection = `${selector('experiment', 'designable')}/${selector('effort', 'fast')}`;
     const discoReference = model === 'disco' ? inventory.data?.native_profile_reference?.variants[discoSelection] : undefined;
+    // Project only source-qualified leaves into schema metadata, not a synthetic
+    // effective object. The shared renderer edits the sparse object separately.
+    if (discoReference) for (const [field, typeName] of [['noisy_guidance', 'NoisyGuidance'], ['sequence_sampling', 'SequenceSampling']]) {
+        const definition = root.$defs?.[typeName];
+        for (const [name, child] of Object.entries(definition?.properties ?? {})) {
+            const reference = discoReference[`${field}.${name}`];
+            if (reference) Object.assign(child, { default: reference.value, default_source: `DISCO ${inventory.data?.native_profile_reference?.source_revision} · ${reference.path} · upstream reference, not effective configuration` });
+        }
+    }
     const patch = (field: string, next: unknown) => {
         const updated = { ...object }; if (next === undefined) delete updated[field]; else updated[field] = next;
         onChange(model === 'rfd3' ? updated : { ...value, [key]: updated });
@@ -73,7 +83,7 @@ export function OtherDeNovoSettings({ model, task, value, onChange, sourceCondit
     for (const [field, schema] of Object.entries(root.properties ?? {})) {
         if (model === 'rfd3' && field === 'dump_trajectories') continue; // Existing primary control.
         if (primaryOverrideFields.includes(field)) continue; // The active-value control owns the same override.
-        const typedSchema = model === 'rfd3' && field === 'inference_sampler' ? { ...schema, properties: Object.fromEntries(Object.entries(schema.properties ?? {}).map(([name, leaf]) => [name, { anyOf: [leaf.type === 'string_array' ? { ...leaf, type: 'array', items: { type: 'string' } } : leaf, { type: 'null' }] }])) } : schema;
+        const typedSchema = model === 'rfd3' && field === 'inference_sampler' ? { ...schema, properties: Object.fromEntries(Object.entries(schema.properties ?? {}).map(([name, leaf]) => [name, { anyOf: [leaf.type === 'string_array' ? { ...leaf, type: 'array', items: { type: 'string' } } : leaf, { type: 'null', title: 'Native checkpoint fallback (null)' }], title: leaf.title, description: leaf.description }])) } : schema;
         const label = group(field); groups.set(label, [...(groups.get(label) ?? []), [field, typedSchema]]);
     }
     return <section aria-label={`${model} native settings`} className="space-y-3">
@@ -100,9 +110,10 @@ export function OtherDeNovoSettings({ model, task, value, onChange, sourceCondit
             const hasProfileReference = !!profile && Object.hasOwn(profile, field);
             const discoLeaf = discoReference?.[field];
             const sampler = model === 'rfd3' && field === 'inference_sampler';
-            const shown = hasOverride ? object[field] : hasLegacy ? legacyValue : sampler ? {} : hasProfileReference ? profile![field] : discoLeaf ? discoLeaf.value : sourceDefault ? definition!.default : undefined;
+            const nestedReference = model === 'disco' && ['noisy_guidance', 'sequence_sampling'].includes(field) && !!discoReference;
+            const shown = hasOverride ? object[field] : hasLegacy ? legacyValue : sampler || nestedReference ? {} : hasProfileReference ? profile![field] : discoLeaf ? discoLeaf.value : sourceDefault ? definition!.default : undefined;
             return <div key={field} data-native-setting={field} title={`Parameter key: ${field}`}>
-                {definition?.authority === 'profile' ? <p>{field}: {JSON.stringify(hasOverride ? object[field] : definition.default)} · profile-owned; retained explicit value is unchanged.</p> : <BioXpSchemaInput label={model === 'rfd3' ? field : schema.title ?? field} nativeLabels schema={schema} rootSchema={root} showInherited={sampler} value={shown} onChange={next => {
+                {definition?.authority === 'profile' ? <p>{definition.title ?? field}: {JSON.stringify(hasOverride ? object[field] : definition.default)} · profile-owned; retained explicit value is unchanged.</p> : <BioXpSchemaInput label={model === 'rfd3' ? field : schema.title ?? field} nativeLabels useSchemaTitles schema={schema} rootSchema={root} showInherited={sampler || nestedReference} value={shown} onChange={next => {
                     const result = sampler && next && typeof next === 'object' && !Array.isArray(next) && Object.keys(next).length === 0 && !samplerState.current.retainEmpty ? undefined : next;
                     if (sampler) samplerState.current.identity = JSON.stringify([model, task, result !== undefined, result]);
                     patch(field, result);
@@ -111,8 +122,8 @@ export function OtherDeNovoSettings({ model, task, value, onChange, sourceCondit
                 {hasProfileReference && <p className="text-xs">Upstream profile reference: {JSON.stringify(profile![field])}</p>}
                 {discoLeaf && <p className="text-xs">Upstream YAML reference: {discoLeaf.path} = {JSON.stringify(discoLeaf.value)}</p>}
                 {discoReference && Object.entries(discoReference).filter(([name]) => name.startsWith(`${field}.`)).map(([name, leaf]) => <p className="text-xs" key={name}>Upstream YAML reference: {leaf.path} = {JSON.stringify(leaf.value)}</p>)}
-                <p className="text-xs">{hasOverride ? 'Custom override' : hasLegacy ? `Retained override: ${legacyNative ? `${model}_settings` : alias} · ${JSON.stringify(legacyValue)}` : hasProfileReference || discoLeaf ? 'Upstream reference; not an override' : sourceDefault ? 'Inherited reference; not an override' : 'Inherited value not reported'}</p>
-                {hasOverride && definition?.authority !== 'profile' && <button type="button" onClick={() => patch(field, undefined)}>{hasLegacy ? 'Use retained override' : 'Use profile value'}</button>}
+                <p className="text-xs">{hasOverride ? 'Custom override' : hasLegacy ? `Retained override: ${legacyNative ? `${model}_settings` : alias} · ${JSON.stringify(legacyValue)}` : nestedReference ? 'Default · upstream leaf references; not effective configuration' : hasProfileReference || discoLeaf ? 'Default · Upstream reference; not an override' : sourceDefault ? 'Default · Inherited reference; not an override' : 'Inherited value not reported'}</p>
+                {hasOverride && definition?.authority !== 'profile' && <button type="button" onClick={() => patch(field, undefined)}>{hasLegacy ? 'Use retained override' : 'Use default'}</button>}
             </div>;
         })}</div>}</NativeSettingsDisclosure>)}
         {sourceConditions && !generalConditions && inventory.data?.conditioning && <Rfd3AdditionalConditions definitions={inventory.data.conditioning} value={value} onChange={onChange} />}

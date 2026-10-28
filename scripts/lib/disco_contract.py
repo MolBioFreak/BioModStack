@@ -270,6 +270,12 @@ def settings_schema() -> dict:
         for key, (title, effect) in definitions.items():
             native = prefix + ('.sequence_noise_scheduler.power' if key == 'power' else '.' + key)
             annotate(schema['$defs'][type_name]['properties'][key], title, native, effect, applicability)
+    for leaf, label in (
+        (schema['properties']['num_inference_seeds'], 'Use native seeds list (null)'),
+        (schema['properties']['output_format'], 'General writer (null)'),
+        (schema['$defs']['SequenceSampling']['properties']['planner_name'], 'No sequence planner (null)'),
+    ):
+        leaf['x-null-label'] = label
     return schema
 
 

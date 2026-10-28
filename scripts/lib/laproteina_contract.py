@@ -146,6 +146,14 @@ def settings_schema() -> dict:
                            "x-native-key": spec["native"], "x-applicability": applicability,
                            "x-default-source": ("native_profile_defaults; upstream composition before overrides" if key in CONTROLS
                                                 else "selected motif task composition; not resolved by discovery")}
+    for key, label in {
+        "bb_ca_gt_clamp_val": "No upper clamp (null)",
+        "local_latents_gt_clamp_val": "No upper clamp (null)",
+        "motif_atom_spec": "Contig-based extraction (null)",
+        "motif_min_length": "No lower length bound (null)",
+        "motif_max_length": "No upper length bound (null)",
+    }.items():
+        properties[key]["x-null-label"] = label
     return {"type": "object", "additionalProperties": False, "properties": properties}
 
 

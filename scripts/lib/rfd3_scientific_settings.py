@@ -68,6 +68,53 @@ EXECUTION_FIELDS = {
 }
 EXECUTION_FIELDS["diffusion_batch_size"]["default_source"] = "BMS historical batch1 profile (native default 8)"
 EXECUTION_FIELDS["write_full_json"]["reason"] = "Complete native metadata is required by typed result ingestion."
+# Help is presentation-only, qualified against the published 0.1.9 wheel.
+# Do not use this inventory to change sampler defaults or checkpoint precedence.
+SAMPLER_SOURCE = "rfd3/model/inference_sampler.py"
+SAMPLER_SOURCE_SHA256 = "e64fd42242422fa40ee0112a031911f462b13403b3f8d46ae49879d569b9314f"
+_SAMPLER_HELP = {
+    "kind": ("Sampler", "Choose the default motif-aware or symmetry sampler. Symmetry sampling does not run classifier-free guidance."),
+    "num_timesteps": ("Noise-schedule points", "Number of points in the inference noise schedule; updates run between consecutive points."),
+    "step_scale": ("Denoising step scale", "Dimensionless multiplier of each coordinate update. The inference YAML notes that higher values trade diversity for designability."),
+    "noise_scale": ("Stochastic noise scale", "Dimensionless multiplier of Gaussian noise injected during each diffusion update; fixed motif atoms receive no injected noise."),
+    "p": ("Noise-schedule exponent", "Power shaping interpolation between maximum and minimum structural noise."),
+    "gamma_0": ("Noise inflation", "Dimensionless inflation of the previous noise level when the next noise level exceeds gamma_min; zero removes this stochastic inflation."),
+    "gamma_min": ("Noise-inflation threshold", "Structural noise threshold for gamma_0; inflation is zero at or below this threshold."),
+    "s_trans": ("Translation augmentation (Å)", "Standard deviation of random translation during realignment augmentation; used when allow_realignment is enabled and the motif-fixing interval permits translation."),
+    "s_jitter_origin": ("Motif-origin jitter (Å)", "Initial Gaussian translation standard deviation for fixed motif atoms; zero skips origin jitter."),
+    "center_option": ("Realignment center", "Center all atoms, fixed motif atoms, or diffused atoms during realignment. Without motif atoms the native sampler centers all atoms."),
+    "allow_realignment": ("Allow realignment", "Enable rotation/translation augmentation around the motif during diffusion and final motif alignment."),
+    "use_classifier_free_guidance": ("Classifier-free guidance", "Blend conditional and reference denoising updates in the default sampler; the symmetry sampler does not use this branch."),
+    "cfg_features": ("Guidance reference features", "Native features zeroed in the reference classifier-free-guidance pass."),
+    "cfg_scale": ("Guidance strength", "Dimensionless multiplier of the conditional/reference difference; one leaves the conditional update unchanged."),
+    "cfg_t_max": ("Guidance noise cutoff", "The default sampler applies guidance when the next structural noise level exceeds this value. A resolved native null removes the cutoff; an explicit request null delegates to checkpoint configuration."),
+    "min_t": ("Schedule start", "Start of the unit schedule interpolation interval, before conversion to structural noise."),
+    "max_t": ("Schedule end", "End of the unit schedule interpolation interval, before conversion to structural noise."),
+    "sigma_data": ("Data noise scale", "Scale multiplying the structural noise schedule and used to rescale saved noisy trajectories."),
+    "s_min": ("Minimum schedule noise", "Lower structural noise parameter before multiplication by sigma_data."),
+    "s_max": ("Maximum schedule noise", "Upper structural noise parameter before multiplication by sigma_data."),
+    "fraction_of_steps_to_fix_motif": ("Initial motif-fixing fraction", "Fraction of schedule transitions used to keep motif positioning fixed during realignment augmentation."),
+    "insert_motif_at_end": ("Reinsert motif at end", "Reinsert ground-truth motif coordinates during final realignment when motif atoms are present and realignment is enabled."),
+}
+_EXECUTION_HELP = {
+    "diffusion_batch_size": ("Diffusion batch size", "Number of samples per native diffusion batch; BMS plans an exact remainder batch for the requested total."),
+    "inference_sampler": ("Sampler and classifier-free guidance", "Omitted sampler values inherit the native configuration. Explicit null delegates to the checkpoint; displayed YAML/dataclass references are not a checkpoint readback."),
+    "low_memory_mode": ("Low-memory tokenization", "Use the native memory-efficient tokenization path."),
+    "skip_existing": ("Skip existing outputs", "Skip examples for which native output already exists."),
+    "cleanup_guideposts": ("Remove guideposts", "Remove native guidepost atoms from written structures."),
+    "cleanup_virtual_atoms": ("Remove virtual atoms", "Remove native virtual atoms from written structures."),
+    "read_sequence_from_sequence_head": ("Read sequence head", "Use the model sequence-head predictions for written residue identities."),
+    "align_trajectory_structures": ("Align trajectory structures", "Align native trajectory structures for output."),
+    "dump_prediction_metadata_json": ("Write prediction metadata", "Write native prediction metadata as JSON."),
+    "dump_trajectories": ("Write diffusion trajectories", "Retain native noisy and denoised diffusion trajectories."),
+    "write_full_json": ("Write complete native metadata", "BMS profile retains full native JSON for typed result ingestion; this is profile-owned, not a second sampler setting."),
+}
+for _fields, _help, _source in ((SAMPLER_FIELDS, _SAMPLER_HELP, SAMPLER_SOURCE),
+                               (EXECUTION_FIELDS, _EXECUTION_HELP, "rfd3/engine.py")):
+    for _key, (_title, _effect) in _help.items():
+        _fields[_key].update(title=_title, description=f"{_effect} Source: rc-foundry==0.1.9 {_source}.",
+                             **{"x-help-source": f"rc-foundry==0.1.9:{_source}"})
+
 GENERATION_FIELDS = {
     "min_length": _field("integer", 100, minimum=1),
     "max_length": _field("integer", 200, minimum=1),
