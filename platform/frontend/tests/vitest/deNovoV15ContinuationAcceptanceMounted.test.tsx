@@ -12,6 +12,10 @@ import { isolateDeNovoTransport } from './deNovoTransport';
 import { api } from '../../src/lib/api';
 import { NativeBinderGenerationResults } from '../../src/components/NativeBinderGenerationResults';
 import { JobSubmission } from '../../src/components/JobSubmission';
+// Resolve the actual lazy receiving modules during collection, before bounded
+// UI waits. This keeps cold Vite transformation outside the interaction window.
+import '../../src/components/MolecularDynamicsTemplate';
+import '../../src/components/ProteinModificationTemplate';
 import { StructurePredictionTemplate } from '../../src/components/StructurePredictionTemplate';
 import { prepareDeNovoContinuation } from '../../src/lib/deNovoContinuation';
 import ShapeBlueprintTemplate from '../../src/components/ShapeBlueprintTemplate';
