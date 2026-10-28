@@ -350,6 +350,36 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         expect(submits()[0].url).toBe('/api/ont/ngs/ont_basecall_dna/submit');
         expect(capturedRequest().params).toMatchObject({ dorado_quality_mode: 'sup', modified_bases: '4mC_5mC 6mA', run_modkit: false });
     });
+    it('prepares BLOW5 raw signal in the analysis form and submits the restored POD5 directory', async () => {
+        const fixture = api.defaults.adapter as (config: InternalAxiosRequestConfig) => Promise<unknown>;
+        const rep = { representation_id: 'rep-blow5', run_id: 'run-1', observed_generation: 1, role: 'source', format: 'blow5', state: 'ready', reason_code: 'ok' };
+        api.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
+            const url = config.url ?? '';
+            const reply = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config });
+            if (url === '/api/ont/raw-signal/import') {
+                calls.push({ url, body: JSON.parse(config.data as string), context: null });
+                return reply({ run_id: 'run-1', observed_generation: 1, representation: rep, already_registered: false });
+            }
+            if (url.endsWith('/raw-signal')) return reply({ representations: [rep] });
+            if (url.endsWith('/restore-pod5')) return reply({ representation_id: 'rep-blow5', state: 'ready', directory: '/data/restored/pod5', restored_read_count: 12 });
+            return fixture(config) as never;
+        };
+        await mount();
+        await click('BLOW5/SLOW5 raw signal');
+        expect(button('Review and submit').disabled).toBe(true);
+        expect(container.querySelector('[aria-label="Browse POD5 folder"]')).toBeNull();
+        const picker = container.querySelector<HTMLInputElement>('input[aria-label="BLOW5 or SLOW5 file"]')!;
+        await act(async () => {
+            Object.defineProperty(picker, 'files', { value: [new File(['blow5'], 'reads.blow5')], configurable: true });
+            picker.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        await click('Prepare POD5 for basecalling');
+        await until(() => expect(container.textContent).toContain('POD5 restored and selected for basecalling.'));
+        const imported = calls.find(call => call.url === '/api/ont/raw-signal/import')!.body as unknown as Record<string, unknown>;
+        expect(imported).toMatchObject({ format: 'blow5', experiment_group: 'domain-1' });
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ pod5_dir: '/data/restored/pod5' });
+    });
     it('opens optional reference controls on demand and returns to reference-free calling', async () => {
         await mount();
         expect(container.querySelector('[data-testid="molbio-sequence-selector"]')).toBeNull();
