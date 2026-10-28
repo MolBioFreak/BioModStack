@@ -65,6 +65,27 @@ class MafftSettings(Closed):
     kimura: int | None = Field(default=None, description='Nucleotide transition/transversion parameter.')
     randomseed: int | None = Field(default=None, description='Native random seed where used by MAFFT.')
     nofft: bool = False
+    fft: bool = Field(default=False, description='Force FFT; compiled before nofft if both are selected.')
+    threadit: int | None = Field(default=None, description='Native iterative-step threads; 0 disables threaded refinement, -1 selects automatic.')
+    threadtb: int | None = Field(default=None, description='Native progressive-step threads; -1 selects automatic.')
+    parttree: Literal['parttree', 'dpparttree'] | None = Field(default=None, description='PartTree distance mode; native interactions with pairwise strategies are retained.')
+    partsize: int | None = None
+    groupsize: int | None = None
+    linkage: Literal['minimumlinkage', 'averagelinkage'] | None = None
+    mixedlinkage: float | None = Field(default=None, description='Mixed linkage coefficient; compiled after linkage when both are supplied.')
+    unweight: bool = False
+    termgappenalty: bool = False
+    legacygappenalty: bool = False
+    anysymbol: bool = False
+    preservecase: bool = False
+    direction: Literal['adjustdirection', 'adjustdirectionaccurately'] | None = Field(default=None, description='Native nucleotide direction adjustment. Raw input and native output remain retained; no inferred coordinate remap.')
+    memsave: Literal['memsave', 'nomemsave'] | None = None
+    fmodel: bool = False
+    nucleotide_scoring: Literal['nwildcard', 'nzero'] | None = None
+    opdist: float | None = None
+    exp: float | None = None
+    treein: str | None = Field(default=None, description='Exact MAFFT merge-table file text (not Newick): one merge per line, 1-based roster indices and branch lengths. Retained verbatim as treein.txt.', json_schema_extra={'format': 'mafft-merge-table'})
+    aamatrix: str | None = Field(default=None, description='Exact native protein matrix file text: amino-acid header, lower triangular scores, optional frequency/norescale record. Retained verbatim as aamatrix.txt; compiled after named substitution models.', json_schema_extra={'format': 'mafft-amino-matrix'})
     retree: int | None = Field(default=None, ge=0, description='Override the strategy guide-tree rebuild count.')
     maxiterate: int | None = Field(default=None, ge=0, description='Override the strategy refinement iteration count.')
     reorder: bool = False
@@ -73,7 +94,9 @@ class MafftSettings(Closed):
 class FamsaSettings(Closed):
     engine: Literal['famsa'] = 'famsa'
     threads: int = Field(default=1, ge=1)
-    guide_tree: Literal['sl', 'upgma', 'nj'] = 'sl'
+    guide_tree: Literal['sl', 'upgma', 'nj', 'import'] = 'sl'
+    guide_tree_newick: str | None = Field(default=None, description='Supplied Newick file text used with guide_tree=import. Leaves are native bmsrow00000001 identifiers unless explicitly mapped; original and submitted trees are retained.', json_schema_extra={'format': 'newick'})
+    leaf_mapping: dict[str, str] = Field(default_factory=dict, description='Explicit supplied tree leaf → roster row ID mapping. Unmapped leaves are retained and reported, never guessed.')
     refine_mode: Literal['auto', 'on', 'off'] = 'auto'
     keep_duplicates: bool = False
     medoidtree: bool = False
@@ -98,10 +121,22 @@ class MuscleSettings(Closed):
     engine: Literal['muscle'] = 'muscle'
     mode: Literal['align', 'super5'] = 'align'
     threads: int = Field(default=1, ge=1)
-    permutation: Literal['none', 'abc', 'acb', 'bca', 'all'] = 'none'
-    perturb: int = Field(default=0, ge=0)
+    permutation: Literal['none', 'abc', 'acb', 'bca', 'all'] | None = Field(default=None, description='Null omits -perm (native single-run default none). Explicit none is passed even with an ensemble; native incompatibilities are not silently repaired.')
+    perturb: int | None = Field(default=None, ge=0, description='Null omits -perturb (native single-run default 0). Explicit zero is passed even with an ensemble.')
     ensemble: Literal['none', 'stratified', 'diversified'] = 'none'
     replicates: int | None = Field(default=None, ge=1)
+    consiters: int | None = Field(default=None, ge=0, description='Native align consistency iterations; not consumed by Super5.')
+    refineiters: int | None = Field(default=None, ge=0, description='Native align refinement iterations; not consumed by Super5.')
+    minsuper: int | None = Field(default=None, ge=0, description='Explicit native align-to-Super5 sequence-count threshold; null keeps the requested align algorithm.')
+    output_order: Literal['input_order', 'tree_order'] | None = Field(default=None, description='Native output row order.')
+    quiet: bool = False
+    verbose: bool = False
+    m_is: float | None = Field(default=None, description='Pair-HMM match to short insertion transition; native normalization applies.')
+    m_il: float | None = Field(default=None, description='Pair-HMM match to long insertion transition; native normalization applies.')
+    is_is: float | None = Field(default=None, description='Pair-HMM short insertion self-transition; native normalization applies.')
+    il_il: float | None = Field(default=None, description='Pair-HMM long insertion self-transition; native normalization applies.')
+    s_is: float | None = Field(default=None, description='Pair-HMM start to short insertion transition; native normalization applies.')
+    s_il: float | None = Field(default=None, description='Pair-HMM start to long insertion transition; native normalization applies.')
 
 class TwilightSettings(Closed):
     engine: Literal['twilight'] = 'twilight'
@@ -134,6 +169,7 @@ class TwilightSettings(Closed):
     gap_ends: float | None = None
     scale: float | None = None
     xdrop: float = 600
+    matrix: str | None = Field(default=None, description='Exact TWILIGHT nucleotide matrix text: A C G T header and 4x4 scores (optional N header and 5x5 scores). Native values are not rescaled. Retained as matrix.txt.', json_schema_extra={'format': 'twilight-nucleotide-matrix'})
     guide_source: Literal['supplied', 'mafft'] = 'supplied'
     guide_tree: str | None = None
     leaf_mapping: dict[str, str] = Field(default_factory=dict)

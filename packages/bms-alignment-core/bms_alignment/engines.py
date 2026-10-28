@@ -35,7 +35,9 @@ def compile_engine(request, executable, input_path, output_path, tree_path=None)
     s = request.settings
     prefix = [executable] if isinstance(executable, str) else list(executable)
     if s.engine == 'famsa':
-        a = prefix + ['-t', str(s.threads), '-gt', s.guide_tree, '-refine_mode', s.refine_mode]
+        a = prefix + ['-t', str(s.threads), '-gt', s.guide_tree]
+        if s.guide_tree == 'import': a.append(tree_path or str(Path(input_path).parent / 'guide.submitted.nwk'))
+        a += ['-refine_mode', s.refine_mode]
         for name in ('keep_duplicates', 'medoidtree', 'dgr', 'dgo', 'dsp'):
             if getattr(s, name): a.append('-' + name)
         if s.verbose: a.append('-v')
@@ -45,14 +47,20 @@ def compile_engine(request, executable, input_path, output_path, tree_path=None)
     if s.engine == 'muscle':
         a = prefix + ['-' + s.mode, input_path, '-output', output_path, '-threads', str(s.threads),
              '-amino' if request.roster.molecule == 'protein' else '-nt']
-        if s.ensemble == 'none' or s.permutation != 'none': a += ['-perm', s.permutation]
-        if s.ensemble == 'none' or s.perturb != 0: a += ['-perturb', str(s.perturb)]
+        if s.permutation is not None: a += ['-perm', s.permutation]
+        if s.perturb is not None: a += ['-perturb', str(s.perturb)]
+        for name in ('consiters', 'refineiters', 'minsuper', 'm_is', 'm_il', 'is_is', 'il_il', 's_is', 's_il'):
+            if getattr(s, name) is not None: a += ['-' + name, str(getattr(s, name))]
+        if s.output_order is not None: a.append('-' + s.output_order)
+        for name in ('quiet', 'verbose'):
+            if getattr(s, name): a.append('-' + name)
         if s.ensemble != 'none': a.append('-' + s.ensemble)
         if s.replicates is not None: a += ['-replicates', str(s.replicates)]
         return a
     if s.engine == 'twilight':
         a = prefix + ['-i', input_path, '-o', output_path, '-t', tree_path, '--type', 'n', '--cpu', str(s.threads), '--accurate']
         if s.method == 'tcs': a.append('tcs')
+        if s.matrix is not None: a += ['--matrix', str(Path(input_path).parent / 'matrix.txt')]
         for name in ('acc_mode', 'acc_max_group', 'acc_sample_rate', 'acc_sample_top', 'consistency_weight', 'max_subtree', 'remove_gappy', 'match', 'mismatch', 'transition', 'gap_open', 'gap_extend', 'gap_ends', 'scale', 'xdrop', 'length_deviation', 'max_ambig', 'max_len', 'min_len'):
             value = getattr(s, name)
             if value is not None: a += ['--' + name.replace('_', '-'), str(value)]
@@ -78,7 +86,17 @@ def run_engine(request: AlignmentRequest, workdir: Path, executable=None, mafft=
     tree_path = None
     prep = None
     report = None
+    if s.engine == 'famsa' and s.guide_tree_newick is not None:
+        raw = s.guide_tree_newick
+        (workdir/'guide.original.nwk').write_bytes(raw.encode('utf8'))
+        reverse = {v: k for k, v in row_map.items()}
+        mapping = {ident: ident for ident in ids}
+        mapping.update({leaf: reverse.get(row_id, row_id) for leaf, row_id in s.leaf_mapping.items()})
+        mapped, report = map_tree(raw, mapping, ids)
+        tree_path = workdir/'guide.submitted.nwk'
+        tree_path.write_bytes(mapped.encode('utf8'))
     if s.engine == 'twilight':
+        if s.matrix is not None: (workdir/'matrix.txt').write_bytes(s.matrix.encode('utf8'))
         tree_path = workdir/'guide.submitted.nwk'
         if s.guide_source == 'mafft':
             roster = request.roster.model_copy(deep=True)
@@ -127,5 +145,6 @@ def run_engine(request: AlignmentRequest, workdir: Path, executable=None, mafft=
         'artifacts': [p.name for p in workdir.iterdir() if p.is_file() and p.name != 'receipt.json'],
         'members': [p.name for p in files], 'observations': observations}
     if s.engine == 'twilight': receipt.update(tree_mapping=report, preparation=prep)
+    if s.engine == 'famsa': receipt['tree_mapping'] = report
     (workdir/'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
     return receipt

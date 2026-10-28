@@ -20,7 +20,17 @@ def compile_mafft(request: AlignmentRequest, executable: str, input_path: str) -
         if getattr(s, name) is not None: args += ['--' + name, str(getattr(s, name))]
     for name, flag in (('long_gap_open', '--LOP'), ('long_gap_extend', '--LEXP')):
         if getattr(s, name) is not None: args += [flag, str(getattr(s, name))]
-    if s.nofft: args.append('--nofft')
+    for name in ('threadit', 'threadtb', 'partsize', 'groupsize', 'opdist', 'exp'):
+        value = getattr(s, name)
+        if value is not None: args += ['--' + name, str(value)]
+    for name in ('parttree', 'linkage', 'direction', 'memsave', 'nucleotide_scoring'):
+        value = getattr(s, name)
+        if value is not None: args.append('--' + value)
+    if s.mixedlinkage is not None: args += ['--mixedlinkage', str(s.mixedlinkage)]
+    for name in ('fft', 'nofft', 'unweight', 'termgappenalty', 'legacygappenalty', 'anysymbol', 'preservecase', 'fmodel'):
+        if getattr(s, name): args.append('--' + name)
+    for name in ('treein', 'aamatrix'):
+        if getattr(s, name) is not None: args += ['--' + name, str(Path(input_path).parent / (name + '.txt'))]
     if s.treeout: args.append('--treeout')
     if s.reorder: args.append('--reorder')
     if s.quiet: args.append('--quiet')
@@ -36,13 +46,16 @@ def run_mafft(request: AlignmentRequest, workdir: Path, executable: str = 'mafft
     workdir = Path(tempfile.mkdtemp(prefix='attempt-', dir=workdir))
     input_file = workdir / 'input.fasta'
     input_file.write_text(''.join(f'>{r.row_id}\n{r.sequence}\n' for r in request.roster.rows), encoding='utf8')
+    for name in ('treein', 'aamatrix'):
+        value = getattr(request.settings, name)
+        if value is not None: (workdir / (name + '.txt')).write_bytes(value.encode('utf8'))
     args = compile_mafft(request, executable, str(input_file.resolve()))
     with (workdir/'alignment.fasta').open('wb') as out, (workdir/'engine.log').open('wb') as err:
         p = subprocess.run(args, stdout=out, stderr=err, cwd=workdir, env=env, check=False)
     receipt = {'attempt_dir': str(workdir), 'returncode': p.returncode, 'requested': request.model_dump(mode='json'),
                'effective_settings': request.settings.model_dump(mode='json'),
                'argv': [Path(args[0]).name, *args[1:-1], input_file.name],
-               'artifacts': ['input.fasta', 'alignment.fasta', 'engine.log']}
+               'artifacts': ['input.fasta', 'alignment.fasta', 'engine.log'] + [name + '.txt' for name in ('treein', 'aamatrix') if getattr(request.settings, name) is not None]}
     tree = Path(str(input_file) + '.tree')
     if tree.exists(): receipt['artifacts'].append(tree.name)
     from .observations import observe_alignment

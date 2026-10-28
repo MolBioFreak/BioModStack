@@ -20,10 +20,33 @@
           "enum": [
             "sl",
             "upgma",
-            "nj"
+            "nj",
+            "import"
           ],
           "title": "Guide Tree",
           "type": "string"
+        },
+        "guide_tree_newick": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Supplied Newick file text used with guide_tree=import. Leaves are native bmsrow00000001 identifiers unless explicitly mapped; original and submitted trees are retained.",
+          "format": "newick",
+          "title": "Guide Tree Newick"
+        },
+        "leaf_mapping": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Explicit supplied tree leaf \u2192 roster row ID mapping. Unmapped leaves are retained and reported, never guessed.",
+          "title": "Leaf Mapping",
+          "type": "object"
         },
         "refine_mode": {
           "default": "auto",
@@ -433,6 +456,239 @@
           "title": "Nofft",
           "type": "boolean"
         },
+        "fft": {
+          "default": false,
+          "description": "Force FFT; compiled before nofft if both are selected.",
+          "title": "Fft",
+          "type": "boolean"
+        },
+        "threadit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native iterative-step threads; 0 disables threaded refinement, -1 selects automatic.",
+          "title": "Threadit"
+        },
+        "threadtb": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native progressive-step threads; -1 selects automatic.",
+          "title": "Threadtb"
+        },
+        "parttree": {
+          "anyOf": [
+            {
+              "enum": [
+                "parttree",
+                "dpparttree"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PartTree distance mode; native interactions with pairwise strategies are retained.",
+          "title": "Parttree"
+        },
+        "partsize": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Partsize"
+        },
+        "groupsize": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Groupsize"
+        },
+        "linkage": {
+          "anyOf": [
+            {
+              "enum": [
+                "minimumlinkage",
+                "averagelinkage"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linkage"
+        },
+        "mixedlinkage": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Mixed linkage coefficient; compiled after linkage when both are supplied.",
+          "title": "Mixedlinkage"
+        },
+        "unweight": {
+          "default": false,
+          "title": "Unweight",
+          "type": "boolean"
+        },
+        "termgappenalty": {
+          "default": false,
+          "title": "Termgappenalty",
+          "type": "boolean"
+        },
+        "legacygappenalty": {
+          "default": false,
+          "title": "Legacygappenalty",
+          "type": "boolean"
+        },
+        "anysymbol": {
+          "default": false,
+          "title": "Anysymbol",
+          "type": "boolean"
+        },
+        "preservecase": {
+          "default": false,
+          "title": "Preservecase",
+          "type": "boolean"
+        },
+        "direction": {
+          "anyOf": [
+            {
+              "enum": [
+                "adjustdirection",
+                "adjustdirectionaccurately"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native nucleotide direction adjustment. Raw input and native output remain retained; no inferred coordinate remap.",
+          "title": "Direction"
+        },
+        "memsave": {
+          "anyOf": [
+            {
+              "enum": [
+                "memsave",
+                "nomemsave"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memsave"
+        },
+        "fmodel": {
+          "default": false,
+          "title": "Fmodel",
+          "type": "boolean"
+        },
+        "nucleotide_scoring": {
+          "anyOf": [
+            {
+              "enum": [
+                "nwildcard",
+                "nzero"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nucleotide Scoring"
+        },
+        "opdist": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Opdist"
+        },
+        "exp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exp"
+        },
+        "treein": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact MAFFT merge-table file text (not Newick): one merge per line, 1-based roster indices and branch lengths. Retained verbatim as treein.txt.",
+          "format": "mafft-merge-table",
+          "title": "Treein"
+        },
+        "aamatrix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact native protein matrix file text: amino-acid header, lower triangular scores, optional frequency/norescale record. Retained verbatim as aamatrix.txt; compiled after named substitution models.",
+          "format": "mafft-amino-matrix",
+          "title": "Aamatrix"
+        },
         "retree": {
           "anyOf": [
             {
@@ -500,22 +756,38 @@
           "type": "integer"
         },
         "permutation": {
-          "default": "none",
-          "enum": [
-            "none",
-            "abc",
-            "acb",
-            "bca",
-            "all"
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "abc",
+                "acb",
+                "bca",
+                "all"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Permutation",
-          "type": "string"
+          "default": null,
+          "description": "Null omits -perm (native single-run default none). Explicit none is passed even with an ensemble; native incompatibilities are not silently repaired.",
+          "title": "Permutation"
         },
         "perturb": {
-          "default": 0,
-          "minimum": 0,
-          "title": "Perturb",
-          "type": "integer"
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Null omits -perturb (native single-run default 0). Explicit zero is passed even with an ensemble.",
+          "title": "Perturb"
         },
         "ensemble": {
           "default": "none",
@@ -539,6 +811,153 @@
           ],
           "default": null,
           "title": "Replicates"
+        },
+        "consiters": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native align consistency iterations; not consumed by Super5.",
+          "title": "Consiters"
+        },
+        "refineiters": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native align refinement iterations; not consumed by Super5.",
+          "title": "Refineiters"
+        },
+        "minsuper": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Explicit native align-to-Super5 sequence-count threshold; null keeps the requested align algorithm.",
+          "title": "Minsuper"
+        },
+        "output_order": {
+          "anyOf": [
+            {
+              "enum": [
+                "input_order",
+                "tree_order"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native output row order.",
+          "title": "Output Order"
+        },
+        "quiet": {
+          "default": false,
+          "title": "Quiet",
+          "type": "boolean"
+        },
+        "verbose": {
+          "default": false,
+          "title": "Verbose",
+          "type": "boolean"
+        },
+        "m_is": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pair-HMM match to short insertion transition; native normalization applies.",
+          "title": "M Is"
+        },
+        "m_il": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pair-HMM match to long insertion transition; native normalization applies.",
+          "title": "M Il"
+        },
+        "is_is": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pair-HMM short insertion self-transition; native normalization applies.",
+          "title": "Is Is"
+        },
+        "il_il": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pair-HMM long insertion self-transition; native normalization applies.",
+          "title": "Il Il"
+        },
+        "s_is": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pair-HMM start to short insertion transition; native normalization applies.",
+          "title": "S Is"
+        },
+        "s_il": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pair-HMM start to long insertion transition; native normalization applies.",
+          "title": "S Il"
         }
       },
       "title": "MuscleSettings",
@@ -959,6 +1378,20 @@
           "default": 600,
           "title": "Xdrop",
           "type": "number"
+        },
+        "matrix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact TWILIGHT nucleotide matrix text: A C G T header and 4x4 scores (optional N header and 5x5 scores). Native values are not rescaled. Retained as matrix.txt.",
+          "format": "twilight-nucleotide-matrix",
+          "title": "Matrix"
         },
         "guide_source": {
           "default": "supplied",
