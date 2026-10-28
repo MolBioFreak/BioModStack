@@ -11,6 +11,14 @@ API_LAUNCHER = REPO_ROOT / "scripts" / "run_biomodstack_api.sh"
 WORKFLOW_ADAPTER_LAUNCHER = REPO_ROOT / "scripts" / "run_biomodstack_workflow_adapter.sh"
 
 
+def _install_uv_resolution_stub(fake_uv: Path) -> None:
+    """uv resolves the interpreter; the interpreter captures launch environment."""
+    interpreter = fake_uv.with_name("python")
+    fake_uv.rename(interpreter)
+    fake_uv.write_text(f"#!/bin/sh\nprintf '%s\\n' '{interpreter}'\n", encoding="utf-8")
+    fake_uv.chmod(0o755)
+
+
 def test_workflow_adapter_disables_proxy_header_client_rewriting() -> None:
     launcher = WORKFLOW_ADAPTER_LAUNCHER.read_text(encoding="utf-8")
     assert "uvicorn workflow_adapter_app:app" in launcher
@@ -70,6 +78,7 @@ def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: P
         encoding="utf-8",
     )
     fake_uv.chmod(0o755)
+    _install_uv_resolution_stub(fake_uv)
 
     env = os.environ.copy()
     env.pop("UV_CACHE_DIR", None)
@@ -140,6 +149,7 @@ def test_dev_api_launcher_parses_labeled_micromamba_base_output(tmp_path: Path) 
         encoding="utf-8",
     )
     fake_uv.chmod(0o755)
+    _install_uv_resolution_stub(fake_uv)
 
     env = os.environ.copy()
     for key in (
