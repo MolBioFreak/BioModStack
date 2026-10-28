@@ -29,6 +29,8 @@ import {
     type OntRawSignalPreference,
     type OntRawSignalWaveform,
     type OntRunSummary,
+    fetchOntPod5Restore,
+    requestOntPod5Restore,
 } from '../../lib/api';
 import { jobPollingInterval } from '../../lib/queryPolling';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
@@ -418,6 +420,28 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
         onSuccess: (settings) => queryClient.setQueryData(['ont-raw-signal-retention'], settings),
     });
     const removePod5 = retentionQuery.data?.remove_pod5_after_verified_blow5 === true;
+
+    const readyBlow5Id = rawSignalQuery.data?.representations.find(
+        (representation) => representation.format === 'blow5' && representation.state === 'ready',
+    )?.representation_id ?? null;
+    const pod5RestoreQuery = useQuery({
+        queryKey: ['ont-pod5-restore', effectiveSelectedRunGeneration?.runId, effectiveSelectedRunGeneration?.observedGeneration, readyBlow5Id],
+        queryFn: () => fetchOntPod5Restore(
+            effectiveSelectedRunGeneration!.runId, effectiveSelectedRunGeneration!.observedGeneration, readyBlow5Id!,
+        ),
+        enabled: Boolean(effectiveSelectedRunGeneration && readyBlow5Id),
+        refetchInterval: (query) => (query.state.data?.state === 'running' ? 5000 : false),
+    });
+    const restorePod5 = useMutation({
+        mutationFn: async () => {
+            if (!effectiveSelectedRunGeneration || !readyBlow5Id) throw new Error('Select a run with a ready BLOW5.');
+            return requestOntPod5Restore(
+                effectiveSelectedRunGeneration.runId, effectiveSelectedRunGeneration.observedGeneration, readyBlow5Id,
+            );
+        },
+        onSuccess: () => void pod5RestoreQuery.refetch(),
+        onError: (error) => setMessage(`POD5 restore failed: ${error instanceof Error ? error.message : String(error)}`),
+    });
 
     const prepareBlow5 = useMutation({
         mutationFn: async (sourceRepresentationId: string) => {
@@ -981,6 +1005,23 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                                     >
                                                         {waveformLoading ? 'Inspecting…' : 'Inspect raw waveform'}
                                                     </button>
+                                                </div>
+                                                <div className="flex flex-wrap items-center gap-2" data-pod5-restore>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => restorePod5.mutate()}
+                                                        disabled={restorePod5.isPending || pod5RestoreQuery.data?.state === 'running'}
+                                                        className="rounded border border-[var(--border-primary)] px-2 py-1 text-[var(--text-primary)] disabled:opacity-40"
+                                                        title="Rebuild POD5 from this BLOW5 so the reads can be basecalled again"
+                                                    >
+                                                        {pod5RestoreQuery.data?.state === 'running' ? 'Restoring POD5…' : 'Restore POD5 for basecalling'}
+                                                    </button>
+                                                    {pod5RestoreQuery.data?.state === 'ready' ? (
+                                                        <span>POD5 restored ({pod5RestoreQuery.data.restored_read_count} reads) in <span className="font-mono break-all">{pod5RestoreQuery.data.directory}</span></span>
+                                                    ) : null}
+                                                    {pod5RestoreQuery.data?.state === 'failed' ? (
+                                                        <span role="alert" className="text-[var(--warning)]">Restore failed: {pod5RestoreQuery.data.error}</span>
+                                                    ) : null}
                                                 </div>
                                                 {waveformError ? <div role="alert" className="text-[var(--warning)]">Waveform unavailable: {waveformError}</div> : null}
                                                 {waveform?.state === 'ready' && waveformPoints ? (
