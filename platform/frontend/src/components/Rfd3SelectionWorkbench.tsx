@@ -3,10 +3,13 @@ import { projectRfd3SourceSelection, type Rfd3SourceSelection } from '../lib/rfd
 
 export type Rfd3AppliedSelection = { field: string; value: unknown };
 /** Receives temporary source-qualified picks. Only explicit Apply changes the native draft. */
-export function Rfd3SelectionWorkbench({ value, onChange, visual, onInspect }: {
-    value: Record<string, unknown>; onChange: (value: Record<string, unknown>) => void;
+export function Rfd3SelectionWorkbench({ value, onChange, visual, onInspect, onHighlight }: {
+    value: Record<string, unknown>; onChange: (value: Record<string, unknown>, action?: 'apply' | 'undo') => void;
     visual?: Rfd3SourceSelection; onInspect?: (selection: Rfd3AppliedSelection) => void;
+    onHighlight?: (visual: Rfd3SourceSelection) => void;
 }) {
+    const [observations, setObservations] = useState<Record<string, { value: unknown; visual: Rfd3SourceSelection }>>({});
+    const [inspectionIssue, setInspectionIssue] = useState('');
     const [field, setField] = useState('select_fixed_atoms');
     const [undo, setUndo] = useState<{ before: Record<string, unknown>; after: Record<string, unknown> }>();
     const projected = visual ? projectRfd3SourceSelection(visual) : { issue: 'Select residues or atoms in the active source.' };
@@ -26,10 +29,22 @@ export function Rfd3SelectionWorkbench({ value, onChange, visual, onInspect }: {
             if (!projected.residues || !projected.atoms) return;
             const atomField = ['select_fixed_atoms', 'select_hbond_donor', 'select_hbond_acceptor', 'select_buried', 'select_exposed', 'select_partially_buried'].includes(field);
             const next = { ...value, [field]: atomField ? projected.atoms : projected.residues };
-            setUndo({ before: value, after: next }); onChange(next);
+            if (visual) setObservations(current => ({ ...current, [field]: { value: next[field], visual } }));
+            setInspectionIssue(''); setUndo({ before: value, after: next }); onChange(next, 'apply');
         }}>Apply RFD3 selection</button>
-        <button type="button" disabled={!undo || JSON.stringify(value) !== JSON.stringify(undo.after)} onClick={() => { if (undo) { onChange(undo.before); setUndo(undefined); } }}>Undo RFD3 selection</button>
+        <button type="button" disabled={!undo || JSON.stringify(value) !== JSON.stringify(undo.after)} onClick={() => { if (undo) { onChange(undo.before, 'undo'); setUndo(undefined); } }}>Undo RFD3 selection</button>
+        {inspectionIssue && <p role="status">{inspectionIssue}</p>}
         <h4>Applied native selections</h4>
-        {fields.filter(([key]) => Object.hasOwn(value, key)).map(([key, label]) => <div key={key}><strong>{label}</strong><code>{JSON.stringify(value[key])}</code>{onInspect && <button type="button" onClick={() => onInspect({ field: key, value: value[key] })}>Inspect {key}</button>}</div>)}
+        {fields.filter(([key]) => Object.hasOwn(value, key)).map(([key, label]) => <div key={key}><strong>{label}</strong><code>{JSON.stringify(value[key])}</code>{(onInspect || onHighlight) && <button type="button" onClick={() => {
+            onInspect?.({ field: key, value: value[key] });
+            const observed = observations[key];
+            if (!visual || !observed || JSON.stringify(observed.value) !== JSON.stringify(value[key]) ||
+                observed.visual.retainedBinding?.receipt !== visual.retainedBinding?.receipt ||
+                observed.visual.inputPath !== visual.inputPath || observed.visual.sourceModel !== visual.sourceModel ||
+                projectRfd3SourceSelection({ ...observed.visual, inputPath: visual.inputPath, sourceModel: visual.sourceModel, sourceMapping: visual.sourceMapping }).issue) {
+                setInspectionIssue('No current exact visual observation for this native selector. Manual syntax remains unchanged; it is not evaluated in the browser.'); return;
+            }
+            setInspectionIssue(''); onHighlight?.(observed.visual);
+        }}>Inspect {key}</button>}</div>)}
     </fieldset>;
 }

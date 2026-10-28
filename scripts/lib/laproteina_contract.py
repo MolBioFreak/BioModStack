@@ -131,6 +131,16 @@ def native_profile_defaults() -> dict:
             "profiles": profiles}
 
 
+def native_task_catalog() -> dict:
+    """Lossless generated snapshot of the pinned native motif dictionary.
+
+    Discovery only: never merge these values into authored sparse overrides.
+    Regenerate from configs/generation/motif_dict.yaml at SOURCE_REVISION;
+    source_sha256 qualifies the original YAML, not a rewritten catalog.
+    """
+    return json.loads(Path(__file__).with_name("laproteina_native_tasks.json").read_text())
+
+
 def settings_schema() -> dict:
     """Typed meanings; profile observations are separate from schema defaults."""
     properties = {}

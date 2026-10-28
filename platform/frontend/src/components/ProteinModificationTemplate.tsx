@@ -2,13 +2,16 @@ import { LaProteinaEvaluation } from './LaProteinaEvaluation';
 import { DeNovoNativeGenerationSettings } from './DeNovoNativeGenerationSettings';
 import { OtherDeNovoSettings, retainedRfd3Draft, rfd3ExecutionKeys, useRfd3GenerationBounds } from './OtherDeNovoSettings';
 import { DiscoJobsInput } from './DiscoJobsInput';
+import { Rfd3SelectionWorkbench } from './Rfd3SelectionWorkbench';
+import type { Rfd3SourceSelection } from '../lib/rfd3SourceSelection';
+import { projectRfd3SourceSelection } from '../lib/rfd3SourceSelection';
 import { NativeSourceInput } from './DeNovoNativeSources';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { completeCurrentLaunchContext, submitJob, type StructureMaterialization, type Job } from '../lib/api';
+import { api, completeCurrentLaunchContext, submitJob, type StructureMaterialization, type Job } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { ModelReferenceCard } from './ModelReferenceCard';
 import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
@@ -325,7 +328,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     // Named motifs inherit their native dictionary, not the old flat motif
     // defaults (the projection deliberately omits those). Do not present a
     // shadowed flat value as effective when its last native override is reset.
-    const namedMotif = backend === 'laproteina' && Boolean(motifTaskName && !motifPdb);
+    const namedMotif = backend === 'laproteina' && Boolean((nativeOverrides.motif_task_name ?? motifTaskName) && !(nativeOverrides.motif_pdb ?? motifPdb));
     const inheritsNamedMotif = (key: string) => namedMotif && ['contig_string', 'segment_order', 'motif_atom_spec', 'atom_selection_mode', 'motif_min_length', 'motif_max_length'].includes(key);
     const effectiveOverride = (key: string, fallback: unknown) => Object.hasOwn(nativeOverrides, key) ? nativeOverrides[key] : inheritsNamedMotif(key) ? undefined : fallback;
     const setEffectiveOverride = (key: string, value: unknown, setPrimary: () => void) => {
@@ -349,11 +352,19 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         return <span className="block text-xs text-[var(--text-secondary)]">Native override ({key}) from {owner}: {JSON.stringify(nativeOverrides[key])}. <button type="button" aria-label={`${resetLabel} for ${key}`} onClick={() => resetOverride(key)}>{resetLabel}</button></span>;
     };
     const [rfd3Settings, setRfd3Settings] = useState(() => retainedRfd3Draft(initialValues));
+    const laCatalog = useQuery({ queryKey: ['other-denovo-settings', 'laproteina', designTask], enabled: generator === 'laproteina' && designTask === 'motif_scaffolding',
+        queryFn: async () => (await api.get<{ native_task_catalog?: { tasks: Record<string, Record<string, unknown>> } }>('/api/models/protein_modification_experimental/generation-settings', { params: { mode: 'de_novo_design', generator: 'laproteina', task: designTask } })).data,
+        staleTime: 60_000, retry: false });
+    const rfd3ConditionUndo = useRef<{ present: boolean; value: unknown } | undefined>(undefined);
+    const [rfd3Picks, setRfd3Picks] = useState<Rfd3SourceSelection>();
     const [rfd3SourceInspection, setRfd3SourceInspection] = useState<{ receipt: StructureMaterialization; path: string; model?: number }>();
     const rfd3Source = typeof rfd3Settings.input_structure === 'string' && rfd3Settings.input_structure ? {
         path: rfd3Settings.input_structure, output_format: 'native' as const,
         ...(typeof rfd3Settings.source_model === 'number' ? { model_number: rfd3Settings.source_model } : {}),
     } : undefined;
+    const rfd3Visual = rfd3Picks ? { ...rfd3Picks, inputPath: rfd3Source?.path ?? '', sourceModel: rfd3Source?.model_number, sourceMapping: rfd3Settings.source_mapping as string | undefined } : undefined;
+    const rfd3Selected = rfd3Visual && !projectRfd3SourceSelection(rfd3Visual).issue ? [...rfd3Visual.identities] : [];
+    useEffect(() => { setRfd3Picks(undefined); }, [rfd3Source?.path, rfd3Source?.model_number]);
     const clearRfd3Source = () => setRfd3Settings(previous => {
         const next = { ...previous }; delete next.input_structure; delete next.source_model; delete next.source_mapping; return next;
     });
@@ -640,7 +651,12 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     {generationControls}
                     <p className="text-xs text-[var(--text-secondary)]">{countHelp}</p>
                     {generator === 'rfd3' && <details><summary>Input structure (optional)</summary>
-                        <NativeSourceInput label="RFD3 input structure" value={rfd3Source ? 'input' : ''} bindings={rfd3Source ? { input: rfd3Source } : undefined}
+                        <NativeSourceInput integrated label="RFD3 input structure"
+                            selectedIdentities={rfd3Selected}
+                            onSelection={(_slot, receipt, selection) => setRfd3Picks({ identities: selection.identities.flatMap(identity => 'first' in identity && 'second' in identity ? [identity.first, identity.second] : [identity]) as Rfd3SourceSelection['identities'],
+                                source: { documentId: receipt.path, source_positions: receipt.source_positions, model_number: receipt.model_number, model_numbers: receipt.model_numbers },
+                                inputPath: rfd3Source?.path ?? '', sourceModel: rfd3Source?.model_number,
+                                retainedBinding: { receipt, inputPath: rfd3Source?.path ?? '', sourceModel: rfd3Source?.model_number } })} value={rfd3Source ? 'input' : ''} bindings={rfd3Source ? { input: rfd3Source } : undefined}
                             onChange={slot => { if (slot === '') clearRfd3Source(); }}
                             onAcquire={source => {
                                 if (!('kind' in source)) setRfd3Settings(previous => {
@@ -652,10 +668,32 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                             }}
                             inspection={rfd3SourceInspection?.path === rfd3Source?.path && rfd3SourceInspection?.model === rfd3Source?.model_number ? rfd3SourceInspection?.receipt : undefined}
                             onInspection={(_slot, receipt, source) => { if (!('kind' in source)) setRfd3SourceInspection({ receipt, path: source.path ?? '', model: source.model_number }); }} />
+                        <label>Source identity mapping<select aria-label="RFD3 source identity mapping" value={String(rfd3Settings.source_mapping ?? '')} onChange={event => {
+                            const selected = event.target.value;
+                            setRfd3Settings(previous => { const next = { ...previous }; if (selected) next.source_mapping = selected; else delete next.source_mapping; return next; });
+                        }}><option value="">Manual / historical source mapping</option><option value="bms.rfd3.source-map.v1">Exact author-to-native source map</option>
+                            {rfd3Settings.source_mapping && rfd3Settings.source_mapping !== 'bms.rfd3.source-map.v1' ? <option value={String(rfd3Settings.source_mapping)}>{String(rfd3Settings.source_mapping)} · retained historical mapping</option> : null}
+                        </select></label>
+                        <Rfd3SelectionWorkbench key={JSON.stringify([rfd3Source?.path, rfd3Source?.model_number])}
+                            value={settingsObject(rfd3Settings.conditioning)} visual={rfd3Visual}
+                            onChange={(conditioning, action) => {
+                                const before = action === 'undo' ? rfd3ConditionUndo.current : undefined;
+                                rfd3ConditionUndo.current = before ? undefined : { present: Object.hasOwn(rfd3Settings, 'conditioning'), value: rfd3Settings.conditioning };
+                                setRfd3Settings(previous => {
+                                    const next: Record<string, unknown> = { ...previous, conditioning };
+                                    if (before) { if (before.present) next.conditioning = before.value; else delete next.conditioning; }
+                                    return next;
+                                });
+                            }}
+                            onHighlight={setRfd3Picks} />
                         {rfd3Source && <button type="button" onClick={clearRfd3Source}>Clear input structure</button>}
                     </details>}
                 </ProteinDesignPanel> : isMotif ? <>
-                    <LaProteinaMotifInput path={motifPdb} contig={String(effectiveOverride('contig_string', motifContig) ?? '')} segmentOrder={String(effectiveOverride('segment_order', motifSegmentOrder) ?? '')}
+                    <LaProteinaMotifInput
+                        taskName={String(effectiveOverride('motif_task_name', motifTaskName) ?? '')}
+                        taskCatalog={laCatalog.data?.native_task_catalog?.tasks}
+                        onTaskChange={name => setEffectiveOverride('motif_task_name', name, () => setMotifTaskName(name))}
+                        path={motifPdb} contig={String(effectiveOverride('contig_string', motifContig) ?? '')} segmentOrder={String(effectiveOverride('segment_order', motifSegmentOrder) ?? '')}
                         atomSpec={effectiveOverride('motif_atom_spec', motifAtomSpec) as string | null | undefined} initialInspection={motifInspection} onInspectionChange={setMotifInspection} onChange={patch => {
                         if (patch.path !== undefined) setMotifPdb(patch.path);
                         if (patch.atomSpec !== undefined) { if (!Object.hasOwn(nativeOverrides, 'motif_atom_spec')) setMotifAtomSpec(patch.atomSpec); authorLaMotif('motif_atom_spec', patch.atomSpec); }
@@ -684,13 +722,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                                 {overrideNote('motif_max_length')}
                             </label>
                         </div>
-                        <details className="rounded-lg border p-3" style={themedInsetStyle}>
-                            <summary className="cursor-pointer text-sm font-medium">Named upstream motif task</summary>
-                            <label className={`${labelClass} mt-3 block`}>Upstream motif task
-                                <input className={fieldClass} value={motifTaskName} onChange={event => setMotifTaskName(event.target.value)} placeholder="La-Proteina motif_dict key" />
-                            </label>
-                            <p className="mt-2 text-xs text-[var(--text-secondary)]">Alternative to a custom motif. A supplied motif structure and contig take precedence.</p>
-                        </details>
+                        {overrideNote('motif_task_name')}
+                        {laCatalog.error && <p role="status">Named task discovery unavailable. Manual task names and retained overrides remain usable.</p>}
                     </ProteinDesignPanel>
                 </> : contextTask && <ProteinDesignPanel title={contextTask === 'custom_json' ? 'Native design input' : 'Molecular context'}
                     description={contextTask === 'dna_conditioned' ? 'DNA context; preparation includes the reverse-complement strand.'
