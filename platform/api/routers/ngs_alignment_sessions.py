@@ -1357,6 +1357,82 @@ async def get_ngs_read_report(
                                job_id=job_id, resource="artifact") from exc
 
 
+async def _job_basecall_bam_and_pod5(job_id: str, authorized_job: Job, pinned_root: Path) -> tuple[Path, Path]:
+    """Move-tagged basecall BAM and the job's own POD5 input, both job-owned."""
+    from paths import get_allowed_roots
+
+    params = authorized_job.params if isinstance(authorized_job.params, dict) else {}
+    raw_pod5 = params.get("pod5_dir")
+    if not isinstance(raw_pod5, str) or not raw_pod5.strip():
+        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+                               message="This run did not start from POD5, so it has no raw signal.",
+                               job_id=job_id, resource="artifact")
+    pod5_dir = Path(raw_pod5).resolve()
+    roots = [Path(root).resolve() for root in get_allowed_roots().values()]
+    if not pod5_dir.exists() or not any(pod5_dir == root or root in pod5_dir.parents for root in roots):
+        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+                               message="This run's POD5 input is no longer available.",
+                               job_id=job_id, resource="artifact")
+    artifacts = await run_in_threadpool(
+        service.build_ngs_package_artifacts, job_id, **_job_package_authority(authorized_job),
+        job_output_dir=pinned_root, pinned_root_descriptor=True,
+    )
+    calls = next((item for item in artifacts if item.get("state") == "present"
+                  and str(item.get("relative_path") or "") == "basecall/calls.bam"), None)
+    if calls is None:
+        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+                               message="This run published no basecall BAM.", job_id=job_id, resource="artifact")
+    path, _metadata = await run_in_threadpool(
+        service.resolve_ngs_package_artifact, job_id, calls["artifact_id"],
+        **_job_package_authority(authorized_job), job_output_dir=pinned_root, pinned_root_descriptor=True,
+    )
+    return Path(path), pod5_dir
+
+
+@router.get("/jobs/{job_id}/ngs-squiggle/reads", responses=_STANDARD_GOVERNED_ERRORS)
+async def list_ngs_squiggle_reads(
+    job_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    authorized_job: Job = Depends(require_alignment_job),
+):
+    """Reads in this run that can be drawn as squiggles, longest first."""
+    from services.ont_read_report import OntReadReportError
+    from services.ont_read_squiggle import list_reads
+
+    try:
+        async with _validated_pinned_result_root(authorized_job) as pinned_root:
+            bam, _pod5 = await _job_basecall_bam_and_pod5(job_id, authorized_job, pinned_root)
+            return await run_in_threadpool(list_reads, bam, limit=limit)
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+    except OntReadReportError as exc:
+        raise OntNgsRouteError(status_code=409, code="NGS_AUTHORITY_CONFLICT", message=str(exc),
+                               job_id=job_id, resource="artifact") from exc
+
+
+@router.get("/jobs/{job_id}/ngs-squiggle/reads/{read_id}", responses=_STANDARD_GOVERNED_ERRORS)
+async def get_ngs_read_squiggle(
+    job_id: str,
+    read_id: str,
+    start_base: int = Query(0, ge=0),
+    bases: int = Query(200, ge=10, le=400),
+    authorized_job: Job = Depends(require_alignment_job),
+):
+    """Signal (pA) segmented per called base, with per-base modification probabilities."""
+    from services.ont_read_report import OntReadReportError
+    from services.ont_read_squiggle import read_squiggle
+
+    try:
+        async with _validated_pinned_result_root(authorized_job) as pinned_root:
+            bam, pod5_dir = await _job_basecall_bam_and_pod5(job_id, authorized_job, pinned_root)
+            return await run_in_threadpool(read_squiggle, bam, pod5_dir, read_id, start_base=start_base, bases=bases)
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="read") from exc
+    except OntReadReportError as exc:
+        raise OntNgsRouteError(status_code=409, code="NGS_AUTHORITY_CONFLICT", message=str(exc),
+                               job_id=job_id, resource="read") from exc
+
+
 @router.get("/jobs/{job_id}/ngs-artifacts/{artifact_id}", responses=_BINARY_RESPONSES)
 @router.head("/jobs/{job_id}/ngs-artifacts/{artifact_id}", responses=_BINARY_RESPONSES)
 async def get_ngs_package_artifact(
