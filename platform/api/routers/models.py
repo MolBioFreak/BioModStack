@@ -282,6 +282,9 @@ def _frustrampnn_discovery_metadata() -> dict:
 
 def _native_parameter_schema(model_id: str, mode_id: str) -> dict | None:
     """Discovery metadata only; scientific validation stays model-owned."""
+    if model_id in {'family_msa_protein', 'family_msa_nucleic'} and mode_id == 'family_msa':
+        from services.family_msa.requests import request_schema
+        return request_schema()
     if model_id == 'protenix' and mode_id in ('predict', 'complex'):
         from scripts.protenix_chemistry import parameter_schema
         return parameter_schema()
@@ -327,6 +330,7 @@ async def list_models(
             "version": m.version,
             "category": m.category,
             "description": m.description,
+            **({'capabilities': m.capabilities} if m.id in {'family_msa_protein', 'family_msa_nucleic'} else {}),
             "modes": [
                 {
                     "id": mode.id, 
@@ -461,6 +465,7 @@ async def get_model(model_id: str):
         "category": model.category,
         "description": model.description,
         "container": model.container,
+        **({'capabilities': model.capabilities} if model.id in {'family_msa_protein', 'family_msa_nucleic'} else {}),
         "inputs": model.inputs,
         "outputs": model.outputs,
         "modes": [

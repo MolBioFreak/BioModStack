@@ -8,6 +8,7 @@ import NgsMolBioProjectHub from './components/molbio-ngs/NgsMolBioProjectHub';
 const ProjectManager = lazy(() => import('./pages/ProjectManager').then((module) => ({ default: module.ProjectManager })));
 const MolBioToolkitV2 = lazy(() => import('./components/MolBioToolkit/indexV2').then((module) => ({ default: module.MolBioToolkitV2 })));
 const NGSToolkit = lazy(() => import('./components/NGSToolkit').then((module) => ({ default: module.NGSToolkit })));
+const AlignmentPage = lazy(() => import('./components/alignments/AlignmentPage'));
 
 function RouteLoadingFallback() {
   return (
@@ -87,7 +88,13 @@ function App() {
                   </div>
                 )}
             />
-            <Route path="*" element={<div className="p-8 text-content-secondary">This workspace provides MolBio, NGS, and their shared Projects.</div>} />
+            <Route path="/alignments" element={<AlignmentPage />} />
+            <Route path="/alignments/library" element={<AlignmentPage />} />
+            <Route path="/alignments/new" element={<AlignmentPage />} />
+            <Route path="/alignments/compare" element={<AlignmentPage />} />
+            <Route path="/alignments/jobs/:jobId" element={<AlignmentPage />} />
+            <Route path="/alignments/results/:resultId" element={<AlignmentPage />} />
+            <Route path="*" element={<div className="p-8 text-content-secondary">This workspace provides MolBio, NGS, Alignments, and their shared Projects.</div>} />
             </Routes>
           </Suspense>
         </Layout>

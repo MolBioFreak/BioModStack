@@ -17,6 +17,8 @@ platform/api/*.log
 
 # Python/runtime caches
 __pycache__/
+/packages/bms-alignment-core/build/
+/packages/bms-alignment-core/*.egg-info/
 *.py[cod]
 .pytest_cache/
 

@@ -123,6 +123,7 @@ INDEPENDENT_RUNTIME_MODELS = frozenset({
     "caliby_binder", "caliby_experimental", "ligandmpnn", "bindcraft2", "protonpottsmpnn",
     # Fold-CP uses its own image with the native BoltzCP shared Boltz tree.
     "boltz_cp_experimental",
+    "family_msa_protein", "family_msa_nucleic",
 })
 
 

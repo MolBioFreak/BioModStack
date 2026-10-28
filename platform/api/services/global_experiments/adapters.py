@@ -3418,3 +3418,7 @@ for _model_id in sorted(_TYPED_CORE_RESULT_MODELS):
 
 for _model_id in sorted(NativeBinderJobResultAdapter._MODES):
     registry.register(NativeBinderJobResultAdapter(_model_id))
+
+from services.family_msa.project_adapters import FamilyMsaResultAdapter
+registry.register(FamilyMsaResultAdapter('family_msa_protein', 'protein_in_silico'))
+registry.register(FamilyMsaResultAdapter('family_msa_nucleic', 'ngs_molbio'))

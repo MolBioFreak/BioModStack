@@ -468,7 +468,8 @@ async def persist_workflow_plan_authority(
     native_contract = None
     if normalized_job_request is not None:
         from services.protein_project_capabilities import normalized_job_plan_contract, protein_setup_parameter_schema, _PARAMETER_SCHEMAS
-        setup_capability = capability_id if capability_id in _PARAMETER_SCHEMAS and protein_setup_parameter_schema(capability_id).get("x-bms-native-editor-draft") else None
+        from services.family_msa_project_capabilities import family_msa_capability
+        setup_capability = capability_id if ((capability_id in _PARAMETER_SCHEMAS and protein_setup_parameter_schema(capability_id).get("x-bms-native-editor-draft")) or family_msa_capability(capability_id) is not None) else None
         native_contract = normalized_job_plan_contract(
             normalized_job_request, native_entrypoint=native_entrypoint,
             setup_capability_id=setup_capability,
@@ -2420,6 +2421,9 @@ async def protein_setup_launch_authority(
         "schema": "bms.protein-setup-launch-authority.v1",
         "capability_contract_sha256": authority.capability_contract_sha256,
     }
+    from services.family_msa_project_capabilities import family_msa_capability
+    family = family_msa_capability((await _head(session, authority.workflow_id, "workflow")).description)
+    expected_domain = family[0]["domain_kind"] if family is not None else "protein_in_silico"
     for prefix, head in (("project", project), ("global_experiment", experiment), ("domain", domain)):
         revision_id = (pinned or {}).get(f"{prefix}_revision_id", head.current_revision_id)
         if prefix == "domain":
@@ -2433,7 +2437,7 @@ async def protein_setup_launch_authority(
             raise ValidationFailure("Protein setup hierarchy revision is not canonical")
         if prefix == "domain" and (
             payload.get("schema") != "bms.domain-experiment.v1"
-            or payload.get("domain_kind") != "protein_in_silico"
+            or payload.get("domain_kind") != expected_domain
         ):
             raise ValidationFailure("native Protein setup authority requires its Protein Domain")
         result.update({
@@ -3431,6 +3435,33 @@ async def reconcile_run_group(
             continue
         attempt = attempts[0]
         if attempt.state in {"completed", "failed", "cancelled"}:
+            # Native terminal state remains authoritative. A producer may commit
+            # retained partial outputs after the first terminal projection.
+            terminal = json.loads(attempt.terminal_receipt_json or "{}")
+            if terminal.get("output_evidence") and not terminal.get("output_receipt_ids"):
+                preparation = await session.get(ExperimentWorkflowPreparation, attempt.preparation_id)
+                normalized = json.loads(preparation.normalized_request_json) if preparation else {}
+                terminal_job = await core_session.get(Job, attempt.scheduler_job_id)
+                native_family_msa = terminal_job is not None and terminal_job.model_id in {
+                    'family_msa_protein', 'family_msa_nucleic'} and terminal_job.mode == 'family_msa'
+                if normalized.get("launch_authority", {}).get("schema") == "bms.protein-setup-launch-authority.v1" or native_family_msa:
+                    linked = await session.scalar(select(ExperimentLineageEdge.id).where(
+                        ExperimentLineageEdge.source_resource_id == attempt.resource_id,
+                        ExperimentLineageEdge.edge_mode == "produced",
+                        ExperimentLineageEdge.edge_key == "verified-terminal-output"))
+                    if linked is None:
+                        try:
+                            from services.global_experiments.receipts import verify_and_link_terminal_outputs
+
+                            async with session.begin_nested():
+                                await verify_and_link_terminal_outputs(
+                                    session, core_session, attempt_id=attempt.resource_id,
+                                )
+                        except Exception:
+                            # Retain pending evidence without a lifecycle change.
+                            pass
+                        # The terminal receipt is immutable. Late outputs belong
+                        # to the existing verified external receipt/lineage owner.
             continue
         # A deterministic Job may survive a typed-claim or outbox crash cut.
         # Recovery owns completion of that durable handoff; reconciliation must
@@ -3454,7 +3485,9 @@ async def reconcile_run_group(
             preparation = await session.get(ExperimentWorkflowPreparation, attempt.preparation_id)
             normalized = json.loads(preparation.normalized_request_json) if preparation else {}
             launch_authority = normalized.get("launch_authority", {})
-            native_protein = launch_authority.get("schema") == "bms.protein-setup-launch-authority.v1"
+            native_protein = launch_authority.get("schema") == "bms.protein-setup-launch-authority.v1" or (
+                job.model_id in {'family_msa_protein', 'family_msa_nucleic'} and job.mode == 'family_msa'
+            )
             resource_usage = None
             resource_evidence = None
             try:

@@ -1,6 +1,9 @@
 packages:
   - packages/*
   - platform/frontend
+  - platform/frontend/alignment-viewers/jbrowse
+  - platform/frontend/alignment-viewers/av2
+  - platform/frontend/alignment-viewers/biojs
   - platform/desktop-electron
 
 onlyBuiltDependencies:

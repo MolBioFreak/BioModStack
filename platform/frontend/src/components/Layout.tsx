@@ -13,6 +13,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         ['/projects?scope=ngs-molbio', 'Projects'],
                         ['/designer', 'MolBio Viewer'],
                         ['/ngs', 'NGS'],
+                        ['/alignments', 'Alignments'],
                     ].map(([to, label]) => (
                         <NavLink key={to} to={to} className={({ isActive }) =>
                             `rounded-lg px-3 py-2 text-sm font-semibold ${isActive ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`

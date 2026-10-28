@@ -43,13 +43,13 @@ def test_migration_v21_persists_and_attests_workflow_setup_contexts(tmp_path: Pa
     experiment_migrations.run_all(db_path)
     connection = sqlite3.connect(db_path)
     try:
-        assert experiment_migrations.LATEST_MIGRATION_VERSION == 21
+        assert experiment_migrations.LATEST_MIGRATION_VERSION == 23
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='workflow_setup_contexts'"
         ).fetchone() == ("workflow_setup_contexts",)
         assert connection.execute(
             "SELECT version, name FROM experiment_schema_migrations ORDER BY version DESC LIMIT 1"
-        ).fetchone() == (21, "project_workflow_setup_context_authority")
+        ).fetchone() == (23, "family_msa_workflow_setup_routes")
         assert experiment_migrations.attest_schema(connection)["ok"] is True
     finally:
         connection.close()

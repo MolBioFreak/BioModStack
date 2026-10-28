@@ -134,7 +134,7 @@ class WorkflowSetupCreateRequest(StrictRequestModel):
     relationship_kind: Literal["primary", "follow_up"]
     global_experiment_id: str | None = Field(default=None, min_length=1, max_length=128)
     experiment: WorkflowSetupExperimentRequest | None = None
-    domain_kind: Literal["protein_in_silico"]
+    domain_kind: Literal["protein_in_silico", "ngs_molbio"]
     capability_id: str = Field(min_length=1, max_length=255)
 
     @model_validator(mode="after")
@@ -475,6 +475,13 @@ def _edition_adapter(adapter_id: str):
 async def list_protein_project_capabilities() -> dict[str, Any]:
     """Expose only server-adapted Protein workflows for Project creation."""
     return protein_capability_inventory(project_ready_only=True)
+
+
+@router.get("/api/family-msa-project-capabilities")
+async def list_family_msa_project_capabilities() -> dict[str, Any]:
+    """Discover editor setup routes; this does not attest Job execution readiness."""
+    from services.family_msa_project_capabilities import family_msa_capability_inventory
+    return family_msa_capability_inventory()
 
 
 @router.post("/api/projects/{project_id}/workflow-setups", status_code=status.HTTP_201_CREATED)
@@ -1577,7 +1584,8 @@ async def _plan_launch_authority(
     plan_authority: ExperimentWorkflowPlanAuthority,
     pinned: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if await _is_native_protein_domain(session, plan_authority.expected_domain_revision_id):
+    if ((isinstance(pinned, dict) and pinned.get("schema") == "bms.protein-setup-launch-authority.v1")
+            or await _is_native_protein_domain(session, plan_authority.expected_domain_revision_id)):
         from experiment_services import protein_setup_launch_authority
         return await protein_setup_launch_authority(session, plan_authority, pinned=pinned)
     authority = await exact_local_launch_authority(
@@ -1607,7 +1615,8 @@ async def _current_preparation_launch_authority(
     if not isinstance(normalized_preparation, dict):
         raise ValidationFailure("replacement_preparation_required")
     pinned = normalized_preparation.get("launch_authority")
-    native = await _is_native_protein_domain(global_session, plan_authority.expected_domain_revision_id)
+    native = ((isinstance(pinned, dict) and pinned.get("schema") == "bms.protein-setup-launch-authority.v1")
+              or await _is_native_protein_domain(global_session, plan_authority.expected_domain_revision_id))
     # Native proof includes the preparation's pinned Project/Experiment revisions
     # and capability. A Domain-only cache must not substitute another Plan's proof.
     current_authority = (

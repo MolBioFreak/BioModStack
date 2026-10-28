@@ -5460,6 +5460,7 @@ async def list_jobs(
     model_ids: Optional[list[str]] = Query(None),
     q_ignore_case_id: bool = False,  # NGS historically searches IDs case-insensitively
     exclude_ngs: bool = False,  # Dashboard Show NGS Jobs filter, before paging/count
+    exclude_alignments: bool = False,  # Family-MSA display filter, before paging/count
     include_children: bool = False,  # New param: show child jobs if True
     scientific_family_job_id: Optional[str] = None,
     summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
@@ -5574,6 +5575,11 @@ async def list_jobs(
         filters.append(~or_(model_identity.in_(ngs_models), and_(
             model_identity == "", or_(workflow_identity.in_(ngs_workflows),
                                       mode_identity.in_((*ngs_workflows, "nanopore_methylation"))))))
+    if exclude_alignments:
+        # Match jobCategories.jobCategory: family MSA only, not folding msa_batch.
+        whitespace = " \t\n\v\f\r\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+        model_identity = func.lower(func.trim(func.coalesce(Job.model_id, ""), whitespace))
+        filters.append(~model_identity.in_(("family_msa_protein", "family_msa_nucleic")))
     if projection == "binder_navigation":
         rows = (await session.execute(select(*navigation_columns()).where(*filters).order_by(
             Job.created_at.desc(), Job.id).limit(limit).offset(offset))).mappings().all()
@@ -6008,6 +6014,25 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     md_input_resolver = md_input_resolver or _resolve_md_input_path_for_runtime
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id in {'family_msa_protein', 'family_msa_nucleic'}:
+        from services.family_msa.requests import MODE, prepare_request
+        from services.resource_usage_evidence import strip_resource_execution_metadata
+        from services.execution_ownership import strip_execution_metadata
+        native_params = strip_execution_metadata(strip_resource_execution_metadata(job_data.params))
+        adapter = native_params.pop('workflow_adapter', None)
+        metadata = {key: value for key, value in job_data.params.items() if key not in native_params and key != 'workflow_adapter'}
+        if adapter is not None:
+            metadata['workflow_adapter'] = adapter
+        try:
+            selected, payload = prepare_request(native_params)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        if selected != normalized_model_id or normalized_mode != MODE:
+            raise HTTPException(422, detail='Family alignment model or mode does not match request')
+        job_data.model_id = selected
+        job_data.mode = MODE
+        job_data.params = {**payload, **metadata}
+        return job_data
     from services.sequence_designer_settings import normalize_historical_sequence_settings
     job_data.params = normalize_historical_sequence_settings(normalized_model_id, job_data.params)
     if normalized_model_id == 'frustrampnn':
@@ -6938,9 +6963,12 @@ async def _create_job(
         if not capability_digest or len(capability_digest) != 64:
             raise HTTPException(status_code=500, detail="trusted Nanopore submission is missing alignment authorization")
 
-    job_data.params = normalize_job_request(
+    normalized_request = normalize_job_request(
         job_data, registry=registry, md_input_resolver=md_input_resolver,
-    ).params
+    )
+    job_data.params = normalized_request.params
+    if normalized_model_id in {'family_msa_protein', 'family_msa_nucleic'}:
+        job_data.model_id, job_data.mode = normalized_request.model_id, normalized_request.mode
     is_mutagenesis = 'mutagenesis_variants' in job_data.params
 
     _validate_protenix_template_requirements(job_data.model_id, job_data.params)
@@ -7217,6 +7245,12 @@ async def _create_job(
     if estimate_model_id == "protenix":
         sequence_length = estimate_protenix_tokens(job_data.params, sequence_length)
     vram_estimate = estimate_vram(estimate_model_id, sequence_length, job_data.params)
+
+    # Family alignment never requests a GPU, even when a cloned request has a pin.
+    if normalized_model_id in {'family_msa_protein', 'family_msa_nucleic'}:
+        job_data.pinned_gpu = None
+        for key in ('gpu_id', 'pinned_gpu', 'pinned_gpus', 'cpus_per_gpu'):
+            job_data.params.pop(key, None)
 
     # ─── CPU-only override: orchestration/launcher jobs should not consume GPU slots ─────
     if is_antibody_pipeline_mode(job_data.mode) and str(job_data.params.get("parallel_mode") or "").strip().lower() == "full_orchestrator":
@@ -9695,6 +9729,8 @@ async def resubmit_job(
     # Create new output directory for resubmitted job
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
+    if original_job.model_id in {'family_msa_protein', 'family_msa_nucleic'}:
+        output_dir = str(get_results_dir() / f"{new_name}_{timestamp}_{uuid.uuid4().hex}")
 
     resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
     if original_job.model_id == "nanopore":
@@ -9749,6 +9785,9 @@ async def resubmit_job(
         resubmit_sequence_length,
         resubmit_params,
     )
+    if original_job.model_id in {'family_msa_protein', 'family_msa_nucleic'}:
+        for key in ('gpu_id', 'pinned_gpu', 'pinned_gpus', 'cpus_per_gpu'):
+            resubmit_params.pop(key, None)
     if original_job.model_id == "nanopore" and resubmit_workflow_id == "ont_fastq_qc" and resubmit_input_mode == "fastq":
         resubmit_vram_estimate = 0
         for key in ("gpu_id", "pinned_gpu", "pinned_gpus", "cpus_per_gpu"):
@@ -9841,12 +9880,22 @@ async def resubmit_job(
         queue_status='queued',
         vram_estimate_mb=resubmit_vram_estimate,
         sequence_length=resubmit_sequence_length,
-        pinned_gpu=original_job.pinned_gpu,
+        pinned_gpu=(None if original_job.model_id in {'family_msa_protein', 'family_msa_nucleic'}
+                    else original_job.pinned_gpu),
         priority=0,
         paused=False,
         retry_count=0,
         max_retries=2,
     )
+
+    if new_job.model_id in {'family_msa_protein', 'family_msa_nucleic'} and resubmit_params.get('managed_operation'):
+        from services.family_msa.operations import ManagedOperation, bind_request
+        from experiment_database import experiment_session_factory
+        operation = ManagedOperation.model_validate(resubmit_params['managed_operation'])
+        async with experiment_session_factory() as project_session:
+            rebound = await bind_request(project_session, request=operation.request, project_id=operation.project_id,
+                shared_states=operation.shared_states, job_id=new_job.id)
+        new_job.params = {**new_job.params, 'managed_operation': rebound.model_dump(mode='json')}
 
     if new_job.model_id == "nanopore":
         _retain_ont_replay_lineage(original_job, new_job)

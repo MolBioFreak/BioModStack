@@ -320,6 +320,7 @@ _SURFACE_BUILDERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "design": _design_surface,
     "typed_core_job_result": _design_surface,
     "native_binder_job_result": _design_surface,
+    "family_msa_job_result": _exact_ngs_member_surface,
     "rfd3_local_redesign_request": _rfd3_surface,
     "conformational_mapping_request": _cm_surface,
     "md_result": _md_surface,
@@ -441,6 +442,9 @@ async def result_surface_for_receipt(
             "state": "review" if readiness == "ready" else "unavailable",
             "reason": None,
         }
+    if entity_kind == 'family_msa_job_result' and _metadata_payload(payload).get('retained_artifacts'):
+        details['reopen_route'] = {'template_id': 'bms.route.verified-external-entity.v1', 'path': '/alignments',
+                                   'query': {'project_id': project_id, 'receipt_id': receipt.id}}
     readiness = str(details["readiness"])
     surface_kind = str(details["surface_kind"])
     comparison, available_actions = _comparison_projection(
@@ -467,7 +471,7 @@ async def result_surface_for_receipt(
         "contract_id": str(details.get("result_contract_id") or "verified_external_entity_v1"),
         "content_digest": payload["content_digest"],
         "surface_kind": surface_kind,
-        "route": None if surface_kind == "unsupported" else _reopen_route(payload),
+        "route": None if surface_kind == "unsupported" else details.get("reopen_route", _reopen_route(payload)),
         "readiness": readiness,
         "native_summary": _typed_payload("bms.result-surface.native-summary.v1", _metadata_payload(payload)),
         "scientific_acceptance": scientific_acceptance,

@@ -1,0 +1,1850 @@
+{
+  "$defs": {
+    "FamsaSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "const": "famsa",
+          "default": "famsa",
+          "title": "Engine",
+          "type": "string"
+        },
+        "threads": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Threads",
+          "type": "integer"
+        },
+        "guide_tree": {
+          "default": "sl",
+          "enum": [
+            "sl",
+            "upgma",
+            "nj",
+            "import"
+          ],
+          "title": "Guide Tree",
+          "type": "string"
+        },
+        "guide_tree_newick": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Supplied Newick file text used with guide_tree=import. Leaves are native bmsrow00000001 identifiers unless explicitly mapped; original and submitted trees are retained.",
+          "format": "newick",
+          "title": "Guide Tree Newick"
+        },
+        "leaf_mapping": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Explicit supplied tree leaf \u2192 roster row ID mapping. Unmapped leaves are retained and reported, never guessed.",
+          "title": "Leaf Mapping",
+          "type": "object"
+        },
+        "refine_mode": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "title": "Refine Mode",
+          "type": "string"
+        },
+        "keep_duplicates": {
+          "default": false,
+          "title": "Keep Duplicates",
+          "type": "boolean"
+        },
+        "medoidtree": {
+          "default": false,
+          "title": "Medoidtree",
+          "type": "boolean"
+        },
+        "medoid_seeds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Medoid Seeds"
+        },
+        "medoid_threshold": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Medoid Threshold"
+        },
+        "trim_columns": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trim Columns"
+        },
+        "r": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "R"
+        },
+        "sm": {
+          "anyOf": [
+            {
+              "enum": [
+                "MIQS",
+                "PFASUM31",
+                "PFASUM43",
+                "PFASUM60"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sm"
+        },
+        "go": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Go"
+        },
+        "ge": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ge"
+        },
+        "tgo": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tgo"
+        },
+        "tge": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tge"
+        },
+        "dist": {
+          "anyOf": [
+            {
+              "enum": [
+                "indel_div_lcs",
+                "indel075_div_lcs"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dist"
+        },
+        "gsd": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gsd"
+        },
+        "gsl": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gsl"
+        },
+        "dgr": {
+          "default": false,
+          "title": "Dgr",
+          "type": "boolean"
+        },
+        "dgo": {
+          "default": false,
+          "title": "Dgo",
+          "type": "boolean"
+        },
+        "dsp": {
+          "default": false,
+          "title": "Dsp",
+          "type": "boolean"
+        },
+        "verbose": {
+          "default": false,
+          "title": "Verbose",
+          "type": "boolean"
+        }
+      },
+      "title": "FamsaSettings",
+      "type": "object"
+    },
+    "MafftSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "const": "mafft",
+          "default": "mafft",
+          "title": "Engine",
+          "type": "string"
+        },
+        "strategy": {
+          "default": "fft_ns_2",
+          "enum": [
+            "fft_ns_2",
+            "linsi",
+            "ginsi",
+            "einsi",
+            "auto"
+          ],
+          "title": "Strategy",
+          "type": "string"
+        },
+        "threads": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Threads",
+          "type": "integer"
+        },
+        "treeout": {
+          "default": false,
+          "title": "Treeout",
+          "type": "boolean"
+        },
+        "pair_method": {
+          "anyOf": [
+            {
+              "enum": [
+                "6merpair",
+                "10merpair",
+                "hybridpair",
+                "localgenafpair",
+                "oldgenafpair",
+                "shortlongpair",
+                "longshortpair"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Explicit native pair method, compiled after strategy; null preserves the original strategy. Native aliases retain their exact spelling. 10mer requires nucleotide input. Hybridpair faults in the pinned synthetic protein probe; no fallback is substituted.",
+          "title": "Pair Method"
+        },
+        "tree_method": {
+          "anyOf": [
+            {
+              "enum": [
+                "large",
+                "memsavetree",
+                "memsavetreex",
+                "stepadd",
+                "youngestlinkage",
+                "pileup",
+                "randomchain"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native tree construction override; native restrictions and failures remain visible, without switching algorithms.",
+          "title": "Tree Method"
+        },
+        "refinement_policy": {
+          "anyOf": [
+            {
+              "enum": [
+                "bestfirst",
+                "adhoc0",
+                "adhoc1",
+                "adhoc2",
+                "simplehillclimbing"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native iterative parallelization policy; aliases are not normalized.",
+          "title": "Refinement Policy"
+        },
+        "alga": {
+          "default": false,
+          "title": "Alga",
+          "type": "boolean"
+        },
+        "allowshift": {
+          "default": false,
+          "description": "Native shift-aware scoring; requires globalpair in the pinned engine.",
+          "title": "Allowshift",
+          "type": "boolean"
+        },
+        "anchors": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact native external anchor table text: seven integers per line, i j starti endi startj endj score. Sequence and position indices are 1-based; i must precede j. Uses roster order, not display labels; retained verbatim.",
+          "format": "mafft-anchors",
+          "title": "Anchors"
+        },
+        "bunkatsunashi": {
+          "default": false,
+          "title": "Bunkatsunashi",
+          "type": "boolean"
+        },
+        "focus": {
+          "default": false,
+          "description": "Native target-focused consistency. Native row names must carry _focus_; use focus_rows to explicitly mark selected roster row IDs.",
+          "title": "Focus",
+          "type": "boolean"
+        },
+        "focus_rows": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One exact roster row ID per line to mark with the native _focus_ prefix. Explicit reversible native row-map is retained. Unknown IDs are observations, not an admission gate; null leaves native identifiers unchanged.",
+          "title": "Focus Rows"
+        },
+        "gep": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native global pairwise offset (--gep), distinct from --ep and --lep.",
+          "title": "Gep"
+        },
+        "gexp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native global pairwise extension (--gexp), distinct from --exp and --lexp.",
+          "title": "Gexp"
+        },
+        "gop": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native global pairwise opening (--gop), distinct from --op and --lop.",
+          "title": "Gop"
+        },
+        "kappa": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kappa"
+        },
+        "leavegappyregion": {
+          "default": false,
+          "description": "Exact native alias of legacygappenalty, preserved in requested settings.",
+          "title": "Leavegappyregion",
+          "type": "boolean"
+        },
+        "lhlimit": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native nodepair local-homology limit; consumed by memory-saving pairwise tree paths.",
+          "title": "Lhlimit"
+        },
+        "minimumweight": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimumweight"
+        },
+        "noscore": {
+          "default": false,
+          "title": "Noscore",
+          "type": "boolean"
+        },
+        "oneiteration": {
+          "default": false,
+          "title": "Oneiteration",
+          "type": "boolean"
+        },
+        "shiftpenalty": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shiftpenalty"
+        },
+        "similaritylevel": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Similaritylevel"
+        },
+        "skipiterate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skipiterate"
+        },
+        "sp": {
+          "default": false,
+          "description": "Rigorous sum-of-pairs scoring; native refinement requires threadit=0.",
+          "title": "Sp",
+          "type": "boolean"
+        },
+        "sparsepickup": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native sparse pickup. Can omit rows; actual output and notused artifact are retained, never silently replenished.",
+          "title": "Sparsepickup"
+        },
+        "terminalmargin": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminalmargin"
+        },
+        "unalignlevel": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unalignlevel"
+        },
+        "nodeout": {
+          "default": false,
+          "title": "Nodeout",
+          "type": "boolean"
+        },
+        "distance_output": {
+          "anyOf": [
+            {
+              "enum": [
+                "distout",
+                "distoutclustalo"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance Output"
+        },
+        "scoreout": {
+          "default": false,
+          "description": "Request native score diagnostics; engine.log retains emitted diagnostics. Pinned L-INS-i synthetic probe faults in tbfast with this option; failure is retained without substitution.",
+          "title": "Scoreout",
+          "type": "boolean"
+        },
+        "op": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Op"
+        },
+        "ep": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ep"
+        },
+        "weighti": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pairwise consistency weight; applies to iterative pairwise strategies.",
+          "title": "Weighti"
+        },
+        "lop": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Local pairwise gap opening penalty.",
+          "title": "Lop"
+        },
+        "lep": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Local pairwise offset.",
+          "title": "Lep"
+        },
+        "lexp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Local pairwise gap extension penalty.",
+          "title": "Lexp"
+        },
+        "long_gap_open": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "E-INS-i skip penalty (native --LOP).",
+          "title": "Long Gap Open"
+        },
+        "long_gap_extend": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "E-INS-i skip extension penalty (native --LEXP).",
+          "title": "Long Gap Extend"
+        },
+        "bl": {
+          "anyOf": [
+            {
+              "enum": [
+                30,
+                45,
+                62,
+                80
+              ],
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Protein BLOSUM matrix number.",
+          "title": "Bl"
+        },
+        "jtt": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Protein JTT PAM distance.",
+          "title": "Jtt"
+        },
+        "tm": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Protein transmembrane PAM distance.",
+          "title": "Tm"
+        },
+        "kimura": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Nucleotide transition/transversion parameter.",
+          "title": "Kimura"
+        },
+        "randomseed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native random seed where used by MAFFT.",
+          "title": "Randomseed"
+        },
+        "nofft": {
+          "default": false,
+          "title": "Nofft",
+          "type": "boolean"
+        },
+        "fft": {
+          "default": false,
+          "description": "Force FFT; compiled before nofft if both are selected.",
+          "title": "Fft",
+          "type": "boolean"
+        },
+        "threadit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native iterative-step threads; 0 disables threaded refinement, -1 selects automatic.",
+          "title": "Threadit"
+        },
+        "threadtb": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native progressive-step threads; -1 selects automatic.",
+          "title": "Threadtb"
+        },
+        "parttree": {
+          "anyOf": [
+            {
+              "enum": [
+                "parttree",
+                "dpparttree"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PartTree distance mode; native interactions with pairwise strategies are retained.",
+          "title": "Parttree"
+        },
+        "partsize": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Partsize"
+        },
+        "groupsize": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Groupsize"
+        },
+        "linkage": {
+          "anyOf": [
+            {
+              "enum": [
+                "minimumlinkage",
+                "averagelinkage"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Linkage"
+        },
+        "mixedlinkage": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Mixed linkage coefficient; compiled after linkage when both are supplied.",
+          "title": "Mixedlinkage"
+        },
+        "unweight": {
+          "default": false,
+          "title": "Unweight",
+          "type": "boolean"
+        },
+        "termgappenalty": {
+          "default": false,
+          "title": "Termgappenalty",
+          "type": "boolean"
+        },
+        "legacygappenalty": {
+          "default": false,
+          "title": "Legacygappenalty",
+          "type": "boolean"
+        },
+        "anysymbol": {
+          "default": false,
+          "title": "Anysymbol",
+          "type": "boolean"
+        },
+        "preservecase": {
+          "default": false,
+          "title": "Preservecase",
+          "type": "boolean"
+        },
+        "direction": {
+          "anyOf": [
+            {
+              "enum": [
+                "adjustdirection",
+                "adjustdirectionaccurately"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native nucleotide direction adjustment. Raw input and native output remain retained; no inferred coordinate remap.",
+          "title": "Direction"
+        },
+        "memsave": {
+          "anyOf": [
+            {
+              "enum": [
+                "memsave",
+                "nomemsave"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memsave"
+        },
+        "fmodel": {
+          "default": false,
+          "title": "Fmodel",
+          "type": "boolean"
+        },
+        "nucleotide_scoring": {
+          "anyOf": [
+            {
+              "enum": [
+                "nwildcard",
+                "nzero"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nucleotide Scoring"
+        },
+        "opdist": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Opdist"
+        },
+        "exp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exp"
+        },
+        "treein": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact MAFFT merge-table file text (not Newick): one merge per line, 1-based roster indices and branch lengths. Retained verbatim as treein.txt.",
+          "format": "mafft-merge-table",
+          "title": "Treein"
+        },
+        "aamatrix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact native protein matrix file text: amino-acid header, lower triangular scores, optional frequency/norescale record. Retained verbatim as aamatrix.txt; compiled after named substitution models.",
+          "format": "mafft-amino-matrix",
+          "title": "Aamatrix"
+        },
+        "retree": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Override the strategy guide-tree rebuild count.",
+          "title": "Retree"
+        },
+        "maxiterate": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Override the strategy refinement iteration count.",
+          "title": "Maxiterate"
+        },
+        "reorder": {
+          "default": false,
+          "title": "Reorder",
+          "type": "boolean"
+        },
+        "quiet": {
+          "default": false,
+          "title": "Quiet",
+          "type": "boolean"
+        }
+      },
+      "title": "MafftSettings",
+      "type": "object"
+    },
+    "MuscleSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "const": "muscle",
+          "default": "muscle",
+          "title": "Engine",
+          "type": "string"
+        },
+        "mode": {
+          "default": "align",
+          "enum": [
+            "align",
+            "super5"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "guidetreeout": {
+          "default": false,
+          "description": "Native guide-tree diagnostic: MPC writes guide.native.nwk then exits zero BEFORE alignment, including in ensembles. This is not an alignment-plus-tree option. Random-chain bypasses the writer. No automatic rerun or algorithm replacement.",
+          "title": "Guidetreeout",
+          "type": "boolean"
+        },
+        "hmmin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact MUSCLE HMM parameter file text, retained verbatim as hmmin.txt. Consumed by align and Super5; no parameter conversion.",
+          "format": "muscle-hmm",
+          "title": "Hmmin"
+        },
+        "hmmout": {
+          "default": false,
+          "description": "Native InitProbcons parameter dump (Super5); align initializes its HMM directly and does not write this file. Dump precedes CmdLineUpdate; not a complete effective-parameter receipt.",
+          "title": "Hmmout",
+          "type": "boolean"
+        },
+        "anchor_letter": {
+          "anyOf": [
+            {
+              "maxLength": 1,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native one-character HMM anchor override; no case normalization.",
+          "title": "Anchor Letter"
+        },
+        "randseed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native RNG seed; zero explicitly selects time/process-based seeding. Perturbation may reset the RNG afterwards.",
+          "title": "Randseed"
+        },
+        "accs": {
+          "default": false,
+          "description": "Native accession label parsing. The adapter still supplies opaque row IDs and retains the original row mapping.",
+          "title": "Accs",
+          "type": "boolean"
+        },
+        "randomchaintree": {
+          "default": false,
+          "description": "MPC random-chain guide tree; native tree writer is bypassed in this branch.",
+          "title": "Randomchaintree",
+          "type": "boolean"
+        },
+        "native_log": {
+          "default": false,
+          "description": "Retain MUSCLE internal -log output separately as muscle.native.log; engine.log always retains stdout/stderr.",
+          "title": "Native Log",
+          "type": "boolean"
+        },
+        "threads": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Threads",
+          "type": "integer"
+        },
+        "permutation": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "abc",
+                "acb",
+                "bca",
+                "all"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Null omits -perm (native single-run default none). Explicit none is passed even with an ensemble; native incompatibilities are not silently repaired.",
+          "title": "Permutation"
+        },
+        "perturb": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Null omits -perturb (native single-run default 0). Explicit zero is passed even with an ensemble.",
+          "title": "Perturb"
+        },
+        "ensemble": {
+          "default": "none",
+          "enum": [
+            "none",
+            "stratified",
+            "diversified"
+          ],
+          "title": "Ensemble",
+          "type": "string"
+        },
+        "replicates": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replicates"
+        },
+        "consiters": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native align consistency iterations; not consumed by Super5.",
+          "title": "Consiters"
+        },
+        "refineiters": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native align refinement iterations; not consumed by Super5.",
+          "title": "Refineiters"
+        },
+        "minsuper": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Explicit native align-to-Super5 sequence-count threshold; null keeps the requested align algorithm.",
+          "title": "Minsuper"
+        },
+        "output_order": {
+          "anyOf": [
+            {
+              "enum": [
+                "input_order",
+                "tree_order"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Native output row order.",
+          "title": "Output Order"
+        },
+        "quiet": {
+          "default": false,
+          "title": "Quiet",
+          "type": "boolean"
+        },
+        "verbose": {
+          "default": false,
+          "title": "Verbose",
+          "type": "boolean"
+        },
+        "m_is": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pair-HMM match to short insertion transition; native normalization applies.",
+          "title": "M Is"
+        },
+        "m_il": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pair-HMM match to long insertion transition; native normalization applies.",
+          "title": "M Il"
+        },
+        "is_is": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pair-HMM short insertion self-transition; native normalization applies.",
+          "title": "Is Is"
+        },
+        "il_il": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pair-HMM long insertion self-transition; native normalization applies.",
+          "title": "Il Il"
+        },
+        "s_is": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pair-HMM start to short insertion transition; native normalization applies.",
+          "title": "S Is"
+        },
+        "s_il": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pair-HMM start to long insertion transition; native normalization applies.",
+          "title": "S Il"
+        }
+      },
+      "title": "MuscleSettings",
+      "type": "object"
+    },
+    "Row": {
+      "additionalProperties": false,
+      "properties": {
+        "row_id": {
+          "title": "Row Id",
+          "type": "string"
+        },
+        "header": {
+          "title": "Header",
+          "type": "string"
+        },
+        "sequence": {
+          "title": "Sequence",
+          "type": "string"
+        },
+        "source_member_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Member Id"
+        },
+        "occurrence_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Occurrence Id"
+        },
+        "source_offset": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Offset"
+        },
+        "source_positions": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Positions"
+        },
+        "transformation_provenance": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transformation Provenance"
+        }
+      },
+      "required": [
+        "row_id",
+        "header",
+        "sequence"
+      ],
+      "title": "Row",
+      "type": "object"
+    },
+    "SequenceSet": {
+      "additionalProperties": false,
+      "properties": {
+        "molecule": {
+          "enum": [
+            "protein",
+            "dna",
+            "rna"
+          ],
+          "title": "Molecule",
+          "type": "string"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/Row"
+          },
+          "title": "Rows",
+          "type": "array"
+        },
+        "source_format": {
+          "default": "fasta",
+          "enum": [
+            "fasta",
+            "stockholm",
+            "clustal",
+            "a3m"
+          ],
+          "title": "Source Format",
+          "type": "string"
+        },
+        "source_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Text"
+        },
+        "stockholm_annotations": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Stockholm Annotations",
+          "type": "array"
+        },
+        "format_observations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Format Observations",
+          "type": "array"
+        },
+        "source_evidence": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Source Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "molecule",
+        "rows"
+      ],
+      "title": "SequenceSet",
+      "type": "object"
+    },
+    "TwilightSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "const": "twilight",
+          "default": "twilight",
+          "title": "Engine",
+          "type": "string"
+        },
+        "threads": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Threads",
+          "type": "integer"
+        },
+        "method": {
+          "default": "pairwise",
+          "enum": [
+            "pairwise",
+            "tcs"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "acc_mode": {
+          "default": 0,
+          "enum": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "title": "Acc Mode",
+          "type": "integer"
+        },
+        "acc_max_group": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acc Max Group"
+        },
+        "acc_sample_rate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acc Sample Rate"
+        },
+        "acc_sample_top": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acc Sample Top"
+        },
+        "consistency_weight": {
+          "default": 5.0,
+          "title": "Consistency Weight",
+          "type": "number"
+        },
+        "max_subtree": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Subtree"
+        },
+        "remove_gappy": {
+          "default": 0.95,
+          "title": "Remove Gappy",
+          "type": "number"
+        },
+        "wildcard": {
+          "default": false,
+          "title": "Wildcard",
+          "type": "boolean"
+        },
+        "rooted": {
+          "default": false,
+          "title": "Rooted",
+          "type": "boolean"
+        },
+        "prune": {
+          "default": false,
+          "title": "Prune",
+          "type": "boolean"
+        },
+        "filter": {
+          "default": false,
+          "title": "Filter",
+          "type": "boolean"
+        },
+        "length_deviation": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Length Deviation"
+        },
+        "max_ambig": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Ambig"
+        },
+        "max_len": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Len"
+        },
+        "min_len": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Len"
+        },
+        "write_filtered": {
+          "default": false,
+          "title": "Write Filtered",
+          "type": "boolean"
+        },
+        "write_prune": {
+          "default": false,
+          "title": "Write Prune",
+          "type": "boolean"
+        },
+        "check": {
+          "default": false,
+          "title": "Check",
+          "type": "boolean"
+        },
+        "verbose": {
+          "default": false,
+          "title": "Verbose",
+          "type": "boolean"
+        },
+        "match": {
+          "default": 18,
+          "title": "Match",
+          "type": "number"
+        },
+        "mismatch": {
+          "default": -8,
+          "title": "Mismatch",
+          "type": "number"
+        },
+        "transition": {
+          "default": -4,
+          "title": "Transition",
+          "type": "number"
+        },
+        "gap_open": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gap Open"
+        },
+        "gap_extend": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gap Extend"
+        },
+        "gap_ends": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gap Ends"
+        },
+        "scale": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scale"
+        },
+        "xdrop": {
+          "default": 600,
+          "title": "Xdrop",
+          "type": "number"
+        },
+        "matrix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact TWILIGHT nucleotide matrix text: A C G T header and 4x4 scores (optional N header and 5x5 scores). Native values are not rescaled. Retained as matrix.txt.",
+          "format": "twilight-nucleotide-matrix",
+          "title": "Matrix"
+        },
+        "guide_source": {
+          "default": "supplied",
+          "enum": [
+            "supplied",
+            "mafft"
+          ],
+          "title": "Guide Source",
+          "type": "string"
+        },
+        "guide_tree": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Guide Tree"
+        },
+        "leaf_mapping": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Leaf Mapping",
+          "type": "object"
+        }
+      },
+      "title": "TwilightSettings",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "roster": {
+      "$ref": "#/$defs/SequenceSet"
+    },
+    "settings": {
+      "discriminator": {
+        "mapping": {
+          "famsa": "#/$defs/FamsaSettings",
+          "mafft": "#/$defs/MafftSettings",
+          "muscle": "#/$defs/MuscleSettings",
+          "twilight": "#/$defs/TwilightSettings"
+        },
+        "propertyName": "engine"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/MafftSettings"
+        },
+        {
+          "$ref": "#/$defs/FamsaSettings"
+        },
+        {
+          "$ref": "#/$defs/MuscleSettings"
+        },
+        {
+          "$ref": "#/$defs/TwilightSettings"
+        }
+      ],
+      "title": "Settings"
+    }
+  },
+  "required": [
+    "roster",
+    "settings"
+  ],
+  "title": "AlignmentRequest",
+  "type": "object"
+}

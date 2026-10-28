@@ -1,0 +1,3307 @@
+{
+  "inventory_version": 1,
+  "scope": "Pinned native declarations with per-control fixed-family reachability evidence. Implemented means typed schema/UI/compiler/retention, not guaranteed native success or biological accuracy.",
+  "source_sha256": {
+    "mafft-7.525-without-extensions/core/mafft.tmpl": "60838e3ad5817b01785f2b0feaf5f44200c5c1b1e5eff047ed62f779885539e5",
+    "muscle/src/myopts.h": "0f8e003e67658b3451439c080a2b4e97407e289ef380eab8f3f67b1e458f44a0"
+  },
+  "options": [
+    {
+      "engine": "mafft",
+      "option": "--10mermultipair",
+      "field": null,
+      "disposition": "Unavailable for fixed-family execution: distance=ktuplesmulti; mafft.tmpl:2657-2667 only invokes addsingle when fragment != 0, otherwise exits 1 (Impossible).",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        456
+      ],
+      "evidence": "Unavailable for fixed-family execution: distance=ktuplesmulti; mafft.tmpl:2657-2667 only invokes addsingle when fragment != 0, otherwise exits 1 (Impossible)."
+    },
+    {
+      "engine": "mafft",
+      "option": "--10merpair",
+      "field": "pair_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        464
+      ],
+      "evidence": "mafft.tmpl:2586-2601 local and generalized-local full-family tbfast branches; 2641-2649 hybrid nonfragment branch; 2673 ktuple disttbfast. 10mer requires nucleotide input (disttbfast native check)."
+    },
+    {
+      "engine": "mafft",
+      "option": "--6mermultipair",
+      "field": null,
+      "disposition": "Unavailable for fixed-family execution: distance=ktuplesmulti; mafft.tmpl:2657-2667 only invokes addsingle when fragment != 0, otherwise exits 1 (Impossible).",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        452
+      ],
+      "evidence": "Unavailable for fixed-family execution: distance=ktuplesmulti; mafft.tmpl:2657-2667 only invokes addsingle when fragment != 0, otherwise exits 1 (Impossible)."
+    },
+    {
+      "engine": "mafft",
+      "option": "--6merpair",
+      "field": "pair_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        460
+      ],
+      "evidence": "mafft.tmpl:2586-2601 local and generalized-local full-family tbfast branches; 2641-2649 hybrid nonfragment branch; 2673 ktuple disttbfast. 10mer requires nucleotide input (disttbfast native check)."
+    },
+    {
+      "engine": "mafft",
+      "option": "--GEXP",
+      "field": null,
+      "disposition": "Unavailable: sole execution consumer is globalgenaf pairlocalalign at mafft.tmpl:2595-2596. The only parser selecting globalgenaf (--globalgenafpair, 526-532) prints no longer supported and exits before execution.",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        942
+      ],
+      "evidence": "Unavailable: sole execution consumer is globalgenaf pairlocalalign at mafft.tmpl:2595-2596. The only parser selecting globalgenaf (--globalgenafpair, 526-532) prints no longer supported and exits before execution."
+    },
+    {
+      "engine": "mafft",
+      "option": "--GOP",
+      "field": null,
+      "disposition": "Unavailable: sole execution consumer is globalgenaf pairlocalalign at mafft.tmpl:2595-2596. The only parser selecting globalgenaf (--globalgenafpair, 526-532) prints no longer supported and exits before execution.",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        945
+      ],
+      "evidence": "Unavailable: sole execution consumer is globalgenaf pairlocalalign at mafft.tmpl:2595-2596. The only parser selecting globalgenaf (--globalgenafpair, 526-532) prints no longer supported and exits before execution."
+    },
+    {
+      "engine": "mafft",
+      "option": "--LEXP",
+      "field": "long_gap_extend",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--LOP",
+      "field": "long_gap_open",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--aamatrix",
+      "field": "aamatrix",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--add",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--addfragments",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--addfull",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--addlong",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--addprofile",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--addtoroot",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--addtotop",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--adhoc0",
+      "field": "refinement_policy",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        638
+      ],
+      "evidence": "mafft.tmpl:636-645 exact alias assignments; dvtditr -p $parallelizationstrategy at 2693 in iterative full-family loop."
+    },
+    {
+      "engine": "mafft",
+      "option": "--adhoc1",
+      "field": "refinement_policy",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        640
+      ],
+      "evidence": "mafft.tmpl:636-645 exact alias assignments; dvtditr -p $parallelizationstrategy at 2693 in iterative full-family loop."
+    },
+    {
+      "engine": "mafft",
+      "option": "--adhoc2",
+      "field": "refinement_policy",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        642
+      ],
+      "evidence": "mafft.tmpl:636-645 exact alias assignments; dvtditr -p $parallelizationstrategy at 2693 in iterative full-family loop."
+    },
+    {
+      "engine": "mafft",
+      "option": "--adjustdirection",
+      "field": "direction",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--adjustdirectionaccurately",
+      "field": "direction",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--alga",
+      "field": "alga",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        350
+      ],
+      "evidence": "mafft.tmpl:350-353 clears algopt/algoptit; these reach disttbfast 2673 and dvtditr 2693."
+    },
+    {
+      "engine": "mafft",
+      "option": "--algq",
+      "field": null,
+      "disposition": "Native disabled branch (not a supported setting)",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--allowshift",
+      "field": "allowshift",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        890
+      ],
+      "evidence": "mafft.tmpl:1423-1455 sets shift/unalign scoring and checks globalpair; no adapter repair."
+    },
+    {
+      "engine": "mafft",
+      "option": "--amino",
+      "field": "roster.molecule",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--anchors",
+      "field": "anchors",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        591
+      ],
+      "evidence": "mafft.tmpl:1153 copies exact supplied file to native _externalanchors; disttbfast -l at 2673; io.c:6378-6445 reads seven integers: sequence i,j,starti,endi,startj,endj,score (all sequence/position indices 1-based)."
+    },
+    {
+      "engine": "mafft",
+      "option": "--anysymbol",
+      "field": "anysymbol",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--auto",
+      "field": "strategy",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--averagelinkage",
+      "field": "linkage",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--bestfirst",
+      "field": "refinement_policy",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        636
+      ],
+      "evidence": "mafft.tmpl:636-645 exact alias assignments; dvtditr -p $parallelizationstrategy at 2693 in iterative full-family loop."
+    },
+    {
+      "engine": "mafft",
+      "option": "--bl",
+      "field": "bl",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--blastpair",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--bunkatsunashi",
+      "field": "bunkatsunashi",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        1042
+      ],
+      "evidence": "mafft.tmpl:1042-1043 sets bunkatsuopt=-B; dvtditr 2693 consumes it."
+    },
+    {
+      "engine": "mafft",
+      "option": "--clustalout",
+      "field": null,
+      "disposition": "Missing auxiliary output/format control; FASTA artifact remains canonical",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--codonpos",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--codonscore",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--compactmapout",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--compactmapoutfile",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--contrafold",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--core",
+      "field": null,
+      "disposition": "Missing auxiliary output/format control; FASTA artifact remains canonical",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--coreext",
+      "field": null,
+      "disposition": "Missing auxiliary output/format control; FASTA artifact remains canonical",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--corethr",
+      "field": null,
+      "disposition": "Missing auxiliary output/format control; FASTA artifact remains canonical",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--corewin",
+      "field": null,
+      "disposition": "Missing auxiliary output/format control; FASTA artifact remains canonical",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--dafs",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--dafspair",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--dash",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--dashserver",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--debug",
+      "field": null,
+      "disposition": "Missing auxiliary output/format control; FASTA artifact remains canonical",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--distout",
+      "field": "distance_output",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        404
+      ],
+      "evidence": "mafft.tmpl:404-409 selects hat2/clodist; distoutopt reaches full-family commands and actual file copied at 2825-2826."
+    },
+    {
+      "engine": "mafft",
+      "option": "--distoutclustalo",
+      "field": "distance_output",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        407
+      ],
+      "evidence": "mafft.tmpl:404-409 selects hat2/clodist; distoutopt reaches full-family commands and actual file copied at 2825-2826."
+    },
+    {
+      "engine": "mafft",
+      "option": "--dpparttree",
+      "field": "parttree",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--ep",
+      "field": "ep",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--excludehomologs",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--exp",
+      "field": "exp",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--fastapair",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--fastaparttree",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--fastswpair",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--fft",
+      "field": "fft",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--fmodel",
+      "field": "fmodel",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--focus",
+      "field": "focus",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        1046
+      ],
+      "evidence": "mafft.tmpl:1046-1047 sets focusarg; nodepair 2566 and tbfast 2584/2593 consume it. pairlocalalign.c:2419-2430 requires _focus_ row names. Explicit focus_rows materializes reversible native IDs and row-map.json; no identity inference."
+    },
+    {
+      "engine": "mafft",
+      "option": "--foldalignglobalpair",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--foldalignlocalpair",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--foldalignpair",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--genafpair",
+      "field": "strategy",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--gep",
+      "field": "gep",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        951
+      ],
+      "evidence": "mafft.tmpl:951-953 sets pgaof; global full-family tbfast pair arguments 2584 consume -h $pgaof."
+    },
+    {
+      "engine": "mafft",
+      "option": "--gexp",
+      "field": "gexp",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        954
+      ],
+      "evidence": "mafft.tmpl:954-956 sets pgexp; global full-family tbfast pair arguments 2584 consume -g $pgexp."
+    },
+    {
+      "engine": "mafft",
+      "option": "--globalgenafpair",
+      "field": null,
+      "disposition": "Native disabled branch (not a supported setting)",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--globalpair",
+      "field": "strategy",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--gop",
+      "field": "gop",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        948
+      ],
+      "evidence": "mafft.tmpl:948-950 sets pggop; global full-family tbfast pair arguments 2584 consume -f $pggop."
+    },
+    {
+      "engine": "mafft",
+      "option": "--groupsize",
+      "field": "groupsize",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--help",
+      "field": null,
+      "disposition": "System-owned process/help/path; not scientific parameter",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--hybridpair",
+      "field": "pair_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        502
+      ],
+      "evidence": "mafft.tmpl:2586-2601 local and generalized-local full-family tbfast branches; 2641-2649 hybrid nonfragment branch; 2673 ktuple disttbfast. 10mer requires nucleotide input (disttbfast native check).",
+      "native_observation": "Reachable full-family branch, but pinned synthetic four-protein run segfaults in pairlocalalign -Y; no substitution or gate."
+    },
+    {
+      "engine": "mafft",
+      "option": "--info",
+      "field": null,
+      "disposition": "System-owned process/help/path; not scientific parameter",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--inputorder",
+      "field": "reorder=false (native default)",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--jtt",
+      "field": "jtt",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--kappa",
+      "field": "kappa",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        793
+      ],
+      "evidence": "mafft.tmpl:793-795 sets kappa=-k; model assembly 1563 reaches full-family commands, e.g. 2673."
+    },
+    {
+      "engine": "mafft",
+      "option": "--keeplength",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--kimura",
+      "field": "kimura",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--larapair",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--laraparams",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--large",
+      "field": "tree_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        783
+      ],
+      "evidence": "mafft.tmpl:1982-2038 treeext dispatch (pileup/randomchain/memsavetree/memsavetreex/stepadd/youngestlinkage); native restrictions retained. Tree helper used without adding sequences."
+    },
+    {
+      "engine": "mafft",
+      "option": "--lastmultipair",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--lastpair",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--leavegappyregion",
+      "field": "leavegappyregion",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        650
+      ],
+      "evidence": "mafft.tmpl:650-653 same legacygapopt=-L as legacygappenalty; consumed by full-family disttbfast/tbfast/dvtditr 2673/2683/2693. Exact original alias retained."
+    },
+    {
+      "engine": "mafft",
+      "option": "--legacygappenalty",
+      "field": "legacygappenalty",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--lep",
+      "field": "lep",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--lexp",
+      "field": "lexp",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--lhlimit",
+      "field": "lhlimit",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        1048
+      ],
+      "evidence": "mafft.tmpl:1048-1050 sets nodepair -q; memory-saving full-family pair paths 2566/2574/2580 consume it."
+    },
+    {
+      "engine": "mafft",
+      "option": "--linelength",
+      "field": null,
+      "disposition": "Missing auxiliary output/format control; FASTA artifact remains canonical",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--localgenafpair",
+      "field": "pair_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        533
+      ],
+      "evidence": "mafft.tmpl:2586-2601 local and generalized-local full-family tbfast branches; 2641-2649 hybrid nonfragment branch; 2673 ktuple disttbfast. 10mer requires nucleotide input (disttbfast native check)."
+    },
+    {
+      "engine": "mafft",
+      "option": "--localpair",
+      "field": "strategy",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--longshortpair",
+      "field": "pair_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        485
+      ],
+      "evidence": "mafft.tmpl:2586-2601 local and generalized-local full-family tbfast branches; 2641-2649 hybrid nonfragment branch; 2673 ktuple disttbfast. 10mer requires nucleotide input (disttbfast native check)."
+    },
+    {
+      "engine": "mafft",
+      "option": "--lop",
+      "field": "lop",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--man",
+      "field": null,
+      "disposition": "System-owned process/help/path; not scientific parameter",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--mapout",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--mapoutfile",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--maxambiguous",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--maxiterate",
+      "field": "maxiterate",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--mccaskill",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--memsave",
+      "field": "memsave",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--memsavetree",
+      "field": "tree_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        785
+      ],
+      "evidence": "mafft.tmpl:1982-2038 treeext dispatch (pileup/randomchain/memsavetree/memsavetreex/stepadd/youngestlinkage); native restrictions retained. Tree helper used without adding sequences."
+    },
+    {
+      "engine": "mafft",
+      "option": "--memsavetreex",
+      "field": "tree_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        787
+      ],
+      "evidence": "mafft.tmpl:1982-2038 treeext dispatch (pileup/randomchain/memsavetree/memsavetreex/stepadd/youngestlinkage); native restrictions retained. Tree helper used without adding sequences."
+    },
+    {
+      "engine": "mafft",
+      "option": "--merge",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--minimumlinkage",
+      "field": "linkage",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--minimumweight",
+      "field": "minimumweight",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        1029
+      ],
+      "evidence": "mafft.tmpl:1029-1031 sets minimumweight; tbfast/dvtditr -W at 2584/2693."
+    },
+    {
+      "engine": "mafft",
+      "option": "--mixedlinkage",
+      "field": "mixedlinkage",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--mpi",
+      "field": null,
+      "disposition": "System-owned process/help/path; not scientific parameter",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--multipair",
+      "field": null,
+      "disposition": "Excluded add-fragments: mafft.tmpl:1849-1853 explicitly requires --addfragments for distance=multi; 2628-2639 has no nonfragment implementation.",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        499
+      ],
+      "evidence": "Excluded add-fragments: mafft.tmpl:1849-1853 explicitly requires --addfragments for distance=multi; 2628-2639 has no nonfragment implementation."
+    },
+    {
+      "engine": "mafft",
+      "option": "--namelength",
+      "field": null,
+      "disposition": "Missing auxiliary output/format control; FASTA artifact remains canonical",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--nodeout",
+      "field": "nodeout",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        401
+      ],
+      "evidence": "mafft.tmpl:401-403 sets treeout and nodeout; native progressive-only check 1807-1810 and tree artifact copy 2817-2818."
+    },
+    {
+      "engine": "mafft",
+      "option": "--nofft",
+      "field": "nofft",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--nomemsave",
+      "field": "memsave",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--noscore",
+      "field": "noscore",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        450
+      ],
+      "evidence": "mafft.tmpl:450-451 scorecalcopt=-Z; dvtditr 2693. Native threaded refinement rejects it; explicit threadit=0 probe succeeds."
+    },
+    {
+      "engine": "mafft",
+      "option": "--nuc",
+      "field": "roster.molecule",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--nwildcard",
+      "field": "nucleotide_scoring",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--nzero",
+      "field": "nucleotide_scoring",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--oldgenafpair",
+      "field": "pair_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        539
+      ],
+      "evidence": "mafft.tmpl:2586-2601 local and generalized-local full-family tbfast branches; 2641-2649 hybrid nonfragment branch; 2673 ktuple disttbfast. 10mer requires nucleotide input (disttbfast native check)."
+    },
+    {
+      "engine": "mafft",
+      "option": "--oneiteration",
+      "field": "oneiteration",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        572
+      ],
+      "evidence": "mafft.tmpl:572-573 oneiterationopt=-r; disttbfast 2673."
+    },
+    {
+      "engine": "mafft",
+      "option": "--op",
+      "field": "op",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--opdist",
+      "field": "opdist",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--originalseqonly",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--out",
+      "field": null,
+      "disposition": "System-owned process/help/path; not scientific parameter",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--outnum",
+      "field": null,
+      "disposition": "Missing auxiliary output/format control; FASTA artifact remains canonical",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--partsize",
+      "field": "partsize",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--parttree",
+      "field": "parttree",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--pdbfilelist",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--pdbidlist",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--phylipout",
+      "field": null,
+      "disposition": "Missing auxiliary output/format control; FASTA artifact remains canonical",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--pileup",
+      "field": "tree_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        763
+      ],
+      "evidence": "mafft.tmpl:1982-2038 treeext dispatch (pileup/randomchain/memsavetree/memsavetreex/stepadd/youngestlinkage); native restrictions retained. Tree helper used without adding sequences."
+    },
+    {
+      "engine": "mafft",
+      "option": "--preservecase",
+      "field": "preservecase",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--progress",
+      "field": null,
+      "disposition": "System-owned process/help/path; not scientific parameter",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--quiet",
+      "field": "quiet",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--randomchain",
+      "field": "tree_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        767
+      ],
+      "evidence": "mafft.tmpl:1982-2038 treeext dispatch (pileup/randomchain/memsavetree/memsavetreex/stepadd/youngestlinkage); native restrictions retained. Tree helper used without adding sequences."
+    },
+    {
+      "engine": "mafft",
+      "option": "--randomseed",
+      "field": "randomseed",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--reorder",
+      "field": "reorder",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--rep",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--retree",
+      "field": "retree",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--ribosum",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--rnaalifold",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--rop",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--scarnapair",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--scoreout",
+      "field": "scoreout",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        646
+      ],
+      "evidence": "mafft.tmpl:646-647 scoreoutarg=-S -B; full-family tbfast/dvtditr 2584/2693 consume it. Synthetic linsi probe faults natively; failure/log retained rather than suppressing option."
+    },
+    {
+      "engine": "mafft",
+      "option": "--seed",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--seedtable",
+      "field": null,
+      "disposition": "Excluded add/profile/seed workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--shiftpenalty",
+      "field": "shiftpenalty",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        892
+      ],
+      "evidence": "mafft.tmpl:892-900 spfactor and explicit marker; full-family pair/progressive commands 2584/2673 use -Q; native value >1 required with allowshift."
+    },
+    {
+      "engine": "mafft",
+      "option": "--shortlongpair",
+      "field": "pair_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        477
+      ],
+      "evidence": "mafft.tmpl:2586-2601 local and generalized-local full-family tbfast branches; 2641-2649 hybrid nonfragment branch; 2673 ktuple disttbfast. 10mer requires nucleotide input (disttbfast native check)."
+    },
+    {
+      "engine": "mafft",
+      "option": "--similaritylevel",
+      "field": "similaritylevel",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        1032
+      ],
+      "evidence": "mafft.tmpl:1032-1034 similarityoffset; native offsets recomputed around 1509 before full-family commands."
+    },
+    {
+      "engine": "mafft",
+      "option": "--simplehillclimbing",
+      "field": "refinement_policy",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        644
+      ],
+      "evidence": "mafft.tmpl:636-645 exact alias assignments; dvtditr -p $parallelizationstrategy at 2693 in iterative full-family loop."
+    },
+    {
+      "engine": "mafft",
+      "option": "--skipiterate",
+      "field": "skipiterate",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        1039
+      ],
+      "evidence": "mafft.tmpl:1039-1041 fixthreshold; dvtditr -E at 2693."
+    },
+    {
+      "engine": "mafft",
+      "option": "--slarapair",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--smoothing",
+      "field": null,
+      "disposition": "Excluded add-to-profile: parser sets add2ndhalfarg=-p at mafft.tmpl:695-696; without an add operation 2094-2100 rejects nonempty add2ndhalfarg.",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        695
+      ],
+      "evidence": "Excluded add-to-profile: parser sets add2ndhalfarg=-p at mafft.tmpl:695-696; without an add operation 2094-2100 rejects nonempty add2ndhalfarg."
+    },
+    {
+      "engine": "mafft",
+      "option": "--sp",
+      "field": "sp",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        1044
+      ],
+      "evidence": "mafft.tmpl:1544-1558 selects rigorous algorithm flags; native rejects threaded refinement, not progressive operation."
+    },
+    {
+      "engine": "mafft",
+      "option": "--sparsepickup",
+      "field": "sparsepickup",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        1051
+      ],
+      "evidence": "mafft.tmpl:1051-1053 npickup; disttbfast -q at 2673 and notused artifact copy 2829-2830."
+    },
+    {
+      "engine": "mafft",
+      "option": "--stepadd",
+      "field": "tree_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        789
+      ],
+      "evidence": "mafft.tmpl:1982-2038 treeext dispatch (pileup/randomchain/memsavetree/memsavetreex/stepadd/youngestlinkage); native restrictions retained. Tree helper used without adding sequences."
+    },
+    {
+      "engine": "mafft",
+      "option": "--strdir",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--termgappenalty",
+      "field": "termgappenalty",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--terminalmargin",
+      "field": "terminalmargin",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        584
+      ],
+      "evidence": "mafft.tmpl:584-590 terminalmargin; disttbfast -x at 2673."
+    },
+    {
+      "engine": "mafft",
+      "option": "--text",
+      "field": null,
+      "disposition": "Excluded nonbiological text alphabet: mafft.tmpl:748-752 forces extended alphabet -E, protein type, disables FFT and sets nonbiological substitution model -b -2. Not protein/DNA/RNA sequence MSA.",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        748
+      ],
+      "evidence": "Excluded nonbiological text alphabet: mafft.tmpl:748-752 forces extended alphabet -E, protein type, disables FFT and sets nonbiological substitution model -b -2. Not protein/DNA/RNA sequence MSA."
+    },
+    {
+      "engine": "mafft",
+      "option": "--textmatrix",
+      "field": null,
+      "disposition": "Excluded nonbiological text alphabet: mafft.tmpl:735-742 forces extended alphabet -E and model -b -2 for arbitrary text symbols; biological protein matrices remain supported separately via --aamatrix.",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        735
+      ],
+      "evidence": "Excluded nonbiological text alphabet: mafft.tmpl:735-742 forces extended alphabet -E and model -b -2 for arbitrary text symbols; biological protein matrices remain supported separately via --aamatrix."
+    },
+    {
+      "engine": "mafft",
+      "option": "--thread",
+      "field": "threads",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--threadit",
+      "field": "threadit",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--threadtb",
+      "field": "threadtb",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--tm",
+      "field": "tm",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--topin",
+      "field": null,
+      "disposition": "Native disabled branch (not a supported setting)",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--treein",
+      "field": "treein",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--treeout",
+      "field": "treeout",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--unalignlevel",
+      "field": "unalignlevel",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        1035
+      ],
+      "evidence": "mafft.tmpl:1035-1038 explicit unalign marker; globalpair native compatibility at 1445-1455; tbfast -u/-s 2584."
+    },
+    {
+      "engine": "mafft",
+      "option": "--unweight",
+      "field": "unweight",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--version",
+      "field": null,
+      "disposition": "System-owned process/help/path; not scientific parameter",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--weighti",
+      "field": "weighti",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--weightm",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--weightr",
+      "field": null,
+      "disposition": "Excluded structure/extension/search workflows",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl"
+    },
+    {
+      "engine": "mafft",
+      "option": "--youngestlinkage",
+      "field": "tree_method",
+      "disposition": "implemented",
+      "source": "mafft-7.525-without-extensions/core/mafft.tmpl",
+      "source_lines": [
+        791
+      ],
+      "evidence": "mafft.tmpl:1982-2038 treeext dispatch (pileup/randomchain/memsavetree/memsavetreex/stepadd/youngestlinkage); native restrictions retained. Tree helper used without adding sequences."
+    },
+    {
+      "engine": "muscle",
+      "option": "-log",
+      "field": "native_log",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "main.cpp"
+      ],
+      "evidence": "Global native logging in myutils; separately retained as muscle.native.log, not confused with stdout/stderr engine.log."
+    },
+    {
+      "engine": "muscle",
+      "option": "-output",
+      "field": null,
+      "disposition": "system-owned output/log/help",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "addconfseq.cpp",
+        "align.cpp",
+        "build_guide_tree.cpp",
+        "cmd_cmp_msa.cpp",
+        "cmd_m3ensemble.cpp",
+        "cmd_muscle3.cpp",
+        "cmd_mustang_core.cpp",
+        "cmd_squeeze_inserts.cpp",
+        "colscoreefa.cpp",
+        "derep.cpp",
+        "eadistmx.cpp",
+        "eadistmxmsas.cpp",
+        "eesort.cpp",
+        "efabestcols.cpp",
+        "efabestconf.cpp",
+        "fa2efa.cpp",
+        "getconsseq.cpp",
+        "guidetreejoinorder.cpp",
+        "letterconf.cpp",
+        "letterconfhtml.cpp",
+        "m3select.cpp",
+        "make_a2m.cpp",
+        "make_a2m_refseq.cpp",
+        "make_substmx.cpp",
+        "masm_train.cpp",
+        "maxcc.cpp",
+        "mega_msas.cpp",
+        "permutetree.cpp",
+        "pprog.cpp",
+        "pprog2.cpp",
+        "pprog_tree.cpp",
+        "pprogt.cpp",
+        "probcons.cpp",
+        "profalign.cpp",
+        "profile3.cpp",
+        "profprof3.cpp",
+        "protdists.cpp",
+        "qscore2.cpp",
+        "qscoreefa.cpp",
+        "randomchaintree.cpp",
+        "relabel.cpp",
+        "resample.cpp",
+        "searchpd.cpp",
+        "strip_anchors.cpp",
+        "stripgappy.cpp",
+        "stripgappycols.cpp",
+        "stripgappyrows.cpp",
+        "super4.cpp",
+        "super5.cpp",
+        "super6.cpp",
+        "super7.cpp",
+        "super7_mega.cpp",
+        "swmasm.cpp",
+        "swmasm_seq.cpp",
+        "transaln.cpp",
+        "transalnref.cpp",
+        "treesplitter.cpp",
+        "treesubsetnodes.cpp",
+        "trimtoref.cpp",
+        "trimtorefefa.cpp",
+        "uclust.cpp",
+        "uclustpd.cpp",
+        "uclustpd2.cpp",
+        "upgma5.cpp",
+        "upgma5_msa.cpp",
+        "viterbimega.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-output1",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "profprof3.cpp",
+        "spatter.cpp",
+        "uclustpd2.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-output2",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "profprof3.cpp",
+        "uclustpd2.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-output3",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "profprof3.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-output4",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "profprof3.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-query",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "swmasm.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-input",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "cmd_newbench_pfamgroups.cpp",
+        "masm_train.cpp",
+        "mega_msas.cpp",
+        "swmasm_seq.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-input2",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "profalign.cpp",
+        "profprof3.cpp",
+        "profseq.cpp",
+        "swmasm_seq.cpp",
+        "transalnref.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-joinprefix",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-joinpaths",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-linkage",
+      "field": null,
+      "disposition": "Excluded command-specific control: opt(linkage) is read in cmd_upgma5 (upgma5.cpp:565-605), cmd_upgma5_msa, and M3AlnParams::SetFromCmdLine. Selected align calls MPCFlat::CalcGuideTree, which hardcodes LINKAGE_Biased (mpcflat.cpp:194). Super5 uses MPCFlat for cluster alignment, not M3AlnParams. The shared UPGMA implementation does not itself read this option.",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "m3alnparams.cpp",
+        "upgma5.cpp",
+        "upgma5_msa.cpp"
+      ],
+      "evidence": "Excluded command-specific control: opt(linkage) is read in cmd_upgma5 (upgma5.cpp:565-605), cmd_upgma5_msa, and M3AlnParams::SetFromCmdLine. Selected align calls MPCFlat::CalcGuideTree, which hardcodes LINKAGE_Biased (mpcflat.cpp:194). Super5 uses MPCFlat for cluster alignment, not M3AlnParams. The shared UPGMA implementation does not itself read this option."
+    },
+    {
+      "engine": "muscle",
+      "option": "-joins",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "pprog2.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-tsvout",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "build_guide_tree.cpp",
+        "cmd_bench.cpp",
+        "eesort.cpp",
+        "searchpd.cpp",
+        "uclustpd.cpp",
+        "uclustpd2.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-html",
+      "field": null,
+      "disposition": "excluded ensemble analysis/visualization command controls, not full-family inference",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "letterconf.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-jalview",
+      "field": null,
+      "disposition": "excluded ensemble analysis/visualization command controls, not full-family inference",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "letterconf.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-distmxin",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "super7.cpp",
+        "super7_mega.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-guidetreein",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "pprog_tree.cpp",
+        "pprogt.cpp",
+        "super7.cpp",
+        "super7_mega.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-guidetreeout",
+      "field": "guidetreeout",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "cmd_muscle3.cpp",
+        "mpcflat.cpp",
+        "pprog.cpp",
+        "pprogt.cpp",
+        "swdistmx.cpp"
+      ],
+      "evidence": "align -> MPCFlat::CalcGuideTree, mpcflat.cpp:196-203 writes native tree then exit(0) BEFORE alignment. Exposed diagnostic is not advertised as alignment-plus-tree. Random chain returns at 188, bypassing writer. Exact native output retained."
+    },
+    {
+      "engine": "muscle",
+      "option": "-prefix",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "efaexplode.cpp",
+        "permutetree.cpp",
+        "treesplitter.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-suffix",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "efaexplode.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-nodes",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "treesubsetnodes.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-label",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "addconfseq.cpp",
+        "getconsseq.cpp",
+        "make_a2m_refseq.cpp",
+        "make_substmx.cpp",
+        "masm_train.cpp",
+        "transalnref.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-labels2",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "relabel.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-savedir",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "pprog.cpp",
+        "pprog2.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-db",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "eesort.cpp",
+        "searchpd.cpp",
+        "usorter.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-label1",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "dividetree.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-label2",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "dividetree.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-subtreeout",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "dividetree.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-supertreeout",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "dividetree.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-refmsa",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-ref",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "addconfseq.cpp",
+        "cmd_cmp_msa.cpp",
+        "cmp_ref_msas.cpp",
+        "colscoreefa.cpp",
+        "efastats.cpp",
+        "letterconf.cpp",
+        "letterconfhtml.cpp",
+        "qscore.cpp",
+        "qscore2.cpp",
+        "qscore_oldcode.cpp",
+        "qscoreefa.cpp",
+        "transaln.cpp",
+        "trimtoref.cpp",
+        "trimtorefefa.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-refdir",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "cmd_bench.cpp",
+        "qscore2.cpp",
+        "spatter.cpp",
+        "sweep.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-indir",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "bench.cpp",
+        "cmd_batch.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-testdir",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "qscore2.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-testdir1",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-testdir2",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-outdir",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "cmd_batch.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-hmmin",
+      "field": "hmmin",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "align.cpp",
+        "setprobconsparams.cpp"
+      ],
+      "evidence": "align.cpp:30-31 reads HMMParams::FromFile; Super5 -> InitProbcons, setprobconsparams.cpp:14-18 reads same exact file. Native-produced HMM reimport exercised in both modes."
+    },
+    {
+      "engine": "muscle",
+      "option": "-hmmout",
+      "field": "hmmout",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "setprobconsparams.cpp"
+      ],
+      "evidence": "Super5 -> InitProbcons -> HP.ToFile at setprobconsparams.cpp:37-38; this occurs before CmdLineUpdate at 40. align.cpp initializes HP directly and has no hmmout writer. Requested flag is preserved even when native ignores it."
+    },
+    {
+      "engine": "muscle",
+      "option": "-report",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-accalnout",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-perm",
+      "field": "permutation",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "align.cpp",
+        "super4.cpp",
+        "super5.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-calnout",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "super4.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-anchor_letter",
+      "field": "anchor_letter",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "hmmparams.cpp"
+      ],
+      "evidence": "align and Super5 -> HP.ToPairHMM -> hmmparams.cpp:399-404 assigns the selected diagonal MatchScore. Exact one-character input, no normalization."
+    },
+    {
+      "engine": "muscle",
+      "option": "-centroids",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "uclustpd2.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-substmx",
+      "field": null,
+      "disposition": "Excluded M3/benchmark parameter: reader M3AlnParams::SetFromCmdLine (m3alnparams.cpp:139-205) is called only by cmd_muscle3, profile3/profprof3, msaselfscore3, m3refine, sweep and spatter. align.cpp:28-40 and super5.cpp:577 initialize pair-HMM parameters instead; neither dispatches these commands.",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "m3alnparams.cpp",
+        "spatter.cpp",
+        "sweep.cpp"
+      ],
+      "evidence": "Excluded M3/benchmark parameter: reader M3AlnParams::SetFromCmdLine (m3alnparams.cpp:139-205) is called only by cmd_muscle3, profile3/profprof3, msaselfscore3, m3refine, sweep and spatter. align.cpp:28-40 and super5.cpp:577 initialize pair-HMM parameters instead; neither dispatches these commands."
+    },
+    {
+      "engine": "muscle",
+      "option": "-fev",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "spatter.cpp",
+        "sweep.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-gridspec",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "spatter.cpp",
+        "sweep.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-spatterspec",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "spatter.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-kmerdist",
+      "field": null,
+      "disposition": "Excluded M3 parameter: sole consumer m3alnparams.cpp:193-195 in SetFromCmdLine. Its call sites are cmd_muscle3, profile3/profprof3, msaselfscore3, m3refine, sweep and spatter, not align/Super5.",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "m3alnparams.cpp"
+      ],
+      "evidence": "Excluded M3 parameter: sole consumer m3alnparams.cpp:193-195 in SetFromCmdLine. Its call sites are cmd_muscle3, profile3/profprof3, msaselfscore3, m3refine, sweep and spatter, not align/Super5."
+    },
+    {
+      "engine": "muscle",
+      "option": "-threads",
+      "field": "threads",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "myutils.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-consiters",
+      "field": "consiters",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "align.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-refineiters",
+      "field": "refineiters",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "align.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-randseed",
+      "field": "randseed",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "myutils.cpp"
+      ],
+      "evidence": "myutils.cpp:2237-2245 InitRand consumes randseed (0 selects time*pid); RandInt32 initializes it; MPC refinement/random-chain consumes RNG. Later perturbation ResetRand can supersede it."
+    },
+    {
+      "engine": "muscle",
+      "option": "-paircount",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "eadistmxmsas.cpp",
+        "pprog.cpp",
+        "pprog2.cpp",
+        "pprog_tree.cpp",
+        "pprogt.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-n",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "cmd_m3ensemble.cpp",
+        "shrub.cpp",
+        "treesplitter.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-splitcount",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-maxcoarse",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-perturb",
+      "field": "perturb",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "align.cpp",
+        "m3alnparams.cpp",
+        "profalign.cpp",
+        "profseq.cpp",
+        "setprobconsparams.cpp",
+        "super5.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-replicates",
+      "field": "replicates",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "align.cpp",
+        "cmd_m3ensemble.cpp",
+        "m3select.cpp",
+        "resample.cpp",
+        "super5.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-maxcols",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "efabestcols.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-minsuper",
+      "field": "minsuper",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "align.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-minpctid",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "make_substmx.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-maxpctid",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "make_substmx.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-maxiters",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "spatter.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-maxfailiters",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "spatter.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-triesperiter",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "spatter.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-blosumpct",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "spatter.cpp",
+        "sweep.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-blosumparamset",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-warmup_pct",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "spatter.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-treeiters",
+      "field": null,
+      "disposition": "Excluded M3/benchmark parameter: m3alnparams.cpp:197-199 and sweep.cpp:41-42. align uses MPCFlat consistency/refinement; Super5 uses clustering/MPC, neither M3 SetFromCmdLine nor sweep.",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "m3alnparams.cpp",
+        "sweep.cpp"
+      ],
+      "evidence": "Excluded M3/benchmark parameter: m3alnparams.cpp:197-199 and sweep.cpp:41-42. align uses MPCFlat consistency/refinement; Super5 uses clustering/MPC, neither M3 SetFromCmdLine nor sweep."
+    },
+    {
+      "engine": "muscle",
+      "option": "-shrub_size",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "super7.cpp",
+        "super7_mega.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-min_cons_pct",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-max_gap_fract",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "cmd_squeeze_inserts.cpp",
+        "colscoreefa.cpp",
+        "disperse.cpp",
+        "efabestcols.cpp",
+        "make_a2m.cpp",
+        "msastats.cpp",
+        "qscore2.cpp",
+        "resample.cpp",
+        "stripgappy.cpp",
+        "stripgappycols.cpp",
+        "stripgappyrows.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-max_gap_fract_row",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "stripgappy.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-minea",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-super6_maxpd1",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-super5_minea1",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-super4_minea1",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-super4_minea2",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-pctid",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-perturb_var",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-minconf",
+      "field": null,
+      "disposition": "excluded ensemble analysis/visualization command controls, not full-family inference",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "efabestcols.cpp",
+        "resample.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-maxpd",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "build_guide_tree.cpp",
+        "searchpd.cpp",
+        "uclustpd.cpp",
+        "uclustpd2.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-shrink",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "spatter.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-gapopen",
+      "field": null,
+      "disposition": "Excluded M3 scoring: m3alnparams.cpp:145-172 in SetFromCmdLine; no selected align/Super5 caller. Pair-HMM transition controls and hmmin, not a v3 gap penalty, govern the approved paths.",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "m3alnparams.cpp"
+      ],
+      "evidence": "Excluded M3 scoring: m3alnparams.cpp:145-172 in SetFromCmdLine; no selected align/Super5 caller. Pair-HMM transition controls and hmmin, not a v3 gap penalty, govern the approved paths."
+    },
+    {
+      "engine": "muscle",
+      "option": "-gapext",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-termgapopen",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-termgapext",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-center",
+      "field": null,
+      "disposition": "Excluded M3 scoring: m3alnparams.cpp:145-175 in SetFromCmdLine; no selected align/Super5 caller. The approved paths use HMMParams in align.cpp/InitProbcons.",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "m3alnparams.cpp"
+      ],
+      "evidence": "Excluded M3 scoring: m3alnparams.cpp:145-175 in SetFromCmdLine; no selected align/Super5 caller. The approved paths use HMMParams in align.cpp/InitProbcons."
+    },
+    {
+      "engine": "muscle",
+      "option": "-s_is",
+      "field": "s_is",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "hmmparams.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-s_il",
+      "field": "s_il",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "hmmparams.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-m_is",
+      "field": "m_is",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "hmmparams.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-m_il",
+      "field": "m_il",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "hmmparams.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-is_is",
+      "field": "is_is",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "hmmparams.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-il_il",
+      "field": "il_il",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "hmmparams.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-quiet",
+      "field": "quiet",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "cmd_batch.cpp",
+        "cmd_bench.cpp",
+        "cmd_m3ensemble.cpp",
+        "m3select.cpp",
+        "main.cpp",
+        "myutils.cpp",
+        "spatter.cpp",
+        "sweep.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-compilerinfo",
+      "field": null,
+      "disposition": "system-owned output/log/help",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-right",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "treesubsetnodes.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-scaledist",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "upgma5.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-eadist",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "upgma5.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-force_super4",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-force_probcons",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-allpairs",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-nt",
+      "field": "roster.molecule",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "eacluster.cpp",
+        "hmmdump.cpp",
+        "perturbhmm.cpp",
+        "super4.cpp",
+        "super5.cpp",
+        "super6.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-amino",
+      "field": "roster.molecule",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "eacluster.cpp",
+        "super4.cpp",
+        "super5.cpp",
+        "super6.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-accs",
+      "field": "accs",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "sequence.cpp"
+      ],
+      "evidence": "LoadInput -> MultiSequence::LoadMFA -> Sequence reader, sequence.cpp:64-68 GetAccFromLabel. Native input uses reversible opaque row IDs; original headers/occurrences are retained separately."
+    },
+    {
+      "engine": "muscle",
+      "option": "-verbose",
+      "field": "verbose",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "qscore.cpp",
+        "qscore_oldcode.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-basename",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "ensemble.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-intsuffix",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "ensemble.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-stratified",
+      "field": "ensemble",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "align.cpp",
+        "super5.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-diversified",
+      "field": "ensemble",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "align.cpp",
+        "super5.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-randomchaintree",
+      "field": "randomchaintree",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "mpcflat.cpp"
+      ],
+      "evidence": "align -> MPCFlat::CalcGuideTree, mpcflat.cpp:185-188 dispatches CalcGuideTree_RandomChain and bypasses normal tree writer."
+    },
+    {
+      "engine": "muscle",
+      "option": "-input_order",
+      "field": "output_order",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "mpcflat.cpp",
+        "super5.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-tree_order",
+      "field": "output_order",
+      "disposition": "implemented",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "mpcflat.cpp",
+        "super5.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-muscle3_randomorder",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "cmd_muscle3.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-confseq1",
+      "field": null,
+      "disposition": "excluded ensemble analysis/visualization command controls, not full-family inference",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "addconfseq.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-q2",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "bench.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-missingtestseqok",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-missingtestfileok",
+      "field": null,
+      "disposition": "declaration-only: no opt/opt_/optset_ consumer found in pinned src/*.cpp; not an established scientific control",
+      "source": "muscle/src/myopts.h",
+      "references": []
+    },
+    {
+      "engine": "muscle",
+      "option": "-bysequence",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "qscore.cpp",
+        "qscorer.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-reseek",
+      "field": null,
+      "disposition": "distinct utility/analysis/experimental command consumers (listed); not exposed in approved align/Super5; transitive applicability not claimed verified",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "upgma5.cpp"
+      ]
+    },
+    {
+      "engine": "muscle",
+      "option": "-mega",
+      "field": null,
+      "disposition": "Excluded rich-feature input workflow: loadinput.cpp:5-8 replaces FASTA reader with Mega::FromFile and its feature/label state; not a setting on the selected protein/DNA/RNA FASTA roster. super5.cpp:555-556 explicitly rejects mega and directs users to super7 (not an approved engine mode).",
+      "source": "muscle/src/myopts.h",
+      "references": [
+        "loadinput.cpp",
+        "super4.cpp",
+        "super5.cpp"
+      ],
+      "evidence": "Excluded rich-feature input workflow: loadinput.cpp:5-8 replaces FASTA reader with Mega::FromFile and its feature/label state; not a setting on the selected protein/DNA/RNA FASTA roster. super5.cpp:555-556 explicitly rejects mega and directs users to super7 (not an approved engine mode)."
+    },
+    {
+      "engine": "famsa",
+      "option": "-help",
+      "field": null,
+      "disposition": "system-owned help",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-t",
+      "field": "threads",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-v",
+      "field": "verbose",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-gt",
+      "field": "guide_tree + guide_tree_newick + leaf_mapping",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-medoidtree",
+      "field": "medoidtree",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-medoid_seeds",
+      "field": "medoid_seeds",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-medoid_threshold",
+      "field": "medoid_threshold",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-gt_export",
+      "field": null,
+      "disposition": "excluded tree/distance-only operation replaces alignment output (not a simultaneous alignment setting)",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-dist_export",
+      "field": null,
+      "disposition": "excluded tree/distance-only operation replaces alignment output (not a simultaneous alignment setting)",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-square_matrix",
+      "field": null,
+      "disposition": "excluded tree/distance-only operation replaces alignment output (not a simultaneous alignment setting)",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-pid",
+      "field": null,
+      "disposition": "excluded tree/distance-only operation replaces alignment output (not a simultaneous alignment setting)",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-keep_duplicates",
+      "field": "keep_duplicates",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-gz",
+      "field": null,
+      "disposition": "output transport: not exposed; canonical native output retained as uncompressed FASTA",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-gz_lev",
+      "field": null,
+      "disposition": "output transport: not exposed; canonical native output retained as uncompressed FASTA",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-trim_columns",
+      "field": "trim_columns",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-refine_mode",
+      "field": "refine_mode",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-r",
+      "field": "r",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-sm",
+      "field": "sm",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-go",
+      "field": "go",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-ge",
+      "field": "ge",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-tgo",
+      "field": "tgo",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-tge",
+      "field": "tge",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-dist",
+      "field": "dist",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-gsd",
+      "field": "gsd",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-gsl",
+      "field": "gsl",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-dgr",
+      "field": "dgr",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-dgo",
+      "field": "dgo",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "famsa",
+      "option": "-dsp",
+      "field": "dsp",
+      "disposition": "implemented",
+      "source": "pinned famsa -help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--tree",
+      "field": "guide_source + guide_tree + leaf_mapping",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--sequences",
+      "field": "roster",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--alignment",
+      "field": null,
+      "disposition": "excluded add/merge workflows",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--files",
+      "field": null,
+      "disposition": "excluded add/merge workflows",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--output",
+      "field": null,
+      "disposition": "system-owned I/O/help; uncompressed canonical output and isolated attempt directory",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--temp-dir",
+      "field": null,
+      "disposition": "system-owned I/O/help; uncompressed canonical output and isolated attempt directory",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--keep-temp",
+      "field": null,
+      "disposition": "system-owned I/O/help; uncompressed canonical output and isolated attempt directory",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--compress",
+      "field": null,
+      "disposition": "system-owned I/O/help; uncompressed canonical output and isolated attempt directory",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--overwrite",
+      "field": null,
+      "disposition": "system-owned I/O/help; uncompressed canonical output and isolated attempt directory",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--cpu",
+      "field": "threads",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--type",
+      "field": "roster.molecule (native n)",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--max-subtree",
+      "field": "max_subtree",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--remove-gappy",
+      "field": "remove_gappy",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--wildcard",
+      "field": "wildcard",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--rooted",
+      "field": "rooted",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--prune",
+      "field": "prune",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--write-prune",
+      "field": "write_prune",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--length-deviation",
+      "field": "length_deviation",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--max-ambig",
+      "field": "max_ambig",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--max-len",
+      "field": "max_len",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--min-len",
+      "field": "min_len",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--filter",
+      "field": "filter",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--write-filtered",
+      "field": "write_filtered",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--match",
+      "field": "match",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--mismatch",
+      "field": "mismatch",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--transition",
+      "field": "transition",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--gap-open",
+      "field": "gap_open",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--gap-extend",
+      "field": "gap_extend",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--gap-ends",
+      "field": "gap_ends",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--scale",
+      "field": "scale",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--xdrop",
+      "field": "xdrop",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--matrix",
+      "field": "matrix",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--blosum",
+      "field": null,
+      "disposition": "excluded protein mode: approved TWILIGHT scope is nucleotide accurate/TCS",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--accurate",
+      "field": "method (pairwise/tcs)",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--acc-mode",
+      "field": "acc_mode",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--acc-max-group",
+      "field": "acc_max_group",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--acc-sample-rate",
+      "field": "acc_sample_rate",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--acc-sample-top",
+      "field": "acc_sample_top",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--consistency-weight",
+      "field": "consistency_weight",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--check",
+      "field": "check",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--verbose",
+      "field": "verbose",
+      "disposition": "implemented",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--help",
+      "field": null,
+      "disposition": "system-owned I/O/help; uncompressed canonical output and isolated attempt directory",
+      "source": "pinned twilight --help"
+    },
+    {
+      "engine": "twilight",
+      "option": "--version",
+      "field": null,
+      "disposition": "system-owned I/O/help; uncompressed canonical output and isolated attempt directory",
+      "source": "pinned twilight --help"
+    }
+  ]
+}

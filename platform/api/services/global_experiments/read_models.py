@@ -1959,7 +1959,9 @@ async def build_project_manager_read_model(
         workflow_head = workflow_heads_by_id.get(setup.workflow_id)
         if global_head is None or workflow_head is None:
             raise ValidationFailure("Project workflow setup task ownership is incomplete")
-        capability = protein_capability_record(setup.capability_id)
+        from services.family_msa_project_capabilities import family_msa_capability
+        family = family_msa_capability(setup.capability_id)
+        capability = family[0] if family is not None else protein_capability_record(setup.capability_id)
         latest_run = latest_run_by_workflow.get(setup.workflow_id)
         actions: list[str] = []
         if setup.lifecycle_state == "open":
