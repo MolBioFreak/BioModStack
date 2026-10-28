@@ -766,12 +766,13 @@ def test_live_conversion_defaults_to_dual_retention_and_is_enabled(monkeypatch: 
     assert ont_raw_signal.raw_signal_retention_policy() == "pod5_and_blow5"
 
 
-def test_blow5_only_retention_is_a_dormant_standalone_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_blow5_only_retention_removes_pod5_after_verification(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("BMS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("BMS_ONT_RAW_SIGNAL_RETENTION_POLICY", "blow5_only")
 
     assert ont_raw_signal.raw_signal_retention_policy() == "blow5_only"
-    assert ont_raw_signal.retention_disposition() == "future_delete_after_verified_blow5_not_active_in_integrated_bms"
-    assert ont_raw_signal.retention_deletion_enabled() is False
+    assert ont_raw_signal.retention_disposition() == "remove_pod5_after_verified_blow5"
+    assert ont_raw_signal.retention_deletion_enabled() is True
 
 
 def test_live_pod5_chunk_requires_two_identical_running_observations(tmp_path: Path) -> None:

@@ -1766,6 +1766,7 @@ async def register_external_pod5_candidate(
         async with session.begin_nested():
             result = await create_external_run_registration(
                 session,
+                domain_session=domain_session,
                 format="pod5",
                 input_file_id=input_file_id,
                 index_input_file_id=None,
