@@ -1406,6 +1406,128 @@
         "variant_count"
       ],
       "type": "object"
+    },
+    "siteReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "min_fraction",
+        "positions_evaluated",
+        "site_count",
+        "motif_site_totals",
+        "sites"
+      ],
+      "properties": {
+        "method": {
+          "const": "per_base_support_disagreement_v1"
+        },
+        "min_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "positions_evaluated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "site_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "motif_site_totals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "dam_gatc",
+            "dcm_ccwgg"
+          ],
+          "properties": {
+            "dam_gatc": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "dcm_ccwgg": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "sites": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "position_1based",
+              "reference_base",
+              "consensus_base",
+              "depth",
+              "disagreement_fraction",
+              "mismatch_fraction",
+              "deletion_fraction",
+              "insertion_fraction",
+              "forward_depth",
+              "reverse_depth",
+              "contexts"
+            ],
+            "properties": {
+              "position_1based": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "reference_base": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1
+              },
+              "consensus_base": {
+                "type": "string",
+                "maxLength": 1
+              },
+              "depth": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "disagreement_fraction": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "mismatch_fraction": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "deletion_fraction": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "insertion_fraction": {
+                "type": "number",
+                "minimum": 0
+              },
+              "forward_depth": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reverse_depth": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "contexts": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^(dam_gatc|dcm_ccwgg|homopolymer_[ACGTN][0-9]+)$"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "$id": "https://biomodstack.local/schemas/ngs/ont_fastq_qc_result_v1.schema.json",
@@ -2178,6 +2300,9 @@
         "threshold_profile"
       ],
       "type": "object"
+    },
+    "site_review": {
+      "$ref": "#/$defs/siteReview"
     }
   },
   "required": [

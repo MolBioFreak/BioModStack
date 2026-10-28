@@ -1,7 +1,8 @@
 import Plot from 'react-plotly.js';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { fetchOntFastqQcResult, type OntResultCollection } from '../../lib/ontFastqQcResult';
 
+import type { OntSiteReview, OntSiteReviewSite } from '../../lib/ontFastqQcResult';
 import type {
     OntFastqQcCheck,
     OntFastqQcJsonValue,
@@ -127,6 +128,113 @@ function affectedVariantInterval(variant: OntFastqQcResult['verification']['vari
         return `Between bases after ${variant.affected_start_1based}`;
     }
     return `${variant.affected_start_1based}-${variant.affected_end_1based}`;
+}
+
+const CONTEXT_LABEL: Record<string, string> = { dam_gatc: 'Dam GATC', dcm_ccwgg: 'Dcm CCWGG' };
+const contextLabel = (context: string) => CONTEXT_LABEL[context] ?? context.replace(/^homopolymer_([ACGTN])(\d+)$/, '$1×$2 homopolymer');
+const percent = (value: number, digits = 1) => `${(value * 100).toFixed(digits)}%`;
+
+/** Plasmidsaurus-style sample card: identity, length and population at a glance. */
+function SampleSummary({ result }: { result: OntFastqQcResult }) {
+    const reads = Number(result.summary.reads_considered) || 0;
+    const dimer = Number(result.summary.dimer_like_reads) || 0;
+    const trimer = Number(result.summary.trimer_plus_reads) || 0;
+    const monomer = Math.max(0, reads - dimer - trimer);
+    const identity = result.verification.summary.sequence_identity_fraction;
+    const rows: Array<[string, string]> = [
+        ['Reference', `${result.verification.summary.reference_name} · ${Number(result.verification.summary.reference_length).toLocaleString()} bp · ${result.verification.summary.reference_topology}`],
+        ['Consensus', `${display(result.summary.consensus_length as number, ' bp')} · ${result.summary.consensus_status}`],
+        ['Consensus identity', typeof identity === 'number' ? percent(identity, 4) : '—'],
+        ['Variants vs expected', `${result.verification.summary.variant_count}${result.verification.summary.variant_analysis_status === 'not_assessed' ? ' (not assessed)' : ''}`],
+        ['Mean depth', display(result.summary.mean_coverage_depth as number, '×')],
+        ['Read N50', display(result.summary.n50_read_length_bp as number, ' bp')],
+    ];
+    return (
+        <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" aria-label="Sample summary">
+            <h4 className="text-sm font-semibold text-[var(--text-primary)]">Sample summary</h4>
+            <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                    {rows.map(([label, value]) => <Fragment key={label}><dt className="text-[var(--text-secondary)]">{label}</dt><dd className="font-mono text-[var(--text-primary)]">{value}</dd></Fragment>)}
+                </dl>
+                <div className="text-xs">
+                    <div className="mb-1 text-[var(--text-secondary)]">Population by read length (reads)</div>
+                    {reads > 0 ? (
+                        <>
+                            <div className="flex h-3 w-full overflow-hidden rounded" role="img" aria-label="Monomer, dimer and trimer-plus read fractions">
+                                <div style={{ width: `${(monomer / reads) * 100}%`, background: '#63d39b' }} />
+                                <div style={{ width: `${(dimer / reads) * 100}%`, background: '#f59e0b' }} />
+                                <div style={{ width: `${(trimer / reads) * 100}%`, background: '#ef4444' }} />
+                            </div>
+                            <div className="mt-1 grid grid-cols-3 gap-2 font-mono">
+                                <span>Monomer {percent(monomer / reads)}</span>
+                                <span>Dimer {percent(dimer / reads)}</span>
+                                <span>Trimer+ {percent(trimer / reads)}</span>
+                            </div>
+                            <p className="mt-1 text-[10px] text-[var(--text-secondary)]">Read counts from the length screen ({reads.toLocaleString()} reads). Shaded histogram bands mark 1×, 2× and 3× the reference length ±10%.</p>
+                        </>
+                    ) : <span className="text-[var(--text-secondary)]">No reads were considered.</span>}
+                </div>
+            </div>
+        </section>
+    );
+}
+
+/** Positions where reads disagree with the major allele, labelled by likely cause. */
+function SiteReviewTable({ review, canOpen, onOpen }: { review: OntSiteReview; canOpen: boolean; onOpen: (position: number) => void }) {
+    const [filter, setFilter] = useState<'all' | 'methylation' | 'homopolymer' | 'other'>('all');
+    const kind = (site: OntSiteReviewSite) => site.contexts.some(c => c.startsWith('dam') || c.startsWith('dcm')) ? 'methylation'
+        : site.contexts.some(c => c.startsWith('homopolymer')) ? 'homopolymer' : 'other';
+    const counts = review.sites.reduce<Record<string, number>>((acc, site) => { acc[kind(site)] = (acc[kind(site)] ?? 0) + 1; return acc; }, {});
+    const shown = review.sites.filter(site => filter === 'all' || kind(site) === filter);
+    return (
+        <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" aria-label="Positions to review">
+            <h4 className="text-sm font-semibold text-[var(--text-primary)]">Positions to review</h4>
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                {review.site_count.toLocaleString()} of {review.positions_evaluated.toLocaleString()} positions have ≥{percent(review.min_fraction, 0)} of reads disagreeing with the major allele or inserting.
+                Reference carries {review.motif_site_totals.dam_gatc} GATC (Dam) and {review.motif_site_totals.dcm_ccwgg} CCWGG (Dcm) sites; systematic errors there usually mean methylated template, and long homopolymers are a known nanopore error mode. This table is evidence only and does not change the verdict.
+            </p>
+            <div className="my-2 flex flex-wrap gap-1 text-xs" role="group" aria-label="Filter positions">
+                {(['all', 'methylation', 'homopolymer', 'other'] as const).map(key => (
+                    <button key={key} type="button" aria-pressed={filter === key} onClick={() => setFilter(key)}
+                        className={`rounded border px-2 py-0.5 ${filter === key ? 'border-[var(--accent-secondary)] text-[var(--text-primary)]' : 'border-[var(--border-primary)] text-[var(--text-secondary)]'}`}>
+                        {key === 'all' ? `All ${review.sites.length}` : `${key[0].toUpperCase()}${key.slice(1)} ${counts[key] ?? 0}`}
+                    </button>
+                ))}
+            </div>
+            {review.sites.length < review.site_count && <p className="text-[11px] text-[var(--warning)]">Showing the {review.sites.length} strongest positions; download per-base support for all.</p>}
+            {shown.length === 0 ? <p className="text-xs text-[var(--text-secondary)]">No positions in this category.</p> : (
+                <div className="max-h-80 overflow-auto">
+                    <table className="w-full text-xs">
+                        <thead className="sticky top-0 bg-[var(--bg-secondary)]">
+                            <tr className="border-b border-[var(--border-primary)] text-left text-[var(--text-secondary)]">
+                                <th className="px-2 py-1">Position</th><th className="px-2 py-1">Ref → consensus</th><th className="px-2 py-1">Depth (fwd/rev)</th>
+                                <th className="px-2 py-1">Disagree</th><th className="px-2 py-1">Mismatch</th><th className="px-2 py-1">Deletion</th><th className="px-2 py-1">Insertion</th>
+                                <th className="px-2 py-1">Context</th><th className="px-2 py-1">Reads</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {shown.map(site => (
+                                <tr key={site.position_1based} className="border-b border-[var(--border-primary)]/40" data-site-position={site.position_1based}>
+                                    <td className="px-2 py-1 font-mono">{site.position_1based.toLocaleString()}</td>
+                                    <td className={`px-2 py-1 font-mono ${site.consensus_base && site.consensus_base !== site.reference_base ? 'text-[var(--error)]' : ''}`}>{site.reference_base} → {site.consensus_base || '—'}</td>
+                                    <td className="px-2 py-1 font-mono">{site.depth.toLocaleString()} ({site.forward_depth.toLocaleString()}/{site.reverse_depth.toLocaleString()})</td>
+                                    <td className="px-2 py-1 font-mono">{percent(site.disagreement_fraction)}</td>
+                                    <td className="px-2 py-1 font-mono">{percent(site.mismatch_fraction)}</td>
+                                    <td className="px-2 py-1 font-mono">{percent(site.deletion_fraction)}</td>
+                                    <td className="px-2 py-1 font-mono">{percent(site.insertion_fraction)}</td>
+                                    <td className="px-2 py-1">{site.contexts.length ? site.contexts.map(contextLabel).join(', ') : '—'}</td>
+                                    <td className="px-2 py-1">
+                                        <button type="button" disabled={!canOpen} onClick={() => onOpen(site.position_1based)}
+                                            className="rounded border border-[var(--border-primary)] px-2 py-0.5 text-[11px] disabled:opacity-50">View in IGV</button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </section>
+    );
 }
 
 export function OntFastqQcResultPanel({
@@ -300,6 +408,19 @@ export function OntFastqQcResultPanel({
                 ))}
             </section>
 
+            <SampleSummary result={result} />
+
+            {result.site_review && (
+                <SiteReviewTable
+                    review={result.site_review}
+                    canOpen={Boolean(onOpenViewer) && result.authority.alignment_readiness === 'ready'}
+                    onOpen={(position) => {
+                        const locus = variantLocus(result, position, position);
+                        if (locus) onOpenViewer?.(locus);
+                    }}
+                />
+            )}
+
             <section>
                 <h4 className="mb-2 text-xs uppercase tracking-wide text-[var(--text-secondary)]">Decision checks</h4>
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
@@ -326,15 +447,28 @@ export function OntFastqQcResultPanel({
                             title: { text: 'Read count by read length' },
                             xaxis: { title: { text: 'Read length (bp)' } },
                             yaxis: { title: { text: 'Read count' } },
-                            shapes: [{
-                                type: 'line',
-                                x0: referenceLength,
-                                x1: referenceLength,
-                                y0: 0,
-                                y1: 1,
-                                yref: 'paper',
-                                line: { color: '#fbbf24', dash: 'dot', width: 1.5 },
-                            }],
+                            shapes: [
+                                ...[1, 2, 3].map((multiple) => ({
+                                    type: 'rect' as const,
+                                    x0: referenceLength * multiple * 0.9,
+                                    x1: referenceLength * multiple * 1.1,
+                                    y0: 0,
+                                    y1: 1,
+                                    yref: 'paper' as const,
+                                    fillcolor: ['#63d39b', '#f59e0b', '#ef4444'][multiple - 1],
+                                    opacity: 0.12,
+                                    line: { width: 0 },
+                                })),
+                                {
+                                    type: 'line',
+                                    x0: referenceLength,
+                                    x1: referenceLength,
+                                    y0: 0,
+                                    y1: 1,
+                                    yref: 'paper',
+                                    line: { color: '#fbbf24', dash: 'dot', width: 1.5 },
+                                },
+                            ],
                             margin: { l: 62, r: 18, t: 44, b: 56 },
                             height: 300,
                             paper_bgcolor: 'rgba(0,0,0,0)',

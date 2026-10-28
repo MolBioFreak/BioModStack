@@ -487,6 +487,104 @@ def _load_manifest(path: Path, **expected: Any) -> tuple[dict[str, Any], str]:
     return manifest, hashlib.sha256(raw).hexdigest()
 
 
+SITE_REVIEW_MIN_FRACTION = 0.10
+SITE_REVIEW_MAX_ROWS = 256
+_HOMOPOLYMER_MIN = 5
+
+
+def _site_contexts(sequence: str, index: int, circular: bool) -> list[str]:
+    """Sequence contexts that explain systematic nanopore disagreement at one base."""
+    length = len(sequence)
+    if not length:
+        return []
+    window = (sequence * 2) if circular else sequence
+
+    def motif_hits(width: int, pattern: str) -> bool:
+        for start in range(index - width + 1, index + 1):
+            if start < 0 and not circular:
+                continue
+            begin = start % length if circular else start
+            word = window[begin:begin + width]
+            if len(word) == width and re.fullmatch(pattern, word):
+                return True
+        return False
+
+    contexts = []
+    if motif_hits(4, "GATC"):
+        contexts.append("dam_gatc")
+    if motif_hits(5, "CC[AT]GG"):
+        contexts.append("dcm_ccwgg")
+    base = sequence[index]
+    left = index
+    while left > 0 and sequence[left - 1] == base:
+        left -= 1
+    right = index
+    while right < length - 1 and sequence[right + 1] == base:
+        right += 1
+    run = right - left + 1
+    if run >= _HOMOPOLYMER_MIN:
+        contexts.append(f"homopolymer_{base}{run}")
+    return contexts
+
+
+def _load_site_review(path: Path, *, circular: bool) -> dict[str, Any]:
+    """Positions where at least 10% of reads disagree with the major allele or insert.
+
+    Display evidence only; it does not change the verdict.
+    """
+    raw = _read_bytes(path, path.name)
+    try:
+        rows = list(csv.DictReader(raw.decode("utf-8").splitlines(), delimiter="\t"))
+    except (UnicodeDecodeError, csv.Error) as exc:
+        raise OntNgsResultError("per-base support table is invalid") from exc
+    sequence = "".join(str(row.get("reference_base") or "N")[:1].upper() for row in rows)
+    sites = []
+    for index, row in enumerate(rows):
+        try:
+            depth = int(row["depth"])
+            major = float(row["major_allele_fraction"])
+            deletions = int(row["deletion_count"])
+            insertions = int(row["insertion_count"])
+            counts = {base: int(row[f"{base.lower()}_count"]) for base in "ACGT"}
+            position = int(row["position_1based"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise OntNgsResultError("per-base support row is invalid") from exc
+        if depth <= 0:
+            continue
+        disagreement = max(0.0, 1.0 - major)
+        insertion_fraction = insertions / depth
+        if disagreement < SITE_REVIEW_MIN_FRACTION and insertion_fraction < SITE_REVIEW_MIN_FRACTION:
+            continue
+        reference_base = sequence[index]
+        mismatches = sum(count for base, count in counts.items() if base != reference_base)
+        sites.append({
+            "position_1based": position,
+            "reference_base": reference_base,
+            "consensus_base": str(row.get("consensus_base") or ""),
+            "depth": depth,
+            "disagreement_fraction": round(disagreement, 6),
+            "mismatch_fraction": round(mismatches / depth, 6),
+            "deletion_fraction": round(deletions / depth, 6),
+            "insertion_fraction": round(insertion_fraction, 6),
+            "forward_depth": int(row.get("forward_depth") or 0),
+            "reverse_depth": int(row.get("reverse_depth") or 0),
+            "contexts": _site_contexts(sequence, index, circular),
+        })
+    sites.sort(key=lambda site: (-max(site["disagreement_fraction"], site["insertion_fraction"]), site["position_1based"]))
+    motif_totals = {
+        "dam_gatc": len(re.findall("(?=GATC)", sequence + (sequence[:3] if circular else ""))),
+        "dcm_ccwgg": len(re.findall("(?=CC[AT]GG)", sequence + (sequence[:4] if circular else ""))),
+    }
+    return {
+        "method": "per_base_support_disagreement_v1",
+        "min_fraction": SITE_REVIEW_MIN_FRACTION,
+        "positions_evaluated": len(rows),
+        "site_count": len(sites),
+        "motif_site_totals": motif_totals,
+        "sites": sorted(sites[:SITE_REVIEW_MAX_ROWS], key=lambda site: site["position_1based"]),
+    }
+
+
 def _present_artifact(manifest: dict[str, Any], kind: str) -> dict[str, Any]:
     matches = [
         item for item in manifest.get("artifacts", [])
@@ -960,6 +1058,15 @@ def _build_file_projection_from_pinned_root(job: Job, root: Path, **pagination) 
         "stages": _stages(job),
         "execution_resources": _execution_resources(job, persisted_package_authority),
     }
+    topology = verification_manifest.get("reference", {}).get("topology") if isinstance(verification_manifest.get("reference"), dict) else None
+    try:
+        projection["site_review"] = _load_site_review(
+            _artifact_path(fastq_dir, _present_artifact(fastq_manifest, "per_base_support")),
+            circular=(topology or verification_summary.get("reference_topology")) == "circular",
+        )
+    except OntNgsResultError as exc:
+        # Optional evidence: the scientific result stays readable without it.
+        logging.getLogger(__name__).warning("site review unavailable for job %s: %s", job.id, exc)
     projection = _page_result_collections(projection, **pagination)
     validate_ont_fastq_qc_result_contract(projection)
     return projection

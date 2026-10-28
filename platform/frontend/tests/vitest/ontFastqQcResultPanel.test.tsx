@@ -138,6 +138,35 @@ describe('ONT FASTQ-QC decision report', () => {
         expect(onOpenViewer).toHaveBeenCalledWith('eGFP_plasmid:3416-3616');
     });
 
+    it('shows the sample summary and labels review positions by methylation or homopolymer context', async () => {
+        const raw = JSON.parse(readFileSync(FIXTURE_PATH, 'utf8')) as Record<string, unknown>;
+        raw.site_review = {
+            method: 'per_base_support_disagreement_v1', min_fraction: 0.1, positions_evaluated: 5570, site_count: 3,
+            motif_site_totals: { dam_gatc: 13, dcm_ccwgg: 16 },
+            sites: [
+                { position_1based: 485, reference_base: 'C', consensus_base: 'C', depth: 50000, disagreement_fraction: 0.135, mismatch_fraction: 0.01, deletion_fraction: 0.118, insertion_fraction: 0.002, forward_depth: 25000, reverse_depth: 25000, contexts: ['dcm_ccwgg'] },
+                { position_1based: 3516, reference_base: 'C', consensus_base: '-', depth: 50000, disagreement_fraction: 0.438, mismatch_fraction: 0.0, deletion_fraction: 0.562, insertion_fraction: 0.005, forward_depth: 25000, reverse_depth: 25000, contexts: ['homopolymer_C15'] },
+                { position_1based: 853, reference_base: 'A', consensus_base: 'A', depth: 50000, disagreement_fraction: 0.007, mismatch_fraction: 0.0, deletion_fraction: 0.001, insertion_fraction: 0.123, forward_depth: 25000, reverse_depth: 25000, contexts: [] },
+            ],
+        };
+        const result = parseOntFastqQcResult(raw, JOB_ID);
+        const onOpenViewer = vi.fn();
+        await act(async () => root.render(<OntFastqQcResultPanel result={result} loading={false} error={null} onOpenViewer={onOpenViewer} />));
+        const summary = container.querySelector('[aria-label="Sample summary"]')!;
+        expect(summary.textContent).toContain('Monomer');
+        expect(summary.textContent).toContain('Dimer');
+        const review = container.querySelector('[aria-label="Positions to review"]')!;
+        expect(review.textContent).toContain('13 GATC (Dam) and 16 CCWGG (Dcm)');
+        expect(review.querySelector('[data-site-position="485"]')?.textContent).toContain('Dcm CCWGG');
+        expect(review.querySelector('[data-site-position="3516"]')?.textContent).toContain('C×15 homopolymer');
+        const methylation = Array.from(review.querySelectorAll('button')).find(node => node.textContent?.startsWith('Methylation'))!;
+        await act(async () => methylation.click());
+        expect(review.querySelectorAll('[data-site-position]')).toHaveLength(1);
+        await act(async () => review.querySelector<HTMLButtonElement>('[data-site-position="485"] button')!.click());
+        expect(onOpenViewer).toHaveBeenCalledWith(expect.stringMatching(/:385-585$/));
+        raw.site_review = { ...(raw.site_review as object), sites: [{ position_1based: 1 }] };
+        expect(() => parseOntFastqQcResult(raw, JOB_ID)).toThrow(/site 0/);
+    });
     it('does not interpret absent variant records as a completed negative analysis', async () => {
         const payload = resultFixture();
         payload.verification.verdict = 'FAIL';

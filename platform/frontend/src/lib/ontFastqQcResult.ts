@@ -71,8 +71,32 @@ export interface OntFastqQcVariant {
 export type OntResultCollection = 'variants' | 'artifacts';
 export interface OntResultPage { offset: number; count: number; total: number; next_offset: number | null }
 
+export interface OntSiteReviewSite {
+    position_1based: number;
+    reference_base: string;
+    consensus_base: string;
+    depth: number;
+    disagreement_fraction: number;
+    mismatch_fraction: number;
+    deletion_fraction: number;
+    insertion_fraction: number;
+    forward_depth: number;
+    reverse_depth: number;
+    contexts: string[];
+}
+
+export interface OntSiteReview {
+    method: 'per_base_support_disagreement_v1';
+    min_fraction: number;
+    positions_evaluated: number;
+    site_count: number;
+    motif_site_totals: { dam_gatc: number; dcm_ccwgg: number };
+    sites: OntSiteReviewSite[];
+}
+
 export interface OntFastqQcResult {
     pagination?: Record<OntResultCollection, OntResultPage>;
+    site_review?: OntSiteReview;
     schema: 'bms.ngs.fastq-qc-result.v1';
     job: {
         id: string;
@@ -486,9 +510,48 @@ function parseVariant(value: unknown): OntFastqQcVariant {
     return variant;
 }
 
+function parseSiteReview(value: unknown): OntSiteReview {
+    const review = object(value, 'site review');
+    exactKeys(review, ['method', 'min_fraction', 'positions_evaluated', 'site_count', 'motif_site_totals', 'sites'], 'site review');
+    if (review.method !== 'per_base_support_disagreement_v1') throw new Error('site review method is invalid');
+    const totals = object(review.motif_site_totals, 'site review motif totals');
+    exactKeys(totals, ['dam_gatc', 'dcm_ccwgg'], 'site review motif totals');
+    if (!Array.isArray(review.sites) || review.sites.length > 256) throw new Error('site review sites are invalid');
+    const SITE_KEYS = ['position_1based', 'reference_base', 'consensus_base', 'depth', 'disagreement_fraction', 'mismatch_fraction',
+        'deletion_fraction', 'insertion_fraction', 'forward_depth', 'reverse_depth', 'contexts'];
+    return {
+        method: 'per_base_support_disagreement_v1',
+        min_fraction: fraction(review.min_fraction, 'site review threshold'),
+        positions_evaluated: integer(review.positions_evaluated, 'site review positions'),
+        site_count: integer(review.site_count, 'site review count'),
+        motif_site_totals: { dam_gatc: integer(totals.dam_gatc, 'GATC total'), dcm_ccwgg: integer(totals.dcm_ccwgg, 'CCWGG total') },
+        sites: review.sites.map((raw, index) => {
+            const site = object(raw, `site ${index}`);
+            exactKeys(site, SITE_KEYS, `site ${index}`);
+            if (!Array.isArray(site.contexts) || site.contexts.some(item => typeof item !== 'string' || !/^(dam_gatc|dcm_ccwgg|homopolymer_[ACGTN][0-9]+)$/.test(item))) throw new Error(`site ${index} contexts are invalid`);
+            const insertion = Number(site.insertion_fraction);
+            if (!Number.isFinite(insertion) || insertion < 0) throw new Error(`site ${index} insertion fraction is invalid`);
+            return {
+                position_1based: integer(site.position_1based, `site ${index} position`, 1),
+                reference_base: string(site.reference_base, `site ${index} reference base`),
+                consensus_base: typeof site.consensus_base === 'string' ? site.consensus_base : '',
+                depth: integer(site.depth, `site ${index} depth`, 1),
+                disagreement_fraction: fraction(site.disagreement_fraction, `site ${index} disagreement`),
+                mismatch_fraction: fraction(site.mismatch_fraction, `site ${index} mismatch`),
+                deletion_fraction: fraction(site.deletion_fraction, `site ${index} deletion`),
+                insertion_fraction: insertion,
+                forward_depth: integer(site.forward_depth, `site ${index} forward depth`),
+                reverse_depth: integer(site.reverse_depth, `site ${index} reverse depth`),
+                contexts: site.contexts as string[],
+            };
+        }),
+    };
+}
+
 export function parseOntFastqQcResult(value: unknown, expectedJobId: string): OntFastqQcResult {
     const root = object(value, 'NGS result');
-    exactKeys(root, root.pagination === undefined ? TOP_LEVEL_KEYS : [...TOP_LEVEL_KEYS, 'pagination'], 'NGS result');
+    exactKeys(root, [...TOP_LEVEL_KEYS, ...(root.pagination === undefined ? [] : ['pagination']), ...(root.site_review === undefined ? [] : ['site_review'])], 'NGS result');
+    const siteReview = root.site_review === undefined ? undefined : parseSiteReview(root.site_review);
     let pagination: OntFastqQcResult['pagination'];
     if (root.pagination !== undefined) {
         const rawPages = object(root.pagination, 'pagination');
@@ -938,6 +1001,7 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
     return {
         schema: 'bms.ngs.fastq-qc-result.v1',
         ...(pagination ? { pagination } : {}),
+        ...(siteReview ? { site_review: siteReview } : {}),
         job: parsedJob,
         authority: parsedAuthority,
         artifacts,
