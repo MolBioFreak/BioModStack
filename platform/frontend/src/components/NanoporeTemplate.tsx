@@ -46,6 +46,7 @@ import { NanoporeWorkflowChooser, type WorkflowKey } from './ngs/NanoporeWorkflo
 import { buildNanoporeOperatorStageParams } from '../lib/nanoporeLaunchPayload';
 import { isNanoporeWorkflowKey } from '../lib/nanoporeWorkflow';
 import { Pod5Upload } from './ngs/Pod5Upload';
+import { RawSignalPod5Input } from './ngs/RawSignalPod5Input';
 import { ReferenceSequenceInputs } from './ngs/ReferenceSequenceInputs';
 import { BarcodeSampleSheet } from './ngs/BarcodeSampleSheet';
 import { describeModification, modificationCatalog, modificationModelIds, modifiedBasesBlocker, parseModifiedBases, serializeModifiedBases, toggleModification } from '../lib/doradoModifiedBases';
@@ -657,6 +658,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const workflowRequiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'modified';
     const [pod5Dir, setPod5Dir] = useState(initialValues?.pod5Dir as string || '');
     const [pod5Uploading, setPod5Uploading] = useState(false);
+    const [rawSignalOrigin, setRawSignalOrigin] = useState(false);
     const [bamPath, setBamPath] = useState(initialValues?.bamPath as string || '');
     const [bamForceRealign, setBamForceRealign] = useState<boolean>(
         (initialValues?.bamForceRealign as boolean | undefined)
@@ -1511,13 +1513,16 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // ============================================================================
     // Render
     // ============================================================================
-    const inputOptions = selectedWorkflow === 'dna' || selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening'
-        ? [{ key: 'pod5' as const, label: 'POD5 raw reads' }, { key: 'bam' as const, label: 'Existing BAM' }, { key: 'fastq' as const, label: 'FASTQ reads' }]
+    // BLOW5/SLOW5 is offered wherever POD5 is: it is restored to POD5 before Dorado.
+    const RAW_SIGNAL = { key: 'blow5' as const, label: 'BLOW5/SLOW5 raw signal' };
+    const inputOptions: Array<{ key: InputSource | 'blow5'; label: string }> = selectedWorkflow === 'dna' || selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening'
+        ? [{ key: 'pod5' as const, label: 'POD5 raw reads' }, RAW_SIGNAL, { key: 'bam' as const, label: 'Existing BAM' }, { key: 'fastq' as const, label: 'FASTQ reads' }]
         : selectedWorkflow === 'modified'
-            ? [{ key: 'pod5' as const, label: 'POD5 raw reads' }, { key: 'bam' as const, label: 'Existing BAM with MM/ML tags' }]
+            ? [{ key: 'pod5' as const, label: 'POD5 raw reads' }, RAW_SIGNAL, { key: 'bam' as const, label: 'Existing BAM with MM/ML tags' }]
             : selectedWorkflow === 'pooledAssignment' || selectedWorkflow === 'fastqQc'
                 ? [{ key: 'fastq' as const, label: 'FASTQ reads' }]
-                : [{ key: 'pod5' as const, label: 'POD5 raw reads' }];
+                : [{ key: 'pod5' as const, label: 'POD5 raw reads' }, RAW_SIGNAL];
+    const selectedInputKey: InputSource | 'blow5' = inputSource === 'pod5' && rawSignalOrigin ? 'blow5' : inputSource;
     return (
         <div className="nanopore-template mx-auto w-full max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4 text-[var(--text-primary)] shadow-[var(--shadow-card)] lg:p-6">
             {review && review.key === requestKey && <ExecutionPlanApproval preview={review.prepared.preview} finish={review.finish} />}
@@ -1628,19 +1633,22 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             {/* Data Source */}
             <div className={TASK_FLOW_CARD}>
                 <p className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Primary input *</p>
-                <p className="mb-3 text-xs text-[var(--text-secondary)]">BLOW5/SLOW5 raw signal uses raw-signal import and Restore POD5 before Dorado basecalling. FASTQ contains bases and quality scores, not MM/ML modification probabilities; tandem modkit needs tagged BAM or modified-base calls from POD5.</p>
+                <p className="mb-3 text-xs text-[var(--text-secondary)]">BLOW5/SLOW5 is validated, indexed and restored to POD5 here before Dorado basecalling. FASTQ contains bases and quality scores, not MM/ML modification probabilities; tandem modkit needs tagged BAM or modified-base calls from POD5.</p>
                 <div className="flex flex-wrap gap-2 mb-3">
                     {inputOptions.length === 1 ? <p className="text-sm text-[var(--text-primary)]">{inputOptions[0].label}</p> : inputOptions.map((source) => (
                         <button
                             key={source.key}
                             type="button"
-                            onClick={() => setInputSource(source.key)}
-                            aria-pressed={inputSource === source.key}
-                            className={`min-w-0 flex-1 basis-32 px-3 py-2 rounded border text-sm text-left transition-colors ${inputSource === source.key
+                            onClick={() => {
+                                if (source.key === 'blow5') { setRawSignalOrigin(true); setInputSource('pod5'); setPod5Dir(''); }
+                                else { if (rawSignalOrigin) setPod5Dir(''); setRawSignalOrigin(false); setInputSource(source.key); }
+                            }}
+                            aria-pressed={selectedInputKey === source.key}
+                            className={`min-w-0 flex-1 basis-32 px-3 py-2 rounded border text-sm text-left transition-colors ${selectedInputKey === source.key
                                 ? ''
                                 : 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
                                 }`}
-                            style={inputSource === source.key ? {
+                            style={selectedInputKey === source.key ? {
                                 borderColor: 'var(--accent-secondary)',
                                 backgroundColor: 'color-mix(in srgb, var(--accent-secondary) 12%, transparent)',
                                 color: 'var(--text-primary)',
@@ -1651,7 +1659,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     ))}
                 </div>
 
-                {inputSource === 'pod5' && (
+                {inputSource === 'pod5' && rawSignalOrigin && (
+                    <>
+                        {pod5Dir && <p className="text-xs text-[var(--text-secondary)]">Restored POD5: <span className="font-mono break-all text-[var(--text-primary)]">{formatPathDisplay(pod5Dir)}</span></p>}
+                        <RawSignalPod5Input domainExperimentId={exactDomainExperimentId} onPod5Directory={setPod5Dir} onBusyChange={setPod5Uploading} />
+                    </>
+                )}
+
+                {inputSource === 'pod5' && !rawSignalOrigin && (
                     <>
                         <div className="flex flex-wrap items-center gap-2">
                             <div className="min-w-0 flex-1 basis-40 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 min-h-10">
