@@ -131,9 +131,15 @@ it('connects global Workflow → De Novo to the telemetry target, not the stored
   sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, other.id);
   await mount(<RemotePreloadPanel target={ready} jobs={[]} onChanged={async () => {}} />);
   await act(async () => { const details = [...host.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent?.includes('Prepare worker'))!; details.open = true; details.dispatchEvent(new Event('toggle')); await settle(); });
-  await edit('Preparation workflow', family.model_id);
+  await edit('Preparation workflow', 'protein_modification_experimental');
   expect(posts).toEqual([]);
-  await prepareFamily();
+  const panel = host.querySelector('[aria-label="Independent worker provisioning"]')!;
+  expect(panel.textContent).toContain('Downloads all supported De Novo generator');
+  await click('Prepare entire workflow', panel);
+  expect(posts).toEqual([
+    { url: '/api/execution-targets/vast%3A123/provision/preview', body: family },
+    { url: '/api/execution-targets/vast%3A123/provision', body: { ...family, preview_sha256: 'b'.repeat(64) } },
+  ]);
   expect(sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBe(other.id);
 });
 

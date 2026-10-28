@@ -70,7 +70,7 @@ it('failed MD approval retains preview and reports exact receiver error without 
 const intent = { schema_version: 'bms.md.launch-intent.v2', name: 'saved', input: { kind: 'guided', source_ref: { kind: 'design', id: 'source-exact', model_number: 2 }, expected_source_sha256: 'e'.repeat(64), chemistry_profile_id: 'saved-profile', chemistry_profile_sha256: 'f'.repeat(64), catalog_digest: 'a'.repeat(64), neutralize: false, padding_nm: 0 }, stages: [{ name: 'production', mdp: { 'gen-seed': 0, 'custom-native-key': 'exact' } }], replicas: 2, random_seed: 0, execution: { ntmpi: 1, ntomp: 4, gpu_offload: 'none', pin: 'off' }, execution_target_id: null, windows: [{ id: 'w', mdp: { production: { 'pull-coord1-init': 0 } } }], analysis: { selection: 'name CA' } };
 it('fresh invocation can author supplied native systems through typed controls without prediction or launching a Job', async () => {
     retained = [{ enabled: true, drafts: {}, stage: { id: 'fresh-md', kind: 'md', input: { selected: true }, models: [{ model_id: 'molecular_dynamics', mode: 'simulate', invocation_id: 'fresh-call', params: {} }] } }];
-    await mount(<Composer />); await click('molecular_dynamics settings');
+    await mount(<Composer />); await click('Molecular dynamics settings');
     await change('MD invocation input kind', 'compiled');
     await change('MD invocation name', 'explicit compiled'); await change('tpr', 'inputs/exact.tpr');
     await change('Replicas per window', '2'); await change('Orchestration seed (not native stochastic seed)', '0'); await change('ntomp', '4');
@@ -87,7 +87,7 @@ let retained: InvocationDraftStage[];
 function Composer() { const [stages, setStages] = useState(retained); retained = stages; return <BinderInvocationPlan stages={stages} onChange={setStages} />; }
 it('real composer reuses complete native settings with invocation-local draft in/out, OFF/restore and independent identical calls', async () => {
     retained = [{ enabled: true, drafts: {}, stage: { id: 'md-stage', kind: 'md', input: { selected: true }, models: ['call-one', 'call-two'].map(invocation_id => ({ model_id: 'molecular_dynamics', mode: 'simulate', invocation_id, execution_target_id: null, params: { intent: structuredClone(intent) } })) } }];
-    await mount(<Composer />); await click('molecular_dynamics settings');
+    await mount(<Composer />); await click('Molecular dynamics settings');
     expect(tree!.root.findAllByType(MolecularDynamicsNativeSettings)).toHaveLength(1);
     expect(text(tree!.root)).toContain('Optional analysis'); expect(text(tree!.root)).toContain('Windows: explicit per-stage');
     await change('Replicas per window', '3'); await change('Orchestration seed (not native stochastic seed)', '');
@@ -100,7 +100,7 @@ it('real composer reuses complete native settings with invocation-local draft in
     expect(wire.stages[0].models[1].params.intent).toEqual(intent);
     expect(wire.stages[0].models[0].execution_target_id).toBeNull();
     expect(calls.filter(c => c.method === 'post')).toEqual([]);
-    await click('molecular_dynamics settings');
+    await click('Molecular dynamics settings');
     await change('MD invocation input kind', 'compiled');
     let compiled: any = activeInvocationPlan(retained);
     expect(compiled.stages[0].models[0].params.intent.input).toEqual({ kind: 'compiled' });
@@ -110,7 +110,7 @@ it('real composer reuses complete native settings with invocation-local draft in
     expect(text(tree!.root)).toContain('Upload topology include tree');
     await change('MD invocation input kind', 'guided');
     expect((activeInvocationPlan(retained) as any).stages[0].models[0].params.intent).toEqual({ ...intent, name: 'only-first', replicas: 3, random_seed: '' });
-    await act(async () => tree!.unmount()); tree = undefined; client.clear(); await mount(<Composer />); await click('molecular_dynamics settings');
+    await act(async () => tree!.unmount()); tree = undefined; client.clear(); await mount(<Composer />); await click('Molecular dynamics settings');
     expect(tree!.root.findByProps({ 'aria-label': 'Replicas per window' }).props.value).toBe('3');
     expect(tree!.root.findByProps({ 'aria-label': 'Orchestration seed (not native stochastic seed)' }).props.value).toBe('');
 });

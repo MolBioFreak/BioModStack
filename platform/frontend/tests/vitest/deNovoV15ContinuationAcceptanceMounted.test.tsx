@@ -3,7 +3,7 @@ import recipes from './fixtures/deNovoContinuationRecipes.json';
 import { writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
-const protenixSchema = JSON.parse(execFileSync(process.env.BMS_TEST_API_PYTHON ?? '../api/.venv/bin/python', ['-c', 'import json; from scripts.protenix_chemistry import parameter_schema; print(json.dumps(parameter_schema()))'], { cwd: resolve('../..'), encoding: 'utf8' }));
+const protenixSchema = JSON.parse(execFileSync(process.env.BMS_TEST_API_PYTHON ?? process.env.BMS_TEST_PYTHON ?? resolve('../api/.venv/bin/python'), ['-c', 'import json; from scripts.protenix_chemistry import parameter_schema; print(json.dumps(parameter_schema()))'], { cwd: resolve('../..'), encoding: 'utf8' }));
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';

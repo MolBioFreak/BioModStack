@@ -23,6 +23,7 @@ it('mounts every native metric and emits an ordinary separate Job request', asyn
     api.defaults.adapter = async config => {
         const url = String(config.url);
         const data = url.includes('/models/laproteina/generation-settings') ? schema
+            : url === '/api/models/protein_modification_experimental' ? { id: 'protein_modification_experimental', params: [], modes: [] }
             : url.includes('execution-targets') ? [] : url.includes('resources') ? {} : null;
         if (data === null) unexpected.push(url);
         return { data, status: 200, statusText: 'OK', headers: {}, config };
