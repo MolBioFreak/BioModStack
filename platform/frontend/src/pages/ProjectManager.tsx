@@ -124,11 +124,15 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExper
     onSelectNode: (nodeKey: string, nodeType: string, subjectId: string | null) => void;
 }) {
     const context = useMemo(() => nativeProjectContext(summary), [summary]);
+    const selectedPayload = summary.selection.summary?.domain_payload;
+    const nonNativeDomain = summary.selection.node_type === 'domain_experiment'
+        && selectedPayload !== null && typeof selectedPayload === 'object' && !Array.isArray(selectedPayload)
+        && selectedPayload.schema === 'bms.ngs-molbio-experiment.v1';
     const isNativeProject = summary.project.project_scope === 'ngs_molbio_local' || context !== null;
     const stateQuery = useQuery({
         queryKey: ['project-manager', 'native-domain-state', context?.domainExperimentId ?? null],
         queryFn: () => fetchMolBioNgsDomainState(context?.domainExperimentId as string),
-        enabled: isNativeProject && context !== null,
+        enabled: isNativeProject && context !== null && !nonNativeDomain,
         retry: (count, error) => count < 5 && (error as { status?: number }).status === 404,
         retryDelay: 1000,
     });
@@ -142,11 +146,12 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExper
             selectedStateRevisionId as string,
             signal,
         ),
-        enabled: isNativeProject && context !== null && selectedStateRevisionId !== null,
+        enabled: isNativeProject && context !== null && selectedStateRevisionId !== null && !nonNativeDomain,
         retry: false,
     });
 
     if (!isNativeProject) return null;
+    if (nonNativeDomain) return <section aria-label="Workflow results" className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-5"><h2 className="font-semibold text-content">Workflow results</h2><p className="mt-2 text-sm text-content-secondary">This workflow does not use a Molecular Tools DNA workspace. Open its retained evidence under Relationships and workflow details below.</p></section>;
     if (!context) {
         const experiments = summary.tree.nodes.filter((node) => node.node_type === 'global_experiment');
         const workspaces = summary.tree.nodes.filter((node) => node.node_type === 'domain_experiment');
