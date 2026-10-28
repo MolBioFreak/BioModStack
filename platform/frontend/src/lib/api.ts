@@ -6513,7 +6513,7 @@ export const registerOntExternalMoveBamCandidate = (
 ));
 export const registerOntMoveSource = (runId: string, observedGeneration: number, request: {
     raw_representation_id: string;
-    input_file_id: string;
+    input_file_id?: string | null;
     molecule_type: 'dna' | 'rna';
     source_job_id: string;
 }) => apiData(api.post<OntMoveTableSource>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/move-sources`, request));
