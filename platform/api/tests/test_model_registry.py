@@ -236,3 +236,35 @@ def test_failed_reload_preserves_the_last_complete_registry(tmp_path: Path) -> N
     assert retained is not None
     assert retained.integration is not None
     assert retained.integration.semantic_roles == record["integration"]["semantic_roles"]
+
+
+@pytest.mark.parametrize('malformed', [None, [], 'not a map', {'bad': {}},
+    {'bad': {'name': 'Bad', 'description': 'Help', 'github': 'javascript:bad',
+             'paper': 'https://example.org/paper', 'docs': 'https://example.org/docs'}}])
+def test_optional_display_references_cannot_reject_model(tmp_path: Path, malformed: Any) -> None:
+    record = _model_record('display_only')
+    record['engine_references'] = malformed
+    registry = _write_registry(tmp_path / 'models', [record])
+    model = registry.get_model('display_only')
+    assert model is not None
+    assert model.container == record['container']
+    assert model.engine_references == {}
+
+
+def test_bad_reference_does_not_hide_valid_sibling_or_weaken_scientific_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _model_record('display_only')
+    good = {'name': 'Good', 'description': 'Display metadata',
+            'github': 'https://example.org/repo', 'paper': 'https://example.org/paper',
+            'docs': 'https://example.org/docs'}
+    record['engine_references'] = {'good': good, 'bad': {**good, 'docs': 'http://unsafe.invalid'}}
+    registry = _write_registry(tmp_path / 'models', [record])
+    response = _client_for(registry, monkeypatch).get('/api/models/display_only')
+    assert response.status_code == 200
+    assert set(response.json()['engine_references']) == {'good'}
+    assert response.json()['engine_references']['good']['docs'] == good['docs']
+    broken = deepcopy(record)
+    del broken['container']
+    with pytest.raises(ValueError, match='container'):
+        _write_registry(tmp_path / 'broken', [broken])

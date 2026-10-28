@@ -732,6 +732,23 @@ class ModelDefinition(BaseModel):
     engine_containers: Dict[str, str] = Field(default_factory=dict)
     capabilities: Dict[str, Any] = Field(default_factory=dict)
     engine_references: Dict[str, ModelPublicReference] = Field(default_factory=dict)
+
+    @field_validator("engine_references", mode="before")
+    @classmethod
+    def display_references_only(cls, value: Any) -> Dict[str, ModelPublicReference]:
+        """Bad optional help must not make scientific model loading fail."""
+        if not isinstance(value, dict):
+            return {}
+        references = {}
+        for key, entry in value.items():
+            if not isinstance(key, str):
+                continue
+            try:
+                references[key] = ModelPublicReference.model_validate(entry)
+            except (ValueError, TypeError):
+                continue
+        return references
+
     public_launch: bool = True
     integration: Optional[ModelIntegration] = None
     
