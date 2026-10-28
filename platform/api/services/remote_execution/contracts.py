@@ -304,6 +304,7 @@ class ArtifactInventoryStatus(StrictModel):
 class ExecutionTargetStatusFields(StrictModel):
     setup: ExecutionTargetSetup | None = None
     progress: RemoteArtifactProgress | None = None
+    can_remove_from_list: bool = False
     active_job_ids: list[str] = Field(default_factory=list)
     job_progress: list[RemoteArtifactProgress] = Field(default_factory=list)
     id: str

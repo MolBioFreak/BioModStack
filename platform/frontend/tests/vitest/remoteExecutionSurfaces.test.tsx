@@ -148,6 +148,45 @@ afterEach(() => {
 });
 
 describe('remote execution operator surfaces', () => {
+    it.each([false, true])('removes only an absent worker and retains selection on error=%s', async (fail) => {
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const stale = { ...persistedDiscoveredTarget, state: 'inactive', can_remove_from_list: true,
+            active_job_ids: ['old-job'], name: 'Absent Florida' };
+        let removed = false;
+        const posts: string[] = [];
+        window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, stale.id);
+        api.defaults.adapter = async config => {
+            if (config.url === '/api/execution-targets') return response(removed ? [readyTarget] : [stale, readyTarget]);
+            if (config.method === 'post') {
+                posts.push(config.url!);
+                expect(config.url).toBe('/api/execution-targets/vast%3A456/dismiss');
+                if (fail) throw new Error('Discover again');
+                removed = true;
+                return response(stale);
+            }
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div'); document.body.append(container);
+        const root = createRoot(container);
+        const flush = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(30); }); };
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>));
+            await flush();
+            const buttons = [...container.querySelectorAll('button')].filter(b => b.textContent === 'Remove from list');
+            expect(buttons).toHaveLength(1);
+            expect(buttons[0].title).toContain('Job history is retained');
+            expect(container.textContent).not.toContain('Attach worker');
+            await act(async () => buttons[0].click()); await flush();
+            expect(posts).toEqual(['/api/execution-targets/vast%3A456/dismiss']);
+            expect(container.textContent?.includes('Absent Florida')).toBe(fail);
+            expect(container.textContent).toContain('Remote 4090');
+            if (fail) expect(container.textContent).toContain('Remove failed');
+            expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBe(stale.id);
+        } finally {
+            await act(async () => root.unmount()); client.clear(); vi.useRealTimers();
+        }
+    });
     it('keeps verified attachment manageable after runtime failure without selecting science', async () => {
         vi.useFakeTimers();
         const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

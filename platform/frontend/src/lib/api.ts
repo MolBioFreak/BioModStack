@@ -694,6 +694,7 @@ export interface RemoteArtifactProgress {
 }
 
 export interface ExecutionTarget {
+    can_remove_from_list?: boolean;
     artifact_inventory?: ObservedArtifactInventory | null;
     preload?: RemotePreloadProgress | null;
     progress?: RemoteArtifactProgress | null;
@@ -906,6 +907,9 @@ export const activateExecutionTarget = (providerInstanceId: string, endpoint?: {
         provider_instance_id: providerInstanceId,
         ...endpoint,
     });
+
+export const dismissExecutionTarget = (executionTargetId: string) =>
+    api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(executionTargetId)}/dismiss`);
 
 export const deactivateExecutionTarget = (executionTargetId: string) =>
     api.post<ExecutionTarget>(

@@ -19,7 +19,7 @@ from services.remote_execution.contracts import (
 from services.remote_execution.targets import (
     ExecutionTargetError,
     active_remote_telemetry,
-    deactivate_target,
+    deactivate_target, dismiss_target,
     list_targets, get_target, observed_artifact_inventory,
     refresh_vast_targets, target_status, artifact_page, _target_response,
 )
@@ -119,6 +119,14 @@ async def activate_execution_target(
         if controller is None:
             raise HTTPException(status_code=503, detail="Attachment service is unavailable")
         return await controller.attach(session, request)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{execution_target_id}/dismiss", response_model=ExecutionTargetResponse)
+async def dismiss_execution_target(execution_target_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        return await dismiss_target(session, execution_target_id)
     except ExecutionTargetError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

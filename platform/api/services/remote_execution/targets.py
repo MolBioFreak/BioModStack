@@ -177,6 +177,7 @@ def _target_response(target: Any, *, details: bool = False) -> ExecutionTargetRe
         artifact_inventory=observed_artifact_inventory(target, compact=not details),
         setup=(target.provider_metadata or {}).get("setup"),
         preload=preload,
+        can_remove_from_list=_can_remove_from_list(target),
         active_job_ids=active_job_ids,
         job_progress=job_progress,
         progress=job_progress[0] if job_progress else None,
@@ -367,6 +368,11 @@ async def _status_rows(session, *, identifier=None, order=False):
     if order:
         query = query.where(or_(ExecutionTarget.active.is_(True), ~target_idle_clause(),
                                 ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True)))
+        query = query.where(or_(
+            func.coalesce(ExecutionTarget.provider_metadata["dismissed_from_list"].as_boolean(), False).is_(False),
+            ExecutionTarget.active.is_(True),
+            ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True),
+        ))
         query = query.order_by(ExecutionTarget.active.desc(), ExecutionTarget.updated_at.desc())
     return [_status_row(row) for row in (await session.execute(query)).mappings()]
 
@@ -1058,6 +1064,36 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
     await session.commit()
     await session.refresh(target)
     return _target_response(target)
+
+
+def _can_remove_from_list(target) -> bool:
+    inventory = (target.provider_metadata or {}).get("inventory", {})
+    return (not target.active and target.state == "inactive"
+            and inventory_fresh(target) and inventory.get("present") is False)
+
+
+async def dismiss_target(session: AsyncSession, execution_target_id: str) -> ExecutionTargetResponse:
+    """Hide a confirmed absent worker; retain Jobs, claims and historical lookup.
+
+    This is not detach, cancellation or a provider delete. Rediscovered owned
+    instances are always visible regardless of a previous dismissal.
+    """
+    now = datetime.utcnow()
+    inventory = ExecutionTarget.provider_metadata["inventory"]
+    changed = await session.execute(update(ExecutionTarget).where(
+        ExecutionTarget.id == execution_target_id, ExecutionTarget.active.is_(False),
+        ExecutionTarget.state == "inactive", inventory["status"].as_string() == "complete",
+        inventory["present"].as_boolean().is_(False),
+        inventory["checked_at"].as_string() >= (now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
+        inventory["checked_at"].as_string() <= now.isoformat(),
+    ).values(provider_metadata=func.json_set(
+        ExecutionTarget.provider_metadata, "$.dismissed_from_list", func.json("true")
+    )).execution_options(synchronize_session=False))
+    if changed.rowcount != 1:
+        await session.rollback()
+        raise ExecutionTargetError("Only a worker confirmed absent from current provider inventory can be removed; discover again")
+    await session.commit()
+    return _target_response(await get_target(session, execution_target_id))
 
 
 async def deactivate_target(
