@@ -1318,6 +1318,45 @@ async def list_ngs_package_artifacts(
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
 
+@router.get("/jobs/{job_id}/ngs-read-report", responses=_STANDARD_GOVERNED_ERRORS)
+async def get_ngs_read_report(
+    job_id: str,
+    authorized_job: Job = Depends(require_alignment_job),
+):
+    """Yield, length, quality, mapping and modification summary from the job's reads BAM."""
+    from services.ont_read_report import OntReadReportError, build_read_report, select_reads_bam
+
+    try:
+        async with _validated_pinned_result_root(authorized_job) as pinned_root:
+            artifacts = await run_in_threadpool(
+                service.build_ngs_package_artifacts,
+                job_id,
+                **_job_package_authority(authorized_job),
+                job_output_dir=pinned_root,
+                pinned_root_descriptor=True,
+            )
+            chosen = select_reads_bam(artifacts)
+            if chosen is None or not chosen.get("artifact_id"):
+                raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+                                       message="This job published no reads BAM.", job_id=job_id, resource="artifact")
+            path, metadata = await run_in_threadpool(
+                service.resolve_ngs_package_artifact,
+                job_id,
+                chosen["artifact_id"],
+                **_job_package_authority(authorized_job),
+                job_output_dir=pinned_root,
+                pinned_root_descriptor=True,
+            )
+            public = {**metadata, "filename": chosen.get("filename") or Path(str(chosen.get("relative_path") or "")).name,
+                      "url": chosen.get("url")}
+            return await run_in_threadpool(build_read_report, Path(path), artifact=public)
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+    except OntReadReportError as exc:
+        raise OntNgsRouteError(status_code=409, code="NGS_AUTHORITY_CONFLICT", message=str(exc),
+                               job_id=job_id, resource="artifact") from exc
+
+
 @router.get("/jobs/{job_id}/ngs-artifacts/{artifact_id}", responses=_BINARY_RESPONSES)
 @router.head("/jobs/{job_id}/ngs-artifacts/{artifact_id}", responses=_BINARY_RESPONSES)
 async def get_ngs_package_artifact(
