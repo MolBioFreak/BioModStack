@@ -49,14 +49,25 @@ export interface DocumentCaptureRegistration {
 export class DocumentCaptureRegistry {
     private owners = new Map<string, DocumentCaptureRegistration>();
     private generation = 0;
+    private listeners = new Set<() => void>();
+    /** Mount-local edit notifications invalidate inspection without authoring science. */
+    changed = (): void => {
+        this.generation++;
+        for (const listener of this.listeners) listener();
+    };
+    getSnapshot = (): number => this.generation;
+    subscribe = (listener: () => void): (() => void) => {
+        this.listeners.add(listener);
+        return () => { this.listeners.delete(listener); };
+    };
 
     register(owner: string, registration: DocumentCaptureRegistration): () => void {
         this.owners.set(owner, registration);
-        this.generation++;
+        this.changed();
         return () => {
             if (this.owners.get(owner) === registration) {
                 this.owners.delete(owner);
-                this.generation++;
+                this.changed();
             }
         };
     }

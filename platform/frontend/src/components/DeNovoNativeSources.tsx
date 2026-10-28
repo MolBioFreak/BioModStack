@@ -1,3 +1,4 @@
+import { useDeNovoDocumentEditors } from './DeNovoDocumentEditors';
 import { useEffect, useRef, useState } from 'react';
 import { buildFileDownloadUrl, materializeExactStructure, materializeStructureTarget, type NativeGenerationSourceBinding, type NativeGenerationSourceBindings, type StructureMaterialization, type StructureSourceSelection } from '../lib/api';
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
@@ -92,6 +93,7 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
     integrated?: boolean;
     onRemove?: () => void; onSelection?: (slot: string, receipt: StructureMaterialization, selection: MetricSelection) => void;
 }) {
+    const editors = useDeNovoDocumentEditors();
     const [receipt, setReceipt] = useState<StructureMaterialization | undefined>(initialReceipt);
     const [saved, setSaved] = useState<{ receipt: StructureMaterialization; rows: SavedCondition[] }>();
     const [savedError, setSavedError] = useState('');
@@ -175,6 +177,7 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
             {onRemove && <button type="button" onClick={() => { epoch.current++; setBusy(false); onRemove(); }}>Remove source {slot}</button>}</div>}
 
         <div className="flex flex-wrap gap-3">
+            {!isFile && editors && (value.path || value.candidate || value.design_id || value.job_id) && <button type="button" aria-label={`Edit ${slot} in AtomWorks Studio`} onClick={() => void editors.open(slot, value, receipt)}>Edit in AtomWorks Studio</button>}
             {!isFile && <button type="button" aria-label={`Choose document for ${slot}`} onClick={() => setPicking(!picking)}>{compact ? 'Choose document' : `Choose document for ${slot}`}</button>}
             {!isFile && <button type="button" aria-label={`Choose native result for ${slot}`} onClick={() => setNativePicking(!nativePicking)}>{compact ? 'From results' : `Choose native result for ${slot}`}</button>}
             <button type="button" aria-label={`Browse ${isFile ? 'file or archive' : 'native file'} for ${slot}`} onClick={() => setBrowser(true)}>{compact ? 'Browse files' : `Browse ${isFile ? 'file or archive' : 'native file'} for ${slot}`}</button>

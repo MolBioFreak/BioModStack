@@ -90,6 +90,19 @@ it('rejects a stale action after A→B→A changes and allows a fresh capture', 
     expect((await current).source.source.path).toBe('inputs/current.cif');
 });
 
+it('dirty notifications invalidate an in-flight capture and notify only mounted inspection subscribers', async () => {
+    const registry = new DocumentCaptureRegistry(); const notify = vi.fn();
+    const unsubscribe = registry.subscribe(notify);
+    let finish!: (value: CapturedAnnotatedDocument) => void;
+    registry.register('source', { generation: () => 0, capture: () => new Promise(resolve => { finish = resolve; }) });
+    const before = registry.getSnapshot(); const pending = registry.capture();
+    registry.changed(); registry.changed();
+    expect(registry.getSnapshot()).toBe(before + 2);
+    finish(retained()); await expect(pending).rejects.toThrow('document changed');
+    expect(notify).toHaveBeenCalledTimes(3); unsubscribe(); registry.changed();
+    expect(notify).toHaveBeenCalledTimes(3);
+});
+
 it('removing an editor during capture cannot save its late export', async () => {
     const registry = new DocumentCaptureRegistry();
     let finish!: (value: CapturedAnnotatedDocument) => void;

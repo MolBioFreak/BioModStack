@@ -1,4 +1,5 @@
-import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { DeNovoDocumentEditorPanels, DeNovoDocumentEditors } from './DeNovoDocumentEditors';
+import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api, fetchNativeGenerationSettings, submitJob, completeCurrentLaunchContext, EXECUTION_TARGET_STORAGE_KEY, type Job, type NativeGenerationSourceBindings, type StructureMaterialization } from '../lib/api';
@@ -70,6 +71,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
     });
     const request = nativeDraft.request;
     const [documentCaptures] = useState(() => new DocumentCaptureRegistry());
+    const documentGeneration = useSyncExternalStore(documentCaptures.subscribe, documentCaptures.getSnapshot, documentCaptures.getSnapshot);
     const preparation = useContext(DeNovoDraftPreparationContext);
     const [molecularDocuments, setMolecularDocuments] = useState(() => record(initialValues.molecular_documents));
     const [recipe, setRecipe] = useState<string | undefined>(() => typeof initialValues.native_recipe === 'string' ? initialValues.native_recipe : undefined);
@@ -199,7 +201,8 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         onChange={value => patch(key, record(value)[key])}
         fallback={() => <p>Saved native value retained; this schema does not describe an editable value.</p>} />;
     const primary = new Set(['version', 'mode', 'operation', 'task', 'task_name', 'source', 'input', 'inputs', 'profile', 'sampling', 'seed', 'num_samples', 'nsamples', 'min_length', 'max_length', 'batch_size', 'nrepeat_per_sample', 'n_recycle']);
-    return <DocumentCaptureContext.Provider value={documentCaptures}><BioXpSchemaControlContext.Provider value={({ label, schema: child, value, onChange, path }) => {
+    return <DocumentCaptureContext.Provider value={documentCaptures}><DeNovoDocumentEditors registry={documentCaptures} sources={nativeDraft.sources}
+        onAdopt={(slot, document) => { setNativeDraft(previous => ({ ...previous, sources: { ...previous.sources, [slot]: document.source } })); setMolecularDocuments(previous => ({ ...previous, [slot]: document })); }}><BioXpSchemaControlContext.Provider value={({ label, schema: child, value, onChange, path }) => {
         if (model === 'rfd4_proteina' && child.type === 'string' && path[0] === 'input' && path.at(-1) === 'select' && String(child['x-native-mapping']).includes('.conditions.')) return <>
             <label>{label}<input aria-label={label} value={String(value ?? '')} onChange={event => onChange(event.target.value)} /></label>
             {/* Conditions are keyed by value, not source slot. Visual adoption lives
@@ -235,7 +238,8 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
             {<NativeSettingsDisclosure summary={<span>Input structures</span>}>{() => <DeNovoNativeSources onInspection={(slot, receipt, binding) => setInspections(previous => ({ ...previous, [slot]: { receipt, binding: JSON.stringify(binding) } }))} selection={currentVisual} value={nativeDraft.sources} onChange={sources => setNativeDraft(previous => ({ ...previous, sources }))}
                 onSelection={selectSource} />}</NativeSettingsDisclosure>}
             {!!inventory.data?.limitations?.length && <NativeSettingsDisclosure summary={<span>Model limits</span>}>{() => inventory.data?.limitations?.map(text => <p key={text} className="text-sm">{text}</p>)}</NativeSettingsDisclosure>}
-            <DeNovoNativePreview request={payload as Partial<Job>} />
+            <DeNovoDocumentEditorPanels />
+            <DeNovoNativePreview request={payload as Partial<Job>} prepareRequest={() => prepareCurrent.current()} documentGeneration={documentGeneration} />
         </ProteinDesignPanel></div>
         <div hidden={section !== 'Native settings'}><ProteinDesignPanel title="Native settings" description="Unchanged settings use the selected profile.">
             <NativeProfileSnapshot model={model} mode={activeMode} request={request} discovery={record(inventory.data).native_profile_defaults} generation={readbackGeneration.current.value} onReadback={(generation, effective) => setEffectiveReadback(effective ? { generation, effective } : undefined)} />
@@ -249,5 +253,5 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
             <ExecutionTargetPicker workflowRequest={payload as Partial<Job>} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
             {runDetails}{submit.error && <p role="alert">{submit.error.message}</p>}
         </ProteinDesignRun>
-    </div></BioXpSchemaControlContext.Provider></DocumentCaptureContext.Provider>;
+    </div></BioXpSchemaControlContext.Provider></DeNovoDocumentEditors></DocumentCaptureContext.Provider>;
 }
