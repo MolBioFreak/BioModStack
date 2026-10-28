@@ -94,7 +94,7 @@ function ProjectComparison({project, savedState, operationJob}: {project: string
     <fieldset disabled={running}><legend>Comparison inputs</legend>
       <label>Molecule <select value={molecule} onChange={e => setMolecule(e.target.value as typeof molecule)}><option value="protein">Protein</option><option value="dna">DNA</option><option value="rna">RNA</option></select></label>
       <label>Destination domain <select value={domain} onChange={e => setDomain(e.target.value)}><option value="">Choose a domain</option>{domains.data?.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></label>
-      {(['left', 'right'] as const).map(side => <div key={side}>
+      {(['left', 'right'] as const).map(side => <div key={side} className="alignment-comparison-side">
         <label>{side === 'left' ? 'Left' : 'Right'} result <select aria-label={`${side} result`} value={inputs[`${side}_receipt_id`]} onChange={e => change(side, 'receipt', e.target.value)}>
           <option value="">Choose a retained result</option>{receipts.data?.map((r, i) => <option key={r.receipt_id} value={r.receipt_id}>{r.entity_kind === 'family_msa_import' ? 'Imported alignment' : 'Alignment result'} {i + 1} · {r.availability} ({r.receipt_id})</option>)}
         </select></label>
