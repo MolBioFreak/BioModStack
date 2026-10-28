@@ -37,7 +37,8 @@ describe('mounted NGS workflow chooser', () => {
         expect(byKey('barcode')).toBeUndefined();
         expect(byKey('bamQc')).toBeUndefined();
         expect(byKey('modified')?.textContent).toContain('Methylation analysis');
-        expect(byKey('dna')?.textContent).toContain('optional paired strands, barcodes and modification calls');
+        expect(byKey('dna')?.textContent).toContain('DNA POD5, BAM or FASTQ');
+        expect(byKey('dna')?.textContent).toContain('tandem methylation analysis');
         expect(byKey('dna')?.getAttribute('aria-pressed')).toBe('true');
         expect(cards.filter((card) => card.getAttribute('aria-pressed') === 'true')).toHaveLength(1);
         expect(byKey('clone')?.getAttribute('aria-pressed')).toBe('false');
@@ -72,7 +73,7 @@ describe('mounted NGS workflow chooser', () => {
             keys: Array.from(group.querySelectorAll<HTMLElement>('[data-ngs-workflow-key]')).map((node) => node.dataset.ngsWorkflowKey),
         }));
         expect(groups).toEqual([
-            { label: 'Start from raw signal', keys: ['dna', 'rna'] },
+            { label: 'General DNA analysis and RNA basecalling', keys: ['dna', 'rna'] },
             { label: 'Analyse reads against a saved sequence', keys: ['clone', 'fastqQc', 'modified'] },
             { label: 'Review pooled samples', keys: ['pooledAssignment'] },
         ]);
