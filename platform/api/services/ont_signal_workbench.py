@@ -1677,7 +1677,7 @@ async def _validated_failed_external_move_source(
             or representation.observed_generation != predecessor.observed_generation
             or source_receipt.get("raw_manifest_sha256") != representation.manifest_sha256
             or tracked.file_type != "bam"
-            or tracked.size_bytes != predecessor.artifact_size_bytes
+            or tracked.size_bytes not in (None, predecessor.artifact_size_bytes)
         ):
             raise OntSignalError("retained job move-source authority diverged")
         return predecessor, None, representation
