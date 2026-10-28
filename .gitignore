@@ -20,6 +20,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
+# Generated alignment package build output
+/packages/bms-alignment-core/build/
+/packages/bms-alignment-core/*.egg-info/
+
 # Node/build caches
 node_modules/
 node_modules/.tmp/
