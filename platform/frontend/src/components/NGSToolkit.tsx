@@ -69,6 +69,7 @@ import { isOwnedFullscreen, toggleOwnedFullscreen } from './ngs/ngsFullscreenOwn
 import { BarcodeUnitsPanel } from './ngs/BarcodeUnitsPanel';
 import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
+import { OntReadReportPanel } from './ngs/OntReadReportPanel';
 import { OntFastqQcResultPanel } from './ngs/OntFastqQcResultPanel';
 import { AlignmentPresentationStatus } from './ngs/AlignmentPresentationStatus';
 import { useOntFastqQcResult } from './ngs/useOntFastqQcResult';
@@ -2543,6 +2544,7 @@ export function NGSToolkit() {
                 ? selectedJobParams.workflow_id
                 : null;
     const isCanonicalFastqQcRun = isFastqOnlyRun && selectedOntWorkflowId === 'ont_fastq_qc';
+    const showOntReadReport = !isCanonicalFastqQcRun && selectedJob?.status === 'completed' && !!selectedOntWorkflowId && /^ont_/.test(selectedOntWorkflowId) && (hasPod5Input || hasBamInput);
     const sequenceQcManifestState = useSequenceQcManifest(selectedJob?.id, selectedJob?.status);
     const ontFastqQcResultState = useOntFastqQcResult(
         selectedJob?.id,
@@ -4733,6 +4735,15 @@ export function NGSToolkit() {
                                             }}
                                             onRecoverAccess={ontFastqQcResultState.accessDenied ? restoreAlignmentAccess : undefined}
                                             recoveryPending={alignmentAccessRecoveryPending}
+                                        />
+                                    </div>
+                                )}
+                                {showOntReadReport && (
+                                    <div className="space-y-2">
+                                        <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Run result</h4>
+                                        <OntReadReportPanel
+                                            jobId={selectedJob.id}
+                                            onOpenSignal={signalDatasetId && rawSignalRunId && rawSignalObservedGeneration ? () => openSignalWorkbench() : undefined}
                                         />
                                     </div>
                                 )}

@@ -220,6 +220,7 @@ export default defineConfig({
             './tests/vitest/ontSignalIdealComparison.test.tsx',
             './tests/vitest/ngsAlignmentAccessLifetimeMounted.test.tsx',
             './tests/vitest/ontFastqQcResultPanel.test.tsx',
+            './tests/vitest/ontReadReportPanel.test.tsx',
             './tests/vitest/molbio-sanity-*.test.tsx',
             './tests/vitest/restrictionAnalysis.test.ts',
             './tests/vitest/molBioMobileToolbar.test.tsx',
