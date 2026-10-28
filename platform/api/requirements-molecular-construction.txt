@@ -1,0 +1,5 @@
+# Optional connected-graph qualification environment; not a managed API install.
+# Install into an isolated environment alongside the API's locked test deps.
+# No geometry provider, coordinates, model weights, or inference runtime implied.
+rdkit==2026.9.1
+biotite==1.7.1
