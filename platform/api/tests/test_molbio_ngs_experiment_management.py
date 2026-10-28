@@ -482,6 +482,30 @@ def test_online_backup_atomic_restore_and_exact_attestation(tmp_path: Path, monk
         )
         connection.commit()
 
+    # A populated, already-migrated startup does not read retained artifact bytes.
+    import molbio_ngs_migrations as migrations
+    hashes = []
+    sha256_file = migrations._sha256_file
+
+    def record_hash(path):
+        hashes.append(path)
+        return sha256_file(path)
+
+    with monkeypatch.context() as audit_patch:
+        audit_patch.setattr(migrations, "_sha256_file", record_hash)
+        run_all(source, verify_data=False)
+        assert hashes == []
+        run_all(source)
+        assert artifact_path in hashes
+        # Same-length byte corruption remains detectable by explicit full audit.
+        artifact_path.write_bytes(b"X" * len(artifact_bytes))
+        run_all(source, verify_data=False)
+        report = health(source)["attestation"]
+        assert isinstance(report, dict) and report["artifact_errors"]
+        with pytest.raises(sqlite3.IntegrityError, match="schema attestation failed"):
+            run_all(source)
+        artifact_path.write_bytes(artifact_bytes)
+
     manifest = backup_database(source, backup)
     manifest_path = Path(f"{backup}.manifest.json")
     assert manifest_path.read_text(encoding="utf-8") == _canonical(manifest) + "\n"

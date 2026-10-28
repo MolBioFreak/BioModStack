@@ -1705,8 +1705,9 @@ def attest_schema(
 ) -> dict[str, object]:
     """Attest schema; optionally audit retained rows and artifact bytes too.
 
-    Startup, release and restore retain the full audit. Ordinary health probes
-    only need the fixed-size schema/ledger checks, not a scan of scientific data.
+    Explicit verification, release, restore and actual migrations retain the full
+    audit. Already-migrated startup and ordinary health probes only check schema
+    and ledger, not retained scientific rows or artifact bytes.
     """
 
     expected_objects = _expected_schema_objects()
@@ -1766,7 +1767,8 @@ def attest_schema(
     }
 
 
-def run_all(db_path: str | Path) -> None:
+def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
+    """Migrate and attest; schema-only reopen still fully audits actual upgrades."""
     path = Path(db_path).expanduser().resolve()
     connection = _connect(path)
     try:
@@ -1778,6 +1780,7 @@ def run_all(db_path: str | Path) -> None:
         expected_rows = _expected_ledger_rows()
         if rows != expected_rows[: len(rows)]:
             raise RuntimeError(f"MolBio/NGS migration ledger mismatch: {rows!r}")
+        migrated = rows != expected_rows
         for version, name, checksum, description, migration_sql in registry[len(rows) :]:
             if version == MIGRATION_V4_VERSION:
                 _apply_v4_upgrade(connection)
@@ -1796,7 +1799,7 @@ def run_all(db_path: str | Path) -> None:
         ).fetchall()
         if rows != expected_rows:
             raise RuntimeError(f"MolBio/NGS migration ledger mismatch: {rows!r}")
-        attestation = attest_schema(connection)
+        attestation = attest_schema(connection, verify_data=verify_data or migrated)
         if not attestation["ok"]:
             raise sqlite3.IntegrityError(f"MolBio/NGS schema attestation failed: {attestation!r}")
     except Exception:
