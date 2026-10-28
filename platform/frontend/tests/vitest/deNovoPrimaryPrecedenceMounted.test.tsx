@@ -18,6 +18,7 @@ function native(code: string, value?: unknown) {
     return JSON.parse(execFileSync(python, ['-c', code], { cwd, input: value === undefined ? undefined : JSON.stringify(value), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }));
 }
 const inventories = native("import sys,json;sys.path.insert(0,'platform/api');from services.rfd4_proteina import generation_settings as r;from services.complexa import discovery as c;from scripts.lib.laproteina_contract import settings_schema as l;from scripts.lib.disco_contract import settings_schema as d;from scripts.lib.rfd3_scientific_settings import scientific_inventory as f;print(json.dumps({'rfd4_proteina':{m:r(m) for m in ('generate','evaluate')},'complexa':{m:c() for m in ('generate','evaluate')},'rfd3':f(),'laproteina':{'parameter_schema':l()},'disco':{'parameter_schema':d()}}))");
+const constructionSchema = native("import sys,json;sys.path.insert(0,'platform/api');from routers.molecular_construction import construction_schema;print(json.dumps(construction_schema()))");
 const project = (params: unknown) => native('import json,sys;from scripts.lib.protein_cad_settings import settings_projection;print(json.dumps(settings_projection(json.load(sys.stdin))))', params);
 let root: Root | undefined, client: QueryClient;
 let prior: typeof api.defaults.adapter;
@@ -41,6 +42,7 @@ beforeEach(() => {
             const model = config.params.generator;
             data = inventories[model];
         } else if (/^\/api\/models\/(rfd4_proteina|complexa)\/generation-settings$/.test(url)) data = inventories[url.split('/')[3]][config.params.mode];
+        else if (url === '/api/molecular-construction/schema' && config.method === 'get') data = constructionSchema;
         else if (url === '/api/jobs' && config.method === 'post') data = { id: 'inert-job' };
         else if (['/api/models', '/api/input-presets', '/api/inputs/presets', '/api/execution-targets'].includes(url)) data = [];
         else if (/^\/api\/models\/[^/]+$/.test(url)) data = { id: url.split('/').at(-1), params: [], modes: [], engine_references: {} };
