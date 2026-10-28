@@ -239,6 +239,17 @@ def test_schema_rejects_expected_reference_screen_overclaim(field: str, replacem
         service.validate_ont_fastq_qc_result_contract(value)
 
 
+@pytest.mark.parametrize("status", ["completed", "not_assessed"])
+def test_schema_accepts_verifier_variant_analysis_status(status: str) -> None:
+    # scripts/verify_construct.py always writes this field into the verification summary.
+    value = _fixture()
+    value["verification"]["summary"]["variant_analysis_status"] = status
+    service.validate_ont_fastq_qc_result_contract(value)
+    value["verification"]["summary"]["variant_analysis_status"] = "unknown"
+    with pytest.raises(service.OntNgsResultError, match="result schema is invalid"):
+        service.validate_ont_fastq_qc_result_contract(value)
+
+
 def test_ngs_result_openapi_publishes_the_normative_closed_contract() -> None:
     from fastapi import FastAPI
     from routers import ngs_alignment_sessions as routes
