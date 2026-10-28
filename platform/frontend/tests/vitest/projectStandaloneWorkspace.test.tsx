@@ -35,6 +35,16 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(() => root.unmount()); client.clear(); host.remove(); });
 describe('standalone NGS/MolBio Projects', () => {
+    it('does not request a Molecular Tools workspace for a v1 alignment domain', async () => {
+        const value = summary([project, experiment, workspace('d')], workspace('d'));
+        value.selection.summary = { domain_payload: { schema: 'bms.ngs-molbio-experiment.v1' } };
+        await render(value);
+        await settle();
+        expect(host.textContent).toContain('Workflow results');
+        expect(host.textContent).not.toContain('could not be loaded');
+        expect(api.fetchMolBioNgsDomainState).not.toHaveBeenCalled();
+        expect(api.fetchProjectHub).not.toHaveBeenCalled();
+    });
     it('shows sequence intake guidance without requiring generic experiment setup', async () => {
         await render(summary([project]));
         expect(host.textContent).toContain('No DNA sequences attached yet');
