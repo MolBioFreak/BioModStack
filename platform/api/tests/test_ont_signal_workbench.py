@@ -572,7 +572,8 @@ def _assert_v33_startup_authority(db_path: Path) -> None:
 
 
 def _assert_v34_startup_authority(db_path: Path) -> None:
-    from migrations.add_ont_move_source_attempt_lineage import attest
+    # Startup applies migration 49, which amends migration 34's lineage trigger.
+    from migrations.allow_ont_job_move_source_fresh_attempts import attest
 
     migration = next(item for item in MIGRATIONS if item.version == 34)
     expected_checksum = migration_runner._migration_content_sha256(migration)
@@ -652,6 +653,7 @@ async def test_upgraded_database_startup_applies_and_attests_migrations_33_and_3
     migrate_terminal_move_source_immutability(str(db_path))
     migrate_external_receipt_binding(str(db_path))
     migrate_lookup_terminal_immutability(str(db_path))
+    next(item for item in MIGRATIONS if item.version == 49).fn(str(db_path))
     with sqlite3.connect(db_path) as connection:
         for version in range(37, max(item.version for item in MIGRATIONS) + 1):
             connection.execute(
@@ -719,6 +721,7 @@ async def test_upgraded_database_startup_rejects_same_name_altered_migration_33_
     next(item for item in MIGRATIONS if item.version == 34).fn(str(db_path))
     migrate_external_receipt_binding(str(db_path))
     migrate_lookup_terminal_immutability(str(db_path))
+    next(item for item in MIGRATIONS if item.version == 49).fn(str(db_path))
     with sqlite3.connect(db_path) as connection:
         for version in range(37, max(item.version for item in MIGRATIONS) + 1):
             connection.execute(
@@ -5583,3 +5586,21 @@ def test_viewer_session_request_and_response_state_schemas_share_closed_literals
         router.ViewerIgvStateResponse.model_validate({"host_path": "/tmp/escape"})
     with pytest.raises(ValueError):
         router.ViewerSignalStateResponse.model_validate({"command": "squigualiser plot"})
+
+
+def test_migration_49_allows_fresh_attempt_for_failed_job_move_source(tmp_path: Path) -> None:
+    from migrations.allow_ont_job_move_source_fresh_attempts import attest, migrate as migrate_49
+
+    db_path = tmp_path / "job-retry.db"
+    _bootstrap_migration_parents(db_path)
+    _materialize_exact_ont_migration_chain(db_path)
+    migrate_external_receipt_binding(str(db_path))
+    migrate_49(str(db_path))
+    migrate_49(str(db_path))  # idempotent
+    with sqlite3.connect(db_path) as connection:
+        attest(connection)
+        sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name='trg_ont_move_source_attempt_lineage_insert'"
+        ).fetchone()[0]
+        assert "predecessor.source_job_id IS NULL) != (predecessor.external_registration_receipt_id IS NULL)" in sql
+        assert "AND NEW.source_job_id IS predecessor.source_job_id" in sql

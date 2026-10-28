@@ -21,7 +21,7 @@ desktop.mkdir(parents=True,exist_ok=True)
 icon=root/'source/platform/assets/icons/biomodstack_tray.png'
 entries=[
  ('org.bns.plasmid-toolkit.desktop','BNS Plasmid Development Toolkit',f'"{root}/control-panel.sh"','Start, stop and manage the local plasmid development platform'),
- ('bns-molbio.desktop','BNS MolBio Viewer',f'"{root}/open-workspace.sh" /designer','Open molecular biology and plasmid development tools'),
+ ('bns-molbio.desktop','BNS Molecular Tools',f'"{root}/open-workspace.sh" /designer','Open molecular biology and plasmid development tools'),
  ('bns-ngs.desktop','BNS NGS Workbench',f'"{root}/open-workspace.sh" /ngs','Open the local ONT and NGS workspace'),
 ]
 for directory,names in [(applications,['org.biomodstack.panel.desktop','biomodstack-molbio.desktop','biomodstack-ngs.desktop']), (desktop,['BioModStack Control Panel.desktop','BioModStack MolBio Viewer.desktop','BioModStack NGS.desktop'])]:
@@ -40,7 +40,7 @@ Icon={icon}
 Terminal=false
 Categories=Science;
 StartupNotify=true
-Keywords=BNS;Plasmid;MolBio;NGS;ONT;
+Keywords=BNS;Plasmid;MolBio;Molecular;NGS;ONT;
 '''
  if filename.startswith('org.'):text+='StartupWMClass=org.biomodstack.panel\n'
  for path in [applications/filename,desktop/(name+'.desktop')]:
@@ -49,4 +49,4 @@ Keywords=BNS;Plasmid;MolBio;NGS;ONT;
   subprocess.run(['desktop-file-validate',str(path)],check=True)
   if path.parent==desktop:subprocess.run(['gio','set',str(path),'metadata::trusted','true'],check=False,capture_output=True)
 subprocess.run(['update-desktop-database',str(applications)],check=True)
-print('Installed BNS Control Panel, MolBio Viewer and NGS Workbench launchers')
+print('Installed BNS Control Panel, Molecular Tools and NGS Workbench launchers')

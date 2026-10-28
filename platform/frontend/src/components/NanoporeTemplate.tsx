@@ -426,10 +426,10 @@ function ImportedMolBioRecords({ records }: { records: MolBioSequenceImportCommi
     const { contextHref } = useGlobalExperimentContext();
     if (!records.length) return null;
     return <div data-testid="molbio-import-committed-records" className="mt-3 space-y-2 text-xs">
-        <p>All imported records are saved in the shared MolBio library. Open each desired revision in the MolBio viewer and explicitly attach it to the Experiment. No record was automatically attached or selected for launch.</p>
+        <p>All imported records are saved in the shared Molecular Tools library. Open each desired revision in Molecular Tools and explicitly attach it to the Experiment. No record was automatically attached or selected for launch.</p>
         <ul>{records.map((record, index) => <li key={`${record.sequence_id}:${record.revision_id}:${index}`}>
             {record.name} · {record.sequence_id} · {record.revision_id || 'revision ID not returned'} · {' '}
-            <Link to={contextHref('/designer', { molbio_sequence_id: record.sequence_id, molbio_revision_id: record.revision_id ?? null })} className="underline">{record.revision_id ? 'Open exact revision in MolBio viewer' : 'Open MolBio library'}</Link>
+            <Link to={contextHref('/designer', { molbio_sequence_id: record.sequence_id, molbio_revision_id: record.revision_id ?? null })} className="underline">{record.revision_id ? 'Open exact revision in Molecular Tools' : 'Open Molecular Tools library'}</Link>
         </li>)}</ul>
     </div>;
 }
@@ -1849,7 +1849,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     {legacyHintsLoaded && legacyReferenceHints.length > 0 && <><select value={selectedLegacyReferenceId} onChange={(event) => setSelectedLegacyReferenceId(event.target.value)} className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm">{legacyReferenceHints.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · untrusted {entry.source} hint</option>)}</select>{selectedLegacyReference && <div className="text-xs"><div>Hint ID: <span className="font-mono">{selectedLegacyReference.id}</span></div>{selectedLegacyReference.source === 'path' && <div className="text-[var(--warning)]">Path-only hint: paste the original FASTA; a path is not sequence content.</div>}</div>}<button type="button" onClick={() => selectedLegacyReference && importLegacyReferenceMutation.mutate(selectedLegacyReference)} disabled={!selectedLegacyReference || !availability.canMutateDomain || usesMolBioReceiptLane || importLegacyReferenceMutation.isPending} title={!availability.canMutateDomain ? availability.reason : undefined} className="px-3 py-2 rounded border disabled:opacity-40">{importLegacyReferenceMutation.isPending ? 'Importing…' : 'Save browser hint to shared MolBio'}</button></>}
                 </div>}
                 <ImportedMolBioRecords records={referenceImportContext === `${exactDomainExperimentId}:${exactStateRevisionId}` ? importedReferenceRecords : []} />
-                {referenceMoleculeType === 'rna' && referenceTab !== 'managed' && <p className="text-xs">RNA records use the shared RNA writer and preserve topology. The declared RNA alphabet canonicalizes T to U. Records are saved independently; any partial completion is listed. Open the shared MolBio viewer to choose and attach the saved revision explicitly.</p>}
+                {referenceMoleculeType === 'rna' && referenceTab !== 'managed' && <p className="text-xs">RNA records use the shared RNA writer and preserve topology. The declared RNA alphabet canonicalizes T to U. Records are saved independently; any partial completion is listed. Open Molecular Tools to choose and attach the saved revision explicitly.</p>}
                 {referenceLibraryNotice && <p role="status" className="text-xs text-[var(--text-secondary)]">{referenceLibraryNotice}</p>}
             </div>
             )}
