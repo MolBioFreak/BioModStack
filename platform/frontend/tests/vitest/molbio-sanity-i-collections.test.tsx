@@ -26,6 +26,7 @@ vi.mock('../../src/lib/api', async (importOriginal) => {
     fetchOntProtocolOptions: vi.fn(),
     fetchOntInstrumentRuns: vi.fn().mockResolvedValue([]),
     fetchOntExternalPod5Candidates: vi.fn().mockResolvedValue({ candidates: [] }),
+    fetchOntRawSignalRetention: vi.fn().mockResolvedValue({ policy: 'keep_pod5' }), saveOntRawSignalRetention: vi.fn(),
     fetchOntInstrumentRunGeneration: vi.fn(), fetchOntRawSignalCapabilities: vi.fn(), fetchOntRawSignalWaveform: vi.fn(),
     requestOntBlow5Preparation: mock.control, requestOntRawSignalWaveform: mock.control,
     registerOntExternalPod5Candidate: mock.control, requestMk1dReconnect: mock.control,
