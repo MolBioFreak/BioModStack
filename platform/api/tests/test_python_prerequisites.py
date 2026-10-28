@@ -65,11 +65,25 @@ class PrerequisitesTest(unittest.TestCase):
                 lock.write_text(original.replace(old, new))
                 self.assertEqual(p.locked_build_policy(lock), (["--no-build"], []))
 
+    def test_first_party_alignment_build_keeps_other_sources_restricted(self):
+        lock, original = self.source_only_lock()
+        local = ('\n[[package]]\nname = "bms-alignment-core"\nversion = "0.1.0"\n'
+                 'source = { directory = "../../packages/bms-alignment-core" }\n')
+        lock.write_text(original + local)
+        flags, approved = p.locked_build_policy(lock)
+        self.assertNotIn("bms-alignment-core", flags)
+        self.assertIn("future-source-package", flags)
+        lock.write_text(original + local.replace('directory = "../../packages/bms-alignment-core"',
+                                                'registry = "https://pypi.org/simple"'))
+        self.assertIn("bms-alignment-core", p.locked_build_policy(lock)[0])
+
     def test_source_build_exception_is_recorded_and_scoped_to_locked_sync(self):
         self.source_only_lock()
         commands = []
         def success(command, **kwargs):
             commands.append((command, kwargs["env"]["UV_NO_BUILD"]))
+            if "sync" in command:
+                self.assertEqual(kwargs["cwd"], self.source / "platform/api")
             return subprocess.CompletedProcess(command, 0)
         with patch.object(p.subprocess, "run", side_effect=success), \
              patch.object(p, "check_environment", return_value="inventory"), \

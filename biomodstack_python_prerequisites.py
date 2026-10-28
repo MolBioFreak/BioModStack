@@ -57,7 +57,16 @@ def locked_build_policy(lock: Path) -> tuple[list[str], list[dict]]:
             or re.findall(r'\burl = "([^"]+)"', sdists[0]) != [DOCOPT_SOURCE["url"]]
             or re.findall(r'\bhash = "([^"]+)"', sdists[0]) != [DOCOPT_SOURCE["hash"]]):
         return ["--no-build"], []
-    flags = [part for name in sorted({name for name, _ in packages} - {"docopt"})
+    # The first-party package is source shipped with this checkout, not a
+    # registry source-build exception. Keep other distributions wheel-only.
+    local_alignment = any(
+        name == "bms-alignment-core"
+        and re.findall(r'^source = (.+)$', stanza, re.M)
+        == ['{ directory = "../../packages/bms-alignment-core" }']
+        for name, stanza in packages
+    )
+    buildable = {"docopt"} | ({"bms-alignment-core"} if local_alignment else set())
+    flags = [part for name in sorted({name for name, _ in packages} - buildable)
              for part in ("--no-build-package", name)]
     # A lone/empty synthetic lock must not turn into unrestricted source builds.
     if not flags:
@@ -259,7 +268,10 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
             save(root, state)
             with open(row["log"], "w") as log:
                 command_env = {**env, "UV_NO_BUILD": "false"} if approved_source else env
-                p = subprocess.run(command, cwd=staging, env=command_env, stdout=log,
+                # Local path dependencies are relative to the API checkout;
+                # staging only the lock manifests loses their package tree.
+                cwd = project_root / "platform/api" if step == "locked-sync" else staging
+                p = subprocess.run(command, cwd=cwd, env=command_env, stdout=log,
                                    stderr=subprocess.STDOUT, timeout=timeout)
             row.update(exit_code=p.returncode, status="complete" if p.returncode == 0 else "failed")
             save(root, state)
