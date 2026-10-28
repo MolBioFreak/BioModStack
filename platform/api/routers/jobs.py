@@ -5995,7 +5995,7 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     Runtime presence/readiness remains the materialization owner's concern.
     """
     from product_scope import NGS_MODEL_IDS
-    if job_data.model_id not in NGS_MODEL_IDS:
+    if str(job_data.model_id or "").strip().lower() not in NGS_MODEL_IDS:
         raise HTTPException(422, "This installation provides MolBio and NGS workflows only.")
     job_data = job_data.model_copy(deep=True)
     registry = registry or get_registry()

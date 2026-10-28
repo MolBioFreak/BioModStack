@@ -23,11 +23,12 @@ async def test_populated_v22_upgrade_and_reopen(tmp_path):
                 session, project_id=project_id, relationship_kind='primary',
                 global_experiment_id=None, experiment_name='Retained v22',
                 experiment_objective='Reopen unchanged', domain_kind='protein_in_silico',
-                capability_id='protein.de_novo.rfd3', idempotency_key='create-v22')
-            await workflow_setups.save_workflow_setup_draft(
+                capability_id='protein.structure_prediction.esmfold2', idempotency_key='create-v22')
+            saved = await workflow_setups.save_workflow_setup_draft(
                 session, project_id=project_id, setup_context_id=setup['setup_context_id'],
                 expected_generation=0, idempotency_key='save-v22',
-                draft={'editor_state': {'zero': 0, 'false': False, 'empty': ''}})
+                draft={'sequence': 'MQIFVK'})
+            saved_draft = saved['draft']
             await session.commit()
     finally:
         await engine.dispose()
@@ -69,7 +70,7 @@ async def test_populated_v22_upgrade_and_reopen(tmp_path):
         async with create_experiment_session_factory(engine)() as session:
             reopened = await workflow_setups.get_workflow_setup(session, project_id=project_id, setup_context_id=setup['setup_context_id'])
             assert reopened['generation'] == 1
-            assert reopened['draft'] == {'zero': 0, 'false': False, 'empty': ''}
+            assert reopened['draft'] == saved_draft
             assert reopened['setup_destination'] == setup['setup_destination']
     finally:
         await engine.dispose()

@@ -460,13 +460,13 @@ def _launch_context_error(exc: LaunchContextError) -> HTTPException:
 @router.get("/api/domain-adapters")
 async def list_domain_adapters() -> dict:
     return {"schema": "bms.global.adapter-registry.v1", "adapters": [
-        item for item in registry.list() if item["domain_kind"] == "ngs_molbio"
+        item for item in registry.list() if item["domain_kind"] == "ngs_molbio" or item["adapter_id"] == "bms.family-msa.family_msa_protein.adapter.v1"
     ]}
 
 
 def _edition_adapter(adapter_id: str):
     adapter = registry.get(adapter_id)
-    if adapter.domain_kind != "ngs_molbio":
+    if adapter.domain_kind != "ngs_molbio" and adapter_id != "bms.family-msa.family_msa_protein.adapter.v1":
         raise AdapterError("unknown_adapter", "adapter is not available in the NGS/MolBio edition")
     return adapter
 

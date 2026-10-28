@@ -872,13 +872,11 @@ def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | N
         "native_entrypoint": native_entrypoint,
         "normalized_job_request": request.model_dump(mode="json"),
     }
-    declared = _CAPABILITY_BY_ID.get(capability_id)
-    if declared is None and setup_capability_id is not None:
+    if setup_capability_id in {'family_msa_protein', 'family_msa_nucleic'}:
         from services.family_msa_project_capabilities import family_msa_capability
         family = family_msa_capability(setup_capability_id)
-        declared = family[0] if family is not None else None
-    if declared is not None:
-        capability["result_adapter_ids"] = copy.deepcopy(declared["result_adapter_ids"])
+        if family is not None:
+            capability["result_adapter_ids"] = copy.deepcopy(family[0]["result_adapter_ids"])
     return {
         "schema": "bms.workflow-plan-capability-contract.v1",
         "capability": capability, "allowed_model_modes": [pair_document],

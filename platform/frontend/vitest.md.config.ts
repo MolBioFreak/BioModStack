@@ -6,6 +6,9 @@ export default defineConfig({
         environment: 'jsdom',
         setupFiles: ['./tests/vitest/setup.ts'],
         include: [
+            './tests/vitest/alignment*.test.ts*',
+            './tests/vitest/biojsViewer.test.tsx',
+            './tests/vitest/projectWorkflowSetup.test.tsx',
             './tests/vitest/bioxpCanvasThermalIntegrationMounted.test.tsx',
             './tests/vitest/bioxpProfilesMounted.test.tsx',
             './tests/vitest/bioxpMethodCanvas*.test.tsx',

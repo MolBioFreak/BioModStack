@@ -3061,7 +3061,7 @@ class GPUOrchestrator:
                         await session.refresh(job)
                     if (not pending and job.model_id not in {'family_msa_protein', 'family_msa_nucleic'}) or (
                         job.status not in {'awaiting_input', 'completed', 'failed', 'cancelled'}
-                        and job.queue_status != 'cancelling'
+                        and (job.model_id not in {'family_msa_protein', 'family_msa_nucleic'} or job.queue_status != 'cancelling')
                     ):
                         job.queue_status = "running"
                         job.assigned_gpu = None

@@ -3444,7 +3444,7 @@ async def reconcile_run_group(
                 terminal_job = await core_session.get(Job, attempt.scheduler_job_id)
                 native_family_msa = terminal_job is not None and terminal_job.model_id in {
                     'family_msa_protein', 'family_msa_nucleic'} and terminal_job.mode == 'family_msa'
-                if normalized.get("launch_authority", {}).get("schema") == "bms.protein-setup-launch-authority.v1" or native_family_msa:
+                if native_family_msa:
                     linked = await session.scalar(select(ExperimentLineageEdge.id).where(
                         ExperimentLineageEdge.source_resource_id == attempt.resource_id,
                         ExperimentLineageEdge.edge_mode == "produced",
