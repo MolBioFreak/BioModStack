@@ -9,22 +9,31 @@ vi.mock('../../src/lib/projectManager', () => ({
   listDomainExperiments: vi.fn().mockResolvedValue([{id:'domain', name:'Domain'}]),
 }))
 
-it('requests a backend comparison and retains its returned report in the shared revision', async () => {
-  const state = {schema:'bms.family-msa.shared-state.v1', marks:[], views:[], comparisons:[]}
+it('links to managed Compare and preserves old reports while serializing the complete renderer state', async () => {
+  sessionStorage.clear()
+  const comparison = {id:'c', name:'Prior comparison', left_artifact_id:'a', right_artifact_id:'b', method:'explicit-source-occurrence.v1', report:{rows:[{source_member_id:'m'}]}, provenance:{}}
+  const rendererState = {scrollX:0, scrollY:23, columnWidth:12, rowHeight:18, colorScheme:'clustal', hiddenColumns:[0, 3], hideGaps:false, allowedGappyness:0, zoomLevel:2}
+  const applyView = vi.fn()
+  const state = {schema:'bms.family-msa.shared-state.v1', marks:[], views:[], comparisons:[comparison]}
   const get = vi.spyOn(api, 'get').mockResolvedValue({data:{id:'dataset', head_generation:2, revision_id:'rev', state}})
   const post = vi.spyOn(api, 'post').mockResolvedValue({data:{method:'explicit-source-occurrence.v1', report:{rows:[{source_member_id:'m'}]}}})
-  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, payload) => ({data:{id:'dataset', head_generation:3, revision_id:'new', state:(payload as {state: unknown}).state}}))
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, payload) => ({data:JSON.parse(JSON.stringify({id:'dataset', head_generation:3, revision_id:'new', state:(payload as {state: unknown}).state}))}))
   const div = document.createElement('div'); document.body.appendChild(div); const root = createRoot(div)
-  await act(async () => root.render(<AlignmentShared projectId="p" receiptId="l" artifactId="a" viewer="jbrowse" applyViewer={() => {}}/>))
+  await act(async () => root.render(<AlignmentShared projectId="p" receiptId="l" artifactId="a" viewer="jbrowse" applyViewer={() => {}} rendererState={rendererState} applyView={applyView}/>))
   const set = (label: string, value: string) => { const el = [...div.querySelectorAll('label')].find(x => x.textContent?.includes(label))!.querySelector('input')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event('input',{bubbles:true})) }
   const button = (text: string) => [...div.querySelectorAll('button')].find(b => b.textContent === text)!
   await act(async () => set('Shared Dataset ID','dataset'))
   await act(async () => button('Open shared state').click())
-  await act(async () => {set('Name','Comparison'); set('Right receipt ID','r'); set('Right artifact ID','b')})
-  await act(async () => button('Compare').click())
-  expect(post).toHaveBeenCalledWith('/api/family-msa/projects/p/compare', {left_receipt_id:'l', left_artifact_id:'a', right_receipt_id:'r', right_artifact_id:'b'})
+  expect(div.querySelector('a[href*="/alignments/compare"]')?.getAttribute('href')).toBe('/alignments/compare?project_id=p&shared_state_id=dataset')
+  expect(div.textContent).toContain('Prior comparison')
+  expect(div.textContent).not.toContain('Right receipt ID')
+  await act(async () => set('Name','Full view'))
+  await act(async () => button('Save current viewer as view').click())
   await act(async () => button('Save shared revision').click())
-  expect(put).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({expected_head_generation:2, state:expect.objectContaining({comparisons:[expect.objectContaining({method:'explicit-source-occurrence.v1', report:{rows:[{source_member_id:'m'}]}})]})}))
+  expect(put).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({expected_head_generation:2, state:expect.objectContaining({comparisons:[comparison], views:[expect.objectContaining({renderer_state:rendererState})]})}))
+  await act(async () => button('Apply viewer').click())
+  expect(applyView).toHaveBeenCalledWith(expect.objectContaining({renderer_state:rendererState}))
+  expect(post).not.toHaveBeenCalled()
   await act(async () => root.unmount()); div.remove(); get.mockRestore(); post.mockRestore(); put.mockRestore()
 })
 

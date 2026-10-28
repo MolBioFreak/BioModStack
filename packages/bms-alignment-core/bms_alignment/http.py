@@ -10,7 +10,8 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, with_config
+from typing_extensions import TypedDict
 from .models import AlignmentRequest
 
 
@@ -144,6 +145,19 @@ class Mark(ClosedRequest):
     provenance: dict[str, Any] = Field(default_factory=dict)
 
 
+@with_config(ConfigDict(extra='forbid'))
+class RendererState(TypedDict, total=False):
+    scrollX: float
+    scrollY: float
+    columnWidth: float
+    rowHeight: float
+    colorScheme: str
+    hiddenColumns: list[int]
+    hideGaps: bool
+    allowedGappyness: float
+    zoomLevel: float
+
+
 class View(ClosedRequest):
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
@@ -154,6 +168,7 @@ class View(ClosedRequest):
     viewer: str | None = None
     selected_row_id: str | None = None
     selected_column: int | None = Field(default=None, ge=0)
+    renderer_state: RendererState | None = None
 
 
 class Comparison(ClosedRequest):
