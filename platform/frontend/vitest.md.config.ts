@@ -176,6 +176,7 @@ export default defineConfig({
             './tests/vitest/bioxpManualAvailabilityRecovery.test.tsx',
             './tests/vitest/bioxpErrorBounds.test.ts',
             './tests/vitest/ontInstrumentPanel.test.tsx',
+            './tests/vitest/ngsThemeSafeColors.test.ts',
             './tests/vitest/pooledAssignmentReviewPanel.test.tsx',
             './tests/vitest/conformationalMappingViewerBehavior.test.tsx',
             './tests/vitest/frustraMpnnSettingsControls.test.tsx',
