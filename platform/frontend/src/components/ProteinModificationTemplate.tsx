@@ -19,6 +19,7 @@ import ShapeBlueprintTemplate from './ShapeBlueprintTemplate';
 import { ProteinDesignSections, ProteinDesignPanel, ProteinDesignRun, themedInsetStyle } from './ProteinDesignWorkflow';
 import { LaProteinaMotifInput, type LaProteinaMotifInspection } from './LaProteinaMotifInput';
 import { DeNovoContextInput } from './DeNovoContextInput';
+import { PreparedGeometryContext, type PreparedGeometryDocument } from '../lib/preparedGeometry';
 import { MolecularConstructionWorkbench } from './MolecularConstructionWorkbench';
 import type { MolecularConstructionDraft } from '../lib/molecularConstruction';
 import { GeneralSequenceDesignSettings } from './GeneralSequenceDesignSettings';
@@ -121,6 +122,9 @@ export function ProteinModificationTemplate({
         initialValues?.molecular_construction && typeof initialValues.molecular_construction === 'object'
             ? structuredClone(initialValues.molecular_construction as MolecularConstructionDraft) : undefined);
     const constructionRef = useRef(construction);
+    const constructionGeneration = useRef(0);
+    const preparedRef = useRef<Record<string, PreparedGeometryDocument>>(structuredClone((initialValues?.prepared_geometry_documents ?? {}) as Record<string, PreparedGeometryDocument>));
+    useEffect(() => () => { constructionGeneration.current++; }, []);
     const [constructionOpen, setConstructionOpen] = useState(false);
 
     const drafts = useRef<Record<string, Record<string, unknown>>>(
@@ -130,7 +134,7 @@ export function ProteinModificationTemplate({
     const activeKey = draftKey(navigation);
     const initialized = useRef(false);
     if (!initialized.current) {
-        const { de_novo_drafts: _drafts, molecular_construction: _construction, ...activeValues } = initialValues ?? {};
+        const { de_novo_drafts: _drafts, molecular_construction: _construction, prepared_geometry_documents: _prepared, ...activeValues } = initialValues ?? {};
         for (const engine of ['laproteina', 'disco']) {
             if (navigation.generator === engine) continue;
             const legacy = Object.fromEntries(Object.entries(activeValues).filter(([key]) => key.startsWith(`${engine}_`)));
@@ -169,15 +173,16 @@ export function ProteinModificationTemplate({
     }, [navigationSignature, navigationState]);
     const reportDraft = useCallback((draft: Record<string, unknown>) => {
         // Child snapshots replace values, including explicit clears; inactive drafts never enter requests.
-        const { native_job_request, molecular_construction: _childConstruction, ...editor } = draft;
+        const { native_job_request, molecular_construction: _childConstruction, prepared_geometry_documents: _childPrepared, ...editor } = draft;
         activeRequest.current = Object.hasOwn(draft, 'native_job_request') ? { native_job_request } : {};
         drafts.current[activeKey] = { ...editor, modification_mode: savedMode };
         // Complexa derives its operation inside the request; its navigation key
         // stays stable while that operation changes.
         if (navigation.generator && navigation.generator !== 'complexa' && typeof draft.native_mode === 'string') lastModeByEngine.current[navigation.generator] = draft.native_mode;
-        callbacks.current.onDraftChange?.({ ...editor, ...activeRequest.current, ...(constructionRef.current ? { molecular_construction: constructionRef.current } : {}), ...navigation, suite_view: suiteView, suite_last_generation: { ...lastGeneration.current }, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, ...(navigation.generator === 'complexa' && typeof draft.native_mode === 'string' ? { native_mode: draft.native_mode } : {}), modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) });
+        callbacks.current.onDraftChange?.({ ...editor, ...activeRequest.current, ...(constructionRef.current ? { molecular_construction: constructionRef.current } : {}), ...(Object.keys(preparedRef.current).length ? { prepared_geometry_documents: preparedRef.current } : {}), ...navigation, suite_view: suiteView, suite_last_generation: { ...lastGeneration.current }, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, ...(navigation.generator === 'complexa' && typeof draft.native_mode === 'string' ? { native_mode: draft.native_mode } : {}), modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) });
     }, [activeKey, navigation.modification_mode, navigation.generator, navigation.design_task, navigation.native_mode, savedMode, suiteView]);
     const changeConstruction = (next: MolecularConstructionDraft) => {
+        constructionGeneration.current++;
         constructionRef.current = structuredClone(next);
         setConstruction(constructionRef.current);
         // Report synchronously through the existing Save/Template/Project owner,
@@ -218,6 +223,12 @@ export function ProteinModificationTemplate({
         </select>
     </label> : null;
     return (
+        <PreparedGeometryContext.Provider value={{ current: construction, generation: () => constructionGeneration.current, retain: document => {
+            // Coordinate equality is not recipe/provenance equality: retain each adoption.
+            const key = `${document.sha256}:${Object.keys(preparedRef.current).length}`;
+            preparedRef.current = { ...preparedRef.current, [key]: structuredClone(document) };
+            reportDraft({ ...drafts.current[activeKey], ...activeRequest.current });
+        } }}>
         <div className="space-y-3 text-[var(--text-primary)]" data-bms-de-novo-form="complete">
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="flex items-center gap-3"><button type="button" onClick={onBack} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">Back</button>
@@ -277,12 +288,13 @@ export function ProteinModificationTemplate({
                 : <ShapeBlueprintTemplate launchContextId={launchContextId} key={activeKey} embedded initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />}
             {onOpenTemplateManager && <button type="button" className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm"
                 onClick={() => onOpenTemplateManager({
-                    currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...(constructionRef.current ? { molecular_construction: constructionRef.current } : {}), ...navigation, suite_view: suiteView, suite_last_generation: { ...lastGeneration.current }, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) },
+                    currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...(constructionRef.current ? { molecular_construction: constructionRef.current } : {}), ...(Object.keys(preparedRef.current).length ? { prepared_geometry_documents: preparedRef.current } : {}), ...navigation, suite_view: suiteView, suite_last_generation: { ...lastGeneration.current }, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) },
                     currentModelId: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? generator : mode === 'rfd3_iteration' && !validatedRedesign ? 'protein_local_redesign' : 'protein_modification_experimental',
                     baseTemplateId: 'protein_modification_experimental',
                     currentMode: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? navigation.native_mode ?? 'generate' : mode === 'rfd3_iteration' ? validatedRedesign ? 'region_redesign' : 'rfd3_local_redesign' : mode,
                 })}>Template Manager</button>}
         </div>
+        </PreparedGeometryContext.Provider>
     );
 }
 

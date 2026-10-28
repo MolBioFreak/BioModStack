@@ -1,3 +1,4 @@
+import { uploadPreparedGeometry, usePreparedGeometry } from '../lib/preparedGeometry';
 import { useDeNovoDocumentEditors } from './DeNovoDocumentEditors';
 import { useEffect, useRef, useState } from 'react';
 import { buildFileDownloadUrl, materializeExactStructure, materializeStructureTarget, type NativeGenerationSourceBinding, type NativeGenerationSourceBindings, type StructureMaterialization, type StructureSourceSelection } from '../lib/api';
@@ -95,6 +96,7 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
     onRemove?: () => void; onSelection?: (slot: string, receipt: StructureMaterialization, selection: MetricSelection) => void;
 }) {
     const editors = useDeNovoDocumentEditors();
+    const prepared = usePreparedGeometry();
     const [receipt, setReceipt] = useState<StructureMaterialization | undefined>(initialReceipt);
     const [saved, setSaved] = useState<{ receipt: StructureMaterialization; rows: SavedCondition[] }>();
     const [savedError, setSavedError] = useState('');
@@ -125,16 +127,29 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
         if (previous.current !== identity) { epoch.current++; setReceipt(undefined); setBusy(false); previous.current = identity; }
     }, [identity]);
     useEffect(() => () => { epoch.current++; }, []);
-    const acquire = async (source: StructureSourceSelection, token = ++epoch.current, inspectOnly = false) => {
+    const acquire = async (source: StructureSourceSelection, token = ++epoch.current, inspectOnly = false, preparedCommit?: { current: () => boolean; retain: () => void }) => {
         setError(''); setBusy(true); setReceipt(undefined);
         try {
             const result = await materializeExactStructure({ ...source, output_format: 'native' });
-            if (epoch.current !== token) return;
+            if (epoch.current !== token || preparedCommit && !preparedCommit.current()) return;
+            preparedCommit?.retain();
             const retained = result.source_structure ?? source;
             inspectedIdentity.current = JSON.stringify(inspectOnly ? source : retained);
             if (!inspectOnly) { previous.current = JSON.stringify(retained); latest.current(retained); }
             setReceipt(result); onInspection?.(slot, result, inspectOnly ? source : retained); setPicking(false); setNativePicking(false); setBrowser(false);
-        } catch (cause) { if (epoch.current === token) setError(cause instanceof Error ? cause.message : String(cause)); }
+        } catch (cause) { if (epoch.current === token && (!preparedCommit || preparedCommit.current())) setError(cause instanceof Error ? cause.message : String(cause)); }
+        finally { if (epoch.current === token) setBusy(false); }
+    };
+    const adoptPrepared = async () => {
+        if (!prepared?.current?.geometry?.result) return;
+        const token = ++epoch.current, generation = prepared.generation();
+        const current = () => epoch.current === token && prepared.generation() === generation;
+        setBusy(true); setError('');
+        try {
+            const document = await uploadPreparedGeometry(prepared.current, fileBinding(value) ? undefined : value);
+            if (!current()) return;
+            await acquire(document.source, token, false, { current, retain: () => prepared.retain(document) });
+        } catch (cause) { if (current()) setError(String(cause)); }
         finally { if (epoch.current === token) setBusy(false); }
     };
     const select = async (source: SelectedTarget | null) => {
@@ -184,6 +199,7 @@ function NativeSourceRow({ slot, value, onChange, onRemove, onSelection, selecte
             <button type="button" aria-label={`Browse ${isFile ? 'file or archive' : 'native file'} for ${slot}`} onClick={() => setBrowser(true)}>{compact ? 'Browse files' : `Browse ${isFile ? 'file or archive' : 'native file'} for ${slot}`}</button>
             {!isFile && (value.path || value.candidate || value.design_id) && <button type="button" aria-label={`Inspect retained ${slot}`} onClick={() => void acquire(value, ++epoch.current, true)}>{compact ? 'Reload preview' : `Inspect retained ${slot}`}</button>}
         </div>
+        {!isFile && prepared?.current?.geometry?.result && <div><button type="button" disabled={busy} aria-label={`Use constructed geometry for ${slot}`} onClick={() => void adoptPrepared()}>Use constructed geometry</button><p className="text-xs text-slate-400">Explicitly selects the current positioned PDB. Graph bonds, charges, recipe and atom correspondence are retained separately; native engine chemistry compatibility is not implied.</p></div>}
         {picking && !isFile && <TargetAntigenSelector requiredFormat="native" label={`Native document for ${slot}`} onSelect={source => void select(source)} />}
         {nativePicking && !isFile && <DeNovoNativeDocumentPicker onSelect={source => void acquire(source)} />}
         {browser && <FileBrowser title={`Native source ${slot}`} allowDirectory={isFile} accept={isFile ? undefined : '.pdb,.cif,.mmcif,.bcif,.pdb.gz,.cif.gz,.mmcif.gz,.bcif.gz'} onCancel={() => setBrowser(false)} onSelect={path => {

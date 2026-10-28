@@ -1,9 +1,10 @@
 import React, { act } from 'react';
+import { webcrypto } from 'node:crypto';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { execFileSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ProteinModificationTemplate } from '../../src/components/ProteinModificationTemplate';
@@ -80,7 +81,7 @@ beforeEach(() => {
     };
 });
 async function unmount() { if (root) await act(async () => root!.unmount()); root = undefined; client?.clear(); document.body.replaceChildren(); }
-afterEach(async () => { await unmount(); api.defaults.adapter = previous; vi.restoreAllMocks(); expect(unexpected).toEqual([]); });
+afterEach(async () => { await unmount(); api.defaults.adapter = previous; vi.restoreAllMocks(); vi.unstubAllGlobals(); expect(unexpected).toEqual([]); });
 async function mount(values: Record<string, unknown> = {}) {
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
@@ -164,6 +165,53 @@ it('real graph and Undo survive JSON cold reopen and repeated parent Save withou
     expect(calls.filter(c => c.method !== 'get')).toHaveLength(count);
     expect(JSON.stringify(latest.native_job_request)).toBe(JSON.stringify(saved.native_job_request));
 });
+it.skipIf(!process.env.BMS_PREPARED_NATIVE_WIRE)('explicit prepared adoption survives construction invalidation, engine switch and parent cold persistence', async () => {
+    vi.stubGlobal('crypto', webcrypto);
+    const construction = JSON.parse(readFileSync(process.env.BMS_PREPARED_NATIVE_WIRE!, 'utf8'));
+    const geometry = construction.geometry.result;
+    const previousAdapter = api.defaults.adapter as (config: any) => Promise<any>;
+    api.defaults.adapter = async config => {
+        const url = config.url;
+        if (url === '/api/files/upload-immutable-structure') {
+            expect(config.data.get('path')).toBe('inputs/protein_local_redesign');
+            expect(config.data.get('sha256')).toBe(geometry.coordinate_sha256);
+            return { data: { path: `inputs/protein_local_redesign/constructed-${geometry.coordinate_sha256}.pdb`, sha256: geometry.coordinate_sha256, size: geometry.coordinate_size_bytes }, config, status: 200, statusText: 'OK', headers: {} };
+        }
+        if (url === '/api/files/materialize-structure') {
+            const source = JSON.parse(config.data);
+            return { data: { source_structure: source, path: source.path, format: 'pdb', native_format: 'pdb', sha256: geometry.coordinate_sha256, author_residues: [], model_numbers: [1] }, config, status: 200, statusText: 'OK', headers: {} };
+        }
+        if (url === '/api/molecular-geometry/schema') {
+            const result = JSON.parse(execFileSync(graphPython!, ['platform/api/tests/molecular_geometry_ui_transport.py'], { cwd: repo, encoding: 'utf8', input: JSON.stringify({ method: 'GET', url }), env: { ...process.env, PYTHONPATH: `${repo}:${repo}/platform/api` } }));
+            return { data: result.data, config, status: 200, statusText: 'OK', headers: {} };
+        }
+        return previousAdapter(config);
+    };
+    vi.mocked(fetch).mockImplementation(async () => ({ ok: true, arrayBuffer: async () => new TextEncoder().encode(geometry.coordinate_text).buffer }) as Response);
+    await mount({ molecular_construction: construction, rfd4_request: { input: { kind: 'annotated', slots: [] }, settings: { seed: 0 } } });
+    expect(latest.prepared_geometry_documents).toBeUndefined();
+    await click('Choose structure'); await click('Use constructed geometry');
+    await wait(() => expect(Object.keys(latest.prepared_geometry_documents ?? {})).toHaveLength(1));
+    const retained = structuredClone(latest.prepared_geometry_documents);
+    expect(Object.values(retained)[0]).toMatchObject({ construction, geometry, format: 'pdb' });
+    expect(latest.rfd4_request.input.slots).toHaveLength(1);
+    const adopted = structuredClone(latest.native_sources);
+    expect(JSON.stringify(latest.native_job_request)).not.toContain('prepared_geometry_documents');
+    await open(); await edit('Strand 1 sequence', 'AGGT');
+    expect(latest.molecular_construction.geometry.result).toBeUndefined();
+    expect(latest.prepared_geometry_documents).toEqual(retained);
+    await edit('Engine', 'disco'); await edit('Engine', 'rfd4_proteina');
+    expect(latest.native_sources).toEqual(adopted);
+    await click('Template Manager'); await click('Template Manager');
+    expect(manager.mock.calls[0][0].currentParams.prepared_geometry_documents).toEqual(retained);
+    expect(manager.mock.calls[1][0].currentParams).toEqual(manager.mock.calls[0][0].currentParams);
+    const envelope = JSON.parse(JSON.stringify(deNovoAuthoringEnvelope(latest)));
+    if (process.env.BMS_PREPARED_PARENT_WIRE) writeFileSync(process.env.BMS_PREPARED_PARENT_WIRE, JSON.stringify(envelope));
+    await unmount(); await mount(envelope.editor_state);
+    expect(latest.prepared_geometry_documents).toEqual(retained);
+    expect(latest.native_sources).toEqual(adopted);
+});
+
 it('unavailable optional schema and graph never disable source-free Generate or mutate its request', async () => {
     await mount({ molecular_construction: recipe() }); const before = structuredClone(latest.native_job_request);
     failSchema = true; await open(); await wait(() => expect(document.body.textContent).toContain('schema unavailable'));
