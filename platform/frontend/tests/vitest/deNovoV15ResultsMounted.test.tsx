@@ -57,14 +57,15 @@ it('bounds a 1003-candidate generation fixture, selects its exact tail mmCIF and
     expect(container.textContent).toContain('does not establish folding or binding validation');
     await act(async () => button('Last').click());
     expect(container.querySelectorAll('tbody tr')).toHaveLength(3);
-    await act(async () => button('fixture-1002').click());
-    expect(viewer()).toMatchObject({ structureUrl: generation.candidates[1002].structure_url, label: 'fixture-1002', format: 'cif', artifactJobId: generation.job_id });
+    await act(async () => button('Candidate 1003').click());
+    expect(viewer()).toMatchObject({ structureUrl: generation.candidates[1002].structure_url, label: 'Candidate 1003', format: 'cif', artifactJobId: generation.job_id });
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Exact candidate identifier"]')?.value).toBe('fixture-1002');
     expect(container.querySelector('tbody tr:last-child a')?.getAttribute('href')).toBe(generation.candidates[1002].structure_url);
     const node = container.querySelector('[data-testid="viewer"]');
     await act(async () => button('First').click());
     await act(async () => container.querySelector<HTMLDetailsElement>('details')!.open = true);
     expect(container.querySelector('[data-testid="viewer"]')).toBe(node);
-    expect(viewer().label).toBe('fixture-1002');
+    expect(viewer().label).toBe('Candidate 1003');
     expect(container.querySelectorAll('tbody tr')).toHaveLength(10);
 });
 
@@ -127,7 +128,7 @@ it.each(['generation', 'redesign'] as const)('retains the inspected %s page and 
     const pane = kind === 'generation' ? <RFD3GenerationResultsPane jobId={model.job_id} /> : <RFD3LocalRedesignResultsPane jobId={model.job_id} />;
     await mount(pane);
     await act(async () => button('Last').click());
-    await act(async () => button('fixture-1002').click());
+    await act(async () => button(kind === 'generation' ? 'Candidate 1003' : 'fixture-1002').click());
     for (const label of ['Redesign', 'Design sequence', 'Predict structure']) {
         const link = [...container.querySelectorAll('a')].find(item => item.textContent === label)!;
         const query = new URL(link.href).searchParams;
@@ -137,5 +138,5 @@ it.each(['generation', 'redesign'] as const)('retains the inspected %s page and 
     await act(async () => root.render(null));
     await mount(pane);
     expect(container.textContent).toContain('Page 101 / 101');
-    expect(viewer().label).toBe('fixture-1002');
+    expect(viewer().label).toBe(kind === 'generation' ? 'Candidate 1003' : 'fixture-1002');
 });

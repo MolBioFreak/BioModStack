@@ -481,15 +481,17 @@ async def get_generation_settings(model_id: str, mode: str, generator: str | Non
             from services.laproteina_evaluation import generation_settings
             return generation_settings(native_mode)
         if selected == 'laproteina':
-            from scripts.lib.laproteina_contract import settings_schema, evaluation_schema, PROFILES, resolve_profile
+            from scripts.lib.laproteina_contract import settings_schema, evaluation_schema, PROFILES, resolve_profile, native_profile_defaults
             return {'model_id': selected, 'mode': native_mode, 'parameter_schema': settings_schema(),
+                    'native_profile_defaults': native_profile_defaults(),
                     'evaluation_schema': evaluation_schema(),
                     'evaluation_scope': 'Separate laproteina/evaluate Job operation; not an implicit generation stage',
                     'profiles': {name: resolve_profile(name) for name in PROFILES}}
         if selected == 'disco':
             from pydantic import TypeAdapter
-            from scripts.lib.disco_contract import settings_schema, BondedNativeJob, NATIVE_REVISION
+            from scripts.lib.disco_contract import settings_schema, BondedNativeJob, NATIVE_REVISION, native_profile_reference
             return {'model_id': selected, 'mode': native_mode, 'source_revision': NATIVE_REVISION,
+                    'native_profile_reference': native_profile_reference(),
                     'parameter_schema': settings_schema(),
                     'input_schema': TypeAdapter(list[BondedNativeJob]).json_schema()}
         if selected == 'rfd4_proteina':
@@ -527,6 +529,10 @@ async def get_model(model_id: str):
         "category": model.category,
         "description": model.description,
         "container": model.container,
+        "engine_references": {
+            key: {**reference.model_dump(), "registry_version": definition.version if (definition := registry.get_model(key)) else None}
+            for key, reference in model.engine_references.items()
+        },
         "inputs": model.inputs,
         "outputs": model.outputs,
         "modes": [

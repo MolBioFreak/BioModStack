@@ -79,6 +79,19 @@ async function edit(label: string, value: string) {
     expect(node, label).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), 'value')!.set!.call(node, value); node!.dispatchEvent(new Event(node!.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); });
 }
 const nativeRequest = { input: { kind: 'unconditional', name: 'n', chains: [{ chain_id: 'A', min_length: 73, max_length: 99 }] }, settings: { seed: 0, delete_failing_pre_oracle: false, search: { checkpoints: null, save_states: false } } };
+it.each([
+    ['rfd4_proteina', nativeRequest, 'rfd4_request'],
+    ['complexa', { task: 'protein_binder', operation: 'generate', seed: 0, reward: null }, 'complexa_request'],
+])('switches Simple and Advanced without changing the %s native Job request', async (model, request, field) => {
+    await mount(model, 'generate', request);
+    await click('Advanced'); await click('Simple'); await click('Advanced');
+    expect(requests.filter(request => request.method !== 'get')).toEqual([]);
+    await click('Generate candidates');
+    const jobs = requests.filter(request => request.url === '/api/jobs');
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].body.params[field]).toEqual(request);
+    expect(jobs[0].body.params).not.toHaveProperty('suite_view');
+});
 async function disclose(name: string) {
     await click('Native settings');
     const summary = [...document.querySelectorAll('summary')].find(node => node.textContent?.trim().toLowerCase() === name.toLowerCase());

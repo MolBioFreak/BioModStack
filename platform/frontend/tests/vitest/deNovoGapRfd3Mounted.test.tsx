@@ -24,7 +24,7 @@ afterEach(async () => { if (root) await act(async () => root.unmount()); client?
 async function render(node: React.ReactNode) {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (...args) => { unexpected.push(`fetch:${String(args[0])}`); throw Error('Unexpected fetch'); });
     vi.spyOn(XMLHttpRequest.prototype, 'send').mockImplementation(() => { unexpected.push('XMLHttpRequest'); throw Error('Unexpected XMLHttpRequest'); });
-    api.defaults.adapter = async config => { const name = String(config.url); requests.push(`${name}:${config.params?.generator}`); if (!name.endsWith('/generation-settings')) { unexpected.push(name); throw Error(name); } return { data: inventories.rfd3, config, status: 200, statusText: 'OK', headers: {} }; };
+    api.defaults.adapter = async config => { const name = String(config.url); if (name === '/api/models/protein_modification_experimental') return { data: { engine_references: {} }, config, status: 200, statusText: 'OK', headers: {} }; requests.push(`${name}:${config.params?.generator}`); if (!name.endsWith('/generation-settings')) { unexpected.push(name); throw Error(name); } return { data: inventories.rfd3, config, status: 200, statusText: 'OK', headers: {} }; };
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host); client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter>{node}</MemoryRouter></QueryClientProvider>); });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
@@ -42,6 +42,55 @@ it('execution discovery exactly matches its explicitly owned sparse projection',
     expect(retainedRfd3Settings({ skip_existing: false, seed: 0, dump_trajectories: false, unknown: 4 })).toEqual({ skip_existing: false });
     expect(retainedRfd3Draft({ conditioning: {}, source_model: 2, generation_mode: 'conditioned', unknown: 4 })).toEqual({ conditioning: {}, source_model: 2, generation_mode: 'conditioned' });
 });
+it('shows source-qualified execution defaults without writing them into the request', async () => {
+    const draft = vi.fn();
+    await render(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} initialValues={{ generator: 'rfd3' }} />);
+    await click('Sampling'); await click('Execution and native outputs');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="skip_existing"]')!.checked).toBe(true);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="low_memory_mode"]')!.checked).toBe(false);
+    expect(request().params).not.toHaveProperty('skip_existing');
+    expect(request().params).not.toHaveProperty('low_memory_mode');
+    expect(document.body.textContent).toContain('Inherited reference; not an override');
+});
+
+it('shows sampler reference values and resets only the edited sparse override', async () => {
+    await render(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator: 'rfd3' }} />);
+    await click('Sampling'); await click('Sampler and classifier-free guidance');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="inference_sampler.num_timesteps"]')!.value).toBe('200');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="inference_sampler.allow_realignment"]')!.checked).toBe(false);
+    expect(request().params).not.toHaveProperty('inference_sampler');
+    await edit('inference_sampler.num_timesteps', '250');
+    expect(request().params.inference_sampler).toEqual({ num_timesteps: 250 });
+    await edit('inference_sampler.num_timesteps presence', 'omitted');
+    expect(request().params).not.toHaveProperty('inference_sampler');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="inference_sampler.num_timesteps"]')!.value).toBe('200');
+});
+
+it('preserves explicit sampler values and updates empty-object custody when drafts change in place', async () => {
+    let replace!: (value: Record<string, unknown>) => void;
+    let saved: Record<string, unknown> = {};
+    function Harness() {
+        const [value, setValue] = useState<Record<string, unknown>>({});
+        replace = setValue; saved = value;
+        return <OtherDeNovoSettings model="rfd3" task="unconditional_monomer" value={value} onChange={setValue} />;
+    }
+    await render(<Harness />); await click('Sampler and classifier-free guidance');
+    await act(async () => replace({ inference_sampler: { num_timesteps: 0, allow_realignment: false, custom: null } }));
+    expect(saved.inference_sampler).toEqual({ num_timesteps: 0, allow_realignment: false, custom: null });
+    await edit('inference_sampler.num_timesteps presence', 'omitted');
+    expect(saved.inference_sampler).toEqual({ allow_realignment: false, custom: null });
+    await act(async () => replace({ inference_sampler: {} }));
+    await edit('inference_sampler.num_timesteps', '250');
+    await edit('inference_sampler.num_timesteps presence', 'omitted');
+    expect(saved.inference_sampler).toEqual({});
+    await act(async () => replace({}));
+    await edit('inference_sampler.num_timesteps', '250');
+    await edit('inference_sampler.num_timesteps presence', 'omitted');
+    expect(saved).not.toHaveProperty('inference_sampler');
+    await act(async () => replace({ inference_sampler: null }));
+    expect(saved.inference_sampler).toBeNull();
+});
+
 it.each([false, true, undefined])('parent cold reopen and unrelated edit preserve skip_existing=%s', async value => {
     const draft = vi.fn(); const template = vi.fn();
     await render(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} onOpenTemplateManager={template} initialValues={{ generator: 'rfd3', ...(value === undefined ? {} : { skip_existing: value }) }} />);

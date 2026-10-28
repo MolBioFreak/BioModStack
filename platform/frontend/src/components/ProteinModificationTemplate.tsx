@@ -1,6 +1,6 @@
 import { LaProteinaEvaluation } from './LaProteinaEvaluation';
 import { DeNovoNativeGenerationSettings } from './DeNovoNativeGenerationSettings';
-import { OtherDeNovoSettings, retainedRfd3Draft, useRfd3GenerationBounds } from './OtherDeNovoSettings';
+import { OtherDeNovoSettings, retainedRfd3Draft, rfd3ExecutionKeys, useRfd3GenerationBounds } from './OtherDeNovoSettings';
 import { DiscoJobsInput } from './DiscoJobsInput';
 import { NativeSourceInput } from './DeNovoNativeSources';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
@@ -10,6 +10,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { completeCurrentLaunchContext, submitJob, type StructureMaterialization, type Job } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
+import { ModelReferenceCard } from './ModelReferenceCard';
 import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 import ShapeBlueprintTemplate from './ShapeBlueprintTemplate';
 import { ProteinDesignSections, ProteinDesignPanel, ProteinDesignRun, themedInsetStyle } from './ProteinDesignWorkflow';
@@ -67,8 +68,9 @@ const initialString = (values: Record<string, unknown> | undefined, key: string,
     return typeof value === 'string' ? value : fallback;
 };
 
-const initialNumber = (values: Record<string, unknown> | undefined, key: string, fallback: number): number | '' => {
+const initialNumber = (values: Record<string, unknown> | undefined, key: string, fallback: number | ''): number | '' => {
     if (values?.[key] === '') return '';
+    if (values?.[key] === undefined) return fallback;
     const value = Number(values?.[key]);
     return Number.isFinite(value) ? value : fallback;
 };
@@ -83,10 +85,12 @@ const resolveNavigation = (values?: Record<string, unknown>): DeNovoNavigationSt
     const nativeMode = native ? { native_mode: typeof values?.native_mode === 'string' ? values.native_mode : 'generate' } : {};
     if (modification_mode !== 'de_novo_design') return { modification_mode, ...(values?.generator === 'rfd4_proteina' ? { generator: 'rfd4_proteina', design_task: 'refine', ...nativeMode } : {}) };
     const engine = values?.generator ?? values?.backend;
+    // Historical RFD3 drafts often predate an explicit generator field.
+    const legacyRfd3 = values?.generation_mode === 'unconditional_monomer';
     return {
         modification_mode,
         ...nativeMode,
-        generator: typeof engine === 'string' ? engine : 'rfd3',
+        generator: typeof engine === 'string' ? engine : legacyRfd3 ? 'rfd3' : 'rfd4_proteina',
         design_task: typeof values?.design_task === 'string' ? values.design_task : 'unconditional',
     };
 };
@@ -97,6 +101,7 @@ export function ProteinModificationTemplate({
     onBack, initialValues, requiredPinnedGpu = null, onDraftChange, onNavigationChange, navigationState, runDetails, onOpenTemplateManager, launchContextId,
 }: ProteinModificationTemplateProps) {
     const [navigation, setNavigation] = useState(() => resolveNavigation({ ...navigationState, ...initialValues }));
+
     const drafts = useRef<Record<string, Record<string, unknown>>>(
         initialValues?.de_novo_drafts && typeof initialValues.de_novo_drafts === 'object'
             ? { ...initialValues.de_novo_drafts as Record<string, Record<string, unknown>> } : {},
@@ -115,6 +120,21 @@ export function ProteinModificationTemplate({
         initialized.current = true;
     }
     const callbacks = useRef({ onDraftChange, onNavigationChange });
+    const savedGeneration = initialValues?.suite_last_generation;
+    const lastGeneration = useRef<{ generator: string; design_task: string; native_mode?: string }>(
+        savedGeneration && typeof savedGeneration === 'object' && !Array.isArray(savedGeneration) && typeof (savedGeneration as Record<string, unknown>).generator === 'string'
+            ? savedGeneration as { generator: string; design_task: string; native_mode?: string }
+            : { generator: navigation.generator ?? 'rfd4_proteina', design_task: navigation.design_task ?? 'unconditional', native_mode: navigation.native_mode },
+    );
+    const lastTaskByEngine = useRef<Record<string, string>>({
+        ...(initialValues?.suite_last_tasks && typeof initialValues.suite_last_tasks === 'object' && !Array.isArray(initialValues.suite_last_tasks) ? initialValues.suite_last_tasks as Record<string, string> : {}),
+        ...(navigation.modification_mode === 'de_novo_design' ? { [navigation.generator ?? 'rfd4_proteina']: navigation.design_task ?? 'unconditional' } : {}),
+    });
+    const lastModeByEngine = useRef<Record<string, string>>({
+        ...(initialValues?.suite_last_modes && typeof initialValues.suite_last_modes === 'object' && !Array.isArray(initialValues.suite_last_modes) ? initialValues.suite_last_modes as Record<string, string> : {}),
+        ...(navigation.generator && navigation.native_mode ? { [navigation.generator]: navigation.native_mode } : {}),
+    });
+    const [suiteView, setSuiteView] = useState<'simple' | 'advanced'>(initialValues?.suite_view === 'advanced' ? 'advanced' : 'simple');
     const activeRequest = useRef<Record<string, unknown>>({});
     callbacks.current = { onDraftChange, onNavigationChange };
     const validatedRedesign = navigation.modification_mode === 'region_redesign';
@@ -131,8 +151,11 @@ export function ProteinModificationTemplate({
         const { native_job_request, ...editor } = draft;
         activeRequest.current = Object.hasOwn(draft, 'native_job_request') ? { native_job_request } : {};
         drafts.current[activeKey] = { ...editor, modification_mode: savedMode };
-        callbacks.current.onDraftChange?.({ ...draft, ...navigation, ...(navigation.generator === 'complexa' && typeof draft.native_mode === 'string' ? { native_mode: draft.native_mode } : {}), modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) });
-    }, [activeKey, navigation.modification_mode, navigation.generator, navigation.design_task, navigation.native_mode, savedMode]);
+        // Complexa derives its operation inside the request; its navigation key
+        // stays stable while that operation changes.
+        if (navigation.generator && navigation.generator !== 'complexa' && typeof draft.native_mode === 'string') lastModeByEngine.current[navigation.generator] = draft.native_mode;
+        callbacks.current.onDraftChange?.({ ...draft, ...navigation, suite_view: suiteView, suite_last_generation: { ...lastGeneration.current }, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, ...(navigation.generator === 'complexa' && typeof draft.native_mode === 'string' ? { native_mode: draft.native_mode } : {}), modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) });
+    }, [activeKey, navigation.modification_mode, navigation.generator, navigation.design_task, navigation.native_mode, savedMode, suiteView]);
     const changeNavigation = (state: DeNovoNavigationState) => {
         const next = resolveNavigation({ ...state });
         // Only shared intent seeds an untouched engine draft. Never translate
@@ -140,17 +163,18 @@ export function ProteinModificationTemplate({
         const nextKey = draftKey(next);
         if (!Object.hasOwn(drafts.current, nextKey)) {
             const current = drafts.current[activeKey] ?? {};
-            drafts.current[nextKey] = Object.fromEntries(
+            drafts.current[nextKey] = next.generator === 'rfd3' && navigation.generator === 'rfd3' && next.modification_mode === 'de_novo_design' && navigation.modification_mode === 'de_novo_design' ? { ...current } : Object.fromEntries(
                 (['rfd3', 'disco', 'laproteina'].includes(next.generator ?? '') && ['rfd3', 'disco', 'laproteina'].includes(navigation.generator ?? '') ? ['job_name', 'num_designs'] : ['job_name']).filter(key => Object.hasOwn(current, key)).map(key => [key, current[key]]),
             );
         }
+        if (next.modification_mode === 'de_novo_design' && next.generator) lastTaskByEngine.current[next.generator] = next.design_task ?? 'unconditional';
+        if (next.generator && next.native_mode) lastModeByEngine.current[next.generator] = next.native_mode;
         setNavigation(next);
         callbacks.current.onNavigationChange?.(next);
     };
     const mode: ModificationMode = validatedRedesign ? 'rfd3_iteration' : navigation.modification_mode as ModificationMode;
-    const generator = navigation.generator ?? 'rfd3';
+    const generator = navigation.generator ?? (mode === 'de_novo_design' ? 'rfd4_proteina' : 'rfd3');
     const task = navigation.design_task ?? 'unconditional';
-    const lastGeneration = useRef({ generator, design_task: task, native_mode: navigation.native_mode });
     const lastRedesign = useRef(validatedRedesign || drafts.current.region_redesign ? 'region_redesign' : 'rfd3_iteration');
     const chooseMode = (next: ModificationMode) => changeNavigation(next === 'de_novo_design'
         ? { modification_mode: next, ...lastGeneration.current }
@@ -167,34 +191,39 @@ export function ProteinModificationTemplate({
     </label> : null;
     return (
         <div className="space-y-3 text-[var(--text-primary)]" data-bms-de-novo-form="complete">
-            <div className="flex items-center gap-3">
-                <button type="button" onClick={onBack} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">Back</button>
-                <h2 className="text-lg font-semibold">Protein design</h2>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex items-center gap-3"><button type="button" onClick={onBack} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">Back</button>
+                <h2 className="text-lg font-semibold">Protein design</h2></div>
+                {mode !== 'shape_blueprint' && <ModelReferenceCard model={generator} />}
             </div>
+
             <nav aria-label="Design task" className="flex flex-wrap gap-2">
                 {DE_NOVO_MODIFICATION_MODE_CARDS.map(card => <button type="button" key={card.id}
                     aria-pressed={mode === card.id} onClick={() => chooseMode(card.id)}
                     className={`rounded-lg px-3 py-1.5 text-sm ${mode === card.id ? 'bg-[var(--bg-tertiary)] text-[var(--accent-primary)]' : ''}`}>{card.label}</button>)}
             </nav>
+            <div role="group" aria-label="Editor detail" className="flex gap-2">
+                {(['simple', 'advanced'] as const).map(view => <button type="button" key={view} aria-pressed={suiteView === view} onClick={() => setSuiteView(view)} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">{view === 'simple' ? 'Simple' : 'Advanced'}</button>)}
+            </div>
             {mode === 'de_novo_design' ? <>
                 <div className="grid grid-cols-2 gap-3 lg:grid-cols-3" data-de-novo-context>
                     {!['rfd4_proteina', 'complexa'].includes(generator) && <label className={labelClass}>Goal
                         <select className={fieldClass} value={task} onChange={event => {
                             const design_task = event.target.value;
-                            const engine = design_task === 'motif_scaffolding' ? 'laproteina' : design_task === 'unconditional' ? generator : 'disco';
-                            changeNavigation({ modification_mode: mode, generator: engine, design_task });
+                            changeNavigation({ ...navigation, design_task });
                         }}>
                             <option value="unconditional">Explore new folds</option>
-                            <option value="dna_conditioned">Design around DNA · DISCO</option>
-                            <option value="rna_conditioned">Design around RNA · DISCO</option>
-                            <option value="ligand_conditioned">Design around a small molecule · DISCO</option>
-                            <option value="motif_scaffolding">Scaffold a motif · La-Proteina</option>
-                            <option value="custom_json">Explicit jobs / native JSON · DISCO</option>
+                            {generator !== 'laproteina' && <><option value="dna_conditioned">{generator === 'rfd3' ? 'Configure DNA context' : 'Design around DNA'}</option>
+                            <option value="rna_conditioned">{generator === 'rfd3' ? 'Configure RNA context' : 'Design around RNA'}</option>
+                            <option value="ligand_conditioned">{generator === 'rfd3' ? 'Configure small-molecule context' : 'Design around a small molecule'}</option></>}
+                            {generator === 'laproteina' && <option value="motif_scaffolding">Scaffold a motif</option>}
+                            {generator === 'disco' && <option value="custom_json">Use a native input document</option>}
+                            {!['unconditional', ...(generator !== 'laproteina' ? ['dna_conditioned', 'rna_conditioned', 'ligand_conditioned'] : []), ...(generator === 'laproteina' ? ['motif_scaffolding'] : []), ...(generator === 'disco' ? ['custom_json'] : [])].includes(task) && <option value={task}>Saved goal ({task})</option>}
                         </select>
                     </label>}
                     <label className={labelClass}>Engine
-                        <select className={fieldClass} value={generator} onChange={event => changeNavigation({ modification_mode: mode, generator: event.target.value, design_task: 'unconditional' })}>
-                            {(task === 'unconditional' ? ['rfd3', 'disco', 'laproteina', 'rfd4_proteina', 'complexa'] : [generator]).map(engine => <option key={engine} value={engine}>{engine === 'rfd3' ? 'RFD3' : engine === 'disco' ? 'DISCO' : engine === 'laproteina' ? 'La-Proteina' : engine === 'rfd4_proteina' ? 'RFD4-Proteina' : engine === 'complexa' ? 'Complexa' : engine}</option>)}
+                        <select className={fieldClass} value={generator} onChange={event => changeNavigation({ modification_mode: mode, generator: event.target.value, design_task: lastTaskByEngine.current[event.target.value] ?? 'unconditional', native_mode: lastModeByEngine.current[event.target.value] })}>
+                            {['rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa'].map(engine => <option key={engine} value={engine}>{engine === 'rfd3' ? 'RFD3' : engine === 'disco' ? 'DISCO' : engine === 'laproteina' ? 'La-Proteina' : engine === 'rfd4_proteina' ? 'RFD4-Proteina' : engine === 'complexa' ? 'Complexa' : engine}</option>)}
                         </select>
                     </label>
                     {nativeModeControl}
@@ -202,17 +231,17 @@ export function ProteinModificationTemplate({
                 {generator === 'laproteina' && navigation.native_mode === 'evaluate' ? <LaProteinaEvaluation key={activeKey} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />
                     : generator === 'rfd4_proteina' || generator === 'complexa' ? <DeNovoNativeGenerationSettings key={activeKey} model={generator}
                     mode={navigation.native_mode ?? 'generate'}
-                    initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />
+                    initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} />
                     : ['rfd3', 'disco', 'laproteina'].includes(generator) ? <GenerationEditor key={activeKey} initialValues={childValues.current.values} generator={generator}
-                    designTask={task} runDetails={runDetails} onDraftChange={reportDraft} /> : <p role="alert">No native editor registered for {generator}. Retained settings have not been translated to another engine.</p>}
-            </> : mode === 'rfd3_iteration' ? <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} /> : <ProteinLocalRedesignTemplate key={activeKey} embedded
+                    designTask={task} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} /> : <p role="alert">No native editor registered for {generator}. Retained settings have not been translated to another engine.</p>}
+            </> : mode === 'rfd3_iteration' ? <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} /> : <ProteinLocalRedesignTemplate key={activeKey} embedded
                 onBack={onBack} initialValues={childValues.current.values}
                 submissionModelId={validatedRedesign ? 'protein_modification_experimental' : 'protein_local_redesign'}
                 requiredPinnedGpu={requiredPinnedGpu} runDetails={runDetails} onDraftChange={reportDraft} />}</>
                 : <ShapeBlueprintTemplate launchContextId={launchContextId} key={activeKey} embedded initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />}
             {onOpenTemplateManager && <button type="button" className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm"
                 onClick={() => onOpenTemplateManager({
-                    currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...navigation, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) },
+                    currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...navigation, suite_view: suiteView, suite_last_generation: { ...lastGeneration.current }, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) },
                     currentModelId: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? generator : mode === 'rfd3_iteration' && !validatedRedesign ? 'protein_local_redesign' : 'protein_modification_experimental',
                     baseTemplateId: 'protein_modification_experimental',
                     currentMode: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? navigation.native_mode ?? 'generate' : mode === 'rfd3_iteration' ? validatedRedesign ? 'region_redesign' : 'rfd3_local_redesign' : mode,
@@ -221,11 +250,12 @@ export function ProteinModificationTemplate({
     );
 }
 
-function GenerationEditor({ initialValues, generator, designTask, onDraftChange, runDetails }: {
+function GenerationEditor({ initialValues, generator, designTask, onDraftChange, runDetails, suiteView }: {
     initialValues: Record<string, unknown>;
     generator: string;
     designTask: string;
     runDetails?: ReactNode;
+    suiteView: 'simple' | 'advanced';
     onDraftChange: (draft: Record<string, unknown>) => void;
 }) {
     const navigate = useNavigate();
@@ -233,13 +263,21 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const backend: DeNovoBackend = generator === 'laproteina' ? 'laproteina' : 'disco';
     const inputSection = designTask === 'unconditional' ? 'Design' : 'Source and regions';
     const [section, setSection] = useState(inputSection);
+    useEffect(() => { setSection(suiteView === 'advanced' ? 'Sampling' : inputSection); }, [suiteView, inputSection]);
     const [jobName, setJobName] = useState(initialString(initialValues, 'job_name', 'protein_modification'));
     const [numDesigns, setNumDesigns] = useState(initialNumber(initialValues, 'num_designs', 8));
     const [minLength, setMinLength] = useState(initialNumber(initialValues, 'min_length', 100));
     const [maxLength, setMaxLength] = useState(initialNumber(initialValues, 'max_length', 200));
+    const [lengthMode, setLengthMode] = useState<'exact' | 'range'>(initialValues.length_mode === 'exact' ? 'exact' : 'range');
+    const [exactLength, setExactLength] = useState(initialNumber(initialValues, 'exact_length', typeof initialValues.min_length === 'number' && initialValues.min_length === initialValues.max_length ? initialValues.min_length : ''));
+    const requestMinLength = lengthMode === 'exact' ? exactLength : minLength;
+    const requestMaxLength = lengthMode === 'exact' ? exactLength : maxLength;
     const [seed, setSeed] = useState(initialNumber(initialValues, 'seed', 0));
     const [dumpTrajectories, setDumpTrajectories] = useState(initialValues?.dump_trajectories === true);
-    const [targetLengths, setTargetLengths] = useState(initialString(initialValues, 'target_lengths', '100,200'));
+    const [alternativeLengthMode, setAlternativeLengthMode] = useState<'exact' | 'list'>(initialValues.alternative_length_mode === 'exact' ? 'exact' : 'list');
+    const [targetLengthList, setTargetLengthList] = useState(initialString(initialValues, 'target_length_list', initialString(initialValues, 'target_lengths', '')));
+    const [targetLengthExact, setTargetLengthExact] = useState(initialString(initialValues, 'target_length_exact', ''));
+    const targetLengths = alternativeLengthMode === 'exact' ? targetLengthExact : targetLengthList;
     const [laproteinaPreset, setLaproteinaPreset] = useState(initialString(initialValues, 'laproteina_preset', designTask === 'motif_scaffolding' ? 'motif_idx_aa' : 'ucond_tri'));
     const [laproteinaSamples, setLaproteinaSamples] = useState(initialNumber(initialValues, 'laproteina_samples_per_length', 8));
     const [laproteinaSteps, setLaproteinaSteps] = useState(initialNumber(initialValues, 'laproteina_num_steps', 400));
@@ -254,7 +292,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [motifMaxLength, setMotifMaxLength] = useState(initialString(initialValues, 'laproteina_motif_max_length', ''));
     const [discoExperiment, setDiscoExperiment] = useState(initialString(initialValues, 'disco_experiment', 'designable'));
     const [discoEffort, setDiscoEffort] = useState(initialString(initialValues, 'disco_effort', 'fast'));
-    const [discoInferenceSeeds, setDiscoInferenceSeeds] = useState(initialNumber(initialValues, 'disco_num_inference_seeds', 8));
+    const [discoInferenceSeeds, setDiscoInferenceSeeds] = useState<number | '' | null>(initialValues.disco_num_inference_seeds === null ? null : initialNumber(initialValues, 'disco_num_inference_seeds', 8));
     const [discoSeeds, setDiscoSeeds] = useState(initialString(initialValues, 'disco_seeds', ''));
     const [discoAttention, setDiscoAttention] = useState(initialValues.disco_use_deepspeed_evo_attention === true);
     const [discoInputJson, setDiscoInputJson] = useState(initialString(initialValues, 'disco_input_json_path', ''));
@@ -263,6 +301,19 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [nucleicSequence, setNucleicSequence] = useState(initialString(initialValues, 'disco_na_sequence', ''));
     const [nativeControls, setNativeControls] = useState<Record<string, unknown>>(() => Object.fromEntries(
         ['pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => { let value = initialValues[key]; if (key.endsWith('_json') && typeof value === 'string') { try { value = JSON.parse(value); } catch { /* Retain invalid saved input for explicit repair. */ } } return [key, value]; })));
+    const nativeOverrideKey = `pcad_${backend}_settings_json`;
+    const rawOverrides = nativeControls[nativeOverrideKey];
+    const nativeOverrides = rawOverrides && typeof rawOverrides === 'object' && !Array.isArray(rawOverrides) ? rawOverrides as Record<string, unknown> : {};
+    const effectiveOverride = (key: string, fallback: unknown) => Object.hasOwn(nativeOverrides, key) ? nativeOverrides[key] : fallback;
+    const setEffectiveOverride = (key: string, value: unknown, setPrimary: () => void) => {
+        if (!Object.hasOwn(nativeOverrides, key)) { setPrimary(); return; }
+        setNativeControls(current => ({ ...current, [nativeOverrideKey]: { ...nativeOverrides, [key]: value } }));
+    };
+    const resetOverride = (key: string) => setNativeControls(current => {
+        const next = { ...nativeOverrides }; delete next[key];
+        return { ...current, [nativeOverrideKey]: next };
+    });
+    const overrideNote = (key: string) => Object.hasOwn(nativeOverrides, key) && <span className="block text-xs text-[var(--text-secondary)]">Native override ({key}): {JSON.stringify(nativeOverrides[key])}. <button type="button" aria-label={`Use primary value for ${key}`} onClick={() => resetOverride(key)}>Use primary value</button></span>;
     const [rfd3Settings, setRfd3Settings] = useState(() => retainedRfd3Draft(initialValues));
     const [rfd3SourceInspection, setRfd3SourceInspection] = useState<{ receipt: StructureMaterialization; path: string; model?: number }>();
     const rfd3Source = typeof rfd3Settings.input_structure === 'string' && rfd3Settings.input_structure ? {
@@ -273,8 +324,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         const next = { ...previous }; delete next.input_structure; delete next.source_model; delete next.source_mapping; return next;
     });
     const rfd3Bounds = useRfd3GenerationBounds(generator === 'rfd3');
-    const rfd3LengthsInvalid = Number(minLength) > Number(maxLength) ||
-        [minLength, maxLength].some((value, index) => {
+    const rfd3LengthsInvalid = requestMinLength === '' || requestMaxLength === '' || !Number.isInteger(requestMinLength) || !Number.isInteger(requestMaxLength) || Number(requestMinLength) > Number(requestMaxLength) ||
+        [requestMinLength, requestMaxLength].some((value, index) => {
             const bound = rfd3Bounds?.[index === 0 ? 'min_length' : 'max_length'];
             return (bound?.minimum != null && Number(value) < bound.minimum) || (bound?.maximum != null && Number(value) > bound.maximum);
         });
@@ -282,13 +333,18 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const effectiveLaMotif = { motif_task_name: motifTaskName, motif_pdb: motifPdb, contig_string: motifContig, ...(nativeControls.pcad_laproteina_settings_json && typeof nativeControls.pcad_laproteina_settings_json === 'object' && !Array.isArray(nativeControls.pcad_laproteina_settings_json) ? nativeControls.pcad_laproteina_settings_json as Record<string, unknown> : {}) };
     const hasEffectiveLaMotif = Boolean(effectiveLaMotif.motif_task_name || (effectiveLaMotif.motif_pdb && effectiveLaMotif.contig_string));
     const authorLaMotif = (key: string, value: unknown) => setNativeControls(current => ({ ...current, pcad_laproteina_settings_json: { ...(current.pcad_laproteina_settings_json && typeof current.pcad_laproteina_settings_json === 'object' && !Array.isArray(current.pcad_laproteina_settings_json) ? current.pcad_laproteina_settings_json as Record<string, unknown> : {}), [key]: value } }));
-    const retainedAlternativeParams = Object.fromEntries(Object.entries(initialValues).filter(([key]) => key.startsWith(`${backend}_`) && key !== 'laproteina_motif_inspection'));
+    const retainedAlternativeParams = Object.fromEntries(Object.entries(initialValues).filter(([key]) =>
+        (key.startsWith(`${backend}_`) || key.startsWith(`pcad_${backend}_`) && !['pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path'].includes(key)) && key !== 'laproteina_motif_inspection'));
     const [error, setError] = useState<string | null>(null);
     const [sequenceDesign, setSequenceDesign] = useState(() => hydrateGeneralSequenceDesign(initialValues));
+    const [sequenceOmitted, setSequenceOmitted] = useState(() => initialValues.sequence_design_omitted === true);
+    const [sequenceNull, setSequenceNull] = useState(() => initialValues.sequence_design === null || initialValues.sequence_design_null === true);
 
-    const draftJson = JSON.stringify({
+    const draftValues: Record<string, unknown> = {
         ...retainedAlternativeParams,
         ...sequenceDesign,
+        ...(sequenceOmitted ? { sequence_design_omitted: true } : {}),
+        ...(sequenceNull ? { sequence_design_null: true } : {}),
         ...nativeControls,
         ...rfd3Settings,
         ...Object.fromEntries(['laproteina_checkpoint_dir', 'laproteina_data_path', 'disco_checkpoint_path', 'disco_cutlass_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => [key, initialValues[key]])),
@@ -296,9 +352,14 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         num_designs: numDesigns,
         min_length: minLength,
         max_length: maxLength,
+        length_mode: lengthMode,
+        exact_length: exactLength,
         seed: seed,
         dump_trajectories: dumpTrajectories,
         target_lengths: targetLengths,
+        alternative_length_mode: alternativeLengthMode,
+        target_length_list: targetLengthList,
+        target_length_exact: targetLengthExact,
         laproteina_preset: laproteinaPreset,
         laproteina_samples_per_length: laproteinaSamples,
         laproteina_num_steps: laproteinaSteps,
@@ -320,7 +381,12 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         disco_ligand_sdf: ligandSdf,
         disco_ligand_name: ligandName,
         disco_na_sequence: nucleicSequence,
-    });
+    };
+    // Retain unrecognized editor imports, without reintroducing cleared fields
+    // owned by this child or placing extras in the native request.
+    const clearable = new Set<string>([...rfd3ExecutionKeys, 'conditioning', 'input_structure', 'source_mapping', 'source_model', 'generation_mode', 'native_job_request', 'de_novo_drafts', 'generator', 'backend', 'design_task', 'modification_mode', 'native_mode', 'suite_view', 'suite_last_tasks', 'suite_last_modes', 'sequence_design_null', 'sequence_design_omitted', 'pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path']);
+    const extras = Object.fromEntries(Object.entries(initialValues).filter(([key]) => !Object.hasOwn(draftValues, key) && !clearable.has(key)));
+    const draftJson = JSON.stringify({ ...extras, ...draftValues });
     const submitMutation = useMutation({
         mutationFn: async (payload: Partial<Job>) => submitJob(payload),
         onSuccess: async (response) => {
@@ -331,7 +397,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     });
 
     const buildAlternativeWorkflowRequest = () => ({
-            ...generalSequenceRequest(sequenceDesign),
+            ...(sequenceOmitted ? {} : generalSequenceRequest(sequenceDesign)),
+            ...(sequenceNull ? { sequence_design: null } : {}),
             name: jobName.trim(),
             model_id: 'protein_modification_experimental',
             mode: 'de_novo_design',
@@ -407,7 +474,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     };
 
     const buildDeNovoWorkflowRequest = () => ({
-            ...generalSequenceRequest(sequenceDesign),
+            ...(sequenceOmitted ? {} : generalSequenceRequest(sequenceDesign)),
+            ...(sequenceNull ? { sequence_design: null } : {}),
             name: jobName.trim(),
             model_id: 'protein_modification_experimental',
             mode: 'de_novo_design',
@@ -415,8 +483,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 generation_mode: 'unconditional_monomer',
                 ...rfd3Settings,
                 generator: 'rfd3',
-                min_length: minLength,
-                max_length: maxLength,
+                min_length: requestMinLength,
+                max_length: requestMaxLength,
                 num_designs: numDesigns,
                 seed,
                 dump_trajectories: dumpTrajectories,
@@ -483,19 +551,32 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     </label>;
     const generationControls = <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {generator === 'rfd3' ? <>
+            <label className={labelClass}>Length selection
+                <select className={fieldClass} value={lengthMode} onChange={event => setLengthMode(event.target.value as 'exact' | 'range')}><option value="range">Length range</option><option value="exact">Exact length</option></select>
+            </label>
+            {lengthMode === 'exact' ? <label className={labelClass}>Exact length
+                <input className={fieldClass} type="number" min={rfd3Bounds?.min_length.minimum} max={rfd3Bounds?.min_length.maximum} value={exactLength} onChange={event => setExactLength(editedNumber(event.target.value))} />
+            </label> : <>
             <label className={labelClass}>Minimum length
                 <input className={fieldClass} type="number" min={rfd3Bounds?.min_length.minimum} max={rfd3Bounds?.min_length.maximum} value={minLength} onChange={event => setMinLength(editedNumber(event.target.value))} />
             </label>
             <label className={labelClass}>Maximum length
                 <input className={fieldClass} type="number" min={rfd3Bounds?.max_length.minimum} max={rfd3Bounds?.max_length.maximum} value={maxLength} onChange={event => setMaxLength(editedNumber(event.target.value))} />
-            </label>
+            </label></>}
             <label className={labelClass}>Number of designs
                 <input className={fieldClass} type="number" min={1} value={numDesigns} onChange={event => setNumDesigns(editedNumber(event.target.value))} />
             </label>
         </> : <>
-            <label className={labelClass}>Target lengths
-                <input className={fieldClass} value={targetLengths} onChange={event => setTargetLengths(event.target.value)} placeholder="100,150,200" />
+            <label className={labelClass}>Length selection
+                <select className={fieldClass} value={alternativeLengthMode} onChange={event => setAlternativeLengthMode(event.target.value as 'exact' | 'list')}><option value="list">Discrete lengths</option><option value="exact">Exact length</option></select>
             </label>
+            {alternativeLengthMode === 'exact' ? <label className={labelClass}>Exact target length
+                <input className={fieldClass} type="number" value={targetLengthExact} onChange={event => setTargetLengthExact(event.target.value)} />
+                <span>Required; enter one length.</span>
+            </label> : <label className={labelClass}>Target lengths
+                <input className={fieldClass} value={targetLengthList} onChange={event => setTargetLengthList(event.target.value)} placeholder="Comma-separated lengths" />
+                <span>Required; enter a discrete comma-separated list, not a range.</span>
+            </label>}
             <label className={labelClass}>Requested design count
                 <input className={fieldClass} type="number" min={1} max={512} value={numDesigns} onChange={event => setNumDesigns(editedNumber(event.target.value))} />
             </label>
@@ -510,7 +591,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             <ProteinDesignSections label="Generation sections" sections={[inputSection, 'Sampling', 'Sequence Design']} active={section} onChange={setSection} />
             {/* Section navigation is presentation only. Source tools and viewers stay mounted. */}
             <div hidden={section !== inputSection} className="space-y-5">
-                {designTask === 'unconditional' ? <ProteinDesignPanel title="Generation" description="Generate new protein candidates.">
+                {designTask === 'unconditional' || generator === 'rfd3' ? <ProteinDesignPanel title="Generation" description={generator === 'rfd3' && designTask !== 'unconditional' ? 'This goal does not automatically add context or conditions. Supply an input structure and configure the desired conditions under Sampling; without them the request remains source-free.' : 'Generate new protein candidates.'}>
                     {generationControls}
                     <p className="text-xs text-[var(--text-secondary)]">{countHelp}</p>
                     {generator === 'rfd3' && <details><summary>Input structure (optional)</summary>
@@ -529,28 +610,32 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                         {rfd3Source && <button type="button" onClick={clearRfd3Source}>Clear input structure</button>}
                     </details>}
                 </ProteinDesignPanel> : isMotif ? <>
-                    <LaProteinaMotifInput path={motifPdb} contig={motifContig} segmentOrder={motifSegmentOrder}
-                        atomSpec={motifAtomSpec} initialInspection={motifInspection} onInspectionChange={setMotifInspection} onChange={patch => {
+                    <LaProteinaMotifInput path={motifPdb} contig={String(effectiveOverride('contig_string', motifContig) ?? '')} segmentOrder={String(effectiveOverride('segment_order', motifSegmentOrder) ?? '')}
+                        atomSpec={effectiveOverride('motif_atom_spec', motifAtomSpec) as string | null | undefined} initialInspection={motifInspection} onInspectionChange={setMotifInspection} onChange={patch => {
                         if (patch.path !== undefined) setMotifPdb(patch.path);
-                        if (patch.atomSpec !== undefined) { setMotifAtomSpec(patch.atomSpec); authorLaMotif('motif_atom_spec', patch.atomSpec); }
-                        if (patch.contig !== undefined) { setMotifContig(patch.contig); authorLaMotif('contig_string', patch.contig); }
-                        if (patch.segmentOrder !== undefined) { setMotifSegmentOrder(patch.segmentOrder); authorLaMotif('segment_order', patch.segmentOrder); }
+                        if (patch.atomSpec !== undefined) { if (!Object.hasOwn(nativeOverrides, 'motif_atom_spec')) setMotifAtomSpec(patch.atomSpec); authorLaMotif('motif_atom_spec', patch.atomSpec); }
+                        if (patch.contig !== undefined) { if (!Object.hasOwn(nativeOverrides, 'contig_string')) setMotifContig(patch.contig); authorLaMotif('contig_string', patch.contig); }
+                        if (patch.segmentOrder !== undefined) { if (!Object.hasOwn(nativeOverrides, 'segment_order')) setMotifSegmentOrder(patch.segmentOrder); authorLaMotif('segment_order', patch.segmentOrder); }
                     }} />
+                    {['contig_string', 'segment_order', 'motif_atom_spec'].map(key => <div key={key}>{overrideNote(key)}</div>)}
                     <ProteinDesignPanel title="Motif conditioning">
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                             {presetControl}
                             <label className={labelClass}>Atom selection
-                                <select className={fieldClass} value={motifAtomSelectionMode} onChange={event => { setMotifAtomSelectionMode(event.target.value); authorLaMotif('atom_selection_mode', event.target.value); }}>
+                                <select className={fieldClass} value={String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? '')} onChange={event => { if (!Object.hasOwn(nativeOverrides, 'atom_selection_mode')) setMotifAtomSelectionMode(event.target.value); authorLaMotif('atom_selection_mode', event.target.value); }}>
                                     <option value="all_atom">All atom</option><option value="tip_atoms">Tip atoms</option>
                                     <option value="bb3o">Backbone N, Cα, C, O</option><option value="ca">Cα only</option>
-                                    {!['all_atom', 'tip_atoms', 'bb3o', 'ca'].includes(motifAtomSelectionMode) && <option value={motifAtomSelectionMode}>{motifAtomSelectionMode} · retained historical value (not a native mode)</option>}
+                                    {!['all_atom', 'tip_atoms', 'bb3o', 'ca'].includes(String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? '')) && <option value={String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? '')}>{String(effectiveOverride('atom_selection_mode', motifAtomSelectionMode) ?? 'null')} · retained historical value</option>}
                                 </select>
+                                {overrideNote('atom_selection_mode')}
                             </label>
                             <label className={labelClass}>Motif minimum length
-                                <input className={fieldClass} type="number" min={1} max={2000} value={motifMinLength} onChange={event => { setMotifMinLength(event.target.value); authorLaMotif('motif_min_length', event.target.value === '' ? null : Number(event.target.value)); }} placeholder="From target lengths" />
+                                <input className={fieldClass} type="number" min={1} max={2000} value={String(effectiveOverride('motif_min_length', motifMinLength) ?? '')} onChange={event => { if (!Object.hasOwn(nativeOverrides, 'motif_min_length')) setMotifMinLength(event.target.value); authorLaMotif('motif_min_length', event.target.value === '' ? null : Number(event.target.value)); }} placeholder="From target lengths" />
+                                {overrideNote('motif_min_length')}
                             </label>
                             <label className={labelClass}>Motif maximum length
-                                <input className={fieldClass} type="number" min={1} max={2000} value={motifMaxLength} onChange={event => { setMotifMaxLength(event.target.value); authorLaMotif('motif_max_length', event.target.value === '' ? null : Number(event.target.value)); }} placeholder="From target lengths" />
+                                <input className={fieldClass} type="number" min={1} max={2000} value={String(effectiveOverride('motif_max_length', motifMaxLength) ?? '')} onChange={event => { if (!Object.hasOwn(nativeOverrides, 'motif_max_length')) setMotifMaxLength(event.target.value); authorLaMotif('motif_max_length', event.target.value === '' ? null : Number(event.target.value)); }} placeholder="From target lengths" />
+                                {overrideNote('motif_max_length')}
                             </label>
                         </div>
                         <details className="rounded-lg border p-3" style={themedInsetStyle}>
@@ -570,7 +655,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             </div>
             {generator === 'disco' && <DiscoJobsInput value={nativeControls.pcad_disco_jobs_json} path={discoInputJson} sourcePath={nativeControls.pcad_disco_jobs_source_path as string | undefined} onChange={(jobs, sourcePath) => setNativeControls(current => { const next = { ...current }; if (jobs === undefined) { delete next.pcad_disco_jobs_json; delete next.pcad_disco_jobs_source_path; } else { next.pcad_disco_jobs_json = jobs; if (sourcePath !== undefined) next.pcad_disco_jobs_source_path = sourcePath; } return next; })} />}
             <div hidden={section !== 'Sampling'} className="space-y-5">
-                <OtherDeNovoSettings generalConditions={generator === 'rfd3'} model={generator as 'rfd3' | DeNovoBackend} task={generator === 'rfd3' ? 'unconditional_monomer' : designTask} value={generator === 'rfd3' ? rfd3Settings : nativeControls} onChange={generator === 'rfd3' ? setRfd3Settings : setNativeControls} />
+                <OtherDeNovoSettings generalConditions={generator === 'rfd3'} model={generator as 'rfd3' | DeNovoBackend} task={generator === 'rfd3' ? 'unconditional_monomer' : designTask} selectedPreset={generator === 'laproteina' ? laproteinaPreset : undefined} requestParams={generator === 'rfd3' ? undefined : JSON.parse(JSON.stringify(buildAlternativeWorkflowRequest().params))} value={generator === 'rfd3' ? rfd3Settings : nativeControls} onChange={generator === 'rfd3' ? setRfd3Settings : setNativeControls}
+                    primaryOverrideFields={generator === 'laproteina' ? ['num_steps', ...(isMotif ? ['contig_string', 'segment_order', 'motif_atom_spec', 'atom_selection_mode', 'motif_min_length', 'motif_max_length'] : [])] : generator === 'disco' ? ['experiment', 'effort', 'num_inference_seeds', 'use_deepspeed_evo_attention'] : []} />
                 {designTask !== 'unconditional' && <ProteinDesignPanel title="Generation" description={countHelp}>{generationControls}</ProteinDesignPanel>}
                 <ProteinDesignPanel title={`${engineName} sampling`}>
                     {generator === 'rfd3' ? <div className="grid gap-4 sm:grid-cols-2">
@@ -583,23 +669,30 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     </div> : backend === 'laproteina' ? <div className="grid gap-4 sm:grid-cols-2">
                         {!isMotif && presetControl}
                         <label className={labelClass}>Sampling steps
-                            <input className={fieldClass} type="number" min={50} max={2000} value={laproteinaSteps} onChange={event => setLaproteinaSteps(editedNumber(event.target.value))} />
+                            <input className={fieldClass} type="number" min={50} max={2000} value={String(effectiveOverride('num_steps', laproteinaSteps) ?? '')} onChange={event => { const value = editedNumber(event.target.value); setEffectiveOverride('num_steps', value, () => setLaproteinaSteps(value)); }} />
+                            <span className="block text-xs">BMS sampling value is sent explicitly; a native override takes precedence over it and the upstream profile reference.</span>
+                            {overrideNote('num_steps')}
                         </label>
                     </div> : <>
                         <div className="grid gap-4 sm:grid-cols-2">
                             <label className={labelClass}>DISCO experiment
-                                <select className={fieldClass} value={discoExperiment} onChange={event => setDiscoExperiment(event.target.value)}>
+                                <select className={fieldClass} value={String(effectiveOverride('experiment', discoExperiment) ?? '')} onChange={event => setEffectiveOverride('experiment', event.target.value, () => setDiscoExperiment(event.target.value))}>
                                     <option value="designable">Designable</option><option value="diverse">Diverse</option>
+                                    {!['designable', 'diverse'].includes(String(effectiveOverride('experiment', discoExperiment) ?? '')) && <option value={String(effectiveOverride('experiment', discoExperiment) ?? '')}>{String(effectiveOverride('experiment', discoExperiment) ?? 'null')} (saved)</option>}
                                 </select>
+                                {overrideNote('experiment')}
                             </label>
                             <label className={labelClass}>Inference effort
-                                <select className={fieldClass} value={discoEffort} onChange={event => setDiscoEffort(event.target.value)}>
+                                <select className={fieldClass} value={String(effectiveOverride('effort', discoEffort) ?? '')} onChange={event => setEffectiveOverride('effort', event.target.value, () => setDiscoEffort(event.target.value))}>
                                     <option value="fast">Fast</option><option value="max">Max</option>
-                                    {!['fast', 'max'].includes(discoEffort) && <option value={discoEffort}>{discoEffort} (saved)</option>}
+                                    {!['fast', 'max'].includes(String(effectiveOverride('effort', discoEffort) ?? '')) && <option value={String(effectiveOverride('effort', discoEffort) ?? '')}>{String(effectiveOverride('effort', discoEffort) ?? 'null')} (saved)</option>}
                                 </select>
+                                {overrideNote('effort')}
                             </label>
                             <label className={labelClass}>Inference seed count
-                                <input className={fieldClass} type="number" min={1} max={1024} value={discoInferenceSeeds} onChange={event => setDiscoInferenceSeeds(editedNumber(event.target.value))} />
+                                <input className={fieldClass} type="number" min={1} max={1024} value={String(effectiveOverride('num_inference_seeds', discoInferenceSeeds) ?? '')} onChange={event => { const value = editedNumber(event.target.value); setEffectiveOverride('num_inference_seeds', value, () => setDiscoInferenceSeeds(value)); }} />
+                                {effectiveOverride('num_inference_seeds', discoInferenceSeeds) === null && <span>None (native seeds list; legacy launch may resolve a count)</span>}
+                                {overrideNote('num_inference_seeds')}
                             </label>
                             <label className={labelClass}>Exact seeds
                                 <input className={fieldClass} value={discoSeeds} onChange={event => setDiscoSeeds(event.target.value)} placeholder="Optional comma-separated integers" />
@@ -609,8 +702,9 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                         <details className="rounded-lg border p-3" style={themedInsetStyle}>
                             <summary className="cursor-pointer text-sm font-medium">Advanced inference</summary>
                             <label className="mt-3 flex items-center gap-3 text-sm">
-                                <input type="checkbox" checked={discoAttention} onChange={event => setDiscoAttention(event.target.checked)} />DeepSpeed Evoformer attention
+                                <input type="checkbox" ref={node => { if (node) node.indeterminate = effectiveOverride('use_deepspeed_evo_attention', discoAttention) === null; }} checked={effectiveOverride('use_deepspeed_evo_attention', discoAttention) === true} onChange={event => setEffectiveOverride('use_deepspeed_evo_attention', event.target.checked, () => setDiscoAttention(event.target.checked))} />DeepSpeed Evoformer attention
                             </label>
+                            {overrideNote('use_deepspeed_evo_attention')}
                             <p className="mt-2 text-xs text-[var(--text-secondary)]">Uses the managed CUTLASS runtime when enabled.</p>
                         </details>
                         {designTask !== 'custom_json' && <details open={Boolean(discoInputJson)} className="rounded-lg border p-3" style={themedInsetStyle}>
@@ -623,7 +717,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 <ModelDocumentationLinks topics={generator === 'rfd3' ? ['rfdiffusion'] : backend === 'laproteina' ? ['laproteina'] : ['disco']} compact />
             </div>
             <div hidden={section !== 'Sequence Design'}>
-                <GeneralSequenceDesignSettings value={sequenceDesign} onChange={setSequenceDesign} />
+                <GeneralSequenceDesignSettings value={sequenceDesign} onChange={next => { if (next.invocation_draft?.enabled || next.sequence_design.enabled) { setSequenceOmitted(false); setSequenceNull(false); } setSequenceDesign(next); }} />
             </div>
             <details className="space-y-3 rounded-xl border p-4" style={themedInsetStyle}>
                 <summary className="cursor-pointer text-sm font-medium">Run details</summary>
@@ -631,7 +725,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     <div><dt className="text-[var(--text-secondary)]">Engine</dt><dd>{engineName}</dd></div>
                     <div><dt className="text-[var(--text-secondary)]">Sequence design</dt><dd>{sequenceDesign.invocation_draft ? (sequenceDesign.invocation_draft.enabled ? 'Selected optional operations' : 'Off · generation only') : sequenceDesign.sequence_design.enabled ? generalSequenceNames[sequenceDesign.sequence_design.model_id] : 'Off · generation only'}</dd></div>
                     <div><dt className="text-[var(--text-secondary)]">Goal</dt><dd>{designTask === 'unconditional' ? 'Explore new folds' : DE_NOVO_TASK_OPTIONS[backend].find(task => task.value === designTask)?.label}</dd></div>
-                    <div><dt className="text-[var(--text-secondary)]">Lengths</dt><dd>{generator === 'rfd3' ? `${minLength}–${maxLength}` : targetLengths || 'Not specified'}</dd></div>
+                    <div><dt className="text-[var(--text-secondary)]">Lengths</dt><dd>{generator === 'rfd3' ? lengthMode === 'exact' ? String(exactLength) : `${minLength}–${maxLength}` : targetLengths || 'Not specified'}</dd></div>
                     {discoInputJson && generator === 'disco' && <div><dt className="text-[var(--text-secondary)]">Native input override</dt><dd className="break-all">{discoInputJson}</dd></div>}
                 </dl>
             </details>

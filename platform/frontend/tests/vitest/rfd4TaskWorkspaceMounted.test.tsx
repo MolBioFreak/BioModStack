@@ -60,6 +60,16 @@ async function click(text: string) { const node = [...document.querySelectorAll<
 async function edit(label: string, value: string) { const node = document.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`); expect(node, label).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), 'value')!.set!.call(node, value); node!.dispatchEvent(new Event(node!.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); }
 async function disclose(text: string) { const node = [...document.querySelectorAll('summary')].find(s => s.textContent?.trim() === text); expect(node, text).toBeTruthy(); await act(async () => { const d = node!.parentElement as HTMLDetailsElement; d.open = true; d.dispatchEvent(new Event('toggle')); }); }
 function normalize(request: unknown, model = 'rfd4', mode = 'generate') { return JSON.parse(execFileSync('python', ['-c', model === 'rfd4' ? "import sys,json;from scripts.lib.rfd4_proteina_contract import normalize_request;print(json.dumps(normalize_request(json.loads(sys.argv[1]),sys.argv[2])))" : "import sys,json;from scripts.lib.complexa_contract import normalize_request;print(json.dumps(normalize_request(json.loads(sys.argv[1]))))", JSON.stringify(request), mode], { cwd, encoding: 'utf8' })); }
+it('retains opaque native editor companions without placing them in the Job request', async () => {
+    const companion = { document: { hash: 'retained' }, selection: [], provenance: null };
+    await mount('rfd4_proteina', { rfd4_request: {}, opaque_import: companion });
+    expect(draft.opaque_import).toEqual(companion);
+    expect(draft.native_job_request.params).not.toHaveProperty('opaque_import');
+    const saved = JSON.parse(JSON.stringify(draft)); await unmount(); await mount('rfd4_proteina', saved);
+    expect(draft.opaque_import).toEqual(companion);
+    expect(draft.native_job_request.params).not.toHaveProperty('opaque_import');
+});
+
 it('Complexa retained token strings and historical integers remain independently editable', async () => {
     await mount('complexa', { complexa_request: { task: 'protein_binder', source: { document_id: 'target', target_hotspots: [1, 'A1'] } } });
     expect((document.querySelector('[aria-label="Target hotspot 1"]') as HTMLInputElement).type).toBe('number');
@@ -260,6 +270,32 @@ it.skipIf(!process.env.BMS_TEST_NATIVE_READBACK)('replays actual installed combi
     await click('Design'); await edit('Seed','1'); await click('Native settings');
     expect(document.querySelector('[aria-label="Selected native effective configuration"]')).toBeNull(); expect(document.body.textContent).toContain('Request changed since readback');
 });
+it('projects selected effective scalar values without authoring them and invalidates A→B→A readback', async () => {
+    const adapter = api.defaults.adapter as Function;
+    api.defaults.adapter = async config => {
+        if (config.url?.endsWith('/generation-settings/preview')) return { config, data: { effective_config: { seed: 0, batch_size: 9, verbose: false, generation: { n_recycle: 4 } } }, status: 200, statusText: 'OK', headers: {} };
+        return adapter(config);
+    };
+    await mount('rfd4_proteina', { rfd4_request: {} });
+    await click('Native settings'); await disclose('Profile reference'); await click('Read selected effective configuration');
+    await disclose('Primary amount overrides'); await disclose('Runtime, output and retained assets');
+    expect((document.querySelector('[aria-label="Random seed"]') as HTMLInputElement).value).toBe('0');
+    const batch = document.querySelector<HTMLInputElement>('[data-rfd4-override="batch_size"] input')!;
+    expect(batch.value).toBe('9');
+    expect((document.querySelector('[aria-label="Verbose"]') as HTMLInputElement).checked).toBe(false);
+    expect(draft.rfd4_request).toEqual({});
+    await click('Design');
+    expect((document.querySelector('[data-rfd4-task-workspace] [aria-label="Batch size"]') as HTMLInputElement).value).toBe('9');
+    expect((document.querySelector('[data-rfd4-task-workspace] [aria-label="Seed"]') as HTMLInputElement).value).toBe('0');
+    await click('Native settings');
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(batch, '3'); batch.dispatchEvent(new Event('input', { bubbles: true })); });
+    const reset = document.querySelector<HTMLButtonElement>('[aria-label="Use profile value for batch_size"]')!;
+    await act(async () => reset.click()); await settle();
+    expect(draft.rfd4_request).toEqual({});
+    expect(document.querySelector<HTMLInputElement>('[data-rfd4-override="batch_size"] input')!.value).toBe('');
+    expect(document.body.textContent).toContain('Request changed since readback');
+});
+
 it('native readback failure is observational and does not alter request or run availability', async () => {
     const adapter = api.defaults.adapter as Function;
     api.defaults.adapter = async config => {

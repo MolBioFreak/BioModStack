@@ -138,13 +138,14 @@ it('connects global Workflow → De Novo to the telemetry target, not the stored
 });
 
 it.each(['rfd3', 'disco', 'laproteina'])('keeps %s exact requested science separate and unchanged by family preparation', async generator => {
-  await mount(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator }} />);
+  await mount(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator, ...(generator === 'rfd3' ? {} : { target_lengths: '125' }) }} />);
   if (generator === 'rfd3') { await edit('Minimum length', '111'); await edit('Seed', '17'); }
   const exact = () => host.querySelector('[aria-label="Unsaved workflow provisioning"]')!;
   await click('Preview artifact downloads', exact());
   const requested = structuredClone(posts[0].body);
   expect(requested.kind).toBe('workflow');
   expect(requested.workflow_request.params.generator).toBe(generator);
+  if (generator !== 'rfd3') expect(requested.workflow_request.params.target_lengths).toBe('125');
   if (generator === 'rfd3') expect(requested.workflow_request.params).toMatchObject({ min_length: 111, seed: 17 });
   await prepareFamily();
   await click('Preview artifact downloads', exact());

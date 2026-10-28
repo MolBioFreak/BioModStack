@@ -67,6 +67,28 @@ def _client_for(registry: ModelRegistry, monkeypatch: pytest.MonkeyPatch) -> Tes
     return TestClient(app)
 
 
+def test_de_novo_public_references_are_serialized_from_model_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = ModelRegistry(config_dir=API_ROOT / 'config' / 'models')
+    response = _client_for(registry, monkeypatch).get('/api/models/protein_modification_experimental')
+    assert response.status_code == 200
+    references = response.json()['engine_references']
+    assert set(references) == {'rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa'}
+    expected = {
+        'rfd4_proteina': ('https://github.com/RosettaCommons/RFD4-Proteina', 'https://rfd4-proteina.org/assets/paper/RFD4-Proteina.pdf', 'https://rfd4-proteina.org/latest/'),
+        'rfd3': ('https://github.com/RosettaCommons/foundry', 'https://www.biorxiv.org/content/early/2025/11/19/2025.09.18.676967', 'https://rosettacommons.github.io/foundry/models/rfd3/input.html'),
+        'disco': ('https://github.com/DISCO-design/DISCO', 'https://arxiv.org/abs/2604.05181', 'https://github.com/DISCO-design/DISCO#readme'),
+        'laproteina': ('https://github.com/NVIDIA-BioNeMo/la-proteina', 'https://arxiv.org/abs/2507.09466', 'https://github.com/NVIDIA-BioNeMo/la-proteina#inference'),
+        'complexa': ('https://github.com/NVIDIA-BioNeMo/Proteina-Complexa', 'https://arxiv.org/abs/2603.27950', 'https://github.com/NVIDIA-BioNeMo/Proteina-Complexa#readme'),
+    }
+    for key, urls in expected.items():
+        entry = references[key]
+        assert entry['name'] and entry['description']
+        assert tuple(entry[name] for name in ('github', 'paper', 'docs')) == urls
+        assert entry['version'] is None
+        definition = registry.get_model(key)
+        assert entry['registry_version'] == (definition.version if definition else None)
+
+
 def test_public_model_routes_hide_internal_and_disabled_models(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

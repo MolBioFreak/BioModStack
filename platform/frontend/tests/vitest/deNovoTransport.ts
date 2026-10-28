@@ -16,6 +16,7 @@ export function isolateDeNovoTransport() {
             '/api/execution-targets': [],
             '/api/shape/geometries': { geometries: [] },
             '/api/models': [],
+            '/api/models/protein_modification_experimental': { engine_references: {} },
             '/api/input-presets': [],
             '/api/inputs/presets': [],
             '/api/shape-blueprint/geometries': { geometries: [] },

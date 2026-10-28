@@ -83,7 +83,10 @@ async function saveTemplate(name: string) {
 }
 async function coldLoad(saved: any) {
     await unmount(); sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY,'ambient-remote');
-    await mount(`/submit?model=${saved.params.native_job_request.model_id}&mode=${saved.mode}`); await click('Template Manager'); await click('← Back to list');
+    const route = saved.params.native_job_request ? `/submit?model=${saved.params.native_job_request.model_id}&mode=${saved.mode}` : undefined;
+    await mount(route); await click('Template Manager'); await click('← Back to list');
+    const allWorkflows = [...document.querySelectorAll('label')].find(node => node.textContent?.includes('All workflows'))?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    if (allWorkflows && !allWorkflows.checked) await act(async () => allWorkflows.click());
     await vi.waitFor(async () => { await settle(); expect(document.body.textContent).toContain(saved.name); });
     const row = [...document.querySelectorAll('button')].find(e => e.textContent === 'Load' && e.parentElement?.parentElement?.textContent?.includes(saved.name));
     expect(row).toBeTruthy(); await act(async () => row!.click()); await settle();
@@ -165,6 +168,113 @@ suite('ordinary parent Complexa inactive reward controls survive cold SQLite Tem
     expect(restored.params.native_job_request.params).not.toHaveProperty('native_control_drafts');
 },30000);
 const clone = { name:'Parent retained exact', model_id:'rfd4_proteina', mode:'generate', execution_target_id:null, sequence_design:null, params:{rfd4_request:nativeRequest} };
+suite.each(['omitted', 'null'])('cloned %s optional-operation envelope survives real SQLite Template cold Load', async presence => {
+    const source: any = { ...clone };
+    if (presence === 'omitted') delete source.sequence_design;
+    await mount(undefined, source);
+    const saved = await saveTemplate(`Optional operation ${presence}`);
+    expect(Object.hasOwn(saved.params.native_job_request, 'sequence_design')).toBe(presence === 'null');
+    if (presence === 'null') expect(saved.params.native_job_request.sequence_design).toBeNull();
+    await coldLoad(saved);
+    const reopened = await saveTemplate(`Optional operation ${presence} reopened`);
+    expect(Object.hasOwn(reopened.params.native_job_request, 'sequence_design')).toBe(presence === 'null');
+    if (presence === 'null') expect(reopened.params.native_job_request.sequence_design).toBeNull();
+}, 30000);
+suite('all five populated engine drafts survive real SQLite template Save and cold Load', async () => {
+    const opaque = { document: { hash: 'retained' }, provenance: null, selection: [] };
+    await mount(undefined, { ...clone, params: { ...clone.params, opaque_import: opaque } });
+    const named = (name: string) => [...document.querySelectorAll('label')].find(node => !node.closest('[hidden]') && node.firstChild?.textContent === name)?.querySelector('input,select') as HTMLInputElement | HTMLSelectElement;
+    const engine = async (name: string) => { await edit(named('Engine'), name); await settle(); };
+    await engine('rfd3'); await edit(named('Minimum length'), '111');
+    await engine('disco'); await edit(named('Target lengths'), '144');
+    await engine('laproteina'); await edit(named('Target lengths'), '155');
+    await engine('complexa');
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[aria-label="Complexa task"]')).not.toBeNull(); });
+    await edit(document.querySelector<HTMLSelectElement>('[aria-label="Complexa task"]')!, 'AME');
+    await engine('rfd4_proteina');
+    const saved = await saveTemplate('Five-engine drafts');
+    expect(saved.params.native_job_request.params.rfd4_request).toEqual(nativeRequest);
+    expect(saved.params.editor_state.opaque_import).toEqual(opaque);
+    expect(saved.params.native_job_request.params).not.toHaveProperty('opaque_import');
+    const closeManager = async () => {
+        const close = document.querySelector<HTMLButtonElement>('button[aria-label="Close"]');
+        expect(close).toBeTruthy();
+        await act(async () => close!.click()); await settle();
+    };
+    await closeManager();
+    const engines = ['rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa'];
+    const before: Record<string, any> = { rfd4_proteina: saved.params.native_job_request };
+    const assertNoEditorMetadata = (request: any) => {
+        for (const key of ['editor_state', 'opaque_import', 'native_task_drafts', 'native_source_drafts', 'native_control_drafts', 'suite_last_generation']) {
+            expect(request).not.toHaveProperty(key);
+            expect(request.params).not.toHaveProperty(key);
+        }
+    };
+    for (const name of engines.slice(1)) {
+        await engine(name);
+        const snapshot = await saveTemplate(`Before cold ${name}`);
+        before[name] = snapshot.params.native_job_request;
+        expect(before[name].params.generator ?? before[name].model_id).toBe(name);
+        assertNoEditorMetadata(before[name]);
+        await closeManager();
+    }
+    assertNoEditorMetadata(before.rfd4_proteina);
+    await coldLoad(saved);
+    for (const name of engines) {
+        await engine(name);
+        if (name === 'rfd3') expect(named('Minimum length').value).toBe('111');
+        if (name === 'disco') expect(named('Target lengths').value).toBe('144');
+        if (name === 'laproteina') expect(named('Target lengths').value).toBe('155');
+        if (name === 'complexa') await vi.waitFor(async () => { await settle(); expect(document.querySelector<HTMLSelectElement>('[aria-label="Complexa task"]')?.value).toBe('AME'); });
+        const reopened = await saveTemplate(`After cold ${name}`);
+        if (name === 'rfd4_proteina') expect(reopened.params.editor_state.opaque_import).toEqual(opaque);
+        expect(reopened.params.native_job_request).toEqual(before[name]);
+        assertNoEditorMetadata(reopened.params.native_job_request);
+        await closeManager();
+    }
+    expect(requests.some(r => r.path === '/api/jobs')).toBe(false);
+}, 30000);
+suite.each(['disco', 'laproteina'])('%s exact and discrete lengths survive SQLite cold Template Load', async name => {
+    await mount();
+    const named = (label: string) => [...document.querySelectorAll('label')].find(node => !node.closest('[hidden]') && node.firstChild?.textContent === label)?.querySelector('input,select') as HTMLInputElement | HTMLSelectElement;
+    await edit(named('Engine'), name); await settle();
+    expect(named('Target lengths').value).toBe('');
+    await edit(named('Target lengths'), '87, 123,87');
+    await edit(named('Length selection'), 'exact');
+    await edit(named('Exact target length'), '173');
+    const saved = await saveTemplate(`Exact and discrete ${name}`);
+    expect(saved.params.native_job_request.params.target_lengths).toBe('173');
+    expect(saved.params.editor_state.target_length_list).toBe('87, 123,87');
+    await coldLoad(saved);
+    expect(named('Exact target length').value).toBe('173');
+    await edit(named('Length selection'), 'list');
+    expect(named('Target lengths').value).toBe('87, 123,87');
+    const reopened = await saveTemplate(`Discrete ${name} reopened`);
+    expect(reopened.params.native_job_request.params.target_lengths).toBe('87, 123,87');
+    expect(reopened.params.editor_state.target_length_exact).toBe('173');
+}, 30000);
+
+suite('last generation selection survives redesign and a real SQLite cold Template Load', async () => {
+    await mount();
+    const named = (name: string) => [...document.querySelectorAll('label')].find(node => !node.closest('[hidden]') && node.firstChild?.textContent === name)?.querySelector('input,select') as HTMLInputElement | HTMLSelectElement;
+    await edit(named('Engine'), 'rfd3');
+    await edit(named('Goal'), 'rna_conditioned');
+    await edit(named('Engine'), 'disco');
+    await edit(named('Target lengths'), '144');
+    await edit(named('Goal'), 'dna_conditioned');
+    await click('Redesign structure');
+    const saved = await saveTemplate('Return to generation cold');
+    expect(saved.params.editor_state.suite_last_generation).toMatchObject({ generator: 'disco', design_task: 'dna_conditioned' });
+    await coldLoad(saved);
+    await click('Generate');
+    expect(named('Engine').value).toBe('disco');
+    expect(named('Goal').value).toBe('dna_conditioned');
+    await edit(named('Goal'), 'unconditional');
+    expect(named('Target lengths').value).toBe('144');
+    await edit(named('Engine'), 'rfd3');
+    expect(named('Goal').value).toBe('rna_conditioned');
+}, 30000);
+
 suite('ordinary parent clone saves native SQLite Template and cold Load preserves sparse science and explicit Local', async () => {
     sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY,'ambient-remote');
     await mount(undefined,clone);
@@ -192,6 +302,55 @@ suite.each(['/submit','/bms/submit'])('ordinary fresh parent at %s snapshots inh
     expect(saved.params.native_job_request.execution_target_id).toBe('ambient-remote');
     expect(saved.params.native_job_request.params).toEqual({rfd4_request:{}});
 },30000);
+suite('two mounted Project editors retain their hydrated generation across refetch and conflict', async () => {
+    const seed = JSON.parse(readFileSync(resolve(evidence!,'seed.json'),'utf8'));
+    const path = `/api/projects/${seed.project_id}/workflow-setups/${encodeURIComponent(seed.setup.setup_context_id)}`;
+    const route = `/submit?model=rfd4_proteina&mode=generate&project_id=${seed.project_id}&setup_context_id=${encodeURIComponent(seed.setup.setup_context_id)}`;
+    await mount(undefined,clone); const source = await saveTemplate('Two editor source'); await unmount();
+    const beforeSeed = (await http('GET',path)).data;
+    const seeded = await http('PUT',path+'/draft',{expected_generation:beforeSeed.generation,draft:source.params},{'Idempotency-Key':crypto.randomUUID()});
+    expect(seeded.status).toBe(200);
+    await mount(route);
+    const firstHost = document.body.lastElementChild as HTMLDivElement;
+    const secondHost = document.createElement('div'); document.body.append(secondHost);
+    const secondRoot = createRoot(secondHost);
+    const secondClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const editIn = async (host: HTMLElement, value: string) => {
+        const input = host.querySelector<HTMLInputElement>('[aria-label="Chain 1 min_length"]');
+        expect(input).toBeTruthy(); await edit(input!, value);
+    };
+    const saveIn = async (host: HTMLElement) => {
+        const button = [...host.querySelectorAll('button')].find(node => node.textContent?.trim() === 'Save draft');
+        expect(button).toBeTruthy(); await act(async () => button!.click());
+    };
+    try {
+        await act(async () => secondRoot.render(<QueryClientProvider client={secondClient}><MemoryRouter initialEntries={[route]}><JobSubmission /></MemoryRouter></QueryClientProvider>));
+        await vi.waitFor(async () => { await settle(); expect(secondHost.querySelector('[aria-label="Chain 1 min_length"]')).toBeTruthy(); });
+        const initial = (await http('GET',path)).data;
+        await editIn(firstHost, '41'); await editIn(secondHost, '57');
+        for (let i = 0; i < 2; i++) {
+            const count = requests.filter(r => r.path === path+'/draft').length;
+            await saveIn(secondHost);
+            await vi.waitFor(async () => { await settle(); expect(requests.filter(r => r.path === path+'/draft')).toHaveLength(count+1); expect(requests.filter(r => r.path === path+'/draft').at(-1).status).toBe(200); });
+        }
+        const saves = requests.filter(r => r.path === path+'/draft');
+        expect(saves.map(r => r.body.expected_generation)).toEqual([initial.generation, initial.generation+1]);
+        const retained = (await http('GET',path)).data;
+        expect(retained.generation).toBe(initial.generation+2);
+        expect(retained.draft).toEqual(saves[1].data.draft);
+        expect(retained.draft.native_job_request.params.rfd4_request.input.chains[0].min_length).toBe(57);
+        await act(async () => { await client.refetchQueries({ queryKey: ['project-workflow-setup', seed.project_id, seed.setup.setup_context_id] }); });
+        expect(firstHost.querySelector<HTMLInputElement>('[aria-label="Chain 1 min_length"]')?.value).toBe('41');
+        await saveIn(firstHost);
+        await vi.waitFor(async () => { await settle(); expect(requests.filter(r => r.path === path+'/draft')).toHaveLength(3); });
+        const stale = requests.filter(r => r.path === path+'/draft')[2];
+        expect(stale.body.expected_generation).toBe(initial.generation);
+        expect(stale.status).toBe(409);
+        expect((await http('GET',path)).data).toEqual(retained);
+        expect(firstHost.querySelector('[role="alert"]')).toBeTruthy();
+        writeFileSync(resolve(evidence!,'project-two-editor-readback.json'),JSON.stringify({initial, saves, stale, retained, after:(await http('GET',path)).data},null,2));
+    } finally { await act(async () => secondRoot.unmount()); secondClient.clear(); }
+}, 30000);
 suite('ordinary Project retains MODEL 2 partial recipe through two Saves cold reopen and Prepare', async () => {
     const seed = JSON.parse(readFileSync(resolve(evidence!,'seed.json'),'utf8'));
     const fixture = JSON.parse(readFileSync(resolve(evidence!,'source.json'),'utf8'));
@@ -243,7 +402,20 @@ suite('ordinary parent Project two acknowledged Saves cold reopen and native Pre
     await vi.waitFor(async () => expect((await http('GET',path)).data.generation).toBe(stored.generation+1));
     const cold = (await http('GET',path)).data;
     expect(cold.draft.native_job_request).toEqual(saved.params.native_job_request);
-    const prepared = await http('POST',path+'/prepare-launch',{expected_generation:cold.generation},{'Idempotency-Key':crypto.randomUUID()});
+    const key = crypto.randomUUID();
+    const exact = { expected_generation: cold.generation, draft: saved.params };
+    const updated = await http('PUT',path+'/draft',exact,{'Idempotency-Key':key});
+    expect(updated.status).toBe(200);
+    const replay = await http('PUT',path+'/draft',exact,{'Idempotency-Key':key});
+    expect(replay.status).toBe(200); expect(replay.data).toEqual(updated.data);
+    const changed = await http('PUT',path+'/draft',{...exact,draft:{...saved.params,editor_state:{...saved.params.editor_state,job_name:'conflicting edit'}}},{'Idempotency-Key':key});
+    expect(changed.status).toBe(409);
+    const stale = await http('PUT',path+'/draft',exact,{'Idempotency-Key':crypto.randomUUID()});
+    expect(stale.status).toBe(409);
+    const afterConflict = (await http('GET',path)).data;
+    expect(afterConflict.generation).toBe(updated.data.generation);
+    expect(afterConflict.draft.native_job_request).toEqual(saved.params.native_job_request);
+    const prepared = await http('POST',path+'/prepare-launch',{expected_generation:afterConflict.generation},{'Idempotency-Key':crypto.randomUUID()});
     writeFileSync(resolve(evidence!,'project-prepared.json'),JSON.stringify(prepared,null,2));
     expect(prepared.status).toBe(200);
     expect(prepared.data.preparation_id).toBeTruthy();

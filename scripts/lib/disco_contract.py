@@ -6,6 +6,7 @@ applied only at the legacy request boundary, never inferred from molecular task.
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 import json
 import re
 from typing import Literal, TypedDict
@@ -242,6 +243,11 @@ _SEQUENCE_HELP = {
     "entropy_adaptive_anneal_power": ("Entropy annealing power", "Exponent of sequence time multiplying the adaptive-temperature coefficient."),
     "power": ("Sequence noise exponent", "Dimensionless power of the polynomial sequence-noise schedule."),
 }
+
+
+def native_profile_reference() -> dict:
+    """Bounded pinned YAML observations, not effective execution settings."""
+    return json.loads(Path(__file__).with_name('disco_profile_reference.json').read_text())
 
 
 def settings_schema() -> dict:

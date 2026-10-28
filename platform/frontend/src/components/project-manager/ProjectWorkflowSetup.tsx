@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -84,10 +84,19 @@ export function useProjectWorkflowSetup() {
     const query = useQuery({ queryKey: ['project-workflow-setup', projectId, setupContextId], queryFn: ({ signal }) => getProjectWorkflowSetup(projectId as string, setupContextId as string, signal), enabled: active, retry: false });
     const setup = query.data;
     const settings = setup?.draft ?? {};
+    // The editor hydrates once per setup identity, not on background query refetch.
+    // Keep its generation alongside that identity rather than borrowing the cache's.
+    const editorGeneration = useRef<{ identity: string; generation: number } | null>(null);
+    const identity = setup && active ? `${setup.project_id}:${setup.setup_context_id}` : null;
+    if (!identity) editorGeneration.current = null;
+    else if (editorGeneration.current?.identity !== identity) {
+        editorGeneration.current = { identity, generation: setup!.generation };
+    }
     const saveDraft = async (exactSettings: JsonObject) => {
         if (!setup) throw new Error('Project workflow setup is not hydrated.');
-        const current = queryClient.getQueryData<ProjectWorkflowSetup>(['project-workflow-setup', projectId, setupContextId]) ?? setup;
-        const updated = await saveProjectWorkflowSetupDraft(setup.project_id, setup.setup_context_id, { expected_generation: current.generation, draft: exactSettings });
+        const generation = editorGeneration.current!;
+        const updated = await saveProjectWorkflowSetupDraft(setup.project_id, setup.setup_context_id, { expected_generation: generation.generation, draft: exactSettings });
+        if (editorGeneration.current === generation) generation.generation = updated.generation;
         queryClient.setQueryData(['project-workflow-setup', projectId, setupContextId], updated);
         return updated;
     };

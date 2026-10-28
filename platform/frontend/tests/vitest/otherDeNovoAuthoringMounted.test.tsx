@@ -20,15 +20,14 @@ vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: () => null }
 import { ProteinModificationTemplate } from '../../src/components/ProteinModificationTemplate';
 const inventories = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python3', ['-c', `import json
 from scripts.lib.rfd3_scientific_settings import scientific_inventory
-from scripts.lib.laproteina_contract import settings_schema, PROFILES, resolve_profile
-from scripts.lib.disco_contract import NativeSettings
-from pydantic import TypeAdapter
-print(json.dumps({'rfd3':scientific_inventory(),'laproteina':{'parameter_schema':settings_schema(),'profiles':{k:resolve_profile(k) for k in PROFILES}},'disco':{'parameter_schema':TypeAdapter(NativeSettings).json_schema()}}))`], { cwd: '../..', encoding: 'utf8' }));
+from scripts.lib.laproteina_contract import settings_schema, PROFILES, resolve_profile, native_profile_defaults
+from scripts.lib.disco_contract import settings_schema as disco_schema, native_profile_reference
+print(json.dumps({'rfd3':scientific_inventory(),'laproteina':{'parameter_schema':settings_schema(),'profiles':{k:resolve_profile(k) for k in PROFILES},'native_profile_defaults':native_profile_defaults()},'disco':{'parameter_schema':disco_schema(),'native_profile_reference':native_profile_reference()}}))`], { cwd: '../..', encoding: 'utf8' }));
 let root: Root; let client: QueryClient; const previous = api.defaults.adapter;
 let requests: string[] = []; let unexpected: string[] = [];
 afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); api.defaults.adapter = previous; vi.restoreAllMocks(); expect(unexpected).toEqual([]); requests = []; unexpected = []; });
 async function render(node: React.ReactNode) {
-    api.defaults.adapter = async config => { const name = String(config.url); requests.push(`${name}:${config.params?.generator}`); if (!name.endsWith('/generation-settings')) { unexpected.push(name); throw Error(name); } return { data: inventories[config.params.generator], config, status: 200, statusText: 'OK', headers: {} }; };
+    api.defaults.adapter = async config => { const name = String(config.url); if (name === '/api/models/protein_modification_experimental') return { data: { engine_references: {} }, config, status: 200, statusText: 'OK', headers: {} }; requests.push(`${name}:${config.params?.generator}`); if (!name.endsWith('/generation-settings')) { unexpected.push(name); throw Error(name); } return { data: inventories[config.params.generator], config, status: 200, statusText: 'OK', headers: {} }; };
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host); client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter>{node}</MemoryRouter></QueryClientProvider>); });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
@@ -53,6 +52,131 @@ it('all current settings are reachable in model-specific sections without fillin
     for (const field of Object.keys(inventories.laproteina.parameter_schema.properties)) expect(document.querySelector(`[data-native-setting="${field}"], [title="${field}"]`), field).not.toBeNull();
     expect(changed).not.toHaveBeenCalled();
     for (const profile of Object.keys(inventories.laproteina.profiles)) expect(document.body.textContent).toContain(profile);
+});
+it('projects selected upstream references without changing requests, and respects overrides and reset', async () => {
+    await render(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator: 'laproteina', target_lengths: '120', laproteina_preset: 'ucond_tri', laproteina_num_steps: 350, pcad_laproteina_settings_json: { self_cond: false, bb_ca_gt_clamp_val: null, seed: 0 } }} />);
+    await click('Backbone sampler'); await click('Local latent sampler'); await click('Sampling and outputs');
+    const field = (name: string) => document.querySelector(`[data-native-setting="${name}"]`)! as HTMLElement;
+    const request = () => JSON.parse(document.querySelector('[data-request]')!.textContent!).params;
+    const initial = structuredClone(request());
+    expect(field('bb_ca_sc_scale_noise').querySelector('input')!.value).toBe('0.1');
+    expect(field('local_latents_center_every_step').querySelector('input')!.checked).toBe(false);
+    expect(field('bb_ca_gt_clamp_val').textContent).toContain('Upstream profile reference: null');
+    expect(field('seed').querySelector('input')!.value).toBe('0');
+    expect(field('self_cond').querySelector('input')!.checked).toBe(false);
+    expect(request()).toEqual(initial);
+    await edit('La-Proteina preset', 'ucond_notri_long');
+    expect(field('bb_ca_sc_scale_noise').querySelector('input')!.value).toBe('0.15');
+    expect(field('local_latents_sc_scale_noise').querySelector('input')!.value).toBe('0.05');
+    expect(request()).toEqual({ ...initial, laproteina_preset: 'ucond_notri_long' });
+    const noise = field('bb_ca_sc_scale_noise').querySelector('input')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(noise), 'value')!.set!.call(noise, '0'); noise.dispatchEvent(new Event('input', { bubbles: true })); });
+    expect(request().pcad_laproteina_settings_json).toEqual({ ...initial.pcad_laproteina_settings_json, bb_ca_sc_scale_noise: 0 });
+    expect(field('bb_ca_sc_scale_noise').textContent).toContain('Upstream profile reference: 0.15');
+    await act(async () => field('bb_ca_sc_scale_noise').querySelector('button')!.click());
+    expect(field('bb_ca_sc_scale_noise').querySelector('input')!.value).toBe('0.15');
+
+    expect(request().pcad_laproteina_settings_json).toEqual(initial.pcad_laproteina_settings_json);
+    expect(request().laproteina_num_steps).toBe(350);
+    expect(document.body.textContent).toContain('BMS sampling value is sent explicitly');
+});
+it('shows retained flat values after native reset and matches the real projection', async () => {
+    await render(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator: 'laproteina', target_lengths: '120', laproteina_preset: 'ucond_tri', laproteina_seed: 99, laproteina_self_cond: false, laproteina_bb_ca_gt_clamp_val: null, pcad_laproteina_settings_json: { seed: 0 } }} />);
+    await click('Sampling and outputs'); await click('Backbone sampler');
+    const field = (name: string) => document.querySelector(`[data-native-setting="${name}"]`)! as HTMLElement;
+    const params = () => JSON.parse(document.querySelector('[data-request]')!.textContent!).params;
+    const project = () => JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python3', ['-c', 'import json,sys; from scripts.lib.protein_cad_settings import settings_projection; print(json.dumps(settings_projection(json.load(sys.stdin))))'], { cwd: '../..', input: JSON.stringify(params()), encoding: 'utf8' })).pcad_laproteina_settings_json;
+    const before = params(); expect(field('seed').querySelector('input')!.value).toBe('0'); expect(project().seed).toBe(0);
+    expect(field('self_cond').textContent).toContain('Retained override: laproteina_self_cond · false');
+    expect(field('bb_ca_gt_clamp_val').textContent).toContain('Retained override: laproteina_bb_ca_gt_clamp_val · null');
+    expect(params()).toEqual(before);
+    expect(field('seed').textContent).toContain('Use retained override');
+    await act(async () => field('seed').querySelector('button')!.click());
+    expect(field('seed').querySelector('input')!.value).toBe('99');
+    expect(field('seed').textContent).toContain('Retained override: laproteina_seed · 99');
+    expect(project().seed).toBe(99);
+    expect(params()).toEqual({ ...before, pcad_laproteina_settings_json: {} });
+});
+it('retains a historical pcad alias through the actual parent and native projection', async () => {
+    const draft = vi.fn();
+    await render(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator: 'laproteina', target_lengths: '120', pcad_laproteina_seed: 42 }} onDraftChange={draft} />);
+    await click('Sampling and outputs');
+    const field = document.querySelector<HTMLElement>('[data-native-setting="seed"]')!;
+    expect(field.querySelector<HTMLInputElement>('input')!.value).toBe('42');
+    const request = JSON.parse(document.querySelector('[data-request]')!.textContent!).params;
+    expect(request.pcad_laproteina_seed).toBe(42);
+    const projected = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python3', ['-c', 'import json,sys; from scripts.lib.protein_cad_settings import settings_projection; print(json.dumps(settings_projection(json.load(sys.stdin))))'], { cwd: '../..', input: JSON.stringify(request), encoding: 'utf8' }));
+    expect(projected.pcad_laproteina_settings_json.seed).toBe(42);
+    const saved = JSON.parse(JSON.stringify(draft.mock.calls.at(-1)![0]));
+    expect(saved.pcad_laproteina_seed).toBe(42);
+});
+
+it('honors both flat aliases and legacy native JSON precedence without rewriting them', async () => {
+    const changed = vi.fn();
+    const requestParams = { laproteina_seed: 0, pcad_laproteina_seed: 42, laproteina_bb_ca_sc_scale_noise: 0, pcad_laproteina_bb_ca_sc_scale_noise: 0.9, pcad_laproteina_self_cond: false, laproteina_bb_ca_gt_clamp_val: null, laproteina_settings: JSON.stringify({ seed: 7 }) };
+    await render(<OtherDeNovoSettings model="laproteina" task="unconditional" selectedPreset="ucond_tri" value={{}} requestParams={requestParams} onChange={changed} />);
+    await click('Sampling and outputs'); await click('Backbone sampler');
+    const field = (name: string) => document.querySelector(`[data-native-setting="${name}"]`)! as HTMLElement;
+    expect(field('seed').querySelector('input')!.value).toBe('7');
+    expect(field('bb_ca_sc_scale_noise').querySelector('input')!.value).toBe('0');
+    expect(field('bb_ca_sc_scale_noise').textContent).toContain('laproteina_bb_ca_sc_scale_noise · 0');
+    expect(field('self_cond').textContent).toContain('pcad_laproteina_self_cond · false');
+    expect(field('bb_ca_gt_clamp_val').textContent).toContain('laproteina_bb_ca_gt_clamp_val · null');
+    const projected = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python3', ['-c', 'import json,sys; from scripts.lib.protein_cad_settings import settings_projection; print(json.dumps(settings_projection(json.load(sys.stdin))))'], { cwd: '../..', input: JSON.stringify(requestParams), encoding: 'utf8' })).pcad_laproteina_settings_json;
+    expect(projected).toMatchObject({ seed: 7, bb_ca_sc_scale_noise: 0, self_cond: false, bb_ca_gt_clamp_val: null });
+    expect(changed).not.toHaveBeenCalled();
+});
+it('DISCO selected YAML references follow the parent selection without changing request overrides', async () => {
+    await render(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator: 'disco', target_lengths: '120', disco_experiment: 'designable', disco_effort: 'fast', disco_N_step: 0, pcad_disco_settings_json: { N_cycle: 7 } }} />);
+    await click('Diffusion and seeds');
+    const params = () => JSON.parse(document.querySelector('[data-request]')!.textContent!).params;
+    const field = (name: string) => document.querySelector(`[data-native-setting="${name}"]`)!;
+    const before = structuredClone(params());
+    expect(document.body.textContent).toContain('Upstream reference for designable/fast');
+    expect(field('N_step').textContent).toContain('sample_diffusion.N_step = 100');
+    expect(field('N_step').textContent).toContain('disco_N_step · 0');
+    expect(field('N_cycle').textContent).toContain('model.N_cycle = 2');
+    expect(params()).toEqual(before);
+    const select = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'max') && [...s.options].some(o => o.value === 'fast'))!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'max'); select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(document.body.textContent).toContain('Upstream reference for designable/max');
+    expect(field('N_step').textContent).toContain('sample_diffusion.N_step = 200');
+    expect(field('N_cycle').textContent).toContain('model.N_cycle = 4');
+    expect(params()).toEqual({ ...before, disco_effort: 'max' });
+});
+
+it('does not infer a DISCO profile from an explicit null selector', async () => {
+    const changed = vi.fn();
+    await render(<OtherDeNovoSettings model="disco" task="unconditional" value={{ pcad_disco_settings_json: { effort: null } }} requestParams={{ disco_effort: 'fast', disco_experiment: 'designable' }} onChange={changed} />);
+    await click('Diffusion and seeds');
+    expect(document.body.textContent).toContain('Profile reference values are not reported for this selection');
+    expect(document.body.textContent).not.toContain('Upstream reference for designable/fast');
+    expect(changed).not.toHaveBeenCalled();
+});
+
+it('shows DISCO retained flat values and seed shorthand as projected', async () => {
+    await render(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator: 'disco', target_lengths: '120', disco_N_step: 0, disco_deterministic: false, disco_seeds: '0, 12' }} />);
+    await click('Diffusion and seeds');
+    const field = (name: string) => document.querySelector(`[data-native-setting="${name}"]`)! as HTMLElement;
+    const params = JSON.parse(document.querySelector('[data-request]')!.textContent!).params;
+    const projected = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python3', ['-c', 'import json,sys; from scripts.lib.protein_cad_settings import settings_projection; print(json.dumps(settings_projection(json.load(sys.stdin))))'], { cwd: '../..', input: JSON.stringify(params), encoding: 'utf8' })).pcad_disco_settings_json;
+    expect(projected).toMatchObject({ N_step: 0, deterministic: false, seeds: [0, 12] });
+    expect(field('N_step').textContent).toContain('disco_N_step · 0');
+    expect(field('deterministic').textContent).toContain('disco_deterministic · false');
+    expect(field('seeds').textContent).toContain('disco_seeds · [0,12]');
+});
+it('uses the exact preset for motif references and reports unlisted values honestly', async () => {
+    const changed = vi.fn();
+    function Harness() { const [preset, setPreset] = useState('motif_idx_aa'); return <><button onClick={() => setPreset('unknown_saved')}>Unknown preset</button><OtherDeNovoSettings model="laproteina" task="motif_scaffolding" selectedPreset={preset} value={{}} onChange={changed} /></>; }
+    await render(<Harness />); await click('Sampling and outputs'); await click('Motif overrides');
+    const field = (name: string) => document.querySelector(`[data-native-setting="${name}"]`)! as HTMLElement;
+    expect(field('max_nsamples_per_batch').querySelector('input')!.value).toBe('5');
+    expect(field('save_trajectory_every').querySelector('input')!.value).toBe('0');
+    expect(field('motif_atom_spec').textContent).toContain('Inherited value not reported');
+    await click('Unknown preset');
+    expect(document.body.textContent).toContain('Profile reference values are not reported for this selection');
+    expect(field('max_nsamples_per_batch').textContent).toContain('Inherited value not reported');
+    expect(changed).not.toHaveBeenCalled();
 });
 it.each(['rfd3', 'disco'] as const)('%s discovers the complete current settings inventory without writing overrides', async model => {
     const changed = vi.fn(); const value = model === 'rfd3' ? { inference_sampler: {} } : { pcad_disco_settings_json: { noisy_guidance: {}, sequence_sampling: {} } };
@@ -86,7 +210,7 @@ it('native input precedence and reorder do not reinterpret DNA or atom types', (
 it('DISCO parent retains explicit molecular jobs and sparse science across serialized cold reopen', async () => {
     const draft = vi.fn();
     const jobs = [{ name: 'native', sequences: [{ dnaSequence: { sequence: 'AGTC', count: 1 } }, { ligand: { ligand: 'CCD_ATP', count: 1 } }, { ion: { ion: 'MG', count: 2 } }], covalent_bonds: [] }];
-    const initial = { generator: 'disco', design_task: 'custom_json', pcad_disco_jobs_json: jobs, pcad_disco_settings_json: { seeds: 0, num_inference_seeds: null, deterministic: false, noisy_guidance: { omega_seq: 0 } }, disco_input_json_path: '/retained/native.json' };
+    const initial = { generator: 'disco', design_task: 'custom_json', target_lengths: '125', pcad_disco_jobs_json: jobs, pcad_disco_settings_json: { seeds: 0, num_inference_seeds: null, deterministic: false, noisy_guidance: { omega_seq: 0 } }, disco_input_json_path: '/retained/native.json' };
     await render(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} initialValues={initial} />);
     await edit('DISCO job 1 name', 'renamed');
     const saved = JSON.parse(JSON.stringify(draft.mock.calls.at(-1)![0]));

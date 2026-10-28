@@ -53,9 +53,9 @@ export function LegacyNativeGenerationControls({ model, task, value, onChange }:
 }
 
 /** Presentation of the native owner's schema, never a second scientific compiler. */
-export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initialValues, onDraftChange, runDetails }: {
+export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initialValues, onDraftChange, runDetails, suiteView }: {
     model: 'rfd4_proteina' | 'complexa'; mode?: string; initialValues: Record<string, unknown>;
-    onDraftChange: (draft: Record<string, unknown>) => void; runDetails?: ReactNode;
+    onDraftChange: (draft: Record<string, unknown>) => void; runDetails?: ReactNode; suiteView?: 'simple' | 'advanced';
 }) {
     const field = model === 'rfd4_proteina' ? 'rfd4_request' : 'complexa_request';
     const [nativeDraft, setNativeDraft] = useState(() => {
@@ -71,27 +71,36 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
     const [recipe, setRecipe] = useState<string | undefined>(() => typeof initialValues.native_recipe === 'string' ? initialValues.native_recipe : undefined);
     const [controlDrafts, setControlDrafts] = useState(() => record(initialValues.native_control_drafts));
     const activeMode = model === 'complexa' ? ['evaluate', 'analysis'].includes(String(request.operation ?? mode)) ? 'evaluate' : 'generate' : mode;
+    const readbackIdentity = JSON.stringify([model, activeMode, request]);
+    const readbackGeneration = useRef({ identity: readbackIdentity, value: 0 });
+    if (readbackGeneration.current.identity !== readbackIdentity) readbackGeneration.current = { identity: readbackIdentity, value: readbackGeneration.current.value + 1 };
+    const [effectiveReadback, setEffectiveReadback] = useState<{ generation: number; effective: Record<string, any> }>();
     const [inspections, setInspections] = useState<Record<string, { receipt: StructureMaterialization; binding: string }>>({});
     const [visual, setVisual] = useState<{ slot: string; receipt: StructureMaterialization; binding: string; identities: Rfd4NativeSelectionIdentity[] }>();
     const visualResult = useMemo(() => visual ? buildRfd4NativeSelection(visual.identities, { ...visual.receipt, documentId: visual.receipt.path }) : undefined, [visual]);
     const currentVisual = visual && visual.binding === JSON.stringify(nativeDraft.sources?.[visual.slot]) ? visual : undefined;
     const [name, setName] = useState(typeof initialValues.job_name === 'string' ? initialValues.job_name : model);
     const [sequence, setSequence] = useState(() => hydrateGeneralSequenceDesign(initialValues));
-    const [explicitSequenceNull] = useState(() => initialValues.sequence_design === null || initialValues.sequence_design_null === true);
+    const [explicitSequenceNull, setExplicitSequenceNull] = useState(() => initialValues.sequence_design === null || initialValues.sequence_design_null === true);
+    const [sequenceOmitted, setSequenceOmitted] = useState(() => initialValues.sequence_design_omitted === true);
     const [section, setSection] = useState('Design');
+    useEffect(() => { if (suiteView) setSection(suiteView === 'advanced' ? 'Native settings' : 'Design'); }, [suiteView]);
     const navigate = useNavigate(); const client = useQueryClient();
     const inventory = useQuery({ queryKey: ['de-novo-native-settings', model, mode],
         queryFn: async () => (await fetchNativeGenerationSettings(model, mode)).data,
         staleTime: 60_000, retry: false });
     const schema = inventory.data?.parameter_schema ?? inventory.data?.schema;
     const contract = inventory.data?.contract ?? (typeof schema?.$id === 'string' ? schema.$id : schema?.properties?.schema_version?.const !== undefined ? `${model}:${schema.properties.schema_version.const}` : typeof initialValues.native_contract === 'string' ? initialValues.native_contract : `${model}:unversioned`);
-    const payload = { ...generalSequenceRequest(sequence), name, model_id: model, mode: activeMode,
+    const payload = { ...(sequenceOmitted ? {} : generalSequenceRequest(sequence)), name, model_id: model, mode: activeMode,
         ...(!sequence.invocation_draft && !sequence.sequence_design.enabled && explicitSequenceNull ? { sequence_design: null } : {}),
         ...(Object.hasOwn(initialValues, 'pinned_gpu') ? { pinned_gpu: initialValues.pinned_gpu } : {}),
         ...(Object.hasOwn(initialValues, 'source_structure') ? { source_structure: initialValues.source_structure } : {}),
         params: { [field]: request, ...(nativeDraft.sources !== undefined ? { native_sources: nativeDraft.sources } : {}) } };
-    const draft = JSON.stringify({ ...sequence, job_name: name, [field]: request, native_mode: activeMode, ...(recipe ? { native_recipe: recipe } : {}),
+    const clearableEditorKeys = new Set(['native_recipe', 'native_sources', 'native_job_request', 'sequence_design_null', 'sequence_design_omitted', 'de_novo_drafts']);
+    const retainedExtras = Object.fromEntries(Object.entries(initialValues).filter(([key]) => !clearableEditorKeys.has(key)));
+    const draft = JSON.stringify({ ...retainedExtras, ...sequence, job_name: name, [field]: request, native_mode: activeMode, ...(recipe ? { native_recipe: recipe } : {}),
         ...(explicitSequenceNull ? { sequence_design_null: true } : {}),
+        ...(sequenceOmitted ? { sequence_design_omitted: true } : {}),
         ...(Object.hasOwn(initialValues, 'pinned_gpu') ? { pinned_gpu: initialValues.pinned_gpu } : {}),
         ...(nativeDraft.sources !== undefined ? { native_sources: nativeDraft.sources } : {}),
         ...(Object.hasOwn(initialValues, 'source_structure') ? { source_structure: initialValues.source_structure } : {}),
@@ -180,7 +189,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         {inventory.isPending && <p role="status">Loading settings…</p>}
         {inventory.error && <p role="alert">{inventory.error.message}. Saved native values are retained.</p>}
         <div hidden={section !== 'Design'}><ProteinDesignPanel title="Design" showTitle={false}>
-            {schema && (model === 'rfd4_proteina' ? <Rfd4TaskWorkspace request={request} schema={schema} mode={mode} recipe={recipe} onRecipe={changeRecipe} onChange={changeRequest} renderNative={renderField} renderSource={renderSource} sourceNames={Object.keys(nativeDraft.sources ?? {})}
+            {schema && (model === 'rfd4_proteina' ? <Rfd4TaskWorkspace request={request} schema={schema} mode={mode} recipe={recipe} onRecipe={changeRecipe} onChange={changeRequest} renderNative={renderField} renderSource={renderSource} sourceNames={Object.keys(nativeDraft.sources ?? {})} effectiveConfig={effectiveReadback?.generation === readbackGeneration.current.value ? effectiveReadback.effective : undefined}
                 sourceChains={Object.fromEntries(Object.entries(inspections).filter(([slot, item]) => item.binding === JSON.stringify(nativeDraft.sources?.[slot]) && !item.receipt.inspection_error && !!item.receipt.source_positions?.length).map(([slot, item]) => [slot, [...new Set(item.receipt.source_positions!.map(row => String(row.label_asym_id ?? '')))]]))}
                 retainedTasks={Object.entries(nativeDraft.inactive).filter(([key]) => { try { const parts = JSON.parse(key); return parts[0] === model && parts[1] === mode && parts[2] === contract && parts[3] !== 'recipe'; } catch { return false; } }).map(([key, value]) => ({ key, label: String(record(value.input).kind ?? 'native request') }))}
                 onClearSelection={() => setVisual(undefined)}
@@ -193,13 +202,13 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
             <DeNovoNativePreview request={payload as Partial<Job>} />
         </ProteinDesignPanel></div>
         <div hidden={section !== 'Native settings'}><ProteinDesignPanel title="Native settings" description="Unchanged settings use the selected profile.">
-            <NativeProfileSnapshot model={model} mode={activeMode} request={request} discovery={record(inventory.data).native_profile_defaults} />
-            {schema && model === 'rfd4_proteina' && <Rfd4ExpertSettings discovery={record(inventory.data).native_profile_defaults} request={request} schema={schema} onChange={changeRequest} fileSlots={Object.fromEntries(Object.entries(nativeDraft.sources ?? {}).filter(([, value]) => 'kind' in value && value.kind === 'file').map(([key, value]) => [key, value.path ?? '']))} />}
+            <NativeProfileSnapshot model={model} mode={activeMode} request={request} discovery={record(inventory.data).native_profile_defaults} generation={readbackGeneration.current.value} onReadback={(generation, effective) => setEffectiveReadback(effective ? { generation, effective } : undefined)} />
+            {schema && model === 'rfd4_proteina' && <Rfd4ExpertSettings discovery={record(inventory.data).native_profile_defaults} effectiveConfig={effectiveReadback?.generation === readbackGeneration.current.value ? effectiveReadback.effective : undefined} request={request} schema={schema} onChange={changeRequest} fileSlots={Object.fromEntries(Object.entries(nativeDraft.sources ?? {}).filter(([, value]) => 'kind' in value && value.kind === 'file').map(([key, value]) => [key, value.path ?? '']))} />}
             {schema && model === 'complexa' && Object.entries(schema.properties ?? {}).filter(([key]) => !primary.has(key)).map(([key, child]) => <NativeSettingsDisclosure key={key} summary={<span>{child.title ?? key.replaceAll('_', ' ')}</span>}>
                 {() => renderField(key, child)}
             </NativeSettingsDisclosure>)}
         </ProteinDesignPanel></div>
-        <div hidden={section !== 'Optional operations'}><GeneralSequenceDesignSettings value={sequence} onChange={setSequence} /></div>
+        <div hidden={section !== 'Optional operations'}><GeneralSequenceDesignSettings value={sequence} onChange={next => { if (next.invocation_draft?.enabled || next.sequence_design.enabled) { setSequenceOmitted(false); setExplicitSequenceNull(false); } setSequence(next); }} /></div>
         <ProteinDesignRun jobName={name} onJobNameChange={setName} pending={submit.isPending} onSubmit={() => submit.mutate()} submitLabel={model === 'complexa' && request.operation === 'design' ? 'Generate, filter, evaluate and analyze' : model === 'complexa' && request.operation === 'analysis' ? 'Evaluate and analyze' : activeMode === 'evaluate' ? 'Evaluate candidates' : 'Generate candidates'}>
             <ExecutionTargetPicker workflowRequest={payload as Partial<Job>} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
             {runDetails}{submit.error && <p role="alert">{submit.error.message}</p>}

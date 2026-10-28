@@ -17,9 +17,11 @@ export function rfd4RecipeRequest(recipe: string): Record<string, unknown> {
     return { input: { kind: 'annotated', slots: [] }, ...(recipe === 'inverse' ? { groups: { generation: 'inverse_folding' } } : {}) };
 }
 /** Cleared numeric text remains explicit; only populated numbers become numeric wire values. */
-export function NativeNumber({ label, value, onChange }: { label: string; value: unknown; onChange: (value: unknown) => void }) {
-    return <label className="flex flex-col">{label}<input aria-label={label} type="number" value={value == null ? '' : String(value)} onChange={event => onChange(event.target.value === '' ? '' : Number(event.target.value))} />
-        <button type="button" onClick={() => onChange(undefined)}>Inherit {label}</button>{value === null && <small>Explicit null</small>}</label>;
+export function NativeNumber({ label, value, inherited, onChange }: { label: string; value: unknown; inherited?: unknown; onChange: (value: unknown) => void }) {
+    const shown = value === undefined ? inherited : value;
+    return <label className="flex flex-col">{label}<input aria-label={label} type="number" value={shown == null ? '' : String(shown)} onChange={event => onChange(event.target.value === '' ? '' : Number(event.target.value))} />
+        <button type="button" onClick={() => onChange(undefined)}>Inherit {label}</button>{shown === null && <small>{value === null ? 'Explicit null' : 'Auto / none (native null)'}</small>}
+        {value === undefined && inherited !== undefined && <small>Selected native effective value; not an override</small>}</label>;
 }
 export function patchNative(value: Record<string, any>, key: string, next: unknown) {
     const result = { ...value }; if (next === undefined) delete result[key]; else result[key] = next; return result;
@@ -57,7 +59,7 @@ function Conditions({ value, families, visual, onChange }: { value: Record<strin
     </fieldset>;
 }
 
-export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onChange, visual, sourceNames, renderNative, renderSource, retainedTasks, sourceChains, onClearSelection }: {
+export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onChange, visual, sourceNames, renderNative, renderSource, retainedTasks, sourceChains, onClearSelection, effectiveConfig }: {
     request: Record<string, any>; schema: Schema; mode: string; recipe?: string; onRecipe: (recipe: string) => void;
     onChange: (request: Record<string, any>) => void; visual?: Visual; sourceNames: string[];
     renderNative: (key: string, schema: Schema) => React.ReactNode;
@@ -65,6 +67,7 @@ export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onC
     sourceChains?: Record<string, string[]>;
     onClearSelection?: () => void;
     retainedTasks?: Array<{ key: string; label: string }>;
+    effectiveConfig?: Record<string, any>;
 }) {
     const sourceControl = (label: string, value: string, change: (slot: string) => void) => renderSource?.(label, value, change) ?? <label>{label}<input aria-label={label} list="rfd4-source-names" value={value} onChange={event => change(event.target.value)} /></label>;
     const input = nativeRecord(request.input); const settings = nativeRecord(request.settings);
@@ -119,8 +122,8 @@ export function Rfd4TaskWorkspace({ request, schema, mode, recipe, onRecipe, onC
                 <button type="button" onClick={() => setInput({ ...input, examples: examples.filter((_: any, n: number) => n !== i) })}>Remove example {i + 1}</button>
             </fieldset>)}<button type="button" onClick={() => setInput({ ...input, examples: [...examples, { name: '', sources: [] }] })}>Add conditioned example</button></>}
         <datalist id="rfd4-source-names">{sourceNames.map(name => <option key={name} value={name} />)}</datalist>
-        {mode !== 'evaluate' && <fieldset><legend>Sampling amount</legend><p>Designs per input are replicates; batch size is parallel sampling, not final beam count.</p><div className="flex flex-wrap gap-3">{[['num_replicates', 'Designs per input'], ['batch_size', 'Batch size'], ['seed', 'Seed']].map(([key, label]) => <NativeNumber key={key} label={label} value={settings[key]} onChange={v => setSetting(key, v)} />)}</div></fieldset>}
-        {recipe === 'partial' && <fieldset><legend>Partial diffusion</legend><p>Trajectory-tail fraction counts the tail of integration steps; backbone and latent partial times are separate native controls. No fraction is chosen automatically.</p>{['partial_trajectory_fraction_steps', 'partial_t_backbone', 'partial_t_latent'].map(key => <NativeNumber key={key} label={key} value={settings.generation?.args?.[key]} onChange={v => setSetting('generation', { ...nativeRecord(settings.generation), args: patchNative(nativeRecord(settings.generation?.args), key, v) })} />)}</fieldset>}
+        {mode !== 'evaluate' && <fieldset><legend>Sampling amount</legend><p>Designs per input are replicates; batch size is parallel sampling, not final beam count.</p><div className="flex flex-wrap gap-3">{[['num_replicates', 'Designs per input'], ['batch_size', 'Batch size'], ['seed', 'Seed']].map(([key, label]) => <NativeNumber key={key} label={label} value={settings[key]} inherited={effectiveConfig?.[key]} onChange={v => setSetting(key, v)} />)}</div></fieldset>}
+        {recipe === 'partial' && <fieldset><legend>Partial diffusion</legend><p>Trajectory-tail fraction counts the tail of integration steps; backbone and latent partial times are separate native controls. No fraction is chosen automatically.</p>{['partial_trajectory_fraction_steps', 'partial_t_backbone', 'partial_t_latent'].map(key => <NativeNumber key={key} label={key} value={settings.generation?.args?.[key]} inherited={effectiveConfig?.generation?.args?.[key]} onChange={v => setSetting('generation', { ...nativeRecord(settings.generation), args: patchNative(nativeRecord(settings.generation?.args), key, v) })} />)}</fieldset>}
         {recipe === 'inverse' && <p>Native inverse folding uses the selected annotated backbone with independent latent sampling. This is not fixed-sequence sidechain packing.</p>}
         {mode === 'evaluate' && <fieldset><legend>Evaluation task labels</legend>{(request.evaluation_tasks ?? []).map((row: any, i: number) => <div key={i} className="flex flex-wrap gap-2">{['slot', 'task'].map(key => <label key={key}>{key}<input aria-label={`Evaluation ${i + 1} ${key}`} list={key === 'slot' ? 'rfd4-source-names' : undefined} value={row[key] ?? ''} onChange={e => onChange({ ...request, evaluation_tasks: request.evaluation_tasks.map((r: any, n: number) => n === i ? { ...r, [key]: e.target.value } : r) })} /></label>)}<button type="button" onClick={() => onChange({ ...request, evaluation_tasks: request.evaluation_tasks.filter((_: any, n: number) => n !== i) })}>Remove evaluation task {i + 1}</button></div>)}<button type="button" onClick={() => onChange({ ...request, evaluation_tasks: [...(request.evaluation_tasks ?? []), { slot: '', task: '' }] })}>Add evaluation task</button><button type="button" onClick={() => onChange(patchNative(request, 'evaluation_tasks', undefined))}>Inherit evaluation task labels</button></fieldset>}
         <NativeSettingsDisclosure summary={<span>Advanced input and global conditions</span>}>{() => schema.properties?.input && renderNative('input', schema.properties.input)}</NativeSettingsDisclosure>

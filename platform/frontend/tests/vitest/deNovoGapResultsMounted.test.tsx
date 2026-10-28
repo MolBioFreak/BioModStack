@@ -35,7 +35,7 @@ const documents: any[] = [
 ];
 const source = { job_id: jobId, document: { artifact_id: 'alternate', target_state: 'B' }, model_number: 2 };
 const materialized = {
-    path: 'inputs/retained/alternate.pdb', format: 'pdb', sha256: 'a'.repeat(64), model_number: 2,
+    path: 'inputs/retained/alternate.pdb', format: 'pdb', native_format: 'pdb', sha256: 'a'.repeat(64), model_number: 2, model_numbers: [2], source_positions: [],
     source_structure: source, native_recipe: recipes.simple,
     author_residues: [
         { model_number: 2, auth_asym_id: 'A', auth_seq_id: 1, residue_name: 'ALA' },
