@@ -73,6 +73,7 @@ beforeEach(() => {
         if (url === '/api/files/upload') data = { path: `${body.path}/${(body.file as File).name}` };
         else if (url.endsWith('/prepare')) data = await prepare(body, url.split('/').at(-2)!);
         else if (url.endsWith('/submit')) data = { id: 'new-job' };
+        else if (url === '/api/ont/ngs/basecall-devices') data = { default: 'cuda:0', cuda_available: config.params?.execution_target_id ? null : true, options: [{ value: 'cpu', label: 'CPU' }, { value: 'cuda:0', label: 'CUDA' }, { value: 'cuda:all', label: 'All CUDA' }] };
         else if (url === '/api/execution-targets') data = [{ id: 'worker-1', name: 'Test worker', active: true, state: 'ready', capabilities: { gpu_count: 1, gpu_name: 'fixture' } }];
         else if (url === '/api/sequences/') data = [molecular];
         else if (url.includes('/state/revisions/')) data = { id: 'state-1', members: [
@@ -119,6 +120,43 @@ const submits = () => calls.filter(call => call.url.endsWith('/submit'));
 async function remoteReview() { await click('Vast · Test worker'); await click('Review and submit'); await until(() => expect(button('Approve and submit')).toBeTruthy()); }
 
 describe('ordinary NGS prepared launch through mounted consumers and real API transport', () => {
+    it.each(['plasmidQc', 'dna'])('preserves tandem modkit settings for %s', async selectedWorkflow => {
+        await mount({ ...base, selectedWorkflow, doradoModel: 'hac', modifiedBases: '6mA',
+            runModkit: true, modkitFilterThreshold: 0, runFastqQc: true,
+            ngsReferenceRevisionId: 'reference-revision-1', doradoDevice: 'cpu' });
+        await click('Show advanced controls');
+        const checkbox = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+            .find(node => node.parentElement?.textContent?.includes('Generate methylation tables'))!;
+        expect(checkbox.checked).toBe(true);
+        expect(container.querySelector<HTMLSelectElement>('#dorado-device')!.value).toBe('cpu');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params).toMatchObject({ run_modkit: true, modified_bases: '6mA',
+            modkit_filter_threshold: 0, run_fastq_qc: true, dorado_device: 'cpu' });
+        expect(submits()[0].body.pinned_gpu).toBeNull();
+    });
+    it('separates worker defaults from controller CPU and preserves explicit CPU across placement changes', async () => {
+        const original = api.defaults.adapter as (config: InternalAxiosRequestConfig) => Promise<any>;
+        const targets: unknown[] = [];
+        api.defaults.adapter = async config => {
+            if (config.url !== '/api/ont/ngs/basecall-devices') return original(config);
+            targets.push(config.params?.execution_target_id ?? null);
+            return { data: { default: config.params?.execution_target_id ? 'cuda:0' : 'cpu',
+                cuda_available: null, options: [{ value: 'cpu', label: 'CPU' }, { value: 'cuda:0', label: 'CUDA' }] },
+                status: 200, statusText: 'OK', headers: {}, config };
+        };
+        await mount();
+        await until(() => expect(container.querySelector<HTMLSelectElement>('#dorado-device')!.value).toBe('cpu'));
+        await click('Vast · Test worker');
+        await until(() => expect(container.querySelector<HTMLSelectElement>('#dorado-device')!.value).toBe('cuda:0'));
+        expect(targets).toEqual([null, 'worker-1']);
+        await input('#dorado-device', 'cpu');
+        await click('Local'); await click('Vast · Test worker');
+        expect(container.querySelector<HTMLSelectElement>('#dorado-device')!.value).toBe('cpu');
+        await click('Review and submit'); await until(() => expect(button('Approve and submit')).toBeTruthy());
+        expect(prepares()[0].body.params.dorado_device).toBe('cpu');
+        expect(prepares()[0].body.execution_target_id).toBe('worker-1');
+    });
+
     it('resolves exact Project sequence summaries outside the first library page before launching', async () => {
         const original = api.defaults.adapter as (config: InternalAxiosRequestConfig) => Promise<any>;
         const lookups: string[] = [];

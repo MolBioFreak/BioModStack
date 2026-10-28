@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "1d41fb50300a4e574670f6a02a0345e597ac9ed4",
   "baseline_source_tree": "af85061039a5fafdcb828336f09ea6355713d1a9",
-  "content_sha256": "8deaca2df440c76973ee5ac2f19c362967eeba2544b0ccbbee5a261dee7a8837",
+  "content_sha256": "dd615e6f9f5e9f5980645a88e8e3a3d1ac3b233f045c00c708d52208cbe55511",
   "entries": [
     {
       "path": "schemas/ngs_molbio/domain-experiment-v2.schema.json",
@@ -443,9 +443,9 @@
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-basecall_dna-v1.schema.json",
-      "schema_canonical_sha256": "aabf6b4754c0d6b79579dd42564bebaf0eb0dd4e0f1241a00c928d62c2e360c6",
+      "schema_canonical_sha256": "3ddc3d0a6319ef6bacfce7fe0c983e3a3c50b92e58bd8e2d6223bfff4f89cf92",
       "schema_id": "bms.workflow-parameters.ngs.ont.basecall_dna.v1",
-      "schema_sha256": "c02df5b94e7fa0bab095919f991f536be3364c0731aab56b91dfbe7357b1d708"
+      "schema_sha256": "76488557a8dc312ef4c43825e5aeae4ce3ccc650c5cf1f7d68b0ebbc34fbd987"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-basecall_rna-v1.schema.json",
@@ -479,9 +479,9 @@
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-plasmid_qc-v1.schema.json",
-      "schema_canonical_sha256": "b2185d5df5a0dcedacb62d81e4107fbd88b916772bf932cc79700fd231b5dd31",
+      "schema_canonical_sha256": "03efeefff23fed7933647a4f145379bab25af8b2cbb812fe04342d4bcc550027",
       "schema_id": "bms.workflow-parameters.ngs.ont.plasmid_qc.v1",
-      "schema_sha256": "1d4a2002451dc7bf9c7f943c02098628bf5e05ee50e3696ebe082d7b892537f8"
+      "schema_sha256": "5af3a7831d0642f06479bcc066bc9573d487882ea58d7d7b20cca81796e19c41"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-pooled_reference_assignment-v1.schema.json",
