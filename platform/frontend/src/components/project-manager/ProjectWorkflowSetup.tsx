@@ -27,14 +27,14 @@ function nativeDestination(setup: ProjectWorkflowSetupNavigation | ProjectWorkfl
     return `${destination.pathname}${destination.search}`;
 }
 
-export function NewProjectExperimentDialog({ projectId, globalExperimentId, open, onClose }: { projectId: string; globalExperimentId?: string; open: boolean; onClose: () => void }) {
+export function NewProjectExperimentDialog({ projectId, globalExperimentId, open, onClose, alignmentOnly = false }: { projectId: string; globalExperimentId?: string; open: boolean; onClose: () => void; alignmentOnly?: boolean }) {
     const navigate = useNavigate();
     const [name, setName] = useState('');
     const [objective, setObjective] = useState('');
     const [capabilityId, setCapabilityId] = useState('');
-    const capabilities = useQuery({ queryKey: ['protein-project-setup-capabilities'], queryFn: ({ signal }) => listProteinProjectCapabilities(signal), enabled: open, retry: false });
+    const capabilities = useQuery({ queryKey: ['protein-project-setup-capabilities'], queryFn: ({ signal }) => listProteinProjectCapabilities(signal), enabled: open && !alignmentOnly, retry: false });
     const alignments = useQuery({ queryKey: ['family-alignment-project-setup-capabilities'], queryFn: ({ signal }) => listFamilyAlignmentCapabilities(signal), enabled: open, retry: false });
-    const ready = useMemo(() => [...(capabilities.data?.capabilities ?? []).map(item => ({ ...item, domain_kind: 'protein_in_silico' as const })), ...(alignments.data ?? [])], [capabilities.data, alignments.data]);
+    const ready = useMemo(() => [...(alignmentOnly ? [] : capabilities.data?.capabilities ?? []).map(item => ({ ...item, domain_kind: 'protein_in_silico' as const })), ...(alignments.data ?? [])], [alignmentOnly, capabilities.data, alignments.data]);
     const selected = ready.find(item => item.capability_id === capabilityId);
     const create = useMutation({
         mutationFn: () => createProjectWorkflowSetup(projectId, {
