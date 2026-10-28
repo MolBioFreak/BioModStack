@@ -2624,6 +2624,12 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
             cleanup_legacy_listener("api", root, runtime_mode=mode)
             services_to_start.append(API_SERVICE)
         services_to_start.append(FRONTEND_SERVICE)
+        # An operator restart is deliberate: clear systemd's crash-loop counter so
+        # back-to-back deploys do not trip StartLimitBurst on the adapter or API.
+        run_systemctl(
+            "reset-failed", DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, *services_to_start,
+            check=False, project_root=root,
+        )
         run_systemctl("start", *services_to_start, DEV_TARGET_UNIT, project_root=root)
         wait_for_http(
             workflow_adapter_health_url_for_lane(DEVELOPMENT_LANE),
@@ -2642,6 +2648,7 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
         check=False,
         project_root=root,
     )
+    run_systemctl("reset-failed", *runtime_service_names(mode), check=False, project_root=root)
     run_systemctl("start", TELEMETRY_SERVICE, *runtime_service_names(mode), TARGET_UNIT, project_root=root)
     wait_for_http(
         workflow_adapter_health_url_for_lane(PRODUCTION_LANE),
