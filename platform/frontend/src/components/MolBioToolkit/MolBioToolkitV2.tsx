@@ -3465,20 +3465,22 @@ export function MolBioToolkitV2() {
                     )}
 
                     {!isViewerFullscreen && selectedSequenceId && (
-                        <section className="mx-3 mt-2 rounded border border-slate-700 bg-slate-800/60 px-3 py-2 text-xs" aria-label="Sequencing verification workup">
+                        <section className="mx-3 mt-2 rounded border border-slate-700 bg-slate-800/60 px-3 py-2 text-xs" aria-label="Sequencing results">
                             <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
-                                <details className="min-w-0 flex-1">
-                                    <summary className="w-fit cursor-pointer font-medium text-slate-200">Sequencing verification · {ngsWorkups.length ? `${ngsWorkups.length} workup${ngsWorkups.length === 1 ? '' : 's'}` : ngsWorkupStatus === 'loading' ? 'loading' : ngsWorkupStatus === 'unavailable' ? 'unavailable' : ngsWorkupQuery.hasNextPage ? 'more history available' : 'no results'}</summary>
-                                    {ngsWorkups.length === 0 ? (
-                                        <p className="mt-1 text-slate-400">{ngsWorkupStatus === 'loading' ? 'Loading sequencing workups…' : ngsWorkupStatus === 'unavailable' ? 'Sequencing workups unavailable.' : ngsWorkupQuery.hasNextPage ? 'No valid workups in the loaded page; older history remains.' : 'No revision-bound NGS evidence. Job completion is not a scientific PASS.'}</p>
-                                    ) : ngsWorkups.map((workup) => (
-                                        <div key={workup.job_id} className="mt-1 flex items-center justify-between text-slate-300">
-                                            <span>{workup.scientific_status} · {workup.revision_relation === 'current' ? 'current revision' : 'historical revision'} · {workup.manifest_available ? 'validated manifest' : 'evidence unavailable/review'}</span>
-                                            <a className="text-blue-300 hover:text-blue-200" href={ngsResultHref(workup.job_id, location.search)}>NGS Run Inspector</a>
-                                        </div>
-                                    ))}
-                                    {ngsWorkupContinuation}
-                                </details>
+                                {(ngsWorkups.length > 0 || ngsWorkupStatus !== 'ready' || ngsWorkupQuery.hasNextPage) && (
+                                    <details className="min-w-0 flex-1">
+                                        <summary className="w-fit cursor-pointer font-medium text-slate-200">Sequencing results · {ngsWorkups.length ? ngsWorkups.length : ngsWorkupStatus === 'loading' ? 'loading' : ngsWorkupStatus === 'unavailable' ? 'unavailable' : 'more history available'}</summary>
+                                        {ngsWorkups.length === 0 ? (
+                                            <p className="mt-1 text-slate-400">{ngsWorkupStatus === 'loading' ? 'Loading sequencing results…' : ngsWorkupStatus === 'unavailable' ? 'Sequencing results unavailable.' : 'No valid workups in the loaded page; older history remains.'}</p>
+                                        ) : ngsWorkups.map((workup) => (
+                                            <div key={workup.job_id} className="mt-1 flex items-center justify-between text-slate-300">
+                                                <span>{workup.scientific_status} · {workup.revision_relation === 'current' ? 'current revision' : 'historical revision'} · {workup.manifest_available ? 'validated manifest' : 'evidence unavailable/review'}</span>
+                                                <a className="text-blue-300 hover:text-blue-200" href={ngsResultHref(workup.job_id, location.search)}>NGS Run Inspector</a>
+                                            </div>
+                                        ))}
+                                        {ngsWorkupContinuation}
+                                    </details>
+                                )}
                                 <a
                                     className="text-blue-300 hover:text-blue-200"
                                     href={contextHref('/ngs', {
