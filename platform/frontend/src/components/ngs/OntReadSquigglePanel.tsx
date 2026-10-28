@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/api';
