@@ -15,7 +15,7 @@
       "upstream_image_id": "sha256:1faa098a72bf7f22242e642ac1e6fb61175c72945f74070f0ffefc952b13d4f3"
     },
     {
-      "edition_image_id": "sha256:9c14929e0381f57685dca89c788da5d55482ed1f780ec51473b54bff3f07ee90",
+      "edition_image_id": "sha256:981ca1d1a6831f4ee2468a6fd611054d6fd70ff4fedb286add22e89d5b1b89d5",
       "policy": "runtime_policy_v1.json",
       "upstream_image_id": "sha256:750a72343bd3a0015ff6d55d6ec38671eff200838acdd2fb065f7e03fdcca40c"
     },
