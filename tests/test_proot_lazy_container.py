@@ -28,7 +28,7 @@ def test_cold_warm_lazy_container(tmp_path,monkeypatch):
     monkeypatch.setattr(sys,'argv',['installer',str(tmp_path),str(ROOT/'containers/transport/proot/proot-x86_64-4_8_0')])
     monkeypatch.setattr(urllib.request,'urlopen',lambda url,**kw:Path(wheel if url.endswith('.whl') else engines).open('rb'))
     exec(compile(embedded,'pinned-installer','exec'),{})
-    tools=tmp_path/'tools/udocker-1.3.17-bms2'
+    tools=tmp_path/'tools/udocker-1.3.17-bms3'
     rootfs=tmp_path/'fixture';rootfs.mkdir()
     shell=Path('/bin/bash')
     dependencies=re.findall(r'(/[^\s()]+)',subprocess.check_output(['ldd',str(shell)],text=True))

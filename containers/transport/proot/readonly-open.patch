@@ -38,7 +38,7 @@ index b21b241..e232ee0 100644
 +		break;
 +	}
 +	if ((flags & (O_ACCMODE | O_TRUNC | O_CREAT)) == O_RDONLY)
-+		needed = is_final ? S_IRUSR : S_IXUSR;
++		needed = S_ISDIR(perms.st_mode) ? S_IXUSR : S_IRUSR;
 +	new_mode |= needed;
  
  	/* Always add 'x' bit to directories */

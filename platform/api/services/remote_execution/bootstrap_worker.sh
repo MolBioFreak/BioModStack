@@ -69,14 +69,14 @@ apptainer --version >/dev/null || fail 'Apptainer installation failed'
 python3 - "$2" "$(dirname "$0")/proot-x86_64-4_8_0" <<'PY_INSTALL'
 import hashlib, json, os, pathlib, shutil, tarfile, tempfile, urllib.request, zipfile
 root = pathlib.Path(__import__('sys').argv[1])
-final = root / 'tools/udocker-1.3.17-bms2'
+final = root / 'tools/udocker-1.3.17-bms3'
 final.parent.mkdir(parents=True, exist_ok=True)
 if final.parent.is_symlink():
     raise ValueError('udocker tool root must not be a symlink')
 # Derived from both checksum-pinned upstream archives, bundled PRoot and launcher.
 # This independently authenticates the receipt; a locally rewritten receipt
 # must never be able to bless altered installed files.
-INSTALLED_MANIFEST_SHA256 = '1d632e2163680c4ac6d82a931f706dc82c0d4629bd85ea6ce4068ed6948f28bc'
+INSTALLED_MANIFEST_SHA256 = 'ace679f37035a12ce7d8da7f1db5f73a97c0cfa138c373b02620ca4c7867a28a'
 
 def installed_file(name, *, retain=False):
     import stat
@@ -154,7 +154,7 @@ if not installed():
         # Only the modern-kernel engine changes; udocker and the legacy engine
         # remain byte-pinned upstream. Recipe/source: containers/transport/proot.
         patched = pathlib.Path(__import__('sys').argv[2]).read_bytes()
-        if hashlib.sha256(patched).hexdigest() != 'dc9012cf46fb1f4d1e168273a22f15077693ebe94cd09fa3247204a726187efd':
+        if hashlib.sha256(patched).hexdigest() != '55047d1f180eb3a93483ea3d68da6b2f87eeba0fd68ca50642e9697fa3bf3ec3':
             raise ValueError('bundled PRoot checksum mismatch')
         (stage / 'engines/bin/proot-x86_64-4_8_0').write_bytes(patched)
         launcher = stage / 'bin/udocker'
