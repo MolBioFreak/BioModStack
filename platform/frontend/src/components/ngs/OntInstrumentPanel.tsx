@@ -523,7 +523,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                 <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                         <h2 className="text-xl font-semibold text-[var(--text-primary)]">ONT instrument control</h2>
-                        <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-100">Mk1D / MinKNOW</span>
+                        <span className="rounded-full border border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)] px-2 py-1 text-xs font-semibold uppercase tracking-wide text-[var(--accent-primary)]">Mk1D / MinKNOW</span>
                     </div>
                     <p className="max-w-2xl text-sm text-[var(--text-secondary)]">Pick a Mk1D position, choose the kit and run length, and start sequencing. BNS tracks the run and picks up its reads when it finishes. Reconnect only works on this computer, not over Tailnet.</p>
                 </div>
@@ -537,7 +537,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                 reconnectMk1d.mutate();
                             }
                         }}
-                        className="rounded-lg border border-cyan-500/40 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="rounded-lg border border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] px-3 py-2 text-sm font-semibold text-[var(--accent-primary)] hover:bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         {reconnectMk1d.isPending ? 'Reconnecting Mk1D…' : 'Reconnect Mk1D (local host)'}
                     </button>
@@ -553,20 +553,20 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                     </p>
                 </div>
                 {requestedPinnedRevisions.sample.error ? (
-                    <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">{requestedPinnedRevisions.sample.error} No exact sample revision was fetched.</p>
+                    <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-sm text-[var(--warning)]">{requestedPinnedRevisions.sample.error} No exact sample revision was fetched.</p>
                 ) : null}
                 {requestedPinnedRevisions.reference.error ? (
-                    <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">{requestedPinnedRevisions.reference.error} No exact reference revision was fetched.</p>
+                    <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-sm text-[var(--warning)]">{requestedPinnedRevisions.reference.error} No exact reference revision was fetched.</p>
                 ) : null}
                 {requestedSampleRevision && !exactDomainExperimentId ? (
-                    <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Exact pinned sample revision requires the URL-owned Domain Experiment context. No exact sample revision was fetched.</p>
+                    <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-sm text-[var(--warning)]">Exact pinned sample revision requires the URL-owned Domain Experiment context. No exact sample revision was fetched.</p>
                 ) : null}
                 {pinnedSampleRevisionQuery.isLoading ? <p className="text-sm text-[var(--text-secondary)]">Loading exact pinned sample revision…</p> : null}
                 {pinnedSampleRevisionQuery.isError ? (
-                    <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Exact pinned sample revision could not be loaded: {errorMessage(pinnedSampleRevisionQuery.error, 'unknown pinned sample revision failure')}</p>
+                    <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-sm text-[var(--warning)]">Exact pinned sample revision could not be loaded: {errorMessage(pinnedSampleRevisionQuery.error, 'unknown pinned sample revision failure')}</p>
                 ) : null}
                 {pinnedSampleRevisionQuery.data ? (
-                    <div className="space-y-2 rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3 text-xs text-[var(--text-secondary)]">
+                    <div className="space-y-2 rounded-lg border border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_5%,transparent)] p-3 text-xs text-[var(--text-secondary)]">
                         <div className="font-semibold text-[var(--text-primary)]">Exact pinned sample revision</div>
                         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                             <div>Sample ID: <span className="break-all font-mono text-[var(--text-primary)]">{pinnedSampleRevisionQuery.data.sample_id}</span></div>
@@ -582,10 +582,10 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                 ) : null}
                 {pinnedReferenceRevisionQuery.isLoading ? <p className="text-sm text-[var(--text-secondary)]">Loading exact pinned reference revision…</p> : null}
                 {pinnedReferenceRevisionQuery.isError ? (
-                    <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Exact pinned reference revision could not be loaded: {errorMessage(pinnedReferenceRevisionQuery.error, 'unknown pinned reference revision failure')}</p>
+                    <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-sm text-[var(--warning)]">Exact pinned reference revision could not be loaded: {errorMessage(pinnedReferenceRevisionQuery.error, 'unknown pinned reference revision failure')}</p>
                 ) : null}
                 {pinnedReferenceRevisionQuery.data ? (
-                    <div className="space-y-2 rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3 text-xs text-[var(--text-secondary)]">
+                    <div className="space-y-2 rounded-lg border border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_5%,transparent)] p-3 text-xs text-[var(--text-secondary)]">
                         <div className="font-semibold text-[var(--text-primary)]">Exact pinned reference revision</div>
                         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                             <div>Reference ID: <span className="break-all font-mono text-[var(--text-primary)]">{pinnedReferenceRevisionQuery.data.reference_id}</span></div>
@@ -608,11 +608,11 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                 <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3"><div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Available</div><div className="mt-1 text-base font-semibold text-[var(--text-primary)]">{minknowReachable ? availableCount : '—'}</div></div>
             </div>
 
-            {domainIntentBlocker ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">{domainIntentBlocker}</p> : null}
-            {instrumentEvidenceError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Device or protocol status could not be refreshed. Refresh the connection before starting sequencing.</p> : null}
+            {domainIntentBlocker ? <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-sm text-[var(--warning)]">{domainIntentBlocker}</p> : null}
+            {instrumentEvidenceError ? <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-sm text-[var(--warning)]">Device or protocol status could not be refreshed. Refresh the connection before starting sequencing.</p> : null}
 
             {reconnectMk1d.isPending || reconnectMk1d.data || reconnectMk1d.isError ? (
-                <div className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 p-4 text-sm text-cyan-50">
+                <div className="rounded-xl border border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)] p-4 text-sm text-[var(--accent-primary)]">
                     <div className="font-semibold">Reconnect result</div>
                     {reconnectMk1d.isPending ? <p className="mt-1">Reconnecting MinKNOW and the host agent…</p> : null}
                     {reconnectMk1d.data ? (
@@ -626,16 +626,16 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                 : <div>Mk1D is not confirmed connected until a post-recovery device status is observed with no connection error.</div>}
                         </div>
                     ) : null}
-                    {reconnectMk1d.isError ? <p className="mt-1 text-amber-100">Reconnect failed. Check the local API and reconnect helper.</p> : null}
+                    {reconnectMk1d.isError ? <p className="mt-1 text-[var(--warning)]">Reconnect failed. Check the local API and reconnect helper.</p> : null}
                 </div>
             ) : null}
 
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
                 <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
                     <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Instrument positions</h3><p className="text-xs text-[var(--text-secondary)]">Mk1D positions reported by MinKNOW.</p></div><button type="button" onClick={() => void deviceStatus.refetch()} className="text-sm text-[var(--text-action)]">Refresh</button></div>
-                    {data?.message ? <p className="rounded-lg bg-slate-900/40 p-2 text-xs text-[var(--text-secondary)]">{data.message}</p> : null}
+                    {data?.message ? <p className="rounded-lg bg-[var(--bg-secondary)] p-2 text-xs text-[var(--text-secondary)]">{data.message}</p> : null}
                     <div className="grid gap-3 md:grid-cols-2">
-                        {devices.length === 0 && !data?.message ? <div className="rounded-lg border border-dashed border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 text-sm text-[var(--text-secondary)] md:col-span-2">{minknowReachable ? 'No Mk1D positions found. Check the device is plugged in, then Refresh.' : 'MinKNOW is not reachable. Use Reconnect Mk1D, then Refresh.'}</div> : devices.map((device) => <button key={device.position} type="button" onClick={() => setSelectedPosition(device.position)} className={`rounded-xl border p-4 text-left transition ${selectedDevice?.position === device.position ? 'border-cyan-400 bg-cyan-500/10' : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] hover:border-cyan-500/50'}`}><div className="text-base font-semibold text-[var(--text-primary)]">{device.position}</div><div className="text-xs text-[var(--text-secondary)]">Mk1D · {deviceStateLabel(device)}</div><div className="mt-3 text-xs text-[var(--text-secondary)]">Flow cell: {device.flow_cell.present ? 'present' : 'absent'} · Running: {device.running ? 'yes' : 'no'}</div></button>)}
+                        {devices.length === 0 && !data?.message ? <div className="rounded-lg border border-dashed border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 text-sm text-[var(--text-secondary)] md:col-span-2">{minknowReachable ? 'No Mk1D positions found. Check the device is plugged in, then Refresh.' : 'MinKNOW is not reachable. Use Reconnect Mk1D, then Refresh.'}</div> : devices.map((device) => <button key={device.position} type="button" onClick={() => setSelectedPosition(device.position)} className={`rounded-xl border p-4 text-left transition ${selectedDevice?.position === device.position ? 'border-[var(--accent-primary)] bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)]' : 'border-[var(--border-primary)] bg-[var(--bg-secondary)] hover:border-[color-mix(in_srgb,var(--accent-primary)_50%,transparent)]'}`}><div className="text-base font-semibold text-[var(--text-primary)]">{device.position}</div><div className="text-xs text-[var(--text-secondary)]">Mk1D · {deviceStateLabel(device)}</div><div className="mt-3 text-xs text-[var(--text-secondary)]">Flow cell: {device.flow_cell.present ? 'present' : 'absent'} · Running: {device.running ? 'yes' : 'no'}</div></button>)}
                     </div>
                 </div>
 
@@ -654,7 +654,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                     </label>
                     {samplesQuery.data && <p className="text-xs">Loaded {samplesQuery.data.pages.reduce((count, page) => count + page.items.length, 0)} of {samplesQuery.data.pages[0].total} samples (only revision-bearing samples are selectable).</p>}
                     {samplesQuery.hasNextPage && <button type="button" disabled={samplesQuery.isFetchingNextPage} onClick={() => void samplesQuery.fetchNextPage()}>Load more samples</button>}
-                    {samplesQuery.isError ? <p role="alert" className="text-xs text-amber-100">Exact domain samples could not be loaded: {errorMessage(samplesQuery.error, 'unknown sample query failure')}</p> : null}
+                    {samplesQuery.isError ? <p role="alert" className="text-xs text-[var(--warning)]">Exact domain samples could not be loaded: {errorMessage(samplesQuery.error, 'unknown sample query failure')}</p> : null}
                     {selectedSample ? (
                         <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">
                             <div>Stable sample ID sent as existing <code>sample_id</code>: <span className="break-all font-mono text-[var(--text-primary)]">{selectedSample.id}</span></div>
@@ -687,7 +687,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                             className="mt-1 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]"
                         />
                     </label>
-                    <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">{selectedOption ? `${selectedOption.protocol_label} · basecalling ${selectedOption.basecalling_enabled ? 'on' : 'off'}` : selectedKit ? 'MinKNOW has no sequencing protocol for this kit and flow cell.' : 'Choose a kit to prepare the run.'}{blockers.length ? <div className="mt-2 text-amber-100">Not ready: {blockers.join(', ')}</div> : null}</div>
+                    <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">{selectedOption ? `${selectedOption.protocol_label} · basecalling ${selectedOption.basecalling_enabled ? 'on' : 'off'}` : selectedKit ? 'MinKNOW has no sequencing protocol for this kit and flow cell.' : 'Choose a kit to prepare the run.'}{blockers.length ? <div className="mt-2 text-[var(--warning)]">Not ready: {blockers.join(', ')}</div> : null}</div>
                     <button
                         type="button"
                         disabled={!canStart}
@@ -707,7 +707,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                             onClick={() => {
                                 if (window.confirm(`Stop run ${run.run_id}? Data collected so far is kept.`)) stopRun.mutate(run.run_id);
                             }}
-                            className="w-full rounded-lg border border-red-500/50 px-4 py-2 text-sm font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="w-full rounded-lg border border-[color-mix(in_srgb,var(--error)_50%,transparent)] px-4 py-2 text-sm font-semibold text-[var(--error)] hover:bg-[color-mix(in_srgb,var(--error)_10%,transparent)] disabled:cursor-not-allowed disabled:opacity-50"
                         >
                             {run.status === 'stopping' ? `Stopping ${run.run_id}…` : `Stop run ${run.run_id} (${run.status})`}
                         </button>
@@ -755,7 +755,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                     </div>
                 ) : (
                     <div className="space-y-3">
-                        {externalPod5CandidatesQuery.isError ? <p role="alert" className="text-sm text-amber-100">Existing POD5 candidates are unavailable: {errorMessage(externalPod5CandidatesQuery.error, 'unknown candidate-list failure')}</p> : null}
+                        {externalPod5CandidatesQuery.isError ? <p role="alert" className="text-sm text-[var(--warning)]">Existing POD5 candidates are unavailable: {errorMessage(externalPod5CandidatesQuery.error, 'unknown candidate-list failure')}</p> : null}
                         <select
                             aria-label="Existing POD5 candidate"
                             value={selectedExternalPod5CandidateId}
@@ -774,7 +774,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                             type="button"
                             disabled={!exactDomainExperimentId || !selectedExternalPod5CandidateId || registerExternalPod5.isPending}
                             onClick={() => registerExternalPod5.mutate()}
-                            className="rounded-lg border border-cyan-500/50 px-3 py-2 text-sm font-semibold text-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
+                            className="rounded-lg border border-[color-mix(in_srgb,var(--accent-primary)_50%,transparent)] px-3 py-2 text-sm font-semibold text-[var(--accent-primary)] disabled:cursor-not-allowed disabled:opacity-40"
                         >
                             {registerExternalPod5.isPending ? 'Registering POD5…' : 'Register selected POD5'}
                         </button>
@@ -790,7 +790,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                     </div>
                     <button type="button" disabled={!exactDomainExperimentId} onClick={() => void durableRunsQuery.refetch()} className="text-sm text-[var(--text-action)] disabled:cursor-not-allowed disabled:opacity-50">Refresh history</button>
                 </div>
-                {durableRunsQuery.isError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Durable ONT runs could not be loaded: {errorMessage(durableRunsQuery.error, 'unknown run-ledger failure')}</p> : null}
+                {durableRunsQuery.isError ? <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-sm text-[var(--warning)]">Durable ONT runs could not be loaded: {errorMessage(durableRunsQuery.error, 'unknown run-ledger failure')}</p> : null}
                 <label className="block text-xs font-semibold text-[var(--text-secondary)]">Saved run
                     <select
                         value={effectiveSelectedRunGeneration ? runSelectionKey({ run_id: effectiveSelectedRunGeneration.runId, observed_generation: effectiveSelectedRunGeneration.observedGeneration }) : ''}
@@ -822,7 +822,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                 ) : null}
                 {requestedRunGeneration ? <p className="text-xs text-[var(--text-secondary)]">Reopening URL-owned exact run generation {requestedRunGeneration.runId} · {requestedRunGeneration.observedGeneration}.</p> : null}
                 {selectedGenerationQuery.isLoading ? <p className="text-sm text-[var(--text-secondary)]">Loading exact persisted run generation…</p> : null}
-                {selectedGenerationQuery.isError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Exact run generation could not be reopened: {errorMessage(selectedGenerationQuery.error, 'unknown generation query failure')}</p> : null}
+                {selectedGenerationQuery.isError ? <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-sm text-[var(--warning)]">Exact run generation could not be reopened: {errorMessage(selectedGenerationQuery.error, 'unknown generation query failure')}</p> : null}
                 {selectedGeneration ? (
                     <div className="space-y-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 text-xs text-[var(--text-secondary)]">
                         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -837,7 +837,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                         </div>
                         <div>Terminal manifest SHA-256: <span className="break-all font-mono text-[var(--text-primary)]">{selectedGeneration.terminal_manifest_sha256 ?? 'not published'}</span></div>
 
-                        <div className="space-y-3 rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3">
+                        <div className="space-y-3 rounded-lg border border-[color-mix(in_srgb,var(--accent-primary)_30%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_5%,transparent)] p-3">
                             <div className="flex flex-wrap items-end justify-between gap-3">
                                 <div>
                                     <div className="font-semibold text-[var(--text-primary)]">Raw-signal representations</div>
@@ -856,7 +856,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                 </label>
                             </div>
                             {rawSignalQuery.isLoading ? <div>Loading raw-signal capability state…</div> : null}
-                            {rawSignalQuery.isError ? <div role="alert" className="text-amber-100">Raw-signal state unavailable: {errorMessage(rawSignalQuery.error, 'unknown capability failure')}</div> : null}
+                            {rawSignalQuery.isError ? <div role="alert" className="text-[var(--warning)]">Raw-signal state unavailable: {errorMessage(rawSignalQuery.error, 'unknown capability failure')}</div> : null}
                             {rawSignalQuery.data ? (
                                 <>
                                     <div>Selected: <span className="font-mono text-[var(--text-primary)]">{rawSignalQuery.data.selected_format ?? 'none'}</span> · {rawSignalQuery.data.selection_reason_code}</div>
@@ -864,7 +864,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                         {Object.entries(rawSignalQuery.data.modes).map(([mode, capability]) => (
                                             <div key={mode} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2">
                                                 <div className="font-mono text-[var(--text-primary)]">{mode}</div>
-                                                <div className={capability.state === 'ready' ? 'text-emerald-300' : capability.state === 'preparable' ? 'text-amber-200' : 'text-[var(--text-secondary)]'}>{capability.state}</div>
+                                                <div className={capability.state === 'ready' ? 'text-[var(--success)]' : capability.state === 'preparable' ? 'text-[var(--warning)]' : 'text-[var(--text-secondary)]'}>{capability.state}</div>
                                                 <div className="break-words">{capability.reason_code}</div>
                                             </div>
                                         ))}
@@ -887,7 +887,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                                     <div className="space-y-2 border-t border-[var(--border-primary)] p-3" aria-label="Raw-signal technical details">
                                                         <div className="break-all font-mono">{representation.representation_id} · manifest {representation.manifest_sha256}</div>
                                                         {representation.role === 'derived' ? (
-                                                            <div className="space-y-2 rounded border border-emerald-500/30 bg-emerald-500/5 p-2" aria-label="Raw-signal publication receipt">
+                                                            <div className="space-y-2 rounded border border-[color-mix(in_srgb,var(--success)_30%,transparent)] bg-[color-mix(in_srgb,var(--success)_5%,transparent)] p-2" aria-label="Raw-signal publication receipt">
                                                                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                                                                     <div><span className="font-semibold text-[var(--text-primary)]">Publication</span><div>{representation.published_at ?? 'not published'}</div></div>
                                                                     <div><span className="font-semibold text-[var(--text-primary)]">Reads</span><div>{representation.read_count ?? 'unknown'}</div></div>
@@ -922,7 +922,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                                         type="button"
                                                         onClick={() => prepareBlow5.mutate(representation.representation_id)}
                                                         disabled={prepareBlow5.isPending}
-                                                        className="mt-2 rounded border border-cyan-500/50 px-2 py-1 font-semibold text-cyan-200 disabled:opacity-40"
+                                                        className="mt-2 rounded border border-[color-mix(in_srgb,var(--accent-primary)_50%,transparent)] px-2 py-1 font-semibold text-[var(--accent-primary)] disabled:opacity-40"
                                                     >
                                                         {representation.format === 'blow5' ? 'Validate indexed BLOW5' : 'Prepare indexed BLOW5'}
                                                     </button>
@@ -936,7 +936,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                         );
                                         if (!readyBlow5) return null;
                                         return (
-                                            <div className="space-y-2 rounded border border-emerald-500/40 bg-emerald-500/5 p-3">
+                                            <div className="space-y-2 rounded border border-[color-mix(in_srgb,var(--success)_40%,transparent)] bg-[color-mix(in_srgb,var(--success)_5%,transparent)] p-3">
                                                 <div className="font-semibold text-[var(--text-primary)]">Indexed BLOW5 waveform inspection</div>
                                                 <div className="flex flex-wrap gap-2">
                                                     <input
@@ -950,17 +950,17 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                                         type="button"
                                                         onClick={() => void inspectWaveform(readyBlow5.representation_id)}
                                                         disabled={!waveformReadId.trim() || waveformLoading}
-                                                        className="rounded border border-emerald-500/50 px-2 py-1 font-semibold text-emerald-200 disabled:opacity-40"
+                                                        className="rounded border border-[color-mix(in_srgb,var(--success)_50%,transparent)] px-2 py-1 font-semibold text-[var(--success)] disabled:opacity-40"
                                                     >
                                                         {waveformLoading ? 'Inspecting…' : 'Inspect raw waveform'}
                                                     </button>
                                                 </div>
-                                                {waveformError ? <div role="alert" className="text-amber-100">Waveform unavailable: {waveformError}</div> : null}
+                                                {waveformError ? <div role="alert" className="text-[var(--warning)]">Waveform unavailable: {waveformError}</div> : null}
                                                 {waveform?.state === 'ready' && waveformPoints ? (
                                                     <div className="space-y-1">
                                                         <div>Read <span className="font-mono text-[var(--text-primary)]">{waveform.read_id}</span> · {waveform.sample_count} source samples · {waveform.samples?.length ?? 0} displayed</div>
-                                                        <svg aria-label="Raw electrical signal waveform" viewBox="0 0 600 120" className="h-36 w-full rounded bg-slate-950" preserveAspectRatio="none">
-                                                            <polyline points={waveformPoints} fill="none" stroke="rgb(52 211 153)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                                                        <svg aria-label="Raw electrical signal waveform" viewBox="0 0 600 120" className="h-36 w-full rounded bg-[var(--bg-tertiary)]" preserveAspectRatio="none">
+                                                            <polyline points={waveformPoints} fill="none" stroke="var(--success)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
                                                         </svg>
                                                     </div>
                                                 ) : null}

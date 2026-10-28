@@ -30,16 +30,16 @@ function countArtifacts(artifacts: SequenceQcArtifact[]) {
 }
 
 function statusBadgeClass(status: SequenceQcManifestStatus): string {
-    if (status === 'available') return 'bg-emerald-500/20 text-emerald-400';
-    if (status === 'loading') return 'bg-blue-500/20 text-blue-300';
-    if (status === 'malformed' || status === 'access-denied' || status === 'forbidden' || status === 'error') return 'bg-rose-500/20 text-rose-300';
-    return 'bg-amber-500/20 text-amber-300';
+    if (status === 'available') return 'bg-[color-mix(in_srgb,var(--success)_20%,transparent)] text-[var(--success)]';
+    if (status === 'loading') return 'bg-[color-mix(in_srgb,var(--accent-primary)_20%,transparent)] text-[var(--accent-primary)]';
+    if (status === 'malformed' || status === 'access-denied' || status === 'forbidden' || status === 'error') return 'bg-[color-mix(in_srgb,var(--error)_20%,transparent)] text-[var(--error)]';
+    return 'bg-[color-mix(in_srgb,var(--warning)_20%,transparent)] text-[var(--warning)]';
 }
 
 function verificationVerdictClass(verdict: string): string {
-    if (verdict === 'PASS') return 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300';
-    if (verdict === 'FAIL') return 'border-rose-500/50 bg-rose-500/15 text-rose-300';
-    return 'border-amber-500/50 bg-amber-500/15 text-amber-300';
+    if (verdict === 'PASS') return 'border-[color-mix(in_srgb,var(--success)_50%,transparent)] bg-[color-mix(in_srgb,var(--success)_15%,transparent)] text-[var(--success)]';
+    if (verdict === 'FAIL') return 'border-[color-mix(in_srgb,var(--error)_50%,transparent)] bg-[color-mix(in_srgb,var(--error)_15%,transparent)] text-[var(--error)]';
+    return 'border-[color-mix(in_srgb,var(--warning)_50%,transparent)] bg-[color-mix(in_srgb,var(--warning)_15%,transparent)] text-[var(--warning)]';
 }
 
 const VERIFICATION_CHECK_LABELS: Record<string, string> = {
@@ -83,7 +83,7 @@ function EvidenceCard({ label, evidence }: { label: string; evidence: ConstructV
             <div>Validation: <code>{evidence?.semantic_validation?.status || 'unavailable'}</code></div>
             <div>Validator: <code>{evidence?.semantic_validation?.validator || 'unavailable'}</code></div>
             {(evidence?.reason || evidence?.semantic_validation?.reason) && (
-                <div className="mt-1 break-all text-amber-300">{evidence.reason || evidence.semantic_validation?.reason}</div>
+                <div className="mt-1 break-all text-[var(--warning)]">{evidence.reason || evidence.semantic_validation?.reason}</div>
             )}
         </div>
     );
@@ -163,7 +163,7 @@ export function SequenceQcManifestPanel({ status, manifest, message, onNavigateL
                                 <div className="rounded border border-[var(--border-primary)] p-2 text-[10px]">
                                     <div className="mb-1 text-xs font-semibold text-[var(--text-primary)]">Verification provenance</div>
                                     {Object.entries(manifest.provenance || {}).length === 0 ? (
-                                        <div className="text-amber-300">No top-level provenance reported.</div>
+                                        <div className="text-[var(--warning)]">No top-level provenance reported.</div>
                                     ) : Object.entries(manifest.provenance || {}).map(([key, value]) => (
                                         <div key={key} className="grid grid-cols-[minmax(8rem,0.35fr)_1fr] gap-2">
                                             <span className="text-[var(--text-secondary)] break-all">{key}</span>
@@ -208,7 +208,7 @@ export function SequenceQcManifestPanel({ status, manifest, message, onNavigateL
                                                 </div>
                                             ))}
                                             {check.reason_codes.length > 0 && (
-                                                <div className="mt-1 text-[10px] text-amber-300 break-all">{check.reason_codes.join(', ')}</div>
+                                                <div className="mt-1 text-[10px] text-[var(--warning)] break-all">{check.reason_codes.join(', ')}</div>
                                             )}
                                             {check.status !== 'pass' && checkPosition(check.metrics || {}) !== null && onNavigateLocus && (
                                                 <button
@@ -270,7 +270,7 @@ export function SequenceQcManifestPanel({ status, manifest, message, onNavigateL
                             </div>
                         )}
                         {fallbackConsensus && (
-                            <p className="text-xs text-amber-300">
+                            <p className="text-xs text-[var(--warning)]">
                                 Fallback consensus cannot verify construct; inspect per-base/read evidence before accepting this sample.
                             </p>
                         )}

@@ -91,7 +91,7 @@ function BarcodeMappingCells({ unitId, sequences, mapping, onChange, disabled }:
                             </option>
                         ))}
                     </select>
-                    {revisionsQuery.isError && <div className="text-xs text-rose-400">Unable to load revisions.</div>}
+                    {revisionsQuery.isError && <div className="text-xs text-[var(--error)]">Unable to load revisions.</div>}
                 </div>
             </td>
             <td className="px-3 py-2 align-top font-mono text-xs text-[var(--text-secondary)] break-all">
@@ -237,13 +237,13 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
                 </select>
                 <input value={namePrefix} onChange={(event) => setNamePrefix(event.target.value)} placeholder="Optional name prefix" className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]" />
                 <input disabled={Boolean(executionTargetId)} value={pinnedGpu} onChange={(event) => setPinnedGpu(event.target.value)} inputMode="numeric" placeholder="Optional pinned GPU" className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]" />
-                <button type="button" disabled={submitMutation.isPending || applyBulkMapping.isPending || units.length === 0} onClick={() => submitMutation.mutate()} className="rounded bg-blue-600 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-40">
+                <button type="button" disabled={submitMutation.isPending || applyBulkMapping.isPending || units.length === 0} onClick={() => submitMutation.mutate()} className="rounded bg-[var(--accent-primary)] px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-40">
                     {submitMutation.isPending ? 'Submitting batch…' : 'Submit mapped batch'}
                 </button>
             </div>
             {unitsQuery.isLoading && <div className="text-xs text-[var(--text-secondary)]">Loading barcodes…</div>}
-            {unitsQuery.isError && <div className="text-xs text-rose-400">No verified barcode manifest is available.</div>}
-            {sequencesQuery.isError && <div className="text-xs text-rose-400">Saved MolBio sequences could not be loaded.</div>}
+            {unitsQuery.isError && <div className="text-xs text-[var(--error)]">No verified barcode manifest is available.</div>}
+            {sequencesQuery.isError && <div className="text-xs text-[var(--error)]">Saved MolBio sequences could not be loaded.</div>}
             <details className="rounded border border-[var(--border-primary)] p-3">
                 <summary className="cursor-pointer text-sm font-semibold">Add barcode-to-plasmid mappings in bulk</summary>
                 <p className="mt-2 text-xs text-[var(--text-secondary)]">Paste two or three columns: barcode number, saved plasmid name or ID, optional version number or revision ID. Current versions are pinned when you apply the rows. Existing mappings stay unchanged if any row fails.</p>
