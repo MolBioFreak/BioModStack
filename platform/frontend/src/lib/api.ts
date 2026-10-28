@@ -5881,6 +5881,13 @@ export const requestOntRawSignalWaveform = (
 ));
 export const fetchOntRawSignalWaveform = (lookupId: string) =>
     apiData(api.get<OntRawSignalWaveform>(`/api/ont/raw-signal/waveforms/${encodeURIComponent(lookupId)}`));
+export interface OntBasecallDeviceOptions {
+    default: string;
+    cuda_available: boolean;
+    options: Array<{ value: string; label: string }>;
+}
+export const fetchOntBasecallDevices = () =>
+    apiData(api.get<OntBasecallDeviceOptions>('/api/ont/ngs/basecall-devices'));
 export type OntRawSignalRetentionPolicy = 'pod5_and_blow5' | 'blow5_only';
 export interface OntRawSignalRetentionSettings {
     policy: OntRawSignalRetentionPolicy;

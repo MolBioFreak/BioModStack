@@ -606,12 +606,16 @@ def validate_move_record(
         raise ValueError(f"move BAM read does not contain legal 0/1 moves: {read_id}")
     if sum(move_values) != len(sequence):
         raise ValueError(f"move BAM query sequence and move count diverge: {read_id}")
-    if ts < 0 or ns <= ts or ns != raw_signal_samples:
-        raise ValueError(f"move BAM ns does not equal raw-signal sample length: {read_id}")
+    # Dorado 2.x drops the final samples that do not fill one stride, so ns may
+    # trail the raw length by less than one stride; anything else is divergent.
+    trailing = raw_signal_samples - ns
+    if ts < 0 or ns <= ts or trailing < 0 or trailing >= stride:
+        raise ValueError(f"move BAM ns does not match raw-signal sample length: {read_id}")
     remainder = ns - ts - stride * len(move_values)
     if remainder < 0 or remainder >= stride:
         raise ValueError(f"move BAM ts/ns violate the partial-final-block rule: {read_id}")
-    return {"stride": stride, "move_count": sum(move_values), "final_block_remainder": remainder}
+    return {"stride": stride, "move_count": sum(move_values), "final_block_remainder": remainder,
+            "trailing_unstrided_samples": trailing}
 
 
 def cmd_validate_moves(args: argparse.Namespace) -> None:
@@ -1216,7 +1220,9 @@ def reform_parent_authority(
                     raise ValueError("BLOW5 cannot resolve exact reform parent authority")
                 signal_length = len(raw_read["signal"])
                 declared_length = int(raw_read.get("len_raw_signal", signal_length))
-                if signal_length != declared_length or ns != signal_length or not 0 <= ts < ns:
+                stride = moves[0] if moves else 0
+                if (signal_length != declared_length or stride <= 0 or not 0 <= signal_length - ns < stride
+                        or not 0 <= ts < ns):
                     raise ValueError("BLOW5 and move BAM reform signal authority diverge")
                 authority[read_id] = reform_coordinate_authority(
                     sequence_length=len(sequence),

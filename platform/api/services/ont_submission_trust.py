@@ -67,7 +67,6 @@ ONT_SERVER_CONTROLLED_RUNTIME_PARAMS = frozenset(
         "data_root",
         "dorado_lock_manifest",
         "dorado_lock_sha256",
-        "dorado_device",
         "dorado_model_root",
         "dorado_input_binding_json",
         "dorado_preflight",

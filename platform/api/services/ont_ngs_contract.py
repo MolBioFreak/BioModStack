@@ -117,6 +117,16 @@ def installed_dorado_device() -> str:
     return value
 
 
+def basecall_device_options() -> dict[str, Any]:
+    """Selectable Dorado devices; CUDA is offered only where the host exposes NVIDIA GPUs."""
+    import shutil
+    cuda_available = shutil.which("nvidia-smi") is not None or Path("/dev/nvidia0").exists()
+    options = [{"value": "cpu", "label": "CPU"}]
+    if cuda_available:
+        options += [{"value": "cuda:0", "label": "CUDA GPU 0"}, {"value": "cuda:all", "label": "All CUDA GPUs"}]
+    return {"default": installed_dorado_device(), "cuda_available": cuda_available, "options": options}
+
+
 ONT_QUALITY_MODE_CONTRACT: dict[str, Any] = {
     "molecule_types": ("dna", "rna"),
     "basecalling_modes": ("simplex", "duplex"),
@@ -719,8 +729,10 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
         else:
             normalized[key] = value
     normalized["dorado_lock_sha256"] = submitted_lock_sha256 if cached_resume and submitted_lock_sha256 else current_lock_sha256
-    if not cached_resume or not normalized.get("dorado_device"):
-        normalized["dorado_device"] = installed_dorado_device()
+    requested_device = str(normalized.get("dorado_device") or "").strip().lower()
+    if requested_device and not _DORADO_DEVICE.fullmatch(requested_device):
+        raise ValueError("dorado_device must be cpu, cuda:<ids> or cuda:all")
+    normalized["dorado_device"] = requested_device or installed_dorado_device()
     normalized["manifest_contract"] = MANIFEST_SCHEMA
     raw_emit_moves = normalized.get("emit_moves", basecall_mode == "simplex")
     if not isinstance(raw_emit_moves, bool):
