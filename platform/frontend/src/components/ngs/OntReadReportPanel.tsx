@@ -1,4 +1,3 @@
-import React from 'react';
 import Plot from 'react-plotly.js';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/api';

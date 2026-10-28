@@ -69,8 +69,6 @@ export function RawSignalPod5Input({ domainExperimentId, onPod5Directory, onBusy
                 const capabilities = await fetchOntRawSignalCapabilities(runId, generation, 'blow5');
                 const ready = capabilities.representations.find(rep => rep.format === 'blow5' && rep.state === 'ready');
                 if (ready) { blow5Id = ready.representation_id; break; }
-                const failed = capabilities.representations.find(rep => rep.state === 'failed');
-                if (failed) throw new Error(`${failed.format.toUpperCase()} validation failed (${failed.reason_code}).`);
                 if (!requested) {
                     const source = capabilities.representations.find(rep => rep.role === 'source') ?? registration.representation;
                     await requestOntBlow5Preparation(runId, generation, source.representation_id, 'blow5');
