@@ -75,6 +75,35 @@ export interface PredictionOperationDetour {
     destination_launch_context_id?: string | null;
 }
 export interface ProjectRoundDraftRef { project_id: string; setup_context_id: string }
+export interface SelectedOperationDraft {
+    schema_version: 1;
+    source_job_id: string;
+    candidate_refs: CandidateRef[];
+    selection_set?: { saved_set_id: string; revision: number; candidate_refs: CandidateRef[] };
+    stages: import('./binderInvocationPlan').InvocationDraftStage[];
+    target: string | null;
+    policy?: ExecutionPolicy;
+}
+/** Explicit save only. Reuse the Project revision owner, never write on Results GET. */
+export async function saveSelectedOperationDraft(reference: ProjectRoundDraftRef, draft: SelectedOperationDraft) {
+    const { getProjectWorkflowSetup, saveProjectWorkflowSetupDraft } = await import('./projectManager');
+    const setup = await getProjectWorkflowSetup(reference.project_id, reference.setup_context_id);
+    const { native_job_request, ...editor_state } = setup.draft;
+    const payload = { ...structuredClone(draft), candidate_refs: uniqueCandidates(draft.candidate_refs) };
+    await saveProjectWorkflowSetupDraft(reference.project_id, reference.setup_context_id, {
+        expected_generation: setup.generation,
+        draft: { editor_state: { ...editor_state, selected_operation_draft: JSON.parse(JSON.stringify(payload)) },
+            ...(native_job_request !== undefined ? { native_job_request } : {}) },
+    });
+    return loadSelectedOperationDraft(reference);
+}
+export async function loadSelectedOperationDraft(reference: ProjectRoundDraftRef): Promise<SelectedOperationDraft> {
+    const { getProjectWorkflowSetup } = await import('./projectManager');
+    const setup = await getProjectWorkflowSetup(reference.project_id, reference.setup_context_id);
+    const draft = setup.draft.selected_operation_draft as unknown as SelectedOperationDraft;
+    if (!draft || draft.schema_version !== 1) throw Error('No saved optional-operation draft in this Project setup.');
+    return structuredClone(draft);
+}
 /** Existing Project revision storage is durable; browser storage is not authority. */
 export async function savePredictionOperationDetour(reference: ProjectRoundDraftRef, detour: PredictionOperationDetour) {
     const { getProjectWorkflowSetup, saveProjectWorkflowSetupDraft } = await import('./projectManager');

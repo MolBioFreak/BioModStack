@@ -1,4 +1,4 @@
-import { materializeExactStructure, type StructureSourceSelection, type StructureMaterialization } from './api';
+import { fetchJobById, materializeExactStructure, type StructureSourceSelection, type StructureMaterialization } from './api';
 import { mountedApplicationBase } from './sourceResultReturn';
 
 
@@ -14,6 +14,7 @@ export const sequenceDestinations = [
     ['fampnn', 'design', 'FA-MPNN design'],
     ['fampnn', 'fixed_backbone', 'FA-MPNN fixed backbone'],
     ['caliby_experimental', 'ensemble_design', 'Caliby ensemble design'],
+    ['caliby_experimental', 'sidechain_pack', 'Caliby sequence-preserving side-chain packing'],
 ] as const;
 
 export function continuationHref(source: StructureSourceSelection, destination: DeNovoDestination): string {
@@ -98,6 +99,22 @@ export async function prepareDeNovoContinuation(source: StructureSourceSelection
             ? [{ model_number: entry.model_number, id: component.id, auth_asym_id: entry.auth_asym_id, sequence: component.sequence ?? '', component }] : [];
     }) ?? [];
     return { ...common, _continuation_recipe: recipe, _continuation_chains: chains, sequence: '' };
+}
+
+/** Reuse JobSubmission's ordinary clone receiver. No resubmit/retry or queue mutation. */
+export async function repeatDeNovoSettings(jobId: string): Promise<string> {
+    const { data: job } = await fetchJobById(jobId);
+    const clone = {
+        name: `${job.name}_repeat`, model_id: job.model_id, mode: job.mode,
+        source_job_id: job.id, source_structure: job.source_structure,
+        execution_target_id: job.execution_target_id ?? null,
+        execution_policy: job.execution_policy ?? { remote_result_policy: 'manual' },
+        params: structuredClone(job.params ?? {}), binder_round: job.binder_round,
+        sequence_design: job.sequence_design, pinned_gpu: job.pinned_gpu ?? null,
+    };
+    localStorage.setItem('clonedJobData', JSON.stringify(clone));
+    const query = new URLSearchParams({ return_to: `${window.location.pathname}${window.location.search}${window.location.hash}` });
+    return `${mountedApplicationBase()}submit?${query}`;
 }
 
 export function inspectedResultState() {

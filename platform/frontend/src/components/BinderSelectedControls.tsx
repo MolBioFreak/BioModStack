@@ -40,6 +40,9 @@ const modelFields = (model: UntypedApiValue, operation: Exclude<BinderOperation,
 };
 export interface BinderSelectedControlsProps {
     sourceJobId: string;
+    /** Only newly added suite stages use whole composition; saved binder drafts are unchanged. */
+    operationScope?: 'binder' | 'whole_composition';
+    projectDraftRef?: import('../lib/binderSelectedRound').ProjectRoundDraftRef;
     selectedDesignIds: string[];
     selectedNativeSources?: NativeCandidateSource[];
     onOpenJob: (id: string) => void;
@@ -314,7 +317,7 @@ export default function BinderSelectedControls(props: BinderSelectedControlsProp
     const [legacyOpen, setLegacyOpen] = useState(false);
     return <><BinderNextRound {...props} renderEditor={editor => <BinderOperationEditor {...props}
         selectedDesignIds={editor.candidateRefs?.flatMap(ref => ref.kind === 'design' ? [ref.design_id] : []) ?? props.selectedDesignIds}
-        selectedNativeSources={editor.candidateRefs?.flatMap(ref => ref.kind === 'native_document' ? [props.selectedNativeSources?.find(source => source.job_id === ref.job_id && source.artifact_id === ref.artifact_id) ?? readRoundStorage<Record<string, NativeCandidateSource>>(props.sourceJobId, 'native-documents', {})[candidateKey(ref)] ?? { job_id: ref.job_id, artifact_id: ref.artifact_id }] : []) ?? props.selectedNativeSources}
+        selectedNativeSources={editor.candidateRefs?.flatMap(ref => ref.kind === 'native_document' ? [props.selectedNativeSources?.find(source => source.job_id === ref.job_id && source.artifact_id === ref.artifact_id && source.document?.target_state === ref.target_state && source.document?.model === ref.model) ?? readRoundStorage<Record<string, NativeCandidateSource>>(props.sourceJobId, 'native-documents', {})[candidateKey(ref)] ?? { job_id: ref.job_id, artifact_id: ref.artifact_id, document: { artifact_id: ref.artifact_id, ...(ref.target_state != null ? { target_state: ref.target_state } : {}), ...(ref.model != null ? { model: ref.model } : {}) } }] : []) ?? props.selectedNativeSources}
         candidateDocuments={{ ...props.candidateDocuments, ...Object.fromEntries(editor.candidateRefs?.flatMap(ref => ref.kind === 'design' && ref.document ? [[ref.design_id, ref.document]] : []) ?? []) }}
         editor={editor} />} />
         <details onToggle={event => { if (event.currentTarget.open) setLegacyOpen(true); }}><summary>Other model operations and source tools</summary>{props.onLegacyFullLoop && <button type="button" onClick={props.onLegacyFullLoop}>Legacy full-loop refinement</button>}{legacyOpen && <BinderOperationEditor {...props} />}</details></>;

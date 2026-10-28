@@ -3,11 +3,11 @@ import { useQueries, useQuery } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import type { BinderSelectedControlsProps } from './BinderSelectedControls';
 import type { BinderOperation } from '../lib/binderContinuation';
-import { activeInvocationPlan } from '../lib/binderInvocationPlan';
+import { activeInvocationPlan, type InvocationDraftStage } from '../lib/binderInvocationPlan';
 import { BinderInvocationPlan } from './BinderInvocationPlan';
 import { BinderMdPreviewReview } from './BinderMdPreviewReview';
 import { readBinderCandidateDocuments } from '../lib/binderContinuation';
-import { candidateKey, fetchSelectedRounds, readRoundStorage, submitSelectedRound, uniqueCandidates, writeRoundStorage, type CandidateRef, type SelectedRoundStage } from '../lib/binderSelectedRound';
+import { candidateKey, fetchSelectedRounds, loadSelectedOperationDraft, saveSelectedOperationDraft, readRoundStorage, submitSelectedRound, uniqueCandidates, writeRoundStorage, type CandidateRef, type SelectedRoundStage } from '../lib/binderSelectedRound';
 import { ExecutionPolicyControl } from './ExecutionPolicyControl';
 import { newJobExecutionPolicy, type ExecutionPolicy } from '../lib/executionPolicy';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
@@ -22,20 +22,20 @@ export interface NativeRoundEditorProps {
     params: Record<string, UntypedApiValue>;
     onChange: (params: Record<string, UntypedApiValue>) => void;
 }
-interface DraftStage { stage: SelectedRoundStage; enabled: boolean; drafts: Record<string, Record<string, UntypedApiValue>>; taskDrafts?: Record<string, Record<string, UntypedApiValue>> }
-interface Draft { stages: DraftStage[]; target: string | null; policy?: ExecutionPolicy }
+type DraftStage = InvocationDraftStage;
+interface Draft { stages: DraftStage[]; target: string | null; policy?: ExecutionPolicy; selection_set?: import('../lib/binderSelectedRound').SelectedOperationDraft['selection_set'] }
 const labels: Record<string, string> = { fampnn: 'FA-MPNN', proteinmpnn: 'ProteinMPNN', caliby_binder: 'Caliby', protonpottsmpnn: 'ProtonPottsMPNN', binder_refinement: 'PPIFlow', protenix: 'Protenix', boltz2: 'Boltz-2', esmfold2: 'ESMFold2' };
 const operations: Record<string, BinderOperation> = { fampnn: 'fampnn', proteinmpnn: 'proteinmpnn', caliby_binder: 'caliby', protonpottsmpnn: 'protonpottsmpnn', binder_refinement: 'refine', protenix: 'predict_protenix', boltz2: 'predict_boltz2', esmfold2: 'predict_esmfold2' };
 const names = { sequence_design: 'Sequence design', maturation: 'Maturation', prediction: 'Blind prediction', md: 'Molecular dynamics' };
 const control = 'min-w-0 max-w-full whitespace-normal rounded border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-sm';
 const identity = () => crypto.randomUUID();
-function newStage(kind: SelectedRoundStage['kind'], previous?: string): DraftStage {
-    const common = { id: identity(), input: previous ? { stage_id: previous } : { selected: true as const } };
+function newStage(kind: SelectedRoundStage['kind'], previous?: string, scope?: 'binder' | 'whole_composition'): DraftStage {
+    const common = { id: identity(), input: { ...(previous ? { stage_id: previous } : { selected: true as const }), ...(scope ? { scope } : {}) } };
     return { enabled: true, drafts: {}, stage: kind === 'maturation'
         ? { ...common, kind, model_id: 'binder_refinement', mode: 'refine', params: {} }
         : { ...common, kind, models: [] } };
 }
-export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNativeSources = [], candidateDocuments, launchContextId, onOpenJob, onClearSelection, renderEditor }: BinderSelectedControlsProps & { renderEditor: (props: NativeRoundEditorProps) => ReactNode }) {
+export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNativeSources = [], candidateDocuments, launchContextId, operationScope, projectDraftRef, onOpenJob, onClearSelection, renderEditor }: BinderSelectedControlsProps & { renderEditor: (props: NativeRoundEditorProps) => ReactNode }) {
     const [draft, setDraft] = useState<Draft>(() => readRoundStorage(sourceJobId, 'draft', { stages: [], target: null, policy: newJobExecutionPolicy() }));
     const [extra, setExtra] = useState<CandidateRef[]>(() => readRoundStorage(sourceJobId, 'selection', []));
     useEffect(() => {
@@ -55,12 +55,13 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
     const owners = useQueries({ queries: selectedDesignIds.map(id => ({ queryKey: ['binder-candidate-owner', id], queryFn: () => fetchDesignById(id).then(response => response.data.job_id), staleTime: Infinity })) });
     const documents = candidateDocuments ?? readBinderCandidateDocuments(sourceJobId);
     const selection = uniqueCandidates([
-        ...selectedDesignIds.map((design_id, index) => ({ kind: 'design' as const, job_id: owners[index]?.data ?? sourceJobId, design_id, ...(documents[design_id] ? { document: documents[design_id] } : {}) })).filter(ref => !extra.some(exact => exact.kind === 'design' && exact.job_id === ref.job_id && exact.design_id === ref.design_id && exact.document?.artifact_id === ref.document?.artifact_id && exact.document?.target_state === ref.document?.target_state)),
-        ...selectedNativeSources.filter(source => !extra.some(ref => ref.kind === 'native_document' && ref.job_id === source.job_id && ref.artifact_id === source.artifact_id)).map(source => ({ kind: 'native_document' as const, job_id: source.job_id, artifact_id: source.artifact_id, ...(source.document?.target_state != null ? { target_state: source.document.target_state } : {}) })), ...extra,
+        ...selectedDesignIds.map((design_id, index) => ({ kind: 'design' as const, job_id: owners[index]?.data ?? sourceJobId, design_id, ...(documents[design_id] ? { document: documents[design_id] } : {}) })).filter(ref => !extra.some(exact => exact.kind === 'design' && exact.job_id === ref.job_id && exact.design_id === ref.design_id && candidateKey(exact) === candidateKey(ref))),
+        ...selectedNativeSources.map(source => ({ kind: 'native_document' as const, job_id: source.job_id, artifact_id: source.artifact_id, ...(source.document?.target_state != null ? { target_state: source.document.target_state } : {}), ...(source.document?.model != null ? { model: source.document.model } : {}) })).filter(ref => !extra.some(exact => candidateKey(exact) === candidateKey(ref))), ...extra,
     ]);
-    const intent = { operation: 'round' as const, source_job_id: sourceJobId, selection: { candidate_refs: selection }, round_plan: activeInvocationPlan(draft.stages), execution_target_id: draft.target, execution_policy: draft.policy ?? newJobExecutionPolicy(), ...(launchContextId !== undefined ? { launch_context_id: launchContextId } : {}) };
+    const frozenSet = draft.selection_set && JSON.stringify(draft.selection_set.candidate_refs.map(candidateKey)) === JSON.stringify(selection.map(candidateKey)) ? draft.selection_set : undefined;
+    const intent = { operation: 'round' as const, source_job_id: sourceJobId, selection: frozenSet ? { saved_set_id: frozenSet.saved_set_id, revision: frozenSet.revision } : { candidate_refs: selection }, round_plan: activeInvocationPlan(draft.stages), execution_target_id: draft.target, execution_policy: draft.policy ?? newJobExecutionPolicy(), ...(launchContextId !== undefined ? { launch_context_id: launchContextId } : {}) };
     const changeStage = (id: string, update: (stage: DraftStage) => DraftStage) => setDraft(previous => ({ ...previous, stages: previous.stages.map(item => item.stage.id === id ? update(item) : item) }));
-    const addStage = (kind: SelectedRoundStage['kind']) => setDraft(previous => ({ ...previous, stages: [...previous.stages, newStage(kind, previous.stages.filter(item => item.enabled).at(-1)?.stage.id)] }));
+    const addStage = (kind: SelectedRoundStage['kind']) => setDraft(previous => ({ ...previous, stages: [...previous.stages, newStage(kind, previous.stages.filter(item => item.enabled).at(-1)?.stage.id, operationScope)] }));
     const addProteinRecipe = () => setDraft(previous => {
         const flow = newStage('maturation', previous.stages.filter(item => item.enabled).at(-1)?.stage.id);
         if (flow.stage.kind === 'maturation') flow.stage.params = { ppiflow_task: 'protein_binder_partial', maturation_flow_enabled: true, maturation_redesign_enabled: false };
@@ -102,6 +103,20 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
         setExtra(refs); writeRoundStorage(sourceJobId, 'selection', refs);
         window.dispatchEvent(new CustomEvent('bms:binder-round-selection', { detail: { jobId: sourceJobId, refs } }));
     };
+    const persistDraft = async (load: boolean) => {
+        if (!projectDraftRef) return;
+        setBusy(true); setError('');
+        try {
+            const saved = load ? await loadSelectedOperationDraft(projectDraftRef)
+                : await saveSelectedOperationDraft(projectDraftRef, { schema_version: 1, source_job_id: sourceJobId,
+                    candidate_refs: selection, ...draft });
+            if (saved.source_job_id !== sourceJobId) throw Error('Saved draft belongs to another source Job. Current draft is unchanged.');
+            setDraft({ stages: saved.stages, target: saved.target, policy: saved.policy, ...(saved.selection_set ? { selection_set: saved.selection_set } : {}) });
+            onClearSelection?.(); setExtra(saved.candidate_refs);
+            writeRoundStorage(sourceJobId, 'selection', saved.candidate_refs);
+            window.dispatchEvent(new CustomEvent('bms:binder-round-selection', { detail: { jobId: sourceJobId, refs: saved.candidate_refs, replace: true } }));
+        } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
+    };
     const retry = async () => {
         if (!round) return;
         setBusy(true); setError('');
@@ -110,10 +125,11 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
     };
     return <section aria-label="Selected round workspace" className="bms-binder-controls min-w-0 space-y-3">
         <div className="flex flex-wrap items-center gap-3"><button className={control} type="button" onClick={() => setOpen(value => !value)}>Next round ({selection.length})</button><span>{selection.length} selected across this workflow</span></div>
-        <BinderCandidateSets jobId={sourceJobId} candidates={selection} onLoad={refs => { onClearSelection?.(); setExtra(refs); writeRoundStorage(sourceJobId, 'selection', refs); window.dispatchEvent(new CustomEvent('bms:binder-round-selection', { detail: { jobId: sourceJobId, refs, replace: true } })); }} />
+        <BinderCandidateSets jobId={sourceJobId} candidates={selection} onLoad={(refs, saved) => { setDraft(previous => ({ ...previous, selection_set: saved ? { ...saved, candidate_refs: refs } : undefined })); onClearSelection?.(); setExtra(refs); writeRoundStorage(sourceJobId, 'selection', refs); window.dispatchEvent(new CustomEvent('bms:binder-round-selection', { detail: { jobId: sourceJobId, refs, replace: true } })); }} />
         {!!extra.length && <details><summary>Additional selected outputs and saved members ({extra.length})</summary>{extra.map((ref, index) => <div key={candidateKey(ref)}>Candidate {index + 1} · {ref.kind.replaceAll('_', ' ')} <button type="button" onClick={() => toggleOutput(ref, false)}>Remove</button><details><summary>Details</summary><BindCraft2SettingsReadback value={ref} /></details></div>)}</details>}
         {open && <div className="space-y-3 rounded border border-[var(--border-color)] p-4" aria-label="Next round composer">
-            <h3 className="font-semibold">Next round</h3>
+            <h3 className="font-semibold">Next operations</h3>
+            {projectDraftRef ? <div><button type="button" disabled={busy} onClick={() => void persistDraft(false)}>Save operation draft to Project</button><button type="button" disabled={busy} onClick={() => void persistDraft(true)}>Load operation draft from Project</button></div> : <p>Unsaved operation draft is stored in this browser only. Open with a Project setup to save a durable draft.</p>}
             <p>Choose stages in order. Models within a stage branch over the same inputs. Inactive drafts are retained, not submitted.</p>
             <p>Protein maturation recipe: flow → chosen designer(s) → blind predictor(s). Flow-only backbones remain available for later design.</p>
             <button type="button" className={control} onClick={addProteinRecipe}>Add protein flow → design → predict</button>
@@ -137,7 +153,7 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
                 {step.state === 'review_required' && step.review?.code !== 'md_native_preview_approval_required' && step.request && <button type="button" className={control} disabled={busy} onClick={() => { setBusy(true); void submitJob(step.request!, { launchContext: Boolean(step.request?.launch_context_id) }).then(() => rounds.refetch()).catch(reason => setError(String(reason))).finally(() => setBusy(false)); }}>Review remote step</button>}
                 {step.outputs?.map((output, index) => <div key={candidateKey(output)}><label><input type="checkbox" aria-label={`Select ${labels[step.model_id] ?? step.model_id} output ${index + 1}`} checked={selection.some(ref => candidateKey(ref) === candidateKey(output))} onChange={event => toggleOutput(output, event.target.checked)} />{output.label ?? output.name ?? `Candidate ${index + 1}`} · {output.kind.replaceAll('_', ' ')}</label><details><summary>Details</summary><BindCraft2SettingsReadback value={output} /></details></div>)}
             </section>)}
-            {round && ['needs_retry', 'completed_with_errors'].includes(round.state) && <button type="button" className={control} disabled={busy} onClick={() => void retry()}>Retry round science</button>}
+            {round && ['needs_retry', 'completed_with_errors'].includes(round.state) && <button type="button" className={control} disabled={busy} onClick={() => void retry()}>Retry failed operations</button>}
             <details><summary>Round provenance</summary><BindCraft2SettingsReadback value={round} /></details>
         </section>}
     </section>;

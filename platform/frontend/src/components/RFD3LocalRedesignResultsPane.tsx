@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchRFD3LocalRedesign } from '../lib/api';
 import type { RFD3LocalRedesignReadModel } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
+import { DeNovoRepeatSettings } from './DeNovoRepeatSettings';
 import { continuationHref, inspectedResultState, rememberInspectedResult } from '../lib/deNovoContinuation';
 import { NativeCandidatePagination } from './RFD3GenerationResultsPane';
 import { resolveRFD3LocalRedesignRequestView } from './rfd3LocalRedesignResultsView';
@@ -81,6 +82,7 @@ export function RFD3LocalRedesignResultsPane({ jobId }: RFD3LocalRedesignResults
 
     return (
         <div className="space-y-5">
+            <DeNovoRepeatSettings jobId={jobId} />
             <section className="rounded-xl border border-slate-700 p-4">
                 <h2 className="text-lg font-semibold text-white">RFD3 local redesign</h2>
                 <p className="mt-2 text-sm text-slate-300">{result.candidates.length} published candidates · Requested: {formatValue(result.population?.requested ?? execution.num_designs)} · Execution: {result.execution_status ?? requestView.status ?? 'Unknown'} · Population: {result.population_completeness ?? 'unknown'}</p>
