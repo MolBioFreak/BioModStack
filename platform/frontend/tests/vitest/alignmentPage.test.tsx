@@ -12,6 +12,22 @@ vi.mock('../../src/lib/projectManager', async original => ({ ...(await original<
 const row = (id: string, domain: string) => ({ capability_id: id, label: id, domain_kind: domain, project_setup_state: 'ready', project_setup_adapter_id: 'adapter', project_native_owner_id: `${id}:family_msa`, safe_setup_destination: `/alignments?model=${id}&mode=family_msa`, launch_mode: 'typed_launcher_handoff', product_taxonomy: { family: 'family_alignment' }, scientific_capabilities: { mafft: ['protein', 'dna', 'rna'], muscle: ['protein', 'dna', 'rna'], famsa: ['protein'], twilight: ['dna', 'rna'] }, result_adapter_ids: [`bms.family-msa.${id}.adapter.v1`] });
 
 describe('alignment route receiver', () => {
+    it.each(['export', 'compare', 'ensemble-support'])('reopens managed %s without requiring an alignment artifact', async operation => {
+        const get = vi.spyOn(api, 'get').mockImplementation(async url => {
+            if (String(url) === '/api/jobs/op') return {data: {status: 'completed', params: {managed_operation: {project_id: 'p', request: {operation}}}}};
+            if (String(url) === '/api/family-msa/projects/p/operations/op') return {data: {status: 'completed', artifact_url: '/api/family-msa/projects/p/operations/op/artifact', error_message: null}};
+            throw new Error('No alignment manifest for analysis Job');
+        });
+        const div = document.createElement('div'); const root = createRoot(div); const client = new QueryClient({defaultOptions: {queries: {retry: false}}});
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/alignments/jobs/op']}><Routes><Route path="/alignments/jobs/:jobId" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>));
+            for (let i = 0; i < 5; i++) await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+            expect(div.querySelector('section[aria-label="Managed alignment operation result"]')).not.toBeNull();
+            expect(div.querySelector('a[href="/api/family-msa/projects/p/operations/op/artifact"]')).not.toBeNull();
+            expect(div.textContent).not.toContain('Alignment result unavailable');
+            expect(div.textContent).not.toContain('No alignment artifact');
+        } finally { await act(async () => root.unmount()); client.clear(); get.mockRestore(); }
+    });
     it('polls a running Job through publication and opens its document', async () => {
         let published = false;
         const get = vi.spyOn(api, 'get').mockImplementation(async url => {

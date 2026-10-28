@@ -4,6 +4,7 @@ import { alignmentViewers } from './lazyViewers';
 import AlignmentEditor from './AlignmentEditor';
 import AlignmentLibrary from './AlignmentLibrary';
 import AlignmentComparison from './AlignmentComparison';
+import AlignmentOperationResult from './AlignmentOperationResult';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { jobPollingInterval } from '../../lib/queryPolling';
@@ -58,20 +59,21 @@ export default function AlignmentPage() {
     const [selection, setSelection] = useState<{base: string | null; id: string}>({base: null, id: ''});
     const job = useQuery({
         queryKey: ['alignment-result-job', jobId],
-        queryFn: async ({ signal }) => (await api.get<{status: string}>(`/api/jobs/${encodeURIComponent(jobId!)}`, { signal })).data,
+        queryFn: async ({ signal }) => (await api.get<{status: string; params?: {managed_operation?: {project_id: string; request: {operation: string}}}}>(`/api/jobs/${encodeURIComponent(jobId!)}`, { signal })).data,
         enabled: Boolean(jobId && !(projectId && receiptId)), retry: false,
         refetchInterval: q => !q.state.data || ['queued', 'running'].includes(q.state.data.status) ? jobPollingInterval(3000, q) : false,
         refetchIntervalInBackground: false,
     });
+    const managedOperation = job.data?.params?.managed_operation;
     const manifest = useQuery({
         queryKey: ['alignment-result-manifest', base],
         queryFn: async ({ signal }) => (await api.get<{artifacts: {id: string; role: string; logical_path?: string | null}[]; import_provenance?: {shared_states?: {dataset_id: string | null}[]}}>(base!, { signal })).data,
-        enabled: Boolean(base), retry: false,
+        enabled: Boolean(base && !managedOperation), retry: false,
         refetchInterval: q => jobId && !(projectId && receiptId) && (!job.data || ['queued', 'running'].includes(job.data.status)) && !q.state.data ? jobPollingInterval(3000, q) : false,
         refetchIntervalInBackground: false,
     });
     useEffect(() => {
-        if (job.data && !['queued', 'running'].includes(job.data.status) && !manifest.data) void manifest.refetch();
+        if (job.data && !managedOperation && !['queued', 'running'].includes(job.data.status) && !manifest.data) void manifest.refetch();
         // Only the status transition triggers the final read.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [job.data?.status, base]);
@@ -99,6 +101,7 @@ export default function AlignmentPage() {
     const queryModel = query.get('model');
     const model = queryModel === 'family_msa_protein' || queryModel === 'family_msa_nucleic' ? queryModel : selectedModel;
     const section = location.pathname.endsWith('/compare') ? 'Compare' : location.pathname.endsWith('/new') || (location.pathname === '/alignments' && query.has('model')) ? 'New' : 'Library';
+    if (jobId && managedOperation) return <div className="mx-auto max-w-7xl p-4"><AlignmentOperationResult jobId={jobId} projectId={managedOperation.project_id} operation={managedOperation.request.operation}/></div>;
     return <div className="mx-auto max-w-7xl p-4">
         {setup.active && setup.isLoading && <p role="status">Loading Project workflow setup…</p>}
         {setup.active && setup.error && <p role="alert">Project workflow setup unavailable: {projectManagerErrorMessage(setup.error)}</p>}
