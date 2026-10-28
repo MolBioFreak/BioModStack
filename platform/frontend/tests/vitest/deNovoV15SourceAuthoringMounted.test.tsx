@@ -21,6 +21,7 @@ vi.mock('../../src/components/ModelIntegrationControl', () => ({ ModelIntegratio
 vi.mock('../../src/components/MolstarViewer', () => ({ default: (props: any) => <div data-viewer-url={props.structureUrl} data-viewer-format={props.format}><button type="button" onClick={() => props.onMetricSelection({ metricId: 'fixture-canvas-copy', origin: 'canvas', identities: [{ documentId: props.structureDocumentId, labelAsymId: 'AA', labelSeqId: 7, operatorInstanceId: 'copy-2' }] })}>Inspect transformed canvas copy</button></div> }));
 import { JobSubmission } from '../../src/components/JobSubmission';
 import '../../src/components/ProteinModificationTemplate';
+import '../../src/components/DeNovoNativeGenerationSettings';
 import { api } from '../../src/lib/api';
 let root: Root | undefined, client: QueryClient, previous: typeof api.defaults.adapter;
 let requests: Array<{ url: string; method: string; body: any; params: any }>, unexpected: string[], saved: any[];

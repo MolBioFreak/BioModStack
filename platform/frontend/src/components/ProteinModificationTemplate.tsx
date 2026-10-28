@@ -7,6 +7,7 @@ import { OtherDeNovoSettings, retainedRfd3Draft, rfd3ExecutionKeys, useRfd3Gener
 import { DiscoJobsInput } from './DiscoJobsInput';
 import { Rfd3SelectionWorkbench } from './Rfd3SelectionWorkbench';
 import type { Rfd3SourceSelection } from '../lib/rfd3SourceSelection';
+import type { Rfd3SelectionObservations, Rfd3InspectionSource } from '../lib/rfd3SelectionObservations';
 import { projectRfd3SourceSelection } from '../lib/rfd3SourceSelection';
 import { NativeSourceInput } from './DeNovoNativeSources';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
@@ -400,6 +401,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         staleTime: 60_000, retry: false });
     const rfd3ConditionUndo = useRef<{ present: boolean; value: unknown } | undefined>(undefined);
     const [rfd3Picks, setRfd3Picks] = useState<Rfd3SourceSelection>();
+    const [rfd3Observations, setRfd3Observations] = useState<Rfd3SelectionObservations>(() => settingsObject(initialValues.rfd3_selection_observations) as Rfd3SelectionObservations);
     const [rfd3SourceInspection, setRfd3SourceInspection] = useState<{ receipt: StructureMaterialization; path: string; model?: number }>();
     const rfd3Source = typeof rfd3Settings.input_structure === 'string' && rfd3Settings.input_structure ? {
         path: rfd3Settings.input_structure, output_format: 'native' as const,
@@ -414,6 +416,11 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [rfd3SourceOpen, setRfd3SourceOpen] = useState(false);
     const rfd3Visual = rfd3Picks ? { ...rfd3Picks, inputPath: rfd3Source?.path ?? '', sourceModel: rfd3Source?.model_number, sourceMapping: rfd3Settings.source_mapping as string | undefined } : undefined;
     const rfd3Selected = rfd3Visual && !projectRfd3SourceSelection(rfd3Visual).issue ? [...rfd3Visual.identities] : [];
+    const rfd3InspectionSource: Rfd3InspectionSource | undefined = rfd3Source && rfd3SourceInspection?.path === rfd3Source.path && rfd3SourceInspection.model === rfd3Source.model_number ? {
+        inputPath: rfd3Source.path, sourceModel: rfd3Source.model_number, sourceMapping: rfd3Settings.source_mapping as string | undefined,
+        source: { documentId: rfd3SourceInspection.receipt.path, source_positions: rfd3SourceInspection.receipt.source_positions, model_number: rfd3SourceInspection.receipt.model_number },
+        retainedBinding: { receipt: rfd3SourceInspection.receipt, inputPath: rfd3Source.path, sourceModel: rfd3Source.model_number },
+    } : undefined;
     useEffect(() => { setRfd3Picks(undefined); }, [rfd3Source?.path, rfd3Source?.model_number]);
     const clearRfd3Source = () => setRfd3Settings(previous => {
         const next = { ...previous }; delete next.input_structure; delete next.source_model; delete next.source_mapping; return next;
@@ -443,6 +450,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         ...(sequenceNull ? { sequence_design_null: true } : {}),
         ...nativeControls,
         ...rfd3Settings,
+        rfd3_selection_observations: rfd3Observations,
         ...Object.fromEntries(['laproteina_checkpoint_dir', 'laproteina_data_path', 'disco_checkpoint_path', 'disco_cutlass_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => [key, initialValues[key]])),
         job_name: jobName,
         num_designs: numDesigns,
@@ -803,6 +811,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                         </select></label>
                         <Rfd3SelectionWorkbench key={JSON.stringify([rfd3Source?.path, rfd3Source?.model_number])}
                             value={settingsObject(rfd3Settings.conditioning)} visual={rfd3Visual}
+                            retainedObservations={rfd3Observations} onObservationsChange={setRfd3Observations} inspectionSource={rfd3InspectionSource}
                             onChange={(conditioning, action) => {
                                 const before = action === 'undo' ? rfd3ConditionUndo.current : undefined;
                                 rfd3ConditionUndo.current = before ? undefined : { present: Object.hasOwn(rfd3Settings, 'conditioning'), value: rfd3Settings.conditioning };

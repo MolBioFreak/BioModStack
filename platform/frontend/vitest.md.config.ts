@@ -13,6 +13,7 @@ export default defineConfig({
         setupFiles: ['./tests/vitest/setup.ts'],
         include: [
             './tests/vitest/atomworksStudioMounted.test.tsx',
+            ...(process.env.BMS_PARENT_RECEIPT_WIRE ? ['./tests/vitest/parentNativeReceivingMounted.test.tsx'] : []),
             './tests/vitest/alignmentPage.test.tsx',
             './tests/vitest/alignmentComparison.test.tsx',
             './tests/vitest/alignmentLibrary.test.tsx',
@@ -155,6 +156,7 @@ export default defineConfig({
             './tests/vitest/deNovoConstructionParentMounted.test.tsx',
             './tests/vitest/molecularConstructionWorkbench.test.tsx',
             './tests/vitest/molecularGeometryWorkbench.test.tsx',
+            './tests/vitest/preparedGeometryMounted.test.tsx',
             './tests/vitest/deNovoCompleteAuthoringMounted.test.tsx',
             './tests/vitest/generalSequenceDesignMounted.test.tsx',
             './tests/vitest/candidateRoundProgressMounted.test.tsx',

@@ -65,6 +65,12 @@ async function mount(initialValues: Record<string, unknown>) {
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
     await act(async () => root!.render(<QueryClientProvider client={client}><MemoryRouter><ProteinModificationTemplate onBack={() => {}} initialValues={initialValues} onDraftChange={draft} /></MemoryRouter></QueryClientProvider>));
     await settle();
+    if (initialValues.generator === 'rfd3') {
+        const details = [...document.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent?.includes('Input structure'));
+        expect(details).toBeTruthy();
+        await act(async () => { details!.open = true; details!.dispatchEvent(new Event('toggle')); });
+        await vi.waitFor(async () => { await settle(); expect(document.querySelector('[data-viewer]')).not.toBeNull(); });
+    }
 }
 function control(name: string): HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement {
     const direct = document.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`[aria-label="${name}"]`);
@@ -118,6 +124,7 @@ it('real parent receives selected-MODEL derivative picks, Apply/Undo only nested
     await click('Inspect select_hotspots'); expect(document.body.textContent).toContain('not evaluated in the browser');
 });
 it.each(['inputPath', 'sourceModel', 'provenance', 'documentId'])('exact retained binding rejects stale %s without relabeling the inspector', key => {
+    // The complete parent cold-reopen case below qualifies durable observations.
     const identity = { documentId: receipt.path, modelNumber: 2, authAsymId: 'AA', authSeqId: 42, insertionCode: 'B' };
     const visual: any = { identities: [identity], inputPath: receipt.original_path, sourceModel: 2, sourceMapping: 'bms.rfd3.source-map.v1', source: { documentId: receipt.path, source_positions: receipt.source_positions, model_number: 2 }, retainedBinding: { receipt, inputPath: receipt.original_path, sourceModel: 2 } };
     expect(projectRfd3SourceSelection(visual)).toHaveProperty('residues', 'AA42B');
@@ -127,6 +134,19 @@ it.each(['inputPath', 'sourceModel', 'provenance', 'documentId'])('exact retaine
     if (key === 'documentId') visual.source.documentId = receipt.original_path;
     expect(projectRfd3SourceSelection(visual)).toHaveProperty('issue');
     expect(identity.documentId).toBe(receipt.path);
+});
+it('parent retains exact observed selectors across cold reopen without adding scientific params', async () => {
+    await mount({ generator: 'rfd3', input_structure: receipt.original_path, source_model: 2, source_mapping: 'bms.rfd3.source-map.v1' });
+    const pick = [...document.querySelectorAll<HTMLButtonElement>('button')].find(b => b.getAttribute('aria-label')?.includes('author AA:42B'))!;
+    await act(async () => pick.click()); await click('Apply RFD3 selection');
+    const saved = JSON.parse(JSON.stringify(latest()));
+    expect(saved.rfd3_selection_observations.select_fixed_atoms.source.consumedSha256).toBe(receipt.sha256);
+    expect(params()).not.toHaveProperty('rfd3_selection_observations');
+    const scientific = JSON.parse(JSON.stringify(params()));
+    await unmount(); await mount(saved); await click('Inspect select_fixed_atoms');
+    const viewer = JSON.parse(document.querySelector('[data-viewer]')!.textContent!);
+    expect(viewer.residueSelections).toMatchObject([{ documentId: receipt.path, modelNumber: 2, authAsymId: 'AA', authSeqId: 42, insertionCode: 'B' }]);
+    expect(params()).toEqual(scientific);
 });
 it('mapping-off manual conditioning remains literal and visual Apply is observational', async () => {
     const conditioning = { contig: 'manual native expression', select_hbond_donor: true };
