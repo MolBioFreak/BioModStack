@@ -10,6 +10,9 @@ import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
 
 import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, exportNativeResults, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, fetchChainPairIptm } from '../lib/api';
 import { isNgsJob, ngsResultHref } from '../lib/ngsResultRouting';
+import { jobCategory, isCategoryVisible } from '../lib/jobCategories';
+import { useJobCategoryVisibility } from '../lib/useJobCategoryVisibility';
+import { JobCategoryFilter } from './dashboard/JobCategoryFilter';
 import type {
     AntibodyData,
     AntibodyCdrIndelConfig,
@@ -1816,6 +1819,7 @@ function ResultsViewerContent() {
 
     // State
     const selectedJobId = jobId || ''; // The route is the sole Job selection authority.
+    const [categoryVisibility, setCategoryVisibility] = useJobCategoryVisibility('results', { ngs: false, alignments: true });
     const [showJobSelectorMenu, setShowJobSelectorMenu] = useState(false);
     const [jobSelectorSearch, setJobSelectorSearch] = useState('');
     const [debouncedJobSelectorSearch, setDebouncedJobSelectorSearch] = useState('');
@@ -2022,12 +2026,14 @@ function ResultsViewerContent() {
         error: jobsQueryError,
         refetch: refetchJobs,
     } = useQuery({
-        queryKey: ['jobs', 'include_children', 'summary', debouncedJobSelectorSearch],
+        queryKey: ['jobs', 'include_children', 'summary', debouncedJobSelectorSearch, categoryVisibility.ngs, categoryVisibility.alignments],
         queryFn: ({ signal }) => fetchJobs({
             include_children: true,
             limit: 100,
             summary: true,
             q: debouncedJobSelectorSearch || undefined,
+            exclude_ngs: !categoryVisibility.ngs,
+            exclude_alignments: !categoryVisibility.alignments,
         }, undefined, signal),
     });
     const {
@@ -2061,7 +2067,9 @@ function ResultsViewerContent() {
         }
         return baseJobs.map((job: Job) => job.id === routedJob.id ? routedJob : job);
     }, [jobsData?.data.jobs, routedJob]);
-    const nonNgsJobs = useMemo(() => jobs.filter((j: Job) => !isNgsJob(j)), [jobs]);
+    const selectorJobs = useMemo(() => jobs.filter((j: Job) => isCategoryVisible(j, categoryVisibility)), [jobs, categoryVisibility]);
+    // Native NGS and family alignment results have their own workspaces.
+    const nonNgsJobs = useMemo(() => jobs.filter((j: Job) => !isNgsJob(j) && jobCategory(j) !== 'alignments'), [jobs]);
     const jobsById = useMemo(
         () => new Map(nonNgsJobs.map((job: Job) => [job.id, job])),
         [nonNgsJobs],
@@ -2135,7 +2143,7 @@ function ResultsViewerContent() {
         return `${activeJob.parent_job_id}:${getLineageFamily(activeJob)}`;
     }, [activeJob, selectableLineageChildJobIds]);
     const jobSelectorOptions = useMemo<JobSelectorOption[]>(() => {
-        const sortedJobs = [...nonNgsJobs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        const sortedJobs = [...selectorJobs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
         const batchMap = new Map<string, { msaJob: Job | null; children: Job[]; totalDesigns: number }>();
         const childJobIds = new Set<string>();
         const lineageGroups = new Map<string, {
@@ -2146,6 +2154,9 @@ function ResultsViewerContent() {
         }>();
 
         sortedJobs.forEach((job) => {
+            // NGS and alignment outputs are routed to their own result surfaces;
+            // do not collapse their jobs into protein design lineage groups.
+            if (jobCategory(job) !== 'other') return;
             if (job.parent_job_id) {
                 childJobIds.add(job.id);
             }
@@ -2207,6 +2218,8 @@ function ResultsViewerContent() {
             const batchData = job.batch_id ? batchMap.get(job.batch_id) : null;
             const hasChildren = Boolean(batchData && batchData.children.length > 0);
             const displayDesigns = (() => {
+                if (jobCategory(job) === 'alignments') return 'Family alignment';
+                if (jobCategory(job) === 'ngs') return 'NGS results';
                 if (isRFD3GenerationResultJob(job)) return 'RFD3 generation';
                 const rfd3CandidateLabel = getRFD3LocalRedesignCandidateLabel(job);
                 if (rfd3CandidateLabel) return `Requested: ${rfd3CandidateLabel}`;
@@ -2264,7 +2277,7 @@ function ResultsViewerContent() {
         });
 
         return [...regularOptions, ...lineageOptions].sort((a, b) => b.createdAt - a.createdAt);
-    }, [jobsById, nonNgsJobs, selectableLineageChildJobIds]);
+    }, [jobsById, selectorJobs, selectableLineageChildJobIds]);
     const filteredJobSelectorOptions = useMemo(() => {
         const query = jobSelectorSearch.trim().toLowerCase();
         if (!query) return jobSelectorOptions;
@@ -2373,6 +2386,8 @@ function ResultsViewerContent() {
     useEffect(() => {
         if (routedJob && isNgsJob(routedJob)) {
             navigate(ngsResultHref(routedJob.id, location.search), { replace: true });
+        } else if (routedJob && jobCategory(routedJob) === 'alignments') {
+            navigate(`/alignments/jobs/${encodeURIComponent(routedJob.id)}${location.search}`, { replace: true });
         }
     }, [routedJob, location.search, navigate]);
 
@@ -2430,11 +2445,17 @@ function ResultsViewerContent() {
                 ['design_id', 'artifact_id', 'target_state', 'native_candidate', 'native_scope', 'native_page', 'result_model', 'candidate_id', 'invocation_id', 'frustrampnn_scope'].forEach(key => params.delete(key));
             }
             const query = params.toString();
-            navigate(`/designs/${newId}${query ? `?${query}` : ''}`, replace ? { replace: true } : undefined);
+            const selected = jobs.find(job => job.id === newId);
+            const destination = selected && jobCategory(selected) === 'alignments'
+                ? `/alignments/jobs/${encodeURIComponent(newId)}${query ? `?${query}` : ''}`
+                : selected && isNgsJob(selected)
+                    ? ngsResultHref(newId, query ? `?${query}` : '')
+                    : `/designs/${newId}${query ? `?${query}` : ''}`;
+            navigate(destination, replace ? { replace: true } : undefined);
         } else {
             navigate('/designs', replace ? { replace: true } : undefined);
         }
-    }, [navigate, location.search, selectedJobId]);
+    }, [navigate, location.search, selectedJobId, jobs]);
     useEffect(() => {
         if (!showJobSelectorMenu) return;
         const handlePointerDown = (event: MouseEvent) => {
@@ -5515,6 +5536,7 @@ function ResultsViewerContent() {
                             {showJobSelectorMenu && (
                                 <div className="absolute right-0 z-50 mt-2 w-[min(520px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/98 shadow-2xl shadow-slate-950/70 backdrop-blur">
                                     <div className="border-b border-slate-800 p-3">
+                                        <JobCategoryFilter value={categoryVisibility} onChange={setCategoryVisibility} />
                                         <input
                                             autoFocus
                                             type="text"

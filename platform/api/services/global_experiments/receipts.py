@@ -646,7 +646,7 @@ async def verify_and_link_terminal_outputs(
             ExperimentWorkflowSetupContext.workflow_id == workflow.aggregate_id))
         if setup is not None:
             result_ids = json.loads(setup.capability_contract_json)["capability"].get("result_adapter_ids", [])
-    native_result_ids = [value for value in result_ids or [] if value.startswith("bms.native-binder.")]
+    native_result_ids = [value for value in result_ids or [] if value.startswith(("bms.native-binder.", "bms.family-msa."))]
     if len(native_result_ids) == 1:
         adapter_id = native_result_ids[0]
     adapter = registry.get(adapter_id)
@@ -663,6 +663,25 @@ async def verify_and_link_terminal_outputs(
     source_receipt = await adapter.verify(core_session, str(entity_id))
     if source_receipt.get("verifier_id") != adapter_id:
         raise ValidationFailure("terminal output verifier identity disagrees with workflow intent")
+    if adapter_id.startswith("bms.family-msa."):
+        # PM owns the retained copies; retrying the same attempt reuses stable IDs.
+        # This transaction is independent of native Job completion/deletion.
+        import uuid
+        from services.family_msa.publication import retain_job_artifact
+        metadata = source_receipt["metadata"]
+        entries = [(metadata["manifest_artifact_id"], "result_manifest")]
+        entries += [(item["id"], item["role"]) for item in metadata["artifacts"]]
+        retained = []
+        for artifact_id, role in entries:
+            resource_id = str(uuid.uuid5(uuid.NAMESPACE_URL,
+                f"bms:family-msa:{attempt.workspace_id}:{attempt.resource_id}:{artifact_id}"))
+            artifact = await retain_job_artifact(core_session, experiment_session,
+                job_id=str(entity_id), artifact_id=artifact_id,
+                workspace_id=attempt.workspace_id, lifecycle_owner_id=domain.aggregate_id,
+                resource_id=resource_id, logical_role=role,
+                schema_name="bms.family-msa.native-artifact", schema_version="1")
+            retained.append({"source_artifact_id": artifact_id, "resource_id": artifact.resource_id, "role": role})
+        metadata["retained_artifacts"] = retained
     external = await register_external_entity_receipt(
         experiment_session,
         workspace_id=attempt.workspace_id,

@@ -468,7 +468,8 @@ async def persist_workflow_plan_authority(
     native_contract = None
     if normalized_job_request is not None:
         from services.protein_project_capabilities import normalized_job_plan_contract, protein_setup_parameter_schema, _PARAMETER_SCHEMAS
-        setup_capability = capability_id if capability_id in _PARAMETER_SCHEMAS and protein_setup_parameter_schema(capability_id).get("x-bms-native-editor-draft") else None
+        from services.family_msa_project_capabilities import family_msa_capability
+        setup_capability = capability_id if ((capability_id in _PARAMETER_SCHEMAS and protein_setup_parameter_schema(capability_id).get("x-bms-native-editor-draft")) or family_msa_capability(capability_id) is not None) else None
         native_contract = normalized_job_plan_contract(
             normalized_job_request, native_entrypoint=native_entrypoint,
             setup_capability_id=setup_capability,
@@ -2373,6 +2374,43 @@ async def save_dataset_revision(
     return revision
 
 
+async def derive_dataset_revision(
+    session: AsyncSession, dataset_id: str, parent_revision_id: str,
+    ordinals: list[int], *, expected_head_generation: int,
+) -> ExperimentRevision:
+    """Copy explicitly selected parent occurrences, recording their exact origin.
+
+    Origin is the immediate parent, not a claim about earlier revisions. The
+    order and multiplicity of ordinals are intentional and preserved.
+    """
+    parent = await session.get(ExperimentRevision, parent_revision_id)
+    if parent is None or parent.subject_id != dataset_id:
+        raise NotFound("parent Dataset revision not found")
+    if any(type(ordinal) is not int or ordinal < 0 for ordinal in ordinals):
+        raise ValidationFailure("invalid parent member ordinal")
+    rows = (await session.execute(select(ExperimentDatasetRevisionMember).where(
+        ExperimentDatasetRevisionMember.revision_id == parent_revision_id,
+        ExperimentDatasetRevisionMember.ordinal.in_(ordinals),
+    ))).scalars().all()
+    by_ordinal = {row.ordinal: row for row in rows}
+    if any(ordinal not in by_ordinal for ordinal in ordinals):
+        raise NotFound("parent Dataset member ordinal not found")
+    members = []
+    for ordinal in ordinals:
+        row = by_ordinal[ordinal]
+        value = json.loads(row.value_json)
+        # Wrap rather than mutate source values, including scalar values.
+        value = {"schema": "bms.dataset-derived-member.v1", "source_value": value,
+                 "origin": {"revision_id": parent_revision_id,
+                            "revision_sha256": parent.payload_sha256,
+                            "ordinal": ordinal, "member_sha256": row.content_sha256}}
+        members.append({"role": row.role, "identity": row.semantic_identity,
+                        "value": value, "media_type": row.media_type})
+    return await save_dataset_revision(session, dataset_id,
+        {"schema": "bms.dataset-revision.v1", "members": members},
+        expected_head_generation=expected_head_generation)
+
+
 async def protein_setup_launch_authority(
     session: AsyncSession,
     authority: ExperimentWorkflowPlanAuthority,
@@ -2394,6 +2432,9 @@ async def protein_setup_launch_authority(
         "schema": "bms.protein-setup-launch-authority.v1",
         "capability_contract_sha256": authority.capability_contract_sha256,
     }
+    from services.family_msa_project_capabilities import family_msa_capability
+    family = family_msa_capability((await _head(session, authority.workflow_id, "workflow")).description)
+    expected_domain = family[0]["domain_kind"] if family is not None else "protein_in_silico"
     for prefix, head in (("project", project), ("global_experiment", experiment), ("domain", domain)):
         revision_id = (pinned or {}).get(f"{prefix}_revision_id", head.current_revision_id)
         if prefix == "domain":
@@ -2407,7 +2448,7 @@ async def protein_setup_launch_authority(
             raise ValidationFailure("Protein setup hierarchy revision is not canonical")
         if prefix == "domain" and (
             payload.get("schema") != "bms.domain-experiment.v1"
-            or payload.get("domain_kind") != "protein_in_silico"
+            or payload.get("domain_kind") != expected_domain
         ):
             raise ValidationFailure("native Protein setup authority requires its Protein Domain")
         result.update({
@@ -3413,7 +3454,10 @@ async def reconcile_run_group(
             if terminal.get("output_evidence") and not terminal.get("output_receipt_ids"):
                 preparation = await session.get(ExperimentWorkflowPreparation, attempt.preparation_id)
                 normalized = json.loads(preparation.normalized_request_json) if preparation else {}
-                if normalized.get("launch_authority", {}).get("schema") == "bms.protein-setup-launch-authority.v1":
+                terminal_job = await core_session.get(Job, attempt.scheduler_job_id)
+                native_family_msa = terminal_job is not None and terminal_job.model_id in {
+                    'family_msa_protein', 'family_msa_nucleic'} and terminal_job.mode == 'family_msa'
+                if normalized.get("launch_authority", {}).get("schema") == "bms.protein-setup-launch-authority.v1" or native_family_msa:
                     linked = await session.scalar(select(ExperimentLineageEdge.id).where(
                         ExperimentLineageEdge.source_resource_id == attempt.resource_id,
                         ExperimentLineageEdge.edge_mode == "produced",
@@ -3422,9 +3466,10 @@ async def reconcile_run_group(
                         try:
                             from services.global_experiments.receipts import verify_and_link_terminal_outputs
 
-                            await verify_and_link_terminal_outputs(
-                                session, core_session, attempt_id=attempt.resource_id,
-                            )
+                            async with session.begin_nested():
+                                await verify_and_link_terminal_outputs(
+                                    session, core_session, attempt_id=attempt.resource_id,
+                                )
                         except Exception:
                             # Retain pending evidence without a lifecycle change.
                             pass
@@ -3453,7 +3498,9 @@ async def reconcile_run_group(
             preparation = await session.get(ExperimentWorkflowPreparation, attempt.preparation_id)
             normalized = json.loads(preparation.normalized_request_json) if preparation else {}
             launch_authority = normalized.get("launch_authority", {})
-            native_protein = launch_authority.get("schema") == "bms.protein-setup-launch-authority.v1"
+            native_protein = launch_authority.get("schema") == "bms.protein-setup-launch-authority.v1" or (
+                job.model_id in {'family_msa_protein', 'family_msa_nucleic'} and job.mode == 'family_msa'
+            )
             resource_usage = None
             resource_evidence = None
             try:
@@ -3505,13 +3552,14 @@ async def reconcile_run_group(
                 try:
                     from services.global_experiments.receipts import verify_and_link_terminal_outputs
 
-                    receipt.update(
-                        await verify_and_link_terminal_outputs(
-                            session,
-                            core_session,
-                            attempt_id=attempt.resource_id,
+                    async with session.begin_nested():
+                        receipt.update(
+                            await verify_and_link_terminal_outputs(
+                                session,
+                                core_session,
+                                attempt_id=attempt.resource_id,
+                            )
                         )
-                    )
                 except Exception as exc:
                     condition_code = str(getattr(exc, "code", "terminal_output_verification_pending"))
                     pending_receipt = {

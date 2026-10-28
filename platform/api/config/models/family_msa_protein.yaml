@@ -1,0 +1,17 @@
+id: family_msa_protein
+name: Protein family alignment
+version: "1"
+category: alignment
+description: CPU fixed-family protein multiple sequence alignment.
+container: msa_engines.sif
+inputs: [fasta]
+outputs: [fasta, json]
+modes:
+  - id: family_msa
+    name: Family alignment
+    description: Align a fixed protein sequence roster.
+    params: []
+params: []
+capabilities:
+  molecules: [protein]
+  engines: [mafft, famsa, muscle]

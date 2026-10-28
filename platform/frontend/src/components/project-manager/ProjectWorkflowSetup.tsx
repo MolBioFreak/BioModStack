@@ -7,6 +7,7 @@ import {
     getProjectWorkflowSetup,
     launchDomainRunGroup,
     listProteinProjectCapabilities,
+    listFamilyAlignmentCapabilities,
     prepareProjectWorkflowSetup,
     projectManagerErrorMessage,
     saveProjectWorkflowSetupDraft,
@@ -32,28 +33,32 @@ export function NewProjectExperimentDialog({ projectId, globalExperimentId, open
     const [objective, setObjective] = useState('');
     const [capabilityId, setCapabilityId] = useState('');
     const capabilities = useQuery({ queryKey: ['protein-project-setup-capabilities'], queryFn: ({ signal }) => listProteinProjectCapabilities(signal), enabled: open, retry: false });
-    const ready = useMemo(() => capabilities.data?.capabilities ?? [], [capabilities.data]);
+    const alignments = useQuery({ queryKey: ['family-alignment-project-setup-capabilities'], queryFn: ({ signal }) => listFamilyAlignmentCapabilities(signal), enabled: open, retry: false });
+    const ready = useMemo(() => [...(capabilities.data?.capabilities ?? []).map(item => ({ ...item, domain_kind: 'protein_in_silico' as const })), ...(alignments.data ?? [])], [capabilities.data, alignments.data]);
+    const selected = ready.find(item => item.capability_id === capabilityId);
     const create = useMutation({
         mutationFn: () => createProjectWorkflowSetup(projectId, {
             schema: 'bms.project-workflow-setup.create.v1',
             relationship_kind: globalExperimentId ? 'follow_up' : 'primary',
             global_experiment_id: globalExperimentId ?? null,
             ...(globalExperimentId ? {} : { experiment: { name: name.trim(), objective: objective.trim() } }),
-            domain_kind: 'protein_in_silico',
+            domain_kind: selected?.domain_kind ?? 'protein_in_silico',
             capability_id: capabilityId,
         }),
         onSuccess: (setup) => navigate(nativeDestination(setup)),
     });
     if (!open) return null;
-    const valid = Boolean(capabilityId) && (Boolean(globalExperimentId) || (Boolean(name.trim()) && Boolean(objective.trim())));
+    const valid = Boolean(selected) && (Boolean(globalExperimentId) || (Boolean(name.trim()) && Boolean(objective.trim())));
     return <div role="dialog" aria-modal="true" aria-label={globalExperimentId ? 'Add workflow' : 'New experiment'} className="fixed inset-0 z-[80] grid place-items-center bg-black/60 p-4">
         <section className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-2xl border border-border-primary bg-surface-secondary p-5 shadow-2xl">
             <div className="flex justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[.18em] text-accent">{globalExperimentId ? 'Related follow-up' : 'New experiment'}</p><h2 className="mt-1 text-lg font-semibold text-content">{globalExperimentId ? 'Add workflow' : 'What do you want to do?'}</h2></div><button type="button" onClick={onClose} aria-label="Close">×</button></div>
             {!globalExperimentId && <div className="mt-4 grid gap-3"><label className="text-xs font-semibold text-content-secondary">Experiment name<input aria-label="Experiment name" className={`${INPUT} mt-1`} value={name} onChange={(event) => setName(event.target.value)}/></label><label className="text-xs font-semibold text-content-secondary">Short objective<input aria-label="Short objective" className={`${INPUT} mt-1`} value={objective} onChange={(event) => setObjective(event.target.value)}/></label></div>}
-            <div className="mt-4"><p className="text-xs font-semibold text-content-secondary">Domain</p><p className="mt-1 rounded-lg border border-border-primary bg-surface px-3 py-2 text-sm text-content">Protein</p></div>
-            <fieldset className="mt-4 grid gap-2"><legend className="mb-2 text-xs font-semibold text-content-secondary">Choose one ready workflow</legend>{ready.map((item) => <label key={item.capability_id} className="flex cursor-pointer gap-3 rounded-xl border border-border-primary bg-surface p-3 text-sm text-content"><input type="radio" name="project-workflow" value={item.capability_id} checked={capabilityId === item.capability_id} onChange={() => setCapabilityId(item.capability_id)}/><span><strong>{item.label}</strong></span></label>)}</fieldset>
-            {!capabilities.isLoading && ready.length === 0 && <p role="status" className="mt-3 text-xs text-warning">No Project-ready Protein workflow is currently advertised by the server.</p>}
-            {(capabilities.error || create.error) && <p role="alert" className="mt-3 text-xs text-error">{projectManagerErrorMessage(capabilities.error ?? create.error)}</p>}
+            <fieldset className="mt-4 grid gap-2"><legend className="mb-2 text-xs font-semibold text-content-secondary">Choose one ready workflow</legend>{ready.map((item) => <label key={item.capability_id} className="flex cursor-pointer gap-3 rounded-xl border border-border-primary bg-surface p-3 text-sm text-content"><input type="radio" name="project-workflow" value={item.capability_id} checked={capabilityId === item.capability_id} onChange={() => setCapabilityId(item.capability_id)}/><span><strong>{item.label}</strong> · {item.domain_kind === 'ngs_molbio' ? 'Nucleic acid' : 'Protein'}</span></label>)}</fieldset>
+            {(capabilities.isLoading || alignments.isLoading) && <p role="status">Loading workflow choices…</p>}
+            {!capabilities.isLoading && !alignments.isLoading && !capabilities.error && !alignments.error && ready.length === 0 && <p role="status" className="mt-3 text-xs text-warning">No Project-ready workflows are currently advertised by the server.</p>}
+            {capabilities.error && <p role="alert" className="mt-3 text-xs text-error">Protein workflows: {projectManagerErrorMessage(capabilities.error)}</p>}
+            {alignments.error && <p role="alert" className="mt-3 text-xs text-error">Family alignment workflows: {projectManagerErrorMessage(alignments.error)}</p>}
+            {create.error && <p role="alert" className="mt-3 text-xs text-error">{projectManagerErrorMessage(create.error)}</p>}
             <div className="mt-5 flex justify-end gap-2"><button type="button" className={BUTTON} onClick={onClose}>Cancel</button><button type="button" className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white disabled:opacity-50" disabled={!valid || create.isPending} onClick={() => create.mutate()}>Continue to setup</button></div>
         </section>
     </div>;

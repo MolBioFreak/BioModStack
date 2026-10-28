@@ -1,0 +1,15 @@
+{
+  "name": "@bms/biojs-viewer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "node copy-vendor.mjs"
+  },
+  "keywords": [],
+  "type": "module",
+  "dependencies": {
+    "msa": "1.0.3"
+  },
+  "private": true
+}

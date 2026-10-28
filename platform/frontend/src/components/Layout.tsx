@@ -474,7 +474,7 @@ export function Layout({ children }: LayoutProps) {
     const showBioXpDevFeature = isBmsFeatureVisible(bmsFeatureState, 'bioxp', showDevFeatures, bmsFeatureState.known);
 
     const isActive = (path: string) => location.pathname === path
-        || (path === '/bioxp' && location.pathname.startsWith('/bioxp/'));
+        || ((path === '/bioxp' || path === '/alignments') && location.pathname.startsWith(`${path}/`));
     const isProjectManagerActive = location.pathname === '/projects' || location.pathname.startsWith('/projects/');
     const showSystemMenus = location.pathname !== '/ngs';
 
@@ -593,6 +593,15 @@ export function Layout({ children }: LayoutProps) {
                                 >
                                     Data Viewer
                                 </Link>
+                                <Link
+                                    to="/alignments"
+                                    data-bms-primary-nav-active={isActive('/alignments') ? 'true' : undefined}
+                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                    style={{
+                                        backgroundColor: isActive('/alignments') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/alignments') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                >Alignments</Link>
                                 <Link
                                     to={{ pathname: '/designer', search: location.search }}
                                     data-bms-primary-nav-active={isActive('/designer') ? 'true' : undefined}

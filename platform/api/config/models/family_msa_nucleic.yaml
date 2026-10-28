@@ -1,0 +1,17 @@
+id: family_msa_nucleic
+name: Nucleic acid family alignment
+version: "1"
+category: alignment
+description: CPU fixed-family DNA or RNA multiple sequence alignment.
+container: msa_engines.sif
+inputs: [fasta]
+outputs: [fasta, json]
+modes:
+  - id: family_msa
+    name: Family alignment
+    description: Align a fixed nucleic-acid sequence roster.
+    params: []
+params: []
+capabilities:
+  molecules: [dna, rna]
+  engines: [mafft, muscle, twilight]

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
     listProteinProjectCapabilities: vi.fn(),
+    listFamilyAlignmentCapabilities: vi.fn(),
     createProjectWorkflowSetup: vi.fn(),
     getProjectWorkflowSetup: vi.fn(),
     saveProjectWorkflowSetupDraft: vi.fn(),
@@ -51,6 +52,7 @@ function HookHarness() {
 beforeEach(() => {
     Object.values(api).forEach((mock) => mock.mockReset());
     api.listProteinProjectCapabilities.mockResolvedValue({ schema: 'bms.protein-project-workflow-picker.v1', capabilities: [ready] });
+    api.listFamilyAlignmentCapabilities.mockResolvedValue([{ capability_id: 'family_msa_nucleic', label: 'Nucleic acid family alignment', domain_kind: 'ngs_molbio' }]);
     api.createProjectWorkflowSetup.mockResolvedValue(setup);
     api.getProjectWorkflowSetup.mockResolvedValue(setup);
     api.saveProjectWorkflowSetupDraft.mockResolvedValue({ ...setup, generation: 3 });
@@ -61,6 +63,15 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); document.body.replaceChildren(); });
 
 describe('Project workflow setup', () => {
+    it('creates a nucleic alignment setup with its native domain and route', async () => {
+        api.createProjectWorkflowSetup.mockResolvedValue({ ...setup, setup_destination: '/alignments?model=family_msa_nucleic&mode=family_msa' });
+        await render(<NewProjectExperimentDialog projectId="project-1" globalExperimentId="experiment-1" open onClose={() => undefined}/>);
+        await waitUntil(() => expect(container.textContent).toContain('Nucleic acid family alignment'));
+        await act(async () => container.querySelector<HTMLInputElement>('input[value="family_msa_nucleic"]')?.click());
+        await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'Continue to setup')?.click());
+        await waitUntil(() => expect(api.createProjectWorkflowSetup).toHaveBeenCalledWith('project-1', expect.objectContaining({ domain_kind: 'ngs_molbio', capability_id: 'family_msa_nucleic' })));
+        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('/alignments?model=family_msa_nucleic&mode=family_msa&setup_context_id=setup-1&project_id=project-1'));
+    });
     it('lists only server-ready workflows and creates a primary setup before navigating to its native destination', async () => {
         await render(<NewProjectExperimentDialog projectId="project-1" open onClose={() => undefined}/>);
         await waitUntil(() => expect(container.textContent).toContain(ready.label));

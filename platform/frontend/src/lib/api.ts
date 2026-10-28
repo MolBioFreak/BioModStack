@@ -694,6 +694,7 @@ export interface RemoteArtifactProgress {
 }
 
 export interface ExecutionTarget {
+    can_remove_from_list?: boolean;
     artifact_inventory?: ObservedArtifactInventory | null;
     preload?: RemotePreloadProgress | null;
     progress?: RemoteArtifactProgress | null;
@@ -907,6 +908,9 @@ export const activateExecutionTarget = (providerInstanceId: string, endpoint?: {
         ...endpoint,
     });
 
+export const dismissExecutionTarget = (executionTargetId: string) =>
+    api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(executionTargetId)}/dismiss`);
+
 export const deactivateExecutionTarget = (executionTargetId: string) =>
     api.post<ExecutionTarget>(
         `/api/execution-targets/${encodeURIComponent(executionTargetId)}/deactivate`,
@@ -1042,6 +1046,7 @@ export const fetchJobs = async (params?: {
     include_children?: boolean;
     summary?: boolean;
     exclude_ngs?: boolean;
+    exclude_alignments?: boolean;
 }, previous?: { data: { jobs: Job[]; total: number }; headers: Record<string, unknown> }, signal?: AbortSignal) => {
     const etag = previous?.headers.etag;
     const response = await api.get<{ jobs: Job[]; total: number }>('/api/jobs', {

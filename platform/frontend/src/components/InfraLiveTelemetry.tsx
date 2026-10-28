@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tan
 import {
     activateExecutionTarget,
     deactivateExecutionTarget,
+    dismissExecutionTarget,
     discoverHardware,
     EXECUTION_TARGET_STORAGE_KEY,
     fetchExecutionTargets,
@@ -1359,6 +1360,10 @@ function InfraLiveTelemetryPanel({
             attachVastMutation.reset();
         }
     }, [attachVastMutation.isError, attachVastMutation.variables, attachVastMutation.reset, executionTargetsQuery.data, executionTargetsQuery.isError]);
+    const dismissVastMutation = useMutation({
+        mutationFn: dismissExecutionTarget,
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['execution-targets'] }),
+    });
     const detachVastMutation = useMutation({
         mutationFn: deactivateExecutionTarget,
         onSuccess: (response) => {
@@ -1505,7 +1510,7 @@ function InfraLiveTelemetryPanel({
                                     : target.state === 'inactive'
                                         ? 'Inactive'
                                         : 'Discovered';
-                        const canAttach = !isReady && !isAttaching && Boolean(target.host && target.port);
+                        const canAttach = !target.can_remove_from_list && !isReady && !isAttaching && Boolean(target.host && target.port);
                         return (
                             <div
                                 key={target.id}
@@ -1545,7 +1550,18 @@ function InfraLiveTelemetryPanel({
                                             {detachVastMutation.isPending ? 'Detaching…' : 'Detach'}
                                         </button>
                                     )}
-                                    {!isReady && (
+                                    {target.can_remove_from_list && (
+                                        <button
+                                            type="button"
+                                            onClick={() => dismissVastMutation.mutate(target.id)}
+                                            disabled={dismissVastMutation.isPending}
+                                            title="Hide this absent worker. Job history is retained; no rental is terminated."
+                                            className="shrink-0 whitespace-nowrap rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] px-3 py-2 text-xs font-semibold text-[var(--text-secondary)] disabled:opacity-50"
+                                        >
+                                            {dismissVastMutation.isPending && dismissVastMutation.variables === target.id ? 'Removing…' : 'Remove from list'}
+                                        </button>
+                                    )}
+                                    {!isReady && !target.can_remove_from_list && (
                                         <button
                                             type="button"
                                             onClick={() => attachVastMutation.mutate(target.provider_instance_id)}
@@ -1561,9 +1577,9 @@ function InfraLiveTelemetryPanel({
                     })}
                 </div>
             )}
-            {(executionTargetsQuery.isError || attachVastMutation.isError || detachVastMutation.isError) && (
+            {(executionTargetsQuery.isError || attachVastMutation.isError || detachVastMutation.isError || dismissVastMutation.isError) && (
                 <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200" role="alert">
-                    {attachVastMutation.isError ? 'Attach failed' : detachVastMutation.isError ? 'Detach failed' : 'Worker inventory failed'}: {vastOperationErrorMessage(attachVastMutation.error ?? detachVastMutation.error ?? executionTargetsQuery.error)}
+                    {dismissVastMutation.isError ? 'Remove failed' : attachVastMutation.isError ? 'Attach failed' : detachVastMutation.isError ? 'Detach failed' : 'Worker inventory failed'}: {vastOperationErrorMessage(dismissVastMutation.error ?? attachVastMutation.error ?? detachVastMutation.error ?? executionTargetsQuery.error)}
                 </div>
             )}
 
