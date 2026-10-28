@@ -23,8 +23,8 @@ type WorkflowGroup = { label: string; hint: string; choices: readonly WorkflowCh
 
 const WORKFLOW_GROUPS: readonly WorkflowGroup[] = [
     {
-        label: 'Start from raw signal',
-        hint: 'POD5 straight off the instrument.',
+        label: 'General DNA analysis and RNA basecalling',
+        hint: 'DNA accepts raw signal or existing reads; RNA starts from POD5.',
         choices: [
             {
                 key: 'dna',

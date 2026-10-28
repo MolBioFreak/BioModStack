@@ -122,7 +122,7 @@ async function remoteReview() { await click('Vast · Test worker'); await click(
 describe('ordinary NGS prepared launch through mounted consumers and real API transport', () => {
     it.each(['plasmidQc', 'dna'])('preserves tandem modkit settings for %s', async selectedWorkflow => {
         await mount({ ...base, selectedWorkflow, doradoModel: 'hac', modifiedBases: '6mA',
-            runModkit: true, modkitFilterThreshold: 0, runFastqQc: false,
+            runModkit: true, modkitFilterThreshold: 0, runFastqQc: true,
             ngsReferenceRevisionId: 'reference-revision-1', doradoDevice: 'cpu' });
         await click('Show advanced controls');
         const checkbox = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
@@ -131,7 +131,7 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         expect(container.querySelector<HTMLSelectElement>('#dorado-device')!.value).toBe('cpu');
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(submits()[0].body.params).toMatchObject({ run_modkit: true, modified_bases: '6mA',
-            modkit_filter_threshold: 0, run_fastq_qc: false, dorado_device: 'cpu' });
+            modkit_filter_threshold: 0, run_fastq_qc: true, dorado_device: 'cpu' });
         expect(submits()[0].body.pinned_gpu).toBeNull();
     });
     it('separates worker defaults from controller CPU and preserves explicit CPU across placement changes', async () => {
