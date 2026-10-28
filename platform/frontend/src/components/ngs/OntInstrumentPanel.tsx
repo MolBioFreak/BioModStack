@@ -720,7 +720,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
             <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4 text-[var(--text-primary)]">
                 <div>
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Add raw signal</h3>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Register POD5, SLOW5 or indexed BLOW5 in the selected Project. File provenance and validation stay in the ONT ledger. SLOW5 is retained as source data; waveform and Squigualiser views use validated indexed BLOW5.</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Register POD5, SLOW5 or indexed BLOW5 in the selected Project. File provenance and validation stay in the ONT ledger. SLOW5 and POD5 are kept as uploaded and can be converted to indexed BLOW5, which the waveform and Squigualiser views read.</p>
                 </div>
                 {!exactDomainExperimentId && rawSignalOnly ? <p role="status" className="text-sm text-[var(--text-secondary)]">Choose a Project (Projects button above) to import raw signal.</p> : null}
                 <div role="radiogroup" aria-label="Raw-signal source" className="flex flex-wrap gap-2">
@@ -850,7 +850,6 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                         className="ml-2 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-[var(--text-primary)]"
                                     >
                                         <option value="auto">Auto</option>
-                                        <option value="pod5">POD5</option>
                                         <option value="blow5">Indexed BLOW5</option>
                                     </select>
                                 </label>
@@ -917,14 +916,14 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                                         ) : null}
                                                     </div>
                                                 </details>
-                                                {representation.state !== 'ready' && (representation.format === 'pod5' || representation.format === 'blow5') ? (
+                                                {representation.state !== 'ready' && (representation.format === 'pod5' || representation.format === 'slow5' || representation.format === 'blow5') ? (
                                                     <button
                                                         type="button"
                                                         onClick={() => prepareBlow5.mutate(representation.representation_id)}
                                                         disabled={prepareBlow5.isPending}
                                                         className="mt-2 rounded border border-[color-mix(in_srgb,var(--accent-primary)_50%,transparent)] px-2 py-1 font-semibold text-[var(--accent-primary)] disabled:opacity-40"
                                                     >
-                                                        {representation.format === 'blow5' ? 'Validate indexed BLOW5' : 'Prepare indexed BLOW5'}
+                                                        {representation.format === 'blow5' ? 'Validate indexed BLOW5' : representation.format === 'slow5' ? 'Convert SLOW5 to indexed BLOW5' : 'Prepare indexed BLOW5'}
                                                     </button>
                                                 ) : null}
                                             </div>
