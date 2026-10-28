@@ -120,9 +120,10 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onSelectNode,
 }) {
     const context = useMemo(() => nativeProjectContext(summary), [summary]);
     const selectedPayload = summary.selection.summary?.domain_payload;
-    const nonNativeDomain = summary.selection.node_type === 'domain_experiment'
+    const nonNativeDomain = (summary.selection.node_type === 'domain_experiment'
         && selectedPayload !== null && typeof selectedPayload === 'object' && !Array.isArray(selectedPayload)
-        && selectedPayload.schema === 'bms.ngs-molbio-experiment.v1';
+        && selectedPayload.schema === 'bms.ngs-molbio-experiment.v1')
+        || ['bms.family-msa.family_msa_protein.adapter.v1', 'bms.family-msa.family_msa_nucleic.adapter.v1'].includes(String(summary.selection.summary?.adapter_id));
     const isNativeProject = true;
     const stateQuery = useQuery({
         queryKey: ['project-manager', 'native-domain-state', context?.domainExperimentId ?? null],

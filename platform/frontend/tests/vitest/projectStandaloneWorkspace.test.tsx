@@ -45,6 +45,15 @@ describe('standalone NGS/MolBio Projects', () => {
         expect(api.fetchMolBioNgsDomainState).not.toHaveBeenCalled();
         expect(api.fetchProjectHub).not.toHaveBeenCalled();
     });
+    it('does not request a DNA workspace when reopening a canonical alignment run', async () => {
+        const value = summary([project, experiment, workspace('d')]);
+        value.selection.node_type = 'workflow_run';
+        value.selection.summary = { adapter_id: 'bms.family-msa.family_msa_nucleic.adapter.v1' };
+        await render(value);
+        await settle();
+        expect(host.textContent).toContain('Workflow results');
+        expect(api.fetchMolBioNgsDomainState).not.toHaveBeenCalled();
+    });
     it('shows sequence intake guidance without requiring generic experiment setup', async () => {
         await render(summary([project]));
         expect(host.textContent).toContain('No DNA sequences attached yet');
