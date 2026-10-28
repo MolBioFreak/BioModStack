@@ -868,6 +868,32 @@ async def ont_basecall_devices() -> dict[str, Any]:
     return basecall_device_options()
 
 
+@router.post("/runs/{run_id}/generations/{observed_generation}/raw-signal/{representation_id}/restore-pod5", status_code=202)
+async def ont_restore_pod5(
+    run_id: str, observed_generation: int, representation_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Rebuild POD5 from a ready BLOW5 representation so it can be basecalled."""
+    from database import OntRawSignalRepresentation
+    from services import ont_pod5_restore
+    representation = await session.get(OntRawSignalRepresentation, representation_id)
+    if representation is None or representation.run_id != run_id or representation.observed_generation != observed_generation:
+        raise HTTPException(status_code=404, detail="BLOW5 representation not found for this run generation")
+    try:
+        return await ont_pod5_restore.request_restore(representation)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/generations/{observed_generation}/raw-signal/{representation_id}/restore-pod5")
+async def ont_restore_pod5_status(run_id: str, observed_generation: int, representation_id: str) -> dict[str, Any]:
+    from services import ont_pod5_restore
+    status = ont_pod5_restore.restore_status(representation_id)
+    if status.get("run_id") not in (None, run_id):
+        raise HTTPException(status_code=404, detail="restore belongs to a different run")
+    return status
+
+
 @router.get("/raw-signal/retention")
 async def ont_raw_signal_retention() -> dict[str, Any]:
     """Whether converted POD5 is kept beside its verified BLOW5."""

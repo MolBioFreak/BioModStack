@@ -5841,6 +5841,21 @@ export const fetchOntRawSignalRetention = () =>
     apiData(api.get<OntRawSignalRetentionSettings>('/api/ont/raw-signal/retention'));
 export const saveOntRawSignalRetention = (policy: OntRawSignalRetentionPolicy) =>
     apiData(api.put<OntRawSignalRetentionSettings>('/api/ont/raw-signal/retention', { policy }));
+export interface OntPod5RestoreStatus {
+    representation_id: string;
+    state: 'not_requested' | 'running' | 'ready' | 'failed';
+    directory?: string;
+    restored_read_count?: number;
+    expected_read_count?: number | null;
+    error?: string;
+}
+const ontPod5RestorePath = (runId: string, generation: number, representationId: string) =>
+    `/api/ont/runs/${encodeURIComponent(runId)}/generations/${generation}/raw-signal/${encodeURIComponent(representationId)}/restore-pod5`;
+export const requestOntPod5Restore = (runId: string, generation: number, representationId: string) =>
+    apiData(api.post<OntPod5RestoreStatus>(ontPod5RestorePath(runId, generation, representationId)));
+export const fetchOntPod5Restore = (runId: string, generation: number, representationId: string) =>
+    apiData(api.get<OntPod5RestoreStatus>(ontPod5RestorePath(runId, generation, representationId)));
+
 export const requestOntBlow5Preparation = (
     runId: string,
     observedGeneration: number,
