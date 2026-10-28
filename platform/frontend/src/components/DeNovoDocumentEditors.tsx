@@ -13,6 +13,11 @@ const EditorsContext = createContext<Actions | null>(null);
 export const useDeNovoDocumentEditors = () => useContext(EditorsContext);
 export function DeNovoDocumentEditorPanels() { return <>{useDeNovoDocumentEditors()?.panels}</>; }
 const key = (value: unknown) => JSON.stringify(value);
+// Source custody already selects the actual MODEL ID. Studio's model is a
+// frame ordinal in that single-model derivative, not the original MODEL ID.
+// Do not expand assembly 1 implicitly on opening an exact source document.
+const studioImportOptions = { parse_preset: 'minimal', assembly: 'asym', model: '1',
+    advanced_options: JSON.stringify({ load_standard_annotations: true, altloc: 'first' }) };
 
 /** One mount-local editor per opened source, shared by task and advanced source rows.
  * Sessions remain ephemeral; all successful captures use immutable source custody.
@@ -34,7 +39,7 @@ export function DeNovoDocumentEditors({ registry, sources, onAdopt, children }: 
     const pending = useRef(new Map<string, number>());
     const opened = useRef(editors); opened.current = editors;
     useEffect(() => { live.current = true; return () => { live.current = false; pending.current.clear(); }; }, []);
-    const open = async (slot: string, source: StructureSourceSelection, known?: StructureMaterialization) => {
+    const open = async (slot: string, source: StructureSourceSelection, _known?: StructureMaterialization) => {
         const existing = opened.current.find(editor => editor.slot === slot && editor.acceptedBindings.has(key(source)));
         if (existing) { setActive(previous => ({ ...previous, [slot]: existing.id })); return; }
         const token = ++sequence.current;
@@ -43,23 +48,24 @@ export function DeNovoDocumentEditors({ registry, sources, onAdopt, children }: 
         const stillCurrent = () => live.current && pending.current.get(slot) === token
             && current.current.generation === generation && key(current.current.sources?.[slot]) === key(source);
         try {
-            const receipt = known && key(known.source_structure) === key(source) ? known
-                : await materializeExactStructure({ ...source, output_format: 'native' });
+            // A display/native receipt is not necessarily the representation
+            // Studio consumes (PDB, encoded BCIF, or an unselected original).
+            // Reacquire through the exact source owner; never relabel its bytes.
+            const receipt = await materializeExactStructure({ ...source, output_format: 'cif' });
             if (!stillCurrent()) return;
             if (receipt.model_number == null && receipt.model_numbers.length > 1) {
                 throw new Error('Choose the source MODEL before opening its editable derivative. The saved source and Generate are unchanged.');
             }
-            const path = receipt.format === 'bcif' ? receipt.decoded_path : receipt.path;
+            const path = receipt.path;
             if (!path) throw new Error('The selected document has no editable decoded structure. Its original source is unchanged.');
             const response = await fetch(buildFileDownloadUrl(path), { credentials: 'same-origin', cache: 'no-store' });
             if (!response.ok) throw new Error(`Source readback failed (${response.status})`);
             const bytes = await response.arrayBuffer();
-            const expected = receipt.format === 'bcif' ? receipt.decoded_sha256 : receipt.sha256;
+            const expected = receipt.sha256;
             const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
             if (expected && digest !== expected) throw new Error('The editable source bytes changed after inspection. Reload the source; its saved selector is unchanged.');
             if (!stillCurrent()) return;
-            const filename = receipt.format === 'pdb' ? 'source.pdb' : 'source.cif';
-            const session = await importStudio(new File([bytes], filename));
+            const session = await importStudio(new File([bytes], 'source.cif'), studioImportOptions);
             if (!stillCurrent()) return;
             const editor = { id: token, slot, original: structuredClone(source), receipt, sessionId: session.session_id, acceptedBindings: new Set([key(source)]) };
             opened.current = [...opened.current, editor]; setEditors(opened.current);
@@ -105,7 +111,10 @@ function DocumentEditor({ editor, source, selected, registry, onAdopt, onClose }
             provenance: { editor: 'atomworks-studio', revision: snapshot.revision, name: snapshot.name,
                 issues: snapshot.issues, imported_source: editor.receipt.source_identity,
                 imported_model: editor.receipt.model_number ?? null,
-                imported_models: editor.receipt.model_numbers } });
+                imported_models: editor.receipt.model_numbers,
+                imported_original: { path: editor.receipt.original_path, sha256: editor.receipt.original_sha256 },
+                imported_document: { path: editor.receipt.path, sha256: editor.receipt.sha256, format: editor.receipt.format },
+                import_options: studioImportOptions } });
         // This is readback of the already frozen persisted bytes, not another
         // mutable Studio GET. Inspection failure does not change admission.
         try {
@@ -151,6 +160,8 @@ function DocumentEditor({ editor, source, selected, registry, onAdopt, onClose }
     };
     return <section className="space-y-3 rounded border border-slate-600 p-3" aria-label={`Molecular editor for ${editor.slot}`}>
         <h3>Editable document · {editor.slot}</h3>
+        <p className="text-xs">Source MODEL {editor.receipt.model_number ?? editor.receipt.model_numbers[0]} · exact source coordinates (no assembly expansion).
+            Studio uses its first-altloc policy; all original alternate locations remain in the retained source.</p>
         {!attached && <p role="status">This editor belongs to a replaced source. Its edits remain here for recovery and are not used by Save or Generate unless explicitly adopted.</p>}
         {dirty && <p role="status">Uncaptured edits. Save, Template, Project, Preview and Generate capture this exact document while it is attached.</p>}
         {captured && !dirty && <p className="text-xs">Immutable source captured. This does not mean a template, project or Job was saved.</p>}

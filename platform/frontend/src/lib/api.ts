@@ -1288,7 +1288,7 @@ export interface StructureSourceSelection {
     request_id?: string; candidate_id?: string;
     document?: { artifact_id?: string; target_state?: string; model?: number };
     candidate?: import('./binderSelectedRound').CandidateRef;
-    output_format?: 'native' | 'pdb'; model_number?: number; expected_sha256?: string;
+    output_format?: 'native' | 'pdb' | 'cif'; model_number?: number; expected_sha256?: string;
 }
 export type NativeGenerationSourceBinding = StructureSourceSelection | { kind: 'file'; path: string; expected_sha256?: string };
 export type NativeGenerationSourceBindings = Record<string, NativeGenerationSourceBinding>;

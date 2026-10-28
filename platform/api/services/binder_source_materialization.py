@@ -26,7 +26,7 @@ class StructureSourceRequest(BaseModel):
     request_id: str | None = None
     candidate_id: str | None = None
     document: CandidateDocument | None = None
-    output_format: Literal["native", "pdb"] = "native"
+    output_format: Literal["native", "pdb", "cif"] = "native"
     model_number: int | None = None
     expected_sha256: str | None = None
     candidate: CandidateRef | None = None
@@ -109,7 +109,8 @@ def _select_cif_model(columns: dict, number: int) -> dict:
     for key, values in columns.items():
         if key.startswith('_atom_site.'):
             result[key] = [values[i] for i in rows]
-    categories = {key.split('.')[0] for key in columns if key.startswith('_annotation_')}
+    categories = {key.split('.')[0] for key in columns
+                  if key.startswith(('_annotation_', '_condition_'))}
     # Native aliases can also appear as category names in historical files.
     categories.update(key.split('.')[0] for key in columns
                       if key.split('.')[0] in {'_SA_CWI', '_C_CRD', '_C_INTCRD', '_C_CRDGRP'})
@@ -144,6 +145,12 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
     from Bio.PDB.MMCIF2Dict import MMCIF2Dict
     from Bio.PDB.PDBExceptions import PDBConstructionException, PDBIOException
     from biotite import InvalidFileError
+
+    class RetainedCifIO(MMCIFIO):
+        def _requires_quote(self, value):
+            # Legal CIF empty text (e.g. PDB assembly details) is distinct
+            # from unknown/inapplicable. Bio.PDB indexes value[0] otherwise.
+            return value == '' or super()._requires_quote(value)
 
     suffix = suffix.lower()
     original = raw
@@ -188,7 +195,7 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
             columns = {'data_': next(iter(binary))}
             columns.update({'_' + name + '.' + field: col.as_array(str).tolist()
                             for name, category in block.items() for field, col in category.items()})
-            writer = MMCIFIO(); writer.set_dict(columns)
+            writer = RetainedCifIO(); writer.set_dict(columns)
             out = io.StringIO(); writer.save(out)
             decoded_bytes = out.getvalue().encode()
             decoded = destination / 'decoded.cif'
@@ -204,7 +211,7 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
             ledger = _cif_ledger(selected_columns)
             if model_number is not None:
                 consumed = destination / f'model-{model_number}.cif'
-                writer = MMCIFIO(); writer.set_dict(selected_columns)
+                writer = RetainedCifIO(); writer.set_dict(selected_columns)
                 out = io.StringIO(); writer.save(out)
                 consumed_bytes = out.getvalue().encode()
                 consumed.write_bytes(consumed_bytes)
@@ -279,6 +286,31 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
         except (PDBConstructionException, PDBIOException) as exc:
             raise ValueError(f'Selected CIF cannot be represented in PDB: {exc}') from exc
         consumed_bytes, consumed_format = consumed.read_bytes(), 'pdb'
+    if output_format == 'cif':
+        if native_format == 'pdb':
+            # Convert the ORIGINAL, not PDBIO's coordinate-only MODEL slice:
+            # it drops SEQRES, LINK/SSBOND and assembly records. Gemmi is the
+            # existing locked structural converter. Keep its full categories,
+            # then use the same exact MODEL selector as annotated native CIF.
+            import gemmi
+            converted = gemmi.read_pdb_string(raw.decode('utf-8'))
+            # Bio.PDB names an implicit (no MODEL record) frame 0, while
+            # Gemmi names it 1. Preserve this service's source MODEL identity.
+            for model, number in zip(converted, numbers, strict=True):
+                model.num = number
+            converted.setup_entities()
+            converted.assign_label_seq_id()
+            converted_columns = MMCIF2Dict(io.StringIO(converted.make_mmcif_document().as_string()))
+            if model_number is not None:
+                converted_columns = _select_cif_model(converted_columns, model_number)
+            writer = RetainedCifIO(); writer.set_dict(converted_columns)
+            out = io.StringIO(); writer.save(out)
+            consumed_bytes = out.getvalue().encode()
+            consumed = destination / 'derived.cif'
+            consumed.write_bytes(consumed_bytes)
+        elif consumed_format == 'bcif':
+            consumed, consumed_bytes = decoded, decoded_bytes
+        consumed_format = 'cif'
     # Hash each distinct byte domain once within this acquisition.
     hashes = {original: verified_original_sha256} if verified_original_sha256 is not None else {}
     def digest(payload):
