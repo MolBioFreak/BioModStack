@@ -14,7 +14,7 @@ it('saves and reopens host view state across renderer switches and retains confl
     if (conflict) throw new Error('409 conflict')
     revision = {id:'ds', head_generation:2, revision_id:'two', state:body.state}; return {data:revision}
   })
-  const Viewer = ({document}: AlignmentViewerProps) => <div data-testid="rows">{document.rows.map(r => r.rowId).join(',')}</div>
+  const Viewer = ({document, rendererState, onRendererStateChange, marks}: AlignmentViewerProps) => <><div data-testid="rows">{document.rows.map(r => r.rowId).join(',')}</div><button onClick={() => onRendererStateChange?.({scrollX: 42, colorScheme: 'taylor', hiddenColumns: [1]})}>Native state</button><output data-testid="native-state">{JSON.stringify({rendererState, marks})}</output></>
   const doc = {resultId:'art', rows:[{rowId:'a',label:'A',aligned:'A-C'}, {rowId:'b',label:'B',aligned:'ABC'}]}
   const div = document.createElement('div'); document.body.appendChild(div); let root = createRoot(div)
   const render = () => root.render(<AlignmentWorkspace projectId="p" receiptId="r" document={doc} viewers={{jbrowse:Viewer,biojs:Viewer}}/>)
@@ -28,12 +28,18 @@ it('saves and reopens host view state across renderer switches and retains confl
   await act(async () => button('Hide').click())
   await act(async () => select('Viewer','biojs'))
   expect(div.querySelector('[data-testid="rows"]')!.textContent).toBe('a')
+  await act(async () => button('Native state').click())
+  await act(async () => button('Add selected column mark').click())
+  await act(async () => (div.querySelector('input[type=checkbox]') as HTMLInputElement).click())
   await act(async () => input('Name','my view')); await act(async () => button('Save current viewer as view').click()); await act(async () => button('Save shared revision').click())
+  expect(revision.state.views[0].renderer_state).toEqual({scrollX: 42, colorScheme: 'taylor', hiddenColumns: [1]})
+  expect(revision.state.views[0].selected_marks).toEqual([revision.state.marks[0].id])
   expect(revision.state.views[0]).toMatchObject({row_order:['b','a'],hidden_row_ids:['b'],selected_row_id:'b',selected_column:1,viewer:'biojs'})
   await act(async () => root.unmount()); root = createRoot(div); await act(async () => render())
   await act(async () => input('Shared Dataset ID','ds')); await act(async () => button('Open shared state').click()); await act(async () => button('Apply viewer').click())
   expect(div.querySelector('[data-testid="rows"]')!.textContent).toBe('a'); expect(div.textContent).toContain('Row b, column 2')
   expect((div.querySelector('#alignment-renderer') as HTMLSelectElement).value).toBe('biojs')
+  expect(JSON.parse(div.querySelector('[data-testid="native-state"]')!.textContent!)).toEqual({rendererState: {scrollX: 42, colorScheme: 'taylor', hiddenColumns: [1]}, marks: revision.state.marks})
   conflict = true; await act(async () => input('Name','conflict draft')); await act(async () => button('Save current viewer as view').click()); await act(async () => button('Save shared revision').click())
   expect(div.textContent).toContain('409 conflict'); expect(div.textContent).toContain('conflict draft')
   await act(async () => root.unmount()); div.remove(); get.mockRestore(); put.mockRestore(); sessionStorage.clear()

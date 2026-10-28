@@ -1,35 +1,8 @@
-import { useLayoutEffect, useRef, useState } from 'react'
 import viewerCode from '../../../alignment-viewers/av2/dist/viewer.js?raw'
-import { anchorAt } from '../../lib/alignmentCoordinates'
 import type { AlignmentViewerProps } from './AlignmentWorkspace'
+import ViewerFrame from './ViewerFrame'
 
-/** Experimental: all document data is embedded once in the initial opaque srcdoc. */
 export default function Av2Viewer(props: AlignmentViewerProps) {
   const key = JSON.stringify([props.document.resultId, props.document.rows.map(r => [r.rowId, r.label, r.aligned])])
-  return <Frame key={key} {...props} />
-}
-
-function Frame({ document, onSelect }: AlignmentViewerProps) {
-  const frame = useRef<HTMLIFrameElement>(null)
-  const current = useRef({ document, onSelect })
-  current.current = { document, onSelect }
-  const [token] = useState(() => crypto.randomUUID() + crypto.randomUUID())
-  const [srcDoc] = useState(() => {
-    const payload = JSON.stringify({ rows: document.rows.map(({ aligned }) => ({ aligned })), token }).replace(/</g, '\\u003c')
-    // The host sends no rows after frame navigation. This does NOT prevent a
-    // compromised viewer script from exfiltrating rows by self-navigation.
-    const code = viewerCode.replace(/<\/script/gi, '<\\/script')
-    return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${token}'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; worker-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></head><body><div id="root"></div><script id="payload" type="application/json">${payload}</script><script nonce="${token}">${code}</script></body></html>`
-  })
-  useLayoutEffect(() => {
-    const receive = (e: MessageEvent) => {
-      if (e.source !== frame.current?.contentWindow || e.data?.channel !== 'bms-av2-inline-v1' || e.data?.token !== token || !Number.isInteger(e.data.index)) return
-      const row = current.current.document.rows[e.data.index]
-      const anchor = row && anchorAt(current.current.document, row.rowId, e.data.column)
-      if (anchor) current.current.onSelect(anchor)
-    }
-    window.addEventListener('message', receive)
-    return () => window.removeEventListener('message', receive)
-  }, [token])
-  return <section aria-label="AlignmentViewer 2"><p>Full alignment loaded; labels are synthetic. External selections and marks are not displayed.</p><iframe ref={frame} title="AlignmentViewer 2" sandbox="allow-scripts" srcDoc={srcDoc} style={{ width: '100%', height: 460, border: 0 }} /></section>
+  return <ViewerFrame key={key} {...props} code={viewerCode} blobWorkers channel="bms-av2-inline-v1" title="AlignmentViewer 2" notice="Native viewport, color and zoom restore; selection and marks use native search highlighting. Upstream has no arbitrary column-hiding API. Row-specific highlights on identical sequences are omitted, not propagated to other occurrences." />
 }
