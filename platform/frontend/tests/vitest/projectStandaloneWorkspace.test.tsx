@@ -35,11 +35,11 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(() => root.unmount()); client.clear(); host.remove(); });
 describe('standalone NGS/MolBio Projects', () => {
-    it('shows sequence intake guidance without requiring generic experiment setup', async () => {
+    it('guides an empty standalone project to create its experiment workspace', async () => {
         await render(summary([project]));
-        expect(host.textContent).toContain('No DNA sequences attached yet');
-        expect(host.textContent).not.toContain('New experiment');
-        expect(host.textContent).not.toContain('Global');
+        expect(host.textContent).toContain('Set up this project');
+        await act(() => button('New experiment').click());
+        expect(create).toHaveBeenCalled();
         expect(api.fetchProjectHub).not.toHaveBeenCalled();
     });
     it('opens the single exact workspace from the project root', async () => {
