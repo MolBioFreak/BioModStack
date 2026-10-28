@@ -481,9 +481,10 @@ async def get_generation_settings(model_id: str, mode: str, generator: str | Non
             from services.laproteina_evaluation import generation_settings
             return generation_settings(native_mode)
         if selected == 'laproteina':
-            from scripts.lib.laproteina_contract import settings_schema, evaluation_schema, PROFILES, resolve_profile, native_profile_defaults
+            from scripts.lib.laproteina_contract import settings_schema, evaluation_schema, PROFILES, resolve_profile, native_profile_defaults, native_task_catalog
             return {'model_id': selected, 'mode': native_mode, 'parameter_schema': settings_schema(),
                     'native_profile_defaults': native_profile_defaults(),
+                    'native_task_catalog': native_task_catalog(),
                     'evaluation_schema': evaluation_schema(),
                     'evaluation_scope': 'Separate laproteina/evaluate Job operation; not an implicit generation stage',
                     'profiles': {name: resolve_profile(name) for name in PROFILES}}

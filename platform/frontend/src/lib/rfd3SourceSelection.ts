@@ -1,3 +1,4 @@
+import type { StructureMaterialization } from './api';
 import type { Rfd4NativeSelectionIdentity, Rfd4NativeSelectionSource } from './rfd4NativeSelection';
 
 /** Original author selectors; the existing Python source-map owner lowers these. */
@@ -7,13 +8,31 @@ export type Rfd3SourceSelection = {
     /** Must be the actual active source, not an ancestral inspection document. */
     inputPath: string;
     sourceMapping?: string;
+    /** Exact materialization provenance; viewer documentId remains derivative-qualified. */
+    retainedBinding?: { receipt: StructureMaterialization; inputPath: string; sourceModel?: number };
+    sourceModel?: number;
 };
 export type Rfd3SelectionProjection = { residues?: string; atoms?: Record<string, string[]>; issue?: string };
 const clean = (v: unknown) => v == null || v === '.' || v === '?' ? '' : String(v);
 export function projectRfd3SourceSelection(visual: Rfd3SourceSelection): Rfd3SelectionProjection {
     const fail = (issue: string) => ({ issue });
     if (visual.sourceMapping !== 'bms.rfd3.source-map.v1') return fail('Visual adoption needs the existing source map. Historical mapping-off and manual selectors are unchanged.');
-    if (visual.inputPath !== visual.source.documentId) return fail('Selection receipt does not belong to the active source.');
+    if (visual.retainedBinding) {
+        const { receipt, inputPath, sourceModel } = visual.retainedBinding;
+        // The materializer owns original -> decoded -> selected ledger correspondence.
+        // Never relabel a viewer identity to the original path or trust a stale inspector.
+        const hash = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
+        const domains = [[receipt.native_path, receipt.native_sha256], [receipt.decoded_path, receipt.decoded_sha256], [receipt.selected_path, receipt.selected_sha256]];
+        if (visual.inputPath !== inputPath || inputPath !== receipt.original_path ||
+            receipt.source_structure?.path !== inputPath ||
+            visual.sourceModel !== sourceModel || sourceModel !== (receipt.model_number ?? undefined) ||
+            sourceModel !== receipt.source_structure.model_number ||
+            visual.source.documentId !== receipt.path || visual.source.source_positions !== receipt.source_positions ||
+            visual.source.model_number !== receipt.model_number || !hash(receipt.original_sha256) ||
+            !domains.some(([path, digest]) => path === receipt.path && digest === receipt.sha256 && hash(digest))) {
+            return fail('Selection receipt does not belong to the active original source / MODEL.');
+        }
+    } else if (visual.inputPath !== visual.source.documentId) return fail('Selection receipt does not belong to the active source.');
     const rows = visual.source.source_positions ?? [];
     const models = [...new Set(rows.map(r => Number(r.model_number)))];
     const model = visual.source.model_number ?? (models.length === 1 && (visual.source.model_numbers?.length ?? 1) === 1 ? models[0] : undefined);

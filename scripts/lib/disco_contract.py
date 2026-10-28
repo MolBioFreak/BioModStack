@@ -74,6 +74,24 @@ class Polymer(TypedDict):
     count: int
 
 
+class ProteinModification(TypedDict):
+    ptmPosition: int
+    ptmType: str
+
+
+class NucleicModification(TypedDict):
+    basePosition: int
+    modificationType: str
+
+
+class ProteinPolymer(Polymer, total=False):
+    modifications: list[ProteinModification]
+
+
+class NucleicPolymer(Polymer, total=False):
+    modifications: list[NucleicModification]
+
+
 class Ligand(TypedDict):
     # SMILES, CCD_<code>, or FILE_<portable-path>; no chemistry reconstruction.
     ligand: str
@@ -86,15 +104,15 @@ class Ion(TypedDict):
 
 
 class ProteinEntity(TypedDict):
-    proteinChain: Polymer
+    proteinChain: ProteinPolymer
 
 
 class DNAEntity(TypedDict):
-    dnaSequence: Polymer
+    dnaSequence: NucleicPolymer
 
 
 class RNAEntity(TypedDict):
-    rnaSequence: Polymer
+    rnaSequence: NucleicPolymer
 
 
 class LigandEntity(TypedDict):
