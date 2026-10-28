@@ -14,6 +14,7 @@ export const AtomWorksStudioHost = forwardRef<StudioCapture, AtomWorksStudioHost
     const generation = useRef(0);
     const selection = useRef(0);
     const [error, setError] = useState<string | null>(null);
+    const [expanded, setExpanded] = useState(false);
     // Render-time invalidation also covers A -> B -> A before an old export finishes.
     const previous = useRef(sessionId);
     if (previous.current !== sessionId) { previous.current = sessionId; generation.current++; selection.current++; }
@@ -39,10 +40,14 @@ export const AtomWorksStudioHost = forwardRef<StudioCapture, AtomWorksStudioHost
       window.addEventListener('message', receive);
       return () => window.removeEventListener('message', receive);
     }, [sessionId, onDirty, onReady]);
-    return <section aria-label="AtomWorks Studio editor">
+    return <section aria-label="AtomWorks Studio editor" style={expanded ? { position: 'fixed', inset: 0, zIndex: 1000, background: 'var(--bg-primary)', overflow: 'auto', padding: 8 } : { minWidth: 0 }}>
+      <button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}
+        style={{ minHeight: 44, padding: '8px 12px' }}>{expanded ? 'Return to form' : 'Expand molecular editor'}</button>
       {error && <p role="alert">Unsaved Studio edits: {error}. Existing saved source is unchanged; retry capture.</p>}
+      <div style={{ overflowX: 'auto' }}>
       <iframe key={sessionId} ref={frame} title="AtomWorks Studio"
         src={studioFrameUrl(sessionId, window.location.origin)}
-        style={{ width: '100%', height: '70vh', border: 0 }} />
+        style={{ width: '100%', minWidth: 320, height: expanded ? 'calc(100dvh - 68px)' : 'max(70vh, 800px)', minHeight: expanded ? 650 : undefined, border: 0 }} />
+      </div>
     </section>;
   });

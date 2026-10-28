@@ -59,6 +59,25 @@ describe('private Studio host', () => {
     await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals();
   });
 
+  it('expands the same live iframe without resetting its session or dirty generation', async () => {
+    const host = document.createElement('div'); document.body.append(host);
+    const root = createRoot(host); const ref = createRef<StudioCapture>();
+    await act(async () => root.render(<AtomWorksStudioHost ref={ref} sessionId="owned" />));
+    const frame = host.querySelector('iframe')!;
+    const button = host.querySelector('button')!;
+    const before = ref.current!.generation();
+    expect(frame.style.minWidth).toBe('320px');
+    await act(async () => button.click());
+    expect(host.querySelector('iframe')).toBe(frame);
+    expect(button.textContent).toBe('Return to form');
+    expect(host.querySelector('section')!.style.position).toBe('fixed');
+    expect(ref.current!.generation()).toBe(before);
+    await act(async () => button.click());
+    expect(host.querySelector('iframe')).toBe(frame);
+    expect(ref.current!.generation()).toBe(before);
+    await act(async () => root.unmount()); host.remove();
+  });
+
   it('rejects stale A -> B -> A capture even if final session id matches', async () => {
     const host = document.createElement('div'); document.body.append(host);
     const root = createRoot(host); const ref = createRef<StudioCapture>();
