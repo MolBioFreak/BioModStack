@@ -80,6 +80,7 @@ async def app(scope, receive, send):
     if scope['type'] == 'lifespan':
         await receive()
         if os.environ['TEST_PHASE'] == 'prelistener':
+            Path('startup-entered').touch()
             while True: await asyncio.sleep(.05)
         await send({'type': 'lifespan.startup.complete'})
         await receive()
@@ -135,6 +136,7 @@ async def app(scope, receive, send):
                 assert Path(owner["python"]).parent.parent == Path(env["UV_PROJECT_ENVIRONMENT"])
                 assert owner["virtual_env"] == env["UV_PROJECT_ENVIRONMENT"]
             if phase == "prelistener":
+                wait_until(lambda: (api / "startup-entered").exists())
                 assert not ready()
             else:
                 wait_until(ready)
