@@ -1669,7 +1669,12 @@ class OntSignalWorker:
         state = identity.get("authority_state")
         if state == "legacy_unknown":
             if (
-                identity.get("reason_code") != "producer_runtime_provenance_unavailable"
+                # Standalone basecall jobs have no instrument lineage; like external BAMs
+                # they are accepted only through the exhaustive independent validation above.
+                identity.get("reason_code") not in {
+                    "producer_runtime_provenance_unavailable",
+                    "producer_lineage_unavailable",
+                }
                 or identity.get("requires_independent_move_validation") is not True
             ):
                 raise RuntimeError("legacy move-source authority is incomplete")
