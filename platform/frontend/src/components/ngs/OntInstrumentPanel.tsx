@@ -13,6 +13,8 @@ import {
     fetchOntRawSignalCapabilities,
     fetchOntRawSignalWaveform,
     requestOntBlow5Preparation,
+    fetchOntRawSignalRetention,
+    saveOntRawSignalRetention,
     requestOntRawSignalWaveform,
     registerOntExternalPod5Candidate,
     importOntRawSignalUpload,
@@ -406,6 +408,17 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
         rawUploadDirectory.current = `inputs/ont-raw-signal/${crypto.randomUUID()}`;
     }, [exactDomainExperimentId, importRawSignal.reset]);
 
+    const retentionQuery = useQuery({
+        queryKey: ['ont-raw-signal-retention'],
+        queryFn: fetchOntRawSignalRetention,
+        staleTime: 60_000,
+    });
+    const saveRetention = useMutation({
+        mutationFn: saveOntRawSignalRetention,
+        onSuccess: (settings) => queryClient.setQueryData(['ont-raw-signal-retention'], settings),
+    });
+    const removePod5 = retentionQuery.data?.remove_pod5_after_verified_blow5 === true;
+
     const prepareBlow5 = useMutation({
         mutationFn: async (sourceRepresentationId: string) => {
             if (!effectiveSelectedRunGeneration) throw new Error('Select an exact ONT generation.');
@@ -722,6 +735,21 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Add raw signal</h3>
                     <p className="mt-1 text-xs text-[var(--text-secondary)]">Register POD5, SLOW5 or indexed BLOW5 in the selected Project. File provenance and validation stay in the ONT ledger. SLOW5 and POD5 are kept as uploaded and can be converted to indexed BLOW5, which the waveform and Squigualiser views read.</p>
                 </div>
+                <label className="flex items-start gap-2 text-xs text-[var(--text-secondary)]">
+                    <input
+                        type="checkbox"
+                        aria-label="Remove POD5 after verified BLOW5"
+                        checked={removePod5}
+                        disabled={!retentionQuery.data || saveRetention.isPending}
+                        onChange={(event) => saveRetention.mutate(event.target.checked ? 'blow5_only' : 'pod5_and_blow5')}
+                        className="mt-0.5"
+                    />
+                    <span>
+                        <span className="font-semibold text-[var(--text-primary)]">Remove POD5 after a verified BLOW5 is made</span>
+                        {' '}Saves roughly half the raw-signal storage. Applies to conversions that finish after this is turned on. The BLOW5 keeps the full signal for waveform and squiggle views; basecalling reads POD5, so re-basecalling a removed run needs its POD5 restored from the BLOW5.
+                    </span>
+                </label>
+                {saveRetention.isError ? <p role="alert" className="text-xs text-[var(--error)]">Could not save the POD5 setting.</p> : null}
                 {!exactDomainExperimentId && rawSignalOnly ? <p role="status" className="text-sm text-[var(--text-secondary)]">Choose a Project (Projects button above) to import raw signal.</p> : null}
                 <div role="radiogroup" aria-label="Raw-signal source" className="flex flex-wrap gap-2">
                     {([
@@ -877,7 +905,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                             <div key={representation.representation_id} className="space-y-2 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2">
                                                 <div>
                                                     <span className="font-semibold text-[var(--text-primary)]">{representation.format.toUpperCase()}</span>
-                                                    {' '}· {representation.role} · {representation.state} · {representation.reason_code}
+                                                    {' '}· {representation.role} · {representation.state} · {representation.reason_code}{representation.source_removed ? ' · POD5 removed (signal kept in BLOW5)' : ''}
                                                 </div>
                                                 <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)]">
                                                     <summary className="cursor-pointer select-none px-3 py-2 font-semibold text-[var(--text-secondary)]">
@@ -916,7 +944,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData, rawSignalOnly = fals
                                                         ) : null}
                                                     </div>
                                                 </details>
-                                                {representation.state !== 'ready' && (representation.format === 'pod5' || representation.format === 'slow5' || representation.format === 'blow5') ? (
+                                                {representation.state !== 'ready' && !representation.source_removed && (representation.format === 'pod5' || representation.format === 'slow5' || representation.format === 'blow5') ? (
                                                     <button
                                                         type="button"
                                                         onClick={() => prepareBlow5.mutate(representation.representation_id)}

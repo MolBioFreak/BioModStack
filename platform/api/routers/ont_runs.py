@@ -855,6 +855,24 @@ async def ont_get_instrument_run(run_id: str) -> dict[str, Any]:
     return record
 
 
+class OntRawSignalRetentionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy: Literal["pod5_and_blow5", "blow5_only"]
+
+
+@router.get("/raw-signal/retention")
+async def ont_raw_signal_retention() -> dict[str, Any]:
+    """Whether converted POD5 is kept beside its verified BLOW5."""
+    return ont_raw_signal.retention_settings()
+
+
+@router.put("/raw-signal/retention")
+async def ont_set_raw_signal_retention(request: OntRawSignalRetentionRequest) -> dict[str, Any]:
+    """Applies to conversions that finish after the change; existing files are untouched."""
+    return ont_raw_signal.save_raw_signal_retention_policy(request.policy)
+
+
 @router.get("/raw-signal/external-pod5-candidates")
 async def ont_list_external_pod5_candidates() -> dict[str, Any]:
     """List path-opaque POD5 candidates from the single governed server root."""
