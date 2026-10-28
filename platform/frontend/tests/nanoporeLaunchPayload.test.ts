@@ -35,7 +35,7 @@ test('NGS operator stage payload keeps workflow-owned rules explicit and omits i
     }), { run_fastq_qc: false, run_assembly: true });
 
     assert.deepEqual(buildNanoporeOperatorStageParams({
-        selectedWorkflow: 'bamQc',
+        selectedWorkflow: 'plasmidQc',
         inputSource: 'bam',
         runFastqQc: false,
         runAssembly: false,

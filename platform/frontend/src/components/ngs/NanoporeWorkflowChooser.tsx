@@ -1,4 +1,4 @@
-import { normalizeNanoporeWorkflowChoice, type WorkflowKey } from '../../lib/nanoporeWorkflow';
+import type { WorkflowKey } from '../../lib/nanoporeWorkflow';
 export type { WorkflowKey } from '../../lib/nanoporeWorkflow';
 
 type WorkflowBadge = 'REVIEW ONLY';
@@ -14,48 +14,68 @@ type WorkflowChoice = {
 const WORKFLOW_PANEL = 'rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 shadow-[var(--shadow-card)]';
 
 const PLASMID_METHODS = [
-    { key: 'clone', title: 'Assembly and validation report', description: 'Vendor wf-clone-validation report, assembly and construct evidence.' },
-    { key: 'plasmidQc', title: 'Plasmid read QC', description: 'BNS read QC, alignment and multimer evidence without the vendor assembly report.' },
+    { key: 'clone', title: 'Assembly and validation report', description: 'Vendor wf-clone-validation report, de novo assembly and construct evidence.' },
+    { key: 'plasmidQc', title: 'Plasmid read QC', description: 'Per-base support, consensus and multimer evidence against the saved plasmid, from POD5, BAM or FASTQ. No vendor assembly report.' },
     { key: 'constructScreening', title: 'Construct screening', description: 'Compare reads against the saved construct and review screening results.' },
 ] as const;
 
-const WORKFLOW_CHOICES: readonly WorkflowChoice[] = [
+type WorkflowGroup = { label: string; hint: string; choices: readonly WorkflowChoice[] };
+
+const WORKFLOW_GROUPS: readonly WorkflowGroup[] = [
     {
-        key: 'clone',
-        title: 'Plasmid analysis',
-        input: 'POD5, BAM, or FASTQ + saved MolBio revision',
-        result: 'Choose an assembly report, read QC, or construct screening below',
+        label: 'Start from raw signal',
+        hint: 'POD5 straight off the instrument.',
+        choices: [
+            {
+                key: 'dna',
+                title: 'Basecall DNA',
+                input: 'DNA POD5',
+                result: 'DNA reads, with optional paired strands, barcodes and modification calls',
+            },
+            {
+                key: 'rna',
+                title: 'Basecall RNA',
+                input: 'RNA POD5',
+                result: 'RNA004 simplex calls BAM, trimming and provenance',
+            },
+        ],
     },
     {
-        key: 'fastqQc',
-        title: 'ONT FASTQ QC',
-        input: 'FASTQ + saved MolBio revision',
-        result: 'Read and alignment QC only; no clone report',
+        label: 'Analyse reads against a saved sequence',
+        hint: 'Needs a saved MolBio sequence revision.',
+        choices: [
+            {
+                key: 'clone',
+                title: 'Plasmid analysis',
+                input: 'POD5, BAM, or FASTQ + saved MolBio revision',
+                result: 'Assembly report, plasmid read QC or construct screening (choose below)',
+            },
+            {
+                key: 'fastqQc',
+                title: 'FASTQ read QC',
+                input: 'FASTQ + saved MolBio revision',
+                result: 'Read-length, quality and alignment QC only. No consensus or per-base support; use Plasmid analysis for those',
+            },
+            {
+                key: 'modified',
+                title: 'Methylation analysis',
+                input: 'DNA POD5 or modification-tagged BAM + saved reference',
+                result: 'Per-site methylation tables and modification summaries',
+            },
+        ],
     },
     {
-        key: 'dna',
-        title: 'Basecall DNA',
-        input: 'DNA POD5',
-        result: 'DNA reads, with optional paired strands, barcodes and modification calls',
-    },
-    {
-        key: 'rna',
-        title: 'Basecall RNA',
-        input: 'RNA POD5',
-        result: 'RNA004 simplex calls BAM, trimming and provenance',
-    },
-    {
-        key: 'modified',
-        title: 'Methylation analysis',
-        input: 'DNA POD5 or modification-tagged BAM + saved reference',
-        result: 'Per-site methylation tables and modification summaries',
-    },
-    {
-        key: 'pooledAssignment',
-        title: 'Assign pooled FASTQ references',
-        input: 'FASTQ + 2-96 exact saved revisions',
-        result: 'Review-only assignment; explicit target release gates consensus',
-        badge: 'REVIEW ONLY',
+        label: 'Review pooled samples',
+        hint: 'Assign reads from a pooled FASTQ to candidate sequences.',
+        choices: [
+            {
+                key: 'pooledAssignment',
+                title: 'Assign pooled FASTQ references',
+                input: 'FASTQ + 2-96 exact saved revisions',
+                result: 'Review-only assignment; explicit target release gates consensus',
+                badge: 'REVIEW ONLY',
+            },
+        ],
     },
 ];
 
@@ -71,7 +91,7 @@ export function NanoporeWorkflowChooser({
     selectedWorkflow,
     onSelect,
 }: NanoporeWorkflowChooserProps) {
-    const current = normalizeNanoporeWorkflowChoice(selectedWorkflow);
+    const current = selectedWorkflow;
     const plasmidMethod = PLASMID_METHODS.find((method) => method.key === current);
     return (
         <section
@@ -84,8 +104,14 @@ export function NanoporeWorkflowChooser({
                     Choose a task, then configure its input and options below.
                 </p>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                {WORKFLOW_CHOICES.map((workflow) => {
+            {WORKFLOW_GROUPS.map((group) => (
+                <div key={group.label} className="space-y-2" role="group" aria-label={group.label}>
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{group.label}</h3>
+                        <span className="text-xs text-[var(--text-secondary)]">{group.hint}</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                        {group.choices.map((workflow) => {
                     const selected = workflow.key === 'clone' ? Boolean(plasmidMethod) : current === workflow.key;
                     return (
                         <button
@@ -109,7 +135,9 @@ export function NanoporeWorkflowChooser({
                         </button>
                     );
                 })}
-            </div>
+                    </div>
+                </div>
+            ))}
             {plasmidMethod && <div className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
                 <label className="block text-sm font-medium text-[var(--text-primary)]">
                     Plasmid analysis method

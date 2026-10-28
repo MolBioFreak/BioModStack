@@ -1,4 +1,4 @@
-import type { WorkflowKey } from '../components/ngs/NanoporeWorkflowChooser';
+import type { WorkflowKey } from './nanoporeWorkflow';
 
 export type NanoporeOperatorStageSettings = {
     selectedWorkflow: WorkflowKey;
@@ -15,7 +15,6 @@ export function buildNanoporeOperatorStageParams({
 }: NanoporeOperatorStageSettings): Record<string, boolean> {
     const params: Record<string, boolean> = {};
     const fastqQcApplies = selectedWorkflow === 'plasmidQc'
-        || selectedWorkflow === 'bamQc'
         || selectedWorkflow === 'fastqQc'
         || ((selectedWorkflow === 'clone' || selectedWorkflow === 'constructScreening') && inputSource === 'fastq');
     if (fastqQcApplies) params.run_fastq_qc = runFastqQc;

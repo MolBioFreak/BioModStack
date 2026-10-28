@@ -43,7 +43,7 @@ import { useGlobalExperimentContext } from './experiments/GlobalExperimentContex
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { NanoporeWorkflowChooser, type WorkflowKey } from './ngs/NanoporeWorkflowChooser';
 import { buildNanoporeOperatorStageParams } from '../lib/nanoporeLaunchPayload';
-import { normalizeNanoporeWorkflowChoice } from '../lib/nanoporeWorkflow';
+import { isNanoporeWorkflowKey } from '../lib/nanoporeWorkflow';
 import { Pod5Upload } from './ngs/Pod5Upload';
 import { ReferenceSequenceInputs } from './ngs/ReferenceSequenceInputs';
 import { BarcodeSampleSheet } from './ngs/BarcodeSampleSheet';
@@ -595,7 +595,7 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse, e
             <div className="flex flex-wrap items-center gap-2">
                 <button type="button" onClick={() => setTargets((previous) => previous.length < 96 ? [...previous, createPooledTarget(previous.length)] : previous)} disabled={targets.length >= 96} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-primary)] disabled:opacity-40">Add target</button>
                 <button type="button" onClick={() => setTargets((previous) => previous.length > 2 ? previous.slice(0, -1) : previous)} disabled={targets.length <= 2} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-secondary)] disabled:opacity-40">Remove last target</button>
-                <button type="button" onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending} className="rounded bg-blue-600 px-3 py-1.5 text-xs text-[var(--text-on-accent)] disabled:cursor-not-allowed disabled:opacity-40">{submitMutation.isPending ? 'Submitting pooled assignment…' : 'Submit pooled assignment'}</button>
+                <button type="button" onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending} className="rounded bg-[var(--accent-primary)] px-3 py-1.5 text-xs text-[var(--text-on-accent)] disabled:cursor-not-allowed disabled:opacity-40">{submitMutation.isPending ? 'Submitting pooled assignment…' : 'Submit pooled assignment'}</button>
                 {message && <span className="text-xs text-[var(--text-secondary)]">{message}</span>}
             </div>
         </section>
@@ -645,7 +645,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [jobName, setJobName] = useState(initialValues?.jobName as string || '');
     const [inputSource, setInputSource] = useState<InputSource>(initialValues?.inputSource as InputSource || 'pod5');
     const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowKey>(() => {
-        if (typeof initialValues?.selectedWorkflow === 'string') return normalizeNanoporeWorkflowChoice(initialValues.selectedWorkflow as WorkflowKey);
+        if (isNanoporeWorkflowKey(initialValues?.selectedWorkflow)) return initialValues.selectedWorkflow;
         if (initialValues?.selectedWorkflow === 'constructScreening' || initialValues?.ontWorkflowId === 'ont_construct_screening') return 'constructScreening';
         if (initialValues?.selectedWorkflow === 'fastqQc' || initialValues?.ontWorkflowId === 'ont_fastq_qc') return 'fastqQc';
         if (initialValues?.runAssembly === true || initialValues?.ontWorkflowId === 'wf_clone_validation') return 'clone';
@@ -657,7 +657,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (initialValues?.runModkit === true) return 'modified';
         return 'dna';
     });
-    const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
+    const [workflowNoticeDismissed, setWorkflowNoticeDismissed] = useState(false);
+    const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'modified';
     const [pod5Dir, setPod5Dir] = useState(initialValues?.pod5Dir as string || '');
     const [pod5Uploading, setPod5Uploading] = useState(false);
     const [bamPath, setBamPath] = useState(initialValues?.bamPath as string || '');
@@ -726,7 +727,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // ============================================================================
     const [doradoModel, setDoradoModel] = useState<DoradoModel>(initialValues?.doradoModel as DoradoModel || 'sup');
     const [doradoMolecule, setDoradoMolecule] = useState<DoradoMolecule>(initialValues?.doradoMolecule as DoradoMolecule || (selectedWorkflow === 'rna' ? 'rna' : 'dna'));
-    const [doradoMode, setDoradoMode] = useState<DoradoMode>(initialValues?.doradoMode as DoradoMode || (initialValues?.selectedWorkflow === 'duplex' ? 'duplex' : 'simplex'));
+    const [doradoMode, setDoradoMode] = useState<DoradoMode>(initialValues?.doradoMode as DoradoMode || 'simplex');
     // Absence is distinct from an explicit historical/operator declaration.
     const [wfCloneBasecallerModel, setWfCloneBasecallerModel] = useState<string | undefined>(
         initialValues?.wfCloneBasecallerModel as string | undefined,
@@ -737,7 +738,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         ? pinnedBasecallerModel : cloneModelSchema.default;
     const declaredCloneModel = wfCloneBasecallerModel ?? recommendedCloneModel;
     const [duplexPairs, setDuplexPairs] = useState(initialValues?.duplexPairs as string || '');
-    const [barcodeKit, setBarcodeKit] = useState<'' | 'SQK-RBK114-96'>((initialValues?.barcodeKit as '' | 'SQK-RBK114-96' | undefined) ?? (initialValues?.selectedWorkflow === 'barcode' ? 'SQK-RBK114-96' : ''));
+    const [barcodeKit, setBarcodeKit] = useState<'' | 'SQK-RBK114-96'>((initialValues?.barcodeKit as '' | 'SQK-RBK114-96' | undefined) ?? '');
     const [sampleSheet, setSampleSheet] = useState(initialValues?.sampleSheet as string || '');
     const [sampleSheetBlocker, setSampleSheetBlocker] = useState('');
     const [modifiedBases, setModifiedBases] = useState<ModifiedBases>(initialValues?.modifiedBases as ModifiedBases || 'none');
@@ -963,7 +964,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         selectedManagedReferenceRevisionId,
     ]);
 
-    const usesExpectedPlasmidSize = ['clone', 'plasmidQc', 'constructScreening', 'fastqQc', 'bamQc'].includes(selectedWorkflow);
+    const usesExpectedPlasmidSize = ['clone', 'plasmidQc', 'constructScreening', 'fastqQc'].includes(selectedWorkflow);
     const hasValidExpectedPlasmidSize = autoExpectedPlasmidSize || isIntegerInRange(Number(expectedPlasmidSize), 1, FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP);
     const hasValidFastqNumericControls = useMemo(() => (
         hasValidExpectedPlasmidSize
@@ -1049,7 +1050,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     ]);
     const canRunModkit = selectedWorkflow === 'modified';
     const fastqQcSettingAvailable = selectedWorkflow === 'plasmidQc'
-        || selectedWorkflow === 'bamQc'
         || selectedWorkflow === 'fastqQc'
         || ((selectedWorkflow === 'clone' || selectedWorkflow === 'constructScreening') && inputSource === 'fastq');
     const cloneValidationControlsActive = selectedWorkflow === 'clone'
@@ -1095,9 +1095,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         ? 'CONSTRUCT SCREENING'
         : selectedWorkflow === 'plasmidQc'
             ? 'PLASMID QC'
-            : selectedWorkflow === 'bamQc'
-                ? 'BAM QC'
-                : selectedWorkflow === 'fastqQc'
+            : selectedWorkflow === 'fastqQc'
                     ? 'ONT FASTQ QC'
                     : selectedWorkflow === 'clone'
                         ? 'CLONE VALIDATION'
@@ -1178,7 +1176,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             ? 'ont_construct_screening'
             : selectedWorkflow === 'fastqQc'
                 ? 'ont_fastq_qc'
-                : selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc'
+                : selectedWorkflow === 'plasmidQc'
             ? 'ont_plasmid_qc'
             : selectedWorkflow === 'rna'
                 ? 'ont_basecall_rna'
@@ -1251,7 +1249,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     wf_clone_expected_identity: wfCloneExpectedIdentity,
                     ...(wfCloneSample.trim() && { wf_clone_sample: wfCloneSample.trim() }),
                 }),
-                ...((selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc') && {
+                ...((selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc') && {
                     samtools_consensus_config: samtoolsConsensusConfig,
                     enable_rotating_reference_frames: enableRotatingReferenceFrames,
                     rotation_scan_step_bp: rotationScanStepBp,
@@ -1465,14 +1463,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             setBarcodeKit('');
             return;
         }
-        if (workflow === 'bamQc') {
-            setInputSource('bam');
-            setRunAssembly(false);
-            setRunFastqQc(false);
-            setRunModkit(false);
-            setBarcodeKit('');
-            return;
-        }
         if (workflow === 'pooledAssignment') {
             setInputSource('fastq');
             setRunAssembly(false);
@@ -1516,9 +1506,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             ? [{ key: 'pod5' as const, label: 'POD5 raw reads' }, { key: 'bam' as const, label: 'Existing BAM with MM/ML tags' }]
             : selectedWorkflow === 'pooledAssignment' || selectedWorkflow === 'fastqQc'
                 ? [{ key: 'fastq' as const, label: 'FASTQ reads' }]
-                : selectedWorkflow === 'bamQc'
-                    ? [{ key: 'bam' as const, label: 'Existing BAM' }]
-                    : [{ key: 'pod5' as const, label: 'POD5 raw reads' }];
+                : [{ key: 'pod5' as const, label: 'POD5 raw reads' }];
     return (
         <div className="nanopore-template mx-auto w-full max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4 text-[var(--text-primary)] shadow-[var(--shadow-card)] lg:p-6">
             {review && review.key === requestKey && <ExecutionPlanApproval preview={review.prepared.preview} finish={review.finish} />}
@@ -1543,9 +1531,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 </div>
             </div>
             {/* Operator-first workflow chooser: do not make users infer a workflow from low-level switches. */}
+            {initialValues?.workflowUnrecognized === true && !workflowNoticeDismissed && (
+                <div role="status" className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_45%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-sm text-[var(--text-primary)]">
+                    This saved job used workflow <code>{String(initialValues.ontWorkflowId || 'unknown')}</code>, which this version does not recognize. The form below shows the closest available workflow; check the selection before submitting.
+                </div>
+            )}
             <NanoporeWorkflowChooser
                 selectedWorkflow={selectedWorkflow}
-                onSelect={selectWorkflow}
+                onSelect={(workflow) => { setWorkflowNoticeDismissed(true); selectWorkflow(workflow); }}
             />
 
             <details className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" open={executionTargetId ? true : undefined}>
@@ -1596,7 +1589,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         </select>
                     </label>
                     )}
-                    {!executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1 && <p role="alert" className="mt-2 text-xs text-amber-200">This saved job contains multiple GPU pins. Select one GPU or Scheduler auto before submitting this NGS job.</p>}
+                    {!executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1 && <p role="alert" className="mt-2 text-xs text-[var(--warning)]">This saved job contains multiple GPU pins. Select one GPU or Scheduler auto before submitting this NGS job.</p>}
                 </div>
 
             {/* Data Source */}
@@ -1738,7 +1731,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         <h3 className="text-sm font-semibold text-[var(--text-primary)]">Expected sequence for this analysis</h3>
                         <p className="mt-1 text-xs text-[var(--text-secondary)]">{requiresReference ? 'Choose a Project sequence below, or add expected sequences by pasting, browsing files, or selecting saved MolBio sequences.' : 'Reference-free basecalling is supported. Optionally choose an attached reference for alignment; Experiment and state grouping are retained.'}</p>
                         {requiresReference && exactDomainExperimentId && molbioSequences.length === 0 && !molbioSequencesQuery.isLoading && !exactStateRevisionQuery.isLoading && (
-                            <p role="alert" className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">This Project has no expected sequences yet. Add one or several below.</p>
+                            <p role="alert" className="mt-2 rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-2 text-xs text-[var(--warning)]">This Project has no expected sequences yet. Add one or several below.</p>
                         )}
                     </div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -1771,7 +1764,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         </label>
                     </div>
                     {projectSequenceSummaries.isError && <p role="alert" className="mt-2 text-xs text-[var(--text-error)]">Some Project sequences could not be loaded. <button type="button" onClick={() => void projectSequenceSummaries.refetch()}>Retry Project sequences</button></p>}
-                    {molbioRevisionsQuery.isError && <p className="mt-2 text-xs text-rose-400">Unable to load revisions for this sequence.</p>}
+                    {molbioRevisionsQuery.isError && <p className="mt-2 text-xs text-[var(--error)]">Unable to load revisions for this sequence.</p>}
                     {selectedMolbioSequence && selectedMolbioRevision && (
                         <div className="mt-3 grid grid-cols-2 gap-2 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/50 p-3 text-xs md:grid-cols-5" data-testid="molbio-revision-summary">
                             <div><div className="text-[var(--text-secondary)]">Sequence</div><div className="mt-1 text-[var(--text-primary)]">{selectedMolbioSequence.name}</div></div>
@@ -1781,7 +1774,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             <div><div className="text-[var(--text-secondary)]">Topology / state</div><div className="mt-1 text-[var(--text-primary)]">{selectedMolbioRevision.topology} · {selectedMolbioRevision.is_current ? 'current' : 'historical'}</div></div>
                         </div>
                     )}
-                    {selectedMolbioSequenceId && ['plasmidQc', 'constructScreening', 'fastqQc', 'bamQc'].includes(selectedWorkflow) && (
+                    {selectedMolbioSequenceId && ['plasmidQc', 'constructScreening', 'fastqQc'].includes(selectedWorkflow) && (
                         <div className="mt-3 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/40 p-3">
                             <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">Approved comparison panel (optional)</label>
                             <select value={approvedComparisonPanelId} onChange={(event) => setApprovedComparisonPanelId(event.target.value)} className="w-full rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]">
@@ -1823,7 +1816,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     <div>Reference resource ID: <span className="font-mono break-all">{selectedManagedReference?.resource.id || 'not selected'}</span></div><div>Reference revision ID: <span className="font-mono break-all">{selectedManagedReference?.revision.id || 'not selected'}</span></div>
                     <div className="md:col-span-2">Canonical FASTA SHA-256: <span className="font-mono break-all">{selectedManagedReference?.revision.canonical_fasta_sha256 || 'not selected'}</span></div>
                 </div>
-                {usesMolBioReceiptLane ? <p className="rounded border border-cyan-500/40 bg-cyan-500/10 p-3 text-xs text-cyan-100">MolBio one-time receipt handoff is active for {selectedMolbioSequenceId}. Managed-reference authority cannot be mixed with this receipt/comparison-panel lane.</p> : managedReferenceBlocker ? <p role="alert" className="rounded border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100">Managed launch disabled: {managedReferenceBlocker}</p> : null}
+                {usesMolBioReceiptLane ? <p className="rounded border border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)] p-3 text-xs text-[var(--accent-primary)]">MolBio one-time receipt handoff is active for {selectedMolbioSequenceId}. Managed-reference authority cannot be mixed with this receipt/comparison-panel lane.</p> : managedReferenceBlocker ? <p role="alert" className="rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-xs text-[var(--warning)]">Managed launch disabled: {managedReferenceBlocker}</p> : null}
                 {referenceTab === 'managed' && <div className="space-y-2">
                     <select value={selectedManagedReferenceRevisionId} onChange={(event) => setSelectedManagedReferenceRevisionId(event.target.value)} disabled={usesMolBioReceiptLane} className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-sm disabled:opacity-50">
                         <option value="">Select immutable managed revision…</option>{selectedManagedReferenceRevisionId && !selectedManagedReference && <option value={selectedManagedReferenceRevisionId}>{selectedManagedReferenceRevisionId} · selected revision not loaded</option>}{managedReferenceOptions.map(({ resource, revision }) => <option key={revision.id} value={revision.id}>{resource.name} · rev {revision.revision_number} · {revision.id}{exactStateReferenceRevisionIds.has(revision.id) ? ' · selected-state member' : ' · not in selected state'}</option>)}
@@ -1846,9 +1839,9 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     <input value={newFastaName} onChange={(event) => setNewFastaName(event.target.value)} placeholder="Managed reference and sequence name" className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm" /><textarea value={newFastaSeq} onChange={(event) => setNewFastaSeq(event.target.value)} placeholder="Raw nucleotide sequence (declared DNA or RNA; server validated)" rows={4} className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm font-mono" />
                     <button type="button" onClick={() => createManagedReferenceMutation.mutate(`>${newFastaName.trim()}\n${newFastaSeq}`)} disabled={!availability.canMutateDomain || usesMolBioReceiptLane || createManagedReferenceMutation.isPending || !newFastaName.trim() || !newFastaSeq.trim()} title={!availability.canMutateDomain ? availability.reason : undefined} className="px-3 py-2 rounded border disabled:opacity-40">{createManagedReferenceMutation.isPending ? 'Saving shared MolBio records…' : 'Save to shared MolBio'}</button>
                 </div>}
-                {referenceTab === 'legacy' && <div className="space-y-2 rounded border border-amber-500/40 p-3">
-                    <p className="text-xs text-amber-100">Import an older browser-saved reference into MolBio before using it.</p><button type="button" onClick={() => { const hints = readLegacyReferenceImportHints(); setLegacyReferenceHints(hints); setLegacyHintsLoaded(true); setSelectedLegacyReferenceId(hints[0]?.id ?? ''); setReferenceLibraryNotice(hints.length ? `Loaded ${hints.length} untrusted browser hint(s).` : 'No legacy browser reference hints were found.'); }} className="px-3 py-2 rounded border text-sm">Read legacy browser hints</button>
-                    {legacyHintsLoaded && legacyReferenceHints.length > 0 && <><select value={selectedLegacyReferenceId} onChange={(event) => setSelectedLegacyReferenceId(event.target.value)} className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm">{legacyReferenceHints.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · untrusted {entry.source} hint</option>)}</select>{selectedLegacyReference && <div className="text-xs"><div>Hint ID: <span className="font-mono">{selectedLegacyReference.id}</span></div>{selectedLegacyReference.source === 'path' && <div className="text-amber-200">Path-only hint: paste the original FASTA; a path is not sequence content.</div>}</div>}<button type="button" onClick={() => selectedLegacyReference && importLegacyReferenceMutation.mutate(selectedLegacyReference)} disabled={!selectedLegacyReference || !availability.canMutateDomain || usesMolBioReceiptLane || importLegacyReferenceMutation.isPending} title={!availability.canMutateDomain ? availability.reason : undefined} className="px-3 py-2 rounded border disabled:opacity-40">{importLegacyReferenceMutation.isPending ? 'Importing…' : 'Save browser hint to shared MolBio'}</button></>}
+                {referenceTab === 'legacy' && <div className="space-y-2 rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] p-3">
+                    <p className="text-xs text-[var(--warning)]">Import an older browser-saved reference into MolBio before using it.</p><button type="button" onClick={() => { const hints = readLegacyReferenceImportHints(); setLegacyReferenceHints(hints); setLegacyHintsLoaded(true); setSelectedLegacyReferenceId(hints[0]?.id ?? ''); setReferenceLibraryNotice(hints.length ? `Loaded ${hints.length} untrusted browser hint(s).` : 'No legacy browser reference hints were found.'); }} className="px-3 py-2 rounded border text-sm">Read legacy browser hints</button>
+                    {legacyHintsLoaded && legacyReferenceHints.length > 0 && <><select value={selectedLegacyReferenceId} onChange={(event) => setSelectedLegacyReferenceId(event.target.value)} className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm">{legacyReferenceHints.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · untrusted {entry.source} hint</option>)}</select>{selectedLegacyReference && <div className="text-xs"><div>Hint ID: <span className="font-mono">{selectedLegacyReference.id}</span></div>{selectedLegacyReference.source === 'path' && <div className="text-[var(--warning)]">Path-only hint: paste the original FASTA; a path is not sequence content.</div>}</div>}<button type="button" onClick={() => selectedLegacyReference && importLegacyReferenceMutation.mutate(selectedLegacyReference)} disabled={!selectedLegacyReference || !availability.canMutateDomain || usesMolBioReceiptLane || importLegacyReferenceMutation.isPending} title={!availability.canMutateDomain ? availability.reason : undefined} className="px-3 py-2 rounded border disabled:opacity-40">{importLegacyReferenceMutation.isPending ? 'Importing…' : 'Save browser hint to shared MolBio'}</button></>}
                 </div>}
                 <ImportedMolBioRecords records={referenceImportContext === `${exactDomainExperimentId}:${exactStateRevisionId}` ? importedReferenceRecords : []} />
                 {referenceMoleculeType === 'rna' && referenceTab !== 'managed' && <p className="text-xs">RNA records use the shared RNA writer and preserve topology. The declared RNA alphabet canonicalizes T to U. Records are saved independently; any partial completion is listed. Open the shared MolBio viewer to choose and attach the saved revision explicitly.</p>}
@@ -2382,7 +2375,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 </div>
                             </div>
                         )}
-                        {(selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc') && (
+                        {(selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc') && (
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Plasmid dimer QC</div>
                                 <label className="flex items-center gap-2 cursor-pointer">
@@ -2537,15 +2530,15 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     <div className="font-semibold text-[var(--text-primary)]">Review and submit <span className="ml-2 text-xs font-normal text-[var(--text-secondary)]">{jobName || 'unnamed job'}</span></div>
                     <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-bold uppercase tracking-[0.12em]">
                         <span data-testid="ngs-review-workflow" className="text-violet-200">WORKFLOW · {reviewWorkflowLabel}</span>
-                        <span data-testid="ngs-review-input" className={reviewInputReady ? 'text-emerald-300' : 'text-amber-200'}>● {reviewInputReady ? 'INPUT READY' : 'INPUT REQUIRED'} · {inputSource.toUpperCase()}</span>
-                        <span data-testid="ngs-review-mode" className="text-cyan-200">MODE · {reviewModeLabel}</span>
+                        <span data-testid="ngs-review-input" className={reviewInputReady ? 'text-[var(--success)]' : 'text-[var(--warning)]'}>● {reviewInputReady ? 'INPUT READY' : 'INPUT REQUIRED'} · {inputSource.toUpperCase()}</span>
+                        <span data-testid="ngs-review-mode" className="text-[var(--accent-primary)]">MODE · {reviewModeLabel}</span>
                         <span data-testid="ngs-review-model" className="text-[var(--text-secondary)]">QUALITY · {reviewModelLabel}</span>
-                        <span data-testid="ngs-review-gpu" className="text-emerald-300">GPU · {reviewGpuLabel}</span>
-                        <span data-testid="ngs-review-reference" className={reviewReferenceReady ? 'text-emerald-300' : 'text-amber-200'}>{reviewReferenceLabel}</span>
+                        <span data-testid="ngs-review-gpu" className="text-[var(--success)]">GPU · {reviewGpuLabel}</span>
+                        <span data-testid="ngs-review-reference" className={reviewReferenceReady ? 'text-[var(--success)]' : 'text-[var(--warning)]'}>{reviewReferenceLabel}</span>
                     </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                    <span className={`hidden rounded-full px-2 py-1 text-xs font-semibold sm:inline-flex ${canSubmit ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-200'}`}>{canSubmit ? 'Ready' : 'Needs input'}</span>
+                    <span className={`hidden rounded-full px-2 py-1 text-xs font-semibold sm:inline-flex ${canSubmit ? 'bg-[color-mix(in_srgb,var(--success)_15%,transparent)] text-[var(--success)]' : 'bg-[color-mix(in_srgb,var(--warning)_15%,transparent)] text-[var(--warning)]'}`}>{canSubmit ? 'Ready' : 'Needs input'}</span>
                     <button type="button" onClick={handleValidate} className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-xs font-semibold text-[var(--text-primary)] hover:border-[var(--accent-secondary)]">Validate</button>
                     <button
                             type="button"
@@ -2562,7 +2555,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
 
             {/* Error Display */}
             {error && (
-                <div role="alert" className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-400">
+                <div role="alert" className="bg-[color-mix(in_srgb,var(--error)_10%,transparent)] border border-[color-mix(in_srgb,var(--error)_30%,transparent)] rounded-lg p-3 text-sm text-[var(--error)]">
                     {error}
                 </div>
             )}

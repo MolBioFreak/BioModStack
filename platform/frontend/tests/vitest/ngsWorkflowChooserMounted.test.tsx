@@ -65,12 +65,23 @@ describe('mounted NGS workflow chooser', () => {
         expect(onSelect).toHaveBeenCalledWith('fastqQc');
     });
 
-    it.each([['duplex', 'dna'], ['barcode', 'dna'], ['bamQc', 'plasmidQc']])('reopens legacy %s under its existing workflow', async (saved, current) => {
-        await renderChooser(saved as WorkflowKey);
-        const selected = container.querySelectorAll('[aria-pressed="true"]');
-        expect(selected).toHaveLength(1);
-        expect((selected[0] as HTMLElement).dataset.ngsWorkflowKey).toBe(current === 'plasmidQc' ? 'clone' : current);
-        if (current === 'plasmidQc') expect(container.querySelector<HTMLSelectElement>('select')?.value).toBe('plasmidQc');
+    it('groups tasks by the data you start with', async () => {
+        await renderChooser('dna');
+        const groups = Array.from(container.querySelectorAll('[role="group"]')).map((group) => ({
+            label: group.getAttribute('aria-label'),
+            keys: Array.from(group.querySelectorAll<HTMLElement>('[data-ngs-workflow-key]')).map((node) => node.dataset.ngsWorkflowKey),
+        }));
+        expect(groups).toEqual([
+            { label: 'Start from raw signal', keys: ['dna', 'rna'] },
+            { label: 'Analyse reads against a saved sequence', keys: ['clone', 'fastqQc', 'modified'] },
+            { label: 'Review pooled samples', keys: ['pooledAssignment'] },
+        ]);
+    });
+
+    it('explains how FASTQ read QC differs from plasmid read QC', async () => {
+        await renderChooser('fastqQc');
+        const tile = container.querySelector<HTMLElement>('[data-ngs-workflow-key="fastqQc"]');
+        expect(tile?.textContent).toContain('No consensus or per-base support');
     });
 
     it.each(['clone', 'plasmidQc', 'constructScreening'] as const)('reopens and edits the exact %s method within one plasmid task', async (workflow) => {
