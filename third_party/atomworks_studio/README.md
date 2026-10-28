@@ -37,6 +37,15 @@ No model execution, live BMS store modification, deployment or rental is perform
   via export, not removed DOM rows, and distinguish positioned overlay atoms from
   unpositioned document atoms.
 
+## Supported packaged host
+
+S02 now consumes this series through `scripts/prepare_atomworks_studio.sh
+NEW_VENV RELEASE_WHEEL DISPOSABLE_SOURCE`. It performs the actual locked browser
+build, verifies `host-build.json`, repacks repaired Python plus rebuilt web with a
+fresh RECORD, then installs into the separate hash-locked CPU environment. See
+`docker/atomworks-studio-README.md` and `HOST-QUALIFICATION.md`. The original release
+wheel remains the digest-verified baseline, not a false identity for the rebuild.
+
 ## Host/build integration
 
 Use a **disposable Git checkout**, not a running service or model environment:

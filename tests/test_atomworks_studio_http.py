@@ -115,7 +115,9 @@ def test_private_assets_worker_off_and_both_api_forms(client):
     index = client.get(BASE + "/")
     assert index.status_code == 200
     assert 'name="atomworks-studio-service-worker" content="off"' in index.text
-    bundle = client.get(BASE + "/assets/index-CUTfffbv.js")
+    entry = re.search(r'<script[^>]+src="([^"]+\.js)"', index.text)
+    assert entry
+    bundle = client.get(BASE + "/" + entry.group(1).removeprefix("./").lstrip("/"))
     assert 'return `/api/atomworks-studio`+' in bundle.text
     for result in (index, bundle, client.get(BASE + "/api/schema"), client.get(BASE + "/api/v1/schema")):
         assert result.status_code == 200
@@ -167,6 +169,80 @@ def test_real_private_import_edit_undo_frozen_export_and_owner_isolation(client)
     assert client.get(path).status_code == 200
     assert client.delete(path).status_code == 204
     assert client.get(path).status_code == 404
+
+
+
+def test_selected_model_export_and_upload_formats(client, tmp_path):
+    """Real parser: model is a 1-based frame ordinal, export is a single-model derivative."""
+    client.headers["x-test-principal"] = "model-probe"
+    # Generate valid two-frame CIF via the installed scientific serializer.
+    script = """
+import io, json
+import numpy as np
+from biotite.structure import AtomArray, stack
+from biotite.structure.io import pdbx
+array = AtomArray(5)
+array.chain_id[:] = 'A'; array.res_id[:] = 1; array.res_name[:] = 'ALA'
+array.atom_name[:] = ['N','CA','C','O','CB']; array.element[:] = ['N','C','C','O','C']
+array.coord[:] = [[0,0,0],[1.45,0,0],[2,1.4,0],[1.4,2.4,0],[1.8,-.7,1.2]]
+second = array.copy(); second.coord += 20
+file = pdbx.CIFFile(); pdbx.set_structure(file, stack([array,second]))
+# Input MODEL IDs differ from ordinal positions, to expose accidental conflation.
+cat = file.block['atom_site']; cat['pdbx_PDB_model_num'] = pdbx.CIFColumn([7]*5+[42]*5)
+stream = io.StringIO(); file.write(stream); print(stream.getvalue())
+"""
+    python = os.environ["STUDIO_TEST_PYTHON"]
+    cif = subprocess.check_output([python, "-c", script], text=True)
+    observed = []
+    for ordinal in (1, 2, None):
+        imported = client.post(BASE + "/api/v1/sessions", files={"file": ("models.mmcif", cif)},
+                               data={"parse_preset": "minimal", "assembly": "asym", **({"model": str(ordinal)} if ordinal else {})})
+        assert imported.status_code == 200, imported.text
+        sid = imported.json()["session_id"]
+        exported = client.post(BASE + "/api/v1/sessions/" + sid + "/export")
+        assert exported.status_code == 200, exported.text
+        path = tmp_path / f"model-{ordinal}.cif"
+        path.write_text(exported.json()["cif"])
+        result = subprocess.check_output([python, "-c", """
+import sys,json
+from biotite.structure.io import pdbx
+f=pdbx.CIFFile.read(sys.argv[1]); c=f.block['atom_site']
+print(json.dumps({'model_ids': sorted(set(c['pdbx_PDB_model_num'].as_array(str))),
+                  'x': c['Cartn_x'].as_array(float).tolist()}))
+""", str(path)], text=True)
+        import json
+        observed.append(json.loads(result))
+    assert observed[0]["model_ids"] == ["1"]
+    assert observed[1]["model_ids"] == ["1"]
+    assert observed[1]["x"][0] - observed[0]["x"][0] == 20
+    assert observed[2] == observed[0]  # Omitted model silently narrows to the first frame.
+    for filename in ("input.pdb", "input.bcif"):
+        result = client.post(BASE + "/api/v1/sessions", files={"file": (filename, b"unused")})
+        assert result.status_code == 415, result.text
+
+
+def test_repaired_segment_endpoint_private_export(client):
+    client.headers["x-test-principal"] = "segment-probe"
+    cif = client.get(BASE + "/api/examples/unconditional/cif")
+    imported = client.post(BASE + "/api/v1/sessions", files={"file": ("segments.cif", cif.content)})
+    assert imported.status_code == 200, imported.text
+    path = BASE + "/api/v1/sessions/" + imported.json()["session_id"]
+    structure = imported.json()["structure"]
+    # Find actual native segment item without assuming an index or authored range.
+    sequence = structure.get("sequence", [])
+    if not sequence:
+        sequence = client.get(path + "/sequence").json().get("chains", [])
+    segment = next(item for chain in sequence for item in chain["items"] if item["kind"] == "segment")
+    before = client.post(path + "/export").json()
+    edited = client.post(path + "/segments/edit", json={"atom_index": segment["atom_indices"][0],
+        "minimum": 17, "maximum": 23, "expected_revision": before["revision"]})
+    assert edited.status_code == 200, edited.text
+    changed = client.post(path + "/export").json()
+    assert changed["cif"] != before["cif"]
+    assert "17-23" in changed["cif"]
+    assert client.post(path + "/undo").status_code == 200
+    restored = client.post(path + "/export").json()
+    assert document_content(restored["cif"]) == document_content(before["cif"])
 
 
 def browser_fixture_app():
@@ -238,6 +314,28 @@ def test_real_browser_iframe_edit_undo_export_and_cache(sidecar, tmp_path):
             assert page.evaluate("async () => (await navigator.serviceWorker.getRegistrations()).length") == 0
             assert page.evaluate("origin => notifications.filter(n => n.session_id).every(n => n.origin === origin)", origin)
             context.close(); browser.close()
+        source = os.environ.get("STUDIO_PATCHED_SOURCE")
+        if source:
+            # Execute the hash-verified genuine WebGL test against this private
+            # router, adapting only module URLs and existing trusted auth headers.
+            import json
+            source = Path(source)
+            script = source / "packages/web/tests/bms-s03-browser.mjs"
+            import hashlib
+            manifest = json.loads((ROOT / "third_party/atomworks_studio/manifest.json").read_text())
+            assert hashlib.sha256(script.read_bytes()).hexdigest() == manifest["files"]["packages/web/tests/bms-s03-browser.mjs"]["after"]
+            code = script.read_text()
+            code = code.replace("from 'playwright-core'", "from " + json.dumps((source / "packages/web/node_modules/playwright-core/index.mjs").as_uri()))
+            code = code.replace("from '../../../scripts/browser.mjs'", "from " + json.dumps((source / "scripts/browser.mjs").as_uri()))
+            code = code.replace("import.meta.url", json.dumps(script.as_uri()))
+            code = code.replace("viewport:{width:1500,height:1000}",
+                "viewport:{width:1500,height:1000},extraHTTPHeaders:{'X-BMS-CM-Proxy-Secret':process.env.BMS_CM_TRUSTED_PROXY_SECRET}")
+            completed = subprocess.run(["node", "--input-type=module", "-e", code],
+                env={**env, "ANNOTATION_STUDIO_URL": origin + BASE + "/"},
+                capture_output=True, text=True, timeout=150)
+            (tmp_path / "s03-private-browser.log").write_text(completed.stdout + completed.stderr)
+            assert completed.returncode == 0, completed.stdout + completed.stderr
+            print(completed.stdout)
     finally:
         process.terminate()
         try: process.wait(timeout=15)
