@@ -150,17 +150,17 @@ export function GovernedRawSignalWaveform({ runId, observedGeneration, represent
     };
 
     return (
-        <div className="space-y-2 rounded border border-emerald-500/40 bg-emerald-500/5 p-3 text-[10px]">
+        <div className="space-y-2 rounded border border-[color-mix(in_srgb,var(--success)_40%,transparent)] bg-[color-mix(in_srgb,var(--success)_5%,transparent)] p-3 text-[10px]">
             <div className="font-semibold text-[var(--text-primary)]">Raw waveform</div>
-            <button type="button" onClick={() => void inspectWaveform()} disabled={!readId.trim() || loading} className="rounded border border-emerald-500/50 px-2 py-1 font-semibold text-emerald-200 disabled:opacity-40">
+            <button type="button" onClick={() => void inspectWaveform()} disabled={!readId.trim() || loading} className="rounded border border-[color-mix(in_srgb,var(--success)_50%,transparent)] px-2 py-1 font-semibold text-[var(--success)] disabled:opacity-40">
                 {loading ? 'Loading…' : 'Load waveform'}
             </button>
-            {error && <div role="alert" className="text-amber-200">Waveform unavailable: {error}</div>}
+            {error && <div role="alert" className="text-[var(--warning)]">Waveform unavailable: {error}</div>}
             {waveform?.state === 'ready' && waveformPoints && (
                 <div className="space-y-1">
                     <div>{waveform.sample_count ?? waveform.samples?.length ?? 0} samples · {waveform.samples?.length ?? 0} shown · pA</div>
-                    <svg aria-label="Raw electrical signal waveform" viewBox="0 0 600 120" className="h-36 w-full rounded bg-slate-950" preserveAspectRatio="none">
-                        <polyline points={waveformPoints} fill="none" stroke="rgb(52 211 153)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                    <svg aria-label="Raw electrical signal waveform" viewBox="0 0 600 120" className="h-36 w-full rounded bg-[var(--bg-tertiary)]" preserveAspectRatio="none">
+                        <polyline points={waveformPoints} fill="none" stroke="var(--success)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
                     </svg>
                 </div>
             )}
@@ -396,7 +396,7 @@ export function RawReadInspector({
             <div className="space-y-2 border-b border-[var(--border-primary)] px-3 py-2">
                 <div className="text-xs font-semibold text-[var(--text-primary)]">Reads</div>
                 {!locusSlice && (
-                    <div role="status" className="rounded border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
+                    <div role="status" className="rounded border border-[color-mix(in_srgb,var(--warning)_30%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] px-2 py-1 text-[11px] text-[var(--warning)]">
                         Load reads for this locus to begin.
                     </div>
                 )}
@@ -425,7 +425,7 @@ export function RawReadInspector({
                     <input aria-label="Selected metric maximum" value={metricMax} onChange={(event) => setMetricMax(event.target.value)} disabled={sortBy === 'read_id'} inputMode="decimal" placeholder="Maximum" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-[10px]" />
                     <button aria-label="Refresh sortable reads" type="button" onClick={() => void loadPage()} disabled={!locusSlice || loading} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Refresh</button>
                 </div>
-                {error && <div role="alert" className="text-[11px] text-red-300">{error}</div>}
+                {error && <div role="alert" className="text-[11px] text-[var(--error)]">{error}</div>}
             </div>
 
             <div className="flex-1 min-h-0 overflow-auto">
@@ -447,8 +447,8 @@ export function RawReadInspector({
                                 <td className="px-2 py-1">Q{read.mean_quality?.toFixed(1) ?? 'n/a'} / {read.mapq ?? 'n/a'}</td>
                                 <td className="px-2 py-1">{read.contig || 'unmapped'}{read.start_1based ? `:${read.start_1based}` : ''} · {read.cigar || 'no CIGAR'}</td>
                                 <td className="whitespace-nowrap px-2 py-1">
-                                    <button aria-label={`Navigate read ${read.read_id} in IGV`} type="button" onClick={() => onNavigateIgv?.(read)} disabled={!onNavigateIgv || !alignmentReadIgvLocus(read)} className="mr-1 rounded border border-cyan-500/40 px-1.5 py-0.5 text-cyan-200 disabled:opacity-35">IGV</button>
-                                    <button aria-label={`Open signal for read ${read.read_id}`} type="button" onClick={() => onOpenRawSignal?.(read)} disabled={!rawSignalBinding || !onOpenRawSignal} className="mr-1 rounded border border-emerald-500/40 px-1.5 py-0.5 text-emerald-200 disabled:opacity-35">Signal</button>
+                                    <button aria-label={`Navigate read ${read.read_id} in IGV`} type="button" onClick={() => onNavigateIgv?.(read)} disabled={!onNavigateIgv || !alignmentReadIgvLocus(read)} className="mr-1 rounded border border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] px-1.5 py-0.5 text-[var(--accent-primary)] disabled:opacity-35">IGV</button>
+                                    <button aria-label={`Open signal for read ${read.read_id}`} type="button" onClick={() => onOpenRawSignal?.(read)} disabled={!rawSignalBinding || !onOpenRawSignal} className="mr-1 rounded border border-[color-mix(in_srgb,var(--success)_40%,transparent)] px-1.5 py-0.5 text-[var(--success)] disabled:opacity-35">Signal</button>
                                     <button aria-label={`Inspect details for read ${read.read_id}`} type="button" onClick={() => void inspectRead(read)} className="rounded border border-[var(--border-primary)] px-1.5 py-0.5">Detail</button>
                                 </td>
                             </tr>
@@ -468,19 +468,19 @@ export function RawReadInspector({
                             <div className="mt-1 text-[var(--text-secondary)]">{selected.contig || 'unmapped'} · {selected.start_1based ?? 'n/a'} · {selected.strand} · MAPQ {selected.mapq ?? 'n/a'} · {selected.cigar || 'no CIGAR'}</div>
                         </div>
                         <div className="flex gap-1">
-                            <button aria-label={`Navigate selected read ${selected.read_id} in IGV`} type="button" onClick={() => onNavigateIgv?.(selected)} disabled={!onNavigateIgv || !alignmentReadIgvLocus(selected)} className="rounded border border-cyan-500/40 px-2 py-1 text-cyan-200 disabled:opacity-35">Navigate IGV</button>
-                            <button aria-label={`Open signal for selected read ${selected.read_id}`} type="button" onClick={() => onOpenRawSignal?.(selected)} disabled={!rawSignalBinding || !onOpenRawSignal} className="rounded border border-emerald-500/40 px-2 py-1 text-emerald-200 disabled:opacity-35">Open signal</button>
+                            <button aria-label={`Navigate selected read ${selected.read_id} in IGV`} type="button" onClick={() => onNavigateIgv?.(selected)} disabled={!onNavigateIgv || !alignmentReadIgvLocus(selected)} className="rounded border border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] px-2 py-1 text-[var(--accent-primary)] disabled:opacity-35">Navigate IGV</button>
+                            <button aria-label={`Open signal for selected read ${selected.read_id}`} type="button" onClick={() => onOpenRawSignal?.(selected)} disabled={!rawSignalBinding || !onOpenRawSignal} className="rounded border border-[color-mix(in_srgb,var(--success)_40%,transparent)] px-2 py-1 text-[var(--success)] disabled:opacity-35">Open signal</button>
                         </div>
                     </div>
                     {waveform?.state === 'ready' && waveform.samples && (
                         <div className="mt-2">
                             <div className="text-[10px] text-[var(--text-secondary)]">{waveform.sample_count ?? waveform.samples.length} samples · {waveform.samples.length} shown · pA</div>
                             <svg viewBox="0 0 400 100" className="mt-1 h-24 w-full rounded bg-[var(--bg-primary)]" role="img" aria-label="Raw electrical signal waveform">
-                                <polyline fill="none" stroke="currentColor" strokeWidth="1" className="text-cyan-300" points={waveformPoints} />
+                                <polyline fill="none" stroke="currentColor" strokeWidth="1" className="text-[var(--accent-primary)]" points={waveformPoints} />
                             </svg>
                         </div>
                     )}
-                    {waveformError && <div className="mt-2 text-[10px] text-amber-300">Raw signal: {waveformError}</div>}
+                    {waveformError && <div className="mt-2 text-[10px] text-[var(--warning)]">Raw signal: {waveformError}</div>}
                     {selected.sequence && (
                         <>
                             <div className="mt-2 text-[10px] text-[var(--text-secondary)]">Basecalled sequence</div>

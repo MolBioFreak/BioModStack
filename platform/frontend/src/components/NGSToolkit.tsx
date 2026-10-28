@@ -4556,7 +4556,7 @@ export function NGSToolkit() {
                                 New Nanopore Run
                             </button>
                         </div>
-                        <div className="max-h-[22rem] overflow-auto overscroll-contain">
+                        <div data-ngs-runs-scroll className="h-[min(55vh,36rem)] min-h-[14rem] resize-y overflow-auto overscroll-contain">
                             <table className="w-full text-sm">
                                 <thead className="sticky top-0 z-10 bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
                                     <tr>
@@ -4571,7 +4571,7 @@ export function NGSToolkit() {
                                 <tbody>
                                     {jobsQueryIsError ? (
                                         <tr>
-                                            <td colSpan={6} role="alert" className="px-4 py-6 text-center text-rose-300">Nanopore job summaries could not be loaded. {jobsQueryError instanceof Error ? jobsQueryError.message : String(jobsQueryError)}</td>
+                                            <td colSpan={6} role="alert" className="px-4 py-6 text-center text-[var(--error)]">Nanopore job summaries could not be loaded. {jobsQueryError instanceof Error ? jobsQueryError.message : String(jobsQueryError)}</td>
                                         </tr>
                                     ) : isLoading ? (
                                         <tr>
@@ -4591,14 +4591,14 @@ export function NGSToolkit() {
                                                 <td className="px-4 py-2 text-[var(--text-secondary)]">{ontWorkflowDisplayName(job.params?.ont_workflow_id, job.mode)}</td>
                                                 <td className="px-4 py-2">
                                                     <span className={`px-2 py-0.5 rounded text-xs font-medium ${job.status === 'completed'
-                                                        ? 'bg-emerald-500/20 text-emerald-400'
+                                                        ? 'bg-[color-mix(in_srgb,var(--success)_20%,transparent)] text-[var(--success)]'
                                                         : job.status === 'running'
-                                                            ? 'bg-blue-500/20 text-blue-400'
+                                                            ? 'bg-[color-mix(in_srgb,var(--accent-primary)_20%,transparent)] text-[var(--accent-primary)]'
                                                             : job.status === 'queued'
-                                                                ? 'bg-cyan-500/20 text-cyan-400'
+                                                                ? 'bg-[color-mix(in_srgb,var(--accent-primary)_20%,transparent)] text-[var(--accent-primary)]'
                                                                 : job.status === 'failed'
-                                                                    ? 'bg-rose-500/20 text-rose-400'
-                                                                    : 'bg-slate-500/20 text-slate-300'
+                                                                    ? 'bg-[color-mix(in_srgb,var(--error)_20%,transparent)] text-[var(--error)]'
+                                                                    : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
                                                         }`}>
                                                         {job.status}
                                                     </span>
@@ -4710,11 +4710,11 @@ export function NGSToolkit() {
                         ) : fullJobQuery.isLoading ? (
                             <p className="text-sm text-[var(--text-secondary)]">Loading full job detail…{selectedJobSummary ? ` List status: ${selectedJobSummary.status}.` : ''}</p>
                         ) : fullJobQuery.isError ? (
-                            <p role="alert" className="rounded border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">
+                            <p role="alert" className="rounded border border-[color-mix(in_srgb,var(--error)_40%,transparent)] bg-[color-mix(in_srgb,var(--error)_10%,transparent)] p-3 text-sm text-[var(--error)]">
                                 Full job detail failed to load. Inspector, evidence links, artifacts, and parameter reuse remain disabled. {fullJobQuery.error instanceof Error ? fullJobQuery.error.message : String(fullJobQuery.error)}
                             </p>
                         ) : !selectedJob ? (
-                            <p role="alert" className="text-sm text-rose-300">Full job detail returned no job record.</p>
+                            <p role="alert" className="text-sm text-[var(--error)]">Full job detail returned no job record.</p>
                         ) : (
                             <>
                                 {isCanonicalFastqQcRun && (
@@ -4841,8 +4841,8 @@ export function NGSToolkit() {
                                                 <div className="flex items-center justify-between gap-2">
                                                     <div className="text-sm text-[var(--text-primary)]">{check.label}</div>
                                                     <div className={`text-xs px-2 py-0.5 rounded ${check.ok
-                                                        ? 'bg-emerald-500/20 text-emerald-400'
-                                                        : 'bg-rose-500/20 text-rose-400'
+                                                        ? 'bg-[color-mix(in_srgb,var(--success)_20%,transparent)] text-[var(--success)]'
+                                                        : 'bg-[color-mix(in_srgb,var(--error)_20%,transparent)] text-[var(--error)]'
                                                         }`}>
                                                         {check.ok ? 'ready' : 'missing'}
                                                     </div>
@@ -4861,8 +4861,8 @@ export function NGSToolkit() {
                                                     <div className="flex items-center justify-between gap-2">
                                                         <div className="text-xs text-[var(--text-primary)]">{check.label}</div>
                                                         <div className={`text-[10px] px-2 py-0.5 rounded ${check.ok
-                                                            ? 'bg-emerald-500/20 text-emerald-400'
-                                                            : 'bg-slate-500/20 text-slate-300'
+                                                            ? 'bg-[color-mix(in_srgb,var(--success)_20%,transparent)] text-[var(--success)]'
+                                                            : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
                                                             }`}>
                                                             {check.ok ? 'found' : 'missing'}
                                                         </div>
@@ -4887,7 +4887,7 @@ export function NGSToolkit() {
                                                 </button>
                                             )}
                                             {alignmentAccessRecoveryError && (
-                                                <p role="alert" className="text-xs text-rose-300">
+                                                <p role="alert" className="text-xs text-[var(--error)]">
                                                     {alignmentAccessRecoveryError}
                                                 </p>
                                             )}
@@ -4966,7 +4966,7 @@ export function NGSToolkit() {
                                                     )}
                                                 </div>
                                                 {multimerError && (
-                                                    <p className="text-xs text-amber-300">{multimerError}</p>
+                                                    <p className="text-xs text-[var(--warning)]">{multimerError}</p>
                                                 )}
 
                                                 {!hasFastqQcDetails ? (
@@ -5113,7 +5113,7 @@ export function NGSToolkit() {
                                                 )}
                                             </div>
                                             {methylationError && (
-                                                <p className="text-xs text-amber-300">{methylationError}</p>
+                                                <p className="text-xs text-[var(--warning)]">{methylationError}</p>
                                             )}
 
                                             <div className="text-xs text-[var(--text-secondary)]">
@@ -5652,7 +5652,7 @@ export function NGSToolkit() {
                                 </a>
                             )}
                             {igvReadsTrackLoaded && (missingIgvAuxTracks.length > 0 || igvAuxTrackFailures.length > 0) && (
-                                <div data-igv-optional-track-status className="basis-full text-[10px] text-amber-200">
+                                <div data-igv-optional-track-status className="basis-full text-[10px] text-[var(--warning)]">
                                     Optional tracks unavailable
                                 </div>
                             )}
@@ -5714,7 +5714,7 @@ export function NGSToolkit() {
                             }} />
                         )}
                         {igvRangeError && (
-                            <div role="alert" className="border-b border-amber-400/30 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-200">
+                            <div role="alert" className="border-b border-[color-mix(in_srgb,var(--warning)_30%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] px-3 py-1 text-[11px] text-[var(--warning)]">
                                 {igvRangeError}
                             </div>
                         )}
@@ -5731,7 +5731,7 @@ export function NGSToolkit() {
                                     </div>
                                 )}
                                 {!igvLoading && igvError && (
-                                    <div className="absolute top-2 left-2 right-2 rounded border border-red-500/40 bg-red-500/10 text-red-300 text-xs px-2 py-1.5">
+                                    <div className="absolute top-2 left-2 right-2 rounded border border-[color-mix(in_srgb,var(--error)_40%,transparent)] bg-[color-mix(in_srgb,var(--error)_10%,transparent)] text-[var(--error)] text-xs px-2 py-1.5">
                                         {igvError}
                                     </div>
                                 )}
@@ -5743,7 +5743,7 @@ export function NGSToolkit() {
 
                                 {signalWorkbenchRequested ? (
                                     requestedViewerSessionReopenFailed ? (
-                                        <div role="alert" className="absolute right-2 top-2 z-20 max-w-md rounded border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                                        <div role="alert" className="absolute right-2 top-2 z-20 max-w-md rounded border border-[color-mix(in_srgb,var(--error)_40%,transparent)] bg-[color-mix(in_srgb,var(--error)_10%,transparent)] px-3 py-2 text-xs text-[var(--error)]">
                                             Requested viewer session could not be reopened. No replacement session was created.
                                         </div>
                                     ) : requestedViewerSessionCompatibilityPending ? (
@@ -5770,7 +5770,7 @@ export function NGSToolkit() {
                                             onNavigateIgv={navigateFromSignalWorkbench}
                                         />
                                     ) : (
-                                        <div role="alert" className="absolute right-2 top-2 z-20 max-w-md rounded border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                        <div role="alert" className="absolute right-2 top-2 z-20 max-w-md rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] px-3 py-2 text-xs text-[var(--warning)]">
                                             The selected job is not bound to both an immutable managed dataset and an immutable ONT run generation, so its signal workbench cannot open.
                                         </div>
                                     )

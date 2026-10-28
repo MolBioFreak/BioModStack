@@ -67,11 +67,11 @@ function CheckCard({
     check: OntFastqQcCheck;
 }) {
     const statusClass = check.status === 'pass'
-        ? 'text-emerald-300 border-emerald-500/35'
+        ? 'text-[var(--success)] border-[color-mix(in_srgb,var(--success)_35%,transparent)]'
         : check.status === 'fail'
-            ? 'text-rose-300 border-rose-500/35'
+            ? 'text-[var(--error)] border-[color-mix(in_srgb,var(--error)_35%,transparent)]'
             : check.status === 'review'
-                ? 'text-amber-300 border-amber-500/35'
+                ? 'text-[var(--warning)] border-[color-mix(in_srgb,var(--warning)_35%,transparent)]'
                 : 'text-[var(--text-secondary)] border-[var(--border-primary)]';
     const checkMetrics = Object.entries(check.metrics);
     return (
@@ -81,7 +81,7 @@ function CheckCard({
                 <span className="rounded border border-current/40 px-2 py-0.5 text-[10px] font-semibold uppercase">{check.status}</span>
             </div>
             <p className="mt-1 text-[11px] text-[var(--text-secondary)]">Purpose: {check.purpose}</p>
-            {limitation && <p className="mt-1 text-[10px] text-amber-200">{limitation}</p>}
+            {limitation && <p className="mt-1 text-[10px] text-[var(--warning)]">{limitation}</p>}
             {checkMetrics.length > 0 && (
                 <dl className="mt-2 grid grid-cols-1 gap-1 text-[11px]">
                     {checkMetrics.map(([key, value]) => (
@@ -174,20 +174,20 @@ export function OntFastqQcResultPanel({
             <span>{page.count ? `${page.offset + 1}–${page.offset + page.count}` : '0'} of {page.total.toLocaleString()} {collection}</span>
             {history.length > 0 && <button type="button" disabled={pageLoading[collection]} onClick={() => void loadPage(collection, history[history.length - 1], history.slice(0, -1))} className="rounded border px-2 py-1 disabled:opacity-50">Previous {collection}</button>}
             {page.next_offset !== null && <button type="button" disabled={pageLoading[collection]} onClick={() => void loadPage(collection, page.next_offset!, page.count ? [...history, page.offset] : history)} className="rounded border px-2 py-1 disabled:opacity-50">{pageLoading[collection] ? 'Loading…' : page.count ? `Next ${collection}` : `Load ${collection}`}</button>}
-            {pageErrors[collection] && <span role="alert" className="text-rose-300">{pageErrors[collection]}</span>}
+            {pageErrors[collection] && <span role="alert" className="text-[var(--error)]">{pageErrors[collection]}</span>}
         </div>;
     };
     if (loading) return <p className="text-sm text-[var(--text-secondary)]">Loading validated FASTQ-QC result…</p>;
     if (error) {
         return (
-            <div role="alert" className="space-y-2 text-sm text-rose-300">
+            <div role="alert" className="space-y-2 text-sm text-[var(--error)]">
                 <p>{error}</p>
                 {onRecoverAccess && (
                     <button
                         type="button"
                         onClick={onRecoverAccess}
                         disabled={recoveryPending}
-                        className="rounded border border-rose-400/40 px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+                        className="rounded border border-[color-mix(in_srgb,var(--error)_40%,transparent)] px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
                     >
                         {recoveryPending ? 'Restoring access…' : 'Restore access'}
                     </button>
@@ -199,10 +199,10 @@ export function OntFastqQcResultPanel({
 
     const verification = { ...result.verification, variants: (pages.variants?.result ?? result).verification.variants };
     const verdictClass = verification.verdict === 'PASS'
-        ? 'text-emerald-300 border-emerald-500/40'
+        ? 'text-[var(--success)] border-[color-mix(in_srgb,var(--success)_40%,transparent)]'
         : verification.verdict === 'FAIL'
-            ? 'text-rose-300 border-rose-500/40'
-            : 'text-amber-300 border-amber-500/40';
+            ? 'text-[var(--error)] border-[color-mix(in_srgb,var(--error)_40%,transparent)]'
+            : 'text-[var(--warning)] border-[color-mix(in_srgb,var(--warning)_40%,transparent)]';
     const verdictLabel = verification.verdict === 'REVIEW' ? 'REVIEW REQUIRED' : verification.verdict;
     const coverageFraction = verification.summary.coverage_fraction;
     const sequenceIdentity = verification.summary.sequence_identity_fraction;
@@ -313,7 +313,7 @@ export function OntFastqQcResultPanel({
                 <div className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
                     <h4 className="text-sm font-semibold text-[var(--text-primary)]">Read-length distribution</h4>
                     <p className="mt-1 text-xs text-[var(--text-secondary)]">Purpose: Show read-length shape against the {referenceLength.toLocaleString()} bp reference. Server-derived fixed_width_v1 bins preserve all producer per-read counts without browser rebinning.</p>
-                    <p className="mt-1 text-[11px] text-amber-200">Reference marker: {referenceLength.toLocaleString()} bp. Historical producer expected plasmid size: {display(metric(result, 'expected_plasmid_size'), ' bp')}; historical copy-number and multimer metrics do not control this decision.</p>
+                    <p className="mt-1 text-[11px] text-[var(--warning)]">Reference marker: {referenceLength.toLocaleString()} bp. Historical producer expected plasmid size: {display(metric(result, 'expected_plasmid_size'), ' bp')}; historical copy-number and multimer metrics do not control this decision.</p>
                     <Plot
                         data={[{
                             type: 'bar',
@@ -349,7 +349,7 @@ export function OntFastqQcResultPanel({
                 <div className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
                     <h4 className="text-sm font-semibold text-[var(--text-primary)]">Coverage across the construct</h4>
                     <p className="mt-1 text-xs text-[var(--text-secondary)]">Purpose: Identify low aligned-base coverage and the context of review loci. Series: {result.coverage.method}; basis: {result.coverage.depth_basis}; {result.coverage.source_row_count.toLocaleString()} source positions.</p>
-                    <p className="mt-1 text-[11px] text-amber-200">
+                    <p className="mt-1 text-[11px] text-[var(--warning)]">
                         Envelope minimum: {result.coverage.minimum_depth.toLocaleString()} at position {result.coverage.minimum_depth_position_1based.toLocaleString()} ({result.coverage.depth_unit}). Decision support minimum: {typeof decisionMinimumDepth === 'number' ? decisionMinimumDepth.toLocaleString() : '—'} (alignment observations; separate per-base-support basis).
                     </p>
                     <Plot
@@ -447,9 +447,9 @@ export function OntFastqQcResultPanel({
                                         href={artifact.url || undefined}
                                         download
                                         data-artifact-display-order={artifact.display_order}
-                                        className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-xs hover:border-sky-400/50"
+                                        className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-xs hover:border-[color-mix(in_srgb,var(--accent-primary)_50%,transparent)]"
                                     >
-                                        <div className="font-semibold text-sky-300">{metricLabel(artifact.kind)}</div>
+                                        <div className="font-semibold text-[var(--accent-primary)]">{metricLabel(artifact.kind)}</div>
                                         <div className="mt-1 text-[var(--text-secondary)]">{artifact.source} · {artifact.size_bytes?.toLocaleString()} bytes</div>
                                         <div className="mt-1 font-mono text-[10px] text-[var(--text-secondary)]">SHA-256 {artifact.sha256?.slice(0, 16)}…</div>
                                     </a>
@@ -489,7 +489,7 @@ export function OntFastqQcResultPanel({
                 <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Logs</summary>
                 <div className="mt-2 space-y-1 text-[var(--text-secondary)]">
                     {logArtifacts.map((artifact) => artifact.state === 'present' ? (
-                        <a key={artifact.display_order} href={artifact.url || undefined} download className="block text-sky-300 underline">
+                        <a key={artifact.display_order} href={artifact.url || undefined} download className="block text-[var(--accent-primary)] underline">
                             {artifact.display_order}. {metricLabel(artifact.kind)} · {artifact.source}
                         </a>
                     ) : (

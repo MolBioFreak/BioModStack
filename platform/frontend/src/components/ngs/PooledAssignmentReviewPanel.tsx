@@ -309,14 +309,14 @@ export function PooledAssignmentReviewPanel({
                         <div className="text-[var(--text-secondary)]">Execution status</div>
                         <strong className="text-[var(--text-primary)]">{executionStatus}</strong>
                     </div>
-                    <div className="rounded border border-amber-400/40 bg-amber-500/10 p-2" data-testid="pooled-assignment-scientific-status">
-                        <div className="text-amber-200/80">Scientific status</div>
-                        <strong className="text-amber-100">{scientificStatus}</strong>
+                    <div className="rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-2" data-testid="pooled-assignment-scientific-status">
+                        <div className="text-[var(--warning)]/80">Scientific status</div>
+                        <strong className="text-[var(--warning)]">{scientificStatus}</strong>
                     </div>
                 </div>
             </div>
 
-            <p className="rounded border border-amber-400/30 bg-amber-500/10 p-3 text-xs leading-5 text-amber-100">
+            <p className="rounded border border-[color-mix(in_srgb,var(--warning)_30%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-xs leading-5 text-[var(--warning)]">
                 Release is one explicit atomic request for all checked targets. There is no automatic release and no per-target child-job action; ambiguous and unclassified assignments are never release candidates.
             </p>
 
@@ -328,8 +328,8 @@ export function PooledAssignmentReviewPanel({
                 <>
                     {manifestQuery.isLoading && <p className="text-sm text-[var(--text-secondary)]">Loading immutable assignment manifest…</p>}
                     {targetsQuery.isLoading && <p className="text-sm text-[var(--text-secondary)]">Loading immutable assignment targets…</p>}
-                    {manifestQuery.isError && <p role="alert" className="text-sm text-rose-400">Unable to load the immutable assignment manifest.</p>}
-                    {targetsQuery.isError && <p role="alert" className="text-sm text-rose-400">Unable to load immutable assignment targets.</p>}
+                    {manifestQuery.isError && <p role="alert" className="text-sm text-[var(--error)]">Unable to load the immutable assignment manifest.</p>}
+                    {targetsQuery.isError && <p role="alert" className="text-sm text-[var(--error)]">Unable to load immutable assignment targets.</p>}
 
                     {manifestQuery.data && (
                         <div className="grid grid-cols-1 gap-3 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3 text-xs sm:grid-cols-2 xl:grid-cols-4">
@@ -424,7 +424,7 @@ export function PooledAssignmentReviewPanel({
                                     <a
                                         key={artifact.key}
                                         href={artifact.href}
-                                        className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-sky-300 underline hover:bg-[var(--bg-tertiary)]"
+                                        className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--accent-primary)] underline hover:bg-[var(--bg-tertiary)]"
                                         title={artifact.path}
                                     >
                                         {artifact.label}
@@ -471,14 +471,14 @@ export function PooledAssignmentReviewPanel({
                             type="button"
                             disabled={releaseMutation.isPending || Boolean(releaseResponse) || selectedTargetIds.filter((targetId) => selectableTargetIds.has(targetId)).length === 0 || targetsQuery.isLoading || manifestQuery.isLoading}
                             onClick={() => releaseMutation.mutate()}
-                            className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+                            className="rounded bg-[var(--accent-primary)] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
                         >
                             {releaseMutation.isPending ? 'Releasing selected targets…' : 'Release selected targets'}
                         </button>
                     </div>
-                    {releaseMutation.isError && <p role="alert" className="text-sm text-rose-400">{errorMessage(releaseMutation.error)}</p>}
+                    {releaseMutation.isError && <p role="alert" className="text-sm text-[var(--error)]">{errorMessage(releaseMutation.error)}</p>}
                     {releaseResponse && (
-                        <div className="space-y-2 rounded border border-emerald-400/40 bg-emerald-500/10 p-3 text-sm text-emerald-100" data-testid="pooled-assignment-release-result">
+                        <div className="space-y-2 rounded border border-[color-mix(in_srgb,var(--success)_40%,transparent)] bg-[color-mix(in_srgb,var(--success)_10%,transparent)] p-3 text-sm text-[var(--success)]" data-testid="pooled-assignment-release-result">
                             <div>Release {releaseResponse.release_id} created for reference set {releaseResponse.reference_set_id}.</div>
                             <div className="text-xs">Assignment job: <span className="font-mono">{releaseResponse.assignment_job_id}</span></div>
                             <div className="text-xs font-semibold">Child job IDs</div>
