@@ -768,6 +768,7 @@ export interface RemoteGpuTelemetry extends Omit<RemoteTelemetrySample, 'gpus'> 
         memory_total_mb: number | null;
         temperature: number | null;
         power_draw_w: number | null;
+        power_limit_w?: number | null;
         controls: { fan: false; power: false };
     }>;
     observed_at?: string;
@@ -793,6 +794,19 @@ export const preloadExecutionTarget = async (targetId: string, jobId: string): P
     return response.data;
 };
 
+export interface HuggingFaceAssetLinkStatus {
+    configured: boolean;
+    available: boolean;
+    bucket: string | null;
+    mode: 'hf_preferred' | 'ssh';
+    credential_configured: boolean;
+    allow_publish: boolean;
+    message: string;
+}
+export const fetchHuggingFaceAssetStatus = async (signal?: AbortSignal): Promise<HuggingFaceAssetLinkStatus> =>
+    (await api.get<HuggingFaceAssetLinkStatus>('/api/execution-targets/providers/huggingface', { signal })).data;
+export const checkHuggingFaceAssetConnection = async (): Promise<HuggingFaceAssetLinkStatus> =>
+    (await api.post<HuggingFaceAssetLinkStatus>('/api/execution-targets/providers/huggingface/check', {})).data;
 export const fetchProvisionCatalog = async (): Promise<Array<CatalogProvisionSelection | WorkflowPackSelection>> =>
     (await api.get<Array<CatalogProvisionSelection | WorkflowPackSelection>>('/api/execution-targets/provision/catalog')).data;
 

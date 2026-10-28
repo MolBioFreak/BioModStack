@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { IndependentProvisionPanel } from './IndependentProvisionPanel';
 import { PagedArtifactDetails } from './PagedArtifactDetails';
 import { isAxiosError } from 'axios';
+import { formatBinaryBytes } from '../telemetryCards';
 import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
 import { preloadExecutionTarget, activeExecutionTargetJobIds, provisionSelectionLabel, type ExecutionTarget } from '../../lib/api';
 
@@ -34,6 +35,14 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
   const jobProgress = target.job_progress ?? (target.active_job_ids === undefined && target.progress ? [target.progress] : []);
   const busy = mutation.isPending || activePreloads > 0 || preload?.recovery_required || ['checking', 'transferring', 'verifying', 'cancelling', 'recovery_blocked'].includes(preload?.phase ?? '');
   const validRecipe = jobs.some(job => job.id === jobId);
+  // Retries share a name and model: list the first (newest) of each once, plus the current choice.
+  const seen = new Set<string>();
+  const uniqueRecipes = jobs.filter(job => {
+    const key = `${job.name ?? job.id}\u0000${job.model_id}`;
+    if (seen.has(key) && job.id !== jobId) return false;
+    seen.add(key);
+    return true;
+  });
   const canPreload = target.active && target.state === 'ready' && !busy;
   function submit() {
     if (!validRecipe || !canPreload || queryClient.isMutating({ mutationKey }) > 0) return;
@@ -42,28 +51,31 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
   return <section aria-label="Remote preload and activity" className="space-y-3 rounded-lg border border-[var(--border-primary)] p-3">
     <details onToggle={event => { setPreparationVisible(event.currentTarget.open); if (event.currentTarget.open) setPreparationOpened(true); }}>
       <summary className="cursor-pointer rounded py-1 text-sm font-medium focus-visible:outline focus-visible:outline-2">
-        Prepare worker <span className="font-normal text-[var(--text-muted)]">— optional dependency downloads{preload ? ` · ${preload.phase === 'source_download_ready' ? 'Downloads complete' : preload.phase}` : ''}</span>
+        Prepare worker <span className="font-normal text-[var(--text-muted)]">— optional dependency downloads (workflows, models, images){preload ? ` · ${preload.phase === 'source_download_ready' ? 'Downloads complete' : preload.phase}` : ''}</span>
       </summary>
       <div className="mt-3 space-y-3">
     {preparationOpened && <IndependentProvisionPanel target={target} onChanged={onChanged} inventoryVisible={preparationVisible} />}
-    <h4 className="font-medium">Preload source and runtime files</h4>
-    <p className="text-xs text-[var(--text-muted)]">Use a saved Job as the exact dependency recipe. This does not submit a Job or transfer biological inputs, results, or secrets. Downloads ready does not mean scientific Ready.</p>
+    <details className="rounded-xl border border-[var(--border-primary)] p-3">
+    <summary className="cursor-pointer text-sm font-medium" title="Use a saved Job as the exact dependency recipe. This does not submit a Job or transfer biological inputs, results, or secrets. Downloads ready does not mean scientific Ready.">Match a saved Job's dependencies</summary>
+    <div className="mt-2 space-y-2">
     <label className="block text-sm">Saved Job recipe
       <select aria-label="Saved Job recipe" value={jobId} disabled={busy} onChange={event => setJobId(event.target.value)} className="mt-1 block w-full rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2">
         <option value="">Select a saved Job</option>
-        {jobs.map(job => <option key={job.id} value={job.id}>{job.name || job.id} — {job.model_id}</option>)}
+        {uniqueRecipes.map(job => <option key={job.id} value={job.id}>{job.name || job.id} — {job.model_id}</option>)}
       </select>
     </label>
     <button type="button" disabled={!canPreload || !validRecipe} onClick={() => void submit()} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-sm disabled:opacity-50">
       {busy ? 'Preloading…' : preload?.phase === 'failed' ? 'Retry preload' : 'Preload selected worker'}
     </button>
+    </div>
+    </details>
       </div>
     </details>
     {error && <p role="alert" className="text-sm text-[var(--error)]">{error}</p>}
     {preload && <div role="status" aria-label="Preload progress" className="text-sm">
       {preload.phase === 'source_download_ready' && <p>Downloads complete</p>}
       <p>{preload.message}</p>
-      <p>{preload.artifact_summary.verified_count} of {preload.artifact_summary.total_count} artifacts complete or cached · {preload.artifact_summary.verified_bytes.toLocaleString()} bytes complete or cached of {preload.artifact_summary.total_bytes.toLocaleString()} bytes declared. Transfer progress and rate are not reported.</p>
+      <p title="Counts completed files only; live transfer bytes and rate are not reported.">{preload.artifact_summary.verified_count} of {preload.artifact_summary.total_count} artifacts complete or cached · {formatBinaryBytes(preload.artifact_summary.verified_bytes)} of {formatBinaryBytes(preload.artifact_summary.total_bytes)}</p>
       {!preload.selection && <>
         <PagedArtifactDetails targetId={target.id} operationId={preload.operation_id} collection="progress" count={preload.artifact_summary.total_count} sequence={preload.sequence} />
         <PagedArtifactDetails targetId={target.id} operationId={preload.operation_id} collection="cached" count={preload.cached_artifact_count} sequence={preload.sequence} />

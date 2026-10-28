@@ -146,3 +146,16 @@ async def test_mounted_whole_pack_preview_with_pinned_acquisition(store, pack, m
         assert not controller.tasks
     finally:
         await controller.close()
+
+
+@pytest.mark.asyncio
+async def test_catalog_offers_the_de_novo_pack_the_contract_accepts():
+    """The registry builds a de_novo_design pack; the catalog and request contract must expose it."""
+    from typing import get_args
+    from routers.execution_targets import provision_catalog
+    from services.remote_execution.contracts import WorkflowPackRequest
+    packs = {item.workflow_id for item in await provision_catalog() if item.kind == 'workflow_pack'}
+    assert packs == set(get_args(WorkflowPackSelection.model_fields['workflow_id'].annotation))
+    assert 'de_novo_design' in packs
+    assert model_registry.workflow_pack_dependencies('de_novo_design')
+    WorkflowPackRequest(kind='workflow_pack', workflow_id='de_novo_design', preview_sha256='a' * 64)

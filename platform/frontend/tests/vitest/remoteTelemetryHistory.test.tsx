@@ -51,17 +51,19 @@ describe('central remote history', () => {
         try {
             await act(async () => root.render(<QueryClientProvider client={client}><DashboardTelemetry /></QueryClientProvider>));
             expect(container.querySelector('[data-testid="local-telemetry"]')?.getAttribute('data-size')).toBe('compact');
+            // Remote cards reuse the local card heights; each card splits its height across metric strips.
             const presets = [
-                ['XS', 'micro', 72, 'p-2', 'space-y-1'],
-                ['S', 'compact', 96, 'p-3', 'space-y-1.5'],
-                ['M', 'standard', 120, 'p-4', 'space-y-4'],
-                ['L', 'large', 156, 'p-5', 'space-y-5'],
-                ['XL', 'xlarge', 196, 'p-6', 'space-y-6'],
+                ['XS', 'micro', 96, 'space-y-1'],
+                ['S', 'compact', 132, 'space-y-1.5'],
+                ['M', 'standard', 196, 'space-y-2'],
+                ['L', 'large', 244, 'space-y-3'],
+                ['XL', 'xlarge', 310, 'space-y-4'],
             ] as const;
+            const strip = (height: number, count: number) => `${Math.max(60, height / count)}px`;
             for (const tab of container.querySelectorAll<HTMLButtonElement>('[role="tab"]')) {
                 await act(async () => tab.click());
                 expect(container.textContent).toContain('Panel Size');
-                for (const [label, size, height, padding, spacing] of presets) {
+                for (const [label, size, height, spacing] of presets) {
                     const button = [...container.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === label);
                     expect(button).toBeTruthy();
                     await act(async () => button!.click());
@@ -72,11 +74,12 @@ describe('central remote history', () => {
                     const remote = container.querySelector('[data-bms-remote-telemetry="true"]')!;
                     expect(remote.getAttribute('data-bms-telemetry-size')).toBe(size);
                     expect(remote.classList.contains(spacing)).toBe(true);
-                    expect(remote.querySelector('article')?.classList.contains(padding)).toBe(true);
                     const plots = [...remote.querySelectorAll<HTMLElement>('[data-bms-telemetry-plot]')];
+                    // GPU card 4 strips, CPU/memory/disk 3, network 2.
                     expect(plots).toHaveLength(9);
-                    expect(plots.map(plot => plot.style.height)).toEqual(Array(9).fill(`${height}px`));
-                    expect(plots.map(plot => plot.getAttribute('aria-label')).join(' ')).toContain('VRAM used (MiB)');
+                    expect(plots.map(plot => plot.style.height)).toEqual([
+                        ...Array(4).fill(strip(height, 4)), ...Array(3).fill(strip(height, 3)), ...Array(2).fill(strip(height, 2))]);
+                    expect(plots.map(plot => plot.getAttribute('aria-label')).join(' ')).toContain('VRAM used (GiB)');
                     expect(plots[0].querySelector('path')?.getAttribute('d')?.match(/ M/g)).toHaveLength(2);
                     expect(remote.textContent).toContain('No samples');
                     expect(client.getQueryData(['active-remote-gpu-telemetry', 'vast:8'])).toBe(cached);
@@ -100,12 +103,14 @@ describe('central remote history', () => {
         const container = document.createElement('div');
         const root = createRoot(container);
         await act(async () => root.render(<QueryClientProvider client={client}><Panel /></QueryClientProvider>));
-        expect(container.querySelectorAll('article')).toHaveLength(8);
-        expect(container.textContent).toContain('N/A');
+        // Eight GPU cards plus the CPU, memory and disk card.
+        expect(container.querySelectorAll('article')).toHaveLength(9);
+        expect(container.textContent).toContain('Remote GPU 7');
+        expect(container.textContent).toContain('Util n/a');
         expect(container.textContent).toContain('No samples');
         const labels = [...container.querySelectorAll('[data-bms-telemetry-plot]')].map(e => e.getAttribute('aria-label')).join(' ');
-        expect(labels).toContain('VRAM used (MiB)');
-        expect(labels).toContain('Power (W)');
+        expect(labels).toContain('VRAM used (GiB)');
+        expect(labels).toContain('Power draw (W)');
         expect(labels).toContain('RAM used (GiB)');
         await act(async () => root.unmount());
         client.clear();
