@@ -356,7 +356,7 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         expect(capturedRequest().params).toMatchObject({ modified_bases: '6mA', run_modkit: true });
     });
     it('retains explicit duplex settings and stereo source identity', async () => {
-        await mount({ ...base, selectedWorkflow: 'duplex', doradoMode: 'duplex', duplexPairs: '/data/pairs.txt' });
+        await mount({ ...base, selectedWorkflow: 'dna', doradoMode: 'duplex', duplexPairs: '/data/pairs.txt' });
         expect(container.textContent).toContain(doradoLock.models.stereo.id);
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ dorado_basecall_mode: 'duplex', duplex_pairs: '/data/pairs.txt', emit_moves: false });

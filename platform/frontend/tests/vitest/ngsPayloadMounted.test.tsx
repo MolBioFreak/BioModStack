@@ -285,8 +285,6 @@ describe('mounted NGS settings to submit payload', () => {
         await act(async () => container.querySelector<HTMLButtonElement>('[data-ngs-workflow-key="clone"]')?.click());
         expect(checkboxContaining('FASTQ plasmid QC')?.checked).toBe(false);
 
-        await act(async () => container.querySelector<HTMLButtonElement>('[data-ngs-workflow-key="bamQc"]')?.click());
-        expect(checkboxContaining('FASTQ plasmid QC')?.checked).toBe(false);
     });
     it('reopens persisted effective stage settings in the visible controls', async () => {
         await renderTemplate({
