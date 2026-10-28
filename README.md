@@ -2,7 +2,7 @@
 
 A focused BMS edition for plasmid development, molecular biology and ONT/NGS.
 
-The installed workspaces are **Projects**, **MolBio Viewer** and **NGS**. The
+The installed workspaces are **Projects**, **Molecular Tools** and **NGS**. The
 native Control Panel starts, stops and reports the managed local runtime.
 MolBio sequence editing, annotation, restriction analysis, PCR and assembly use
 the existing scientific contracts. ONT/NGS uses the shared job, reference,

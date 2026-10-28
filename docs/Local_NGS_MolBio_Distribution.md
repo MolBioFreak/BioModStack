@@ -1,6 +1,6 @@
 # BNS Plasmid Development Toolkit
 
-This checkout installs the MolBio Viewer, the NGS workspace, and their shared
+This checkout installs Molecular Tools, the NGS workspace, and their shared
 Projects. The home route opens MolBio. The native BioModStack Control Panel
 remains the supported way to start and stop the managed runtime.
 

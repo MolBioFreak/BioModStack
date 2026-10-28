@@ -35,7 +35,7 @@ it('opens an empty Project directly in MolBio with add-sequence context and no r
     const post = mockEmptyProject();
     const host = await mount(<NativeProjectTools projectId="project" projectName="QA" context={null} />);
     await settle();
-    for (const label of ['Open MolBio', 'Open NGS', 'Add DNA sequence', 'Add NGS data record']) expect(button(host, label)).toBeTruthy();
+    for (const label of ['Open Molecular Tools', 'Open NGS', 'Add DNA sequence', 'Add NGS data record']) expect(button(host, label)).toBeTruthy();
     await act(() => button(host, 'Add DNA sequence').click()); await settle();
     expect(host.querySelector('output')?.textContent).toBe('/designer?workspace_id=project&global_experiment_id=experiment&domain_experiment_id=domain&action=add-plasmid');
     const domain = post.mock.calls.find(([url]) => String(url).endsWith('/domains'))?.[1] as { domain_payload: unknown };

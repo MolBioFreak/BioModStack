@@ -1,4 +1,4 @@
-/** Shared shell for the local MolBio / NGS installation. */
+/** Shared shell for the local Molecular Tools / NGS installation. */
 import { NavLink } from 'react-router-dom';
 import { ThemeSelector } from './ThemeSelector';
 import { ProjectReturnBanner } from './project-manager/ProjectReturnBanner';
@@ -11,7 +11,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 <nav aria-label="Workspace navigation" className="flex flex-wrap items-center gap-2">
                     {[
                         ['/projects?scope=ngs-molbio', 'Projects'],
-                        ['/designer', 'MolBio Viewer'],
+                        ['/designer', 'Molecular Tools'],
                         ['/ngs', 'NGS'],
                     ].map(([to, label]) => (
                         <NavLink key={to} to={to} className={({ isActive }) =>
