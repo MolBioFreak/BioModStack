@@ -6,6 +6,10 @@ import sqlite3
 from migrations.add_ont_external_move_bam_receipts import MIGRATION_33_TRIGGER_SQL
 from migrations.add_ont_move_source_attempt_lineage import MIGRATION_34_TRIGGER_SQL
 from migrations.seal_ont_external_move_bam_receipt_binding import MIGRATION_39_TRIGGER_SQL
+from migrations.allow_ont_job_move_source_fresh_attempts import (
+    LINEAGE_TRIGGER_NAME as _LINEAGE_TRIGGER_NAME,
+    LINEAGE_TRIGGER_SQL as _LINEAGE_TRIGGER_V49_SQL,
+)
 
 
 ContractColumn = tuple[str, str, int, str | None, int]
@@ -94,6 +98,7 @@ def assert_sqlite_table_contract(
     sql_fragments: tuple[str, ...],
     label: str,
     triggers: TriggerContract | None = None,
+    trigger_alternatives: dict[str, frozenset[str]] | None = None,
 ) -> None:
     observed_columns = tuple(
         (str(row[1]), str(row[2]), int(row[3]), row[4], int(row[5]))
@@ -128,8 +133,13 @@ def assert_sqlite_table_contract(
     if observed_foreign_keys != foreign_keys:
         raise RuntimeError(f"{label} foreign keys diverged")
 
-    if triggers is not None and sqlite_trigger_contract(connection, table_name) != triggers:
-        raise RuntimeError(f"{label} triggers diverged")
+    if triggers is not None:
+        observed_triggers = sqlite_trigger_contract(connection, table_name)
+        for name, alternatives in (trigger_alternatives or {}).items():
+            if observed_triggers.get(name) in alternatives:
+                observed_triggers[name] = triggers.get(name)
+        if observed_triggers != triggers:
+            raise RuntimeError(f"{label} triggers diverged")
 
 
 _ONT_SOURCE_COLUMN_CONTRACT = (
@@ -237,6 +247,12 @@ _ONT_SOURCE_TRIGGER_CONTRACT[ONT_TERMINAL_IMMUTABILITY_TRIGGER_NAME] = normalize
 )
 
 
+# Migration 49 replaces the attempt-lineage trigger so job-sourced failures can be retried.
+_ONT_SOURCE_TRIGGER_ALTERNATIVES = {
+    _LINEAGE_TRIGGER_NAME: frozenset({normalize_sql(_LINEAGE_TRIGGER_V49_SQL)}),
+}
+
+
 def ensure_ont_move_source_terminal_immutability(connection: sqlite3.Connection) -> None:
     connection.execute(ONT_TERMINAL_IMMUTABILITY_TRIGGER_SQL)
 
@@ -262,4 +278,5 @@ def assert_ont_move_source_table_contract(
         sql_fragments=_ONT_SOURCE_SQL_FRAGMENTS,
         label="ONT move-source table",
         triggers=triggers,
+        trigger_alternatives=_ONT_SOURCE_TRIGGER_ALTERNATIVES,
     )

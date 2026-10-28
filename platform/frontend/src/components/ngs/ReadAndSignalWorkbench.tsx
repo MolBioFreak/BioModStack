@@ -192,6 +192,17 @@ export function ReadAndSignalWorkbench({
         [displayedActiveExternalMoveSource?.move_source_id, externalMoveSources],
     );
 
+    // Failed job-sourced move tables (e.g. rejected by a since-fixed validator) can be re-validated.
+    const retryableJobMoveSources = useMemo(
+        () => moveSources.filter((item) => (
+            item.source_job_id
+            && item.state === 'failed'
+            && item.attempt_number < 3
+            && !moveSources.some((candidate) => candidate.predecessor_move_source_id === item.move_source_id)
+        )),
+        [moveSources],
+    );
+
     const identityKey = `${datasetId}:${runId}:${observedGeneration}:${alignmentJobId}:${alignmentSession?.session_id || ''}:${referenceRevisionId || ''}:${viewerSession?.viewer_session_id || ''}`;
     const viewerAlignmentSessionId = alignmentSession?.ready && alignmentSession.session_id && referenceRevisionId
         ? alignmentSession.session_id
@@ -1139,6 +1150,19 @@ export function ReadAndSignalWorkbench({
                             </div>
                         </details>
                     )}
+                    {retryableJobMoveSources.map((item) => (
+                        <div key={item.move_source_id} data-retryable-job-move-source className="flex flex-wrap items-center gap-1 break-all text-[10px] text-[var(--text-secondary)]">
+                            <span>Basecall move table <code>{item.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(item.state)}`}>{item.state}</span> · {item.reason_code}</span>
+                            <button
+                                type="button"
+                                onClick={() => void createFreshExternalMoveSourceAttempt(item.move_source_id)}
+                                disabled={busy}
+                                className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40"
+                            >
+                                Re-validate
+                            </button>
+                        </div>
+                    ))}
                 </section>
 
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">

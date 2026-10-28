@@ -2756,8 +2756,8 @@ def _attest_sqlite_migration_33(db_path: str) -> None:
 
 
 def _attest_sqlite_migration_34(db_path: str) -> None:
-    """Prove move-source attempt lineage and its sealed migration ledger."""
-    from migrations.add_ont_move_source_attempt_lineage import attest
+    """Prove move-source attempt lineage (as amended by migration 49) and its ledger."""
+    from migrations.allow_ont_job_move_source_fresh_attempts import attest
     from migrations.ont_sqlite_schema_contract import assert_ont_move_source_table_contract
     from migrations import runner as migration_runner
 
@@ -2783,7 +2783,7 @@ def _attest_sqlite_migration_34(db_path: str) -> None:
 
 def _attest_sqlite_migration_38(db_path: str) -> None:
     """Prove migration 38 ledger identity and terminal trigger authority."""
-    from migrations.add_ont_move_source_attempt_lineage import attest
+    from migrations.allow_ont_job_move_source_fresh_attempts import attest
     from migrations.ont_sqlite_schema_contract import assert_ont_move_source_table_contract
     from migrations import runner as migration_runner
 
