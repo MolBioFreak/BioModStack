@@ -95,7 +95,7 @@ def test_native_workflow_graph_preview(tmp_path, workflow, mode, tandem):
         "--out_dir", str(tmp_path / "out"),
         "--" + {"pod5": "pod5_dir", "bam": "bam_path", "fastq": "fastq_path"}[mode], str(reads),
         "--reference_fasta", str(reference), "--run_modkit", str(tandem).lower(),
-        "--run_fastq_qc", "false", "-ansi-log", "false",
+        "--run_fastq_qc", "true", "-ansi-log", "false",
     ], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
     log = (tmp_path / "nextflow.log").read_text()
@@ -103,3 +103,4 @@ def test_native_workflow_graph_preview(tmp_path, workflow, mode, tandem):
     if tandem:
         assert "Creating process" in log and "ModkitAnalysis:ModkitPileup" in log
         assert "ModkitAnalysis:ModkitSummary" in log
+        assert ("Pod5PlasmidQC" if mode == "pod5" else "BamPlasmidQC") in log
