@@ -36,6 +36,22 @@
       "x-bms-ui-control": "bounded_integer",
       "x-bms-units": "not_applicable"
     },
+    "modified_bases": {
+      "type": "string",
+      "pattern": "^(?:none|(?:2OmeG|4mC_5mC|5mCG_5hmCG|5mC_5hmC|6mA|inosine_m6A|inosine_m6A_2OmeA|m5C|m5C_2OmeC|m6A_DRACH|pseU|pseU_2OmeU)(?: (?:2OmeG|4mC_5mC|5mCG_5hmCG|5mC_5hmC|6mA|inosine_m6A|inosine_m6A_2OmeA|m5C|m5C_2OmeC|m6A_DRACH|pseU|pseU_2OmeU))*)$",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "modified_bases",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_output",
+      "x-bms-scientific-meaning": "Modified-base models (space-separated; one per canonical base)",
+      "x-bms-supported-runtime-range": "dorado=2.1.2",
+      "x-bms-ui-control": "multi_select",
+      "x-bms-units": "not_applicable",
+      "default": "none"
+    },
     "quality_mode": {
       "default": "sup",
       "enum": [
@@ -59,7 +75,8 @@
   "required": [
     "quality_mode",
     "batch_size",
-    "min_qscore"
+    "min_qscore",
+    "modified_bases"
   ],
   "title": "ngs.ont.basecall_rna parameters v1",
   "type": "object",

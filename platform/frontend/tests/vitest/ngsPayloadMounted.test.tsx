@@ -199,7 +199,7 @@ describe('mounted NGS settings to submit payload', () => {
         });
 
         expect(container.querySelector('[data-testid="ngs-gpu-assignment"]')).toBeNull();
-        expect(container.querySelector('[data-testid="ngs-review-gpu"]')?.textContent).toContain('CPU ONLY');
+        expect(container.querySelector('[data-testid="ngs-review-gpu"]')?.textContent).toContain('LOCAL CPU');
 
         const fastqQc = checkboxContaining('FASTQ plasmid QC');
         expect(fastqQc?.checked).toBe(true);
@@ -242,7 +242,7 @@ describe('mounted NGS settings to submit payload', () => {
             'RNA duplex is unsupported by the locked Dorado runtime.',
             'Duplex basecalling requires a confined read-pairs file.',
             'Barcode classification and duplex cannot be combined in the locked runtime.',
-            'Modified-base calling requires DNA HAC simplex.',
+            'Modified-base calling requires one-strand (simplex) basecalling.',
         ]) {
             expect(alert).toContain(blocker);
         }

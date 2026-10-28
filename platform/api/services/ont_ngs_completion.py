@@ -209,7 +209,7 @@ def prepare_dorado_demux_products(job: Any, *, read_root: Path, persisted_root: 
         or preflight_selection.get("model_aggregate_sha256") != approved_model.get("aggregate_sha256")
         or preflight_selection.get("quality") != params.get("dorado_quality_mode")
         or preflight_selection.get("modified_bases") != "none"
-        or preflight_selection.get("modified_bases_model_id") is not None
+        or preflight_selection.get("modified_bases_model_ids")
         or preflight_selection.get("stereo_model_id") is not None
         or runtime.get("model_id") != expected_model_id
         or expected_mode != "simplex"

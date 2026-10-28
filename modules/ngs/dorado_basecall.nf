@@ -108,7 +108,8 @@ process DoradoBasecall {
     pair_relative="\$(jq -r '.pairs.relative_path // empty' dorado_preflight.json)"
     barcode_kit="\$(jq -r '.barcoding.kit // empty' dorado_preflight.json)"
     sample_relative="\$(jq -r '.barcoding.sample_sheet.relative_path // empty' dorado_preflight.json)"
-    mod_model_id="\$(jq -r '.selection.modified_bases_model_id // empty' dorado_preflight.json)"
+    mapfile -t mod_model_ids < <(jq -r '.selection.modified_bases_model_ids[]?' dorado_preflight.json)
+    for mod_model_id in "\${mod_model_ids[@]}"; do [[ "\${mod_model_id}" =~ ^[A-Za-z0-9_.@-]+\$ ]]; done
     [[ "\${model_id}" =~ ^[A-Za-z0-9_.@-]+\$ ]]
     [[ "\${batch_size}" =~ ^[0-9]+\$ ]]
     [[ "\${min_qscore}" =~ ^[0-9]+\$ ]]
@@ -197,7 +198,7 @@ process DoradoBasecall {
       [[ "\$(sha256sum "\${sample_target}" | cut -d' ' -f1)" == "\${sample_sha}" ]] || { echo 'sample-sheet snapshot identity mismatch' >&2; exit 1; }
     fi
     snapshot_model "\${model_id}" '.runtime.assets.models.base'
-    if [[ -n "\${mod_model_id}" ]]; then snapshot_model "\${mod_model_id}" '.runtime.assets.models.modified_bases'; fi
+    for mod_model_id in "\${mod_model_ids[@]}"; do snapshot_model "\${mod_model_id}" ".runtime.assets.models.modified_bases[\"\${mod_model_id}\"]"; done
     if [[ "\${mode}" == duplex ]]; then stereo_model_id="\$(jq -r '.selection.stereo_model_id' dorado_preflight.json)"; snapshot_model "\${stereo_model_id}" '.runtime.assets.models.stereo'; fi
 
     visible_gpus="\${CUDA_VISIBLE_DEVICES:-0}"
@@ -225,7 +226,11 @@ process DoradoBasecall {
     if [[ -n "\${pair_relative}" ]]; then command+=(--pairs "\${pod5_root}/\${pair_relative}"); fi
     if [[ -n "\${barcode_kit}" ]]; then command+=(--kit-name "\${barcode_kit}"); fi
     if [[ -n "\${sample_relative}" ]]; then command+=(--sample-sheet "\${pod5_root}/\${sample_relative}"); fi
-    if [[ -n "\${mod_model_id}" ]]; then command+=(--modified-bases-models "\$PWD/sealed_models/\${mod_model_id}"); fi
+    if (( \${#mod_model_ids[@]} )); then
+      mod_model_paths=()
+      for mod_model_id in "\${mod_model_ids[@]}"; do mod_model_paths+=("\$PWD/sealed_models/\${mod_model_id}"); done
+      command+=(--modified-bases-models "\$(IFS=,; echo "\${mod_model_paths[*]}")")
+    fi
     source ${doradoShellQuote(params.code_root + '/scripts/dorado_supports_option.sh')}
     if [[ "\${molecule}" == dna && "\${mode}" == simplex && "\${trim_adapters}" == false ]]; then
       dorado_supports_option dorado basecaller --no-trim || { echo 'locked Dorado runtime lacks --no-trim' >&2; exit 1; }

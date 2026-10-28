@@ -334,16 +334,21 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         expect(container.querySelector('[data-ngs-workflow-key="barcode"]')).toBeNull();
         expect(container.querySelectorAll('select[aria-label="Strand mode"]')).toHaveLength(1);
         expect(container.querySelectorAll('select[aria-label="Barcoding"]')).toHaveLength(1);
-        const modification = container.querySelector<HTMLButtonElement>('button[aria-label="6mA only"]')!;
-        expect(modification.disabled).toBe(true);
-        await quality('hac');
-        await act(async () => modification.click()); await settle();
-        expect(modification.getAttribute('aria-pressed')).toBe('true');
-        expect(container.querySelector<HTMLButtonElement>('button[aria-label="Super Accurate (SUP)"]')?.disabled).toBe(true);
+        const mod = (name: string) => container.querySelector<HTMLInputElement>(`input[type="checkbox"][aria-label="${name}"]`);
+        // SUP carries its own pinned modification models; select several at once.
+        await quality('sup');
+        await act(async () => mod('6mA')!.click()); await settle();
+        await act(async () => mod('5mCG_5hmCG')!.click()); await settle();
+        expect(mod('6mA')!.checked).toBe(true);
+        expect(mod('5mCG_5hmCG')!.checked).toBe(true);
+        // Dorado allows one model per canonical base: choosing 4mC_5mC replaces the CpG model.
+        await act(async () => mod('4mC_5mC')!.click()); await settle();
+        expect(mod('5mCG_5hmCG')!.checked).toBe(false);
         expect(container.querySelector<HTMLSelectElement>('select[aria-label="Barcoding"]')?.disabled).toBe(true);
+        expect(container.textContent).toContain(doradoLock.models.modified_bases['dna_r10.4.1_e8.2_400bps_sup@v5.2.0_6mA@v1'].id);
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(submits()[0].url).toBe('/api/ont/ngs/ont_basecall_dna/submit');
-        expect(capturedRequest().params).toMatchObject({ dorado_quality_mode: 'hac', modified_bases: '6mA', run_modkit: false });
+        expect(capturedRequest().params).toMatchObject({ dorado_quality_mode: 'sup', modified_bases: '4mC_5mC 6mA', run_modkit: false });
     });
     it('opens optional reference controls on demand and returns to reference-free calling', async () => {
         await mount();
@@ -372,7 +377,7 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
     it('analyzes existing modification-tagged BAM without requiring another basecalling model', async () => {
         await mount({ ...base, selectedWorkflow: 'modified', inputSource: 'bam', pod5Dir: '', bamPath: '/data/tagged.bam',
             modifiedBases: 'none', runModkit: true, ngsReferenceRevisionId: 'reference-revision-1' });
-        expect(container.querySelector('button[aria-label="6mA only"]')).toBeNull();
+        expect(container.querySelector('input[aria-label="6mA"]')).toBeNull();
         await click('Show advanced controls');
         const tables = Array.from(container.querySelectorAll('label')).find(node => node.textContent?.includes('Generate methylation tables'))!;
         expect(tables.querySelector<HTMLInputElement>('input')?.checked).toBe(true);
@@ -384,12 +389,12 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
     it('blocks incomplete methylation analysis instead of silently dropping the requested tables', async () => {
         await mount({ ...base, selectedWorkflow: 'modified', doradoModel: 'hac', modifiedBases: '6mA',
             runModkit: true, ngsReferenceRevisionId: 'reference-revision-1' });
-        await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="No modification detection"]')!.click());
+        await act(async () => container.querySelector<HTMLInputElement>('input[aria-label="6mA"]')!.click());
         await settle();
         expect(button('Review and submit').disabled).toBe(true);
         expect(container.textContent).toContain('Choose a modification model before generating methylation tables.');
         expect(submits()).toHaveLength(0);
-        await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="6mA only"]')!.click());
+        await act(async () => container.querySelector<HTMLInputElement>('input[aria-label="6mA"]')!.click());
         await settle(); await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ modified_bases: '6mA', run_modkit: true });
     });
@@ -401,7 +406,7 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
     });
     it.each(['5mC_5hmC', '6mA'])('preserves the native modification branch %s', async modification => {
         await mount({ ...base, selectedWorkflow: 'modified', doradoModel: 'hac', modifiedBases: modification, runModkit: true, ngsReferenceRevisionId: 'reference-revision-1' });
-        expect(container.textContent).toContain(doradoLock.models.modified_bases[modification as '5mC_5hmC' | '6mA'].id);
+        expect(container.textContent).toContain(`dna_r10.4.1_e8.2_400bps_hac@v6.0.0_${modification}@v1`);
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ modified_bases: modification, dorado_quality_mode: 'hac', run_modkit: true });
     });

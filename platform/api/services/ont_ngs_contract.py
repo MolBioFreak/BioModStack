@@ -143,7 +143,7 @@ ONT_QUALITY_MODE_CONTRACT: dict[str, Any] = {
     "default_basecalling_mode": "simplex",
     "default_device": "cuda:0",
     "device_examples": ("cuda:0", "cuda:all", "cpu"),
-    "modified_base_models": ("none", "5mC", "6mA", "6mA 4mC_5mC", "6mA 5mC"),
+    "modified_base_models": "dorado_v2.1.2.lock.json models.modified_bases (space-separated per basecaller; one per canonical base)",
     "sample_multiplexing_fields": ("barcode_kit", "sample_sheet"),
 }
 
@@ -693,12 +693,12 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     if basecall_mode == "simplex" and duplex_pairs:
         raise ValueError("duplex_pairs is only valid in duplex mode")
 
-    modified_bases = str(normalized.get("modified_bases") or "none").strip()
-    if modified_bases not in {"none", "5mC_5hmC", "6mA"}:
-        raise ValueError("unsupported modified-base selection")
-    if modified_bases != "none" and (molecule_type != "dna" or quality_mode != "hac" or basecall_mode != "simplex"):
-        raise ValueError("modified-base selection requires DNA HAC simplex basecalling")
+    from scripts.dorado_p4_preflight import canonical_modified_bases, resolve_modified_bases
+
+    modified_bases = canonical_modified_bases(resolve_modified_bases(
+        lock, molecule_type, quality_mode, basecall_mode, normalized.get("modified_bases")))
     if barcode_kit and modified_bases != "none":
+        # Barcoded completion seals unmodified demux units; per-barcode modkit is downstream.
         raise ValueError("inline barcode classification and modified-base calling are mutually exclusive")
 
     raw_batch = normalized.get("dorado_batch_size")

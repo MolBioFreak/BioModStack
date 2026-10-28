@@ -48,8 +48,18 @@ quality_modes:
     - cpu
   modified_base_models:
     - none
+    - 2OmeG
+    - 4mC_5mC
+    - 5mCG_5hmCG
     - 5mC_5hmC
     - 6mA
+    - inosine_m6A
+    - inosine_m6A_2OmeA
+    - m5C
+    - m5C_2OmeC
+    - m6A_DRACH
+    - pseU
+    - pseU_2OmeU
   barcode_fields:
     - barcode_kit
     - sample_sheet
@@ -126,6 +136,7 @@ modes:
       - dorado_model
       - dorado_device
       - min_qscore
+      - modified_bases
       - trim_adapters
       - emit_summary
       - dorado_batch_size
@@ -408,13 +419,10 @@ params:
 
   - name: modified_bases
     type: string
-    description: Explicit compatible modified-base model selection; none is the safe default
+    description: Space-separated pinned Dorado modification models for the selected basecaller (one per canonical base), or none
     required: false
     default: none
-    enum:
-      - 6mA
-      - 5mC_5hmC
-      - none
+    pattern: '^(?:none|(?:2OmeG|4mC_5mC|5mCG_5hmCG|5mC_5hmC|6mA|inosine_m6A|inosine_m6A_2OmeA|m5C|m5C_2OmeC|m6A_DRACH|pseU|pseU_2OmeU)(?: (?:2OmeG|4mC_5mC|5mCG_5hmCG|5mC_5hmC|6mA|inosine_m6A|inosine_m6A_2OmeA|m5C|m5C_2OmeC|m6A_DRACH|pseU|pseU_2OmeU))*)$'
 
   - name: min_qscore
     type: integer

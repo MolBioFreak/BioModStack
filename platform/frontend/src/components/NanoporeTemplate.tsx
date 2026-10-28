@@ -48,6 +48,7 @@ import { isNanoporeWorkflowKey } from '../lib/nanoporeWorkflow';
 import { Pod5Upload } from './ngs/Pod5Upload';
 import { ReferenceSequenceInputs } from './ngs/ReferenceSequenceInputs';
 import { BarcodeSampleSheet } from './ngs/BarcodeSampleSheet';
+import { describeModification, modificationCatalog, modificationModelIds, modifiedBasesBlocker, parseModifiedBases, serializeModifiedBases, toggleModification } from '../lib/doradoModifiedBases';
 
 const TASK_FLOW_PANEL = 'rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 shadow-[var(--shadow-card)]';
 const TASK_FLOW_CARD = 'min-w-0 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4';
@@ -60,7 +61,6 @@ const TASK_FLOW_LABEL = 'text-[11px] font-bold uppercase tracking-[0.14em] text-
 type DoradoModel = 'sup' | 'hac' | 'fast';
 type DoradoMolecule = 'dna' | 'rna';
 type DoradoMode = 'simplex' | 'duplex';
-type ModifiedBases = '6mA' | '5mC_5hmC' | 'none';
 type AssemblyTool = 'flye' | 'canu';
 type FlyeReadQuality = 'nano-hq' | 'nano-corr' | 'nano-raw';
 type MinimapPreset = 'map-ont' | 'map-hifi' | 'map-pb' | 'sr';
@@ -110,11 +110,6 @@ const DORADO_MODELS: Record<DoradoModel, { label: string; description: string }>
     fast: { label: 'Fast', description: 'Fastest; lower accuracy.' },
 };
 
-const MODIFIED_BASES_OPTIONS: Record<ModifiedBases, { label: string; description: string }> = {
-    '6mA': { label: '6mA only', description: 'Adenine methylation.' },
-    '5mC_5hmC': { label: '5mC + 5hmC', description: 'Cytosine + hydroxymethyl-cytosine.' },
-    none: { label: 'No modification detection', description: 'No modification tags.' },
-};
 
 const QSCORE_LABELS: Record<number, string> = {
     5: 'Very permissive',
@@ -742,7 +737,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [barcodeKit, setBarcodeKit] = useState<'' | 'SQK-RBK114-96'>((initialValues?.barcodeKit as '' | 'SQK-RBK114-96' | undefined) ?? '');
     const [sampleSheet, setSampleSheet] = useState(initialValues?.sampleSheet as string || '');
     const [sampleSheetBlocker, setSampleSheetBlocker] = useState('');
-    const [modifiedBases, setModifiedBases] = useState<ModifiedBases>(initialValues?.modifiedBases as ModifiedBases || 'none');
+    const [selectedModifications, setSelectedModifications] = useState<string[]>(() => parseModifiedBases(initialValues?.modifiedBases as string | undefined));
+    const modifiedBases = serializeModifiedBases(selectedModifications);
+    const setModifiedBases = (value: string) => setSelectedModifications(parseModifiedBases(value));
+    const modificationOptions = modificationCatalog(doradoMolecule, doradoModel);
 
     // ============================================================================
     // State: QC Settings
@@ -1083,7 +1081,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (inputSource === 'pod5' && doradoMolecule === 'rna' && doradoMode === 'duplex') blockers.push('RNA duplex is unsupported by the locked Dorado runtime.');
         if (inputSource === 'pod5' && doradoMode === 'duplex' && !duplexPairs.trim()) blockers.push('Duplex basecalling requires a confined read-pairs file.');
         if (inputSource === 'pod5' && doradoMode === 'duplex' && barcodeKit) blockers.push('Barcode classification and duplex cannot be combined in the locked runtime.');
-        if (inputSource === 'pod5' && modifiedBases !== 'none' && (doradoMolecule !== 'dna' || doradoModel !== 'hac' || doradoMode !== 'simplex')) blockers.push('Modified-base calling requires DNA HAC simplex.');
+        const modificationBlocker = inputSource === 'pod5' ? modifiedBasesBlocker(selectedModifications, doradoMolecule, doradoModel, doradoMode) : null;
+        if (modificationBlocker) blockers.push(modificationBlocker);
         if (inputSource === 'pod5' && canRunModkit && runModkit && modifiedBases === 'none') blockers.push('Choose a modification model before generating methylation tables.');
         if (inputSource === 'fastq' && canRunModkit && runModkit) blockers.push('FASTQ has no MM/ML modification probabilities. Disable methylation tables or select tagged BAM/POD5.');
         if (inputSource === 'bam' && !bamPath.trim()) blockers.push('Please specify a BAM file path.');
@@ -1499,8 +1498,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         setDoradoMolecule('dna');
         setDoradoMode('simplex');
         if (workflow === 'modified') {
-            setDoradoModel('hac');
-            setModifiedBases('5mC_5hmC');
+            setModifiedBases('5mC_5hmC 6mA');
             setBarcodeKit('');
             setRunModkit(true);
             return;
@@ -1923,7 +1921,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     {(modifiedBases !== 'none' || barcodeKit) && <p className="text-xs text-[var(--text-secondary)]">Paired-strand calling cannot be combined with modification calling or barcoding in this installation.</p>}
                     <details className="text-xs text-[var(--text-secondary)]"><summary className="cursor-pointer">Model and runtime details</summary><div className="mt-2">Dorado {doradoLock.dorado.version}; model <code>{pinnedBasecallerModel}</code>.
                         {doradoMode === 'duplex' && <> Stereo model: <code>{doradoLock.models.stereo.id}</code>.</>}
-                        {modifiedBases !== 'none' && <> Modification model: <code>{doradoLock.models.modified_bases[modifiedBases].id}</code>.</>}</div></details>
+                        {selectedModifications.length > 0 && <> Modification models: {modificationModelIds(selectedModifications, doradoMolecule, doradoModel).map(id => <code key={id} className="mr-1">{id}</code>)}.</>}</div></details>
                 </div>
             )}
 
@@ -1937,7 +1935,6 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 key={key}
                                 onClick={() => setDoradoModel(key)}
                                 aria-label={model.label}
-                                disabled={modifiedBases !== 'none' && key !== 'hac'}
                                 aria-pressed={doradoModel === key}
                                 className={`p-3 rounded-lg border-2 transition-all text-left disabled:opacity-40 disabled:cursor-not-allowed ${doradoModel === key
                                     ? ''
@@ -1956,34 +1953,41 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                 </div>
             )}
 
-            {/* Methylation Detection */}
-            {inputSource === 'pod5' && doradoMolecule === 'dna' && (
+            {/* Modification calling: every pinned Dorado model for the selected basecaller */}
+            {inputSource === 'pod5' && (
                 <div className={TASK_FLOW_CARD}>
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-3">Modification calling</label>
-                    <p className="mb-3 text-xs text-[var(--text-secondary)]">{selectedWorkflow === 'modified' ? 'Choose which modifications to call before analysis.' : 'Optional per-read modification calls in the BAM. Enable Generate methylation tables for tandem per-site analysis.'}</p>
-                    <div className="grid grid-cols-2 gap-3">
-                        {(Object.entries(MODIFIED_BASES_OPTIONS) as [ModifiedBases, typeof MODIFIED_BASES_OPTIONS[ModifiedBases]][]).map(([key, opt]) => (
-                            <button
-                                key={key}
-                                onClick={() => { setModifiedBases(key); if (key !== 'none') { setBarcodeKit(''); setSampleSheet(''); } }}
-                                aria-label={opt.label}
-                                disabled={key !== 'none' && (doradoMolecule !== 'dna' || doradoModel !== 'hac' || doradoMode !== 'simplex' || Boolean(barcodeKit))}
-                                aria-pressed={modifiedBases === key}
-                                className={`p-3 rounded-lg border-2 transition-all text-left disabled:opacity-40 disabled:cursor-not-allowed ${modifiedBases === key
-                                    ? ''
-                                    : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)] bg-[var(--bg-tertiary)]/60'
-                                    }`}
-                                style={modifiedBases === key ? {
-                                    borderColor: 'var(--accent-secondary)',
-                                    backgroundColor: 'color-mix(in srgb, var(--accent-secondary) 12%, transparent)',
-                                } : undefined}
-                            >
-                                <div className="font-medium text-[var(--text-primary)] text-sm">{opt.label}</div>
-                                <div className="text-xs text-[var(--text-secondary)] mt-1">{opt.description}</div>
-                            </button>
-                        ))}
-                    </div>
-                    <p className="mt-3 text-xs text-[var(--text-secondary)]">Modification models in this installation require High Accuracy (HAC), one strand, and no barcoding.</p>
+                    <p className="mb-3 text-xs text-[var(--text-secondary)]">{selectedWorkflow === 'modified' ? 'Choose which modifications to call before analysis.' : 'Optional per-read modification calls (MM/ML tags) in the BAM. Select any combination; enable Generate methylation tables for per-site analysis.'}</p>
+                    {modificationOptions.length === 0 ? (
+                        <p className="text-xs text-[var(--text-secondary)]">No modification models exist for {doradoMolecule.toUpperCase()} {DORADO_MODELS[doradoModel].label} basecalling. Choose High Accuracy or Super Accurate.</p>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-2" role="group" aria-label="Modification models">
+                            {modificationOptions.map(option => {
+                                const checked = selectedModifications.includes(option.modification);
+                                const unavailable = doradoMode !== 'simplex' || Boolean(barcodeKit);
+                                return (
+                                    <label key={option.id} className={`flex items-start gap-2 p-2 rounded-lg border text-left ${checked ? 'border-[var(--accent-secondary)]' : 'border-[var(--border-primary)]'} ${unavailable ? 'opacity-40' : 'cursor-pointer'}`}>
+                                        <input
+                                            type="checkbox"
+                                            aria-label={option.modification}
+                                            checked={checked}
+                                            disabled={unavailable}
+                                            onChange={() => {
+                                                setSelectedModifications(current => toggleModification(current, modificationOptions, option.modification));
+                                                setBarcodeKit(''); setSampleSheet('');
+                                            }}
+                                            className="mt-0.5"
+                                        />
+                                        <span>
+                                            <span className="block text-sm font-medium text-[var(--text-primary)]">{option.modification.replace(/_/g, ' + ')}</span>
+                                            <span className="block text-xs text-[var(--text-secondary)]">{describeModification(option)}</span>
+                                        </span>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                    )}
+                    <p className="mt-3 text-xs text-[var(--text-secondary)]">Dorado runs one modification model per canonical base; choosing another model for the same base replaces it. Modification calling requires one-strand calling and no inline barcoding.</p>
                 </div>
             )}
 
@@ -2569,7 +2573,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                         <span data-testid="ngs-review-input" className={reviewInputReady ? 'text-[var(--success)]' : 'text-[var(--warning)]'}>● {reviewInputReady ? 'INPUT READY' : 'INPUT REQUIRED'} · {inputSource.toUpperCase()}</span>
                         <span data-testid="ngs-review-mode" className="text-[var(--accent-primary)]">MODE · {reviewModeLabel}</span>
                         <span data-testid="ngs-review-model" className="text-[var(--text-secondary)]">QUALITY · {reviewModelLabel}</span>
-                        <span data-testid="ngs-review-gpu" className="text-[var(--success)]">GPU · {reviewGpuLabel}</span>
+                        <span data-testid="ngs-review-gpu" className="text-[var(--success)]">COMPUTE · {reviewGpuLabel}</span>
                         <span data-testid="ngs-review-reference" className={reviewReferenceReady ? 'text-[var(--success)]' : 'text-[var(--warning)]'}>{reviewReferenceLabel}</span>
                     </div>
                 </div>

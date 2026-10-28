@@ -1704,7 +1704,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "acb3214b376003a2f4a4b34fa85a6d3225bb4da4a7c9cf2a49be59ac46c87712",
+      "inventory_sha256": "df9991f9496645775dc79e77a98ce6992f46666ea47e808a7c93026a7c9a83fa",
       "label": "ONT DNA Analysis",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -1748,7 +1748,7 @@
         "trim_adapters"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.basecall_dna.v1",
-      "parameter_schema_sha256": "76488557a8dc312ef4c43825e5aeae4ce3ccc650c5cf1f7d68b0ebbc34fbd987",
+      "parameter_schema_sha256": "fef7ef448f8c17f6d9c5b85f24969b86246a6038baf353088c0a79c3e8563699",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -1839,11 +1839,12 @@
         "dorado_batch_size",
         "dorado_quality_mode",
         "emit_moves",
-        "min_qscore"
+        "min_qscore",
+        "modified_bases"
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "367d55023c21e246488d354f1b2f548bceb2f626b21fdb7b7f85ead8da4e5c3f",
+      "inventory_sha256": "069bb96dae9f04d12687088d09a0f403edb85392ef90d7ec8e7ec81e77ab9e9c",
       "label": "ONT RNA Basecalling",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -1861,12 +1862,13 @@
         "emit_moves",
         "emit_summary",
         "min_qscore",
+        "modified_bases",
         "pod5_dir",
         "reference_fasta",
         "trim_adapters"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.basecall_rna.v1",
-      "parameter_schema_sha256": "42f053d66f910ab4cc5f362df11e48b03ec8d8a7abfdf9034e8bac199996c536",
+      "parameter_schema_sha256": "95385d73718944f72192a476443e21c547ba35dc62fd114915ffd58fe4a9d36e",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -2457,7 +2459,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "190a76d24e87a0f8c3e876f4291a92a438c2451775ca1541b4b3995802a73e18",
+      "inventory_sha256": "29447b640a26e9b7934dd8c1c3579302cd6ed181a1d40f452774242d78e2d758",
       "label": "ONT Methylation Analysis",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -2485,7 +2487,7 @@
         "trim_adapters"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.methylation_analysis.v1",
-      "parameter_schema_sha256": "b1728b4a5cab97bccf2cb1204cd84c411c61e0bab1adaff89f1b83dfd9cb8d3b",
+      "parameter_schema_sha256": "6450951a3ad17cc43f8ed0e926a989317a1b77bd88e24f3dc9fba2f3f17d8829",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -2606,7 +2608,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "c64c9f5c076543323bb0ceb7b4e5e5d6f9e9a4a05116df960147935546c044a0",
+      "inventory_sha256": "ba9f106331a7d951e32c50e86ee38eedbc142e5a9eee7484568f24165a0205be",
       "label": "ONT Plasmid QC",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -2651,7 +2653,7 @@
         "trim_adapters"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.plasmid_qc.v1",
-      "parameter_schema_sha256": "5af3a7831d0642f06479bcc066bc9573d487882ea58d7d7b20cca81796e19c41",
+      "parameter_schema_sha256": "1dd02aa1113e8facd5dc060cafc301d7ffdcba7f06ef2b62fba7ce41bc4ff997",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -3067,7 +3069,7 @@
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "7686f7481943470cf2fe0e780b5f0967caa060b6f996da528e7709ca4337e1bc",
+  "content_sha256": "7d37a3bbb599173b5fff1e8656ac0bd8e8658b47fc7e76397e7a42cc3b87be5a",
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",

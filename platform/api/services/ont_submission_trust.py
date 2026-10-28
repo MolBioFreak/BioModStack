@@ -752,9 +752,9 @@ def dorado_selected_input_binding(params: Mapping[str, Any]) -> dict[str, Any]:
     models = [resolve_model(lock, params.get('ont_molecule_type') or 'dna', params.get('dorado_quality_mode') or 'sup')]
     if params.get('dorado_basecall_mode') == 'duplex':
         models.append(lock['models']['stereo'])
-    modified = params.get('modified_bases') or 'none'
-    if modified != 'none':
-        models.append(lock['models']['modified_bases'][modified])
+    from scripts.dorado_p4_preflight import resolve_modified_bases
+    models.extend(resolve_modified_bases(lock, params.get('ont_molecule_type') or 'dna', params.get('dorado_quality_mode') or 'sup',
+                                         params.get('dorado_basecall_mode') or 'simplex', params.get('modified_bases')))
     bindings = {}
     layouts = list(_layouts(model_acquisition_plan('nanopore')))
     for model in models:
