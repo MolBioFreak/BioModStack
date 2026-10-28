@@ -12,11 +12,12 @@ from typing import Any
 
 from sqlalchemy import select
 
-from database import OntInstrumentRun
+from database import OntInstrumentRun, OntRawSignalRepresentation
 from services.container_cli_environment import container_cli_environment
 from services.ont_raw_signal import (
     EXTERNAL_BLOW5_VALIDATION_PROFILE_ID,
     SLOW5_TO_BLOW5_PROFILE_ID,
+    apply_source_retention,
     finalize_slow5_conversion,
     slow5_canonical_roundtrip,
     slow5_output_validation_command,
@@ -354,6 +355,20 @@ class OntRawSignalWorker:
             raise RuntimeError(f"raw-signal stage command failed with exit {receipt['returncode']}")
         return receipt
 
+    async def _apply_retention(self, source_id: str, blow5_id: str) -> None:
+        """Remove converted POD5 when the operator chose BLOW5-only retention."""
+        try:
+            async with self._session_factory() as session:
+                source = await session.get(OntRawSignalRepresentation, source_id)
+                blow5 = await session.get(OntRawSignalRepresentation, blow5_id)
+                if source is not None and blow5 is not None:
+                    outcome = await apply_source_retention(session, source, blow5)
+                    await session.commit()
+                    if outcome and outcome.get("errors"):
+                        logger.warning("ONT POD5 removal incomplete for %s: %s", source_id, outcome["errors"])
+        except Exception:
+            logger.exception("ONT POD5 retention step failed: %s", source_id)
+
     async def run_once(self) -> int:
         async with self._session_factory() as session:
             await recover_expired_derivations(session)
@@ -533,6 +548,7 @@ class OntRawSignalWorker:
                     raise RuntimeError("raw-signal publication authority disappeared")
                 representation = await publish_derivation(session, live_job, live_source, commands)
                 await transition_derivation(session, job.id, claim_token, "ready", "indexed_blow5_ready", {"representation_id": representation.id})
+            await self._apply_retention(source.id, representation.id)
             return 1
         except asyncio.CancelledError:
             raise

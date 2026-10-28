@@ -5688,6 +5688,7 @@ export interface OntRawSignalRepresentation {
     state: OntRawSignalReadiness;
     reason_code: string;
     manifest_sha256: string;
+    source_removed?: boolean;
     artifact_count: number;
     artifacts: Array<{
         artifact_id?: string;
@@ -5823,6 +5824,16 @@ export const requestOntRawSignalWaveform = (
 ));
 export const fetchOntRawSignalWaveform = (lookupId: string) =>
     apiData(api.get<OntRawSignalWaveform>(`/api/ont/raw-signal/waveforms/${encodeURIComponent(lookupId)}`));
+export type OntRawSignalRetentionPolicy = 'pod5_and_blow5' | 'blow5_only';
+export interface OntRawSignalRetentionSettings {
+    policy: OntRawSignalRetentionPolicy;
+    remove_pod5_after_verified_blow5: boolean;
+    installation_default: string;
+}
+export const fetchOntRawSignalRetention = () =>
+    apiData(api.get<OntRawSignalRetentionSettings>('/api/ont/raw-signal/retention'));
+export const saveOntRawSignalRetention = (policy: OntRawSignalRetentionPolicy) =>
+    apiData(api.put<OntRawSignalRetentionSettings>('/api/ont/raw-signal/retention', { policy }));
 export const requestOntBlow5Preparation = (
     runId: string,
     observedGeneration: number,

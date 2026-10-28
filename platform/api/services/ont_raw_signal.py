@@ -211,22 +211,129 @@ def live_conversion_enabled() -> bool:
     return os.getenv(LIVE_CONVERSION_ENABLED_ENV, "1").strip().lower() in {"1", "true", "yes", "on"}
 
 
+_RETENTION_POLICIES = ("pod5_and_blow5", "blow5_only")
+
+
+def retention_settings_path() -> Path:
+    """Operator choice beside the raw-signal publication tree; the env value is the install default."""
+    staging = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).expanduser()
+    return staging.parent / "ont-raw-signal-retention.json"
+
+
 def raw_signal_retention_policy() -> Literal["pod5_and_blow5", "blow5_only"]:
-    policy = os.getenv(RAW_SIGNAL_RETENTION_POLICY_ENV, "pod5_and_blow5").strip().lower()
-    if policy not in {"pod5_and_blow5", "blow5_only"}:
+    try:
+        saved = json.loads(retention_settings_path().read_text(encoding="utf-8")).get("policy")
+    except (OSError, ValueError, AttributeError):
+        saved = None
+    policy = str(saved or os.getenv(RAW_SIGNAL_RETENTION_POLICY_ENV, "pod5_and_blow5")).strip().lower()
+    if policy not in _RETENTION_POLICIES:
         raise RuntimeError(f"{RAW_SIGNAL_RETENTION_POLICY_ENV} must be pod5_and_blow5 or blow5_only")
     return policy  # type: ignore[return-value]
+
+
+def save_raw_signal_retention_policy(policy: str) -> dict[str, Any]:
+    if policy not in _RETENTION_POLICIES:
+        raise ValueError("retention policy must be pod5_and_blow5 or blow5_only")
+    path = retention_settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps({"policy": policy, "updated_at": _now().isoformat()}) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+    return retention_settings()
+
+
+def retention_settings() -> dict[str, Any]:
+    policy = raw_signal_retention_policy()
+    return {
+        "policy": policy,
+        "remove_pod5_after_verified_blow5": policy == "blow5_only",
+        "installation_default": os.getenv(RAW_SIGNAL_RETENTION_POLICY_ENV, "pod5_and_blow5").strip().lower(),
+    }
 
 
 def retention_disposition() -> str:
     if raw_signal_retention_policy() == "pod5_and_blow5":
         return "retain_pod5_and_blow5"
-    return "future_delete_after_verified_blow5_not_active_in_integrated_bms"
+    return "remove_pod5_after_verified_blow5"
 
 
 def retention_deletion_enabled() -> bool:
-    """The integrated BMS build exposes the future policy seam without deleting acquisition evidence."""
-    return False
+    return raw_signal_retention_policy() == "blow5_only"
+
+
+def _unlink_verified_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    """Remove one registered file only if it is still the exact bytes that were converted."""
+    path, root_fd, file_fd = _open_descriptor_confined_artifact_fds(artifact, authority="retained POD5")
+    parent_fd = -1
+    try:
+        digest = hashlib.sha256()
+        os.lseek(file_fd, 0, os.SEEK_SET)
+        while chunk := os.read(file_fd, 1024 * 1024):
+            digest.update(chunk)
+        if digest.hexdigest() != artifact.get("sha256"):
+            raise ValueError("retained POD5 digest diverged")
+        relative = Path(str(artifact["governed_relative_path"]))
+        parent_fd = os.dup(root_fd)
+        for component in relative.parts[:-1]:
+            next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        named = os.stat(relative.parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+        opened = os.fstat(file_fd)
+        if (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ValueError("retained POD5 name was replaced")
+        os.unlink(relative.parts[-1], dir_fd=parent_fd)
+        return {"path": str(path), "bytes": int(opened.st_size), "sha256": artifact.get("sha256")}
+    finally:
+        for descriptor in (parent_fd, file_fd, root_fd):
+            if descriptor >= 0:
+                os.close(descriptor)
+
+
+async def apply_source_retention(
+    session: AsyncSession,
+    source: OntRawSignalRepresentation,
+    blow5: OntRawSignalRepresentation,
+) -> dict[str, Any] | None:
+    """Honour the "remove POD5" choice after a POD5 conversion has published verified BLOW5.
+
+    Failures are recorded on the source and never undo the publication.
+    """
+    if (
+        raw_signal_retention_policy() != "blow5_only"
+        or source.format != "pod5"
+        or blow5.format != "blow5"
+        or blow5.state != _READY
+        or source.id not in list(blow5.parent_representation_ids or [])
+    ):
+        return None
+    receipts = dict(source.validation_receipts or {})
+    if receipts.get("source_removed"):
+        return receipts["source_removed"]
+    manifest = source.artifact_manifest if isinstance(source.artifact_manifest, dict) else {}
+    removed: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for artifact in manifest.get("artifacts") or []:
+        if not isinstance(artifact, dict) or artifact.get("kind") != "pod5":
+            continue
+        try:
+            removed.append(await asyncio.to_thread(_unlink_verified_artifact, artifact))
+        except (OSError, ValueError, KeyError) as exc:
+            errors.append(f"{artifact.get('artifact_id') or artifact.get('path')}: {type(exc).__name__}: {exc}")
+    outcome = {
+        "policy": "blow5_only",
+        "blow5_representation_id": blow5.id,
+        "removed_files": removed,
+        "removed_bytes": sum(item["bytes"] for item in removed),
+        "errors": errors,
+        "removed_at": _now().isoformat(),
+    }
+    receipts["source_removed" if removed and not errors else "source_removal_incomplete"] = outcome
+    source.validation_receipts = receipts
+    if removed and not errors:
+        source.reason_code = "pod5_removed_after_verified_blow5"
+    await session.flush()
+    return outcome
 
 
 def live_pod5_identity_snapshot(paths: list[str]) -> dict[str, dict[str, int]]:
@@ -577,6 +684,7 @@ def _public_representation(record: OntRawSignalRepresentation) -> dict[str, Any]
         "parent_manifest_sha256s": list(record.parent_manifest_sha256s or []),
         "runtime_identity": dict(record.runtime_identity or {}),
         "validation_receipts": dict(record.validation_receipts or {}),
+        "source_removed": bool((record.validation_receipts or {}).get("source_removed")),
         "validation": {
             "source_identity_closed": bool((record.validation_receipts or {}).get("source_preflight")),
             "adjacent_index_validated": bool((record.validation_receipts or {}).get("adjacent_index")),
@@ -1716,7 +1824,7 @@ async def capabilities(session: AsyncSession, *, run_id: str, observed_generatio
     reps = await list_representations(session, run_id=run_id, observed_generation=observed_generation)
     ready_pod5 = next((item for item in reps if item["format"] == "pod5" and item["state"] == _READY), None)
     ready_blow5 = next((item for item in reps if item["format"] == "blow5" and item["state"] == _READY and item["validation"]["adjacent_index_validated"]), None)
-    any_pod5 = next((item for item in reps if item["format"] == "pod5"), None)
+    any_pod5 = next((item for item in reps if item["format"] == "pod5" and not item["source_removed"]), None)
     any_convertible = any_pod5 or next((item for item in reps if item["format"] == "slow5"), None)
     blow5_state = _mode(_READY, "indexed_blow5_ready", ready_blow5["representation_id"]) if ready_blow5 else (
         _mode(_PREPARABLE, "qualified_conversion_required", any_convertible["representation_id"]) if any_convertible else _mode(_UNAVAILABLE, "no_pod5_slow5_or_indexed_blow5")
