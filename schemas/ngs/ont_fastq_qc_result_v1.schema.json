@@ -1384,6 +1384,12 @@
             "null"
           ]
         },
+        "variant_analysis_status": {
+          "enum": [
+            "completed",
+            "not_assessed"
+          ]
+        },
         "variant_count": {
           "minimum": 0,
           "type": "integer"
