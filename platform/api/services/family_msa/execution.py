@@ -55,29 +55,35 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
     argv = []
     runtime = None
     try:
-        request = AlignmentRequest.model_validate({key: payload[key] for key in ('roster', 'settings')})
-        input_file.write_text(''.join(f'>{r.row_id}\n{r.sequence}\n' for r in request.roster.rows), encoding='utf8')
-        from services.family_msa.runtime import select_runtime
-        image, selection = select_runtime()
-        if image:
-            runtime = {'kind': 'image', 'path': image, **selection}
-            try:
-                digest = hashlib.sha256()
-                with open(image, 'rb') as stream:
-                    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-                        digest.update(chunk)
-                runtime['sha256'] = digest.hexdigest()
-            except OSError as exc:
-                runtime['identity_error'] = str(exc)
+        managed = payload.get('managed_operation')
+        if managed:
+            (work / 'operation.json').write_text(json.dumps(managed), encoding='utf8')
+            argv = [sys.executable, str(Path(__file__).with_name('operation_worker.py')), str(work), job_id]
+            runtime = {'kind': 'owned-python-operation'}
         else:
-            runtime = {'kind': 'host', 'executable': shutil.which(request.settings.engine), **selection}
-        if request.settings.engine == 'mafft':
+            request = AlignmentRequest.model_validate({key: payload[key] for key in ('roster', 'settings')})
+            input_file.write_text(''.join(f'>{r.row_id}\n{r.sequence}\n' for r in request.roster.rows), encoding='utf8')
+            from services.family_msa.runtime import select_runtime
+            image, selection = select_runtime()
             if image:
-                argv = ['apptainer', 'exec', '--cleanenv', '--no-home', '--bind', f'{work}:{work}', image]
-            argv += compile_mafft(request, 'mafft', str(input_file))
-        else:
-            (work / 'request.json').write_text(request.model_dump_json(), encoding='utf8')
-            argv = [sys.executable, str(Path(__file__).with_name('worker.py')), str(work), image]
+                runtime = {'kind': 'image', 'path': image, **selection}
+                try:
+                    digest = hashlib.sha256()
+                    with open(image, 'rb') as stream:
+                        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                            digest.update(chunk)
+                    runtime['sha256'] = digest.hexdigest()
+                except OSError as exc:
+                    runtime['identity_error'] = str(exc)
+            else:
+                runtime = {'kind': 'host', 'executable': shutil.which(request.settings.engine), **selection}
+            if request.settings.engine == 'mafft':
+                if image:
+                    argv = ['apptainer', 'exec', '--cleanenv', '--no-home', '--bind', f'{work}:{work}', image]
+                argv += compile_mafft(request, 'mafft', str(input_file))
+            else:
+                (work / 'request.json').write_text(request.model_dump_json(), encoding='utf8')
+                argv = [sys.executable, str(Path(__file__).with_name('worker.py')), str(work), image]
         with output.open('wb') as stdout, log.open('wb') as stderr:
             process = await asyncio.create_subprocess_exec(*argv, cwd=str(work), stdout=stdout, stderr=stderr,
                                                            start_new_session=True)
@@ -98,7 +104,7 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
                     await process.wait()
                 raise
         if code:
-            error = f'{request.settings.engine} exited with status {code}'
+            error = f'{managed["request"]["operation"] if managed else request.settings.engine} exited with status {code}'
     except Exception as exc:
         error = f'{type(exc).__name__}: {exc}'
         with log.open('a', encoding='utf8') as stream:
@@ -112,7 +118,15 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
         'observations': observations}, indent=2) + '\n', encoding='utf8')
     files = [(input_file, 'input', 'text/x-fasta'),
              (log, 'engine_log', 'text/plain'), (receipt_path, 'receipt', 'application/json')]
-    if payload.get('settings', {}).get('engine', 'mafft') == 'mafft':
+    publication = {}
+    if payload.get('managed_operation'):
+        files += [(work / 'operation.json', 'operation_request', 'application/json')]
+        publication_path = work / 'operation-publication.json'
+        if publication_path.is_file():
+            publication = json.loads(publication_path.read_text())
+            files += [(publication_path, 'operation_publication', 'application/json'),
+                      (work / publication['result_path'], 'operation_result', publication['media_type'])]
+    elif payload.get('settings', {}).get('engine', 'mafft') == 'mafft':
         files += [(output, 'alignment', 'text/x-fasta'),
                   (Path(str(input_file) + '.tree'), 'guide_tree', 'text/plain')]
     else:
@@ -156,7 +170,9 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
                 artifact = JobArtifact(id=str(uuid.uuid4()), owner_job_id=job_id, attempt=attempt,
                     logical_path=str(path.relative_to(Path(output_dir).resolve())), storage_path=str(path),
                     sha256=digest.hexdigest(), bytes=path.stat().st_size, media_type=media_type,
-                    provenance={'role': role, 'run_identity': run_identity})
+                    provenance={'role': role, 'run_identity': run_identity,
+                                **({'retained_resource_id': publication['retained_resource_id']}
+                                   if role == 'operation_result' else {})})
                 artifacts.append(artifact)
                 session.add(artifact)
         from services.family_msa.result_manifest import write_result_manifest

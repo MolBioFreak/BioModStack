@@ -206,6 +206,11 @@ async def job_result(request, session, job_id):
 
 async def project_result(request, session, project_id, receipt_id):
     await _require_mutation_owner(request, session, resource_id=project_id)
+    return await project_result_data(session, project_id, receipt_id)
+
+
+async def project_result_data(session, project_id, receipt_id):
+    """Verified retained read for authorized routes and bound owned workers."""
     receipt = await session.get(ExperimentExternalEntityReceipt, receipt_id)
     if not receipt or receipt.workspace_id != project_id or receipt.entity_kind not in ('family_msa_job_result', 'family_msa_import'):
         raise HTTPException(404, detail='Result not found')
@@ -383,19 +388,83 @@ async def export_browser_bundle(request: Request, project_id: str, receipt_id: s
                         headers={'Content-Disposition': 'attachment; filename="alignment-project-bundle.zip"'})
 
 
-class ComparisonInput(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    left_receipt_id: str = Field(min_length=1)
-    left_artifact_id: str = Field(min_length=1)
-    right_receipt_id: str = Field(min_length=1)
-    right_artifact_id: str = Field(min_length=1)
+from services.family_msa.operations import OperationRequest, OperationStatus, ComparisonInput, EnsembleSupportInput
 
 
-class EnsembleSupportInput(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    receipt_id: str = Field(min_length=1)
-    reference_artifact_id: str = Field(min_length=1)
-    member_artifact_ids: list[str]
+@router.post('/projects/{project_id}/operations', response_model=OperationStatus, status_code=202)
+async def submit_operation(request: Request, project_id: str, payload: OperationRequest,
+                           session: AsyncSession = Depends(get_experiment_session),
+                           core: AsyncSession = Depends(get_session)):
+    """Persist only identifiers; expensive reads and computation belong to the Job."""
+    import uuid
+    from fastapi import BackgroundTasks
+    from schemas import JobCreate
+    from routers.jobs import _create_job
+    from services.family_msa.operations import status
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    for key in ('receipt_id', 'left_receipt_id', 'right_receipt_id'):
+        if key in payload.inputs:
+            receipt = await session.get(ExperimentExternalEntityReceipt, payload.inputs[key])
+            if not receipt or receipt.workspace_id != project_id or receipt.entity_kind not in ('family_msa_import', 'family_msa_job_result'):
+                raise HTTPException(404, detail='Result not found')
+    job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms.family-msa.operation:' + uuid.uuid4().hex))
+    try:
+        from services.family_msa.operations import bind_request
+        snapshots = [await get_shared_state(request, project_id, ident, session=session)
+                     for ident in payload.inputs.get('shared_state_ids', [])]
+        operation = await bind_request(session, request=payload, project_id=project_id,
+                                       shared_states=snapshots, job_id=job_id)
+        await _create_job(JobCreate(name=payload.name,
+            model_id='family_msa_protein' if payload.molecule == 'protein' else 'family_msa_nucleic',
+            mode='family_msa', params={'managed_operation': operation.model_dump(mode='json')}),
+            BackgroundTasks(), core, _preallocated_job_id=job_id)
+        job = await core.get(Job, job_id)
+        return status(job)
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
+async def operation_job(request, project_id, job_id, session, core):
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    job = await core.get(Job, job_id)
+    if (not job or job.model_id not in ('family_msa_protein', 'family_msa_nucleic')
+            or job.params.get('managed_operation', {}).get('project_id') != project_id):
+        raise HTTPException(404, detail='Operation not found')
+    return job
+
+
+@router.get('/projects/{project_id}/operations/{job_id}', response_model=OperationStatus)
+async def get_operation(request: Request, project_id: str, job_id: str,
+                        session: AsyncSession = Depends(get_experiment_session),
+                        core: AsyncSession = Depends(get_session)):
+    from services.family_msa.operations import status
+    return status(await operation_job(request, project_id, job_id, session, core))
+
+
+@router.get('/projects/{project_id}/operations/{job_id}/artifact')
+async def get_operation_artifact(request: Request, project_id: str, job_id: str,
+                                session: AsyncSession = Depends(get_experiment_session),
+                                core: AsyncSession = Depends(get_session)):
+    from fastapi.responses import FileResponse
+    job = await operation_job(request, project_id, job_id, session, core)
+    if job.status != 'completed':
+        raise HTTPException(409, detail='Operation is not completed')
+    rows = (await core.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job_id,
+        JobArtifact.attempt == (job.retry_count or 0)))).all()
+    publication = next((row for row in rows if (row.provenance or {}).get('role') == 'operation_result'), None)
+    retained_id = (publication.provenance or {}).get('retained_resource_id') if publication else None
+    artifact = await session.get(ExperimentArtifact, retained_id) if retained_id else None
+    resource = await session.get(ExperimentResource, retained_id) if retained_id else None
+    if (not publication or not artifact or not resource or resource.workspace_id != project_id
+            or resource.lifecycle_owner_id != job.params['managed_operation']['request_dataset_id']
+            or artifact.logical_role != 'operation_result' or artifact.blob_sha256 != publication.sha256):
+        raise HTTPException(404, detail='Operation artifact not found')
+    try:
+        path = await retained_path(session, artifact)
+    except (CustodyError, OSError) as exc:
+        raise unavailable(exc) from exc
+    return FileResponse(path, media_type=publication.media_type, filename='alignment-operation.zip' if publication.media_type == 'application/zip' else 'alignment-operation.json')
 
 
 class PairAgreement(BaseModel):

@@ -1,6 +1,20 @@
 """Typed project-shared alignment state, stored by the Project Dataset owner."""
 from typing import Literal, Annotated
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing_extensions import TypedDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator, with_config
+
+
+@with_config(ConfigDict(extra='forbid'))
+class RendererState(TypedDict, total=False):
+    scrollX: float
+    scrollY: float
+    columnWidth: float
+    rowHeight: float
+    colorScheme: str
+    hiddenColumns: list[int]
+    hideGaps: bool
+    allowedGappyness: float
+    zoomLevel: float
 
 
 class Closed(BaseModel):
@@ -52,6 +66,7 @@ class View(Closed):
     hidden_row_ids: list[str] = Field(default_factory=list)
     row_order: list[str] = Field(default_factory=list)
     selected_marks: list[str] = Field(default_factory=list)
+    renderer_state: RendererState | None = None
     viewer: str | None = None
     selected_row_id: str | None = None
     selected_column: int | None = Field(default=None, ge=0)

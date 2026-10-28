@@ -137,6 +137,8 @@ async def test_owned_runner_cancellation_reaps_process(admission, monkeypatch, t
     monkeypatch.setenv('PID_FILE', str(pid_file))
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.delenv('BMS_FAMILY_MSA_SIF', raising=False)
+    from services.family_msa import runtime
+    monkeypatch.setattr(runtime, 'select_runtime', lambda: ('', {'selection': 'synthetic-host'}))
     payload = {'roster': {'molecule': 'dna', 'rows': [
         {'row_id': 'r1', 'header': 'one', 'sequence': 'ACGT'}]}, 'settings': {'threads': 1}}
     job = Job(id='cancel-scratch', name='cancel', model_id='family_msa_nucleic', mode='family_msa',
@@ -159,7 +161,8 @@ async def test_owned_runner_cancellation_reaps_process(admission, monkeypatch, t
 
 
 @pytest.mark.asyncio
-async def test_cancel_api_stops_owned_runner(admission, monkeypatch, tmp_path):
+@pytest.mark.parametrize('managed', [False, True])
+async def test_cancel_api_stops_owned_runner(admission, monkeypatch, tmp_path, managed):
     from services.family_msa.execution import run_owned_job
     from services import job_control
     monkeypatch.delenv('INVOCATION_ID', raising=False)
@@ -170,8 +173,17 @@ async def test_cancel_api_stops_owned_runner(admission, monkeypatch, tmp_path):
     monkeypatch.setenv('PID_FILE', str(pid_file))
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.delenv('BMS_FAMILY_MSA_SIF', raising=False)
+    from services.family_msa import runtime
+    monkeypatch.setattr(runtime, 'select_runtime', lambda: ('', {'selection': 'synthetic-host'}))
     payload = {'roster': {'molecule': 'protein', 'rows': [
         {'row_id': 'r1', 'header': 'one', 'sequence': 'ACDEFG'}]}, 'settings': {'engine': 'famsa'}}
+    if managed:
+        payload = {'managed_operation': {'request': {'operation': 'compare'}}}
+        spawn = asyncio.create_subprocess_exec
+        async def synthetic_slow_operation(*argv, **kwargs):
+            assert Path(argv[1]).name == 'operation_worker.py'
+            return await spawn(str(executable), **kwargs)
+        monkeypatch.setattr(asyncio, 'create_subprocess_exec', synthetic_slow_operation)
     job = Job(id='cancel-api-scratch', name='cancel', model_id='family_msa_protein', mode='family_msa',
               params=payload, status='running', queue_status='running', nextflow_run_id='scratch-unit')
     admission.add(job)
@@ -201,7 +213,8 @@ async def test_cancel_api_stops_owned_runner(admission, monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('mutation', ['canceling', 'receipt', 'successor', 'owner'])
-async def test_terminal_publication_fenced_by_live_authority(admission, monkeypatch, tmp_path, mutation):
+@pytest.mark.parametrize('managed', [False, True])
+async def test_terminal_publication_fenced_by_live_authority(admission, monkeypatch, tmp_path, mutation, managed):
     from services.family_msa.execution import run_owned_job
     executable = tmp_path / 'mafft'
     executable.write_text('#!/bin/sh\ntouch "$READY"\nwhile [ ! -f "$RELEASE" ]; do sleep 0.05; done\n')
@@ -210,10 +223,19 @@ async def test_terminal_publication_fenced_by_live_authority(admission, monkeypa
     monkeypatch.setenv('READY', str(tmp_path / 'ready'))
     monkeypatch.setenv('RELEASE', str(tmp_path / 'release'))
     monkeypatch.delenv('BMS_FAMILY_MSA_SIF', raising=False)
+    from services.family_msa import runtime
+    monkeypatch.setattr(runtime, 'select_runtime', lambda: ('', {'selection': 'synthetic-host'}))
     monkeypatch.delenv('BMS_TRANSIENT_WORKFLOW_UNIT_NAME', raising=False)
     monkeypatch.delenv('INVOCATION_ID', raising=False)
     payload = {'roster': {'molecule': 'dna', 'rows': [
         {'row_id': 'r1', 'header': 'one', 'sequence': 'ACGT'}]}, 'settings': {'threads': 1}}
+    if managed:
+        payload = {'managed_operation': {'request': {'operation': 'compare'}}}
+        spawn = asyncio.create_subprocess_exec
+        async def synthetic_slow_operation(*argv, **kwargs):
+            assert Path(argv[1]).name == 'operation_worker.py'
+            return await spawn(str(executable), **kwargs)
+        monkeypatch.setattr(asyncio, 'create_subprocess_exec', synthetic_slow_operation)
     if mutation == 'owner':
         monkeypatch.setenv('BMS_TRANSIENT_WORKFLOW_UNIT_NAME', 'unit-a')
         monkeypatch.setenv('BMS_TRANSIENT_WORKFLOW_OWNER_NONCE', 'nonce-a')

@@ -9877,6 +9877,15 @@ async def resubmit_job(
         max_retries=2,
     )
 
+    if new_job.model_id in {'family_msa_protein', 'family_msa_nucleic'} and resubmit_params.get('managed_operation'):
+        from services.family_msa.operations import ManagedOperation, bind_request
+        from experiment_database import experiment_session_factory
+        operation = ManagedOperation.model_validate(resubmit_params['managed_operation'])
+        async with experiment_session_factory() as project_session:
+            rebound = await bind_request(project_session, request=operation.request, project_id=operation.project_id,
+                shared_states=operation.shared_states, job_id=new_job.id)
+        new_job.params = {**new_job.params, 'managed_operation': rebound.model_dump(mode='json')}
+
     if new_job.model_id == "nanopore":
         _retain_ont_replay_lineage(original_job, new_job)
         output_dir = str(get_results_dir() / new_job.id)
