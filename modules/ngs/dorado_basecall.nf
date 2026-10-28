@@ -198,7 +198,8 @@ process DoradoBasecall {
       [[ "\$(sha256sum "\${sample_target}" | cut -d' ' -f1)" == "\${sample_sha}" ]] || { echo 'sample-sheet snapshot identity mismatch' >&2; exit 1; }
     fi
     snapshot_model "\${model_id}" '.runtime.assets.models.base'
-    for mod_model_id in "\${mod_model_ids[@]}"; do snapshot_model "\${mod_model_id}" ".runtime.assets.models.modified_bases[\"\${mod_model_id}\"]"; done
+    dq='"'
+    for mod_model_id in "\${mod_model_ids[@]}"; do snapshot_model "\${mod_model_id}" ".runtime.assets.models.modified_bases[\${dq}\${mod_model_id}\${dq}]"; done
     if [[ "\${mode}" == duplex ]]; then stereo_model_id="\$(jq -r '.selection.stereo_model_id' dorado_preflight.json)"; snapshot_model "\${stereo_model_id}" '.runtime.assets.models.stereo'; fi
 
     visible_gpus="\${CUDA_VISIBLE_DEVICES:-0}"
