@@ -3,6 +3,7 @@ import Plot from 'react-plotly.js';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/api';
 import { describeNgsError, withAlignmentAccessRecovery } from '../../lib/ngsAlignmentSession';
+import { OntReadSquigglePanel } from './OntReadSquigglePanel';
 
 export interface OntReadReport {
     schema: 'bms.ngs.read-report.v1';
@@ -64,7 +65,7 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
         ['Mean Q', report.mean_qscore == null ? '—' : report.mean_qscore.toFixed(1), `median ${report.median_qscore?.toFixed(1) ?? '—'}`],
         ['≥Q10 / ≥Q20', report.reads ? `${pct(report.reads_q10_or_better / report.reads, 0)} / ${pct(report.reads_q20_or_better / report.reads, 0)}` : '—', 'share of reads'],
         ['Mapped', align.aligned ? `${n(align.mapped_reads)} / ${n(report.reads)}` : 'not aligned', align.aligned ? `${align.references.length} reference contig(s)` : 'no reference supplied'],
-        ['Move tables', n(report.move_tagged_reads), report.move_tagged_reads ? 'squiggle mapping possible' : 'enable "emit moves" for squiggles'],
+        ['Move tables', n(report.move_tagged_reads), report.move_tagged_reads ? 'squiggles below' : 'enable "emit moves" for squiggles'],
     ];
     return (
         <div className="space-y-3" data-testid="ont-read-report">
@@ -143,6 +144,8 @@ export function OntReadReportPanel({ jobId, onOpenSignal }: { jobId: string; onO
                     </ul>
                 </section>
             )}
+
+            {report.move_tagged_reads > 0 && <OntReadSquigglePanel jobId={jobId} />}
 
             <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
                 <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Programs and read groups</summary>

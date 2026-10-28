@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const get = vi.fn();
-vi.mock('react-plotly.js', () => ({ default: () => <div data-testid="plot" /> }));
+vi.mock('react-plotly.js', () => ({ default: (props: { layout?: { shapes?: unknown[] } }) => <div data-testid="plot" data-shapes={props.layout?.shapes?.length ?? 0} /> }));
 vi.mock('../../src/lib/api', () => ({ api: { get: (...args: unknown[]) => get(...args) } }));
 vi.mock('../../src/lib/ngsAlignmentSession', () => ({
     withAlignmentAccessRecovery: (_jobId: string, operation: () => Promise<unknown>) => operation(),
@@ -33,6 +33,18 @@ const REPORT = {
     read_groups: [{ id: 'rg', basecall_model: 'runid=r basecall_model=dna_r10.4.1_e8.2_400bps_hac@v6.0.0 modbase_models=x_6mA@v1,x_5mCG_5hmCG@v1' }],
 };
 
+const READS = { total_primary_reads: 1, reads: [{ read_id: 'r-long', length: 4, qscore: 20, has_moves: true, modified_calls: { 'A+6mA': 3 } }] };
+const SQUIGGLE = {
+    schema: 'bms.ngs.read-squiggle.v1', read_id: 'r-long', pod5_file: 'a.pod5', read_length: 4, stride: 6, trimmed_samples: 0,
+    start_base: 0, end_base: 4, sample_offset: 0, signal_pa: Array.from({ length: 24 }, (_v, i) => 80 + i),
+    bases: [
+        { index: 0, base: 'G', sample_start: 0, sample_end: 6, modifications: {} },
+        { index: 1, base: 'A', sample_start: 6, sample_end: 12, modifications: { 'A+6mA': 0.94 } },
+        { index: 2, base: 'T', sample_start: 12, sample_end: 18, modifications: {} },
+        { index: 3, base: 'C', sample_start: 18, sample_end: 24, modifications: { 'C+5mC': 0.1 } },
+    ],
+};
+
 describe('OntReadReportPanel', () => {
     let container: HTMLDivElement;
     let root: Root;
@@ -46,10 +58,18 @@ describe('OntReadReportPanel', () => {
     }
 
     it('shows yield, quality, model and calls methylation with the 5% cutoff', async () => {
-        get.mockResolvedValue({ data: REPORT });
+        get.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('ngs-read-report') ? REPORT : url.endsWith('/reads') ? READS : SQUIGGLE }));
         const onOpenSignal = vi.fn();
         await mount(onOpenSignal);
         expect(get).toHaveBeenCalledWith('/api/jobs/j/ngs-read-report');
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+        expect(get).toHaveBeenCalledWith('/api/jobs/j/ngs-squiggle/reads/r-long', { params: { start_base: 0, bases: 120 } });
+        const viewer = container.querySelector('[aria-label="Squiggle viewer"]')!;
+        expect(viewer.querySelector('select')?.textContent).toContain('A+6mA 3');
+        expect(viewer.querySelector('[aria-label="Called bases"]')?.textContent).toBe('GATC');
+        expect(viewer.querySelector('[data-base-index="1"]')?.getAttribute('title')).toContain('A+6mA 94%');
+        expect(viewer.querySelector('[data-testid="plot"]')?.getAttribute('data-shapes')).toBe('5');
         const summary = container.querySelector('[aria-label="Read summary"]')!;
         expect(summary.textContent).toContain('65,630 bp');
         expect(summary.textContent).toContain('5,549 bp');
