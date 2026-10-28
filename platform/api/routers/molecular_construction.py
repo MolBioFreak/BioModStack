@@ -11,6 +11,16 @@ from services.molecular_construction_recipe import (
 router = APIRouter(prefix="/api/molecular-construction", tags=["molecular-construction"])
 
 
+@router.get("/schema")
+def construction_schema():
+    """Actual closed native contracts, including their local $defs."""
+    return {
+        "recipe": MolecularConstructionRecipe.model_json_schema(),
+        "complement": ComplementRequest.model_json_schema(),
+        "result": ConstructionResult.model_json_schema(),
+    }
+
+
 @router.post("/graph", response_model=ConstructionResult)
 def molecular_graph(recipe: MolecularConstructionRecipe):
     try:
