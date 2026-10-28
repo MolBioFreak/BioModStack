@@ -3622,6 +3622,19 @@ def test_move_worker_publication_requires_exact_known_producer_authority() -> No
         "independent_move_validation": True,
     }
 
+    # A standalone basecall job (no instrument run lineage) is accepted the same way.
+    missing.source_runtime_identity = {
+        **missing.source_runtime_identity,
+        "reason_code": "producer_lineage_unavailable",
+    }
+    assert validator(missing, report)["authority_state"] == "legacy_unknown"
+    missing.source_runtime_identity = {
+        **missing.source_runtime_identity,
+        "requires_independent_move_validation": False,
+    }
+    with pytest.raises(RuntimeError, match="legacy move-source authority is incomplete"):
+        validator(missing, report)
+
 
 @pytest.mark.asyncio
 async def test_move_source_runtime_failures_are_boundedly_rerequested_before_terminal_failure(
