@@ -1347,6 +1347,52 @@ def _runtime_reference_directive(store: Path, lane: str) -> str:
     return f"EnvironmentFile={systemd_value(reference)}" if required else ""
 
 
+STUDIO_SERVICE = 'biomodstack-atomworks-studio.service'
+
+
+def studio_development_units(root: Path) -> tuple[dict[str, str], str]:
+    """Optional CPU editor descriptor, consumed by the existing unit installer.
+
+    No descriptor means byte-identical legacy units. This is Development-only;
+    no model registry entry, service scheduler or Production runtime is added.
+    """
+    path = runtime_profile_config_dir() / 'atomworks-studio-development.json'
+    if not path.exists():
+        return {}, ''
+    descriptor = json.loads(path.read_text())
+    if descriptor.get('schema_version') != 'bms.atomworks-studio-runtime.v1':
+        raise ServiceManagerError('unsupported Studio runtime descriptor')
+    python, env, sessions = (Path(descriptor[key]) for key in ('python', 'environment_file', 'sessions'))
+    if not all(p.is_absolute() for p in (python, env, sessions)):
+        raise ServiceManagerError('Studio runtime paths must be absolute')
+    port = descriptor['port']
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ServiceManagerError('Studio runtime port is invalid')
+    unit = dedent(f'''\
+        [Unit]
+        Description=BioModStack isolated CPU AtomWorks Studio
+        PartOf={DEV_TARGET_UNIT}
+        After=network.target
+
+        [Service]
+        Type=simple
+        UMask=0077
+        EnvironmentFile={systemd_value(env)}
+        Environment=PYTHONDONTWRITEBYTECODE=1
+        WorkingDirectory={systemd_value(root)}
+        ExecStartPre=/usr/bin/mkdir -p {systemd_exec_arg(sessions)}
+        ExecStart={systemd_exec_arg(python)} -B -m uvicorn atomworks_studio_service:create_app --factory --app-dir {systemd_exec_arg(root / 'scripts')} --host 127.0.0.1 --port {port} --no-access-log
+        Restart=on-failure
+        RestartSec=5
+        TimeoutStopSec=20
+        KillMode=control-group
+
+        [Install]
+        WantedBy={DEV_TARGET_UNIT}
+        ''')
+    return {STUDIO_SERVICE: unit}, f'EnvironmentFile={systemd_value(env)}'
+
+
 def render_user_units(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, str]:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
@@ -1888,7 +1934,13 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         """
     )
 
+    studio_units, studio_environment = studio_development_units(root)
+    if studio_units:
+        api_unit = api_unit.replace('[Unit]\n', f'[Unit]\nWants={STUDIO_SERVICE}\nAfter={STUDIO_SERVICE}\n', 1)
+        api_unit = api_unit.replace('[Service]\n', f'[Service]\n{studio_environment}\n', 1)
+        target_unit = target_unit.replace('[Unit]\n', f'[Unit]\nWants={STUDIO_SERVICE}\n', 1)
     return {
+        **studio_units,
         DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE: development_workflow_adapter_unit,
         TELEMETRY_SERVICE: telemetry_unit,
         WORKFLOW_PARENT_SLICE: render_workflow_parent_slice(),

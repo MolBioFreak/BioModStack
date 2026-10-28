@@ -1,5 +1,10 @@
 # Private pinned AtomWorks Studio host (S02 / R03)
 
+For the supported managed Development descriptor, durable staging and isolated
+CPU graph/geometry execution, see [AtomWorks_Managed_Runtime.md](../docs/AtomWorks_Managed_Runtime.md).
+The original lane boundaries below describe its historical qualification, not
+current parent registration/deployment completion.
+
 This lane supplies a working isolated editor service, BMS private receiving router,
 raw-export React wrapper and executable CPU/HTTP/browser tests. It does **not**
 change live services/ingress, register the router in `app/main.py`, wire the parent
