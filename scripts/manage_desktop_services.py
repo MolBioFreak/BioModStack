@@ -89,6 +89,10 @@ def main() -> int:
     parser.add_argument("--accept-license", action="append", default=[], help="explicit acceptance of a reviewed license ID; repeatable, recorded durably")
     parser.add_argument("--runtime-attestation", type=Path, help="existing Protenix observed attestation for offline verify; not approval")
     args = parser.parse_args()
+    # Recorded installation selectors fill only what the caller left unset, so
+    # a plain shell reproduces the same units and prerequisite environment.
+    from biomodstack_runtime_profile import apply_host_selectors
+    apply_host_selectors()
     from biomodstack_python_prerequisites import (
         ACTIONS, SETUP_ACTIONS, prerequisite_report, dispatch_setup,
     )

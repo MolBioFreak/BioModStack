@@ -28,9 +28,11 @@ from biomodstack_runtime_profile import (
     DEFAULT_DEVELOPMENT_WORKFLOW_ADAPTER_PORT,
     DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT,
     DEFAULT_WEB_HOST_PORT,
+    apply_host_selectors,
     get_biomodstack_config_dir as runtime_profile_config_dir,
     install_profile_snapshot as runtime_profile_snapshot,
     load_install_profile,
+    record_host_selectors,
     save_install_profile,
     validate_runtime_port_contract,
 )
@@ -435,8 +437,21 @@ def get_user_systemd_dir(home: Path | None = None) -> Path:
     return base_home / ".config" / "systemd" / "user"
 
 
+def installed_default_runtime_mode() -> str:
+    """The installation's lane when nothing selects one explicitly.
+
+    An install profile with ``core_runtime_mode: false`` has no Production
+    container runtime; defaulting it to ``container`` sent unqualified restarts
+    to storage that was never provisioned.
+    """
+    profile = load_install_profile()
+    if profile.get("core_runtime_mode") is False:
+        return DEV_RUNTIME_MODE
+    return DEFAULT_RUNTIME_MODE
+
+
 def resolve_runtime_mode(runtime_mode: str | None = None) -> str:
-    mode = (runtime_mode or os.getenv("BMS_RUNTIME_MODE") or DEFAULT_RUNTIME_MODE).strip().lower()
+    mode = (runtime_mode or os.getenv("BMS_RUNTIME_MODE") or installed_default_runtime_mode()).strip().lower()
     if mode not in VALID_RUNTIME_MODES:
         raise ServiceManagerError(
             f"Unknown BioModStack runtime mode '{mode}'. Expected one of: {', '.join(sorted(VALID_RUNTIME_MODES))}"
@@ -1973,6 +1988,9 @@ def install_user_units(
     root = (project_root or get_project_root()).resolve()
     target_dir = (systemd_dir or get_user_systemd_dir()).resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
+    # Regenerated units must keep this host's provisioned selections even when
+    # the caller's shell never sourced the installation environment.
+    apply_host_selectors()
     if resolve_runtime_mode(runtime_mode) == DEV_RUNTIME_MODE:
         ensure_development_proxy_identity()
         # Retire only the old candidate's raw-image pins. The generated release
@@ -2002,7 +2020,10 @@ def install_user_units(
             legacy_guard.write_text(retained, encoding="utf-8")
 
     written_paths: list[Path] = []
-    for unit_name, content in render_user_units(root, runtime_mode=runtime_mode).items():
+    rendered = render_user_units(root, runtime_mode=runtime_mode)
+    if systemd_dir is None:
+        record_host_selectors()
+    for unit_name, content in rendered.items():
         path = target_dir / unit_name
         if not path.exists() or path.read_text(encoding="utf-8") != content:
             path.write_text(content, encoding="utf-8")
