@@ -16,6 +16,11 @@ from database import OntInstrumentRun
 from services.container_cli_environment import container_cli_environment
 from services.ont_raw_signal import (
     EXTERNAL_BLOW5_VALIDATION_PROFILE_ID,
+    SLOW5_TO_BLOW5_PROFILE_ID,
+    finalize_slow5_conversion,
+    slow5_canonical_roundtrip,
+    slow5_output_validation_command,
+    stage_slow5_source,
     claim_next_derivation,
     claim_next_waveform_lookup,
     close_source_identity,
@@ -396,6 +401,42 @@ class OntRawSignalWorker:
                 )
                 return await self._execute(command, item_id, token, **kwargs)
 
+            if job.profile_id == SLOW5_TO_BLOW5_PROFILE_ID:
+                for directory_name in ("source", "outputs", "check"):
+                    os.close(_prepare_confined_directory(stage, (directory_name,)))
+                async with self._session_factory() as session:
+                    await transition_derivation(session, job.id, claim_token, "converting", "converting_started", {})
+                source_identity = stage_slow5_source(commands)
+                convert_receipt = await execute_stage(commands["convert"], job.id, claim_token)
+                async with self._session_factory() as session:
+                    await transition_derivation(session, job.id, claim_token, "converting", "conversion_processes_complete", {"source": source_identity, "convert": convert_receipt})
+                for state, reason, command_name in (
+                    ("structural_check", "slow5tools_quickcheck_passed", "quickcheck"),
+                    ("indexing", "adjacent_indexes_created", "index_create"),
+                ):
+                    async with self._session_factory() as session:
+                        await transition_derivation(session, job.id, claim_token, state, f"{state}_started", {})
+                    stage_receipt = await execute_stage(commands[command_name], job.id, claim_token)
+                    async with self._session_factory() as session:
+                        await transition_derivation(session, job.id, claim_token, state, reason, stage_receipt)
+                async with self._session_factory() as session:
+                    await transition_derivation(session, job.id, claim_token, "index_validation", "index_validation_started", {})
+                await execute_stage(commands["canonical_source"], job.id, claim_token)
+                await execute_stage(commands["canonical_output"], job.id, claim_token)
+                roundtrip = slow5_canonical_roundtrip(commands)
+                validation_receipt = await execute_stage(slow5_output_validation_command(commands), job.id, claim_token)
+                semantic = finalize_slow5_conversion(commands, roundtrip)
+                async with self._session_factory() as session:
+                    await transition_derivation(session, job.id, claim_token, "index_validation", "index_open_lookup_validation_passed", validation_receipt)
+                    await transition_derivation(session, job.id, claim_token, "semantic_validation", "lossless_slow5_roundtrip_passed", {"roundtrip": roundtrip, "read_count": semantic["read_count"]})
+                    await transition_derivation(session, job.id, claim_token, "publishing", "atomic_publication_started", {})
+                    live_job = await session.get(type(job), job.id)
+                    live_source = await session.get(type(source), source.id)
+                    if live_job is None or live_source is None:
+                        raise RuntimeError("raw-signal publication authority disappeared")
+                    representation = await publish_derivation(session, live_job, live_source, commands)
+                    await transition_derivation(session, job.id, claim_token, "ready", "indexed_blow5_ready", {"representation_id": representation.id})
+                return 1
             if job.profile_id == EXTERNAL_BLOW5_VALIDATION_PROFILE_ID:
                 external_source_fds = pin_external_blow5_descriptors(commands)
             else:
