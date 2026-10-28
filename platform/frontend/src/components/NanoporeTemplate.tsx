@@ -38,6 +38,7 @@ import {
     type MolBioSequenceRevision,
     type NucleotideSequenceListItem,
     type PooledReferenceAssignmentSubmitRequest,
+    fetchOntBasecallDevices,
 } from '../lib/api';
 import { useGlobalExperimentContext } from './experiments/GlobalExperimentContext';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
@@ -869,6 +870,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const validBatchSize = batchSize === null || (Number.isInteger(batchSize) && batchSize >= 0);
     const [emitSummary, setEmitSummary] = useState(initialValues?.emitSummary !== false);
     const [emitMoves, setEmitMoves] = useState(initialValues?.emitMoves !== false);
+    const basecallDevicesQuery = useQuery({ queryKey: ['ont-basecall-devices'], queryFn: fetchOntBasecallDevices, staleTime: 300_000 });
+    const [doradoDevice, setDoradoDevice] = useState<string>(String(initialValues?.doradoDevice ?? ''));
+    const effectiveDoradoDevice = doradoDevice || basecallDevicesQuery.data?.default || '';
     const [modkitFilterThreshold, setModkitFilterThreshold] = useState<number | null>(
         (initialValues?.modkitFilterThreshold as number | null | undefined) ?? null
     );
@@ -1211,6 +1215,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     trim_adapters: trimAdapters,
                     emit_summary: emitSummary,
                     emit_moves: doradoMode === 'simplex' ? emitMoves : false,
+                    ...(effectiveDoradoDevice && { dorado_device: effectiveDoradoDevice }),
                     ...(batchSize !== null && { dorado_batch_size: batchSize }),
                 }),
                 ...(inputSource === 'bam' && {
@@ -2204,6 +2209,27 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                 </button>
                 {showAdvanced && (
                     <div id="ngs-advanced-controls" className="mt-4 space-y-4 pl-6 border-l-2 border-[var(--border-primary)]">
+                        {inputSource === 'pod5' && (
+                            <div>
+                                <label className="text-xs text-[var(--text-secondary)] mb-1 block" htmlFor="dorado-device">Basecalling device</label>
+                                <select
+                                    id="dorado-device"
+                                    aria-label="Basecalling device"
+                                    value={effectiveDoradoDevice}
+                                    onChange={(e) => setDoradoDevice(e.target.value)}
+                                    className="w-48 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-1.5 text-[var(--text-primary)] text-sm"
+                                >
+                                    {(basecallDevicesQuery.data?.options ?? [{ value: effectiveDoradoDevice || 'cpu', label: effectiveDoradoDevice || 'CPU' }]).map((option) => (
+                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                </select>
+                                <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                    {basecallDevicesQuery.data && !basecallDevicesQuery.data.cuda_available
+                                        ? 'No CUDA GPU on this host; basecalling runs on CPU (fast model suits small runs).'
+                                        : 'CPU works anywhere but is much slower than a CUDA GPU.'}
+                                </p>
+                            </div>
+                        )}
                         {inputSource === 'pod5' && (
                             <div>
                                 <label className="text-xs text-[var(--text-secondary)] mb-1 block">Dorado batch size (0 = native auto; positive integer)</label>

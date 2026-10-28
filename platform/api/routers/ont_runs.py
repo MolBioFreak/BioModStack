@@ -861,6 +861,13 @@ class OntRawSignalRetentionRequest(BaseModel):
     policy: Literal["pod5_and_blow5", "blow5_only"]
 
 
+@router.get("/ngs/basecall-devices")
+async def ont_basecall_devices() -> dict[str, Any]:
+    """CPU or CUDA choices for Dorado basecalling on this host."""
+    from services.ont_ngs_contract import basecall_device_options
+    return basecall_device_options()
+
+
 @router.get("/raw-signal/retention")
 async def ont_raw_signal_retention() -> dict[str, Any]:
     """Whether converted POD5 is kept beside its verified BLOW5."""
