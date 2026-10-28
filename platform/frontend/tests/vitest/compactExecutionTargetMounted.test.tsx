@@ -66,7 +66,7 @@ afterEach(async () => { await act(async () => root.unmount()); client.clear(); c
 it('renders saved-Job summaries without fetching collapsed details, even after status polling', async () => {
   await mount(); await mount();
   expect(container.textContent).toContain('137 of 205 artifacts complete or cached');
-  expect(container.textContent).toContain('6,000 bytes complete or cached of 9,000 bytes declared');
+  expect(container.textContent).toContain('5.9 KiB of 8.8 KiB');
   expect(gets).toEqual([]); expect(posts).toEqual([]);
   expect(container.querySelectorAll('li')).toHaveLength(0);
   expect(container.querySelector('summary')?.textContent).toContain('Prepare worker');
@@ -144,16 +144,16 @@ it('keeps inventory details lazy under evidence and uses compact inventory count
   target.artifact_inventory = { operation_id: 'receipt', selection: { kind: 'model', model_id: 'protenix' }, observed_at: 'now', artifact_count: 205, state: 'stale', scope: 'last_independent_provision', scientific_ready: false };
   await mount('independent'); expect(artifactGets()).toEqual([]);
   expect(container.textContent).toContain('Cache artifacts (205)');
-  await disclose('Evidence'); expect(artifactGets()).toEqual([]);
+  await disclose('What is already on this worker'); expect(artifactGets()).toEqual([]);
   await disclose('Cache artifacts');
   expect(artifactGets()).toEqual([{ url: '/api/execution-targets/vast%3A123/artifact-inventory/artifacts', params: { offset: 0, limit: 100 } }]);
   expect(container.querySelectorAll('li')).toHaveLength(100);
-  await disclose('Evidence');
+  await disclose('What is already on this worker');
   const fetched = artifactGets().length;
   await act(async () => { await client.invalidateQueries(); await settle(); });
   expect(artifactGets()).toHaveLength(fetched);
   expect(container.querySelectorAll('li')).toHaveLength(0);
-  await disclose('Evidence');
+  await disclose('What is already on this worker');
   expect(artifactGets().at(-1)?.params.offset).toBe(0);
 });
 
@@ -163,7 +163,7 @@ it('renders historical 89,115-record counts directly from compact status, withou
   target.artifact_inventory = { operation_id: 'receipt', selection: { kind: 'model', model_id: 'protenix' }, observed_at: 'now', artifact_count: 89115, state: 'download_verified', scope: 'last_independent_provision', scientific_ready: false };
   await mount('independent');
   expect(container.textContent).toContain('89115 of 89115 artifacts complete or cached');
-  expect(container.textContent).toContain('123,456,789 bytes complete or cached of 123,456,789 bytes declared');
+  expect(container.textContent).toContain('118 MiB of 118 MiB');
   expect(container.textContent).toContain('Cached preload artifacts (89,115)');
   expect(container.textContent).toContain('Cache artifacts (89,115)');
   expect(container.textContent).toContain('Downloads complete');

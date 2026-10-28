@@ -317,11 +317,12 @@ def test_probe_one_gpu_command_missing_optional_values(monkeypatch):
     calls = []
     def run(argv, **kwargs):
         calls.append(argv)
-        return SimpleNamespace(stdout='0, GPU-0, fixture, 24000, 500, N/A, N/A, N/A\n')
+        return SimpleNamespace(stdout='0, GPU-0, fixture, 24000, 500, N/A, N/A, N/A, [N/A]\n')
     monkeypatch.setattr(telemetry_probe.subprocess, 'run', run)
     result = telemetry_probe.snapshot('/definitely/not/present')
     assert len(calls) == 1 and calls[0][0] == 'nvidia-smi'
     assert result['gpus'][0]['utilization'] is None
+    assert result['gpus'][0]['power_limit_w'] is None
     assert result['disk'] == {}
     assert len(json.dumps(result)) < 65536
 

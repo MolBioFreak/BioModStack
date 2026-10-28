@@ -309,7 +309,7 @@ describe('remote execution operator surfaces', () => {
             }
             target = { ...target, state: 'ready', active: true, setup: { phase: 'ready', message: 'Worker runtime verified' } };
             await flush(5_020);
-            expect(container.textContent).toContain('Remote analytics available');
+            expect(container.textContent).toContain('Readyidle');
             expect(container.textContent).toContain('Detach');
             expect(container.textContent).toContain('Vast · Remote A6000');
             expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
@@ -486,13 +486,13 @@ describe('remote execution operator surfaces', () => {
         const vastButton = buttons.find((button) => button.textContent?.trim() === 'Discover running Vast');
         expect(hardwareButton).toBeTruthy();
         expect(vastButton).toBeTruthy();
-        expect(hardwareButton?.parentElement).toBe(vastButton?.parentElement);
+        // Hardware discovery stays with local controls; Vast discovery heads the worker fleet.
         expect(hardwareButton?.className).toContain('px-2.5 py-1.5 text-[10px]');
-        expect(vastButton?.className).toContain('px-2.5 py-1.5 text-[10px]');
+        expect(vastButton?.closest('[data-bms-worker-fleet]')).not.toBeNull();
 
         await act(async () => {
             hardwareButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-            await new Promise((resolve) => setTimeout(resolve, 0));
+            await new Promise((resolve) => setTimeout(resolve, 60));
         });
 
         expect(requests).toContain('POST /api/gpu/hardware/discover');
@@ -500,7 +500,7 @@ describe('remote execution operator surfaces', () => {
 
         await act(async () => {
             vastButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-            await new Promise((resolve) => setTimeout(resolve, 0));
+            await new Promise((resolve) => setTimeout(resolve, 60));
         });
 
         expect(requests).toContain('POST /api/execution-targets/providers/vast/refresh');
@@ -542,11 +542,10 @@ describe('remote execution operator surfaces', () => {
             .find((button) => button.textContent?.trim() === 'Attach worker');
         await act(async () => {
             attachButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-            await new Promise((resolve) => setTimeout(resolve, 0));
+            await new Promise((resolve) => setTimeout(resolve, 60));
         });
         expect(requests).toContain('POST /api/execution-targets/activate');
-        expect(container.textContent).toContain('Ready');
-        expect(container.textContent).toContain('Remote analytics available');
+        expect(container.textContent).toContain('Readyidle');
         expect(container.textContent).toContain('Detach');
 
         await act(async () => root.unmount());
@@ -847,9 +846,9 @@ describe('remote execution operator surfaces', () => {
             await Promise.resolve();
         });
 
-        expect(container.textContent).toContain('Read-only remote telemetry');
+        expect(container.querySelector('[title^="Read-only"]')).not.toBeNull();
         expect(container.textContent).toContain('Remote GPU 0');
-        expect(container.textContent).toContain('12,000 MB used');
+        expect(container.textContent).toContain('VRAM 11.7 / 24 GiB');
         expect(container.textContent).not.toContain('Fan speed');
         expect(container.textContent).not.toContain('Power limit');
 

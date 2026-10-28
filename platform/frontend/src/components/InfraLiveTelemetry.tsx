@@ -1,17 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { TimeSeriesPlot } from './telemetryMetricPlot';
+import { VastWorkerFleet } from './VastWorkerFleet';
+import { PanelFrame, SegmentedControl, legendName, METRIC_COLORS, PLOT_TICK } from './telemetryCards';
 import { useTelemetryChartRefresh } from './useTelemetryChartRefresh';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import {
-    activateExecutionTarget,
-    deactivateExecutionTarget,
-    dismissExecutionTarget,
     discoverHardware,
-    EXECUTION_TARGET_STORAGE_KEY,
     fetchExecutionTargets,
     fetchSystemStatus,
     fetchTelemetryChartHistory,
-    refreshVastExecutionTargets,
     setFanControl,
     setPowerControlManual,
     toggleGpuDisabled,
@@ -81,6 +78,8 @@ export interface InfraLiveTelemetryProps {
     defaultPollIntervalMs?: PollPreset;
     defaultWindowMinutes?: WindowPreset;
     variant?: 'infra' | 'dashboard';
+    /** The Dashboard renders the worker fleet once, above every telemetry scope. */
+    showWorkerFleet?: boolean;
     dashboardSize?: 'micro' | 'compact' | 'standard' | 'large' | 'xlarge';
 }
 
@@ -167,35 +166,6 @@ const DASHBOARD_SIZING: Record<NonNullable<InfraLiveTelemetryProps['dashboardSiz
 };
 
 
-function PanelFrame({
-    title,
-    subtitle,
-    children,
-    compact = false,
-}: {
-    title: string;
-    subtitle?: string;
-    children: React.ReactNode;
-    compact?: boolean;
-}) {
-    return (
-        <section className={`rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-card,var(--bg-secondary))] shadow-[var(--shadow-card)] ${compact ? 'p-3' : 'p-4'}`}>
-            <div className={compact ? 'mb-2' : 'mb-4'}>
-                <h2 className={`font-semibold text-[var(--text-primary)] ${compact ? 'text-base' : 'text-lg'}`}>{title}</h2>
-                {subtitle ? <p className="mt-1 text-sm text-[var(--text-muted)]">{subtitle}</p> : null}
-            </div>
-            {children}
-        </section>
-    );
-}
-
-const PLOT_TICK = 'var(--chart-axis, var(--text-muted))';
-
-const UI_ACCENT = 'var(--accent-primary)';
-const UI_SUCCESS = 'var(--success)';
-const UI_WARNING = 'var(--warning)';
-const UI_LINK = 'var(--link)';
-
 function TotalPowerBar({
     payload,
     currentLimits,
@@ -245,61 +215,11 @@ function TotalPowerBar({
                     className="h-full rounded-full transition-all duration-300"
                     style={{
                         width: `${fillPercent}%`,
-                        background: `linear-gradient(90deg, ${UI_SUCCESS} 0%, ${UI_WARNING} 72%, #ef4444 100%)`,
+                        background: `linear-gradient(90deg, ${METRIC_COLORS.utilization} 0%, ${METRIC_COLORS.power} 72%, #ef4444 100%)`,
                     }}
                 />
             </div>
         </section>
-    );
-}
-
-function SegmentedControl<T extends string | number>({
-    label,
-    value,
-    options,
-    onChange,
-    compact = false,
-}: {
-    label: string;
-    value: T;
-    options: ReadonlyArray<{ value: T; label: string }>;
-    onChange: (value: T) => void;
-    compact?: boolean;
-}) {
-    return (
-        <div>
-            <div
-                className={`font-semibold uppercase text-[var(--text-muted)] ${compact ? 'mb-1 text-[9px]' : 'mb-2 text-xs'}`}
-                style={{ letterSpacing: '0.16em' }}
-            >
-                {label}
-            </div>
-            <div className={`inline-flex border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] ${compact ? 'rounded-lg p-0.5' : 'rounded-xl p-1'}`}>
-                {options.map((option) => {
-                    const active = option.value === value;
-                    return (
-                        <button
-                            key={String(option.value)}
-                            type="button"
-                            onClick={() => onChange(option.value)}
-                            className={`border font-medium transition-colors ${
-                                compact ? 'rounded-md px-2 py-1 text-[10px]' : 'rounded-lg px-3 py-2 text-sm'
-                            } ${
-                                active
-                                    ? 'text-[var(--accent-primary)]'
-                                    : 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-control-strong,var(--bg-tertiary))] hover:text-[var(--text-primary)]'
-                            }`}
-                            style={active ? {
-                                backgroundColor: 'color-mix(in srgb, var(--accent-primary) 14%, var(--bg-tertiary))',
-                                borderColor: 'color-mix(in srgb, var(--accent-primary) 34%, var(--border-primary))',
-                            } : undefined}
-                        >
-                            {option.label}
-                        </button>
-                    );
-                })}
-            </div>
-        </div>
     );
 }
 
@@ -346,9 +266,6 @@ function toPercent(value: number, maxValue: number): number {
     return clamp01(value / maxValue) * 100;
 }
 
-function legendName(label: string, value: string): string {
-    return `${label} ${value}`;
-}
 
 function formatGpuProcessMemory(memoryMb: number): string {
     if (memoryMb >= 1024) {
@@ -840,28 +757,28 @@ function CpuPanel({
                             y: cpuUtilTrace.y,
                             axis: { title: 'CPU utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
                             name: legendName('Util', `${current.utilization.toFixed(1)}%`),
-                            line: { color: UI_SUCCESS, width: 1.55 },
+                            line: { color: METRIC_COLORS.utilization, width: 1.55 },
                         },
                         {
                             x: cpuFreqTrace.x,
                             y: cpuFreqTrace.y,
                             axis: { title: 'Frequency', color: PLOT_TICK, suffix: ' GHz' },
                             name: legendName('Freq', `${(current.frequency_current_mhz / 1000).toFixed(2)} GHz`),
-                            line: { color: UI_LINK, width: 1.4 },
+                            line: { color: METRIC_COLORS.memory, width: 1.4 },
                         },
                         {
                             x: cpuPowerTrace.x,
                             y: cpuPowerTrace.y,
                             axis: { title: 'Package power', color: PLOT_TICK, suffix: ' W' },
                             name: legendName('Power', current.power_watts != null ? `${current.power_watts.toFixed(0)}W` : 'n/a'),
-                            line: { color: UI_WARNING, width: 1.4 },
+                            line: { color: METRIC_COLORS.power, width: 1.4 },
                         },
                         {
                             x: cpuTempTrace.x,
                             y: cpuTempTrace.y,
                             axis: { title: 'Temperature', color: PLOT_TICK, suffix: ' °C' },
                             name: legendName('Temp', current.temperature != null ? `${current.temperature.toFixed(1)}C` : 'n/a'),
-                            line: { color: '#f472b6', width: 1.4 },
+                            line: { color: METRIC_COLORS.temperature, width: 1.4 },
                         },
                     ]}
                     showXAxisLabels={showXAxisLabels}
@@ -917,28 +834,28 @@ function RamPanel({
                             y: ramUsedTrace.y,
                             axis: { title: 'Used memory', color: PLOT_TICK, suffix: ' GB' },
                             name: legendName('Used', `${current.used_gb.toFixed(1)} GB`),
-                            line: { color: UI_LINK, width: 1.55 },
+                            line: { color: METRIC_COLORS.memory, width: 1.55 },
                         },
                         {
                             x: ramFreeTrace.x,
                             y: ramFreeTrace.y,
                             axis: { title: 'Available memory', color: PLOT_TICK, suffix: ' GB' },
                             name: legendName('Free', `${current.available_gb.toFixed(1)} GB`),
-                            line: { color: UI_SUCCESS, width: 1.4 },
+                            line: { color: METRIC_COLORS.utilization, width: 1.4 },
                         },
                         {
                             x: ramUtilTrace.x,
                             y: ramUtilTrace.y,
                             axis: { title: 'RAM utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
                             name: legendName('Util', `${current.utilization.toFixed(1)}%`),
-                            line: { color: UI_WARNING, width: 1.4 },
+                            line: { color: METRIC_COLORS.power, width: 1.4 },
                         },
                         {
                             x: ramSwapTrace.x,
                             y: ramSwapTrace.y,
                             axis: { title: 'Swap utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
                             name: legendName('Swap', `${current.swap_percent.toFixed(1)}%`),
-                            line: { color: UI_ACCENT, width: 1.4 },
+                            line: { color: METRIC_COLORS.secondary, width: 1.4 },
                         },
                     ]}
                     showXAxisLabels={showXAxisLabels}
@@ -1006,28 +923,28 @@ function GpuPanel({
                             y: gpuUtilTrace.y,
                             axis: { title: 'GPU utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
                             name: legendName('Util', `${gpu.utilization.toFixed(0)}%`),
-                            line: { color: UI_SUCCESS, width: 1.55 },
+                            line: { color: METRIC_COLORS.utilization, width: 1.55 },
                         },
                         {
                             x: gpuVramTrace.x,
                             y: gpuVramTrace.y,
                             axis: { title: 'VRAM used + reserved', color: PLOT_TICK, suffix: ' GB' },
                             name: legendName('VRAM', `${currentVramGb.toFixed(1)} / ${totalGb.toFixed(0)} GB`),
-                            line: { color: UI_LINK, width: 1.4 },
+                            line: { color: METRIC_COLORS.memory, width: 1.4 },
                         },
                         {
                             x: gpuPowerTrace.x,
                             y: gpuPowerTrace.y,
                             axis: { title: 'Power draw', color: PLOT_TICK, suffix: ' W' },
                             name: legendName('Power', `${gpu.power_draw_w.toFixed(1)}W`),
-                            line: { color: UI_WARNING, width: 1.4 },
+                            line: { color: METRIC_COLORS.power, width: 1.4 },
                         },
                         {
                             x: gpuTempTrace.x,
                             y: gpuTempTrace.y,
                             axis: { title: 'Temperature', color: PLOT_TICK, suffix: ' °C' },
                             name: legendName('Temp', `${gpu.temperature.toFixed(0)}C`),
-                            line: { color: '#f472b6', width: 1.4 },
+                            line: { color: METRIC_COLORS.temperature, width: 1.4 },
                         },
                     ]}
                     showXAxisLabels={showXAxisLabels}
@@ -1082,7 +999,7 @@ function HistoricalTelemetryFallback({
     const gpuIndexes = [...new Set(
         samples.flatMap((sample) => Object.keys(sample.gpu).map(Number)),
     )].sort((left, right) => left - right);
-    const gpuColors = [UI_SUCCESS, UI_LINK, UI_WARNING, UI_ACCENT, '#f472b6', '#a78bfa'];
+    const gpuColors = [METRIC_COLORS.utilization, METRIC_COLORS.memory, METRIC_COLORS.power, METRIC_COLORS.secondary, METRIC_COLORS.temperature, '#a78bfa'];
 
     return (
         <div className={compact ? 'space-y-2' : 'space-y-6'}>
@@ -1097,13 +1014,13 @@ function HistoricalTelemetryFallback({
                             x: cpuTrace.x,
                             y: cpuTrace.y,
                             name: 'CPU',
-                            line: { color: UI_SUCCESS, width: 1.55 },
+                            line: { color: METRIC_COLORS.utilization, width: 1.55 },
                         },
                         {
                             x: ramTrace.x,
                             y: ramTrace.y,
                             name: 'RAM',
-                            line: { color: UI_LINK, width: 1.4 },
+                            line: { color: METRIC_COLORS.memory, width: 1.4 },
                         },
                     ]}
                     showXAxisLabels={showXAxisLabels}
@@ -1142,12 +1059,6 @@ function HistoricalTelemetryFallback({
 }
 
 
-function vastOperationErrorMessage(error: unknown): string {
-    const detail = (error as { response?: { data?: { detail?: unknown } } } | null)?.response?.data?.detail;
-    if (typeof detail === 'string' && detail.trim()) return detail;
-    return error instanceof Error && error.message ? error.message : 'Unknown error';
-}
-
 export function InfraLiveTelemetry(props: InfraLiveTelemetryProps = {}) {
     return props.executionTargetsQuery
         ? <InfraLiveTelemetryPanel {...props} executionTargetsQuery={props.executionTargetsQuery} />
@@ -1171,6 +1082,7 @@ function InfraLiveTelemetryPanel({
     defaultWindowMinutes = 3,
     variant = 'infra',
     dashboardSize = 'standard',
+    showWorkerFleet = true,
 }: InfraLiveTelemetryProps & { executionTargetsQuery: ExecutionTargetsQuery }) {
     const compact = variant === 'dashboard';
     const dashboardSizing = DASHBOARD_SIZING[dashboardSize];
@@ -1338,42 +1250,6 @@ function InfraLiveTelemetryPanel({
             queryClient.invalidateQueries({ queryKey: SHARED_FAN_CONTROL_QUERY_KEY });
         },
     });
-    const vastDiscoverMutation = useMutation({
-        mutationFn: refreshVastExecutionTargets,
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['execution-targets'] }),
-    });
-    const attachVastMutation = useMutation({
-        mutationFn: (providerInstanceId: string) => {
-            const target = executionTargetsQuery.data?.data.find(item => item.provider_instance_id === providerInstanceId);
-            return activateExecutionTarget(providerInstanceId, target?.active
-                ? { username: target.username ?? undefined, remote_root: target.remote_root } : undefined);
-        },
-        onSettled: () => queryClient.invalidateQueries({ queryKey: ['execution-targets'] }),
-    });
-    useEffect(() => {
-        if (attachVastMutation.isError && !executionTargetsQuery.isError && executionTargetsQuery.data?.data.some(
-            (target) => target.provider === 'vast'
-                && target.provider_instance_id === attachVastMutation.variables
-                && target.active && target.state === 'ready'
-                && target.setup?.phase === 'ready' && !target.last_error,
-        )) {
-            attachVastMutation.reset();
-        }
-    }, [attachVastMutation.isError, attachVastMutation.variables, attachVastMutation.reset, executionTargetsQuery.data, executionTargetsQuery.isError]);
-    const dismissVastMutation = useMutation({
-        mutationFn: dismissExecutionTarget,
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['execution-targets'] }),
-    });
-    const detachVastMutation = useMutation({
-        mutationFn: deactivateExecutionTarget,
-        onSuccess: (response) => {
-            if (window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) === response.data.id) {
-                window.sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
-            }
-            return queryClient.invalidateQueries({ queryKey: ['execution-targets'] });
-        },
-    });
-
     useEffect(() => {
         if (typeof window === 'undefined') return undefined;
         persistTelemetryPreferences(pollIntervalMs, windowMinutes);
@@ -1384,10 +1260,6 @@ function InfraLiveTelemetryPanel({
     const currentLimits = powerControlData?.data.limits ?? {};
     const currentFanControls = fanControlData?.data.gpus ?? {};
     const gpuOverrides = schedulerConfigData?.data?.overrides ?? {};
-    // Inventory refresh never changes placement. The picker blocks an unavailable selection.
-    const vastTargets = executionTargetsQuery.isError
-        ? []
-        : (executionTargetsQuery.data?.data ?? []).filter((target) => target.provider === 'vast');
 
     return (
         <section className={variant === 'infra'
@@ -1452,15 +1324,6 @@ function InfraLiveTelemetryPanel({
                             >
                                 {discoverMutation.isPending ? 'Discovering...' : 'Discover hardware'}
                             </button>
-                            <button
-                                type="button"
-                                onClick={() => vastDiscoverMutation.mutate()}
-                                disabled={vastDiscoverMutation.isPending}
-                                className={`rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] font-medium text-[var(--text-secondary)] transition-colors hover:border-accent/40 hover:text-[var(--text-primary)] disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}
-                                title="Query Vast for running instances without creating, starting, stopping, or destroying provider resources"
-                            >
-                                {vastDiscoverMutation.isPending ? 'Discovering Vast...' : 'Discover running Vast'}
-                            </button>
                         </div>
                     </div>
                 </div>
@@ -1476,110 +1339,9 @@ function InfraLiveTelemetryPanel({
                     Hardware discovery complete: {discoverMutation.data.discovery.data.message}
                 </div>
             )}
-            {vastDiscoverMutation.isError && (
-                <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
-                    Vast discovery failed: {vastDiscoverMutation.error instanceof Error ? vastDiscoverMutation.error.message : 'unknown error'}
-                </div>
-            )}
-            {vastDiscoverMutation.isSuccess && (
-                <div className={`mb-3 rounded-2xl border p-3 text-sm ${vastDiscoverMutation.data.data.available
-                    ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
-                    : 'border-amber-500/25 bg-amber-500/10 text-amber-200'}`} role="status">
-                    {vastDiscoverMutation.data.data.available ? 'Vast discovery complete' : 'Vast inventory unavailable'}: {vastDiscoverMutation.data.data.message}
-                </div>
-            )}
-            {executionTargetsQuery.isSuccess && vastTargets.length === 0 && (
-                <div role="status" className="mb-3 text-sm text-[var(--text-muted)]">No owned Vast instances. Local execution is available.</div>
-            )}
-            {executionTargetsQuery.isError && (
-                <div role="alert" className="mb-3 text-sm text-amber-200">Vast inventory unavailable or expired. Discover again; any selected worker is retained, not switched to Local.</div>
-            )}
-            {vastTargets.length > 0 && (
-                <div className="mb-4 space-y-2" aria-label="Vast workers">
-                    {vastTargets.map((target) => {
-                        const isReady = target.active && target.state === 'ready';
-                        const isAttaching = target.state === 'probing'
-                            || (attachVastMutation.isPending && attachVastMutation.variables === target.provider_instance_id);
-                        const stateLabel = isReady
-                            ? 'Ready'
-                            : target.active ? 'Attached — runtime not ready'
-                            : isAttaching
-                                ? 'Checking readiness'
-                                : target.state === 'unavailable'
-                                    ? 'Unavailable'
-                                    : target.state === 'inactive'
-                                        ? 'Inactive'
-                                        : 'Discovered';
-                        const canAttach = !target.can_remove_from_list && !isReady && !isAttaching && Boolean(target.host && target.port);
-                        return (
-                            <div
-                                key={target.id}
-                                className="flex flex-col items-stretch gap-3 rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] p-3 sm:flex-row sm:items-center"
-                            >
-                                <div className="min-w-0 flex-1 [overflow-wrap:anywhere] text-sm text-[var(--text-secondary)]">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        <span className="font-semibold text-[var(--text-primary)]">
-                                            {target.name ?? `Vast ${target.provider_instance_id}`}
-                                        </span>
-                                        <span className={isReady ? 'font-semibold text-emerald-300' : 'text-[var(--text-muted)]'}>
-                                            {stateLabel}
-                                        </span>
-                                    </div>
-                                    <div className="mt-1 text-xs">
-                                        {String(target.capabilities.gpu_count ?? '?')} × {String(target.capabilities.gpu_name ?? 'GPU')}
-                                        {target.pricing.hourly_rate != null ? ` · $${target.pricing.hourly_rate.toFixed(3)}/hr` : ''}
-                                        {isReady ? ' · Remote analytics available' : ''}
-                                    </div>
-                                    {target.setup && (
-                                        <div role="status" className={`mt-1 text-xs ${target.setup.phase === 'failed' ? 'text-red-300' : 'text-[var(--text-muted)]'}`}>
-                                            Setup · {target.setup.phase}: {target.setup.message}
-                                        </div>
-                                    )}
-                                    {target.last_error && target.last_error !== target.setup?.message && (
-                                        <div className="mt-1 text-xs text-red-300">{target.last_error}</div>
-                                    )}
-                                </div>
-                                <div role="group" aria-label="Worker actions" className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 sm:ml-auto">
-                                    {target.active && (
-                                        <button
-                                            type="button"
-                                            onClick={() => detachVastMutation.mutate(target.id)}
-                                            disabled={detachVastMutation.isPending || isAttaching}
-                                            className="shrink-0 whitespace-nowrap rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200 disabled:opacity-50"
-                                        >
-                                            {detachVastMutation.isPending ? 'Detaching…' : 'Detach'}
-                                        </button>
-                                    )}
-                                    {target.can_remove_from_list && (
-                                        <button
-                                            type="button"
-                                            onClick={() => dismissVastMutation.mutate(target.id)}
-                                            disabled={dismissVastMutation.isPending}
-                                            title="Hide this absent worker. Job history is retained; no rental is terminated."
-                                            className="shrink-0 whitespace-nowrap rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] px-3 py-2 text-xs font-semibold text-[var(--text-secondary)] disabled:opacity-50"
-                                        >
-                                            {dismissVastMutation.isPending && dismissVastMutation.variables === target.id ? 'Removing…' : 'Remove from list'}
-                                        </button>
-                                    )}
-                                    {!isReady && !target.can_remove_from_list && (
-                                        <button
-                                            type="button"
-                                            onClick={() => attachVastMutation.mutate(target.provider_instance_id)}
-                                            disabled={!canAttach || attachVastMutation.isPending}
-                                            className="shrink-0 whitespace-nowrap rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 disabled:opacity-40"
-                                        >
-                                            {isAttaching ? 'Attaching…' : target.active ? 'Retry setup' : 'Attach worker'}
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            )}
-            {(executionTargetsQuery.isError || attachVastMutation.isError || detachVastMutation.isError || dismissVastMutation.isError) && (
-                <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200" role="alert">
-                    {dismissVastMutation.isError ? 'Remove failed' : attachVastMutation.isError ? 'Attach failed' : detachVastMutation.isError ? 'Detach failed' : 'Worker inventory failed'}: {vastOperationErrorMessage(dismissVastMutation.error ?? attachVastMutation.error ?? detachVastMutation.error ?? executionTargetsQuery.error)}
+            {showWorkerFleet && (
+                <div className="mb-4">
+                    <VastWorkerFleet executionTargetsQuery={executionTargetsQuery} compact={compact} />
                 </div>
             )}
 

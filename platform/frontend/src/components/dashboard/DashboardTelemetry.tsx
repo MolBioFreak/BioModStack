@@ -5,6 +5,7 @@ import { fetchExecutionTargets, type Job } from '../../lib/api';
 import { RemotePreloadPanel } from './RemotePreloadPanel';
 import { InfraLiveTelemetry } from '../InfraLiveTelemetry';
 import { RemoteGpuTelemetry } from '../RemoteGpuTelemetry';
+import { VastWorkerFleet } from '../VastWorkerFleet';
 
 const DASHBOARD_TELEMETRY_COMPACT_KEY = 'bms_dashboard_telemetry_compact_v1';
 type TelemetryPanelSize = 'micro' | 'compact' | 'standard' | 'large' | 'xlarge';
@@ -77,6 +78,7 @@ export function DashboardTelemetry({ jobs = [] }: { jobs?: Pick<Job, 'id' | 'mod
             defaultWindowMinutes={3}
             variant="dashboard"
             dashboardSize={telemetrySize}
+            showWorkerFleet={false}
         />
     );
 
@@ -170,6 +172,9 @@ export function DashboardTelemetry({ jobs = [] }: { jobs?: Pick<Job, 'id' | 'mod
                 </div>
             </div>
 
+            <div className="mb-3">
+                <VastWorkerFleet executionTargetsQuery={targetsQuery} compact />
+            </div>
             {activeVastTarget && (scope === 'vast' || scope === 'combined') && (
                 <RemotePreloadPanel key={activeVastTarget.id} target={activeVastTarget} jobs={jobs} onChanged={() => targetsQuery.refetch()} />
             )}

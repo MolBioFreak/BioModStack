@@ -1,8 +1,11 @@
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AxiosResponse } from 'axios';
 import type { RemoteGpuTelemetry as Telemetry, RemoteTelemetrySample } from '../lib/api';
 import { TimeSeriesPlot } from './telemetryMetricPlot';
 import { mergeRemoteTelemetry, remoteMetricSeries } from './remoteTelemetryHistory';
+import { PanelFrame, PLOT_TICK, METRIC_COLORS, legendName, formatDuration } from './telemetryCards';
+import { loadPersistedTelemetryPreferences, TELEMETRY_PREFERENCES_EVENT } from './infraTelemetryHistory';
 
 import { fetchActiveRemoteGpuTelemetry } from '../lib/api';
 
@@ -12,16 +15,38 @@ const asNumber = (value: unknown): number | null => {
     return Number.isFinite(parsed) ? parsed : null;
 };
 
+// Same card heights as the local dashboard cards at each panel size.
 const REMOTE_SIZING = {
-    micro: { plotHeight: 72, padding: 'p-2', gap: 'gap-1', spacing: 'space-y-1', margin: 'mt-1' },
-    compact: { plotHeight: 96, padding: 'p-3', gap: 'gap-1.5', spacing: 'space-y-1.5', margin: 'mt-2' },
-    standard: { plotHeight: 120, padding: 'p-4', gap: 'gap-3', spacing: 'space-y-4', margin: 'mt-4' },
-    large: { plotHeight: 156, padding: 'p-5', gap: 'gap-4', spacing: 'space-y-5', margin: 'mt-5' },
-    xlarge: { plotHeight: 196, padding: 'p-6', gap: 'gap-5', spacing: 'space-y-6', margin: 'mt-6' },
+    micro: { plotHeight: 96, gap: 'gap-1', spacing: 'space-y-1' },
+    compact: { plotHeight: 132, gap: 'gap-1.5', spacing: 'space-y-1.5' },
+    standard: { plotHeight: 196, gap: 'gap-2', spacing: 'space-y-2' },
+    large: { plotHeight: 244, gap: 'gap-3', spacing: 'space-y-3' },
+    xlarge: { plotHeight: 310, gap: 'gap-4', spacing: 'space-y-4' },
 };
+const REMOTE_SAMPLE_MS = 10_000;
+const MIB = 1024 ** 2;
+const GIB = 1024 ** 3;
+
+function useSharedWindowMinutes(): number {
+    const [minutes, setMinutes] = useState(() => loadPersistedTelemetryPreferences(1000, 3).windowMinutes);
+    useEffect(() => {
+        const update = () => setMinutes(loadPersistedTelemetryPreferences(1000, 3).windowMinutes);
+        window.addEventListener(TELEMETRY_PREFERENCES_EVENT, update);
+        window.addEventListener('storage', update);
+        return () => {
+            window.removeEventListener(TELEMETRY_PREFERENCES_EVENT, update);
+            window.removeEventListener('storage', update);
+        };
+    }, []);
+    return minutes;
+}
+
+const fixed = (value: number | null | undefined, digits: number, suffix: string) =>
+    value == null || !Number.isFinite(value) ? 'n/a' : `${value.toFixed(digits)}${suffix}`;
 
 export function RemoteGpuTelemetry({ dashboardSize = 'standard', executionTargetId }: { dashboardSize?: keyof typeof REMOTE_SIZING; executionTargetId?: string }) {
     const sizing = REMOTE_SIZING[dashboardSize];
+    const windowMinutes = useSharedWindowMinutes();
     const client = useQueryClient();
     const queryKey = executionTargetId == null
         ? ['active-remote-gpu-telemetry']
@@ -34,17 +59,17 @@ export function RemoteGpuTelemetry({ dashboardSize = 'standard', executionTarget
             const next = await fetchActiveRemoteGpuTelemetry(previous?.data.cursor, executionTargetId);
             return { ...next, data: mergeRemoteTelemetry(previous?.data, next.data) };
         },
-        refetchInterval: 10_000,
+        refetchInterval: REMOTE_SAMPLE_MS,
         refetchIntervalInBackground: false,
         retry: false,
     });
 
     if (telemetryQuery.isLoading) {
-        return <div className="rounded-xl border border-slate-800 bg-slate-900 p-5 text-sm text-slate-400">Reading the active Vast worker…</div>;
+        return <div className="rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-card,var(--bg-secondary))] p-5 text-sm text-[var(--text-secondary)]">Reading the active Vast worker…</div>;
     }
     if (telemetryQuery.isError || !telemetryQuery.data) {
         return (
-            <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-sm text-amber-100">
+            <div role="alert" className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 text-sm text-amber-100">
                 Remote telemetry could not be read.
             </div>
         );
@@ -53,7 +78,7 @@ export function RemoteGpuTelemetry({ dashboardSize = 'standard', executionTarget
     const telemetry = telemetryQuery.data.data;
     if (!telemetry.target) {
         return (
-            <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-sm text-amber-100">
+            <div role="alert" className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 text-sm text-amber-100">
                 {telemetry.error || 'No active ready Vast worker is available. Attach one from the Dashboard.'}
             </div>
         );
@@ -62,81 +87,106 @@ export function RemoteGpuTelemetry({ dashboardSize = 'standard', executionTarget
     const startedAt = typeof telemetry.target.pricing.provider_started_at === 'string'
         ? Date.parse(telemetry.target.pricing.provider_started_at)
         : Number.NaN;
-    const estimatedCost = hourly != null && Number.isFinite(startedAt)
-        ? Math.max(0, Date.now() - startedAt) / 3_600_000 * hourly
-        : null;
+    const uptimeMs = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : null;
+    const estimatedCost = hourly != null && uptimeMs != null ? uptimeMs / 3_600_000 * hourly : null;
 
     const history = telemetry.history ?? [];
-    const metric = (title: string, suffix: string, value: (s: RemoteTelemetrySample) => number | null | undefined, maximum?: number) => (
-        <TimeSeriesPlot key={title} height={sizing.plotHeight} samples={[]} xDomain={[Date.now() - 3_600_000, Date.now()]}
-            yAxis={{ title, suffix, color: '#22d3ee', ...(maximum == null ? {} : { range: [0, maximum] as [number, number] }) }}
-            series={[{ name: title, line: { color: '#22d3ee' }, ...remoteMetricSeries(history, value) }]} />
+    const now = Date.now();
+    const windowStart = now - windowMinutes * 60_000;
+    const firstSample = history.map(s => Date.parse(s.observed_at ?? '')).find(Number.isFinite);
+    // A young worker fills the chart with what it has instead of an empty hour.
+    const collecting = firstSample != null && firstSample > windowStart;
+    const xDomain: [number, number] = [collecting ? Math.min(firstSample!, now - REMOTE_SAMPLE_MS) : windowStart, now];
+    const latest = history.at(-1);
+
+    type Strip = { title: string; suffix: string; color: string; label: string; current: string; decimals?: number; value: (s: RemoteTelemetrySample) => number | null | undefined; range?: [number, number] };
+    const card = (strips: Strip[]) => (
+        <TimeSeriesPlot
+            height={sizing.plotHeight}
+            samples={[]}
+            xDomain={xDomain}
+            showXAxisLabels={false}
+            yAxis={{ title: 'Metrics', color: PLOT_TICK }}
+            series={strips.map(strip => ({
+                ...remoteMetricSeries(history, strip.value),
+                axis: { title: strip.title, color: PLOT_TICK, suffix: strip.suffix, decimals: strip.decimals ?? 1, ...(strip.range ? { range: strip.range } : {}) },
+                name: legendName(strip.label, strip.current),
+                line: { color: strip.color, width: 1.5 },
+            }))}
+        />
     );
-    const gib = (v: number | null | undefined) => v == null ? null : v / 1024 ** 3;
+    const interfaces = [...new Set(history.flatMap(s => (s.network ?? []).map(n => n.interface)))];
+    const ramLimit = telemetry.ram?.limit_bytes ?? null;
+    const diskTotal = telemetry.disk?.total_bytes ?? null;
+    const latestNetwork = (name: string) => latest?.network?.find(n => n.interface === name);
+    const compactCards = dashboardSize === 'micro' || dashboardSize === 'compact';
+
     return (
         <div className={sizing.spacing} data-bms-remote-telemetry="true" data-bms-telemetry-size={dashboardSize}>
             {!telemetry.available && <div role="alert" className="text-sm text-amber-200">Remote telemetry unavailable. {telemetry.error}</div>}
-            <div className={`flex flex-wrap items-center justify-between rounded-xl border border-slate-700 bg-slate-900 ${sizing.padding} ${sizing.gap}`}>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-card,var(--bg-secondary))] px-4 py-2 text-xs text-[var(--text-secondary)]">
                 <div>
-                    <div className="text-sm font-semibold text-emerald-100">Vast instance {telemetry.target.provider_instance_id}</div>
-                    <div className="mt-1 text-xs text-emerald-200/80">Read-only remote telemetry · {telemetry.observed_at ? new Date(telemetry.observed_at).toLocaleString() : 'Waiting for sample'} · 10-second collection · 1-hour history</div>
+                    <span className="text-sm font-semibold text-[var(--text-primary)]">Vast instance {telemetry.target.provider_instance_id}</span>
+                    <span className="ml-2" title="Read-only. The worker reports every 10 seconds and keeps one hour of history.">
+                        {telemetry.observed_at ? `updated ${new Date(telemetry.observed_at).toLocaleTimeString([], { hour12: false })}` : 'waiting for first sample'}
+                        {collecting ? ` · ${formatDuration(now - firstSample!)} of history` : ''}
+                    </span>
                 </div>
-                <div className="text-right text-xs text-emerald-100">
-                    <div>{hourly == null ? 'Rate unavailable' : `$${hourly.toFixed(3)}/hr`}</div>
-                    {estimatedCost != null && <div className="mt-1">Estimated session: ${estimatedCost.toFixed(2)}</div>}
+                <div className="tabular-nums" title={estimatedCost != null ? `Estimated session cost $${estimatedCost.toFixed(2)}` : undefined}>
+                    {hourly == null ? 'Rate unavailable' : `$${hourly.toFixed(3)}/hr`}
+                    {uptimeMs != null && ` · up ${formatDuration(uptimeMs)}`}
                 </div>
             </div>
 
-            <div className={`grid md:grid-cols-2 xl:grid-cols-3 ${sizing.gap}`}>
+            <div className={`grid lg:grid-cols-2 2xl:grid-cols-3 ${sizing.gap}`}>
                 {telemetry.gpus.map((gpu) => {
-                    const memoryPercent = gpu.memory_total_mb != null && gpu.memory_used_mb != null && gpu.memory_total_mb > 0
-                        ? Math.min(100, gpu.memory_used_mb / gpu.memory_total_mb * 100)
-                        : 0;
+                    const totalGib = gpu.memory_total_mb != null ? gpu.memory_total_mb / 1024 : null;
+                    const usedGib = gpu.memory_used_mb != null ? gpu.memory_used_mb / 1024 : null;
+                    const powerLimit = asNumber(gpu.power_limit_w);
+                    const own = (s: RemoteTelemetrySample) => s.gpus.find(g => g.id === gpu.id);
                     return (
-                        <article key={gpu.id} className={`rounded-xl border border-slate-800 bg-slate-900 ${sizing.padding}`}>
-                            <div className="flex items-start justify-between gap-3">
-                                <div>
-                                    <h3 className="text-sm font-semibold text-slate-100">Remote GPU {gpu.index}</h3>
-                                    <p className="mt-1 text-xs text-slate-400">{gpu.name}</p>
-                                </div>
-                                <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-xs font-semibold text-cyan-200">
-                                    {gpu.utilization == null ? 'N/A' : `${gpu.utilization.toFixed(0)}%`}
-                                </span>
-                            </div>
-                            <div className={`h-2 overflow-hidden rounded-full bg-slate-800 ${sizing.margin}`}>
-                                <div className="h-full bg-emerald-400" style={{ width: `${memoryPercent}%` }} />
-                            </div>
-                            <div className="mt-2 flex justify-between text-xs text-slate-400">
-                                <span>{gpu.memory_used_mb?.toLocaleString() ?? 'N/A'} MB used</span>
-                                <span>{gpu.memory_total_mb?.toLocaleString() ?? 'N/A'} MB</span>
-                            </div>
-                            <div className={`grid grid-cols-2 text-xs ${sizing.margin} ${sizing.gap}`}>
-                                <div className="rounded-lg bg-slate-950 px-3 py-2 text-slate-300">
-                                    Temperature<br /><span className="text-slate-100">{gpu.temperature == null ? 'N/A' : `${gpu.temperature.toFixed(0)}°C`}</span>
-                                </div>
-                                <div className="rounded-lg bg-slate-950 px-3 py-2 text-slate-300">
-                                    Power<br /><span className="text-slate-100">{gpu.power_draw_w == null ? 'N/A' : `${gpu.power_draw_w.toFixed(1)} W`}</span>
-                                </div>
-                            </div>
-                            <div className={`${sizing.margin} ${sizing.spacing}`}>
-                                {metric('GPU utilization', '%', s => s.gpus.find(g => g.id === gpu.id)?.utilization, 100)}
-                                {metric('VRAM used', ' MiB', s => s.gpus.find(g => g.id === gpu.id)?.memory_used_mb, gpu.memory_total_mb ?? undefined)}
-                                {metric('Temperature', '°C', s => s.gpus.find(g => g.id === gpu.id)?.temperature)}
-                                {metric('Power', ' W', s => s.gpus.find(g => g.id === gpu.id)?.power_draw_w)}
-                            </div>
+                        <article key={gpu.id} className="min-w-0">
+                            <PanelFrame compact={compactCards} title={gpu.name} subtitle={`Remote GPU ${gpu.index}`}>
+                                {card([
+                                    { title: 'GPU utilization', suffix: ' %', range: [0, 100], color: METRIC_COLORS.utilization, label: 'Util', current: fixed(gpu.utilization, 0, '%'), value: s => own(s)?.utilization },
+                                    { title: 'VRAM used', suffix: ' GiB', decimals: 0, ...(totalGib ? { range: [0, totalGib] as [number, number] } : {}), color: METRIC_COLORS.memory, label: 'VRAM',
+                                        current: `${fixed(usedGib, 1, '')} / ${fixed(totalGib, 0, ' GiB')}`, value: s => { const v = own(s)?.memory_used_mb; return v == null ? null : v / 1024; } },
+                                    { title: 'Power draw', suffix: ' W', decimals: 0, ...(powerLimit ? { range: [0, powerLimit] as [number, number] } : {}), color: METRIC_COLORS.power, label: 'Power',
+                                        current: `${fixed(gpu.power_draw_w, 0, ' W')}${powerLimit ? ` / ${powerLimit.toFixed(0)} W` : ''}`, value: s => own(s)?.power_draw_w },
+                                    { title: 'Temperature', suffix: ' °C', decimals: 0, range: [0, 100], color: METRIC_COLORS.temperature, label: 'Temp', current: fixed(gpu.temperature, 0, ' °C'), value: s => own(s)?.temperature },
+                                ])}
+                            </PanelFrame>
                         </article>
                     );
                 })}
-            </div>
-            <div className="text-xs text-slate-400">CPU allocation: {telemetry.cpu?.allocated_cores ?? 'N/A'} cores · CPU scope: {telemetry.cpu?.scope ?? 'N/A'} · RAM scope: {telemetry.ram?.scope ?? 'N/A'} · RAM limit: {gib(telemetry.ram?.limit_bytes)?.toFixed(2) ?? 'N/A'} GiB · Work filesystem: {telemetry.disk?.path ?? 'N/A'} · Total: {gib(telemetry.disk?.total_bytes)?.toFixed(2) ?? 'N/A'} GiB</div>
-            <div className={`grid md:grid-cols-2 ${sizing.gap}`}>
-                {metric('CPU utilization', '%', s => s.cpu?.utilization, 100)}
-                {metric('RAM used', ' GiB', s => gib(s.ram?.used_bytes), gib(telemetry.ram?.limit_bytes) ?? undefined)}
-                {metric('Work filesystem free', ' GiB', s => gib(s.disk?.free_bytes), gib(telemetry.disk?.total_bytes) ?? undefined)}
-                {[...new Set(history.flatMap(s => (s.network ?? []).map(n => n.interface)))].map(name => <div key={name} className={sizing.spacing}>
-                    {metric(`${name} RX throughput`, ' MiB/s', s => { const n = s.network?.find(n => n.interface === name)?.rx_bytes_per_second; return n == null ? null : n / 1024 ** 2; })}
-                    {metric(`${name} TX throughput`, ' MiB/s', s => { const n = s.network?.find(n => n.interface === name)?.tx_bytes_per_second; return n == null ? null : n / 1024 ** 2; })}
-                </div>)}
+                <article className="min-w-0">
+                    <PanelFrame compact={compactCards} title="CPU, memory and disk"
+                        subtitle={`${telemetry.cpu?.allocated_cores != null ? `${Number(telemetry.cpu.allocated_cores.toFixed(1))} cores` : 'cores n/a'} · ${telemetry.cpu?.scope === 'cgroup' ? 'container limits' : 'host'}${telemetry.disk?.path ? ` · ${telemetry.disk.path}` : ''}`}>
+                        {card([
+                            { title: 'CPU utilization', suffix: ' %', range: [0, 100], color: METRIC_COLORS.utilization, label: 'Util', current: fixed(latest?.cpu?.utilization, 1, '%'), value: s => s.cpu?.utilization },
+                            { title: 'RAM used', suffix: ' GiB', decimals: 0, ...(ramLimit ? { range: [0, ramLimit / GIB] as [number, number] } : {}), color: METRIC_COLORS.memory, label: 'RAM',
+                                current: `${fixed(latest?.ram?.used_bytes != null ? latest.ram.used_bytes / GIB : null, 1, '')} / ${fixed(ramLimit != null ? ramLimit / GIB : null, 0, ' GiB')}`,
+                                value: s => s.ram?.used_bytes == null ? null : s.ram.used_bytes / GIB },
+                            { title: 'Disk free', suffix: ' GiB', decimals: 0, ...(diskTotal ? { range: [0, diskTotal / GIB] as [number, number] } : {}), color: METRIC_COLORS.secondary, label: 'Free',
+                                current: `${fixed(latest?.disk?.free_bytes != null ? latest.disk.free_bytes / GIB : null, 0, '')} / ${fixed(diskTotal != null ? diskTotal / GIB : null, 0, ' GiB')}`,
+                                value: s => s.disk?.free_bytes == null ? null : s.disk.free_bytes / GIB },
+                        ])}
+                    </PanelFrame>
+                </article>
+                {interfaces.length > 0 && (
+                    <article className="min-w-0">
+                        <PanelFrame compact={compactCards} title="Network" subtitle={interfaces.join(', ')}>
+                            {card(interfaces.flatMap(name => [
+                                { title: `${name} download`, suffix: ' MiB/s', color: METRIC_COLORS.memory, label: 'RX',
+                                    current: fixed(latestNetwork(name)?.rx_bytes_per_second != null ? latestNetwork(name)!.rx_bytes_per_second! / MIB : null, 1, ' MiB/s'),
+                                    value: (s: RemoteTelemetrySample) => { const n = s.network?.find(n => n.interface === name)?.rx_bytes_per_second; return n == null ? null : n / MIB; } },
+                                { title: `${name} upload`, suffix: ' MiB/s', color: METRIC_COLORS.power, label: 'TX',
+                                    current: fixed(latestNetwork(name)?.tx_bytes_per_second != null ? latestNetwork(name)!.tx_bytes_per_second! / MIB : null, 1, ' MiB/s'),
+                                    value: (s: RemoteTelemetrySample) => { const n = s.network?.find(n => n.interface === name)?.tx_bytes_per_second; return n == null ? null : n / MIB; } },
+                            ]))}
+                        </PanelFrame>
+                    </article>
+                )}
             </div>
         </div>
     );
