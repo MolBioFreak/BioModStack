@@ -114,6 +114,52 @@ def _validate_model_record(model: Any) -> None:
         raise ValueError("model record has invalid file inventory")
 
 
+def modified_base_catalog(lock: dict[str, Any], molecule: str, quality: str) -> dict[str, dict[str, Any]]:
+    """Pinned modification models for one basecaller, keyed by modification name."""
+    return {
+        str(model["modification"]): dict(model)
+        for model in (lock["models"].get("modified_bases") or {}).values()
+        if model.get("molecule") == molecule and model.get("base_quality") == quality
+    }
+
+
+def resolve_modified_bases(lock: dict[str, Any], molecule: str, quality: str, mode: str,
+                           selection: Any) -> list[dict[str, Any]]:
+    """Resolve a space-separated modification selection to exact pinned models.
+
+    Mirrors Dorado 2.1.2: modification models extend one simplex basecaller and
+    at most one model may cover each canonical base.
+    """
+    if isinstance(selection, (list, tuple)):
+        names = [str(item).strip() for item in selection]
+    else:
+        names = str(selection or "none").split()
+    names = [name for name in names if name]
+    if not names or names == ["none"]:
+        return []
+    if "none" in names or len(set(names)) != len(names):
+        raise ValueError("modified-base selection must be 'none' or distinct modification names")
+    if mode != "simplex":
+        raise ValueError("modified-base calling requires simplex basecalling")
+    catalog = modified_base_catalog(lock, molecule, quality)
+    unknown = [name for name in names if name not in catalog]
+    if unknown:
+        available = ", ".join(sorted(catalog)) or "none"
+        raise ValueError(f"modified-base model(s) {', '.join(unknown)} are not pinned for {molecule} {quality}; available: {available}")
+    models = [catalog[name] for name in names]
+    seen: dict[str, str] = {}
+    for model in models:
+        base = str(model["canonical_base"])
+        if base in seen:
+            raise ValueError(f"{seen[base]} and {model['modification']} both call canonical base {base}; Dorado allows one model per canonical base")
+        seen[base] = str(model["modification"])
+    return sorted(models, key=lambda item: str(item["id"]))
+
+
+def canonical_modified_bases(models: list[dict[str, Any]]) -> str:
+    return " ".join(sorted(str(model["modification"]) for model in models)) or "none"
+
+
 def resolve_model(lock: dict[str, Any], molecule: str, quality: str) -> dict[str, Any]:
     molecule = str(molecule).strip().lower()
     quality = str(quality).strip().lower()
@@ -511,10 +557,8 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
         raise ValueError("unsupported barcode kit")
     if sample_sheet and not barcode_kit:
         raise ValueError("sample sheet requires a barcode kit")
-    if modified_bases != "none":
-        mods = lock["models"]["modified_bases"]
-        if molecule != "dna" or mode != "simplex" or modified_bases not in mods or quality != mods[modified_bases]["base_quality"]:
-            raise ValueError("modified-base model is incompatible with molecule, quality, or basecalling mode")
+    modified_models = resolve_modified_bases(lock, molecule, quality, mode, modified_bases)
+    modified_bases = canonical_modified_bases(modified_models)
     if not DEVICE.fullmatch(str(device)):
         raise ValueError("device must be cpu or an explicit CUDA device selection")
     policy = lock["policy"]
@@ -572,9 +616,11 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
         verified_models = {"base": verify_model_identity(model, Path(model_root) / model["id"], model_bindings.get(model["id"]))}
         if stereo:
             verified_models["stereo"] = verify_model_identity(stereo, Path(model_root) / stereo["id"], model_bindings.get(stereo["id"]))
-        if modified_bases != "none":
-            mod_model = lock["models"]["modified_bases"][modified_bases]
-            verified_models["modified_bases"] = verify_model_identity(mod_model, Path(model_root) / mod_model["id"], model_bindings.get(mod_model["id"]))
+        if modified_models:
+            verified_models["modified_bases"] = {
+                mod_model["id"]: verify_model_identity(mod_model, Path(model_root) / mod_model["id"], model_bindings.get(mod_model["id"]))
+                for mod_model in modified_models
+            }
         if image_identity is not None:
             if verify_image(runtime_sif, lock["dorado"]["sif_sha256"]) != image_identity:
                 raise ValueError("Dorado runtime canonical object identity changed during preflight")
@@ -595,7 +641,7 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
             "model_id": model["id"], "model_aggregate_sha256": model["aggregate_sha256"],
             "stereo_model_id": stereo["id"] if stereo else None,
             "modified_bases": modified_bases,
-            "modified_bases_model_id": lock["models"]["modified_bases"][modified_bases]["id"] if modified_bases != "none" else None,
+            "modified_bases_model_ids": [mod_model["id"] for mod_model in modified_models],
         },
         "pairs": pairs_record,
         "barcoding": {"kit": barcode_kit, "sample_sheet": sheet_record, "sample_sheet_sha256": sheet_record["sha256"] if sheet_record else None},

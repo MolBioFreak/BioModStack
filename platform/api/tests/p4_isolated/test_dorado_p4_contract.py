@@ -31,8 +31,14 @@ def test_p4_matrix_rejects_unsupported_combinations() -> None:
         normalize_ont_launch_params("ont_basecall_dna", {"dorado_basecall_mode": "duplex", "barcode_kit": "SQK-RBK114-96"})
     with pytest.raises(ValueError, match="sample_sheet"):
         normalize_ont_launch_params("ont_basecall_dna", {"sample_sheet": "/tmp/s.csv"})
-    with pytest.raises(ValueError, match="modified"):
-        normalize_ont_launch_params("ont_basecall_dna", {"dorado_quality_mode": "sup", "modified_bases": "6mA"})
+    # SUP and HAC both carry pinned modification models; several may be combined.
+    assert normalize_ont_launch_params("ont_basecall_dna", {"dorado_quality_mode": "sup", "modified_bases": "6mA 5mCG_5hmCG"})["modified_bases"] == "5mCG_5hmCG 6mA"
+    with pytest.raises(ValueError, match="not pinned"):
+        normalize_ont_launch_params("ont_basecall_dna", {"dorado_quality_mode": "fast", "modified_bases": "6mA"})
+    with pytest.raises(ValueError, match="canonical base"):
+        normalize_ont_launch_params("ont_basecall_dna", {"dorado_quality_mode": "sup", "modified_bases": "5mC_5hmC 4mC_5mC"})
+    with pytest.raises(ValueError, match="simplex"):
+        normalize_ont_launch_params("ont_basecall_dna", {"dorado_basecall_mode": "duplex", "duplex_pairs": "/tmp/p.txt", "modified_bases": "6mA"})
     with pytest.raises(ValueError, match="only supported"):
         normalize_ont_launch_params("ont_basecall_rna", {"barcode_kit": "SQK-RBK114-96"})
     with pytest.raises(ValueError, match="mutually exclusive"):

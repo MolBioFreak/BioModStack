@@ -73,19 +73,333 @@
       "bytes": 25773916
     },
     "modified_bases": {
-      "5mC_5hmC": {
+      "dna_r10.4.1_e8.2_400bps_hac@v6.0.0_4mC_5mC@v1": {
+        "id": "dna_r10.4.1_e8.2_400bps_hac@v6.0.0_4mC_5mC@v1",
+        "aggregate_sha256": "a89b2d162671f684bf5b32822d962fd84fe155017859ca9f1de099c6141e0556",
+        "files": 24,
+        "bytes": 12796654,
+        "molecule": "dna",
+        "base_quality": "hac",
+        "modification": "4mC_5mC",
+        "canonical_base": "C",
+        "motif": "C",
+        "motif_offset": 0,
+        "long_names": [
+          "4mC",
+          "5mC"
+        ],
+        "codes": [
+          "21839",
+          "m"
+        ]
+      },
+      "dna_r10.4.1_e8.2_400bps_hac@v6.0.0_5mCG_5hmCG@v1": {
+        "id": "dna_r10.4.1_e8.2_400bps_hac@v6.0.0_5mCG_5hmCG@v1",
+        "aggregate_sha256": "2694d736045a1428bcb4ecdf78bcc92cfb75b7b5a1af9e2fd5bb545905c32ae6",
+        "files": 24,
+        "bytes": 12796652,
+        "molecule": "dna",
+        "base_quality": "hac",
+        "modification": "5mCG_5hmCG",
+        "canonical_base": "C",
+        "motif": "CG",
+        "motif_offset": 0,
+        "long_names": [
+          "5hmC",
+          "5mC"
+        ],
+        "codes": [
+          "h",
+          "m"
+        ]
+      },
+      "dna_r10.4.1_e8.2_400bps_hac@v6.0.0_5mC_5hmC@v1": {
         "id": "dna_r10.4.1_e8.2_400bps_hac@v6.0.0_5mC_5hmC@v1",
         "aggregate_sha256": "b5e97f5d110bce89fff81be42b0916627e14f61ef709b435b1206290b42439dc",
         "files": 24,
         "bytes": 12796652,
-        "base_quality": "hac"
+        "molecule": "dna",
+        "base_quality": "hac",
+        "modification": "5mC_5hmC",
+        "canonical_base": "C",
+        "motif": "C",
+        "motif_offset": 0,
+        "long_names": [
+          "5hmC",
+          "5mC"
+        ],
+        "codes": [
+          "h",
+          "m"
+        ]
       },
-      "6mA": {
+      "dna_r10.4.1_e8.2_400bps_hac@v6.0.0_6mA@v1": {
         "id": "dna_r10.4.1_e8.2_400bps_hac@v6.0.0_6mA@v1",
         "aggregate_sha256": "ca8a7dc3908c0ce7a5827ada7bd9cdbedf7fc6078fc8294cf3ef126fd366d499",
         "files": 24,
         "bytes": 12795086,
-        "base_quality": "hac"
+        "molecule": "dna",
+        "base_quality": "hac",
+        "modification": "6mA",
+        "canonical_base": "A",
+        "motif": "A",
+        "motif_offset": 0,
+        "long_names": [
+          "6mA"
+        ],
+        "codes": [
+          "a"
+        ]
+      },
+      "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_4mC_5mC@v1": {
+        "id": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_4mC_5mC@v1",
+        "aggregate_sha256": "34b8bcc9cba1ddb9a1c8ee7e63a3ae92ef37f50f9b4d17ba53ebb145e5eb104b",
+        "files": 24,
+        "bytes": 41181653,
+        "molecule": "dna",
+        "base_quality": "sup",
+        "modification": "4mC_5mC",
+        "canonical_base": "C",
+        "motif": "C",
+        "motif_offset": 0,
+        "long_names": [
+          "4mC",
+          "5mC"
+        ],
+        "codes": [
+          "21839",
+          "m"
+        ]
+      },
+      "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_5mCG_5hmCG@v2": {
+        "id": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_5mCG_5hmCG@v2",
+        "aggregate_sha256": "639ea42a9a59018bce5aab0a1b2f4e0a1320523a90b84be92369f1a9b5d00478",
+        "files": 24,
+        "bytes": 41181650,
+        "molecule": "dna",
+        "base_quality": "sup",
+        "modification": "5mCG_5hmCG",
+        "canonical_base": "C",
+        "motif": "CG",
+        "motif_offset": 0,
+        "long_names": [
+          "5hmC",
+          "5mC"
+        ],
+        "codes": [
+          "h",
+          "m"
+        ]
+      },
+      "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_5mC_5hmC@v2": {
+        "id": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_5mC_5hmC@v2",
+        "aggregate_sha256": "325f28c006e7d1d130ac9df747bba2a694e311b04a136b92e796143722fbed53",
+        "files": 24,
+        "bytes": 41181649,
+        "molecule": "dna",
+        "base_quality": "sup",
+        "modification": "5mC_5hmC",
+        "canonical_base": "C",
+        "motif": "C",
+        "motif_offset": 0,
+        "long_names": [
+          "5hmC",
+          "5mC"
+        ],
+        "codes": [
+          "h",
+          "m"
+        ]
+      },
+      "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_6mA@v1": {
+        "id": "dna_r10.4.1_e8.2_400bps_sup@v5.2.0_6mA@v1",
+        "aggregate_sha256": "ff32952b468397058542aba85a5d68f390768d033268cd6632bfa04e167f1fa3",
+        "files": 24,
+        "bytes": 41180085,
+        "molecule": "dna",
+        "base_quality": "sup",
+        "modification": "6mA",
+        "canonical_base": "A",
+        "motif": "A",
+        "motif_offset": 0,
+        "long_names": [
+          "6mA"
+        ],
+        "codes": [
+          "a"
+        ]
+      },
+      "rna004_hac@v6.0.0_inosine_m6A@v1": {
+        "id": "rna004_hac@v6.0.0_inosine_m6A@v1",
+        "aggregate_sha256": "1b323d924d57f7304aa0a3f20411f316a7c60d7c099b8208a1c3335136bccfc7",
+        "files": 24,
+        "bytes": 12796402,
+        "molecule": "rna",
+        "base_quality": "hac",
+        "modification": "inosine_m6A",
+        "canonical_base": "A",
+        "motif": "A",
+        "motif_offset": 0,
+        "long_names": [
+          "Inosine",
+          "m6A"
+        ],
+        "codes": [
+          "17596",
+          "a"
+        ]
+      },
+      "rna004_hac@v6.0.0_m5C@v1": {
+        "id": "rna004_hac@v6.0.0_m5C@v1",
+        "aggregate_sha256": "be994a8982503640bcd963dd6f27d0d621c811bc4fb44a88073f370a5a388fdf",
+        "files": 24,
+        "bytes": 12794828,
+        "molecule": "rna",
+        "base_quality": "hac",
+        "modification": "m5C",
+        "canonical_base": "C",
+        "motif": "C",
+        "motif_offset": 0,
+        "long_names": [
+          "m5C"
+        ],
+        "codes": [
+          "m"
+        ]
+      },
+      "rna004_hac@v6.0.0_m6A_DRACH@v1": {
+        "id": "rna004_hac@v6.0.0_m6A_DRACH@v1",
+        "aggregate_sha256": "0abd4a05a63840dad49a35a0c2f12a391e740ca2d32de372cc9671980dbf1617",
+        "files": 24,
+        "bytes": 12794832,
+        "molecule": "rna",
+        "base_quality": "hac",
+        "modification": "m6A_DRACH",
+        "canonical_base": "A",
+        "motif": "DRACH",
+        "motif_offset": 2,
+        "long_names": [
+          "m6A"
+        ],
+        "codes": [
+          "a"
+        ]
+      },
+      "rna004_hac@v6.0.0_pseU@v1": {
+        "id": "rna004_hac@v6.0.0_pseU@v1",
+        "aggregate_sha256": "e6db8ab982ac356adc747c41742b7a41b15d41343da8fff47c9c132a766cb14f",
+        "files": 24,
+        "bytes": 12794807,
+        "molecule": "rna",
+        "base_quality": "hac",
+        "modification": "pseU",
+        "canonical_base": "T",
+        "motif": "T",
+        "motif_offset": 0,
+        "long_names": [
+          "pseU"
+        ],
+        "codes": [
+          "17802"
+        ]
+      },
+      "rna004_sup@v6.0.0_2OmeG@v1": {
+        "id": "rna004_sup@v6.0.0_2OmeG@v1",
+        "aggregate_sha256": "32ad26d0ed5aa9b14ff93bee6f43ea3a010d665f555e370edb481a69464d1488",
+        "files": 24,
+        "bytes": 12794834,
+        "molecule": "rna",
+        "base_quality": "sup",
+        "modification": "2OmeG",
+        "canonical_base": "G",
+        "motif": "G",
+        "motif_offset": 0,
+        "long_names": [
+          "2OmeG"
+        ],
+        "codes": [
+          "19229"
+        ]
+      },
+      "rna004_sup@v6.0.0_inosine_m6A_2OmeA@v1": {
+        "id": "rna004_sup@v6.0.0_inosine_m6A_2OmeA@v1",
+        "aggregate_sha256": "598a59a5466afbcf0fb6e4a6c5dff73c422aabb22a05c04dd05c8ff709e4477c",
+        "files": 24,
+        "bytes": 12797974,
+        "molecule": "rna",
+        "base_quality": "sup",
+        "modification": "inosine_m6A_2OmeA",
+        "canonical_base": "A",
+        "motif": "A",
+        "motif_offset": 0,
+        "long_names": [
+          "Inosine",
+          "2OmeA",
+          "m6A"
+        ],
+        "codes": [
+          "17596",
+          "69426",
+          "a"
+        ]
+      },
+      "rna004_sup@v6.0.0_m5C_2OmeC@v1": {
+        "id": "rna004_sup@v6.0.0_m5C_2OmeC@v1",
+        "aggregate_sha256": "e5b03df16c81dc8d6cfd5fedba5ef32c17512396ac6fa19c544160b3e0e0bf00",
+        "files": 24,
+        "bytes": 12796400,
+        "molecule": "rna",
+        "base_quality": "sup",
+        "modification": "m5C_2OmeC",
+        "canonical_base": "C",
+        "motif": "C",
+        "motif_offset": 0,
+        "long_names": [
+          "2OmeC",
+          "m5C"
+        ],
+        "codes": [
+          "19228",
+          "m"
+        ]
+      },
+      "rna004_sup@v6.0.0_m6A_DRACH@v1": {
+        "id": "rna004_sup@v6.0.0_m6A_DRACH@v1",
+        "aggregate_sha256": "f246ba437769519316915f99c8e2646f81950b86e456809e2550b4ec067e770a",
+        "files": 24,
+        "bytes": 12794832,
+        "molecule": "rna",
+        "base_quality": "sup",
+        "modification": "m6A_DRACH",
+        "canonical_base": "A",
+        "motif": "DRACH",
+        "motif_offset": 2,
+        "long_names": [
+          "m6A"
+        ],
+        "codes": [
+          "a"
+        ]
+      },
+      "rna004_sup@v6.0.0_pseU_2OmeU@v1": {
+        "id": "rna004_sup@v6.0.0_pseU_2OmeU@v1",
+        "aggregate_sha256": "3028a23166ec6c985559ced83dd79a3c38b661c13e0a5138f347108d1d5d4e25",
+        "files": 24,
+        "bytes": 12796405,
+        "molecule": "rna",
+        "base_quality": "sup",
+        "modification": "pseU_2OmeU",
+        "canonical_base": "T",
+        "motif": "T",
+        "motif_offset": 0,
+        "long_names": [
+          "pseU",
+          "2OmeU"
+        ],
+        "codes": [
+          "17802",
+          "19227"
+        ]
       }
     }
   },
@@ -153,6 +467,10 @@
     },
     "batch_size_min": 0,
     "runtime_network": "forbidden",
-    "model_download": "forbidden"
+    "model_download": "forbidden",
+    "modified_bases_selection": {
+      "representation": "space-separated modification names for the selected molecule and basecalling quality, or none",
+      "compatibility": "at most one model per canonical base (Dorado 2.1.2 check_modbase_multi_model_compatibility)"
+    }
   }
 }

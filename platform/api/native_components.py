@@ -1331,9 +1331,9 @@ def ngs_dorado_model_dependencies(params, workflow):
     models = [lock['models'][molecule][quality]]
     if params.get('dorado_basecall_mode') == 'duplex':
         models.append(lock['models']['stereo'])
-    modified = params.get('modified_bases') or 'none'
-    if modified != 'none':
-        models.append(lock['models']['modified_bases'][modified])
+    from scripts.dorado_p4_preflight import resolve_modified_bases
+    models.extend(resolve_modified_bases(lock, molecule, quality, params.get('dorado_basecall_mode') or 'simplex',
+                                         params.get('modified_bases')))
     version = lock['dorado']['version'].split('+')[0]
     return tuple(SelectedDependency('weights:dorado/' + version + '/' + model['id'],
         'weights', 'dorado/' + version + '/' + model['id'],
