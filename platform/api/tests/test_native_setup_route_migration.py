@@ -11,7 +11,7 @@ from test_project_workflow_setups import _project
 
 
 @pytest.mark.asyncio
-async def test_v22_preserves_v21_rows_and_immutable_contract(tmp_path):
+async def test_v22_preserves_v21_rows_and_immutable_contract(tmp_path, monkeypatch):
     path = tmp_path / 'upgrade.db'
     migrations.run_all(path)
     engine = create_experiment_engine(f'sqlite+aiosqlite:///{path}')
@@ -47,8 +47,18 @@ async def test_v22_preserves_v21_rows_and_immutable_contract(tmp_path):
         old_ledger = connection.execute('SELECT version, checksum FROM experiment_schema_migrations ORDER BY version').fetchall()
     finally:
         connection.close()
-    migrations.run_all(path)
-    migrations.run_all(path)  # startup replay is harmless
+    audits = []
+    attest = migrations.attest_schema
+
+    def record_attestation(connection, **kwargs):
+        audits.append(kwargs["verify_data"])
+        return attest(connection, **kwargs)
+
+    monkeypatch.setattr(migrations, "attest_schema", record_attestation)
+    migrations.run_all(path, verify_data=False)
+    migrations.run_all(path, verify_data=False)  # startup replay is harmless
+    assert audits == [True, False]
+    monkeypatch.setattr(migrations, "attest_schema", attest)
     connection = migrations._connect(path)
     try:
         assert connection.execute('SELECT * FROM workflow_setup_contexts').fetchall() == original

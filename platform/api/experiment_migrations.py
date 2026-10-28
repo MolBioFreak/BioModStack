@@ -2763,8 +2763,10 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
         expected.close()
 
 
-def attest_schema(connection: sqlite3.Connection) -> dict[str, object]:
-    """Verify the exact ledger and complete migration-owned SQLite definitions."""
+def attest_schema(
+    connection: sqlite3.Connection, *, verify_data: bool = True
+) -> dict[str, object]:
+    """Verify schema/ledger and, by default, historical foreign-key integrity."""
     missing_tables: list[str] = []
     missing_columns: dict[str, list[str]] = {}
     for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
@@ -2789,7 +2791,10 @@ def attest_schema(connection: sqlite3.Connection) -> dict[str, object]:
         for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
     }
     missing_triggers = sorted(set(_MIGRATION_TRIGGER_NAMES) - actual_triggers)
-    foreign_key_errors = [list(row) for row in connection.execute("PRAGMA foreign_key_check")]
+    foreign_key_errors = (
+        [list(row) for row in connection.execute("PRAGMA foreign_key_check")]
+        if verify_data else None
+    )
     ledger = [
         (int(row[0]), str(row[1]), str(row[2]))
         for row in connection.execute(
@@ -2841,6 +2846,7 @@ def attest_schema(connection: sqlite3.Connection) -> dict[str, object]:
         "missing_indexes": missing_indexes,
         "missing_triggers": missing_triggers,
         "foreign_key_errors": foreign_key_errors,
+        "data_integrity_checked": verify_data,
         "migration_ledger": [list(row) for row in ledger],
         "migration_ledger_valid": ledger_valid,
         "definition_errors": definition_errors,
@@ -3748,7 +3754,8 @@ def _apply_domain_parent_revision_authority_upgrade(connection: sqlite3.Connecti
         raise
 
 
-def run_all(db_path: str | Path) -> None:
+def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
+    """Migrate and attest; schema-only reopen still fully audits actual upgrades."""
     _verify_frozen_migration_sources()
     path = Path(db_path).expanduser().resolve()
     connection = _connect(path)
@@ -3789,6 +3796,7 @@ def run_all(db_path: str | Path) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
+        migrated = rows not in _accepted_migration_ledgers()
         if not rows:
             connection.executescript(MIGRATION_SQL)
             connection.execute(
@@ -4006,10 +4014,7 @@ def run_all(db_path: str | Path) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_experiment_run_events_idempotency "
             "ON run_events(workflow_run_id, idempotency_key)"
         )
-        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
-        if violations:
-            raise sqlite3.IntegrityError(f"experiment foreign-key violations: {violations!r}")
-        attestation = attest_schema(connection)
+        attestation = attest_schema(connection, verify_data=verify_data or migrated)
         if not attestation["ok"]:
             raise sqlite3.IntegrityError(f"experiment schema attestation failed: {attestation!r}")
     except Exception:
