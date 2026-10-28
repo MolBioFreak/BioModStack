@@ -250,6 +250,39 @@ def test_schema_accepts_verifier_variant_analysis_status(status: str) -> None:
         service.validate_ont_fastq_qc_result_contract(value)
 
 
+def test_site_review_labels_methylation_and_homopolymer_contexts(tmp_path: Path) -> None:
+    # Circular reference: GATC wraps the origin; CCAGG (Dcm) and a C6 homopolymer sit in the body.
+    sequence = "ATCAAAACCAGGTTTTCCCCCCTTTTG"
+    header = "chrom\tposition_1based\treference_base\tdepth\tforward_depth\treverse_depth\ta_count\tc_count\tg_count\tt_count\tn_count\tinsertion_count\tdeletion_count\tconsensus_base\tmajor_allele_fraction\tlow_coverage\tambiguous"
+    rows = [header]
+    for index, base in enumerate(sequence, start=1):
+        counts = {b: 0 for b in "ACGT"}
+        counts[base] = 100
+        deletions = insertions = 0
+        if index in {2, 9, 17}:  # GATC across origin, Dcm, homopolymer
+            counts[base] = 80; deletions = 20
+        if index == 5:
+            insertions = 15
+        major = counts[base] / 100
+        rows.append("\t".join(map(str, ["p", index, base, 100, 50, 50, counts["A"], counts["C"], counts["G"], counts["T"], 0,
+                                        insertions, deletions, base, f"{major:.4f}", "false", "false"])))
+    table = tmp_path / "per_base_support.tsv"
+    table.write_text("\n".join(rows) + "\n")
+    review = service._load_site_review(table, circular=True)
+    by_position = {site["position_1based"]: site for site in review["sites"]}
+    assert set(by_position) == {2, 5, 9, 17}
+    assert by_position[2]["contexts"] == ["dam_gatc"]
+    assert by_position[9]["contexts"] == ["dcm_ccwgg"]
+    assert by_position[17]["contexts"] == ["homopolymer_C6"]
+    assert by_position[5]["insertion_fraction"] == 0.15
+    assert review["motif_site_totals"] == {"dam_gatc": 1, "dcm_ccwgg": 1}
+    linear = service._load_site_review(table, circular=False)
+    assert {site["position_1based"]: site["contexts"] for site in linear["sites"]}[2] == []
+    value = _fixture()
+    value["site_review"] = review
+    service.validate_ont_fastq_qc_result_contract(value)
+
+
 def test_ngs_result_openapi_publishes_the_normative_closed_contract() -> None:
     from fastapi import FastAPI
     from routers import ngs_alignment_sessions as routes
