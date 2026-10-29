@@ -271,7 +271,7 @@ it('Complexa evaluation basket preserves order and exact slots across cold reope
 it.each(['rfd4_proteina', 'complexa'] as const)('%s shows real native snapshots without default hydration', async model => {
     const request = model === 'complexa' ? { task: 'AME', reward: null } : { groups: { generation: 'inverse_folding', recycle_strategy: 'thinking_low' }, settings: { seed: 0 } };
     await mount(model, { [model === 'complexa' ? 'complexa_request' : 'rfd4_request']: request });
-    await click('Native settings'); await disclose('Profile reference');
+    await disclose('Profile reference');
     expect(document.body.textContent).toContain(model === 'complexa' ? 'reward_model' : 'independent single-group snapshots');
     expect(document.body.textContent).toContain('n_recycle');
     expect(draft[model === 'complexa' ? 'complexa_request' : 'rfd4_request']).toEqual(request);
@@ -286,7 +286,7 @@ it.skipIf(!process.env.BMS_TEST_NATIVE_READBACK)('replays actual installed combi
         }
         return adapter(config);
     };
-    await mount('rfd4_proteina', {rfd4_request:result.request}); await click('Native settings'); await disclose('Profile reference'); await click('Read selected effective configuration');
+    await mount('rfd4_proteina', {rfd4_request:result.request}); await disclose('Profile reference'); await click('Read selected effective configuration');
     expect(JSON.parse(document.querySelector('[aria-label="Selected native effective configuration"]')!.textContent!)).toEqual(result.effective_config);
     expect(draft.rfd4_request).toEqual(result.request);
     await click('Design'); await edit('Seed','1'); await click('Native settings');
@@ -299,8 +299,8 @@ it('projects selected effective scalar values without authoring them and invalid
         return adapter(config);
     };
     await mount('rfd4_proteina', { rfd4_request: { settings: {} } });
-    await click('Native settings'); await disclose('Profile reference'); await click('Read selected effective configuration');
-    await disclose('Runtime, output and retained assets');
+    await disclose('Profile reference'); await click('Read selected effective configuration');
+    await click('Native settings'); await disclose('Runtime, output and retained assets');
     expect(document.body.textContent).not.toContain('Primary amount overrides');
     expect((document.querySelector('[aria-label="Verbose"]') as HTMLInputElement).checked).toBe(false);
     expect(draft.rfd4_request).toEqual({ settings: {} });
@@ -325,7 +325,7 @@ it('native readback failure is observational and does not alter request or run a
         if (config.url?.endsWith('/generation-settings/preview')) throw new Error('Native test unavailable');
         return adapter(config);
     };
-    await mount('rfd4_proteina', {rfd4_request:{settings:{seed:0}}}); await click('Native settings'); await disclose('Profile reference'); await click('Read selected effective configuration');
+    await mount('rfd4_proteina', {rfd4_request:{settings:{seed:0}}}); await disclose('Profile reference'); await click('Read selected effective configuration');
     expect(document.body.textContent).toContain('Native test unavailable'); expect(draft.rfd4_request).toEqual({settings:{seed:0}});
     expect([...document.querySelectorAll('button')].find(b=>b.textContent === 'Generate candidates')!.disabled).toBe(false);
 });
@@ -346,7 +346,7 @@ it('provider catalog searches real schema constructors without activation and re
     await click('Omit resume_slot'); expect(draft.rfd4_request.resume_slot).toBeUndefined();
 });
 it('Complexa tasks/counts/reward and authoritative operation survive actual transport', async () => {
-    await mount('complexa'); await edit('Complexa task', 'monomer_motif_indexed'); await edit('Native task name', 'indexed'); await edit('nsamples', '3'); await edit('seed', '0'); await edit('Native operation', 'analysis');
+    await mount('complexa'); await edit('Complexa task', 'monomer_motif_indexed'); await edit('Native task name', 'indexed'); await edit('Dataset samples', '3'); await edit('Seed', '0'); await edit('Native operation', 'analysis');
     await disclose('Reward activation'); await edit('Native reward state', 'off'); await click('Evaluate and analyze'); const body = wire.find(w => w.url === '/api/jobs').body;
     expect(body.mode).toBe('evaluate'); expect(body.params.complexa_request).toEqual({ task: 'monomer_motif_indexed', task_name: 'indexed', nsamples: 3, seed: 0, operation: 'analysis', reward: null }); expect(normalize(body.params.complexa_request, 'complexa')).toEqual(body.params.complexa_request);
 });

@@ -269,7 +269,7 @@ export function NativeSourceInput({ label, value, bindings, onChange, onAcquire,
                 {value && !structureBindings.some(([slot]) => slot === value) && <option value={value}>{value} · not bound</option>}
                 {structureBindings.map(([slot, source]) => <option key={slot} value={slot}>{displayName(slot, source)}</option>)}
             </select>}</label>
-            {(!integrated || !binding) && <button type="button" aria-label={`Choose structure for ${label}`} onClick={() => { committedSlot.current = undefined; setOpen(true); }}>Choose structure</button>}
+            {(!integrated || !binding) && <button type="button" aria-label={`Choose structure for ${label}`} onClick={() => { committedSlot.current = undefined; setOpen(true); }}>Choose / import document</button>}
             {!integrated && binding && !fileBinding(binding) && <button type="button" aria-label={`Inspect structure for ${label}`} onClick={() => setOpen(!open)}>Inspect</button>}
         </div>
         {(open || integrated && binding && !fileBinding(binding)) && <div className="space-y-2 min-w-0" style={{ minWidth: 0, width: '100%', maxWidth: '100%' }} role="group" aria-label={`Choose structure for ${label}`}>
@@ -293,6 +293,7 @@ export function DeNovoNativeSources({ value, onChange, onSelection, selection, o
     const [name, setName] = useState('');
     const [kind, setKind] = useState('structure');
     return <div className="space-y-3" data-native-source-bindings>
+        <p className="text-xs">Registered sources are only used when selected in the task above.</p>
         {Object.entries(value ?? {}).map(([slot, binding]) => <NativeSourceRow key={slot} slot={slot} value={binding} onInspection={onInspection} onSelection={onSelection} selectedIdentities={selection?.slot === slot ? selection.identities : []}
             onChange={next => onChange({ ...value, [slot]: next })} onRemove={() => { const next = { ...value }; delete next[slot]; onChange(next); }} />)}
         <details><summary>Advanced source bindings</summary><div className="flex flex-wrap gap-3"><label>Native source name<input aria-label="Native source name" value={name} onChange={event => setName(event.target.value)} /></label>

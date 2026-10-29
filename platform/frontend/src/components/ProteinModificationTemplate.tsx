@@ -27,7 +27,8 @@ import { PreparedGeometryContext, type PreparedGeometryDocument } from '../lib/p
 import { MolecularConstructionWorkbench } from './MolecularConstructionWorkbench';
 import type { MolecularConstructionDraft } from '../lib/molecularConstruction';
 import { GeneralSequenceDesignSettings } from './GeneralSequenceDesignSettings';
-import { generalSequenceRequest, hydrateGeneralSequenceDesign, generalSequenceNames } from '../lib/generalSequenceDesign';
+import { DeNovoRunScope } from './DeNovoRunScope';
+import { generalSequenceRequest, hydrateGeneralSequenceDesign } from '../lib/generalSequenceDesign';
 import { DE_NOVO_MODIFICATION_MODE_CARDS, type ModificationMode } from './proteinModificationModes';
 
 export interface DeNovoNavigationState {
@@ -282,10 +283,10 @@ export function ProteinModificationTemplate({
                 {generator === 'laproteina' && navigation.native_mode === 'evaluate' ? <LaProteinaEvaluation key={activeKey} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />
                     : generator === 'rfd4_proteina' || generator === 'complexa' ? <DeNovoNativeGenerationSettings key={activeKey} model={generator}
                     mode={navigation.native_mode ?? 'generate'}
-                    initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} />
+                    initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} />
                     : ['rfd3', 'disco', 'laproteina'].includes(generator) ? <GenerationEditor key={activeKey} initialValues={childValues.current.values} generator={generator}
-                    designTask={task} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} /> : <p role="alert">No native editor registered for {generator}. Retained settings have not been translated to another engine.</p>}
-            </> : mode === 'rfd3_iteration' ? <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} /> : <ProteinLocalRedesignTemplate key={activeKey} embedded
+                    designTask={task} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} /> : <p role="alert">No native editor registered for {generator}. Retained settings have not been translated to another engine.</p>}
+            </> : mode === 'rfd3_iteration' ? <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} /> : <ProteinLocalRedesignTemplate key={activeKey} embedded
                 onBack={onBack} initialValues={childValues.current.values}
                 submissionModelId={validatedRedesign ? 'protein_modification_experimental' : 'protein_local_redesign'}
                 requiredPinnedGpu={requiredPinnedGpu} runDetails={runDetails} onDraftChange={reportDraft} />}</>
@@ -302,12 +303,13 @@ export function ProteinModificationTemplate({
     );
 }
 
-function GenerationEditor({ initialValues, generator, designTask, onDraftChange, runDetails, suiteView }: {
+function GenerationEditor({ initialValues, generator, designTask, onDraftChange, runDetails, suiteView, onSuiteViewChange }: {
     initialValues: Record<string, unknown>;
     generator: string;
     designTask: string;
     runDetails?: ReactNode;
     suiteView: 'simple' | 'advanced';
+    onSuiteViewChange: (view: 'simple' | 'advanced') => void;
     onDraftChange: (draft: Record<string, unknown>) => void;
 }) {
     const navigate = useNavigate();
@@ -318,7 +320,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const backend: DeNovoBackend = generator === 'laproteina' ? 'laproteina' : 'disco';
     const inputSection = designTask === 'unconditional' ? 'Design' : 'Source and regions';
     const [section, setSection] = useState(inputSection);
-    useEffect(() => { setSection(suiteView === 'advanced' ? 'Sampling' : inputSection); }, [suiteView, inputSection]);
+    const manualSection = useRef(false);
+    useEffect(() => { if (manualSection.current) { manualSection.current = false; return; } setSection(suiteView === 'advanced' ? 'Sampling' : inputSection); }, [suiteView, inputSection]);
     const [jobName, setJobName] = useState(initialString(initialValues, 'job_name', 'protein_modification'));
     const [numDesigns, setNumDesigns] = useState(initialNumber(initialValues, 'num_designs', 8));
     const [minLength, setMinLength] = useState(initialNumber(initialValues, 'min_length', 100));
@@ -774,16 +777,19 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         </>}
     </div>;
     return (
-        <DocumentCaptureContext.Provider value={documentCaptures}><DeNovoDocumentEditors registry={documentCaptures} sources={studioSources}
+        <DocumentCaptureContext.Provider value={documentCaptures}><DeNovoDocumentEditors registry={documentCaptures} sources={studioSources} molecularDocuments={molecularDocuments}
             onAdopt={(slot, document) => { void receiveCurrent.current({ [slot]: document }).catch(cause => setError(cause instanceof Error ? cause.message : String(cause))); }}>
         <div className="w-full space-y-5 text-[var(--text-primary)]" data-bms-protein-generation-workflow={generator}>
-            <ProteinDesignSections label="Generation sections" sections={[inputSection, 'Sampling', 'Sequence Design']} active={section} onChange={setSection} />
+            <ProteinDesignSections label="Generation sections" sections={[inputSection, 'Sampling', 'Sequence Design']} active={section} onChange={next => { setSection(next); const view = next === 'Sampling' ? 'advanced' : 'simple'; manualSection.current = suiteView !== view; onSuiteViewChange(view); }} />
             {/* Section navigation is presentation only. Source tools and viewers stay mounted. */}
             <div hidden={section !== inputSection} className="space-y-5">
+            {generator === 'rfd3' && <p className="text-xs">Choose a context document, then edit coordinates in AtomWorks or assign RFD3 conditions below. Studio’s RFD4 annotations are not RFD3 masks.</p>}
+            {generator === 'disco' && <p className="text-xs">Use Native jobs for DISCO entities, sequences, modifications and bonds. Studio scaffold coordinates and RFD4 conditions are not DISCO inputs.</p>}
                 {designTask === 'unconditional' || generator === 'rfd3' ? <ProteinDesignPanel title="Generation" description={generator === 'rfd3' && designTask !== 'unconditional' ? 'This goal does not automatically add context or conditions. Supply an input structure and configure the desired conditions under Sampling; without them the request remains source-free.' : 'Generate new protein candidates.'}>
                     {generationControls}
                     <p className="text-xs text-[var(--text-secondary)]">{countHelp}</p>
-                    {generator === 'rfd3' && <details onToggle={event => setRfd3SourceOpen(event.currentTarget.open)}><summary>Input structure (optional)</summary>
+                    {generator === 'rfd3' && <button type="button" aria-expanded={rfd3SourceOpen} onClick={() => setRfd3SourceOpen(!rfd3SourceOpen)}>Choose / edit RFD3 context</button>}
+                    {generator === 'rfd3' && <details open={rfd3SourceOpen} onToggle={event => setRfd3SourceOpen(event.currentTarget.open)}><summary>Input structure (optional)</summary>
                         {rfd3SourceOpen && <>
                         <NativeSourceInput integrated label="RFD3 input structure"
                             selectedIdentities={rfd3Selected}
@@ -942,21 +948,10 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             <div hidden={section !== 'Sequence Design'}>
                 <GeneralSequenceDesignSettings value={sequenceDesign} onChange={next => { if (next.invocation_draft?.enabled || next.sequence_design.enabled) { setSequenceOmitted(false); setSequenceNull(false); } setSequenceDesign(next); }} />
             </div>
-            <details className="space-y-3 rounded-xl border p-4" style={themedInsetStyle}>
-                <summary className="cursor-pointer text-sm font-medium">Run details</summary>
-                <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-                    <div><dt className="text-[var(--text-secondary)]">Engine</dt><dd>{engineName}</dd></div>
-                    <div><dt className="text-[var(--text-secondary)]">Sequence design</dt><dd>{sequenceDesign.invocation_draft ? (sequenceDesign.invocation_draft.enabled ? 'Selected optional operations' : 'Off · generation only') : sequenceDesign.sequence_design.enabled ? generalSequenceNames[sequenceDesign.sequence_design.model_id] : 'Off · generation only'}</dd></div>
-                    <div><dt className="text-[var(--text-secondary)]">Goal</dt><dd>{designTask === 'unconditional' ? 'Explore new folds' : DE_NOVO_TASK_OPTIONS[backend].find(task => task.value === designTask)?.label}</dd></div>
-                    <div><dt className="text-[var(--text-secondary)]">Lengths</dt><dd>{generator === 'rfd3' ? lengthMode === 'exact' ? String(exactLength) : `${minLength}–${maxLength}` : targetLengths || 'Not specified'}</dd></div>
-                    {discoInputJson && generator === 'disco' && <div><dt className="text-[var(--text-secondary)]">Native input override</dt><dd className="break-all">{discoInputJson}</dd></div>}
-                </dl>
-            </details>
             <DeNovoDocumentEditorPanels />
-            {generator === 'rfd3' && <p className="text-xs">Studio captures coordinates and document identity. RFD4 Studio annotations are not translated into RFD3 masks; use the native RFD3 condition controls.</p>}
-            {generator === 'disco' && <p className="text-xs">DISCO accepts explicit native entities, sequences, modifications and bonds, not Studio scaffold coordinates or RFD4 conditions. Author these through Native jobs; existing jobs (including an empty list), unknown fields and FILE_ ownership remain unchanged.</p>}
             <ProteinDesignRun jobName={jobName} onJobNameChange={setJobName} pending={submitMutation.isPending}
                 onSubmit={() => { void (generator === 'rfd3' ? submitDeNovo() : submitAlternative()); }} submitLabel="Generate candidates">
+                <DeNovoRunScope task={`${engineName} · ${designTask.replaceAll('_', ' ')}`} documents={generator === 'rfd3' ? [rfd3Source?.path].filter((path): path is string => !!path) : generator === 'laproteina' ? (isMotif ? [effectiveMotifPath].filter((path): path is string => typeof path === 'string' && !!path) : []) : ['Native entities / sequence inputs (see task inputs)']} operations={sequenceOmitted || sequenceNull && !sequenceDesign.invocation_draft && !sequenceDesign.sequence_design.enabled ? undefined : generalSequenceRequest(sequenceDesign).sequence_design} />
                 {runDetails}
                 <ExecutionTargetPicker workflowRequest={stableWorkflowRequest} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
                 {error && <div role="alert" className="text-sm text-[var(--text-primary)]">{error}</div>}

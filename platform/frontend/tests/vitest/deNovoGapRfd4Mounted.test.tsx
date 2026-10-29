@@ -237,6 +237,21 @@ function normalize(request: object) {
         "import sys,json;from scripts.lib.rfd4_proteina_contract import normalize_request;print(json.dumps(normalize_request(json.loads(sys.argv[1]),'generate')))", JSON.stringify(request)],
     { cwd: resolve(process.cwd(), '../..'), encoding: 'utf8' }));
 }
+it('Simple and Advanced follow manual sections without rewriting the sparse scientific draft', async () => {
+    const sparse = { input: { kind: 'unconditional', name: '', chains: [] }, settings: { seed: 0 } };
+    await mount('rfd4_proteina', 'generate', sparse);
+    const pressed = (name: string) => [...document.querySelectorAll('button')].find(node => node.textContent === name)?.getAttribute('aria-pressed');
+    expect(pressed('Simple')).toBe('true');
+    await click('Native settings'); expect(pressed('Advanced')).toBe('true');
+    await show('Requested and inherited identity'); expect(current()).toEqual(sparse);
+    await click('Optional operations'); expect(pressed('Simple')).toBe('true');
+    expect(document.querySelector('[aria-label="Generation sections"]')?.textContent).toContain('Optional operations');
+    expect([...document.querySelectorAll('button')].find(node => node.textContent === 'Optional operations')?.getAttribute('aria-pressed')).toBe('true');
+    await click('Advanced'); expect(pressed('Advanced')).toBe('true');
+    await click('Design'); expect(pressed('Simple')).toBe('true');
+    expect(current()).toEqual(sparse);
+});
+
 it('saves edited object and array overrides through Template Manager, cold loads and emits the exact native request', async () => {
     await mount('rfd4_proteina', 'generate', nativeRequest);
     const expected = await editPersistenceValues();

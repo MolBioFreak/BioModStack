@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { ComplexaTaskWorkspace } from '../../src/components/ComplexaTaskWorkspace';
 
 const tasks = ['protein_binder', 'ligand_binder', 'AME', 'monomer_motif_indexed', 'monomer_motif_unindexed'];
@@ -11,10 +13,10 @@ let tree: ReactTestRenderer;
 let current: any;
 let emitted = vi.fn();
 const text = (node: any): string => typeof node === 'string' ? node : (node.children ?? []).map(text).join('');
-function Harness({ initial, picker = false }: { initial: any; picker?: boolean }) {
+function Harness({ initial, picker = false, controls = schema }: { initial: any; picker?: boolean; controls?: any }) {
     const [request, setRequest] = useState(initial);
     current = request;
-    return <ComplexaTaskWorkspace request={request} schema={schema} onChange={r => { emitted(r); setRequest(r); }} onTask={task => setRequest({ ...request, task })} sourceNames={['MODEL-2', 'other']} controlDraft={{}} onControlDraft={() => {}} visual={{ slot: 'MODEL-2', atoms: [{ chain: 'Z', residue: 99, insertion_code: '', atoms: ['N'] }] }} renderNative={(key, s) => <div data-expert={key} data-schema={s} />} renderSource={picker ? (label, value, commit) => <button type="button" data-source={value} onClick={() => commit('other')}>{label}</button> : undefined} />;
+    return <ComplexaTaskWorkspace request={request} schema={controls} onChange={r => { emitted(r); setRequest(r); }} onTask={task => setRequest({ ...request, task })} sourceNames={['MODEL-2', 'other']} controlDraft={{}} onControlDraft={() => {}} visual={{ slot: 'MODEL-2', atoms: [{ chain: 'Z', residue: 99, insertion_code: '', atoms: ['N'] }] }} renderNative={(key, s) => <div data-expert={key} data-schema={s} />} renderSource={picker ? (label, value, commit) => <button type="button" data-source={value} onClick={() => commit('other')}>{label}</button> : undefined} />;
 }
 async function mount(initial: any, picker = false) { await act(async () => { tree = create(<Harness initial={initial} picker={picker} />); }); }
 async function change(label: string, value: string) { await act(async () => tree.root.findByProps({ 'aria-label': label }).props.onChange({ target: { value } })); }
@@ -50,6 +52,22 @@ for (const task of tasks) for (const operation of operations) it(`${task}/${oper
     await act(async () => advanced.props.onToggle({ currentTarget: { open: true } }));
     expect(tree.root.findByProps({ 'data-expert': 'source' }).props['data-schema']).toBe(schema.properties.source);
     expect(current).toEqual(expected);
+});
+
+it('plain count controls show native schema references without authoring sparse values, and keep unknown inheritance explicit', async () => {
+    const native = JSON.parse(execFileSync(process.env.BMS_SCHEMA_PYTHON ?? 'python', ['-c', "import json,sys;sys.path.insert(0,'platform/api');from services.complexa import discovery;print(json.dumps(discovery()['schema']))"], { cwd: resolve('../..'), encoding: 'utf8' }));
+    const initial = { task: 'protein_binder', operation: 'generate', source: {} };
+    await act(async () => { tree = create(<Harness initial={initial} controls={native} />); });
+    expect(tree.root.findByProps({ 'aria-label': 'Repeats per sample' }).props.value).toBe('1');
+    expect(tree.root.findByProps({ 'aria-label': 'Recycles' }).props.value).toBe('0');
+    expect(text(tree.root)).toContain('Schema reference; not an override');
+    expect(emitted).not.toHaveBeenCalled(); expect(current).toEqual(initial);
+    await change('Repeats per sample', ''); expect(current.nrepeat_per_sample).toBe('');
+    await click('Inherit Repeats per sample'); expect(current).toEqual(initial);
+    await act(async () => tree.unmount()); await mount(JSON.parse(JSON.stringify(current)));
+    expect(text(tree.root)).toContain('Inherited; value not reported');
+    expect(tree.root.findByProps({ 'aria-label': 'Repeats per sample' }).props.value).toBe('');
+    expect(current).toEqual(initial);
 });
 
 it('AME atom roles are independent and visual selection requires explicit apply', async () => {

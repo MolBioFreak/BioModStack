@@ -4,7 +4,7 @@ import { importStudio, type StudioCapture } from '../lib/atomworksStudio';
 import { adoptAnnotatedCif, type CapturedAnnotatedDocument, type DocumentCaptureRegistry } from '../lib/deNovoDocumentCapture';
 import { buildFileDownloadUrl, materializeExactStructure, type NativeGenerationSourceBindings, type StructureMaterialization, type StructureSourceSelection } from '../lib/api';
 
-type Editor = { id: number; slot: string; original: StructureSourceSelection; receipt: StructureMaterialization; sessionId: string; acceptedBindings: Set<string> };
+type Editor = { id: number; slot: string; original: StructureSourceSelection; parent: StructureSourceSelection; receipt: StructureMaterialization; sessionId: string; acceptedBindings: Set<string> };
 type Actions = {
     open: (slot: string, source: StructureSourceSelection, receipt?: StructureMaterialization) => Promise<void>;
     panels: ReactNode;
@@ -12,7 +12,9 @@ type Actions = {
 const EditorsContext = createContext<Actions | null>(null);
 export const useDeNovoDocumentEditors = () => useContext(EditorsContext);
 export function DeNovoDocumentEditorPanels() { return <>{useDeNovoDocumentEditors()?.panels}</>; }
-const key = (value: unknown) => JSON.stringify(value);
+// Property order is not source identity; compare every retained selector field.
+const key = (value: unknown) => JSON.stringify(value, (_name, item) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.keys(item).sort().map(name => [name, item[name]])) : item);
 // Source custody already selects the actual MODEL ID. Studio's model is a
 // frame ordinal in that single-model derivative, not the original MODEL ID.
 // Do not expand assembly 1 implicitly on opening an exact source document.
@@ -22,8 +24,9 @@ const studioImportOptions = { parse_preset: 'minimal', assembly: 'asym', model: 
 /** One mount-local editor per opened source, shared by task and advanced source rows.
  * Sessions remain ephemeral; all successful captures use immutable source custody.
  */
-export function DeNovoDocumentEditors({ registry, sources, onAdopt, children }: {
+export function DeNovoDocumentEditors({ registry, sources, molecularDocuments, onAdopt, children }: {
     registry: DocumentCaptureRegistry; sources: NativeGenerationSourceBindings | undefined;
+    molecularDocuments?: Record<string, CapturedAnnotatedDocument>;
     onAdopt: (slot: string, document: CapturedAnnotatedDocument) => void;
     children: ReactNode;
 }) {
@@ -31,6 +34,15 @@ export function DeNovoDocumentEditors({ registry, sources, onAdopt, children }: 
     const [active, setActive] = useState<Record<string, number>>({});
     const [error, setError] = useState('');
     const sequence = useRef(0);
+    const panel = useRef<HTMLDivElement>(null);
+    const [opening, setOpening] = useState('');
+    const [focusRevision, setFocusRevision] = useState(0);
+    const focusEditor = useRef<number | undefined>(undefined);
+    useEffect(() => {
+        if (!focusRevision) return;
+        const target = panel.current?.querySelector<HTMLElement>(`[data-document-editor="${focusEditor.current}"]`) ?? panel.current;
+        target?.focus(); target?.scrollIntoView?.({ block: 'nearest' });
+    }, [focusRevision]);
     const live = useRef(true);
     const current = useRef({ identity: key(sources), generation: 0, sources });
     const identity = key(sources);
@@ -40,11 +52,13 @@ export function DeNovoDocumentEditors({ registry, sources, onAdopt, children }: 
     const opened = useRef(editors); opened.current = editors;
     useEffect(() => { live.current = true; return () => { live.current = false; pending.current.clear(); }; }, []);
     const open = async (slot: string, source: StructureSourceSelection, _known?: StructureMaterialization) => {
+        setFocusRevision(value => value + 1);
         const existing = opened.current.find(editor => editor.slot === slot && editor.acceptedBindings.has(key(source)));
+        focusEditor.current = existing?.id;
         if (existing) { setActive(previous => ({ ...previous, [slot]: existing.id })); return; }
         const token = ++sequence.current;
         const generation = current.current.generation;
-        pending.current.set(slot, token); setError('');
+        pending.current.set(slot, token); setError(''); setOpening(slot);
         const stillCurrent = () => live.current && pending.current.get(slot) === token
             && current.current.generation === generation && key(current.current.sources?.[slot]) === key(source);
         try {
@@ -67,20 +81,25 @@ export function DeNovoDocumentEditors({ registry, sources, onAdopt, children }: 
             if (!stillCurrent()) return;
             const session = await importStudio(new File([bytes], 'source.cif'), studioImportOptions);
             if (!stillCurrent()) return;
-            const editor = { id: token, slot, original: structuredClone(source), receipt, sessionId: session.session_id, acceptedBindings: new Set([key(source)]) };
+            const retained = molecularDocuments?.[slot];
+            const original = retained && key(retained.source) === key(source) ? retained.original_source ?? source : source;
+            const editor = { id: token, slot, original: structuredClone(original), parent: structuredClone(source), receipt, sessionId: session.session_id, acceptedBindings: new Set([key(source)]) };
+            focusEditor.current = editor.id;
             opened.current = [...opened.current, editor]; setEditors(opened.current);
             setActive(previous => ({ ...previous, [slot]: editor.id }));
+            setFocusRevision(value => value + 1);
         } catch (cause) { if (stillCurrent()) setError(cause instanceof Error ? cause.message : String(cause)); }
-        finally { if (pending.current.get(slot) === token) pending.current.delete(slot); }
+        finally { if (pending.current.get(slot) === token) { pending.current.delete(slot); setOpening(''); setFocusRevision(value => value + 1); } }
     };
     const close = (id: number) => {
         opened.current = opened.current.filter(editor => editor.id !== id); setEditors(opened.current);
     };
-    return <EditorsContext.Provider value={{ open, panels: <>
+    return <EditorsContext.Provider value={{ open, panels: <div ref={panel} tabIndex={-1} aria-label="Molecular document editor">
+        {opening && <p role="status">Opening {opening} in AtomWorks Studio…</p>}
         {error && <p role="status">Studio unavailable: {error}</p>}
         {editors.map(editor => <DocumentEditor key={editor.id} editor={editor} source={sources?.[editor.slot]} selected={active[editor.slot] === editor.id}
             registry={registry} onAdopt={document => { setActive(previous => ({ ...previous, [editor.slot]: editor.id })); onAdopt(editor.slot, document); }} onClose={() => close(editor.id)} />)}
-    </> }}>{children}</EditorsContext.Provider>;
+    </div> }}>{children}</EditorsContext.Provider>;
 }
 
 function DocumentEditor({ editor, source, selected, registry, onAdopt, onClose }: {
@@ -108,7 +127,7 @@ function DocumentEditor({ editor, source, selected, registry, onAdopt, onClose }
         const generation = handle.generation();
         const snapshot = await handle.capture();
         const document = await adoptAnnotatedCif(snapshot.cif, { originalSource: editor.original,
-            provenance: { editor: 'atomworks-studio', revision: snapshot.revision, name: snapshot.name,
+            provenance: { editor: 'atomworks-studio', parent_source: editor.parent, revision: snapshot.revision, name: snapshot.name,
                 issues: snapshot.issues, imported_source: editor.receipt.source_identity,
                 imported_model: editor.receipt.model_number ?? null,
                 imported_models: editor.receipt.model_numbers,
@@ -158,7 +177,7 @@ function DocumentEditor({ editor, source, selected, registry, onAdopt, onClose }
             setTimeout(() => URL.revokeObjectURL(url), 0);
         } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     };
-    return <section className="space-y-3 rounded border border-slate-600 p-3" aria-label={`Molecular editor for ${editor.slot}`}>
+    return <section tabIndex={-1} data-document-editor={editor.id} className="space-y-3 rounded border border-slate-600 p-3" aria-label={`Molecular editor for ${editor.slot}`}>
         <h3>Editable document · {editor.slot}</h3>
         <p className="text-xs">Source MODEL {editor.receipt.model_number ?? editor.receipt.model_numbers[0]} · exact source coordinates (no assembly expansion).
             Studio uses its first-altloc policy; all original alternate locations remain in the retained source.</p>

@@ -76,7 +76,7 @@ export function DeNovoNativePreview({ request, prepareRequest, documentGeneratio
     const effective = new Map(rows(preview?.native_review?.native_request ?? preview?.plan.effective_json));
     return <section aria-label="Native effective settings">
         <button type="button" disabled={!!pending?.valid} onClick={() => void inspect()}>Preview settings</button>
-        <p className="text-xs">Does not run a model.</p>
+        <p className="text-xs">Advisory native-{request.mode === 'evaluate' ? 'evaluation' : 'generation'} preview only. Does not run a model or review optional follow-on operations.</p>
         {current?.error && <p role="status">Preview unavailable: {current.error}</p>}
         {result && !current && <p role="status">Settings changed. Refresh preview.</p>}
         {preview && <>

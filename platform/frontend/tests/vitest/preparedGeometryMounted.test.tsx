@@ -41,7 +41,7 @@ afterEach(async () => { if (root) await act(async () => root!.unmount()); root =
 async function mount(value = '') {
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     await render(value);
-    if (!value) await click('Choose structure');
+    if (!value) await click('Choose / import document');
 }
 async function render(value: string) { await act(async () => root!.render(<PreparedGeometryContext.Provider value={{ current: draft(), generation: () => generation, retain }}><NativeSourceInput label="Context" value={value} bindings={{ old: { path: 'inputs/old.pdb' }, other: { path: 'inputs/other.pdb' } }} onChange={() => {}} onAcquire={acquired} /></PreparedGeometryContext.Provider>)); }
 async function wait(check: () => void) { await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); check(); }); }

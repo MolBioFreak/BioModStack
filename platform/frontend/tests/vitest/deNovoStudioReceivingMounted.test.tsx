@@ -29,11 +29,12 @@ let root: Root | undefined, query: QueryClient, previous: typeof api.defaults.ad
 let prep: DeNovoDraftPreparation, latest: any, unexpected: string[], calls: Array<{ url: string; body: any }>;
 let exports: number, imports: number, failExport: boolean, failUpload: boolean, mismatch: boolean;
 let exportReply: (() => Promise<any>) | undefined;
+let exportCif: string;
 let uploaded: Array<{ path: string; sha256: string; text: string }>;
 function receipt(source: any) {
     const edited = String(source.path).includes('annotated_structures');
     return { path: source.path, source_structure: source, original_path: source.path, original_sha256: source.expected_sha256,
-        sha256: edited ? hash(frozenCif) : hash(originalCif), format: 'cif', native_format: 'cif', native_path: source.path,
+        sha256: edited ? uploaded.find(item => item.path === source.path)?.sha256 ?? hash(frozenCif) : hash(originalCif), format: 'cif', native_format: 'cif', native_path: source.path,
         native_sha256: source.expected_sha256, decoded_path: source.path, decoded_sha256: source.expected_sha256,
         stored_encoding: 'plain', selected_path: source.path, selected_sha256: source.expected_sha256,
         source_path: source.path, source_identity: {}, source_positions: [], author_residues: [], model_numbers: [1], model_number: source.model_number ?? null };
@@ -73,21 +74,21 @@ async function mount(values: Record<string, unknown> = { rfd4_request: scientifi
 }
 beforeEach(() => {
     vi.stubGlobal('crypto', webcrypto); previous = api.defaults.adapter; prep = { current: null }; latest = undefined;
-    unexpected = []; calls = []; imports = 0; exports = 0; failExport = false; failUpload = false; mismatch = false; uploaded = []; exportReply = undefined;
+    unexpected = []; calls = []; imports = 0; exports = 0; failExport = false; failUpload = false; mismatch = false; uploaded = []; exportReply = undefined; exportCif = frozenCif;
     localStorage.clear(); sessionStorage.clear();
     vi.spyOn(XMLHttpRequest.prototype, 'open').mockImplementation(() => { unexpected.push('XHR'); throw Error('No network'); });
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, options) => {
         const url = String(input);
         if (url.startsWith('/api/files/download/')) return { ok: true,
-            arrayBuffer: async () => new TextEncoder().encode(mismatch ? 'corrupted bytes' : originalCif).buffer,
+            arrayBuffer: async () => new TextEncoder().encode(mismatch ? 'corrupted bytes' : uploaded.find(item => item.path === decodeURIComponent(url.slice('/api/files/download/'.length)))?.text ?? originalCif).buffer,
             text: async () => originalCif } as Response;
         if (url === '/api/atomworks-studio/api/v1/sessions' && options?.method === 'POST') {
-            imports++; expect(await readBlob((options.body as FormData).get('file') as File)).toBe(originalCif);
+            imports++; expect([originalCif, ...uploaded.map(item => item.text)]).toContain(await readBlob((options.body as FormData).get('file') as File));
             return { ok: true, json: async () => ({ session_id: 'owned', structure: { revision: 0 } }) } as Response;
         }
         if (url === '/api/atomworks-studio/api/v1/sessions/owned/export' && options?.method === 'POST') {
             exports++; if (exportReply) return exportReply();
-            return { ok: !failExport, status: failExport ? 502 : 200, json: async () => ({ cif: frozenCif, revision: 4, name: 'edited', issues: [{ message: 'advisory only' }] }) } as Response;
+            return { ok: !failExport, status: failExport ? 502 : 200, json: async () => ({ cif: exportCif, revision: 4, name: 'edited', issues: [{ message: 'advisory only' }] }) } as Response;
         }
         unexpected.push(`fetch ${options?.method ?? 'GET'} ${url}`); throw Error(`Unexpected ${url}`);
     });
@@ -100,7 +101,7 @@ beforeEach(() => {
             if (failUpload) throw Error('immutable disk unavailable');
             const form = body as FormData, file = form.get('file') as File, sha256 = String(form.get('sha256'));
             const text = await readBlob(file); const path = `${form.get('path')}/${file.name}`;
-            expect(text).toBe(frozenCif); expect(hash(text)).toBe(sha256); uploaded.push({ path, sha256, text });
+            expect(text).toBe(exportCif); expect(hash(text)).toBe(sha256); uploaded.push({ path, sha256, text });
             data = { path, sha256, size: new TextEncoder().encode(text).byteLength, existing: false };
         } else if (url === '/api/jobs/execution-plan/preview') data = { plan: { requested_json: body.params, effective_json: body.params }, blockers: [] };
         else if (url === '/api/jobs') data = { id: 'inert-no-job-created' };
@@ -109,6 +110,52 @@ beforeEach(() => {
     };
 });
 afterEach(async () => { await unmount(); api.defaults.adapter = previous; vi.restoreAllMocks(); vi.unstubAllGlobals(); expect(unexpected).toEqual([]); });
+
+it('empty motif acquisition binds the task before parsing controls, and opens/focuses its existing editor', async () => {
+    const sparse = { input: { kind: 'condition_spec', examples: [] }, settings: { seed: 0 } };
+    await mount({ native_recipe: 'motif', rfd4_request: sparse, sequence_design: null });
+    expect(latest.rfd4_request).toEqual(sparse);
+    await click('Choose / import document'); await click('Browse files'); await click('Select replacement fixture');
+    await wait(() => expect(latest.rfd4_request.input.examples[0].sources[0].slot).toBe('input_1'));
+    const editor = document.querySelector<HTMLButtonElement>('[aria-label="Edit input_1 in AtomWorks Studio"]')!;
+    const policy = [...document.querySelectorAll('summary')].find(node => node.textContent === 'Parsing policy')!;
+    expect(editor.compareDocumentPosition(policy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect((policy.parentElement as HTMLDetailsElement).open).toBe(false);
+    const raw = document.querySelector('[aria-label="Selection expression"]')!;
+    expect(raw.closest('details')?.open).toBe(false);
+    expect(document.querySelector('[aria-label="Run scope"]')?.textContent).toContain('replaced.cif');
+    await act(async () => editor.click());
+    await wait(() => expect(document.querySelector('iframe')).not.toBeNull());
+    expect(document.activeElement?.getAttribute('aria-label')).toMatch(/^Molecular editor for /);
+    expect(latest.rfd4_request.settings).toEqual({ seed: 0 });
+    expect(latest.rfd4_request.input.examples[0].sources).toEqual([{ slot: 'input_1' }]);
+});
+
+it('Run scope lists only enabled follow-ons in retained order while preview excludes them', async () => {
+    const stage = (id: string, model_id: string) => ({ enabled: true, drafts: {}, stage: { id, kind: 'sequence_design', input: { selected: true }, models: [{ invocation_id: id + '-call', model_id, mode: 'design', params: {} }] } });
+    const invocation_draft = { enabled: true, stages: [stage('first', 'proteinmpnn'), { ...stage('off', 'caliby_experimental'), enabled: false }, stage('second', 'fampnn')] };
+    await mount({ rfd4_request: scientific, native_sources: { source: original }, invocation_draft });
+    const summary = document.querySelector('[aria-label="Run scope"]')!.textContent!;
+    expect(summary).toContain('1. proteinmpnn · design'); expect(summary).toContain('2. fampnn · design');
+    expect(summary).not.toContain('caliby');
+    await click('Preview settings');
+    await wait(() => expect(calls.some(call => call.url === '/api/jobs/execution-plan/preview')).toBe(true));
+    expect(calls.find(call => call.url === '/api/jobs/execution-plan/preview')!.body).not.toHaveProperty('sequence_design');
+    expect(latest.invocation_draft).toEqual(invocation_draft);
+    expect(latest.native_job_request.sequence_design.round_plan.stages.map((row: any) => row.id)).toEqual(['first', 'second']);
+});
+
+it('source-free New chains stays sparse and summarizes no task document', async () => {
+    const sparse = { input: { kind: 'unconditional', name: '', chains: [] } };
+    await mount({ native_recipe: 'source_free', rfd4_request: sparse, native_sources: { unused: original }, sequence_design: null });
+    expect(document.body.textContent).toContain('New chains is source-free');
+    expect(document.querySelector('[aria-label="Run scope"]')?.textContent).toContain('Task documents: None selected');
+    expect(document.querySelector('[aria-label="Run scope"]')?.textContent).not.toContain('original.cif');
+    expect(latest.rfd4_request).toEqual(sparse);
+    expect(latest.rfd4_request).not.toHaveProperty('settings');
+    expect(document.body.textContent).toContain('Advisory native-generation preview only');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Designs per input"]')?.value).toBe('1');
+});
 
 it('one shared editor captures exact bytes for Save and retains original/derived provenance outside science', async () => {
     await mount(); await open(); await open(); expect(imports).toBe(1); expect(document.querySelectorAll('iframe')).toHaveLength(1);
@@ -125,6 +172,32 @@ it('one shared editor captures exact bytes for Save and retains original/derived
     if (process.env.BMS_STUDIO_CAPTURE_WIRE) writeFileSync(process.env.BMS_STUDIO_CAPTURE_WIRE,
         JSON.stringify({ envelope: deNovoAuthoringEnvelope(latest), uploads: uploaded }));
 });
+it.each([false, true])('cold second edit preserves root only for the exact reopened binding (replacement=%s)', async replacement => {
+    await mount(); await open(); await changed();
+    expect(document.activeElement?.getAttribute('aria-label')).toMatch(/^Molecular editor for /);
+    await act(async () => { await prep.current!(); });
+    const saved = JSON.parse(JSON.stringify(latest));
+    const parent = saved.native_sources.source;
+    expect(saved.molecular_documents.source.original_source).toEqual(original);
+    await unmount(); prep = { current: null };
+    const reopened = replacement ? { ...original, path: 'inputs/unrelated.cif' } : Object.fromEntries(Object.entries(parent).reverse());
+    await mount({ ...saved, native_sources: { source: reopened } });
+    expect(document.querySelector('iframe')).toBeNull();
+    await open(); await changed(); exportCif = frozenCif + '# cold second edit C\n';
+    await act(async () => { await prep.current!(); });
+    expect(latest.molecular_documents.source.original_source).toEqual(replacement ? reopened : original);
+    expect(latest.molecular_documents.source.provenance.parent_source).toEqual(reopened);
+    expect(latest.molecular_documents.source.source.expected_sha256).toBe(hash(exportCif));
+    expect(latest.native_job_request.params.rfd4_request).toEqual(scientific);
+    expect(latest.native_job_request.params).not.toHaveProperty('molecular_documents');
+    expect(imports).toBe(2); expect(exports).toBe(2);
+    const twiceSaved = JSON.parse(JSON.stringify(latest));
+    await unmount(); prep = { current: null }; await mount(twiceSaved);
+    await act(async () => { await prep.current!(); });
+    expect(latest.molecular_documents.source).toEqual(twiceSaved.molecular_documents.source);
+    expect(exports).toBe(2);
+});
+
 it.each(['export', 'upload'])('failed %s retains recovery and does not submit stale source; retry uses frozen bytes', async phase => {
     await mount(); await open(); await changed(); failExport = phase === 'export'; failUpload = phase === 'upload';
     await click('Generate candidates');

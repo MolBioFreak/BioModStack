@@ -37,11 +37,12 @@ export function LaProteinaEvaluation({ initialValues = {}, onDraftChange, runDet
     return <section aria-label="La-Proteina retained-output evaluation" className="space-y-4">
         <h2>Evaluate retained La-Proteina outputs</h2>
         <p>This is a separate operation. It does not generate samples. Select the original native sample directory (including motif tables) and composed generation config. Originals are retained unchanged; evaluation writes into a private copy.</p>
-        <p>Omitted metrics inherit that config. An empty evaluation is not evidence of successful scientific metrics. Only the installed ESMFold implementation is offered; its companion assets must be available at execution.</p>
+        <fieldset className="space-y-3 rounded border p-3"><legend>Retained evaluation inputs</legend>
         {(['samples_slot', 'config_slot'] as const).map(key => <div key={key}>
             <button type="button" onClick={() => setPicking(key)}>{key === 'samples_slot' ? 'Choose retained samples' : 'Choose original config'}</button>
             <span>{sources[request[key]]?.path ?? 'Not selected'}</span>
         </div>)}
+        <p className="text-xs">Both the native sample directory and its generation config are needed; an exported CIF alone is not an evaluation input.</p></fieldset>
         {picking && <FileBrowser title={picking === 'samples_slot' ? 'Retained native samples' : 'Original generation config'}
             allowDirectory={picking === 'samples_slot'} accept={picking === 'config_slot' ? '.yaml,.yml' : undefined}
             onCancel={() => setPicking(undefined)} onSelect={path => {
@@ -53,7 +54,7 @@ export function LaProteinaEvaluation({ initialValues = {}, onDraftChange, runDet
             <input aria-label={key} type="number" step="1" value={request[key] ?? ''} onChange={event => {
                 const value = event.target.value; setRequest(previous => { const next = { ...previous }; if (value === '') delete next[key]; else next[key] = Number(value); return next; });
             }} /></label>)}
-        <fieldset><legend>Native metric overrides</legend>
+        <fieldset><legend>Native metric overrides</legend><p className="text-xs">Omitted metrics inherit the original config. Evaluation uses the installed ESMFold implementation and its assets.</p>
             {Object.entries(inventory.data?.parameter_schema.properties?.metrics.properties ?? {}).map(([key, schema]) => {
                 const present = Object.hasOwn(metrics, key);
                 return <fieldset key={key}><legend>{key.replaceAll('_', ' ')}</legend>

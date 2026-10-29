@@ -6,6 +6,7 @@ import { api, fetchNativeGenerationSettings, submitJob, completeCurrentLaunchCon
 import { BioXpSchemaInput, BioXpSchemaControlContext } from './BioXpSchemaInput';
 import { DeNovoNativeSources, NativeSourceInput } from './DeNovoNativeSources';
 import { DeNovoNativePreview } from './DeNovoNativePreview';
+import { DeNovoRunScope } from './DeNovoRunScope';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
 import { NativeSettingsDisclosure } from './NativeSettingsDisclosure';
 import { ProteinDesignSections, ProteinDesignPanel, ProteinDesignRun } from './ProteinDesignWorkflow';
@@ -17,7 +18,7 @@ import { changeNativeTask, nativeTaskKey, type NativeTaskDrafts } from '../lib/n
 import { buildRfd4NativeSelection, type Rfd4NativeSelectionIdentity } from '../lib/rfd4NativeSelection';
 import { buildComplexaNativeSelection } from '../lib/complexaNativeSelection';
 import { useRfd4ConditionInspection } from '../lib/rfd4ConditionInspection';
-import { Rfd4TaskWorkspace, rfd4RecipeRequest, type Rfd4LengthDraft } from './Rfd4TaskWorkspace';
+import { Rfd4TaskWorkspace, RFD4_RECIPES, rfd4RecipeRequest, type Rfd4LengthDraft } from './Rfd4TaskWorkspace';
 import { Rfd4ExpertSettings, NativeProfileSnapshot } from './Rfd4ExpertSettings';
 import { ComplexaTaskWorkspace } from './ComplexaTaskWorkspace';
 import type { MetricSelection } from '../structureViewer/metrics/metricContracts';
@@ -56,9 +57,9 @@ export function LegacyNativeGenerationControls({ model, task, value, onChange }:
 }
 
 /** Presentation of the native owner's schema, never a second scientific compiler. */
-export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initialValues, onDraftChange, runDetails, suiteView }: {
+export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initialValues, onDraftChange, runDetails, suiteView, onSuiteViewChange }: {
     model: 'rfd4_proteina' | 'complexa'; mode?: string; initialValues: Record<string, unknown>;
-    onDraftChange: (draft: Record<string, unknown>) => void; runDetails?: ReactNode; suiteView?: 'simple' | 'advanced';
+    onDraftChange: (draft: Record<string, unknown>) => void; runDetails?: ReactNode; suiteView?: 'simple' | 'advanced'; onSuiteViewChange?: (view: 'simple' | 'advanced') => void;
 }) {
     const field = model === 'rfd4_proteina' ? 'rfd4_request' : 'complexa_request';
     const [nativeDraft, setNativeDraft] = useState(() => {
@@ -92,7 +93,8 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
     const [explicitSequenceNull, setExplicitSequenceNull] = useState(() => initialValues.sequence_design === null || initialValues.sequence_design_null === true);
     const [sequenceOmitted, setSequenceOmitted] = useState(() => initialValues.sequence_design_omitted === true);
     const [section, setSection] = useState('Design');
-    useEffect(() => { if (suiteView) setSection(suiteView === 'advanced' ? 'Native settings' : 'Design'); }, [suiteView]);
+    const manualSection = useRef(false);
+    useEffect(() => { if (manualSection.current) { manualSection.current = false; return; } if (suiteView) setSection(suiteView === 'advanced' ? 'Native settings' : 'Design'); }, [suiteView]);
     const navigate = useNavigate(); const client = useQueryClient();
     const inventory = useQuery({ queryKey: ['de-novo-native-settings', model, mode],
         queryFn: async () => (await fetchNativeGenerationSettings(model, mode)).data,
@@ -203,8 +205,17 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         value={Object.hasOwn(request, key) ? { [key]: request[key] } : {}}
         onChange={value => patch(key, record(value)[key])}
         fallback={() => <p>Saved native value retained; this schema does not describe an editable value.</p>} />;
+    const input = record(request.input);
+    const consumedSlots: string[] = model === 'rfd4_proteina'
+        ? input.kind === 'annotated' ? input.slots ?? [] : input.kind === 'condition_spec' ? (input.examples ?? []).flatMap((example: any) => (example.sources ?? []).map((source: any) => source.slot)) : []
+        : [request.source?.document_id, request.source?.motif_csv_slot, ...(['evaluate', 'analysis'].includes(request.operation ?? activeMode) ? request.evaluation_slots ?? [] : [])].filter(Boolean);
+    const consumedDocuments = [...new Set(consumedSlots)].map(slot => {
+        const source = nativeDraft.sources?.[slot];
+        return source ? `${source.path?.split('/').at(-1) ?? slot}${!('kind' in source) && source.model_number != null ? ` · MODEL ${source.model_number}` : ''}` : `${slot} (not bound)`;
+    });
+    const taskLabel = model === 'rfd4_proteina' ? RFD4_RECIPES.find(([id]) => id === recipe)?.[1] ?? input.kind ?? 'Task not selected' : request.task ?? 'Task not selected';
     const primary = new Set(['version', 'mode', 'operation', 'task', 'task_name', 'source', 'input', 'inputs', 'profile', 'sampling', 'seed', 'num_samples', 'nsamples', 'min_length', 'max_length', 'batch_size', 'nrepeat_per_sample', 'n_recycle']);
-    return <DocumentCaptureContext.Provider value={documentCaptures}><DeNovoDocumentEditors registry={documentCaptures} sources={nativeDraft.sources}
+    return <DocumentCaptureContext.Provider value={documentCaptures}><DeNovoDocumentEditors registry={documentCaptures} sources={nativeDraft.sources} molecularDocuments={molecularDocuments}
         onAdopt={(slot, document) => { setNativeDraft(previous => ({ ...previous, sources: { ...previous.sources, [slot]: document.source } })); setMolecularDocuments(previous => ({ ...previous, [slot]: document })); }}><BioXpSchemaControlContext.Provider value={({ label, schema: child, value, onChange, path }) => {
         if (model === 'rfd4_proteina' && child.type === 'string' && path[0] === 'input' && path.at(-1) === 'select' && String(child['x-native-mapping']).includes('.conditions.')) return <>
             <label>{label}<input aria-label={label} value={String(value ?? '')} onChange={event => onChange(event.target.value)} /></label>
@@ -225,11 +236,11 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
             [data-native-de-novo] :is([data-rfd4-task-workspace], [data-complexa-task-workspace], [data-rfd4-expert]) fieldset { min-width: 0; }
             [data-native-de-novo] :is([data-rfd4-task-workspace], [data-complexa-task-workspace], [data-rfd4-expert]) legend { font-weight: 600; margin-bottom: .5rem; }
         `}</style>
-        <ProteinDesignSections label="Generation sections" sections={['Design', 'Native settings', 'Optional operations']} active={section} onChange={setSection} />
+        <ProteinDesignSections label="Generation sections" sections={['Design', 'Native settings', 'Optional operations']} active={section} onChange={next => { setSection(next); const view = next === 'Native settings' ? 'advanced' : 'simple'; manualSection.current = !!onSuiteViewChange && suiteView !== view; onSuiteViewChange?.(view); }} />
         {inventory.isPending && <p role="status">Loading settings…</p>}
         {inventory.error && <p role="alert">{inventory.error.message}. Saved native values are retained.</p>}
         <div hidden={section !== 'Design'}><ProteinDesignPanel title="Design" showTitle={false}>
-            {schema && (model === 'rfd4_proteina' ? <Rfd4TaskWorkspace request={request} schema={schema} mode={mode} recipe={recipe} onRecipe={changeRecipe} onChange={changeRequest} renderNative={renderField} renderSource={renderSource} sourceNames={Object.keys(nativeDraft.sources ?? {})} effectiveConfig={effectiveReadback?.generation === readbackGeneration.current.value ? effectiveReadback.effective : undefined}
+            {schema && (model === 'rfd4_proteina' ? <Rfd4TaskWorkspace advanced={suiteView === 'advanced'} request={request} schema={schema} mode={mode} recipe={recipe} onRecipe={changeRecipe} onChange={changeRequest} renderNative={renderField} renderSource={renderSource} sourceNames={Object.keys(nativeDraft.sources ?? {})} effectiveConfig={effectiveReadback?.generation === readbackGeneration.current.value ? effectiveReadback.effective : undefined}
                 sourceChains={Object.fromEntries(Object.entries(inspections).filter(([slot, item]) => item.binding === JSON.stringify(nativeDraft.sources?.[slot]) && !item.receipt.inspection_error && !!item.receipt.source_positions?.length).map(([slot, item]) => [slot, [...new Set(item.receipt.source_positions!.map(row => String(row.label_asym_id ?? '')))]]))}
                 retainedTasks={Object.entries(nativeDraft.inactive).filter(([key]) => { try { const parts = JSON.parse(key); return parts[0] === model && parts[1] === mode && parts[2] === contract && parts[3] !== 'recipe'; } catch { return false; } }).map(([key, value]) => ({ key, label: String(record(value.input).kind ?? 'native request') }))}
                 lengthDrafts={record(record(controlDrafts[activeControlKey]).chain_lengths) as Record<number, Rfd4LengthDraft>}
@@ -239,6 +250,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
                 visual={currentVisual ? { slot: currentVisual.slot, identities: currentVisual.identities, receipt: currentVisual.receipt, ...visualResult } : undefined} /> : <ComplexaTaskWorkspace request={request} schema={schema} onChange={changeRequest} onTask={task => patch('task', task)} renderNative={renderField} renderSource={renderSource} sourceNames={Object.keys(nativeDraft.sources ?? {})}
                 controlDraft={record(controlDrafts[nativeTaskKey(model, mode, contract, request)])} onControlDraft={value => setControlDrafts(previous => ({ ...previous, [nativeTaskKey(model, mode, contract, request)]: value }))}
                 visual={currentVisual ? { slot: currentVisual.slot, ...buildComplexaNativeSelection(currentVisual.identities, { ...currentVisual.receipt, documentId: currentVisual.receipt.path }) } : undefined} />)}
+            <NativeProfileSnapshot model={model} mode={activeMode} request={request} discovery={record(inventory.data).native_profile_defaults} generation={readbackGeneration.current.value} onReadback={(generation, effective) => setEffectiveReadback(effective ? { generation, effective } : undefined)} />
             {model === 'rfd4_proteina' && conditionInspection.status && <p role="status" data-condition-inspection>{conditionInspection.status}</p>}
             {<NativeSettingsDisclosure summary={<span>Input structures</span>}>{() => <DeNovoNativeSources onInspection={(slot, receipt, binding) => setInspections(previous => ({ ...previous, [slot]: { receipt, binding: JSON.stringify(binding) } }))} selection={currentVisual} value={nativeDraft.sources} onChange={sources => setNativeDraft(previous => ({ ...previous, sources }))}
                 onSelection={selectSource} />}</NativeSettingsDisclosure>}
@@ -247,7 +259,6 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
             <DeNovoNativePreview request={payload as Partial<Job>} prepareRequest={() => prepareCurrent.current()} documentGeneration={documentGeneration} />
         </ProteinDesignPanel></div>
         <div hidden={section !== 'Native settings'}><ProteinDesignPanel title="Native settings" description="Unchanged settings use the selected profile.">
-            <NativeProfileSnapshot model={model} mode={activeMode} request={request} discovery={record(inventory.data).native_profile_defaults} generation={readbackGeneration.current.value} onReadback={(generation, effective) => setEffectiveReadback(effective ? { generation, effective } : undefined)} />
             {schema && model === 'rfd4_proteina' && <Rfd4ExpertSettings discovery={record(inventory.data).native_profile_defaults} effectiveConfig={effectiveReadback?.generation === readbackGeneration.current.value ? effectiveReadback.effective : undefined} request={request} schema={schema} onChange={changeRequest} fileSlots={Object.fromEntries(Object.entries(nativeDraft.sources ?? {}).filter(([, value]) => 'kind' in value && value.kind === 'file').map(([key, value]) => [key, value.path ?? '']))} />}
             {schema && model === 'complexa' && Object.entries(schema.properties ?? {}).filter(([key]) => !primary.has(key)).map(([key, child]) => <NativeSettingsDisclosure key={key} summary={<span>{child.title ?? key.replaceAll('_', ' ')}</span>}>
                 {() => renderField(key, child)}
@@ -255,6 +266,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
         </ProteinDesignPanel></div>
         <div hidden={section !== 'Optional operations'}><GeneralSequenceDesignSettings value={sequence} onChange={next => { if (next.invocation_draft?.enabled || next.sequence_design.enabled) { setSequenceOmitted(false); setExplicitSequenceNull(false); } setSequence(next); }} /></div>
         <ProteinDesignRun jobName={name} onJobNameChange={setName} pending={submit.isPending} onSubmit={() => submit.mutate()} submitLabel={model === 'complexa' && request.operation === 'design' ? 'Generate, filter, evaluate and analyze' : model === 'complexa' && request.operation === 'analysis' ? 'Evaluate and analyze' : activeMode === 'evaluate' ? 'Evaluate candidates' : 'Generate candidates'}>
+            <DeNovoRunScope task={`${model === 'rfd4_proteina' ? 'RFD4' : 'Complexa'} · ${taskLabel} · ${request.operation ?? activeMode}`} documents={consumedDocuments} operations={payload.sequence_design} />
             <ExecutionTargetPicker workflowRequest={payload as Partial<Job>} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
             {runDetails}{submit.error && <p role="alert">{submit.error.message}</p>}
         </ProteinDesignRun>

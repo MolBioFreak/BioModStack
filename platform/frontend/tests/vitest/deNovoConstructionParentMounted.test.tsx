@@ -190,7 +190,7 @@ it.skipIf(!process.env.BMS_PREPARED_NATIVE_WIRE)('explicit prepared adoption sur
     vi.mocked(fetch).mockImplementation(async () => ({ ok: true, arrayBuffer: async () => new TextEncoder().encode(geometry.coordinate_text).buffer }) as Response);
     await mount({ molecular_construction: construction, rfd4_request: { input: { kind: 'annotated', slots: [] }, settings: { seed: 0 } } });
     expect(latest.prepared_geometry_documents).toBeUndefined();
-    await click('Choose structure'); await click('Use constructed geometry');
+    await click('Choose / import document'); await click('Use constructed geometry');
     await wait(() => expect(Object.keys(latest.prepared_geometry_documents ?? {})).toHaveLength(1));
     const retained = structuredClone(latest.prepared_geometry_documents);
     expect(Object.values(retained)[0]).toMatchObject({ construction, geometry, format: 'pdb' });
