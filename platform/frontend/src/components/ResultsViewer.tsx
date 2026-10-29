@@ -70,7 +70,7 @@ import { ProteinDesignPanel } from './ProteinDesignWorkflow';
 import { readRoundStorage, type CandidateRef } from '../lib/binderSelectedRound';
 import { RFantibodyCandidateResults } from './RFantibodyCandidateResults';
 import NativeSequenceResults, { nativeSequenceResultKind } from './NativeSequenceResults';
-import { isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
+import { fetchNativeBinderGeneration, isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
 import { fetchRFD3Generation, fetchRFD3LocalRedesign } from '../lib/api';
 import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
 import {
@@ -2229,6 +2229,7 @@ function ResultsViewerContent() {
                     if (screenedCount > 0) return `Raw ${rawCount.toLocaleString()} / Screened ${screenedCount.toLocaleString()}`;
                     if (rawCount > 0) return `Raw ${rawCount.toLocaleString()}`;
                 }
+                if (!hasChildren && !job.design_count && isNativeBinderGeneration(job)) return 'Native results';
                 const total = hasChildren ? (batchData?.totalDesigns || 0) : (job.design_count || 0);
                 return `${total.toLocaleString()} designs`;
             })();
@@ -3317,6 +3318,15 @@ function ResultsViewerContent() {
     const nativeGenerationCount = nativeGeneration?.schema === 'bms.rfd3.generation.read-model.v1'
         && nativeGeneration.job_id === activeJob?.id ? nativeGeneration.counts.generated : undefined;
     const isNativeGeneration = isRFD3GenerationResultJob(activeJob);
+    // Registered native generations publish records, not Design rows; design_count stays 0.
+    const publishedNativeJob = !isNativeGeneration && isNativeBinderGeneration(activeJob);
+    const publishedNativeTotalQuery = useQuery({
+        queryKey: ['native-generation-total', activeJob?.id, activeJob?.status],
+        queryFn: ({ signal }) => fetchNativeBinderGeneration(activeJob!.id, 0, 1, signal),
+        enabled: publishedNativeJob && activeJob?.status === 'completed',
+        retry: false, refetchOnWindowFocus: false,
+    });
+    const publishedNativeTotal = publishedNativeTotalQuery.data?.total;
     const nativeRedesignQuery = useQuery({
         queryKey: ['rfd3-local-redesign', activeJob?.id],
         queryFn: () => fetchRFD3LocalRedesign(activeJob!.id),
@@ -3334,6 +3344,7 @@ function ResultsViewerContent() {
         if (isShapeResultJob(activeJob)) return 'Native Shape results';
         if (nativeSequenceResultKind(activeJob)) return 'Native sequence results';
         if (isNativeGeneration) return nativeGenerationCount == null ? 'Generated count unavailable' : `${nativeGenerationCount.toLocaleString()} generated candidates`;
+        if (publishedNativeJob) return publishedNativeTotal == null ? 'Native results' : `${publishedNativeTotal.toLocaleString()} generated candidates`;
         if (activeRFD3CandidateLabel) return activeRFD3CandidateLabel;
         if (isPostRFantibodyReview && reviewSelectionRequired) {
             return 'Select a review source';
@@ -3345,7 +3356,7 @@ function ResultsViewerContent() {
             return `${tableDesigns.length.toLocaleString()} visible`;
         }
         return `${totalDesigns.toLocaleString()} designs`;
-    }, [activeJob, isNativeGeneration, nativeGenerationCount, activeCurrentSetLabel, activeRFD3CandidateLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
+    }, [activeJob, isNativeGeneration, nativeGenerationCount, publishedNativeJob, publishedNativeTotal, activeCurrentSetLabel, activeRFD3CandidateLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
     const paginationSubject = isPostRFantibodyReview
         ? reviewSelectionRequired
             ? 'outputs'
