@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { createHash, webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api, type StructureMaterialization, type StructureSourceSelection } from '../../src/lib/api';
-import { DeNovoDocumentEditors, DeNovoDocumentEditorPanels, useDeNovoDocumentEditors } from '../../src/components/DeNovoDocumentEditors';
+import { DeNovoDocumentEditors, DeNovoDocumentEditorPanels, DeNovoEditorLayout, useDeNovoDocumentEditors } from '../../src/components/DeNovoDocumentEditors';
 import { DocumentCaptureRegistry } from '../../src/lib/deNovoDocumentCapture';
 
 // Actual opening/capture owner and iframe transport; scientific parsing is
@@ -24,7 +24,7 @@ let actions: ReturnType<typeof useDeNovoDocumentEditors>, adopted: any[], reques
 let materializeReply: (() => Promise<StructureMaterialization>) | undefined;
 let importReply: (() => Promise<any>) | undefined;
 let exportReply: (() => Promise<any>) | undefined;
-function Consumer() { actions = useDeNovoDocumentEditors(); return <DeNovoDocumentEditorPanels />; }
+function Consumer() { actions = useDeNovoDocumentEditors(); return <DeNovoEditorLayout><div>form</div><DeNovoDocumentEditorPanels /></DeNovoEditorLayout>; }
 async function render(source: StructureSourceSelection = original) {
     await act(async () => root.render(<DeNovoDocumentEditors sources={{ source }} registry={registry} onAdopt={(_, value) => adopted.push(value)}><Consumer /></DeNovoDocumentEditors>));
 }
@@ -115,4 +115,18 @@ it('an unselected ensemble does not import a first frame or mutate the ordinary 
     await act(async () => { await actions!.open('source', source); });
     expect(imports).toEqual([]); expect(adopted).toEqual([]);
     expect(document.body.textContent).toContain('Choose the source MODEL');
+});
+
+it('puts the Studio canvas beside the form only while an editor is open', async () => {
+    await render();
+    const layout = () => document.querySelector<HTMLElement>('[data-editor-split]')!;
+    expect(layout().dataset.editorSplit).toBe('false');
+    expect(layout().className).not.toContain('xl:grid');
+    await act(async () => { await actions!.open('source', original); });
+    expect(layout().dataset.editorSplit).toBe('true');
+    expect(layout().className).toContain('xl:grid-cols-2');
+    expect(layout().querySelector('iframe')).not.toBeNull();
+    const close = [...document.querySelectorAll('button')].find(node => /^Close editor/.test(node.textContent ?? ''))!;
+    await act(async () => close.click());
+    expect(layout().dataset.editorSplit).toBe('false');
 });

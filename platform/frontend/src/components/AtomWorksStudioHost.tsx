@@ -58,7 +58,7 @@ export const AtomWorksStudioHost = forwardRef<StudioCapture, AtomWorksStudioHost
       <div style={{ overflowX: 'auto' }}>
       <iframe key={sessionId} ref={frame} title="AtomWorks Studio"
         src={studioFrameUrl(sessionId, window.location.origin)}
-        style={{ width: '100%', minWidth: 320, height: expanded ? 'calc(100dvh - 68px)' : 'max(70vh, 800px)', minHeight: expanded ? 650 : undefined, border: 0 }} />
+        style={{ width: '100%', minWidth: 320, height: expanded ? 'calc(100dvh - 68px)' : 'var(--bms-studio-height, max(70vh, 800px))', minHeight: expanded ? 650 : undefined, border: 0 }} />
       </div>
     </section>;
   });

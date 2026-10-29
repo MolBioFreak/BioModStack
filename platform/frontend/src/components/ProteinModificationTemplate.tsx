@@ -1,5 +1,5 @@
 import { DocumentCaptureContext, DocumentCaptureRegistry, DeNovoDraftPreparationContext, type CapturedAnnotatedDocument } from '../lib/deNovoDocumentCapture';
-import { DeNovoDocumentEditors, DeNovoDocumentEditorPanels } from './DeNovoDocumentEditors';
+import { DeNovoDocumentEditors, DeNovoDocumentEditorPanels, DeNovoEditorLayout } from './DeNovoDocumentEditors';
 import { materializeLaProteinaStudioCapture } from '../lib/laProteinaStudioCapture';
 import { LaProteinaEvaluation } from './LaProteinaEvaluation';
 import { DeNovoNativeGenerationSettings } from './DeNovoNativeGenerationSettings';
@@ -781,6 +781,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         <DocumentCaptureContext.Provider value={documentCaptures}><DeNovoDocumentEditors registry={documentCaptures} sources={studioSources} molecularDocuments={molecularDocuments}
             onAdopt={(slot, document) => { void receiveCurrent.current({ [slot]: document }).catch(cause => setError(cause instanceof Error ? cause.message : String(cause))); }}>
         <div className="w-full space-y-5 text-[var(--text-primary)]" data-bms-protein-generation-workflow={generator}>
+            <DeNovoEditorLayout><div className="min-w-0 space-y-5">
             <ProteinDesignSections label="Generation sections" sections={[inputSection, 'Sampling', 'Sequence Design']} active={section} onChange={next => { setSection(next); const view = next === 'Sampling' ? 'advanced' : 'simple'; manualSection.current = suiteView !== view; onSuiteViewChange(view); }} />
             {/* Section navigation is presentation only. Source tools and viewers stay mounted. */}
             <div hidden={section !== inputSection} className="space-y-5">
@@ -949,7 +950,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             <div hidden={section !== 'Sequence Design'}>
                 <GeneralSequenceDesignSettings value={sequenceDesign} onChange={next => { if (next.invocation_draft?.enabled || next.sequence_design.enabled) { setSequenceOmitted(false); setSequenceNull(false); } setSequenceDesign(next); }} />
             </div>
-            <DeNovoDocumentEditorPanels />
+            </div><DeNovoDocumentEditorPanels /></DeNovoEditorLayout>
             <ProteinDesignRun stickyAction jobName={jobName} onJobNameChange={setJobName} pending={submitMutation.isPending}
                 onSubmit={() => { void (generator === 'rfd3' ? submitDeNovo() : submitAlternative()); }} submitLabel="Generate candidates">
                 <DeNovoRunScope task={`${engineName} · ${designTask.replaceAll('_', ' ')}`} documents={generator === 'rfd3' ? [rfd3Source?.path].filter((path): path is string => !!path) : generator === 'laproteina' ? (isMotif ? [effectiveMotifPath].filter((path): path is string => typeof path === 'string' && !!path) : []) : ['Native entities / sequence inputs (see task inputs)']} operations={sequenceOmitted || sequenceNull && !sequenceDesign.invocation_draft && !sequenceDesign.sequence_design.enabled ? undefined : generalSequenceRequest(sequenceDesign).sequence_design} />

@@ -8,10 +8,19 @@ type Editor = { id: number; slot: string; original: StructureSourceSelection; pa
 type Actions = {
     open: (slot: string, source: StructureSourceSelection, receipt?: StructureMaterialization) => Promise<void>;
     panels: ReactNode;
+    /** True while a Studio editor is opening or open, so the form can make room for the canvas. */
+    active: boolean;
 };
 const EditorsContext = createContext<Actions | null>(null);
 export const useDeNovoDocumentEditors = () => useContext(EditorsContext);
 export function DeNovoDocumentEditorPanels() { return <>{useDeNovoDocumentEditors()?.panels}</>; }
+/** Form column plus Studio canvas. Wide screens put the canvas beside the form while an editor is open;
+ * narrow screens keep the editor under the form as before. */
+export function DeNovoEditorLayout({ children }: { children: ReactNode }) {
+    const split = Boolean(useDeNovoDocumentEditors()?.active);
+    return <div data-editor-split={split ? 'true' : 'false'}
+        className={split ? 'space-y-5 xl:grid xl:grid-cols-2 xl:items-start xl:gap-x-5 xl:space-y-0 xl:[--bms-studio-height:max(480px,calc(100dvh-340px))]' : 'space-y-5'}>{children}</div>;
+}
 // Property order is not source identity; compare every retained selector field.
 const key = (value: unknown) => JSON.stringify(value, (_name, item) => item && typeof item === 'object' && !Array.isArray(item)
     ? Object.fromEntries(Object.keys(item).sort().map(name => [name, item[name]])) : item);
@@ -94,7 +103,7 @@ export function DeNovoDocumentEditors({ registry, sources, molecularDocuments, o
     const close = (id: number) => {
         opened.current = opened.current.filter(editor => editor.id !== id); setEditors(opened.current);
     };
-    return <EditorsContext.Provider value={{ open, panels: <div ref={panel} tabIndex={-1} aria-label="Molecular document editor">
+    return <EditorsContext.Provider value={{ open, active: Boolean(opening) || editors.length > 0, panels: <div ref={panel} tabIndex={-1} aria-label="Molecular document editor" className="min-w-0 space-y-5 xl:sticky xl:top-2 xl:self-start">
         {opening && <p role="status">Opening {opening} in AtomWorks Studio…</p>}
         {error && <p role="status">Studio unavailable: {error}</p>}
         {editors.map(editor => <DocumentEditor key={editor.id} editor={editor} source={sources?.[editor.slot]} selected={active[editor.slot] === editor.id}
