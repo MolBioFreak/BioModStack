@@ -29,7 +29,7 @@ process PrepProteinCadRequest {
         --num-designs ${params.pcad_num_designs ?: 8} \\
         --target-lengths "${params.pcad_target_lengths ?: '100,200'}" \\
         --laproteina-preset "${params.pcad_laproteina_preset ?: params.laproteina_preset ?: 'ucond_tri'}" \\
-        --laproteina-samples-per-length ${params.pcad_laproteina_samples_per_length ?: params.laproteina_samples_per_length ?: 8} \\
+        --laproteina-samples-per-length ${params.pcad_laproteina_samples_per_length ?: params.laproteina_samples_per_length ?: params.pcad_num_designs ?: 8} \\
         --laproteina-num-steps ${params.pcad_laproteina_num_steps ?: params.laproteina_num_steps ?: 400} \\
         --laproteina-motif-task-name "${params.pcad_laproteina_motif_task_name ?: params.laproteina_motif_task_name ?: ''}" \\
         --laproteina-motif-pdb "${params.pcad_laproteina_motif_pdb ?: params.laproteina_motif_pdb ?: ''}" \\

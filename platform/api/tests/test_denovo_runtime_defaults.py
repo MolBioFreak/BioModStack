@@ -160,3 +160,22 @@ def test_complexa_publishes_its_results_directory_where_the_reader_looks():
     assert 'publishDir "${params.out_dir}/collected"' in module
     reader = (REPO_ROOT / 'platform/api/services/rfd4_proteina_results.py').read_text()
     assert "'complexa': ('collected/complexa', 'complexa-results.json'" in reader
+
+
+def test_laproteina_sample_count_follows_requested_designs_unless_set_explicitly():
+    module = (REPO_ROOT / 'modules/protein_cad_experimental.nf').read_text()
+    la = "params.pcad_laproteina_samples_per_length ?: params.laproteina_samples_per_length ?: params.pcad_num_designs ?: 8"
+    assert la in module
+    # DISCO's own count already follows the request the same way.
+    assert "params.disco_num_inference_seeds ?: params.pcad_num_designs ?: 8" in module
+
+
+def test_compiled_laproteina_job_carries_requested_designs_and_no_invented_sample_count():
+    from services.nextflow import build_nextflow_command
+    cmd = build_nextflow_command(
+        'protein_modification_experimental', 'de_novo_design',
+        {'generator': 'laproteina', 'backend': 'laproteina', 'design_task': 'unconditional',
+         'num_designs': 1, 'target_lengths': '60'}, '/tmp/out', job_id='job-la')
+    joined = ' '.join(cmd)
+    assert '--pcad_num_designs 1' in joined
+    assert 'samples_per_length' not in joined   # nothing authored; the module derives it from num_designs
