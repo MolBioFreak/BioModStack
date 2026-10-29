@@ -2,7 +2,9 @@ process RunComplexa {
     label 'Complexa'
     label 'gpu'
 
-    publishDir "${params.out_dir}/collected/complexa", mode: 'copy', pattern: 'results/**', saveAs: { it.replaceFirst('results/', '') }
+    // The output is the directory 'results'; a 'results/**' pattern never matches it,
+    // so nothing was published. Publish the directory itself as collected/complexa.
+    publishDir "${params.out_dir}/collected", mode: 'copy', saveAs: { it == 'results' ? 'complexa' : null }
 
     input:
     path request_dir

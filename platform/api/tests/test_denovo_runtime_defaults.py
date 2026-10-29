@@ -150,3 +150,13 @@ def test_filter_stage_label_never_replaces_canonical_candidate_identity(tmp_path
     rows = list(csv.DictReader(output.open()))
     assert [r['candidate_id'] for r in rows] == [canonical]
     assert rows[0]['rfd_RoG'] == '10.3' and rows[0]['pr_RoG'] == '10.4'
+
+
+def test_complexa_publishes_its_results_directory_where_the_reader_looks():
+    module = (REPO_ROOT / 'modules/complexa.nf').read_text()
+    # The only output is the directory 'results'; a 'results/**' pattern never matches it.
+    assert "pattern: 'results/**'" not in module
+    assert "saveAs: { it == 'results' ? 'complexa' : null }" in module
+    assert 'publishDir "${params.out_dir}/collected"' in module
+    reader = (REPO_ROOT / 'platform/api/services/rfd4_proteina_results.py').read_text()
+    assert "'complexa': ('collected/complexa', 'complexa-results.json'" in reader
