@@ -535,7 +535,9 @@ def native_checkpoint_dependencies(process: str, params: dict):
         from paths import get_weights_root
 
         owner = 'modules/protein_cad_experimental.nf:PrepProteinCadRequest'
-        default = Path(params.get('weights_root') or get_weights_root()) / 'laproteina'
+        from paths import default_weight_location
+
+        default = default_weight_location('laproteina', params.get('weights_root'))
         seen = set()
         for name in ('checkpoint_dir', 'data_path'):
             selector = ('pcad_laproteina_' + name if params.get('pcad_laproteina_' + name)

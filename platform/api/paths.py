@@ -185,6 +185,27 @@ def get_weights_root() -> Path:
     return Path(str(_runtime_paths()["weights_root"]))
 
 
+def default_weight_location(relative_path: str, weights_root: Path | str | None = None) -> Path:
+    """Default runtime binding for a weights dependency.
+
+    Acquired weights live in immutable layout generations, not under their plain
+    name. The plain path keeps precedence when it exists. Otherwise the layout is
+    used only when exactly one generation is present; with none or several the
+    historical plain path is returned unchanged, so selection is never guessed.
+    """
+    root = Path(weights_root) if weights_root is not None else get_weights_root()
+    plain = root / relative_path
+    if plain.exists():
+        return plain
+    layouts = root / "layouts" / relative_path
+    try:
+        generations = [p for p in layouts.iterdir()
+                       if p.is_dir() and len(p.name) == 64 and all(c in "0123456789abcdef" for c in p.name)]
+    except OSError:
+        return plain
+    return generations[0] if len(generations) == 1 else plain
+
+
 def get_colabfold_db() -> Path:
     return Path(str(_runtime_paths()["colabfold_db"]))
 

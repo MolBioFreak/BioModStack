@@ -31,10 +31,21 @@ export const AtomWorksStudioHost = forwardRef<StudioCapture, AtomWorksStudioHost
         throw cause;
       }
     } }), [sessionId]);
+    const framed = useRef<string | null>(null);
     useEffect(() => {
       const receive = (event: MessageEvent) => {
         if (!isStudioMessage(event, frame.current?.contentWindow ?? null, window.location.origin, sessionId)) return;
-        if (event.data.type === 'ready') onReady?.();
+        if (event.data.type === 'ready') {
+          // A restored session keeps the previous camera, so a fresh frame shows
+          // an empty viewport. Studio's host API reopens the same session and
+          // frames it. Once per session: openSession announces ready again.
+          if (framed.current !== sessionId) {
+            framed.current = sessionId;
+            try { (frame.current?.contentWindow as (Window & { atomworksStudio?: { openSession?: (id: string) => unknown } }) | null)
+              ?.atomworksStudio?.openSession?.(sessionId); } catch { /* the editor stays usable without framing */ }
+          }
+          onReady?.();
+        }
         else { generation.current++; onDirty?.(); }
       };
       window.addEventListener('message', receive);

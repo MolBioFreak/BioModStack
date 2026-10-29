@@ -5820,10 +5820,11 @@ def compile_nextflow_invocation(
         if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id)
     if selected_generator in {'rfd4_proteina', 'complexa'}:
         effective_profile = 'workstation_ryzen7960x'
+        from paths import default_weight_location
         if selected_generator == 'rfd4_proteina':
-            params.setdefault('rfd4_proteina_bundle', str(Path(params.get('weights_root') or get_weights_root()) / 'rfd4-proteina'))
+            params.setdefault('rfd4_proteina_bundle', str(default_weight_location('rfd4-proteina', params.get('weights_root'))))
         else:
-            params.setdefault('complexa_weights_dir', str(Path(params.get('weights_root') or get_weights_root()) / 'complexa'))
+            params.setdefault('complexa_weights_dir', str(default_weight_location('complexa', params.get('weights_root'))))
 
     effective_profile = resolve_antibody_validation_profile(effective_profile)
 
@@ -6797,6 +6798,13 @@ def compile_nextflow_invocation(
             value = params.get(key)
             if isinstance(value, str) and value.lstrip('/').split('/')[0] in get_allowed_roots():
                 params[key] = str(resolve_allowed_path(value))
+
+        if params.get('pcad_backend') == 'laproteina':
+            from paths import default_weight_location
+            default = default_weight_location('laproteina', params.get('weights_root'))
+            if default != Path(str(params.get('weights_root') or get_weights_root())) / 'laproteina':
+                for key in ('pcad_laproteina_checkpoint_dir', 'pcad_laproteina_data_path'):
+                    params.setdefault(key, str(default))
 
         if 'pcad_num_designs' in params and 'rfd_num_designs' not in params:
             params['rfd_num_designs'] = params['pcad_num_designs']

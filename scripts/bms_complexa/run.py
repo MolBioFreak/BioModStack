@@ -54,6 +54,12 @@ def run(request: Request, *, upstream: Path, weights: Path, output: Path,
     env = os.environ.copy()
     env.update({str(k): str(v) for k, v in cfg.get("env_vars", {}).items()})
     env.setdefault("DATA_PATH", str(upstream.resolve() / "assets"))
+    # The official CLI refuses every non-init command unless COMPLEXA_INIT is set;
+    # BMS composes the equivalent configuration itself. Caches must also be
+    # writable, because the image filesystem and its home directory are not.
+    env.setdefault("COMPLEXA_INIT", "bms")
+    env.setdefault("XDG_CACHE_HOME", str(native / ".cache"))
+    env.setdefault("MPLCONFIGDIR", str(native / ".cache" / "matplotlib"))
     receipt["execution"] = "running"
     try:
         with (native / "complexa.log").open("w") as log:

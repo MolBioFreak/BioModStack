@@ -122,6 +122,11 @@ def job_expects_design_results(job: Job) -> bool:
         # The native publication owner validates projected rows. A zero-yield
         # receipt is still a completed campaign, including on administrative repair.
         return False
+    if (job.provenance or {}).get('native_generation_publication'):
+        # A registered native generation (RFD4, Complexa, La-Proteina, DISCO) is
+        # read through its own publication, including a valid zero yield. It has
+        # no Design rows to validate, so the generic candidate contract does not apply.
+        return False
     params = job.params if isinstance(job.params, dict) else {}
     if job.model_id == 'esmfold2' and job.mode == 'blind_pose':
         return False

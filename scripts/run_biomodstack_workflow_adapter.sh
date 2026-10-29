@@ -9,6 +9,15 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 export PATH="/usr/local/bin:/usr/bin:/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
+# Managed scientific images need the user-installed Apptainer; the system package
+# cannot open them. Put only that installation's directory first, so no other
+# ~/.local/bin tool shadows a system one.
+if [ -x "$HOME/.local/bin/apptainer" ]; then
+    _bms_apptainer_dir="$(dirname "$(readlink -f "$HOME/.local/bin/apptainer")")"
+    export PATH="$_bms_apptainer_dir:$PATH"
+    unset _bms_apptainer_dir
+fi
+
 pin_nextflow_java() {
     local candidate="${BMS_NEXTFLOW_JAVA_HOME:-}"
     if [ -z "$candidate" ] && [ -x "$HOME/.local/jdks/temurin-17/bin/java" ]; then

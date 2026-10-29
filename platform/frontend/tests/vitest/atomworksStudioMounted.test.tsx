@@ -59,6 +59,36 @@ describe('private Studio host', () => {
     await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals();
   });
 
+  it('frames a restored session once, through Studio\'s own host API, and still announces ready', async () => {
+    const host = document.createElement('div'); document.body.append(host);
+    const root = createRoot(host); const ready = vi.fn();
+    await act(async () => root.render(<AtomWorksStudioHost sessionId="owned" onReady={ready} />));
+    const frame = host.querySelector('iframe')!;
+    const openSession = vi.fn();
+    (frame.contentWindow as unknown as { atomworksStudio: unknown }).atomworksStudio = { openSession };
+    const announce = () => window.dispatchEvent(new MessageEvent('message', { origin: window.location.origin,
+      source: frame.contentWindow, data: { source: 'atomworks-annotation-studio', type: 'ready', session_id: 'owned' } }));
+    announce(); announce();   // openSession itself announces ready again
+    expect(openSession).toHaveBeenCalledTimes(1);
+    expect(openSession).toHaveBeenCalledWith('owned');
+    expect(ready).toHaveBeenCalledTimes(2);
+    // A different session is framed on its own first ready.
+    await act(async () => root.render(<AtomWorksStudioHost sessionId="other" onReady={ready} />));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => root.unmount()); host.remove();
+  });
+
+  it('keeps working when the embedded editor exposes no host API', async () => {
+    const host = document.createElement('div'); document.body.append(host);
+    const root = createRoot(host); const ready = vi.fn();
+    await act(async () => root.render(<AtomWorksStudioHost sessionId="owned" onReady={ready} />));
+    const frame = host.querySelector('iframe')!;
+    window.dispatchEvent(new MessageEvent('message', { origin: window.location.origin,
+      source: frame.contentWindow, data: { source: 'atomworks-annotation-studio', type: 'ready', session_id: 'owned' } }));
+    expect(ready).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount()); host.remove();
+  });
+
   it('expands the same live iframe without resetting its session or dirty generation', async () => {
     const host = document.createElement('div'); document.body.append(host);
     const root = createRoot(host); const ref = createRef<StudioCapture>();

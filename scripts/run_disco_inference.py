@@ -277,6 +277,10 @@ def main() -> None:
     env["HF_HOME"] = str(hf_cache)
     env["HF_HUB_CACHE"] = str(hf_cache / "hub")
     env["HF_HUB_DISABLE_TELEMETRY"] = "1"
+    if not os.access(hf_cache / "hub", os.W_OK):
+        # A read-only pinned cache is read in place. Without this, hf_hub_download
+        # tries to create its blobs directory even for files already present.
+        env.setdefault("HF_HUB_OFFLINE", "1")
     cache_root = Path(env.get("XDG_CACHE_HOME") or work_dir / "cache")
     for key, name in (("XDG_CACHE_HOME", "general"), ("TRITON_CACHE_DIR", "triton"),
                       ("TORCH_EXTENSIONS_DIR", "torch_extensions")):
