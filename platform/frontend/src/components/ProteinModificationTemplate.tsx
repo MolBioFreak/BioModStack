@@ -227,6 +227,14 @@ export function ProteinModificationTemplate({
             <option value="generate">Generate</option><option value="evaluate">Evaluate</option>
         </select>
     </label> : null;
+    const constructionPanel = (inContextRow: boolean) => <details className={`rounded-lg border border-[var(--border-primary)] p-3 ${inContextRow ? (constructionOpen ? 'col-span-full' : 'self-end') : ''}`}
+                data-molecular-construction-panel open={constructionOpen} onToggle={event => setConstructionOpen(event.currentTarget.open)}>
+                <summary className="cursor-pointer text-sm font-medium">DNA / RNA construction{construction ? ' · retained recipe' : ''}</summary>
+                {constructionOpen && <div className="mt-3 min-w-0">
+                    <p className="mb-3 text-sm">One shared molecular recipe across engines. Construction is optional and does not change a generator's inputs until you explicitly use its prepared document.</p>
+                    <MolecularConstructionWorkbench initialDraft={construction} onDraftChange={changeConstruction} />
+                </div>}
+            </details>;
     return (
         <PreparedGeometryContext.Provider value={{ current: construction, generation: () => constructionGeneration.current, retain: document => {
             // Coordinate equality is not recipe/provenance equality: retain each adoption.
@@ -248,14 +256,7 @@ export function ProteinModificationTemplate({
             </div>
                 <div className="ml-auto">{mode !== 'shape_blueprint' && <ModelReferenceCard model={generator} />}</div>
             </div>
-            {mode !== 'shape_blueprint' && <details className="rounded-lg border border-[var(--border-primary)] p-3"
-                data-molecular-construction-panel onToggle={event => setConstructionOpen(event.currentTarget.open)}>
-                <summary className="cursor-pointer text-sm font-medium">DNA / RNA construction{construction ? ' · retained recipe' : ''}</summary>
-                {constructionOpen && <div className="mt-3 min-w-0">
-                    <p className="mb-3 text-sm">One shared molecular recipe across engines. Construction is optional and does not change a generator's inputs until you explicitly use its prepared document.</p>
-                    <MolecularConstructionWorkbench initialDraft={construction} onDraftChange={changeConstruction} />
-                </div>}
-            </details>}
+            {mode !== 'shape_blueprint' && mode !== 'de_novo_design' && constructionPanel(false)}
             {mode === 'de_novo_design' ? <>
                 <div className="grid grid-cols-2 gap-3 lg:grid-cols-3" data-de-novo-context>
                     {!['rfd4_proteina', 'complexa'].includes(generator) && <label className={labelClass}>Goal
@@ -278,6 +279,7 @@ export function ProteinModificationTemplate({
                         </select>
                     </label>
                     {nativeModeControl}
+                    {constructionPanel(true)}
                 </div>
                 {generator === 'laproteina' && navigation.native_mode === 'evaluate' ? <LaProteinaEvaluation key={activeKey} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />
                     : generator === 'rfd4_proteina' || generator === 'complexa' ? <DeNovoNativeGenerationSettings key={activeKey} model={generator}
