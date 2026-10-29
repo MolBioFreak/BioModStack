@@ -17,12 +17,14 @@ export type BioXpWorkflowDeckProps = {
     selection: BioXpDeckSelection; onChange: (selection: BioXpDeckSelection) => void; readOnly?: boolean;
     live?: BioXpDeckLiveIntent; resources?: DeckResource[]; overlay?: React.ReactNode;
     compact?: boolean; canvas?: boolean;
+    /** Robot-recorded tip occupancy by tray (1-4), 96 row-major booleans. Shading only. */
+    tipOccupancy?: Record<number, boolean[]>;
 };
 const fullView: DeckBounds = { x: 0, y: 0, ...deckSize };
 const modes: DeckSelectionMode[] = ['well', 'range', 'row', 'column'];
 
 /** Shared presentation. Authoring defaults remain selection-only; live intents are explicit callbacks. */
-export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, compact = false, canvas = false }: BioXpWorkflowDeckProps) {
+export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, compact = false, canvas = false, tipOccupancy }: BioXpWorkflowDeckProps) {
     const id = useId();
     const svg = useRef<SVGSVGElement>(null);
     const anchor = useRef<{ station: string; well: string } | null>(null);
@@ -187,7 +189,10 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                             <title>{resource.label} · {well.well}{live?.wellDisabledReason ? ` · ${live.wellDisabledReason}` : ''}</title>
                             <circle className="bwd-ring" cx={well.x} cy={well.y} r="5.4" />
                             <circle className="bwd-core" cx={well.x} cy={well.y} r="3.8" />
-                            {resource.kind === 'rack' && <circle className="bwd-tip" cx={well.x} cy={well.y} r="1.35" />}
+                            {resource.kind === 'rack' && (() => {
+                                const present = resource.tipTray !== null ? tipOccupancy?.[resource.tipTray]?.[well.row * 12 + well.column] : undefined;
+                                return present === false ? null : <circle className={`bwd-tip${present ? ' is-recorded' : ''}`} cx={well.x} cy={well.y} r="1.35" data-tip={present === undefined ? undefined : 'present'} />;
+                            })()}
                             <circle className="bwd-hit" cx={well.x} cy={well.y} r="8.5" />
                         </g>)}
                     </g>;

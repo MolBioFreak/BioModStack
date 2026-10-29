@@ -41,6 +41,7 @@
 .bwd-ring { fill: var(--bwd-surface); stroke: var(--bwd-muted); stroke-width: 1; }
 .bwd-core { fill: var(--bwd-inset); }
 .bwd-tip { fill: var(--bwd-muted); }
+.bwd-tip.is-recorded { fill: var(--bwd-text); }
 .bwd-hit { fill: transparent; stroke: transparent; stroke-width: 2; }
 .bwd-well.is-selected .bwd-core { fill: var(--bwd-accent); }
 .bwd-well.is-selected .bwd-ring { stroke: var(--bwd-accent); stroke-width: 2; }

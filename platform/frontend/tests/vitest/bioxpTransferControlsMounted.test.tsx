@@ -5,6 +5,8 @@ import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BioXpTransferControls, transferDocument } from '../../src/components/BioXpTransferControls';
 import { api } from '../../src/lib/api';
+// Dumped from platform/api bioxp_method_custody.custody_suggestions() (methods catalog authoring.custody).
+import custodyCatalog from '../fixtures/bioxp_methods_catalog_custody.json';
 
 vi.mock('../../src/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
 let host: HTMLDivElement, root: Root, client: QueryClient;
@@ -23,6 +25,7 @@ beforeEach(() => {
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     vi.mocked(api.get).mockImplementation(async (path) => {
+        if (String(path) === '/api/bioxp/methods/catalog') return { data: custodyCatalog } as never;
         if (String(path).endsWith('/jobs')) return { data: { rows } } as never;
         if (!job) throw new Error('job not yet accepted');
         if (!String(path).includes('/jobs/')) throw new Error(`Unexpected GET ${path}`);
@@ -40,13 +43,13 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it.each(['pending', 'failed'])('submits without waiting for %s observations', async state => {
-    vi.mocked(api.get).mockImplementation(() => state === 'pending'
-        ? new Promise(() => {}) : Promise.reject(new Error('observations unavailable')));
+    vi.mocked(api.get).mockImplementation(path => String(path) === '/api/bioxp/methods/catalog' ? Promise.resolve({ data: custodyCatalog } as never)
+        : state === 'pending' ? new Promise(() => {}) : Promise.reject(new Error('observations unavailable')));
     await render();
     await act(async () => button().click()); await tick();
     expect(api.post).toHaveBeenCalledTimes(1);
     expect((vi.mocked(api.post).mock.calls[0][1] as any).live_execution).toEqual({ live_execution_ack: true });
-    expect(vi.mocked(api.get).mock.calls.every(([path]) => String(path).includes('/protocols/jobs'))).toBe(true);
+    expect(vi.mocked(api.get).mock.calls.every(([path]) => String(path).includes('/protocols/jobs') || String(path) === '/api/bioxp/methods/catalog')).toBe(true);
     expect(button().disabled).toBe(false);
 });
 
@@ -172,4 +175,17 @@ it.each([undefined, 409, 502])('keeps the original identity after a failed respo
     await render(10); await tick();
     expect(vi.mocked(api.get).mock.calls.filter(([path]) => String(path).includes('/jobs/'))).toHaveLength(priorReads);
     expect(host.textContent).toContain('Connection changed. Check the earlier job.');
+});
+
+it('lists objects and destinations from the backend catalog, including strips and trough', async () => {
+    await render();
+    const [object, destination] = host.querySelectorAll('select');
+    const objects = [...object.options].map(o => o.value);
+    expect(objects).toEqual(['PL_POOL', 'PL_OUTPUT', 'PL_REAGENT', 'CV_BIOSECURITY', 'CV_OUTPUT', 'CV_REAGENT',
+        'STRIP1', 'STRIP2', 'STRIP3', 'STRIP4', 'TROUGH']);
+    expect([...destination.options].map(o => o.value)).toEqual(custodyCatalog.authoring.custody.destinations.map(d => d.token));
+    await act(async () => { object.value = 'TROUGH'; object.dispatchEvent(new Event('change', { bubbles: true })); });
+    await act(async () => button().click()); await tick();
+    expect((vi.mocked(api.post).mock.calls[0][1] as any).document.stages[0].actions[0]).toMatchObject({
+        kind: 'plate_move', params: { plate_id: 'TROUGH', target_location: 'LOC_OCS' } });
 });

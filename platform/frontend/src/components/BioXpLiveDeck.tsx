@@ -30,13 +30,15 @@ export type BioXpLiveDeckProps = {
     commandDetailsOpen?: boolean;
     onCommandDetailsToggle?: (open: boolean) => void;
     transferControls: React.ReactNode | ((visible: boolean) => React.ReactNode);
+    /** Deck record panel (what the robot believes); record-only. */
+    deckRecord?: React.ReactNode;
+    /** Recorded tip occupancy by tray 1-4; shades tip racks only. */
+    tipOccupancy?: Record<number, boolean[]>;
 };
 
 export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
     const { generation, connected, visible, dashboard, selection } = props;
     const updates = useBioXpOperatorUpdates(generation, connected && visible);
-    const [transferOpen, setTransferOpen] = useState(false);
-    const [recordOpen, setRecordOpen] = useState(false);
     const revision = dashboard?.deck?.position_table_revision ?? null;
     const geometry = useQuery({
         queryKey: ['bioxp-live-deck-geometry', generation, revision],
@@ -80,7 +82,7 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
         <div className="bld-workspace">
             <div className="bld-map-pane bioxp-method-map">
                 <BioXpWorkflowDeck canvas selection={selection} onChange={() => { /* Authoring selection is not a live intent. */ }}
-                    resources={resources} live={{ onStation: props.onMoveToStation, onWell: props.onMoveToWell, selectedStation: selectedStation?.id,
+                    resources={resources} tipOccupancy={props.tipOccupancy} live={{ onStation: props.onMoveToStation, onWell: props.onMoveToWell, selectedStation: selectedStation?.id,
                         stationDisabledReason: props.stationDisabledReason, wellDisabledReason: props.wellDisabledReason, onBlocked: props.onBlockedMove }}
                     overlay={<>{selectedPoint && <g className="bld-chosen-point" data-selected-destination={destination?.target}
                         aria-label={`Selected destination: ${destination?.label}`}>
@@ -107,10 +109,13 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
             </div>
             <aside className="bld-controls" aria-label="Live movement controls">
                 {props.preparation}
+                {props.deckRecord}
+                <section className="bld-transfer-card" aria-label="Move plate / cover"><h3>Move plate / cover</h3>
+                    {typeof props.transferControls === 'function' ? props.transferControls(visible) : props.transferControls}
+                </section>
                 {props.doorControls}
                 {props.movementControls}
                 {props.cameraControls}
-                <BioXpDeckObjectsCard generation={generation} connected={connected} visible={visible} />
                 <section className="bld-pose-card" aria-label="Reported pose"><h3>{pose ? lastKnown ? 'Last known position' : 'Reported gantry position' : 'Position unavailable'}</h3>
                     <dl className="bld-coordinates"><div><dt>X steps</dt><dd>{axes?.axes.find(axis => axis.axis === 'x')?.position_steps ?? 'Unavailable'}</dd></div><div><dt>Y steps</dt><dd>{axes?.axes.find(axis => axis.axis === 'y')?.position_steps ?? 'Unavailable'}</dd></div><div><dt>Z steps</dt><dd>{axes?.axes.find(axis => axis.axis === 'z')?.position_steps ?? 'Unavailable'}</dd></div></dl>
                     {updates.isError && <p role="status">Position updates unavailable. Retaining last observed values.</p>}
@@ -126,11 +131,5 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
             </aside>
         </div>
         <details className="bld-details" open={props.commandDetailsOpen} onToggle={event => props.onCommandDetailsToggle?.(event.currentTarget.open)}><summary>Command details</summary>{props.commandDetails}</details>
-        <details className="bld-details" onToggle={event => setTransferOpen(event.currentTarget.open)}><summary>Plate and cover handling</summary>
-            {typeof props.transferControls === 'function' ? props.transferControls(visible && transferOpen) : props.transferControls}
-        </details>
-        <details className="bld-details" onToggle={event => setRecordOpen(event.currentTarget.open)}><summary>Deck record</summary>
-            {recordOpen && <BioXpDeckRecordPanel generation={generation} connected={connected} visible={visible && recordOpen} />}
-        </details>
     </section>;
 }

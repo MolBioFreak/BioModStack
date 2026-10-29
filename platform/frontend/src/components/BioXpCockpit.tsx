@@ -5,6 +5,7 @@ import { BioXpServiceRestart } from './BioXpServiceRestart';
 import { BioXpMovePreparation, useBioXpMovePreparation } from './BioXpMovePreparation';
 
 import {
+    useBioXpTipTrays,
     bioXpDeckRecoveryResolution,
     bioXpErrorPresentation,
     bioXpErrorText,
@@ -58,6 +59,9 @@ import { repairManualLatestRequest } from '../lib/repairManualFeedback';
 import './BioXpRobotControls.css';
 import { BioXpMovementFailureEvidence } from './BioXpMovementFailureEvidence';
 import { BioXpTransferControls } from './BioXpTransferControls';
+import { BioXpDeckRecordPanel } from './BioXpDeckRecordPanel';
+import { BioXpMotionToggle } from './BioXpMotionToggle';
+import { occupancyByTray } from '../lib/bioxpDeckRecord';
 import { BioXpOperatorReports } from './BioXpOperatorReports';
 
 
@@ -329,6 +333,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const operationalVisible = documentVisible && controlTab !== 'workflows';
     const robotVisible = documentVisible && controlTab === 'robot';
     const liveDeckVisible = documentVisible && controlTab === 'live-deck';
+    // Same query as the deck record panel; shades recorded tips on the live map.
+    const liveTipTrays = useBioXpTipTrays(generation, linkConnected && liveDeckVisible);
     const controlsVisible = operationalVisible && controlTab !== 'live-deck';
     const [pipettesOpened, setPipettesOpened] = useState(initialTab === 'pipettes');
     const [workflowsOpened, setWorkflowsOpened] = useState(initialTab === 'workflows');
@@ -797,7 +803,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     };
 
     const invokeLifecycleAction = (actionId: 'meta.activate_motion' | 'meta.deactivate_motion' | 'meta.recover_motion_non_homing') => {
-        if (v2ActionDisabledReason(actionId) !== null) return;
+        // Motion Off is never held back by sensor or catalog state; the robot decides.
+        if (actionId !== 'meta.deactivate_motion' && v2ActionDisabledReason(actionId) !== null) return;
         const envelope = v2NormalEnvelope();
         if (!envelope) return;
         const releaseSubmission = reserveNormalSubmission();
@@ -824,9 +831,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     };
     const claimTransport = () => invokeLifecycleAction('meta.activate_motion');
     const recoverMotionNonHoming = () => invokeLifecycleAction('meta.recover_motion_non_homing');
-    // Motion On/Off: On = Activate Motion; Off = host motion switch (refuses new moves, sends nothing to controllers).
-    const motionToggleAction = motionControlsAvailable === true ? 'meta.deactivate_motion' as const : 'meta.activate_motion' as const;
-    const motionToggleReason = v2ActionDisabledReason(motionToggleAction);
+    // Motion Off: host switch that refuses new moves; sends nothing to controllers.
+    const motionOff = () => invokeLifecycleAction('meta.deactivate_motion');
 
     const operatorPathForControl = (axis: Axis, operation: Operation): string | null => {
         if (operation === 'move-negative' || operation === 'move-positive') return '/motion/oem/manual/relative';
@@ -1231,6 +1237,9 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         {tab === 'robot' ? 'Robot controls' : tab === 'pipettes' ? 'Pipettes' : tab === 'workflows' ? 'Workflows' : 'Live deck movement'}
                     </button>)}
                 </div>
+                <BioXpMotionToggle enabled={motionControlsAvailable} reason={dashboard?.motion.reason} connected={linkConnected}
+                    onDisabledReason={v2ActionDisabledReason('meta.activate_motion')} pending={invokeLifecycleActionMutation.isPending}
+                    onOn={claimTransport} onOff={motionOff} />
                 <div title="Cancels software waiters, not motor motion. Motors may continue. This is not a physical emergency stop. Use Stop for motors." aria-label="Stop controls" className="bx-stops">
                     {(['x', 'y', 'z'] as const).map(axis => <button key={axis} type="button"
                         disabled={!linkConnected || generation <= 0 || interruptPending(`oem.${axis}.stop`)}
@@ -1269,18 +1278,6 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         onClick={claimTransport}
                         className="rounded bg-[var(--surface-control,var(--bg-tertiary))] px-4 py-2 font-semibold  disabled:cursor-not-allowed "
                      aria-label="Enable controllers">Enable</button>
-                    <button
-                        type="button"
-                        role="switch"
-                        aria-checked={motionControlsAvailable === true}
-                        disabled={!linkConnected || motionToggleReason !== null || busy}
-                        title={motionToggleReason ?? (motionToggleAction === 'meta.deactivate_motion'
-                            ? 'Turn motion off: new moves are refused until motion is turned on again. Does not stop a move in progress; use Stop for that.'
-                            : 'Turn motion on (Activate Motion, no homing).')}
-                        onClick={() => invokeLifecycleAction(motionToggleAction)}
-                        data-testid="motion-toggle"
-                        className={`rounded px-4 py-2 font-semibold disabled:cursor-not-allowed ${motionControlsAvailable === true ? 'bg-teal-700' : 'bg-[var(--surface-control,var(--bg-tertiary))]'}`}
-                     aria-label="Motion">Motion {motionControlsAvailable === true ? 'On' : motionControlsAvailable === false ? 'Off' : '?'}</button>
                     <button
                         type="button"
                         disabled={!linkConnected || v2ActionDisabledReason('meta.recover_motion_non_homing') !== null || busy}
@@ -1462,6 +1459,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
 
                         </div>}
                         transferControls={visible => <BioXpTransferControls visible={visible} key={`${generation}:${active}`} generation={generation} connected={linkConnected} />}
+                        deckRecord={<BioXpDeckRecordPanel generation={generation} connected={linkConnected} visible={liveDeckVisible} compact />}
+                        tipOccupancy={occupancyByTray(liveTipTrays.data)}
                     />
                     {error && <p role="alert" className="mt-3 rounded border border-red-600 p-3 text-sm" style={{ color: 'var(--text-primary)' }}>{bioXpErrorText(error)}</p>}
                 </>}
