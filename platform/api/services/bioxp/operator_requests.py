@@ -222,3 +222,19 @@ class OperatorReportExportRequestV1(BaseModel):
     action: str | None = None
     channel: StrictInt | None = Field(default=None, ge=0, le=3)
     limit: StrictInt = Field(default=1000, ge=1, le=100000)
+
+
+class OperatorDeckRecordTipTrayV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    tray: StrictInt = Field(ge=1, le=5, description="OEM/load_tip tray 1-5 (5 = tip hotel)")
+    tips: Literal["full", "empty"] | list[str] = Field(description="'full', 'empty' or the wells that hold tips")
+
+
+class OperatorDeckRecordRequestV1(BaseModel):
+    """Record-only correction of the robot's deck record. Moves nothing."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_connection_generation: StrictInt = Field(ge=0)
+    record_id: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    reason: str = Field(min_length=1, max_length=500)
+    movable_objects: dict[str, str] | None = Field(None, description="ClassMachineStatus object name -> deck location name")
+    tip_trays: list[OperatorDeckRecordTipTrayV1] | None = None

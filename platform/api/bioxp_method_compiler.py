@@ -490,6 +490,8 @@ def compile_method(request):
                 fail('Compile request must be an object')
             method = request.get('method')
             validate_method(method)
+            from bioxp_method_deck import check_deck
+            result['issues'].extend(check_deck(method))
             dependencies = deepcopy(request.get('dependencies', {}))
             if not isinstance(dependencies, dict):
                 fail('Dependencies must be an object', '/dependencies')

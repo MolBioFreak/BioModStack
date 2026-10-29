@@ -38,6 +38,7 @@ def method_schema():
     expression = {'type': 'object', 'required': ['version', 'op'], 'properties': {
         'version': {'const': 1}, 'op': {'enum': list(EXPRESSION_OPS)}, 'id': {'type': 'string'},
         'value': {}, 'type': {'enum': ['number'], 'description': 'Explicit numeric literal kind; raw spelling persists until compilation'}, 'unit': {'type': 'string'}, 'args': {'type': 'array', 'items': {'$ref': '#/$defs/value'}}}}
+    from bioxp_method_deck import deck_schema
     return {'$schema': 'https://json-schema.org/draft/2020-12/schema', '$id': SCHEMA,
         'type': 'object', 'required': ['schema', 'steps'], 'properties': {
             'schema': {'const': SCHEMA}, 'name': {'type': 'string'}, 'description': {'type': 'string'},
@@ -45,7 +46,7 @@ def method_schema():
             'procedures': {'type': 'array', 'items': {'type': 'object', 'required': ['id', 'steps'], 'properties': {
                 'id': {'type': 'string'}, 'parameters': {'type': 'array', 'items': {'$ref': '#/$defs/parameter'}},
                 'steps': {'type': 'array', 'items': {'$ref': '#/$defs/node'}}}}},
-            'steps': {'type': 'array', 'items': {'$ref': '#/$defs/node'}}, 'deck_plan': {'type': 'object'},
+            'steps': {'type': 'array', 'items': {'$ref': '#/$defs/node'}}, 'deck_plan': deck_schema(),
             'tip_policy': {}, 'editor_state': {}},
         '$defs': {'expression': expression, 'value': {'description': 'Raw JSON or {expr: versioned typed AST}; no executable text'},
             'parameter': {'type': 'object', 'required': ['id', 'type'], 'properties': {
@@ -131,6 +132,11 @@ def method_catalog():
     transfer_schema = deepcopy(native['transfer'])
     transfer_defs = transfer_schema.pop('$defs', {})
     transfer_defs['TransferEndpoint']['properties']['labware_id'] = {'type': 'string', 'description': 'Stable logical vessel identity; not a native positioning field'}
+    transfer_defs['TransferEndpoint']['properties']['material_id'] = {'type': 'string', 'description': (
+        'Name a starting-deck material instead of station/location_id/wells. The compiler fills only omitted '
+        'fields from deck_plan assignments; explicit fields are kept.')}
+    transfer_defs['TransferEndpoint']['anyOf'] = [
+        {'required': transfer_defs['TransferEndpoint'].pop('required')}, {'required': ['material_id']}]
     transfer_schema.get('properties', {}).pop('operation', None)
     transfer_schema['required'] = [k for k in transfer_schema.get('required', []) if k != 'operation']
     class_transfer = deepcopy(transfer_schema)

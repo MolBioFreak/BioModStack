@@ -220,6 +220,27 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                 state.setdefault("thermal_tasks", {})[str(inputs.get("task_id", oid))] = {
                     "action": action, "inputs": deepcopy(inputs), "attainment": "unknown"}
                 changed_other["thermal_tasks"] = {str(inputs.get("task_id", oid)): deepcopy(state["thermal_tasks"][str(inputs.get("task_id", oid))])}
+            if action == "tip_pickup" and isinstance(state.get("tip_racks"), dict):
+                from bioxp_method_deck import pickup_indices
+                rack = state["tip_racks"].get(str(inputs.get("tray")))
+                indices = pickup_indices(inputs.get("well"))
+                if rack is not None and indices is not None:
+                    missing = [i for i in indices if not rack["occupancy"][i]]
+                    if missing:
+                        issue("planned_tip_unavailable", occurrence,
+                              f"Tray {inputs.get('tray')} {inputs.get('well')}: {len(missing)} of 4 tips already used or absent in the starting deck; not a runtime gate.")
+                    for i in indices:
+                        rack["occupancy"][i] = False
+                    changed_other["tip_racks"] = {str(inputs.get("tray")): {
+                        "tips_remaining": sum(1 for tip in rack["occupancy"] if tip)}}
+            if action in {"plate_move", "move_cover"} and isinstance(state.get("object_locations"), dict):
+                from bioxp_method_deck import TOKEN_OBJECTS, resolve_target
+                token = inputs.get("plate_id" if action == "plate_move" else "cover_id")
+                name = TOKEN_OBJECTS.get(token, token)
+                target = inputs.get("target_location")
+                if isinstance(name, str) and isinstance(target, str):
+                    state["object_locations"][name] = resolve_target(name, target)
+                    changed_other["object_locations"] = {name: state["object_locations"][name]}
             if action in {"tip_pickup", "tip_eject"}:
                 for channel in inputs.get("channels", []):
                     touched_channels.add(str(channel))
@@ -377,6 +398,9 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
             snapshots.append({"occurrence_id": oid, "state_delta": {
                 "vessels": {key: deepcopy(vessels[key]) for key in sorted(touched_vessels)},
                 "channels": channel_delta, **changed_other}})
+    if isinstance(state.get("tip_racks"), dict):
+        from bioxp_method_deck import summarize_racks
+        state["tip_rack_summary"] = summarize_racks(state["tip_racks"])
     return {"layer": "planned", "state": state, "observed": None, "issues": issues,
             "lineage": lineage, "strokes": strokes, "after_occurrences": snapshots,
             "accounting": {k: {"known_ul": _text(v), "has_unknown": k in unknown_totals}

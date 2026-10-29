@@ -430,6 +430,10 @@ def prepare_occurrences(occurrences, method, dependencies):
         if not isinstance(inputs, dict):
             raise ValueError('Action inputs must be an object')
         try:
+            from bioxp_method_deck import resolve_occurrence_materials
+            materials = resolve_occurrence_materials(row, method, dependencies)
+            if materials:
+                row['material_endpoints'] = materials
             if row['action'] == 'transfer' and 'liquid' in inputs:
                 prepare_class_transfer(inputs)
             resolution = liquid_resolution(inputs, dependencies)
@@ -583,4 +587,5 @@ def initial_state(method, explicit):
                 vessel['volume_ul'] = None
     for key, value in planned_vessels.items():
         state.setdefault('vessels', {}).setdefault(key, value)
-    return state
+    from bioxp_method_deck import seed_state
+    return seed_state(method, state)
