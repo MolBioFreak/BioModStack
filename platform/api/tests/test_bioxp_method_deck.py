@@ -155,3 +155,45 @@ def test_deck_record_relay_forwards_record_only_body(monkeypatch):
     assert kwargs['json_data'] == {'schema_version': 'bioxp.operator_deck_record_request.v1',
         'record_id': 'rec-cover-0001', 'reason': 'cover on chiller',
         'movable_objects': {'OUTPUT_COVER': 'LOC_OC_COVER'}}
+
+
+def test_cover_inspection_resets_covers_and_uninspected_move_is_advisory():
+    inspect = {'step_id': 'i', 'type': 'action', 'action': 'inspect', 'inputs': {}}
+    move = {'step_id': 'c', 'type': 'action', 'action': 'move_cover',
+            'inputs': {'cover_id': 'CV_OUTPUT', 'target_location': 'LOC_OC'}}
+    bare = compile_method({'method': method(move, movable_objects={'OUTPUT_COVER': 'LOC_OC_COVER'})})
+    codes = [i['code'] for i in bare['simulation'].get('issues', []) + bare.get('issues', [])]
+    assert 'cover_move_before_inspection' in codes
+    assert bare['document'] is not None  # report only
+    inspected = compile_method({'method': method(inspect, move, movable_objects={'OUTPUT_COVER': 'LOC_OC_COVER'})})
+    codes = [i['code'] for i in inspected['simulation'].get('issues', []) + inspected.get('issues', [])]
+    assert 'cover_move_before_inspection' not in codes
+    assert inspected['simulation']['state']['object_locations']['OUTPUT_COVER'] == 'LOC_OC_COVER'
+    assert inspected['simulation']['state']['object_locations']['REAGENT_COVER'] == 'LOC_RC_COVER_STORAGE'
+
+
+def test_run_submission_carries_deck_plan_as_record_only_manifest(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from routers.bioxp import protocols
+    seen = {}
+
+    async def submit(submission, response, runtime):
+        seen['manifest'] = submission.deck_manifest
+        from hashlib import sha256
+        return SimpleNamespace(job_id='protocol-live-' + sha256(b'deck-run-0001').hexdigest(),
+                               model_dump=lambda **k: {})
+
+    monkeypatch.setattr(protocols, 'submit_bioxp_protocol', submit)
+    data = SimpleNamespace(bindings={}, dependencies={}, model_fields_set=set(), expected_generation=1,
+                           idempotency_key='deck-run-0001', acknowledge_live=True)
+    m = method({'step_id': 'n', 'type': 'action', 'action': 'note', 'inputs': {'message': 'x'}})
+    asyncio.run(methods._submit(m, data, None, None))
+    assert seen['manifest'] == m['deck_plan']
+
+
+def test_job_rows_accept_robot_row_kind():
+    from services.bioxp.protocol_models import ProtocolJobSummary
+    row = ProtocolJobSummary(job_id='j', status='completed', dry_run=True, protocol_id='p', source_type='native',
+                             created_at='a', updated_at='b', pending_review=None, row_kind='historical_bundle')
+    assert row.row_kind == 'historical_bundle'

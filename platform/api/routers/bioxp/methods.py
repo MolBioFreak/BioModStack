@@ -224,6 +224,9 @@ async def _submit(method, data, response, runtime, *, saved=None):
         expected_connection_generation=data.expected_generation, source_type="native",
         document=document, dry_run=False, idempotency_key=data.idempotency_key,
         live_execution_ack=data.acknowledge_live,
+        # Record-only annotation of the authored starting deck; the robot keeps it
+        # out of the idempotency fingerprint so interactive deck edits stay legal.
+        deck_manifest=deepcopy(method["deck_plan"]) if isinstance(method.get("deck_plan"), dict) else None,
     )
     job_id = "protocol-live-" + sha256(data.idempotency_key.strip().encode("utf-8")).hexdigest()
     try:

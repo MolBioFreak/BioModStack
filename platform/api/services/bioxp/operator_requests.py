@@ -234,7 +234,8 @@ class OperatorDeckRecordRequestV1(BaseModel):
     """Record-only correction of the robot's deck record. Moves nothing."""
     model_config = ConfigDict(extra="forbid", strict=True)
     expected_connection_generation: StrictInt = Field(ge=0)
-    record_id: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
-    reason: str = Field(min_length=1, max_length=500)
+    record_id: str | None = Field(None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$",
+                                  description="Optional; the robot generates one when omitted")
+    reason: str | None = Field(None, min_length=1, max_length=500)
     movable_objects: dict[str, str] | None = Field(None, description="ClassMachineStatus object name -> deck location name")
     tip_trays: list[OperatorDeckRecordTipTrayV1] | None = None

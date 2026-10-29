@@ -241,6 +241,18 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                 if isinstance(name, str) and isinstance(target, str):
                     state["object_locations"][name] = resolve_target(name, target)
                     changed_other["object_locations"] = {name: state["object_locations"][name]}
+            if action == "inspect" and isinstance(state.get("object_locations"), dict):
+                # ControlLib.inspectCover:3745-3752 finalize: both covers end in storage.
+                from bioxp_method_deck import INSPECTED_COVER_LOCATIONS
+                state["object_locations"].update(INSPECTED_COVER_LOCATIONS)
+                changed_other["object_locations"] = dict(INSPECTED_COVER_LOCATIONS)
+                state["covers_inspected"] = True
+            if (action == "move_cover" and not state.get("covers_inspected")
+                    and not state.get("cover_move_uninspected_reported")):
+                state["cover_move_uninspected_reported"] = True
+                issue("cover_move_before_inspection", occurrence,
+                      "Cover move before any cover inspection step; the robot will grab where its record says "
+                      "the cover is. OEM runs cover inspection at run start. Advisory only.")
             if action in {"tip_pickup", "tip_eject"}:
                 for channel in inputs.get("channels", []):
                     touched_channels.add(str(channel))

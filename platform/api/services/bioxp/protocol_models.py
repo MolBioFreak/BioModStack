@@ -286,6 +286,7 @@ class ProtocolJob(ProtocolWireModel):
     operator: ProtocolOperator
     artifacts: dict[str, JsonValue]
     command: ProtocolCommand | None = None
+    row_kind: Literal["canonical_workflow", "historical_bundle"] | None = None
 
     @model_validator(mode="after")
     def canonical_identity(self) -> ProtocolJob:
@@ -338,6 +339,7 @@ class ProtocolJobSummary(ProtocolWireModel):
     updated_at: str
     pending_review: ProtocolPendingReview | None
     command: ProtocolCommand | None = None
+    row_kind: Literal["canonical_workflow", "historical_bundle"] | None = None
 
 
 class ProtocolJobs(ProtocolWireModel):

@@ -38,6 +38,8 @@ TOKEN_OBJECTS = {
     'TROUGH': 'TROUGH',
 }
 COVERS = {'OUTPUT_COVER', 'REAGENT_COVER', 'BIO_SECURITY_COVER'}
+# ControlLib.inspectCover:3745-3752 unconditional terminal assignments (4->18, 5->20).
+INSPECTED_COVER_LOCATIONS = {'OUTPUT_COVER': 'LOC_OC_COVER_STORAGE', 'REAGENT_COVER': 'LOC_RC_COVER_STORAGE'}
 # lookupDesLocation aliases; covers and plates resolve differently (translate_oem_plate_move).
 TARGET_ALIASES = {
     'LOC_BSCS': ('LOC_BSCS', 'LOC_BSCS'), 'LOC_TC': ('LOC_BSC', 'LOC_P_TC'),
