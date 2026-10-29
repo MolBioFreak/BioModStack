@@ -19,7 +19,7 @@ export function DeNovoDocumentEditorPanels() { return <>{useDeNovoDocumentEditor
 export function DeNovoEditorLayout({ children }: { children: ReactNode }) {
     const split = Boolean(useDeNovoDocumentEditors()?.active);
     return <div data-editor-split={split ? 'true' : 'false'}
-        className={split ? 'space-y-5 xl:grid xl:grid-cols-2 xl:items-start xl:gap-x-5 xl:space-y-0 xl:[--bms-studio-height:max(480px,calc(100dvh-340px))]' : 'space-y-5'}>{children}</div>;
+        className={split ? 'space-y-5 xl:grid xl:grid-cols-2 xl:items-start xl:gap-x-5 xl:space-y-0' : 'space-y-5'}>{children}</div>;
 }
 // Property order is not source identity; compare every retained selector field.
 const key = (value: unknown) => JSON.stringify(value, (_name, item) => item && typeof item === 'object' && !Array.isArray(item)
@@ -103,7 +103,7 @@ export function DeNovoDocumentEditors({ registry, sources, molecularDocuments, o
     const close = (id: number) => {
         opened.current = opened.current.filter(editor => editor.id !== id); setEditors(opened.current);
     };
-    return <EditorsContext.Provider value={{ open, active: Boolean(opening) || editors.length > 0, panels: <div ref={panel} tabIndex={-1} aria-label="Molecular document editor" className="min-w-0 space-y-5 xl:sticky xl:top-2 xl:self-start">
+    return <EditorsContext.Provider value={{ open, active: Boolean(opening) || editors.length > 0, panels: <div ref={panel} tabIndex={-1} aria-label="Molecular document editor" className="min-w-0 space-y-5">
         {opening && <p role="status">Opening {opening} in AtomWorks Studio…</p>}
         {error && <p role="status">Studio unavailable: {error}</p>}
         {editors.map(editor => <DocumentEditor key={editor.id} editor={editor} source={sources?.[editor.slot]} selected={active[editor.slot] === editor.id}
