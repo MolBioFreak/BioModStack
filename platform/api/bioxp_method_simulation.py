@@ -241,10 +241,23 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                 if isinstance(name, str) and isinstance(target, str):
                     state["object_locations"][name] = resolve_target(name, target)
                     changed_other["object_locations"] = {name: state["object_locations"][name]}
+                    from bioxp_method_deck import cover_slot_mismatch
+                    holder = cover_slot_mismatch(state["object_locations"][name], state.get("deck_slots"))
+                    if action == "move_cover" and holder:
+                        issue("cover_slot_holder_mismatch", occurrence,
+                              f"{name} is moved to {state['object_locations'][name]}, which the starting deck "
+                              f"records as holding a {holder.replace('_', ' ')}, not cover storage. Advisory only.")
             if action == "inspect" and isinstance(state.get("object_locations"), dict):
                 # ControlLib.inspectCover:3745-3752 finalize: both covers end in storage.
                 from bioxp_method_deck import INSPECTED_COVER_LOCATIONS
                 state["object_locations"].update(INSPECTED_COVER_LOCATIONS)
+                from bioxp_method_deck import cover_slot_mismatch
+                for cover_name, location in INSPECTED_COVER_LOCATIONS.items():
+                    holder = cover_slot_mismatch(location, state.get("deck_slots"))
+                    if holder:
+                        issue("cover_slot_holder_mismatch", occurrence,
+                              f"Cover inspection returns {cover_name} to {location}, which the starting deck records "
+                              f"as holding a {holder.replace('_', ' ')}. Advisory only.")
                 changed_other["object_locations"] = dict(INSPECTED_COVER_LOCATIONS)
                 state["covers_inspected"] = True
             if (action == "move_cover" and not state.get("covers_inspected")

@@ -46,7 +46,8 @@ def actions(result):
 def test_schema_publishes_typed_deck_and_validates_example():
     schema = method_schema()
     plan = schema['properties']['deck_plan']
-    assert set(plan['properties']) == {'labware', 'materials', 'assignments', 'tip_racks', 'movable_objects'}
+    assert set(plan['properties']) == {'labware', 'materials', 'assignments', 'tip_racks', 'movable_objects', 'slots'}
+    assert plan['properties']['tip_racks']['items']['properties']['tray'] == {'enum': [1, 2, 3, 4]}
     full = method(tip_racks=[{'tray': 1, 'tip_type': 'T50', 'tips': 'full'}],
                   movable_objects={'OUTPUT_COVER': 'LOC_OC_COVER'})
     assert not list(Draft202012Validator(schema).iter_errors(full))
@@ -203,3 +204,59 @@ def test_deck_record_relay_forwards_gantry():
     from services.bioxp.operator_requests import OperatorDeckRecordRequestV1
     body = OperatorDeckRecordRequestV1(expected_connection_generation=1, gantry='empty')
     assert body.model_dump(exclude={'expected_connection_generation'}, exclude_none=True) == {'gantry': 'empty'}
+
+
+def test_slots_default_and_cover_to_reconfigured_storage_is_advisory():
+    move = {'step_id': 'c', 'type': 'action', 'action': 'move_cover',
+            'inputs': {'cover_id': 'CV_OUTPUT', 'target_location': 'LOC_OCS'}}
+    schema = method_schema()
+    fitted = method(move, movable_objects={'OUTPUT_COVER': 'LOC_OC_COVER'},
+                    slots=[{'slot': 'LOC_OC_COVER_STORAGE', 'holder': 'fluorometer', 'label': '4X DIYnaFLUOR'}])
+    assert not list(Draft202012Validator(schema).iter_errors(fitted))
+    result = compile_method({'method': fitted})
+    codes = [i['code'] for i in result['simulation']['issues']]
+    assert 'cover_slot_holder_mismatch' in codes
+    assert result['document'] is not None  # advisory, never a refusal
+    default = compile_method({'method': method(move, movable_objects={'OUTPUT_COVER': 'LOC_OC_COVER'})})
+    assert 'cover_slot_holder_mismatch' not in [i['code'] for i in default['simulation']['issues']]
+    explicit = method(move, slots=[{'slot': 'LOC_OC_COVER_STORAGE', 'holder': 'cover_storage'}])
+    assert 'cover_slot_holder_mismatch' not in [i['code'] for i in compile_method({'method': explicit})['simulation']['issues']]
+
+
+def test_slot_findings_and_starting_cover_in_reconfigured_slot():
+    m = method(slots=[{'slot': 'LOC_RC_COVER_STORAGE', 'holder': 'tool_dock'}, {'slot': 'LOC_MS', 'holder': 'trough'},
+                      {'slot': 'LOC_TROUGH', 'holder': 'spaceship'}],
+               movable_objects={'REAGENT_COVER': 'LOC_RC_COVER_STORAGE'})
+    codes = [i['code'] for i in check_deck(m)]
+    assert {'deck_slot_unknown', 'deck_slot_holder', 'cover_slot_holder_mismatch'} <= set(codes)
+    assert all(i['category'] == 'advisory' for i in check_deck(m))
+
+
+def test_tray_five_retained_records_are_still_accepted():
+    m = method(tip_racks=[{'tray': 5, 'tips': 'full'}])
+    assert check_deck(m) == []
+
+
+def test_draft_run_accepts_unsaved_method_and_freezes_exact_copy(monkeypatch):
+    import asyncio
+    from hashlib import sha256
+    from types import SimpleNamespace
+    from routers.bioxp import protocols
+    seen = {}
+
+    async def submit(submission, response, runtime):
+        seen['document'] = submission.document
+        return SimpleNamespace(job_id='protocol-live-' + sha256(b'unsaved-0001').hexdigest(),
+                               model_dump=lambda **k: {})
+
+    monkeypatch.setattr(protocols, 'submit_bioxp_protocol', submit)
+    draft = method({'step_id': 'n', 'type': 'action', 'action': 'note', 'inputs': {'message': 'unsaved'}})
+    original = deepcopy(draft)
+    body = methods.QuickRun(method=draft, based_on={'id': 'tmpl-1', 'revision': 3, 'edited': True},
+                            idempotency_key='unsaved-0001', expected_generation=1, acknowledge_live=True)
+    reply = asyncio.run(methods.quick_run(body, None, None))
+    draft['steps'].clear()  # later edits never reach the retained run copy
+    snapshot = seen['document']['metadata']['bms_method_run']
+    assert snapshot['method'] == original and snapshot['saved'] is None
+    assert snapshot['based_on'] == {'id': 'tmpl-1', 'revision': 3, 'edited': True}
+    assert reply['method_snapshot']['method'] == original

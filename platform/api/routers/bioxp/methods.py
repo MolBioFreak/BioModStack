@@ -111,7 +111,11 @@ class SavedRun(RunRequest):
 
 
 class QuickRun(RunRequest):
+    """Run the current draft, saved or not. The exact method is frozen on the run."""
     method: dict[str, JsonValue]
+    # Optional record of the library entry this draft was opened from; it does
+    # not select what runs (the submitted method body does).
+    based_on: dict[str, JsonValue] | None = None
 
 
 class Recovery(Wire):
@@ -204,7 +208,7 @@ async def _create(collection, data, session):
     return await exact_revision(session, template, 1)
 
 
-async def _submit(method, data, response, runtime, *, saved=None):
+async def _submit(method, data, response, runtime, *, saved=None, based_on=None):
     # Freeze before any network await. Compiler failures never emit a prefix.
     request = deepcopy({"method": method, "bindings": data.bindings, "dependencies": data.dependencies})
     if "initial_state" in data.model_fields_set:
@@ -218,6 +222,8 @@ async def _submit(method, data, response, runtime, *, saved=None):
                          "saved": saved, "compilation": compiled})
     if "recovery" in data.model_fields_set:
         snapshot["recovery"] = deepcopy(data.recovery)
+    if based_on is not None:
+        snapshot["based_on"] = deepcopy(based_on)
     document = deepcopy(compiled["document"])
     document.setdefault("metadata", {})["bms_method_run"] = snapshot
     submission = ProtocolSubmission(
@@ -252,7 +258,9 @@ async def _submit(method, data, response, runtime, *, saved=None):
 @router.post("/quick-runs", response_model=MethodRunResponse, response_model_exclude_unset=True,
              dependencies=[Depends(require_bioxp_mutation_access)])
 async def quick_run(data: QuickRun, response: Response, runtime=Depends(get_bioxp_runtime)):
-    return await _submit(data.method, data, response, runtime)
+    # Saved or unsaved draft: the exact submitted method is retained in the
+    # native document metadata (bms_method_run), which clone/report read back.
+    return await _submit(data.method, data, response, runtime, based_on=data.based_on)
 
 
 @router.get("/runs")

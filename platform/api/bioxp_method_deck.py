@@ -47,8 +47,16 @@ TARGET_ALIASES = {
     'LOC_OC': ('LOC_OC_COVER', 'LOC_P_OC'), 'LOC_OCS': ('LOC_OC_COVER_STORAGE', 'LOC_OC_COVER_STORAGE'),
     'LOC_MS': ('LOC_P_MS', 'LOC_P_MS'),
 }
+# Trays offered to authoring UIs. Tray 5 (tip hotel) is not fitted on this deck;
+# it stays accepted for retained records but is not published as a choice.
+AUTHORING_TIP_TRAYS = (1, 2, 3, 4)
+# Reconfigurable deck slots and their default holder. Swapping hardware is a
+# deck_plan record change (slots[].holder), never a geometry or code change.
+SLOT_HOLDERS = ('cover_storage', 'trough', 'tube_holder', 'fluorometer', 'tool_dock', 'empty')
+RECONFIGURABLE_SLOTS = {'LOC_TROUGH': 'trough', 'LOC_OC_COVER_STORAGE': 'cover_storage',
+                        'LOC_RC_COVER_STORAGE': 'cover_storage'}
 MATERIAL_KINDS = ('sample', 'reagent', 'product', 'waste')
-TOP_KEYS = ('labware', 'materials', 'assignments', 'tip_racks', 'movable_objects')
+TOP_KEYS = ('labware', 'materials', 'assignments', 'tip_racks', 'movable_objects', 'slots')
 
 
 def _locations():
@@ -85,10 +93,10 @@ def deck_schema():
             'assignments': {'type': 'array', 'items': {'type': 'object',
                 'required': ['id', 'labware_id', 'well', 'material_id', 'volume_ul'], 'properties': {
                     'id': text, 'labware_id': text, 'well': well, 'material_id': text, 'volume_ul': number}}},
-            'tip_racks': {'type': 'array', 'description': ('OEM tip trays: 1-4 TECANRACK1-4, 5 tip hotel. 96 tips; '
+            'tip_racks': {'type': 'array', 'description': ('Tip trays 1-4 (TECANRACK1-4). 96 tips; '
                     'four-channel pickup at A/B head references takes four tips (rows +0/+2/+4/+6).'),
                 'items': {'type': 'object', 'required': ['tray', 'tips'], 'properties': {
-                    'tray': {'type': 'integer', 'minimum': 1, 'maximum': 5},
+                    'tray': {'enum': list(AUTHORING_TIP_TRAYS)},
                     'tip_type': {'enum': [*TIP_TYPES, None]},
                     'tips': {'anyOf': [{'enum': ['full', 'empty']},
                         {'type': 'object', 'required': ['available'], 'properties': {
@@ -96,7 +104,24 @@ def deck_schema():
             'movable_objects': {'type': 'object', 'description': 'Where each plate/cover starts (ClassMachineStatus names).',
                 'propertyNames': {'enum': sorted(MOVABLE_OBJECTS)},
                 'additionalProperties': {'type': 'string'}},
+            'slots': {'type': 'array', 'description': (
+                    'Reconfigurable slots and what is fitted in them. Omitted slots keep their default '
+                    '(LOC_TROUGH: trough; cover storages: cover_storage). Record only; geometry is unchanged.'),
+                'items': {'type': 'object', 'required': ['slot', 'holder'], 'properties': {
+                    'slot': {'enum': sorted(RECONFIGURABLE_SLOTS)}, 'holder': {'enum': list(SLOT_HOLDERS)},
+                    'label': text, 'positions': {'type': 'array', 'items': text}}}},
         }}
+
+
+def slot_holders(method):
+    """Effective holder per reconfigurable slot (defaults merged with authored slots)."""
+    holders = dict(RECONFIGURABLE_SLOTS)
+    raw = method.get('deck_plan') if isinstance(method, dict) else None
+    rows = raw.get('slots') if isinstance(raw, dict) else None
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and row.get('slot') in holders and row.get('holder') in SLOT_HOLDERS:
+            holders[row['slot']] = row['holder']
+    return holders
 
 
 def _issue(code, path, message):
@@ -196,6 +221,18 @@ def check_deck(method):
             if not isinstance(available, list) or any(well_index(w) is None for w in available):
                 issues.append(_issue('deck_tip_occupancy', path + '/tips',
                                      "Tips must be 'full', 'empty' or {available: [A1..H12]}"))
+    seen_slots = set()
+    for index, row in enumerate(raw.get('slots') if isinstance(raw.get('slots'), list) else []):
+        path = f'{base}/slots/{index}'
+        if not isinstance(row, dict) or row.get('slot') not in RECONFIGURABLE_SLOTS:
+            issues.append(_issue('deck_slot_unknown', path + '/slot',
+                                 f"Slot {row.get('slot') if isinstance(row, dict) else row!r} is not reconfigurable"))
+            continue
+        if row['slot'] in seen_slots:
+            issues.append(_issue('deck_duplicate_id', path, f"Slot {row['slot']} declared twice"))
+        seen_slots.add(row['slot'])
+        if row.get('holder') not in SLOT_HOLDERS:
+            issues.append(_issue('deck_slot_holder', path + '/holder', f"Unknown holder {row.get('holder')!r}"))
     objects = raw.get('movable_objects')
     if isinstance(objects, dict):
         locations, occupied = _locations(), {}
@@ -205,7 +242,11 @@ def check_deck(method):
                 issues.append(_issue('deck_object_unknown', path, f'Unknown movable object {name!r}'))
             if location not in locations:
                 issues.append(_issue('deck_object_location', path, f'Unknown deck location {location!r}'))
-            elif location != 'UNKNOWN' and location in occupied:
+            elif name in COVERS and cover_slot_mismatch(location, slot_holders(method)):
+                issues.append(_issue('cover_slot_holder_mismatch', path,
+                                     f'{name} starts at {location}, which holds a '
+                                     f'{cover_slot_mismatch(location, slot_holders(method)).replace("_", " ")}'))
+            if location in locations and location != 'UNKNOWN' and location in occupied:
                 issues.append(_issue('deck_object_collision', path,
                                      f'{name} and {occupied[location]} both start at {location}'))
             occupied.setdefault(location, name)
@@ -250,7 +291,17 @@ def seed_state(method, state):
         for name, location in objects.items():
             if isinstance(name, str) and isinstance(location, str):
                 state.setdefault('object_locations', {}).setdefault(name, location)
+    if isinstance(raw.get('slots'), list):
+        state.setdefault('deck_slots', slot_holders(method))
     return state
+
+
+def cover_slot_mismatch(location, slots):
+    """Holder name when a cover lands in a storage slot fitted with something else."""
+    holder = (slots or RECONFIGURABLE_SLOTS).get(location)
+    if location in ('LOC_OC_COVER_STORAGE', 'LOC_RC_COVER_STORAGE') and holder not in (None, 'cover_storage'):
+        return holder
+    return None
 
 
 def summarize_racks(racks):
