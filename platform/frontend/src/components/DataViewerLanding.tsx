@@ -11,6 +11,7 @@ import {
 } from '../lib/api';
 import type { ExternalImportPreview, Job } from '../lib/api';
 import FrustraMpnnUploadAnalysisPanel from './FrustraMpnnUploadAnalysisPanel';
+import { isNativeBinderGeneration } from '../lib/nativeBinderResults';
 
 type RequestedFormat = 'auto' | 'proteinbase_bundle' | 'tabular_csv' | 'jsonl_records' | 'boltz_api_run';
 type ResolvedFormat = 'proteinbase_csv' | 'proteinbase_jsonl' | 'tabular_csv' | 'jsonl_records' | 'unknown';
@@ -430,7 +431,9 @@ function formatRelativeTime(timestamp: string): string {
 
 function formatJobSubtitle(job: Job): string {
     const source = job.selection_dataset_name || job.stage_mode || job.model_id || job.mode;
-    return `${source} • ${job.design_count.toLocaleString()} designs • ${formatRelativeTime(job.created_at)}`;
+    // A registered native generation publishes records, not Design rows.
+    const count = !job.design_count && isNativeBinderGeneration(job) ? 'native results' : `${job.design_count.toLocaleString()} designs`;
+    return `${source} • ${count} • ${formatRelativeTime(job.created_at)}`;
 }
 
 export function DataViewerLanding({
