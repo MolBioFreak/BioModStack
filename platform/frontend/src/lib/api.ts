@@ -3297,6 +3297,7 @@ export interface SchedulerConfig {
         enabled: boolean;
         target_vram_fill: number;
         vram_safety_margin_mb: number;
+        nanopore_vram_fraction?: number;
         capacity_weight: number;
         emptiness_weight: number;
         max_launches_per_cycle: number;

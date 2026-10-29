@@ -686,6 +686,7 @@ interface SchedulerConfig {
         enabled: boolean;
         target_vram_fill: number;
         vram_safety_margin_mb: number;
+        nanopore_vram_fraction?: number;
         capacity_weight: number;
         emptiness_weight: number;
         max_launches_per_cycle: number;
@@ -721,6 +722,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
     const [config, setConfig] = useState<SchedulerConfig | null>(null);
     const [loading, setLoading] = useState(false);
     const [localThreshold, setLocalThreshold] = useState(75);
+    const [localNanoporeVram, setLocalNanoporeVram] = useState(75);
     const [localBusyThreshold, setLocalBusyThreshold] = useState(50);
     const [localCooldown, setLocalCooldown] = useState(10);
     const [localCpuThreadsPerJob, setLocalCpuThreadsPerJob] = useState(24);
@@ -762,6 +764,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 if (!data) return;
                 setConfig(data);
                 setLocalThreshold(Math.round((data.global?.target_vram_fill ?? 0.75) * 100));
+                setLocalNanoporeVram(Math.round((data.global?.nanopore_vram_fraction ?? 0.75) * 100));
                 setLocalBusyThreshold(Math.round((data.global?.busy_threshold ?? 0.5) * 100));
                 setLocalCooldown(Math.round((data.global?.cooldown_ms ?? 10000) / 1000));
                 setLocalCpuThreadsPerJob(data.global?.cpu_threads_per_job ?? 24);
@@ -940,6 +943,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     enabled: config?.global?.enabled ?? true,
                     target_vram_fill: localThreshold / 100,
                     vram_safety_margin_mb: config?.global?.vram_safety_margin_mb ?? 2048,
+                    nanopore_vram_fraction: localNanoporeVram / 100,
                     capacity_weight: localCapacityWeight,
                     emptiness_weight: localEmptinessWeight,
                     max_launches_per_cycle: localMaxLaunchesPerCycle,
@@ -1018,6 +1022,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
 
     const isDirty =
         localThreshold !== Math.round((config.global.target_vram_fill ?? 0.75) * 100) ||
+        localNanoporeVram !== Math.round((config.global.nanopore_vram_fraction ?? 0.75) * 100) ||
         localBusyThreshold !== Math.round((config.global.busy_threshold ?? 0.5) * 100) ||
         localCooldown !== Math.round(config.global.cooldown_ms / 1000) ||
         localCpuThreadsPerJob !== (config.global.cpu_threads_per_job ?? 24) ||
@@ -1066,6 +1071,27 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                             />
                             <div className="flex justify-between text-xs text-slate-500 mt-1">
                                 <span>50%</span>
+                                <span>95%</span>
+                            </div>
+                        </div>
+
+                        <div className="mb-4">
+                            <div className="flex justify-between text-xs text-slate-400 mb-1">
+                                <span>Dorado basecalling VRAM (share of card)</span>
+                                <span className="text-cyan-400 font-medium">{localNanoporeVram}%</span>
+                            </div>
+                            <input
+                                type="range"
+                                aria-label="Dorado basecalling VRAM share"
+                                min="25"
+                                max="95"
+                                step="5"
+                                value={localNanoporeVram}
+                                onChange={(e) => setLocalNanoporeVram(parseInt(e.target.value, 10) || 75)}
+                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                            />
+                            <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                <span>25%</span>
                                 <span>95%</span>
                             </div>
                         </div>

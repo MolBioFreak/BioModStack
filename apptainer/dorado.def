@@ -32,10 +32,10 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
         python3-pip \
         python3-venv
 
-    # ── samtools 1.24 Bayesian consensus ─────────────────────────────────
-    SAMTOOLS_VERSION="1.24"
-    SAMTOOLS_URL="https://github.com/samtools/samtools/releases/download/1.24/samtools-1.24.tar.bz2"
-    SAMTOOLS_SHA256="89b2a440123eeaa400392ce1736e7d60ce9041843027d76819753c5a8246bfdd"
+    # ── samtools 1.25 Bayesian consensus ─────────────────────────────────
+    SAMTOOLS_VERSION="1.25"
+    SAMTOOLS_URL="https://github.com/samtools/samtools/releases/download/1.25/samtools-1.25.tar.bz2"
+    SAMTOOLS_SHA256="8bbd2b3cb447953149a74ab0b00e3ec4e88a789a27b8373a31fa6b5b2dee02b1"
     SAMTOOLS_TARBALL="/tmp/samtools-${SAMTOOLS_VERSION}.tar.bz2"
     curl -fsSL --retry 3 --retry-delay 2 -o "${SAMTOOLS_TARBALL}" "${SAMTOOLS_URL}"
     printf '%s  %s\n' "${SAMTOOLS_SHA256}" "${SAMTOOLS_TARBALL}" | sha256sum -c -
@@ -50,7 +50,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
     rm -rf "/tmp/samtools-${SAMTOOLS_VERSION}" "${SAMTOOLS_TARBALL}"
 
     # ── igv-reports (pinned static-report generator) ───────────────────────
-    IGV_REPORTS_VERSION="1.16.3"
+    IGV_REPORTS_VERSION="1.17.0"
     python3 -m venv /opt/igv-reports
     /opt/igv-reports/bin/pip install --no-cache-dir --disable-pip-version-check \
         "igv-reports==${IGV_REPORTS_VERSION}"
@@ -110,7 +110,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
     samtools_version="$(samtools --version)"
     set -- ${samtools_version}
     test "$1" = "samtools"
-    test "$2" = "1.24"
+    test "$2" = "1.25"
     consensus_help="$(samtools consensus --help 2>&1 || true)"
     case "${consensus_help}" in
         *"samtools consensus"*) ;;
@@ -121,8 +121,8 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
     grep -F 'src="file:///opt/bms/igv-reports/igv.min.js"' /opt/bms/igv-reports/igv_variant_standalone.html
     igv_metadata="$(/opt/igv-reports/bin/pip show igv-reports)"
     case "${igv_metadata}" in
-        *"Version: 1.16.3"*) ;;
-        *) echo "igv-reports 1.16.3 is missing" >&2; exit 1 ;;
+        *"Version: 1.17.0"*) ;;
+        *) echo "igv-reports 1.17.0 is missing" >&2; exit 1 ;;
     esac
     echo "Container build tests passed"
 
