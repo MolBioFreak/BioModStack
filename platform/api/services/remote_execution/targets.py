@@ -66,11 +66,19 @@ async def invalidate_vast_inventory(session: AsyncSession) -> None:
     """Invalidate current knowledge, never historical presence or attempt evidence."""
     global _empty_inventory_checked_at
     _empty_inventory_checked_at = None
-    for row in (await session.scalars(select(ExecutionTarget).where(ExecutionTarget.provider == "vast"))).all():
-        metadata = dict(row.provider_metadata or {})
-        metadata["inventory"] = {**metadata.get("inventory", {}), "status": "unknown"}
-        row.provider_metadata = metadata
-    await session.commit()
+    metadata = ExecutionTarget.provider_metadata
+    # Only the small inventory object changes. Historical workers keep tens of MB of
+    # attempt evidence in the same JSON column, so it is patched in SQL, one row per
+    # transaction, rather than loaded and re-serialized on the event loop.
+    pending = (await session.scalars(select(ExecutionTarget.id).where(
+        ExecutionTarget.provider == "vast",
+        func.coalesce(func.json_extract(metadata, "$.inventory.status"), "") != "unknown"))).all()
+    for identifier in pending:
+        await session.execute(update(ExecutionTarget).where(ExecutionTarget.id == identifier).values(
+            provider_metadata=func.json_set(metadata, "$.inventory", func.json_patch(
+                func.coalesce(func.json_extract(metadata, "$.inventory"), "{}"), '{"status":"unknown"}')),
+        ).execution_options(synchronize_session=False))
+        await session.commit()
 
 
 async def run_vast_inventory_refresh(session_factory, stop: asyncio.Event, *, wait=None) -> None:
@@ -569,13 +577,16 @@ async def _refresh_vast_targets(session: AsyncSession) -> ExecutionTargetInvento
         return inventory
     now = datetime.utcnow()
     present_ids = {target_id("vast", instance.provider_instance_id) for instance in inventory.instances}
-    for row in (await session.scalars(select(ExecutionTarget).where(ExecutionTarget.provider == "vast"))).all():
-        if row.id not in present_ids:
-            row.provider_metadata = {**dict(row.provider_metadata or {}), "inventory": {
-                "status": "complete", "present": False, "running": False, "checked_at": now.isoformat()}}
-            row.active = False
-            row.state = "inactive"
-            row.last_error = "Absent from complete owned Vast inventory"
+    absent = {"status": "complete", "present": False, "running": False, "checked_at": now.isoformat()}
+    for identifier in (await session.scalars(select(ExecutionTarget.id).where(ExecutionTarget.provider == "vast"))).all():
+        if identifier in present_ids:
+            continue
+        # Same values as before, written without loading the row's historical evidence.
+        await session.execute(update(ExecutionTarget).where(ExecutionTarget.id == identifier).values(
+            provider_metadata=func.json_set(ExecutionTarget.provider_metadata, "$.inventory", func.json(json.dumps(absent))),
+            active=False, state="inactive", last_error="Absent from complete owned Vast inventory",
+        ).execution_options(synchronize_session=False))
+        await session.commit()
     _empty_inventory_checked_at = now
     for instance in inventory.instances:
         identifier = target_id("vast", instance.provider_instance_id)
