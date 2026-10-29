@@ -33,6 +33,7 @@ DEFAULT_SCHEDULER_CONFIG: Dict[str, Any] = {
         "enabled": True,
         "target_vram_fill": 0.90,
         "vram_safety_margin_mb": 2048,
+        "nanopore_vram_fraction": 0.75,
         "capacity_weight": 9.0,
         "emptiness_weight": 1.0,
         "max_launches_per_cycle": 3,

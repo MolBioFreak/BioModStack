@@ -277,7 +277,7 @@ VRAM_PROFILES = {
     'esmfold2_experimental': {'base': 22000, 'scale': 35},  # Compatibility alias
 
     'oligo_design': {'base': 7000, 'scale': 20},     # Oligo Designer (RFDpoly + NA-MPNN)
-    'nanopore': {'base': 15360, 'scale': 0},        # Dorado P4 lock: total VRAM floor, runtime also requires 8192 MiB free
+    'nanopore': {'base': 12288, 'scale': 0},        # Display estimate; packing books nanopore_vram_fraction of the card
     'default': {'base': 6000, 'scale': 25},     # Conservative fallback
 }
 
@@ -1982,6 +1982,34 @@ def _gpu_target_fill(gpu_index: int, config: Dict[str, Any]) -> float:
     return max(0.05, min(0.99, fill))
 
 
+def _nanopore_vram_fraction(config: Dict[str, Any]) -> float:
+    try:
+        value = float(config.get("global", {}).get("nanopore_vram_fraction", 0.75))
+    except (TypeError, ValueError):
+        value = 0.75
+    return max(0.25, min(0.95, value))
+
+
+def _job_required_mb(job: Any, gpu_capacity_mb: int, config: Dict[str, Any]) -> int:
+    """Packing reservation for one job on one card.
+
+    Dorado sizes its batches to the card, so CUDA basecalling books a share of
+    the host card's VRAM (operator slider, default 75%) instead of a fixed floor.
+    """
+    if getattr(job, "model_type", None) == "nanopore":
+        return max(1, int(gpu_capacity_mb * _nanopore_vram_fraction(config)))
+    return job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
+
+
+def _job_fits(job: Any, gpu_index: int, capacity: Dict[int, int], projected: Dict[int, int], config: Dict[str, Any]) -> bool:
+    required = _job_required_mb(job, capacity[gpu_index], config)
+    if getattr(job, "model_type", None) == "nanopore":
+        # The slider already is the allotment; only the card's free memory bounds it.
+        return required <= capacity[gpu_index] - projected[gpu_index]
+    available = (capacity[gpu_index] * _gpu_target_fill(gpu_index, config)) - projected[gpu_index] - _gpu_safety_margin_mb(gpu_index, config)
+    return required <= available
+
+
 def _gpu_safety_margin_mb(gpu_index: int, config: Dict[str, Any]) -> int:
     global_margin = config.get("global", {}).get("vram_safety_margin_mb", 2048)
     try:
@@ -2257,12 +2285,7 @@ def pack_jobs_to_gpus(
             
             # Check 4: VRAM availability (with per-GPU safety margin)
             gpu_override = _gpu_override(gpu.index, config)
-            safety_margin = _gpu_safety_margin_mb(gpu.index, config)
-            gpu_fill_target = _gpu_target_fill(gpu.index, config)
-            available = (capacity[gpu.index] * gpu_fill_target) - projected[gpu.index] - safety_margin
-            
-            required = job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
-            if required > available:
+            if not _job_fits(job, gpu.index, capacity, projected, config):
                 continue  # Doesn't fit
             
             # ═══════════════════════════════════════════════════════════════
@@ -2310,7 +2333,7 @@ def pack_jobs_to_gpus(
         # ═══════════════════════════════════════════════════════════════════
         if best_gpu is not None:
             assignments.append((job, best_gpu))
-            projected[best_gpu] += job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
+            projected[best_gpu] += _job_required_mb(job, capacity[best_gpu], config)
             projected_jobs_per_gpu[best_gpu] = projected_jobs_per_gpu.get(best_gpu, 0) + 1
             if quick_enable_tokens.get(best_gpu, 0) > 0:
                 quick_enable_tokens[best_gpu] = 0
@@ -2619,11 +2642,7 @@ def build_queue_scheduler_diagnostics(
                 reason_buckets.setdefault("requires Protenix-compatible GPU", []).append(gpu.index)
                 continue
 
-            safety_margin = _gpu_safety_margin_mb(gpu.index, config)
-            gpu_fill_target = _gpu_target_fill(gpu.index, config)
-            available = (capacity[gpu.index] * gpu_fill_target) - projected[gpu.index] - safety_margin
-            required = job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
-            if required > available:
+            if not _job_fits(job, gpu.index, capacity, projected, config):
                 reason_buckets.setdefault("VRAM fill cap reached", []).append(gpu.index)
                 continue
 
@@ -2655,7 +2674,7 @@ def build_queue_scheduler_diagnostics(
         job_diag["scheduler_candidate_gpus"] = candidate_gpu_ids
 
         assignments.append((job, best_gpu))
-        projected[best_gpu] += job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
+        projected[best_gpu] += _job_required_mb(job, capacity[best_gpu], config)
         projected_jobs_per_gpu[best_gpu] = projected_jobs_per_gpu.get(best_gpu, 0) + 1
         projected_by_model[job.model_type] = projected_by_model.get(job.model_type, 0) + 1
         if quick_enable_tokens.get(best_gpu, 0) > 0:

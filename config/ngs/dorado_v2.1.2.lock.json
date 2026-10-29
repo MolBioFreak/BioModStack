@@ -4,15 +4,15 @@
     "version": "2.1.2+8b8fc5d",
     "source_commit": "8b8fc5d36a9c0baab262a743cb175b5878e38ca6",
     "source_tree": "9b77aeb0757ad15bf8b80795cffbf7d41b107f02",
-    "sif_sha256": "3ad5fa9286660b7d3389541c70d14c1194227d156e350f053a23f4d57ece31a1",
+    "sif_sha256": "5fc5df620a1b465cac93e28758461642c68b836c770c7e0077eb89108937ff9c",
     "archive_url": "https://cdn.oxfordnanoportal.com/software/analysis/dorado-2.1.2-linux-x64.tar.gz",
     "archive_sha256": "f4ed83acfb75cf07ffe8a0fc78e26828fc911fcfc8177920be6104e1d0e02485"
   },
   "scientific_tools": {
     "samtools": {
-      "version": "1.24",
-      "source_url": "https://github.com/samtools/samtools/releases/download/1.24/samtools-1.24.tar.bz2",
-      "source_sha256": "89b2a440123eeaa400392ce1736e7d60ce9041843027d76819753c5a8246bfdd",
+      "version": "1.25",
+      "source_url": "https://github.com/samtools/samtools/releases/download/1.25/samtools-1.25.tar.bz2",
+      "source_sha256": "8bbd2b3cb447953149a74ab0b00e3ec4e88a789a27b8373a31fa6b5b2dee02b1",
       "consensus_method": "samtools_1.24_bayesian_consensus"
     },
     "modkit": {
@@ -21,7 +21,7 @@
       "source_sha256": "fb332c691431bd336eb0a81cbca17d2a35caf442ac48277ed3e296c2fe061d80"
     },
     "igv_reports": {
-      "version": "1.16.3"
+      "version": "1.17.0"
     }
   },
   "model_aggregate_algorithm": "sha256(sorted(relative_path NUL size NUL file_sha256 LF))",

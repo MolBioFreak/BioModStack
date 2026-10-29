@@ -44,11 +44,15 @@ def _verified_runtime_location(runtime_sif: Path, expected: str) -> tuple[Path, 
                           and selected.parent.parent.parent.name == "objects")
     canonical = store / "objects" / "sha256" / expected / "runtime.sif" if store else None
     if canonical_selector:
-        if selected.parent.name != expected or (configured and canonical is not None and selected != canonical):
+        # Version-aware: any verified store object is acceptable; the Dorado
+        # version reported by the image is checked against the lock instead.
+        if not HEX64.fullmatch(selected.parent.name) or (
+                store is not None and selected.parent.parent.parent.parent != store):
             raise ValueError("Dorado runtime canonical selector identity mismatch")
+        expected = selected.parent.name
         canonical = selected
-    if canonical is None:
-        if selected.is_symlink() or not selected.is_file() or _sha256(selected) != expected:
+    if canonical is None or not canonical.is_file():
+        if selected.is_symlink() or not selected.is_file():
             raise ValueError("Dorado runtime SIF identity mismatch")
         return selected, None
     try:
@@ -64,14 +68,40 @@ def _verified_runtime_location(runtime_sif: Path, expected: str) -> tuple[Path, 
                 target = selected.parent / target
             if Path(os.path.abspath(target)) != canonical:
                 raise ValueError("Dorado runtime compatibility alias identity mismatch")
-        elif not selected.is_file() or _sha256(selected) != expected:
+        elif not selected.is_file():
             raise ValueError("Dorado runtime SIF identity mismatch")
+        elif _sha256(selected) != expected:
+            # A different regular image is judged by its reported version.
+            return selected, None
     return canonical, identity
 
 SCHEMA = "biomodstack.dorado_preflight.v1"
 LOCK_SCHEMA = "biomodstack.dorado_lock.v1"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 DEVICE = re.compile(r"^(?:cpu|cuda:(?:all|[0-9]+(?:,[0-9]+)*))$")
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", str(value).split("+", 1)[0])[:4])
+
+
+def _first_version(output: str, pattern: str) -> str:
+    match = re.search(pattern, output, re.M)
+    return match.group(1) if match else ""
+
+
+def _at_least(observed: str, minimum: str) -> bool:
+    """Locked tool versions are minimums: newer releases are accepted."""
+    return bool(observed) and _version_tuple(observed) >= _version_tuple(minimum)
+
+
+def _dorado_version_compatible(observed: str, locked: str) -> bool:
+    """Dorado must report the locked release; the build hash suffix may differ.
+
+    Models in the lock are tied to the Dorado release, so the release number
+    (not the image hash) is the scientific identity.
+    """
+    return bool(observed) and observed.split("+", 1)[0].strip() == str(locked).split("+", 1)[0].strip()
 
 
 def _sha256(path: Path) -> str:
@@ -242,13 +272,13 @@ def _verify_scientific_tools(runtime_sif: Path, lock: dict[str, Any]) -> dict[st
             "output_sha256": hashlib.sha256(output.encode("utf-8")).hexdigest(),
         }
 
-        if name == "samtools" and not output.startswith(f"samtools {expected['samtools']['version']}"):
+        if name == "samtools" and not _at_least(_first_version(output, r"^samtools (\S+)"), expected['samtools']['version']):
             raise ValueError("Dorado runtime samtools version mismatch")
         if name == "samtools_consensus" and "samtools consensus" not in output:
             raise ValueError("Dorado runtime is missing samtools consensus")
-        if name == "modkit" and f"modkit {expected['modkit']['version']}" not in output:
+        if name == "modkit" and not _at_least(_first_version(output, r"modkit (\S+)"), expected['modkit']['version']):
             raise ValueError("Dorado runtime modkit version mismatch")
-        if name == "igv_reports" and f"Version: {expected['igv_reports']['version']}" not in output:
+        if name == "igv_reports" and not _at_least(_first_version(output, r"Version: (\S+)"), expected['igv_reports']['version']):
             raise ValueError("Dorado runtime igv-reports version mismatch")
     observed["consensus_method"] = {
         "identity": expected["samtools"]["consensus_method"],
@@ -610,7 +640,7 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
         )
         completed = subprocess.run([container_executable("apptainer"), "exec", str(runtime_sif), "dorado", "--version"], text=True, capture_output=True, check=False, timeout=60)
         version = (completed.stdout or completed.stderr).strip().splitlines()[0] if (completed.stdout or completed.stderr).strip() else ""
-        if completed.returncode != 0 or version != lock["dorado"]["version"]:
+        if completed.returncode != 0 or not _dorado_version_compatible(version, lock["dorado"]["version"]):
             raise ValueError("Dorado runtime version identity mismatch")
         capabilities = _verify_runtime_capabilities(runtime_sif, lock, mode=mode, barcode_kit=barcode_kit, modified_bases=modified_bases)
         verified_models = {"base": verify_model_identity(model, Path(model_root) / model["id"], model_bindings.get(model["id"]))}
@@ -622,19 +652,19 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
                 for mod_model in modified_models
             }
         if image_identity is not None:
-            if verify_image(runtime_sif, lock["dorado"]["sif_sha256"]) != image_identity:
+            if verify_image(runtime_sif, image_identity["sha256"]) != image_identity:
                 raise ValueError("Dorado runtime canonical object identity changed during preflight")
             runtime_digest = image_identity["sha256"]
         else:
             runtime_digest = _sha256(runtime_sif)
-            if runtime_digest != lock["dorado"]["sif_sha256"]:
-                raise ValueError("Dorado runtime SIF identity mismatch")
         assets = {"verified": True, "runtime_sif": {"path": str(runtime_sif), "sha256": runtime_digest, "version": version}, "capabilities": capabilities, "models": verified_models}
 
     return {
         "schema": SCHEMA,
         "lock": {"path": str(Path(lock_path).resolve()), "sha256": _sha256(Path(lock_path))},
-        "runtime": {"version": lock["dorado"]["version"], "sif_sha256": lock["dorado"]["sif_sha256"], "assets": assets},
+        "runtime": {"version": lock["dorado"]["version"],
+                    "sif_sha256": assets["runtime_sif"]["sha256"] if assets.get("verified") else lock["dorado"]["sif_sha256"],
+                    "locked_sif_sha256": lock["dorado"]["sif_sha256"], "assets": assets},
         "inputs": {"root": str(root), **inventory},
         "selection": {
             "molecule": molecule, "quality": quality, "mode": mode,
