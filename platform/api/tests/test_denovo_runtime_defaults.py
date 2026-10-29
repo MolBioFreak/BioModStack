@@ -179,3 +179,12 @@ def test_compiled_laproteina_job_carries_requested_designs_and_no_invented_sampl
     joined = ' '.join(cmd)
     assert '--pcad_num_designs 1' in joined
     assert 'samples_per_length' not in joined   # nothing authored; the module derives it from num_designs
+
+
+def test_profile_does_not_pin_laproteina_samples_per_length_ahead_of_requested_designs():
+    import re
+    config = (REPO_ROOT / 'nextflow.config').read_text()
+    profile = re.search(r"\n    protein_cad_experimental \{.*?\n    \}\n", config, re.S).group(0)
+    # A profile default would always win over the requested design count.
+    assert 'laproteina_samples_per_length' not in profile
+    assert 'pcad_num_designs = 8' in profile
