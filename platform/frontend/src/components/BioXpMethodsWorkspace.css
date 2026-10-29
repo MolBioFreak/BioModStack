@@ -231,3 +231,8 @@
 .bioxp-rack-profiles button { text-align:left; padding:16px; font-size:16px; }
 .bioxp-rack-profiles button small { display:block; color:var(--text-secondary); font-size:11px; margin-top:6px; }
 .bioxp-rack-profiles button[aria-pressed=true] { border-color:var(--accent-primary); background:color-mix(in srgb,var(--accent-primary) 9%,var(--card-bg,var(--bg-primary))); }
+.bioxp-copy-id { font-size: 0.75rem; padding: 0.1rem 0.4rem; opacity: 0.8; }
+.bioxp-step-note { font-style: normal; font-size: 0.7rem; padding: 0 0.35rem; border-radius: 0.5rem; background: var(--surface-warning, rgba(245, 158, 11, 0.2)); }
+.bioxp-step-advisory { font-size: 0.85rem; border-left: 3px solid rgba(245, 158, 11, 0.7); padding-left: 0.5rem; }
+.bioxp-plan-summary dl > div { display: grid; grid-template-columns: 9rem 1fr; gap: 0.5rem; }
+.bioxp-endpoint-mode button[aria-pressed="true"], .bioxp-starting-deck [aria-pressed="true"] { font-weight: 600; outline: 2px solid currentColor; }

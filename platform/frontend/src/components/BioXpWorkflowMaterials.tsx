@@ -43,11 +43,6 @@ export function BioXpWorkflowMaterials({ plan, onChange, selection, methodAuthor
     };
     return <section className="bioxp-plan-leaf" aria-label="Planned materials">
         <header><h3>Labware & materials</h3><p>Workflow-local labels and planned amounts, not measured presence or a Run requirement.</p></header>
-        {methodAuthoring && contextual && station?.tipTray != null && <section className="bioxp-rack-profiles" aria-label="Assign rack profile"><h3>Tips stored in this rack</h3><div>{choices.map(profile => <button type="button" key={String(profile.id)} aria-pressed={target?.profile_id === profile.id} onClick={() => {
-            library?.pin(profile);
-            if (target) onChange({ ...plan, labware: plan.labware.map(l => l.id === target.id ? { ...l, profile_id: String(profile.id) } : l) });
-            else { const item = { id: id(), name: station.label, station: station.id, profile_id: String(profile.id) }; onChange({ ...plan, labware: [...plan.labware, item] }); setLabwareId(item.id); setAssignmentContext(selectedLabwareId); }
-        }}>{String(profile.name || profile.label || profile.id)}<small>Published profile · r{String(profile.revision ?? '?')}</small></button>)}</div><p>Assign the rack here. Pickup remains a separate method step.</p>{library?.error && <p>Published profiles are unavailable; existing assignments are retained.</p>}</section>}
         <fieldset><legend>Named labware</legend>
             <p>Selected: {stationLabel(selection.station)}{selection.wells.length > 0 && ` · ${selection.wells.join(', ')}`}</p>
             <button type="button" disabled={!station} onClick={() => {

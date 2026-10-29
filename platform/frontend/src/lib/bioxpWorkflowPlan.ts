@@ -5,7 +5,7 @@ export type WorkflowLabware = { id: string; station: string; name: string; profi
 export type WorkflowMaterial = { id: string; name: string; kind: 'sample' | 'reagent' | 'product' | 'waste'; description: string; concentration?: string | number | null; concentration_unit?: string };
 export type WorkflowAssignment = { id: string; labware_id: string; well: string; material_id: string; volume_ul: string | number | null };
 /** Tip trays 1-4 (TECANRACK1-4). The tip hotel (tray 5) is not fitted on this deck. */
-export type WorkflowTipRack = { tray: 1 | 2 | 3 | 4; tip_type?: 'T50' | 'T200' | 'T201' | null; tips: 'full' | 'empty' | { available: string[] } };
+export type WorkflowTipRack = { tray: 1 | 2 | 3 | 4; tip_type?: 'T50' | 'T200' | 'T201' | null; tips: 'full' | 'empty' | { available: string[] }; profile_id?: string };
 /** Reconfigurable slots; the holder is a record, deck geometry never changes. */
 export type WorkflowSlotId = 'LOC_TROUGH' | 'LOC_OC_COVER_STORAGE' | 'LOC_RC_COVER_STORAGE';
 export type WorkflowSlotHolder = 'cover_storage' | 'trough' | 'tube_holder' | 'fluorometer' | 'tool_dock' | 'empty';
