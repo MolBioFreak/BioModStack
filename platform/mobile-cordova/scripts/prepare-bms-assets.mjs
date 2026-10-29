@@ -937,8 +937,11 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       '--reload-exclude', '__pycache__/*',
       '--reload-exclude', '.venv/*',
     ];
-    const approvedArgv = (value) => JSON.stringify(value) === JSON.stringify(baseArgv)
-      || JSON.stringify(value) === JSON.stringify(reloadArgv);
+    // The managed launcher execs the environment's Python as `python -m uvicorn`
+    // (f692d14); the older `.venv/bin/uvicorn` script form remains accepted.
+    const moduleArgv = (argv) => [argv[0], '-m', 'uvicorn', ...argv.slice(2)];
+    const approvedArgv = (value) => [baseArgv, reloadArgv, moduleArgv(baseArgv), moduleArgv(reloadArgv)]
+      .some((candidate) => JSON.stringify(value) === JSON.stringify(candidate));
     if (!(
       hasExactKeys(listener, [
         'port', 'bind_addresses', 'listener_inodes', 'listener_inode_owners',

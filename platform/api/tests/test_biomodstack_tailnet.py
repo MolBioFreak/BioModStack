@@ -1,4 +1,5 @@
 from __future__ import annotations
+import itertools
 import json
 import os
 from pathlib import Path
@@ -1952,8 +1953,10 @@ def test_managed_runtime_listener_rejects_mixed_epoch_capture(monkeypatch) -> No
 
 
 def test_host_listener_closure_rejects_same_pid_socket_substitution(monkeypatch) -> None:
-    captures = iter(([77], [88]))
+    # Every observation pair differs, so bounded retries cannot stabilize it.
+    captures = itertools.cycle(([77], [88]))
     monkeypatch.setattr(tailnet, "_host_listener_inodes", lambda port: list(next(captures)))
+    monkeypatch.setattr(tailnet.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         tailnet,
         "_host_listener_inode_owners",

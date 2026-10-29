@@ -1360,7 +1360,9 @@ def _host_listener_closure(port: int) -> dict[str, object]:
     # Bind reports, socket inodes and complete owners to one stable observation.
     # A replacement that preserves a PID but changes the socket inode must not be
     # combined with the prior process identity.
-    for _attempt in range(1):
+    for _attempt in range(3):
+        if _attempt:
+            time.sleep(0.5)
         before_inodes = _host_listener_inodes(port)
         before_owners = _host_listener_inode_owners(before_inodes)
         before_addresses = sorted(_listener_bind_addresses(port))

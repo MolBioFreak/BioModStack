@@ -2,7 +2,7 @@
   "version": 1,
   "exceptions": [
     {
-      "path": "artifacts/android/BioModStack-0.4.16-internal-update.apk",
+      "path": "artifacts/android/BioModStack-0.4.17-internal-update.apk",
       "sha256": "2435b230cc40d6303551ede5028bc85debc94d493c6df48562c8fbc725d925fc",
       "reason": "Approved hash-bound internal-update release asset; artifacts/android/README.md defines its role."
     },
