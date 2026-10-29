@@ -1,4 +1,4 @@
-import { DeNovoDocumentEditorPanels, DeNovoDocumentEditors } from './DeNovoDocumentEditors';
+import { DeNovoDocumentEditorPanels, DeNovoDocumentEditors, DeNovoEditorLayout } from './DeNovoDocumentEditors';
 import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -236,6 +236,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
             [data-native-de-novo] :is([data-rfd4-task-workspace], [data-complexa-task-workspace], [data-rfd4-expert]) fieldset { min-width: 0; }
             [data-native-de-novo] :is([data-rfd4-task-workspace], [data-complexa-task-workspace], [data-rfd4-expert]) legend { font-weight: 600; margin-bottom: .5rem; }
         `}</style>
+        <DeNovoEditorLayout><div className="min-w-0 space-y-4">
         <ProteinDesignSections label="Generation sections" sections={['Design', 'Native settings', 'Optional operations']} active={section} onChange={next => { setSection(next); const view = next === 'Native settings' ? 'advanced' : 'simple'; manualSection.current = !!onSuiteViewChange && suiteView !== view; onSuiteViewChange?.(view); }} />
         {inventory.isPending && <p role="status">Loading settings…</p>}
         {inventory.error && <p role="alert">{inventory.error.message}. Saved native values are retained.</p>}
@@ -255,7 +256,6 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
             {<NativeSettingsDisclosure summary={<span>Input structures</span>}>{() => <DeNovoNativeSources onInspection={(slot, receipt, binding) => setInspections(previous => ({ ...previous, [slot]: { receipt, binding: JSON.stringify(binding) } }))} selection={currentVisual} value={nativeDraft.sources} onChange={sources => setNativeDraft(previous => ({ ...previous, sources }))}
                 onSelection={selectSource} />}</NativeSettingsDisclosure>}
             {!!inventory.data?.limitations?.length && <NativeSettingsDisclosure summary={<span>Model limits</span>}>{() => inventory.data?.limitations?.map(text => <p key={text} className="text-sm">{text}</p>)}</NativeSettingsDisclosure>}
-            <DeNovoDocumentEditorPanels />
             <DeNovoNativePreview request={payload as Partial<Job>} prepareRequest={() => prepareCurrent.current()} documentGeneration={documentGeneration} />
         </ProteinDesignPanel></div>
         <div hidden={section !== 'Native settings'}><ProteinDesignPanel title="Native settings" description="Unchanged settings use the selected profile.">
@@ -265,6 +265,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
             </NativeSettingsDisclosure>)}
         </ProteinDesignPanel></div>
         <div hidden={section !== 'Optional operations'}><GeneralSequenceDesignSettings value={sequence} onChange={next => { if (next.invocation_draft?.enabled || next.sequence_design.enabled) { setSequenceOmitted(false); setExplicitSequenceNull(false); } setSequence(next); }} /></div>
+        </div><DeNovoDocumentEditorPanels /></DeNovoEditorLayout>
         <ProteinDesignRun stickyAction jobName={name} onJobNameChange={setName} pending={submit.isPending} onSubmit={() => submit.mutate()} submitLabel={model === 'complexa' && request.operation === 'design' ? 'Generate, filter, evaluate and analyze' : model === 'complexa' && request.operation === 'analysis' ? 'Evaluate and analyze' : activeMode === 'evaluate' ? 'Evaluate candidates' : 'Generate candidates'}>
             <DeNovoRunScope task={`${model === 'rfd4_proteina' ? 'RFD4' : 'Complexa'} · ${taskLabel} · ${request.operation ?? activeMode}`} documents={consumedDocuments} operations={payload.sequence_design} />
             <ExecutionTargetPicker workflowRequest={payload as Partial<Job>} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
