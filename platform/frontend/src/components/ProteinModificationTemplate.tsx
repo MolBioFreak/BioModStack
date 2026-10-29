@@ -241,13 +241,15 @@ export function ProteinModificationTemplate({
                 {mode !== 'shape_blueprint' && <ModelReferenceCard model={generator} />}
             </div>
 
-            <nav aria-label="Design task" className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-3" data-de-novo-header-controls>
+                <nav aria-label="Design task" className="flex flex-wrap gap-2">
                 {DE_NOVO_MODIFICATION_MODE_CARDS.map(card => <button type="button" key={card.id}
                     aria-pressed={mode === card.id} onClick={() => chooseMode(card.id)}
                     className={`rounded-lg px-3 py-1.5 text-sm ${mode === card.id ? 'bg-[var(--bg-tertiary)] text-[var(--accent-primary)]' : ''}`}>{card.label}</button>)}
             </nav>
-            <div role="group" aria-label="Editor detail" className="flex gap-2">
+                <div role="group" aria-label="Editor detail" className="flex gap-2">
                 {(['simple', 'advanced'] as const).map(view => <button type="button" key={view} aria-pressed={suiteView === view} onClick={() => setSuiteView(view)} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">{view === 'simple' ? 'Simple' : 'Advanced'}</button>)}
+            </div>
             </div>
             {mode !== 'shape_blueprint' && <details className="rounded-lg border border-[var(--border-primary)] p-3"
                 data-molecular-construction-panel onToggle={event => setConstructionOpen(event.currentTarget.open)}>

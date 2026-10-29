@@ -17,9 +17,15 @@ export function ModelReferenceCard({ model }: { model: string }) {
     const links = ([['GitHub', reference.github], ['Preprint', reference.paper], ['Docs', reference.docs]] as const)
         .filter(([, href]) => { try { return new URL(href).protocol === 'https:'; } catch { return false; } });
     return <aside aria-label={`${reference.name} references`} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-xs">
-        <strong>{reference.name}</strong><p className="text-[var(--text-secondary)]">{reference.description}</p>
-        <p className="text-[var(--text-secondary)]">Registry version: {reference.registry_version ?? reference.version ?? 'not reported'} (not a runtime receipt)</p>
-        <div className="mt-1 flex gap-3">{links.map(([label, href]) =>
-            <a key={label} href={href} target="_blank" rel="noopener noreferrer" className="underline">{label}</a>)}</div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <strong>{reference.name}</strong>
+            {links.map(([label, href]) =>
+                <a key={label} href={href} target="_blank" rel="noopener noreferrer" className="underline">{label}</a>)}
+        </div>
+        <details className="mt-1">
+            <summary className="cursor-pointer text-[var(--text-secondary)]">About this engine</summary>
+            <p className="text-[var(--text-secondary)]">{reference.description}</p>
+            <p className="text-[var(--text-secondary)]">Registry version: {reference.registry_version ?? reference.version ?? 'not reported'} (not a runtime receipt)</p>
+        </details>
     </aside>;
 }
