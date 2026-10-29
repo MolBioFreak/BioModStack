@@ -48,6 +48,11 @@ async function input(label: string, value: string) { const el = host.querySelect
 async function openOriginal() { await input('Library entry', 'm1'); await click('Open'); }
 async function acknowledge() { const el = [...host.querySelectorAll('label')].find(n => n.textContent === 'Acknowledge live robot execution')!.querySelector('input')!; await act(async () => el.click()); }
 const submits = () => requests.filter(r => r.method === 'post' && /\/runs$|quick-runs$/.test(r.url));
+const lastRun = () => JSON.parse(localStorage.getItem('bms.bioxp.method-runs.v2')!)[0];
+const seedRun = (entry: Record<string, unknown>) => localStorage.setItem('bms.bioxp.method-runs.v2', JSON.stringify([{ name: 'Native run', startedAt: '', ...entry }]));
+// Preview checks automatically ~600 ms after the last edit.
+async function checked() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 700)); }); await settle(); }
+const checks = () => requests.filter(r => r.method === 'post' && r.url.endsWith('/check'));
 const reads = () => requests.filter(r => r.method === 'get' && /\/runs\/protocol-live-/.test(r.url) && !r.url.endsWith('/report'));
 beforeEach(() => {
     vi.stubGlobal('crypto', webcrypto); localStorage.clear(); oldAdapter = api.defaults.adapter;
@@ -67,7 +72,7 @@ beforeEach(() => {
         else if (url.endsWith('/control')) data = { accepted: true, reached: false, command_id: body.command_id, control_command_id: 'control-1' };
         else if (method === 'post' && /\/runs$|quick-runs$/.test(url)) {
             const id = `protocol-live-${createHash('sha256').update(body.idempotency_key).digest('hex')}`;
-            expect(JSON.parse(localStorage.getItem('bms.bioxp.method-run.v1')!).jobId).toBe(id);
+            expect(lastRun().jobId).toBe(id);
             if (failure === 'refused') fail(config, 409, { delivery: 'not_submitted', code: 'method_submission_error' });
             if (failure === 'conflict') fail(config, 409, { error: 'idempotency_conflict' });
             records[id] = job(id); if (failure === 'timeout') throw new AxiosError('response lost', 'ECONNABORTED', config);
@@ -113,7 +118,7 @@ it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('loads actual bound companio
     api.defaults.adapter = async config => {
         const part = config.url?.split('/').at(-1);
         if (['catalog', 'schema', 'examples'].includes(part ?? '')) return { config, status: 200, statusText: 'OK', headers: {}, data: contracts[part!] };
-        if (part === 'compile') {
+        if (part === 'check') {
             const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
             const produced = spawnSync(process.env.BMS_TEST_PYTHON ?? '../api/.venv/bin/python', ['-c', 'import json,sys; from bioxp_method_compiler import compile_method; print(json.dumps(compile_method(json.load(sys.stdin))))'], { cwd: process.env.BIOXP_METHOD_API_DIR ?? '../api', encoding: 'utf8', input: JSON.stringify(body) });
             expect(produced.status, produced.stderr).toBe(0); const data = JSON.parse(produced.stdout);
@@ -126,7 +131,7 @@ it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('loads actual bound companio
     await mount();
     for (const [index, example] of contracts.examples.entries()) {
         expect(example.bound_fixture).toBeTruthy();
-        await input('Bound software fixture', String(index)); await click('Compile');
+        await input('Bound software fixture', String(index)); await checked();
         expect(requests.at(-1)?.body).toMatchObject({ method: example.bound_fixture.method, bindings: example.bound_fixture.bindings, dependencies: example.bound_fixture.dependencies });
         expect(host.textContent).toContain(example.bound_fixture.fixture_provenance);
     }
@@ -138,7 +143,7 @@ it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('authors a generic numeric p
     api.defaults.adapter = async config => {
         const part = config.url?.split('/').at(-1);
         if (['catalog', 'schema', 'examples'].includes(part ?? '')) return { config, status: 200, statusText: 'OK', headers: {}, data: contracts[part!] };
-        if (part === 'compile') {
+        if (part === 'check') {
             const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
             const produced = spawnSync(process.env.BMS_TEST_PYTHON ?? '../api/.venv/bin/python', ['-c', 'import json,sys; from bioxp_method_compiler import compile_method; print(json.dumps(compile_method(json.load(sys.stdin))))'], { cwd: process.env.BIOXP_METHOD_API_DIR ?? '../api', encoding: 'utf8', input: JSON.stringify(body) });
             expect(produced.status, produced.stderr).toBe(0); const data = JSON.parse(produced.stdout); results.push(data);
@@ -153,14 +158,14 @@ it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('authors a generic numeric p
     await input('Parameters[0].default presence', 'value'); await input('Parameters[0].default type', 'number');
     await input('Action palette', 'wait'); await click('Add step');
     await input('Wait time (seconds)', '001.2500');
-    await click('Save'); await click('Compile');
+    await click('Save'); await checked();
     expect(results.at(-1).document).toBeNull(); expect(results.at(-1).issues.length).toBeGreaterThan(0);
     await click('New'); await input('Library entry', 'm2'); await click('Open');
     expect((host.querySelector('[aria-label="Parameters[0].default type"]') as HTMLSelectElement).value).toBe('number');
     await input('Parameters[0].default', '9007199254740993.000100'); await click('Save');
     await click('New'); await input('Library entry', 'm2'); await click('Open');
     expect((host.querySelector('[aria-label="Parameters[0].default"]') as HTMLInputElement).value).toBe('9007199254740993.000100');
-    await click('Compile');
+    await checked();
     expect(results.at(-1).document, JSON.stringify(results.at(-1).issues)).toBeTruthy();
     expect(results.at(-1).resolved.parameters.precise).toBe('9007199254740993.0001');
     expect(db.m2.method.parameters[0].default).toEqual({ expr: { version: 1, op: 'literal', type: 'number', value: '9007199254740993.000100' } });
@@ -170,24 +175,24 @@ it.runIf(!!process.env.BIOXP_NATIVE_METHOD_PRODUCER)('renders the real native AS
     const producer = JSON.parse(readFileSync(process.env.BIOXP_NATIVE_METHOD_PRODUCER!, 'utf8'));
     const native = producer.execution.runtime_state.action_results;
     expect(native.length).toBeGreaterThan(0);
-    localStorage.setItem('bms.bioxp.method-run.v1', JSON.stringify({ jobId: producer.job_id, key: producer.command.idempotency_key, generation, snapshot: { native_document: producer.protocol.document } }));
+    seedRun({ jobId: producer.job_id, key: producer.command.idempotency_key, generation, snapshot: { native_document: producer.protocol.document } });
     const transport = api.defaults.adapter as AxiosAdapter;
     api.defaults.adapter = async config => {
         if (config.url === `/api/bioxp/methods/runs/${producer.job_id}`) { requests.push({ method: config.method!, url: config.url, body: undefined, params: config.params }); return { config, status: 200, statusText: 'OK', headers: {}, data: structuredClone(producer) }; }
         return transport(config);
     };
     await mount();
-    expect(host.textContent).toContain(`Robot status: ${producer.command.status}`);
+    expect(host.textContent).toContain(`Status: ${producer.command.status}`);
     const progress = host.querySelector('[aria-label="Occurrence outcomes"]')!;
     expect(progress.querySelectorAll('tbody tr')).toHaveLength(native.length);
     for (const row of native) expect(progress.textContent).toContain(row.source_occurrence_id);
-    expect(submits()).toHaveLength(0); expect(button('Pause workflow').disabled).toBe(true);
+    expect(submits()).toHaveLength(0); expect(button('Pause workflow').disabled).toBe(false);
     expect(requests.filter(r => r.method !== 'get')).toHaveLength(0);
 });
 it.runIf(!!process.env.BIOXP_NATIVE_METHOD_EXPORTS).each(['cavro-device-pause_for_operator.json', 'cavro-device-stop.json', 'cavro-missing-stop.json'])('renders actual native partial/held producer %s without retry/Continue or outcome rewriting', async filename => {
     const exported = JSON.parse(readFileSync(`${process.env.BIOXP_NATIVE_METHOD_EXPORTS}/${filename}`, 'utf8'));
     const producer = exported.held ?? exported.result, original = JSON.stringify(producer);
-    localStorage.setItem('bms.bioxp.method-run.v1', JSON.stringify({ jobId: producer.job_id, key: producer.command.idempotency_key, generation, snapshot: { native_document: producer.protocol.document } }));
+    seedRun({ jobId: producer.job_id, key: producer.command.idempotency_key, generation, snapshot: { native_document: producer.protocol.document } });
     const transport = api.defaults.adapter as AxiosAdapter;
     api.defaults.adapter = async config => {
         if (config.url === `/api/bioxp/methods/runs/${producer.job_id}`) {
@@ -198,7 +203,7 @@ it.runIf(!!process.env.BIOXP_NATIVE_METHOD_EXPORTS).each(['cavro-device-pause_fo
         return transport(config);
     };
     await mount();
-    expect(host.textContent).toContain(`Robot status: ${producer.command.status}`);
+    expect(host.textContent).toContain(`Status: ${producer.command.status}`);
     const progress = host.querySelector('[aria-label="Occurrence outcomes"]')!;
     expect(progress.textContent).toContain('partial_effects');
     expect(progress.textContent).toContain('sourceCavroApplication');
@@ -231,26 +236,35 @@ it('provides structured nodes and expression AST, stable reorder and new duplica
     expect(steps).toHaveLength(2); expect(steps[0].step_id).not.toBe(steps[1].step_id);
     expect(steps[0].inputs.height_steps).toMatchObject({ expr: { version: 1, op: 'param', id: 'volume' } });
 });
-it('saved Run freezes exact saved revision, bindings and generation despite uncommitted editor and class changes', async () => {
-    await mount(); await openOriginal(); await input('Method name', 'Next edited draft'); await acknowledge();
-    await click('Run saved revision'); await click('Liquid classes'); await input('Method name', 'New liquid');
+it('Run on an edited saved method sends the exact draft body with its saved basis, without saving', async () => {
+    await mount(); await openOriginal(); await input('Method name', 'Edited, not saved'); await acknowledge(); await click('Run');
+    expect(submits()).toHaveLength(1); expect(submits()[0].url).toBe('/api/bioxp/methods/quick-runs');
+    expect(submits()[0].body.method.name).toBe('Edited, not saved');
+    expect(submits()[0].body.based_on).toEqual({ id: 'm1', revision: 1, edited: true });
+    expect(requests.filter(r => r.method === 'put' || r.url.endsWith('/library') && r.method === 'post')).toHaveLength(0);
+    expect(lastRun().snapshot.method.name).toBe('Edited, not saved');
+});
+it('Run on an unchanged saved method pins the exact revision; later edits never reach the run copy', async () => {
+    await mount(); await openOriginal(); await acknowledge();
+    await click('Run'); await input('Method name', 'Next edited draft'); await click('Liquid classes'); await input('Method name', 'New liquid');
+    expect(submits()[0].url).toBe('/api/bioxp/methods/library/m1/runs');
     expect(submits()).toHaveLength(1); expect(submits()[0].body).toEqual({ revision: 1, bindings: {}, dependencies: {}, initial_state: {}, idempotency_key: expect.any(String), expected_generation: 9, acknowledge_live: true });
-    expect(JSON.parse(localStorage.getItem('bms.bioxp.method-run.v1')!).snapshot.method.name).toBe(sourceMethod.name);
+    expect(lastRun().snapshot.method.name).toBe(sourceMethod.name);
     expect(host.textContent).not.toContain('Continue (try again)');
     await click('Methods'); expect((host.querySelector('[aria-label="Method name"]') as HTMLInputElement).value).toBe('Next edited draft');
 });
-it('quick run retains frozen next-draft snapshot and reload observes only the original after accepted response loss', async () => {
-    failure = 'timeout'; await mount(); await click('Quick run'); await input('Method name', 'Unsaved quick'); await acknowledge(); await click('Run immutable quick snapshot'); await click('New');
+it('unsaved draft Run retains its frozen copy and reload observes only the original after accepted response loss', async () => {
+    failure = 'timeout'; await mount(); await input('Method name', 'Unsaved quick'); await acknowledge(); await click('Run'); await click('New');
     expect(submits()).toHaveLength(1); expect(submits()[0].body.method.name).toBe('Unsaved quick');
-    const original = JSON.parse(localStorage.getItem('bms.bioxp.method-run.v1')!);
+    const original = lastRun();
     await act(async () => root.unmount()); client.clear(); generation = 10; await mount();
     expect(submits()).toHaveLength(1); expect(reads().at(-1)?.url).toBe(`/api/bioxp/methods/runs/${original.jobId}`);
     expect(reads().at(-1)?.params.expected_connection_generation).toBe(10);
 });
 it.each(['refused', 'conflict', 'timeout'] as const)('distinguishes %s from uncertain delivery; never retries POST', async outcome => {
-    failure = outcome; readFailure = true; await mount(); await openOriginal(); await acknowledge(); await click('Run saved revision');
+    failure = outcome; readFailure = true; await mount(); await openOriginal(); await acknowledge(); await click('Run');
     expect(submits()).toHaveLength(1);
-    expect(JSON.parse(localStorage.getItem('bms.bioxp.method-run.v1')!).refused === true).toBe(outcome === 'refused');
+    expect(lastRun().refused === true).toBe(outcome === 'refused');
     expect(host.textContent?.includes('nothing started for this submission')).toBe(outcome === 'refused');
     if (outcome === 'refused') { const count = reads().length; await render(); expect(reads()).toHaveLength(count); }
 });
@@ -274,63 +288,49 @@ it('edits complete source-class field groups without defaults, saving raw explic
     expect(submits()).toHaveLength(0); expect(host.textContent).toContain('Saved exact revision 1');
 });
 it('clones the original immutable snapshot through facade without modifying the run', async () => {
-    await mount(); await openOriginal(); await acknowledge(); await click('Run saved revision'); const snapshot = localStorage.getItem('bms.bioxp.method-run.v1');
-    await click('Clone original method'); expect(submits()).toHaveLength(1); expect(localStorage.getItem('bms.bioxp.method-run.v1')).toBe(snapshot);
+    await mount(); await openOriginal(); await acknowledge(); await click('Run'); const snapshot = localStorage.getItem('bms.bioxp.method-runs.v2');
+    await click('Clone original method'); expect(submits()).toHaveLength(1); expect(localStorage.getItem('bms.bioxp.method-runs.v2')).toBe(snapshot);
     expect(host.textContent).toContain('Original immutable method cloned as an unsaved draft');
-    expect(button('Run saved revision').disabled).toBe(true);
+    expect(host.textContent).toContain('Runs the current draft');
 });
-it.each(['Methods', 'Quick run'])('%s retains accepted create through readback failure and retries PUT rather than duplicate POST', async tab => {
-    saveReadFailure = true; await mount(); await click(tab); await input('Method name', 'Incomplete');
-    const save = tab === 'Quick run' ? 'Save as method' : 'Save';
-    await click(save);
-    if (tab === 'Methods') expect(button('Run saved revision').disabled).toBe(true);
-    saveReadFailure = false; await click(save);
+it('keeps a run history list rather than one slot', async () => {
+    await mount(); await openOriginal(); await acknowledge(); await click('Run');
+    await input('Method name', 'Second run'); await click('Run');
+    const list = JSON.parse(localStorage.getItem('bms.bioxp.method-runs.v2')!);
+    expect(list.map((r: any) => r.name)).toEqual(['Second run', sourceMethod.name]);
+    await click('Runs');
+    const history = host.querySelector('[aria-label="Run history"]')!;
+    expect([...history.querySelectorAll('button')].map(b => b.textContent?.split(' · ')[0])).toEqual(['Second run', sourceMethod.name]);
+    expect(history.textContent).not.toContain('protocol-live-');
+});
+it('retains accepted create through readback failure and retries PUT rather than duplicate POST', async () => {
+    saveReadFailure = true; await mount(); await input('Method name', 'Incomplete');
+    await click('Save');
+    saveReadFailure = false; await click('Save');
     expect(requests.filter(r => r.url.endsWith('/library') && r.method === 'post')).toHaveLength(1);
     expect(requests.filter(r => r.method === 'put')).toHaveLength(1);
     expect(host.textContent).toContain('Saved exact revision 2');
 });
-it('Quick Save retry retains accepted identity independently of Methods and Clear creates a new target', async () => {
-    await mount(); await openOriginal(); await click('Quick run');
-    await input('Method name', 'Quick incomplete'); saveReadFailure = true;
-    await click('Save as method');
-    const create = requests.filter(r => r.url.endsWith('/library') && r.method === 'post');
-    expect(create).toHaveLength(1); expect(db.m2.method.name).toBe('Quick incomplete');
-    await click('Methods'); await click('Save');
-    expect(requests.filter(r => r.method === 'put').at(-1)?.url).toMatch(/library\/m1$/);
-    await click('Quick run'); saveReadFailure = false; await input('Method name', 'Quick edited');
-    await click('Save as method');
-    expect(requests.filter(r => r.url.endsWith('/library') && r.method === 'post')).toHaveLength(1);
-    expect(requests.filter(r => r.method === 'put').at(-1)).toMatchObject({ url: '/api/bioxp/methods/library/m2', body: { expected_base_revision: 1 } });
-    expect(host.textContent).toContain('Saved exact revision 2');
-    expect(db.m1.method.name).toBe(sourceMethod.name); expect(db.m2.method.name).toBe('Quick edited');
-    await click('Save as method'); expect(db.m2.revision).toBe(3);
-    await click('Clear next draft'); await input('Method name', 'Next Quick'); await click('Save as method');
-    expect(requests.filter(r => r.url.endsWith('/library') && r.method === 'post')).toHaveLength(2);
-    expect(db.m3.method.name).toBe('Next Quick'); expect(submits()).toHaveLength(0);
-});
-it('Quick Open, duplicate and late Quick Save do not replace an unrelated Methods saved snapshot', async () => {
-    db.m2 = { id: 'm2', revision: 1, name: 'Other', method: { ...sourceMethod, name: 'Other' } };
-    await mount(); await openOriginal(); await click('Quick run'); await input('Library entry', 'm2'); await click('Open');
-    await click('Duplicate');
-    let finish!: () => void; deferSave = done => { finish = done; };
-    await act(async () => button('Save as method').click()); await settle();
-    await input('Method name', 'Newer Quick'); await act(async () => finish()); await settle();
-    expect(host.textContent).toContain('newer edits remain unsaved');
-    await click('Methods');
-    expect((host.querySelector('[aria-label="Method name"]') as HTMLInputElement).value).toBe(sourceMethod.name);
-    await acknowledge(); await click('Run saved revision');
-    expect(submits()[0].url).toBe('/api/bioxp/methods/library/m1/runs');
-    expect(JSON.parse(localStorage.getItem('bms.bioxp.method-run.v1')!).snapshot.method.name).toBe(sourceMethod.name);
+it('has no separate Quick run tab and never checks on each keystroke', async () => {
+    await mount();
+    expect([...host.querySelectorAll('[role="tab"]')].map(t => t.textContent)).toEqual(['Methods', 'Liquid classes', 'Runs']);
+    await checked(); const before = checks().length;
+    for (const name of ['a', 'ab', 'abc', 'abcd']) await input('Method name', name);
+    expect(checks()).toHaveLength(before);
+    await checked(); expect(checks()).toHaveLength(before + 1);
+    expect(checks().at(-1)!.body.method.name).toBe('abcd');
+    expect([...host.querySelectorAll('button')].some(b => ['Check', 'Compile'].includes(b.textContent ?? ''))).toBe(false);
 });
 it('retains newer edits while Save settles and exposes only saved readback', async () => {
     let finish!: () => void; deferSave = done => { finish = done; };
     await mount(); await input('Method name', 'Original save'); await act(async () => button('Save').click()); await settle();
     await input('Method name', 'Newer edit'); await act(async () => finish()); await settle();
     expect(host.textContent).toContain('newer edits remain unsaved'); expect((host.querySelector('[aria-label="Method name"]') as HTMLInputElement).value).toBe('Newer edit');
-    await acknowledge(); await click('Run saved revision'); expect(JSON.parse(localStorage.getItem('bms.bioxp.method-run.v1')!).snapshot.method.name).toBe('Original save');
+    await acknowledge(); await click('Run'); expect(lastRun().snapshot.method.name).toBe('Newer edit');
+    expect(submits()[0].body.based_on).toMatchObject({ edited: true });
 });
 it('uses existing same-job controls and exact occurrence recovery with no replay or generated setup', async () => {
-    await mount(); await openOriginal(); await acknowledge(); await click('Run saved revision'); await click('Pause workflow');
+    await mount(); await openOriginal(); await acknowledge(); await click('Run'); await click('Pause workflow');
     const control = requests.find(r => r.url.endsWith('/control'))!; expect(control.body).toMatchObject({ action: 'pause', mode: 'ordinary', expected_ownership_generation: 7, expected_connection_generation: 9 });
     await click('Load method report'); await input('Exact recovery occurrence', 'loop/0/move-original'); await click('Create recovery draft');
     expect(requests.find(r => r.url.endsWith('/recovery-draft'))!.body.occurrence).toEqual(provenance[0]); expect(submits()).toHaveLength(1);
@@ -363,10 +363,10 @@ it.runIf(!!process.env.BIOXP_NATIVE_BMS_SNAPSHOTS).each([
         }
         return transport(config);
     };
-    await mount(); await click('Runs'); await click(`${original.job_id} · ${original.status}`); await click('Load method report');
+    await mount(); await click('Runs'); await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent?.endsWith(`· ${original.status}`))!.click()); await settle(); await click('Load method report');
     const selected = snapshot.compilation.provenance[0];
     await input('Exact recovery occurrence', selected.occurrence_id);
-    await input('Recovery native action', selected.native_action_ids[0]);
+    await input('Recovery native action', String(selected.native_action_ids[0]));
     await input('Recovery initial assumptions type', 'object');
     await input('Recovery initial assumptions new field', 'custody'); await click('Add Recovery initial assumptions field');
     await input('Recovery initial assumptions.custody type', 'null');
@@ -379,8 +379,8 @@ it.runIf(!!process.env.BIOXP_NATIVE_BMS_SNAPSHOTS).each([
     expect(saved.method.editor_state.run_inputs).toEqual({ bindings: snapshot.bindings ?? {}, dependencies: snapshot.dependencies ?? {}, initial_state: { custody: null } });
     expect(saved.method.editor_state.recovery_linkage).toMatchObject({ original_job_id: original.job_id, occurrence: sent.occurrence, automatic_setup: [], excluded_actions: [], submitted: false });
     await act(async () => root.unmount()); client.clear(); await mount();
-    await input('Library entry', saved.id); await click('Open'); await click('Compile');
-    const reopened = requests.filter(r => r.url.endsWith('/compile')).at(-1)!.body;
+    await input('Library entry', saved.id); await click('Open'); await checked();
+    const reopened = checks().at(-1)!.body;
     expect(reopened.initial_state).toEqual({ custody: null });
     expect(reopened.bindings).toEqual(snapshot.bindings ?? {}); expect(reopened.dependencies).toEqual(snapshot.dependencies ?? {});
     expect(reopened.method).toEqual(saved.method);
@@ -388,7 +388,7 @@ it.runIf(!!process.env.BIOXP_NATIVE_BMS_SNAPSHOTS).each([
     expect(requests.filter(r => /\/(control|review)$/.test(r.url))).toHaveLength(0);
 }, 30000);
 it('cold reopens edited recovery assumptions and original bindings without replay', async () => {
-    await mount(); await openOriginal(); await acknowledge(); await click('Run saved revision');
+    await mount(); await openOriginal(); await acknowledge(); await click('Run');
     await click('Load method report'); await input('Exact recovery occurrence', 'loop/0/move-original');
     await input('Recovery initial assumptions type', 'object');
     await input('Recovery initial assumptions new field', 'custody'); await click('Add Recovery initial assumptions field');
@@ -404,7 +404,7 @@ it('cold reopens edited recovery assumptions and original bindings without repla
     expect(submits()).toHaveLength(1);
 });
 it.each(['omitted', 'null', 'object'])('recovery %s assumptions are independent from next-draft edits and preserve exact native action', async kind => {
-    await mount(); await openOriginal(); await acknowledge(); await click('Run saved revision');
+    await mount(); await openOriginal(); await acknowledge(); await click('Run');
     await click('Load method report'); await input('Exact recovery occurrence', 'loop/0/move-original');
     await input('Recovery native action', 'a1');
     await input('Initial assumptions new field', 'next_only'); await click('Add Initial assumptions field');
@@ -419,32 +419,34 @@ it.each(['omitted', 'null', 'object'])('recovery %s assumptions are independent 
     expect(body.occurrence).toEqual({ ...provenance[0], native_action_id: 'a1' });
     expect(Object.hasOwn(body, 'initial_state')).toBe(kind !== 'omitted');
     if (kind !== 'omitted') expect(body.initial_state).toEqual(kind === 'null' ? null : { tips: null });
-    await click('Compile');
-    const check = requests.filter(r => r.url.endsWith('/compile')).at(-1)!.body;
+    await checked();
+    const check = checks().at(-1)!.body;
     expect(Object.hasOwn(check, 'initial_state')).toBe(kind !== 'omitted');
     if (kind !== 'omitted') expect(check.initial_state).toEqual(body.initial_state);
     await input('Method name', `Recovered ${kind}`); await click('Save');
     const saved = Object.values(db).find(r => r.name === `Recovered ${kind}`)!;
     await act(async () => root.unmount()); client.clear(); localStorage.clear(); await mount();
-    await input('Library entry', saved.id); await click('Open'); await click('Compile');
-    const cold = requests.filter(r => r.url.endsWith('/compile')).at(-1)!.body;
+    await input('Library entry', saved.id); await click('Open'); await checked();
+    const cold = checks().at(-1)!.body;
     expect(Object.hasOwn(cold, 'initial_state')).toBe(kind !== 'omitted');
     if (kind !== 'omitted') expect(cold.initial_state).toEqual(body.initial_state);
     expect(submits()).toHaveLength(1);
 });
-it('compiles separately, presents Water without new acknowledgement and derives map from emitted station', async () => {
-    await mount(); await openOriginal(); await click('Compile');
-    expect(host.textContent).toContain('Before Run: matching Water substitutions'); expect(host.textContent).toContain('Station: LOC_TC');
+it('auto-previews a plain summary, presents Water without new acknowledgement and derives map from emitted station', async () => {
+    await mount(); await openOriginal(); await checked();
+    expect(host.querySelector('[aria-label="Plan summary"]')!.textContent).toContain('1 unspecified setting use the matching Water class');
+    await click('Preview'); expect(host.textContent).toContain('Station: LOC_TC');
+    expect(host.textContent).not.toContain('Tips, time, volumes and unknowns');
     expect(host.querySelector('[aria-label="Compiled occurrence preview"]')).toBeTruthy(); expect(submits()).toHaveLength(0);
     expect([...host.querySelectorAll('label')].filter(n => /Acknowledge live robot execution/.test(n.textContent ?? ''))).toHaveLength(1);
 });
 it('retains active reconciliation across subtabs and settles ambiguous terminal observation without disabling warm-error controls', async () => {
-    await mount(); await openOriginal(); await acknowledge(); await click('Run saved revision');
+    await mount(); await openOriginal(); await acknowledge(); await click('Run');
     readFailure = true; await act(async () => { await client.refetchQueries({ predicate: q => q.queryKey.includes('observation') }); }); await settle();
     expect(button('Pause workflow').disabled).toBe(false);
     expect(button('Request safe-state stop').disabled).toBe(false);
     readFailure = false; phase = 'reconciling'; await act(async () => { await client.refetchQueries({ predicate: q => q.queryKey.includes('observation') }); }); await settle();
-    expect(host.textContent).toContain('Phase: reconciling');
+    expect(host.textContent).toContain('· reconciling');
     visible = false; await render(); const before = reads().length;
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 2200)); });
     expect(reads().length).toBeGreaterThan(before);
@@ -452,7 +454,7 @@ it('retains active reconciliation across subtabs and settles ambiguous terminal 
     await act(async () => { await client.refetchQueries({ predicate: q => q.queryKey.includes('observation') }); }); await settle();
     const settled = reads().length;
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 2200)); });
-    expect(reads()).toHaveLength(settled); expect(button('Pause workflow').disabled).toBe(true);
+    expect(reads()).toHaveLength(settled); expect(button('Pause workflow').disabled).toBe(false);
 }, 10000);
 it('does not interpret HTTP status or absent ACK as definitive refusal and displays non-XY without coordinates', () => {
     expect(definiteMethodRefusal({ response: { status: 422, data: { detail: 'invalid' } } })).toBe(false);
@@ -518,14 +520,13 @@ it.each(['manual', 'class'])('composes map-driven Move and %s Transfer, selected
     await click('Select step 2');
     expect((host.querySelector(`[aria-label="Inputs ${transferId} variant"]`) as HTMLSelectElement).value).toBe(mode === 'class' ? '1' : '0');
     expect((host.querySelector(`[aria-label="Inputs ${transferId}.volume_ul"]`) as HTMLInputElement).value).toBe('020.000100');
-    await click('Preview');
-    expect(requests.filter(r => r.url.endsWith('/compile')).at(-1)!.body.method).toEqual(saved);
+    await checked();
+    expect(checks().at(-1)!.body.method).toEqual(saved);
     await click('Save'); expect(db.m2.method).toEqual(saved);
-    await click('Quick run'); await mapWell('LOC_MS', 'A2'); await click('Add Move');
-    await click('Methods'); await click('Save'); expect(db.m2.method).toEqual(saved);
+    await click('Liquid classes'); await click('Methods'); await click('Save'); expect(db.m2.method).toEqual(saved);
     expect(submits()).toHaveLength(0);
     expect(requests.every(r => r.url.startsWith('/api/bioxp/methods/'))).toBe(true);
-    expect(requests.filter(r => r.method !== 'get').every(r => /\/(library|check|compile)(\/[^/]+)?$/.test(r.url))).toBe(true);
+    expect(requests.filter(r => r.method !== 'get').every(r => /\/(library|check)(\/[^/]+)?$/.test(r.url))).toBe(true);
 });
 
 
@@ -538,7 +539,7 @@ it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('emits deck-edited Move and 
     api.defaults.adapter = async config => {
         const part = config.url?.split('/').at(-1);
         if (['catalog', 'schema', 'examples'].includes(part ?? '')) return { config, status: 200, statusText: 'OK', headers: {}, data: contracts[part!] };
-        if (part === 'compile') {
+        if (part === 'check') {
             const body = JSON.parse(config.data);
             const produced = spawnSync(process.env.BMS_TEST_PYTHON ?? 'python', ['-c', 'import json,sys; from bioxp_method_compiler import compile_method; print(json.dumps(compile_method(json.load(sys.stdin))))'], { cwd: process.env.BIOXP_METHOD_API_DIR ?? '../api', encoding: 'utf8', input: JSON.stringify(body) });
             expect(produced.status, produced.stderr).toBe(0); result = JSON.parse(produced.stdout);
@@ -553,7 +554,7 @@ it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('emits deck-edited Move and 
     await mapWell('LOC_TC', 'B2'); await click('Add Move');
     const moveId = host.querySelector('[aria-label^="Label "]')!.getAttribute('aria-label')!.slice(6);
     await input(`Inputs ${moveId}.position_flag presence`, 'value'); await input(`Inputs ${moveId}.position_flag`, '1');
-    await click('Save'); await click('Preview');
+    await click('Save'); await checked();
     expect(result.document, JSON.stringify(result.issues)).toBeTruthy();
     const actions = result.document.stages.flatMap((s: any) => s.actions);
     const moves = actions.filter((a: any) => a.kind === 'pipette_position' && a.params.operation === 'move');

@@ -192,6 +192,7 @@ export default defineConfig({
             './tests/vitest/stateLandscapeWorkspacePanel.test.tsx',
             './tests/vitest/bioxpDeckQueueMounted.test.tsx',
             './tests/vitest/bioxpMethodsMounted.test.tsx',
+            './tests/vitest/bioxpMethodsWorkflowAuthoringMounted.test.tsx',
             './tests/vitest/bioxpExperimentAuthoringMounted.test.tsx',
             './tests/vitest/bioxpCustodyAuthoringMounted.test.tsx',
             './tests/vitest/bioxpMethodSimulationMounted.test.tsx',
