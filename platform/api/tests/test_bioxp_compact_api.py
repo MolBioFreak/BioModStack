@@ -9,6 +9,17 @@ from routers import bioxp
 # R5 reviewed current surface: v2 receipts, retained evidence and basic camera
 # are supported; retired generic commands/proxy dispatch must stay absent.
 EXPECTED = {
+    ('GET', '/methods/openapi.json'),
+    ('GET', '/operator-controls/deck/state'),
+    ('GET', '/operator-controls/readers/position-table'),
+    ('GET', '/operator-controls/readers/settings'),
+    ('GET', '/operator-controls/tip-trays'),
+    ('GET', '/pipettes/pressure-captures/{stream_session_id}'),
+    ('GET', '/protocols/calibration/schema'),
+    ('GET', '/service'),
+    ('POST', '/operator-controls/deck/record'),
+    ('POST', '/protocols/calibration/analyze'),
+    ('POST', '/service/restart'),
     ('DELETE', '/profile'),
     ('GET', '/camera/frame/latest'),
     ('GET', '/camera/mjpeg'),
@@ -135,7 +146,7 @@ def _inventory() -> set[tuple[str, str]]:
 
 def test_compact_api_inventory_is_exact_and_bounded() -> None:
     assert _inventory() == EXPECTED
-    assert len(_inventory()) == 100
+    assert len(_inventory()) == 111
 
 
 def test_every_non_read_route_carries_the_global_containment_dependency() -> None:

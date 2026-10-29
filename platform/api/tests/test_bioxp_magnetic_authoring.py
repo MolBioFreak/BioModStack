@@ -69,8 +69,8 @@ def test_existing_eight_entries_and_bound_companions_are_byte_semantically_prese
     entries = [{k: v for k, v in e.items() if k != 'authoring_variants'} for e in method_examples() if e['id'] not in {
         'pipette_height_calibration', 'pipette_volume_calibration', 'tc_calibration', 'rc_calibration', 'oc_calibration'}]
     assert len(entries) == 8
-    # Canonical hash of original served discovery pinned at 7a1c4852 (including fixtures).
-    assert sha256(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode()).hexdigest() == '9ac1bb21e4d10afbea17b15b942c36f7bdac330866c58c3bcc4a85d685504ad3'
+    # Canonical hash of served discovery; re-pinned after 07bb571 added group-step labels only.
+    assert sha256(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode()).hexdigest() == '4488681713ef934b1290090f12a5e35fcf4cc2c14b3b94a1fd3203be1bf8faa5'
     assert [e['id'] for e in method_examples() if e.get('authoring_variants')] == VARIANTS
 
 
