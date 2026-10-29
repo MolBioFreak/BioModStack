@@ -235,13 +235,9 @@ export function ProteinModificationTemplate({
             reportDraft({ ...drafts.current[activeKey], ...activeRequest.current });
         } }}>
         <div className="space-y-3 text-[var(--text-primary)]" data-bms-de-novo-form="complete">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="flex items-center gap-3"><button type="button" onClick={onBack} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">Back</button>
-                <h2 className="text-lg font-semibold">Protein design</h2></div>
-                {mode !== 'shape_blueprint' && <ModelReferenceCard model={generator} />}
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-3" data-de-novo-header-controls>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2" data-de-novo-header-controls>
+                <button type="button" onClick={onBack} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">Back</button>
+                <h2 className="text-lg font-semibold">Protein design</h2>
                 <nav aria-label="Design task" className="flex flex-wrap gap-2">
                 {DE_NOVO_MODIFICATION_MODE_CARDS.map(card => <button type="button" key={card.id}
                     aria-pressed={mode === card.id} onClick={() => chooseMode(card.id)}
@@ -250,6 +246,7 @@ export function ProteinModificationTemplate({
                 <div role="group" aria-label="Editor detail" className="flex gap-2">
                 {(['simple', 'advanced'] as const).map(view => <button type="button" key={view} aria-pressed={suiteView === view} onClick={() => setSuiteView(view)} className="rounded-lg bg-[var(--bg-tertiary)] px-3 py-1.5 text-sm">{view === 'simple' ? 'Simple' : 'Advanced'}</button>)}
             </div>
+                <div className="ml-auto">{mode !== 'shape_blueprint' && <ModelReferenceCard model={generator} />}</div>
             </div>
             {mode !== 'shape_blueprint' && <details className="rounded-lg border border-[var(--border-primary)] p-3"
                 data-molecular-construction-panel onToggle={event => setConstructionOpen(event.currentTarget.open)}>
