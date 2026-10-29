@@ -312,7 +312,7 @@ it('retains accepted create through readback failure and retries PUT rather than
     expect(host.textContent).toContain('Saved exact revision 2');
 });
 it('has no separate Quick run tab and never checks on each keystroke', async () => {
-    await mount();
+    await mount(); await openOriginal();
     expect([...host.querySelectorAll('[role="tab"]')].map(t => t.textContent)).toEqual(['Methods', 'Liquid classes', 'Runs']);
     await checked(); const before = checks().length;
     for (const name of ['a', 'ab', 'abc', 'abcd']) await input('Method name', name);

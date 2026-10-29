@@ -76,13 +76,13 @@ it('deletes irrelevant observations for a full Build minute after visiting opera
     await click('#control-tab-live-deck');
     expect(host.querySelectorAll('section[aria-label="Camera"]')).toHaveLength(1);
     await click('#control-tab-workflows');
-    const editor = host.querySelector('[aria-label="Saved workflow"]');
-    const name = host.querySelector('[aria-label="Workflow name"]') as HTMLInputElement;
+    const editor = host.querySelector('[aria-label="Methods workspace"]');
+    const name = host.querySelector('[aria-label="Method name"]') as HTMLInputElement;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Unsubmitted retained draft'); name.dispatchEvent(new Event('input', { bubbles: true })); });
     await click('#control-tab-robot');
     await click('#control-tab-workflows');
-    expect(host.querySelector('[aria-label="Saved workflow"]')).toBe(editor);
-    expect((host.querySelector('[aria-label="Workflow name"]') as HTMLInputElement).value).toBe('Unsubmitted retained draft');
+    expect(host.querySelector('[aria-label="Methods workspace"]')).toBe(editor);
+    expect((host.querySelector('[aria-label="Method name"]') as HTMLInputElement).value).toBe('Unsubmitted retained draft');
     expect(host.querySelector('#control-panel-pipettes input')).toBe(manual);
     requests = []; await advance();
     const irrelevant = requests.filter(r => r.url !== '/api/bioxp/status' && !r.url.endsWith('/updates'));

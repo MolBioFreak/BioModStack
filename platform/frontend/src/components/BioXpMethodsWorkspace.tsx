@@ -154,7 +154,8 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
     }
     const compileInput = (method = activeDraft): MethodValue => ({ method: clone(method), bindings: clone(bindings), dependencies: clone(dependencies), initial_state: clone(initialState) });
     // One pure check ~600 ms after the last edit; it never gates Save or Run.
-    const checkKey = tab === 'Methods' && visible ? JSON.stringify(compileInput()) : '';
+    const hasContent = (Array.isArray(draft.steps) && draft.steps.length > 0) || draft.deck_plan !== undefined;
+    const checkKey = tab === 'Methods' && visible && hasContent ? JSON.stringify(compileInput()) : '';
     useEffect(() => {
         if (!checkKey) return;
         const timer = setTimeout(() => {
@@ -268,7 +269,7 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
                 <details onToggle={e => { if (e.currentTarget.open) setAdvancedMethodVisited(true); }}><summary>All method fields and advanced controls</summary>{advancedMethodVisited && <MethodFields label="Method" schema={rootSchema} value={activeDraft} onChange={v => setActive(object(v))} />}</details>
                 <section aria-label="Method findings" className="bioxp-method-findings">
                     {checkError && <p role="status">Preview unavailable right now ({checkError}). Your draft is unchanged; Run still works.</p>}
-                    {!check && !checkError && <p role="status">Preparing preview…</p>}
+                    {!check && !checkError && <p role="status">{hasContent ? 'Preparing preview…' : 'Add a step or set up the deck to see a preview.'}</p>}
                     {check && <BioXpMethodPlanSummary result={check.result} method={object(check.input.method)} stale={!freshCheck} />}
                     {previewOpen && check && <details open><summary>Step-by-step preview</summary><BioXpMethodApplicationFields value={check.result.resolved} /><BioXpMethodPreview result={check.result} initialState={check.input.initial_state} custodyDestinations={Array.isArray(object(object(catalog.data?.authoring).custody).destinations) ? object(object(catalog.data?.authoring).custody).destinations as MethodValue[] : []} /></details>}
                 </section>
