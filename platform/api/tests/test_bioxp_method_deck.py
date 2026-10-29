@@ -197,3 +197,9 @@ def test_job_rows_accept_robot_row_kind():
     row = ProtocolJobSummary(job_id='j', status='completed', dry_run=True, protocol_id='p', source_type='native',
                              created_at='a', updated_at='b', pending_review=None, row_kind='historical_bundle')
     assert row.row_kind == 'historical_bundle'
+
+
+def test_deck_record_relay_forwards_gantry():
+    from services.bioxp.operator_requests import OperatorDeckRecordRequestV1
+    body = OperatorDeckRecordRequestV1(expected_connection_generation=1, gantry='empty')
+    assert body.model_dump(exclude={'expected_connection_generation'}, exclude_none=True) == {'gantry': 'empty'}

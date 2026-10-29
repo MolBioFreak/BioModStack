@@ -239,3 +239,5 @@ class OperatorDeckRecordRequestV1(BaseModel):
     reason: str | None = Field(None, min_length=1, max_length=500)
     movable_objects: dict[str, str] | None = Field(None, description="ClassMachineStatus object name -> deck location name")
     tip_trays: list[OperatorDeckRecordTipTrayV1] | None = None
+    gantry: str | None = Field(None, min_length=1, max_length=64,
+                               description="What the gripper holds: 'empty' or a ClassMachineStatus object name")
