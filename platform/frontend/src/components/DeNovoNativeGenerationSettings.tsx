@@ -265,7 +265,7 @@ export function DeNovoNativeGenerationSettings({ model, mode = 'generate', initi
             </NativeSettingsDisclosure>)}
         </ProteinDesignPanel></div>
         <div hidden={section !== 'Optional operations'}><GeneralSequenceDesignSettings value={sequence} onChange={next => { if (next.invocation_draft?.enabled || next.sequence_design.enabled) { setSequenceOmitted(false); setExplicitSequenceNull(false); } setSequence(next); }} /></div>
-        <ProteinDesignRun jobName={name} onJobNameChange={setName} pending={submit.isPending} onSubmit={() => submit.mutate()} submitLabel={model === 'complexa' && request.operation === 'design' ? 'Generate, filter, evaluate and analyze' : model === 'complexa' && request.operation === 'analysis' ? 'Evaluate and analyze' : activeMode === 'evaluate' ? 'Evaluate candidates' : 'Generate candidates'}>
+        <ProteinDesignRun stickyAction jobName={name} onJobNameChange={setName} pending={submit.isPending} onSubmit={() => submit.mutate()} submitLabel={model === 'complexa' && request.operation === 'design' ? 'Generate, filter, evaluate and analyze' : model === 'complexa' && request.operation === 'analysis' ? 'Evaluate and analyze' : activeMode === 'evaluate' ? 'Evaluate candidates' : 'Generate candidates'}>
             <DeNovoRunScope task={`${model === 'rfd4_proteina' ? 'RFD4' : 'Complexa'} · ${taskLabel} · ${request.operation ?? activeMode}`} documents={consumedDocuments} operations={payload.sequence_design} />
             <ExecutionTargetPicker workflowRequest={payload as Partial<Job>} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
             {runDetails}{submit.error && <p role="alert">{submit.error.message}</p>}

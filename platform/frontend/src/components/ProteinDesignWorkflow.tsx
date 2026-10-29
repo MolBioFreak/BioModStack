@@ -42,11 +42,19 @@ export function ProteinDesignPanel({ title, description, children, showTitle = t
     </section>;
 }
 
-export function ProteinDesignRun({ jobName, onJobNameChange, children, pending, disabled = false, onSubmit, submitLabel, onCancel }: {
+export function ProteinDesignRun({ jobName, onJobNameChange, children, pending, disabled = false, onSubmit, submitLabel, onCancel, stickyAction = false }: {
     jobName: string; onJobNameChange: (name: string) => void; children: ReactNode;
     pending: boolean; disabled?: boolean; onSubmit: () => void; submitLabel: string; onCancel?: () => void;
+    /** Keep Run reachable at the bottom of the scrolling workspace instead of after the whole form. */
+    stickyAction?: boolean;
 }) {
-    return <section aria-label="Run" className="space-y-4" data-bms-protein-design-run>
+    const action = <>
+        {onCancel && <button type="button" onClick={onCancel} className="rounded-lg border px-5 py-3 text-sm font-medium" style={themedInsetStyle}>Cancel</button>}
+        <button type="button" onClick={onSubmit} disabled={pending || disabled}
+            className="rounded-lg border px-5 py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            style={themedSelectedStyle('var(--accent-primary)')}>{pending ? 'Submitting…' : submitLabel}</button>
+    </>;
+    const run = <section aria-label="Run" className="space-y-4" data-bms-protein-design-run>
         <div className="rounded-lg border p-3" style={themedInsetStyle}>
             <label className="block text-sm font-medium">Job name
                 <input aria-label="Job name" value={jobName} onChange={event => onJobNameChange(event.target.value)}
@@ -54,11 +62,17 @@ export function ProteinDesignRun({ jobName, onJobNameChange, children, pending, 
             </label>
         </div>
         {children}
-        <div className="flex justify-end gap-3">
-            {onCancel && <button type="button" onClick={onCancel} className="rounded-lg border px-5 py-3 text-sm font-medium" style={themedInsetStyle}>Cancel</button>}
-            <button type="button" onClick={onSubmit} disabled={pending || disabled}
-                className="rounded-lg border px-5 py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                style={themedSelectedStyle('var(--accent-primary)')}>{pending ? 'Submitting…' : submitLabel}</button>
-        </div>
+        {!stickyAction && <div className="flex justify-end gap-3">{action}</div>}
     </section>;
+    if (!stickyAction) return run;
+    // A sticky element cannot leave its parent, and the Run section sits after the whole
+    // form. The bar is therefore its sibling, so it spans the form and stays on screen.
+    return <>
+        {run}
+        <div data-bms-run-action="sticky" className="sticky bottom-0 z-10 -mx-4 flex items-center justify-between gap-3 border-t px-4 py-3"
+            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-primary)' }}>
+            <span className="min-w-0 truncate text-sm text-[var(--text-secondary)]">{jobName || 'Unnamed job'}</span>
+            <div className="flex gap-3">{action}</div>
+        </div>
+    </>;
 }

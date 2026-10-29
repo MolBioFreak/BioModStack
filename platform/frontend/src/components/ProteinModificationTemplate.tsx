@@ -949,7 +949,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                 <GeneralSequenceDesignSettings value={sequenceDesign} onChange={next => { if (next.invocation_draft?.enabled || next.sequence_design.enabled) { setSequenceOmitted(false); setSequenceNull(false); } setSequenceDesign(next); }} />
             </div>
             <DeNovoDocumentEditorPanels />
-            <ProteinDesignRun jobName={jobName} onJobNameChange={setJobName} pending={submitMutation.isPending}
+            <ProteinDesignRun stickyAction jobName={jobName} onJobNameChange={setJobName} pending={submitMutation.isPending}
                 onSubmit={() => { void (generator === 'rfd3' ? submitDeNovo() : submitAlternative()); }} submitLabel="Generate candidates">
                 <DeNovoRunScope task={`${engineName} · ${designTask.replaceAll('_', ' ')}`} documents={generator === 'rfd3' ? [rfd3Source?.path].filter((path): path is string => !!path) : generator === 'laproteina' ? (isMotif ? [effectiveMotifPath].filter((path): path is string => typeof path === 'string' && !!path) : []) : ['Native entities / sequence inputs (see task inputs)']} operations={sequenceOmitted || sequenceNull && !sequenceDesign.invocation_draft && !sequenceDesign.sequence_design.enabled ? undefined : generalSequenceRequest(sequenceDesign).sequence_design} />
                 {runDetails}
