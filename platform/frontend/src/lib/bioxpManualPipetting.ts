@@ -89,25 +89,3 @@ export function manualPipettingDocument({ protocol_id, steps }: BioXpManualReque
     return { protocol_id, version: 1, stages: [{ stage_id: 'manual', title: 'Manual pipetting', actions }],
         metadata: { manual_scope: 'explicit_steps_only', well_alignment: 'source_machine_tip_location' } };
 }
-
-export function describeManualStep(step: BioXpManualStep): string {
-    if (isSourceStep(step)) {
-        if (step.operation === 'source_load_tips') return `OEM selected tips · T${step.tip_type} · source pipette ${step.pipette} · force new ${step.force_new_tip}`;
-        if (step.operation === 'diagnostic_pipette') {
-            const d = step.diagnostic;
-            return `OEM diagnostic · ${d.action}${'channels' in d ? ` · source channels ${d.channels.join(', ') || 'none'}` : ''}${'volume_ul' in d ? ` · ${d.volume_ul} µL · speed ${d.speed}` : ''}${'steps' in d ? ` · ${d.steps} Z steps` : ''}`;
-        }
-        if (step.operation === 'source_mix') return `OEM source mix · ${step.volume_ul} µL · air ${step.air_ul} µL · speeds ${step.aspirate_speed}/${step.dispense_speed} · delays ${step.aspirate_delay_ms ?? 'default'}/${step.dispense_delay_ms ?? 'default'} ms · ${step.cycles} cycles · type ${step.mix_type} · tip dip ${step.tip_dip}`;
-        if (step.operation === 'source_purge') return `OEM source purge · speed ${step.speed} · AMP ${step.amp} · NTD ${step.ntd}`;
-        return `OEM ${step.operation.slice(7)} · ${step.volume_ul} µL`;
-    }
-    if (step.operation === 'load_tip') return `Load tip · tray ${step.tray} · ${step.well} · overpress ${step.overpress} · lift Z ${step.lift_z}`;
-    if (step.operation === 'measure_fluid_height') return `Measure fluid height · current location · speed ${step.speed}`;
-    if (step.operation === 'source_fluid_offset') return `OEM fluid offset scan · ${step.plate} · speed ${step.speed} · ${step.transfer_fluid ? 'prefill' : 'scan only'} · every ${step.skip_steps} well(s)`;
-    if (step.operation === 'diagnostic_detect_fluid') return 'OEM Detect Fluid · five stations · no calibration save';
-    if (step.operation === 'source_calwith_fluid') return 'OEM calibrate with fluid · five stations · saves each offset';
-    if (step.operation === 'move') return `Move · locationID ${step.location_id} · ${step.well} · flag ${step.position_flag}`;
-    if (step.operation === 'lower') return `Lower in place · locationID ${step.location_id} · calibrated zLow`;
-    if (step.operation === 'lift') return `Lift in place · locationID ${step.location_id} · ${step.height_steps === null ? 'calibrated zHigh' : `zLow − ${step.height_steps} steps`}`;
-    return `${step.operation} in place · plungers ${step.channels.map(c => c + 1).join(', ')} · ${step.volume_ul} µL · ${step.operation === 'mix' ? `${step.cycles} cycles · speeds ${step.aspirate_speed}/${step.dispense_speed}` : `speed ${step.speed}`}`;
-}

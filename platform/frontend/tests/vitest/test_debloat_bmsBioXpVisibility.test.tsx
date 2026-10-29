@@ -204,24 +204,3 @@ it('observes relocated transfers only under the open Live deck disclosure, retai
     expect(requests.filter(r => r.url.endsWith('/protocols/jobs')).length).toBeGreaterThan(0);
     expect(requests.every(r => r.method === 'get')).toBe(true);
 });
-
-it('discovers cross-client prepared jobs only in Workflows and retains the original active outcome owner across navigation', async () => {
-    await mount();
-    await click('#control-tab-workflows');
-    const prepared = [...host.querySelectorAll('details')].find(d => d.querySelector('summary')?.textContent === 'Prepared request files')!;
-    await act(async () => { prepared.open = true; prepared.dispatchEvent(new Event('toggle')); });
-    await advance(100);
-    liveJob = { job_id: 'job-original', status: 'dispatched', command: { command_id: 'job-original', idempotency_key: 'original-key', ownership_generation: 7, state_version: 1, status: 'dispatched', terminal: false },
-        execution: { dry_run: false, runtime_state: { workflow: { command_id: 'job-original', phase: 'executing', child_command_ids: [] } } } };
-    rows = [liveJob]; await advance(11_000);
-    expect(host.textContent).toContain('job-original');
-    await click('#control-tab-robot'); requests = []; await advance();
-    expect(requests.filter(r => r.url.endsWith('/protocols/jobs'))).toEqual([]);
-    expect(count('/protocols/jobs/job-original')).toBeGreaterThan(0);
-    expect(requests.every(r => r.method === 'get')).toBe(true);
-    liveJob = { ...liveJob, status: 'completed', command: { ...liveJob.command, terminal: true, status: 'completed' } };
-    await advance(3_000); requests = []; await advance();
-    expect(count('/protocols/jobs')).toBe(0);
-    await click('#control-tab-robot');
-    expect(host.textContent).toContain('job-original');
-});

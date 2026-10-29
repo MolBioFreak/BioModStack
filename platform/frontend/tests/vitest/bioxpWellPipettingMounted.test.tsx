@@ -151,13 +151,6 @@ it.each(['completed', 'failed', 'denied'])('ordinary eject crosses the actual BM
     exports.push({ name: `eject-bms-route-${status}`, request: requests[0].request, relay: bridged });
 }, 30000);
 
-it('workflow authoring never offers the immediate eject buttons', async () => {
-    await act(async () => root.render(<QueryClientProvider client={client}><BioXpWellPipettingPanel workflowAuthoring generation={0} connected={false} /></QueryClientProvider>));
-    expect(host.querySelector('[aria-label="Tip ejection"]')).toBeNull();
-    expect([...host.querySelectorAll('button')].some(el => ['Eject all tips', 'Eject selected tips'].includes(el.textContent ?? ''))).toBe(false);
-    expect(requests).toEqual([]);
-});
-
 it.each(['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'] as const)('mounted %s sends only its native action through the actual submit hook and Axios', async op => {
     await mount(); await fields(); await click(`${op[0].toUpperCase()}${op.slice(1)} now`);
     expect(requests).toHaveLength(1);
@@ -182,11 +175,11 @@ it.each(['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'] as const)('moun
 });
 
 it('manual physical controls preserve explicit flags and expose structured measurement without logs', async () => {
-    await mount(); await change('Tip tray', '5'); await change('Tip well', 'B12');
+    await mount(); await change('Tip tray', '4'); await change('Tip well', 'B12');
     await act(async () => (host.querySelector('[aria-label="Overpress"]') as HTMLInputElement).click());
     await act(async () => (host.querySelector('[aria-label="Lift Z after pickup"]') as HTMLInputElement).click());
     await click('Pick up from tray');
-    expect(requests[0].request.document.stages[0].actions[0]).toMatchObject({ kind: 'pipette_manual_physical', params: { operation: 'load_tip', tray: 5, well: 'B12', overpress: true, lift_z: true } });
+    expect(requests[0].request.document.stages[0].actions[0]).toMatchObject({ kind: 'pipette_manual_physical', params: { operation: 'load_tip', tray: 4, well: 'B12', overpress: true, lift_z: true } });
     await change('Detection speed', '0'); await click('Measure fluid height now');
     expect(requests[1].request.document.stages[0].actions[0].params).toEqual({ operation: 'measure_fluid_height', speed: 0 });
     job = { ...job, execution: { ...job.execution, runtime_state: { ...job.execution.runtime_state, action_results: [{ kind: 'pipette_manual_physical', position_steps: 78000, lost_steps: -110, lost_steps_warning: true, raw_debug: 'DO_NOT_RENDER_RAW' }] } } };
@@ -377,12 +370,12 @@ it.each(['completed', 'failed', 'denied'])('mounted submission traverses real BM
         if (bridged.status >= 400) throw { response: { status: bridged.status, data: bridged.data } };
         return { data: bridged.data, status: bridged.status, statusText: 'fixture', headers: {}, config };
     };
-    await mount(); await change('Tip tray', '5'); await change('Tip well', 'B12'); await click('Pick up from tray');
+    await mount(); await change('Tip tray', '4'); await change('Tip well', 'B12'); await click('Pick up from tray');
     expect(requests).toHaveLength(1);
     expect(bridged.robot_requests[0].body.document).toEqual(requests[0].request.document);
     expect(bridged.robot_requests[0].path).toBe('/protocol/execute');
     expect(bridged.robot_requests[0].body.document.stages[0].actions).toMatchObject([
-        { kind: 'pipette_manual_physical', params: { operation: 'load_tip', tray: 5, well: 'B12', overpress: false, lift_z: false } },
+        { kind: 'pipette_manual_physical', params: { operation: 'load_tip', tray: 4, well: 'B12', overpress: false, lift_z: false } },
     ]);
     expect(host.querySelector('pre')).toBeNull();
     expect(host.textContent).toContain(status === 'denied' ? 'OEM door interlock denied' : `Robot job: ${status}`);

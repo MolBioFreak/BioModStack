@@ -45,7 +45,8 @@ import { BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
 import { BioXpCalibrationSettings } from './BioXpCalibrationSettings';
 import { BioXpPipetteSettings } from './BioXpPipetteSettings';
 import { BioXpWellPipettingPanel } from './BioXpWellPipettingPanel';
-import { BioXpWorkflowEditor } from './BioXpWorkflowEditor';
+import { BioXpMethodsWorkspace } from './BioXpMethodsWorkspace';
+import { BioXpWorkflowMutationProvider } from './BioXpWorkflowMutationOwner';
 import { BioXpLiveDeck } from './BioXpLiveDeck';
 import { deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
 import { BioXpAxisRow, BioXpAxisTelemetry, BioXpStepSlider, BioXpStepPresets, repairManualJogDistances } from './BioXpRobotPresentation';
@@ -53,7 +54,6 @@ import { BioXpStatusStrip } from './BioXpStatusStrip';
 import { RepairManualViewer, RepairManualFields } from './repairManualViewers';
 import { repairManualLatestRequest } from '../lib/repairManualFeedback';
 import './BioXpRobotControls.css';
-import { BioXpWorkflowControls } from './BioXpWorkflowControls';
 import { BioXpMovementFailureEvidence } from './BioXpMovementFailureEvidence';
 import { BioXpTransferControls } from './BioXpTransferControls';
 import { BioXpOperatorReports } from './BioXpOperatorReports';
@@ -321,8 +321,6 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(8);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [reportsOpen, setReportsOpen] = useState(false);
-    const [workflowOpen, setWorkflowOpen] = useState(false);
-    const [workflowVisible, setWorkflowVisible] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [cameraOpen, setCameraOpen] = useState(true);
     const [controlTab, setControlTab] = useState<ControlTab>(initialTab);
@@ -1288,14 +1286,11 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                     {linkConnected && componentStop.error && <p role="alert">Component Stop: {bioXpErrorText(componentStop.error)}</p>}
             </div>
             <div role="tabpanel" id="control-panel-workflows" aria-labelledby="control-tab-workflows" hidden={controlTab !== 'workflows'}>
-                {workflowsOpened && <BioXpWorkflowEditor visible={documentVisible && controlTab === 'workflows'} generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />}
-                {workflowsOpened && <>
-            <details onToggle={event => { setWorkflowVisible(event.currentTarget.open); if (event.currentTarget.open) setWorkflowOpen(true); }}>
-                <summary className="cursor-pointer text-lg font-semibold">Prepared request files</summary>
-                {workflowOpen && <BioXpWorkflowControls key={generation} generation={generation} connected={active}
-                    controlsEnabled={robotControlReady} visible={documentVisible && controlTab === 'workflows' && workflowVisible} />}
-            </details>
-                </>}
+                {workflowsOpened && <BioXpWorkflowMutationProvider><section className="w-full space-y-4" aria-label="BioXP workflows workspace">
+                    <header><h2 className="text-xl font-semibold">Workflows</h2>
+                        <p className="mt-1 text-sm text-content-secondary">Plan on the deck, configure each action, preview, save and run. Editing does not send robot commands.</p></header>
+                    <BioXpMethodsWorkspace visible={documentVisible && controlTab === 'workflows'} generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />
+                </section></BioXpWorkflowMutationProvider>}
             </div>
             <div role="tabpanel" id="control-panel-live-deck" aria-labelledby="control-tab-live-deck" hidden={controlTab !== 'live-deck'}>
                 {liveDeckOpened && <>
