@@ -124,7 +124,7 @@ it('puts the Studio canvas beside the form only while an editor is open', async 
     expect(layout().className).not.toContain('xl:grid');
     await act(async () => { await actions!.open('source', original); });
     expect(layout().dataset.editorSplit).toBe('true');
-    expect(layout().className).toContain('xl:grid-cols-2');
+    expect(layout().className).toContain('xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]');
     expect(layout().querySelector('iframe')).not.toBeNull();
     const close = [...document.querySelectorAll('button')].find(node => /^Close editor/.test(node.textContent ?? ''))!;
     await act(async () => close.click());

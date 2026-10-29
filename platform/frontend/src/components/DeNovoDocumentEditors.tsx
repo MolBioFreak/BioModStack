@@ -19,7 +19,7 @@ export function DeNovoDocumentEditorPanels() { return <>{useDeNovoDocumentEditor
 export function DeNovoEditorLayout({ children }: { children: ReactNode }) {
     const split = Boolean(useDeNovoDocumentEditors()?.active);
     return <div data-editor-split={split ? 'true' : 'false'}
-        className={split ? 'space-y-5 xl:grid xl:grid-cols-2 xl:items-start xl:gap-x-5 xl:space-y-0' : 'space-y-5'}>{children}</div>;
+        className={split ? 'space-y-5 xl:grid xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] xl:items-start xl:gap-x-5 xl:space-y-0' : 'space-y-5'}>{children}</div>;
 }
 // Property order is not source identity; compare every retained selector field.
 const key = (value: unknown) => JSON.stringify(value, (_name, item) => item && typeof item === 'object' && !Array.isArray(item)
