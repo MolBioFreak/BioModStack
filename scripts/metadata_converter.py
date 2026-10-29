@@ -154,7 +154,13 @@ class MetadataConverter:
                         
                         # Fold-only Metadata Merging
                         if fold_id in metadata_fold_data:
-                            combined_entries[key].update(metadata_fold_data[fold_id])
+                            fold_only = metadata_fold_data[fold_id]
+                            if candidate_id not in (None, ''):
+                                # A filter stage names its own candidate by file;
+                                # that label must not replace the canonical
+                                # terminal identity this row is keyed by.
+                                fold_only = {k: v for k, v in fold_only.items() if k != 'candidate_id'}
+                            combined_entries[key].update(fold_only)
                             merge_count += 1
 
                     logging.info(f"Processed {metadata_fold_seq_count} fold_id + seq_id metadata entries")

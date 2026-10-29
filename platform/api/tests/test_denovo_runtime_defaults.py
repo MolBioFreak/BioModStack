@@ -114,3 +114,39 @@ def test_native_runners_set_the_environment_their_images_require():
     disco = (REPO_ROOT / 'scripts/run_disco_inference.py').read_text()
     assert 'os.access(hf_cache / "hub", os.W_OK)' in disco
     assert 'env.setdefault("HF_HUB_OFFLINE", "1")' in disco
+
+
+def test_framed_native_log_scheduling_event_is_decoded_and_idempotent(tmp_path):
+    from services import rf_filter_task_roster as roster
+    from test_rf_filter_task_roster import owner
+    job = owner(tmp_path)
+    assert roster.begin(job, job.params)
+    bare = '[30/cfa1c7] Submitted process > PROTEIN_LOCAL_REDESIGN:FilterRFD3 (1)'
+    framed = 'Oct-29 14:06:17.649 [Task submitter] INFO  nextflow.Session - ' + bare
+    assert roster.observe(job, bare)
+    assert roster.observe(job, framed)
+    task = job.provenance[roster.KEY]['stages']['rfd3_backbone_filter']['tasks']['1']
+    assert len(task['executions']) == 1
+    with pytest.raises(ValueError, match='decoded'):
+        roster.observe(job, 'Oct-29 14:06:17.649 [Task submitter] INFO  nextflow.Session - '
+                            '[30/cfa1c7] Submitted process > PROTEIN_LOCAL_REDESIGN:FilterRFD3 (bad)')
+
+
+def test_filter_stage_label_never_replaces_canonical_candidate_identity(tmp_path):
+    import csv
+    import json
+    import sys
+    sys.path.insert(0, str(REPO_ROOT / 'scripts'))
+    from metadata_converter import MetadataConverter
+    canonical = '7ba52db3-b31f-de56-297d-3de7b479b253'
+    fold = tmp_path / 'fold.jsonl'
+    fold.write_text(json.dumps({'fold_id': 0, 'rfd_RoG': 10.3, 'passed': True,
+                                'candidate_id': 'model_0.cif.gz'}) + '\n')
+    fold_seq = tmp_path / 'fold-seq.jsonl'
+    fold_seq.write_text(json.dumps({'candidate_id': canonical, 'fold_id': 0, 'seq_id': None,
+                                    'description': 'model_0', 'pr_RoG': 10.4}) + '\n')
+    output = tmp_path / 'combined.csv'
+    assert MetadataConverter().merge_all(str(fold), str(fold_seq), str(output))
+    rows = list(csv.DictReader(output.open()))
+    assert [r['candidate_id'] for r in rows] == [canonical]
+    assert rows[0]['rfd_RoG'] == '10.3' and rows[0]['pr_RoG'] == '10.4'
