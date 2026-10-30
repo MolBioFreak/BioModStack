@@ -5591,14 +5591,22 @@ async def list_jobs(
             Design.job_id == page.c.id).correlate(page).scalar_subquery()
         query = select(page, page_design_count.label("design_count")).order_by(page.c.created_at.desc())
     else:
-        design_counts = (
-            select(Design.job_id.label("job_id"), func.count(Design.id).label("design_count"))
-            .group_by(Design.job_id).subquery()
+        # Count Designs for the page only. A global GROUP BY over the Designs
+        # table made every Jobs list read the whole retained design history.
+        page_ids = (
+            select(Job.id)
+            .where(*filters)
+            .order_by(Job.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .subquery()
         )
+        design_count = select(func.count(Design.id)).where(
+            Design.job_id == Job.id).correlate(Job).scalar_subquery()
         query = (
-            select(Job, func.coalesce(design_counts.c.design_count, 0).label("design_count"))
-            .outerjoin(design_counts, design_counts.c.job_id == Job.id)
-            .where(*filters).order_by(Job.created_at.desc()).limit(limit).offset(offset)
+            select(Job, design_count.label("design_count"))
+            .where(Job.id.in_(select(page_ids.c.id)))
+            .order_by(Job.created_at.desc())
         )
     result = await session.execute(query)
     if summary:
