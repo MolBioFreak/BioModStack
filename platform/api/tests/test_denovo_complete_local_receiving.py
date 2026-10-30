@@ -98,7 +98,8 @@ def test_legacy_v1_manifest_remains_readable_without_population_reinterpretation
     assert len(result['candidates']) == 1
 
 
-def test_real_source_mapping_and_native_source_document_reach_receiver(tmp_path, monkeypatch):
+@pytest.mark.parametrize('subdir', ['', 'rfd3_sources'])
+def test_real_source_mapping_and_native_source_document_reach_receiver(tmp_path, monkeypatch, subdir):
     from scripts.rfd3_local_redesign.source_mapping import materialize_source, lower_native
     from scripts.rfd3_local_redesign.contract import canonical_json
     real_run = subprocess.run
@@ -107,16 +108,19 @@ def test_real_source_mapping_and_native_source_document_reach_receiver(tmp_path,
         native_input = Path(command[command.index('--native-input') + 1])
         receipt_path = Path(command[command.index('--preparation-receipt') + 1])
         request_path = Path(command[command.index('--request') + 1])
-        native_source = native_input.parent / 'rfd3_source_native.cif'
+        # The real workflow publishes the derived source under rfd3_sources/ and records that relative path.
+        native_source = native_input.parent / subdir / 'rfd3_source_native.cif'
+        native_source.parent.mkdir(exist_ok=True)
+        runtime_input = f'{subdir}/{native_source.name}' if subdir else native_source.name
         mapping = materialize_source(source, native_source)
         request = json.loads(request_path.read_bytes())
         receipt = json.loads(receipt_path.read_bytes())
-        native = lower_native(request['rfd3'], mapping, native_source.name)
+        native = lower_native(request['rfd3'], mapping, runtime_input)
         native_payload = {receipt['design_id']: native}
         native_input.write_text(canonical_json(native_payload) + '\n')
         receipt.update(source_mapping=mapping, native_rfd3=native,
             native_input_sha256=_local_redesign_canonical_sha(native_payload),
-            runtime_input={'path': native_source.name, 'sha256': mapping['native_sha256']})
+            runtime_input={'path': runtime_input, 'sha256': mapping['native_sha256']})
         receipt_path.write_text(json.dumps(receipt))
         return real_run([*command, '--native-source', str(native_source)], **kwargs)
     monkeypatch.setattr(subprocess, 'run', mapped_producer)

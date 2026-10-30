@@ -278,7 +278,9 @@ def main() -> None:
         artifacts.append(_descriptor(
             role="native_source_structure", source_path=derived_source,
             storage_path=storage_root / derived_source.name,
-            relative_path=f"collected/protein_local_redesign/{derived_source.name}",
+            # The workflow publishes the derived source where the receipt's runtime input points
+            # (rfd3_sources/<name>), so the artifact path must follow it rather than assume the folder root.
+            relative_path=f"collected/protein_local_redesign/{native_runtime_input}",
         ))
     candidates: list[dict[str, Any]] = []
     for cif_path in sorted(cif_paths):
