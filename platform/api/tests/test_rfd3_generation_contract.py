@@ -208,6 +208,13 @@ def test_partial_t_flows_through_the_service_request(tmp_path: Path, monkeypatch
     assert normalized["rfd3_generation_request"]["conditioning"]["partial_t"] == 5.0
 
 
+def test_unresolvable_input_structure_is_a_contract_error_not_a_server_error() -> None:
+    with pytest.raises(GenerationContractError, match="input_structure"):
+        normalize_generation_params(
+            {"generator": "rfd3", "min_length": 80, "max_length": 80, "num_designs": 1,
+             "input_structure": "not-an-allowed-root/file.pdb"}, job_name="bad-source")
+
+
 def test_backup_generators_keep_the_deferred_internal_entrypoint() -> None:
     for generator in ("disco", "laproteina"):
         params = {

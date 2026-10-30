@@ -136,7 +136,10 @@ def normalize_generation_params(
         raise GenerationContractError(str(exc)) from exc
     if raw.get("input_structure"):
         from services.rfd3_local_redesign import _resolve_local_redesign_source
-        source = _resolve_local_redesign_source(raw["input_structure"])
+        try:
+            source = _resolve_local_redesign_source(raw["input_structure"])
+        except ValueError as exc:  # Redesign's ContractError; a bad source path is a 422, not a 500
+            raise GenerationContractError(str(exc)) from exc
         request["source"] = {"path": str(source), "sha256": file_sha256(source)}
         if raw.get("source_mapping") == "bms.rfd3.source-map.v1" or raw.get("source_model") is not None:
             request["source_mapping"] = "bms.rfd3.source-map.v1"
