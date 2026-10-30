@@ -51,7 +51,7 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
     const [addHost, setAddHost] = useState<HTMLDivElement | null>(null);
     const [connectionSource, setConnectionSource] = useState<BioXpDeckSelection | null>(null);
     const occurrenceState = occurrence ? methodStateAfter(preview?.simulation, initialState, occurrence) : undefined;
-    const openEditor = () => { const active = activationOrigin.current ?? document.activeElement as HTMLElement; if (!sheetRef.current?.contains(active)) returnFocus.current = active; activationOrigin.current = null; setEditorOpen(true); };
+    const openEditor = () => { const active = activationOrigin.current ?? document.activeElement as HTMLElement; if (!sheetRef.current?.contains(active)) returnFocus.current = active; activationOrigin.current = null; setEditorOpen(true); requestAnimationFrame(() => { if (sheetRef.current) { sheetRef.current.scrollTop = 0; sheetRef.current.scrollIntoView({ block: 'nearest' }); } }); };
     const closeEditor = () => { setEditorOpen(false); const origin = returnFocus.current; if (origin?.isConnected) origin.focus(); else document.querySelector<HTMLElement>('[aria-label="Authoring view"] button')?.focus(); };
     // React portal events follow the outline tree, not the visual sheet ancestor.
     useEffect(() => {

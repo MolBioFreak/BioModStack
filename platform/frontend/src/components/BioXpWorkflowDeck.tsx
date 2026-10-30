@@ -198,7 +198,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                 </g>)}
                 <g className={`bwd-park${selection.station === deckPark.id ? ' is-active' : ''}`} role={readOnly ? 'img' : 'button'} tabIndex={readOnly ? undefined : 0} aria-label="Select Park target" aria-pressed={selection.station === deckPark.id} aria-disabled={live ? !!live.stationDisabledReason(deckPark.id) : undefined} onClick={e => activate(e, () => chooseStation(deckPark.id))} onKeyDown={e => keyboardStation(e, deckPark.id)}>
                     <title>{live?.stationDisabledReason(deckPark.id) ?? 'Park target'}</title>
-                    <circle cx={deckPark.point[0]} cy={deckPark.point[1]} r="6" /><text className="bwd-map-label" x={deckPark.point[0] + 12} y={deckPark.point[1] + 4}>Park target</text>
+                    <circle cx={deckPark.point[0]} cy={deckPark.point[1]} r="6" /><text className="bwd-map-label" x={deckPark.point[0] + 12} y={deckPark.point[1] + 4}>Gantry park</text>
                 </g>
                 {live && <g aria-label="Station move buttons">
                     {deckResources.filter(resource => resource.kind !== 'strip').map(resource => moveButton(resource.id, resource.label,

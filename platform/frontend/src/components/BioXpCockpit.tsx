@@ -1287,8 +1287,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             </div>
             <div role="tabpanel" id="control-panel-workflows" aria-labelledby="control-tab-workflows" hidden={controlTab !== 'workflows'}>
                 {workflowsOpened && <BioXpWorkflowMutationProvider><section className="w-full space-y-4" aria-label="BioXP workflows workspace">
-                    <header><h2 className="text-xl font-semibold">Workflows</h2>
-                        <p className="mt-1 text-sm text-content-secondary">Plan on the deck, configure each action, preview, save and run. Editing does not send robot commands.</p></header>
+                    <header className="flex items-baseline gap-3"><h2 className="text-lg font-semibold">Workflows</h2>
+                        <span className="text-xs text-content-secondary">Editing never moves the robot.</span></header>
                     <BioXpMethodsWorkspace visible={documentVisible && controlTab === 'workflows'} generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />
                 </section></BioXpWorkflowMutationProvider>}
             </div>

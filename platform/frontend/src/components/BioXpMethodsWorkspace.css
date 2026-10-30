@@ -239,3 +239,9 @@
 .bioxp-transfer-speeds { display: grid; gap: 0.35rem; }
 .bioxp-speed-row { display: grid; grid-template-columns: 10rem minmax(8rem, 1fr) 6rem 2.5rem auto; gap: 0.5rem; align-items: center; }
 .bioxp-speed-row input[type="number"] { width: 6rem; }
+.bioxp-method-map .bwd-canvas-presentation .bwd-map { width:100%; }
+.bioxp-method-map .bwd-body { stroke:var(--border-secondary); stroke-width:1.4; }
+.bioxp-method-map .bwd-well { stroke:var(--text-secondary); stroke-opacity:.55; }
+.bioxp-method-library, .bioxp-method-start, .bioxp-method-fixtures { display:inline-block; margin-right:14px; vertical-align:top; }
+.bioxp-method-map .bwd-canvas-presentation .bwd-map { height:clamp(560px, calc(100dvh - 160px), 980px); }
+.bioxp-method-canvas { min-height:clamp(600px, calc(100dvh - 120px), 1020px); }
