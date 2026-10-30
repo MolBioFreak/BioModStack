@@ -3326,7 +3326,9 @@ function ResultsViewerContent() {
         enabled: publishedNativeJob && activeJob?.status === 'completed',
         retry: false, refetchOnWindowFocus: false,
     });
-    const publishedNativeTotal = publishedNativeTotalQuery.data?.total;
+    // Reward-table and timing rows are observations, not generated candidates; the page reports the
+    // molecular count separately, and the raw total is the fallback when it does not.
+    const publishedNativeTotal = publishedNativeTotalQuery.data?.record_counts?.molecular_records ?? publishedNativeTotalQuery.data?.total;
     const nativeRedesignQuery = useQuery({
         queryKey: ['rfd3-local-redesign', activeJob?.id],
         queryFn: () => fetchRFD3LocalRedesign(activeJob!.id),

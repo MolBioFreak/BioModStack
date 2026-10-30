@@ -145,6 +145,29 @@ it.each(['rfd4_proteina', 'complexa'] as const)('names the published %s record c
     expect(totals).toContain(1);   // the header reads only the total, one record
 }, 30000);
 
+it('counts generated molecules, not reward and timing rows, in the published native header', async () => {
+    const job = { id: 'fixture-job', name: 'TEST native publication', model_id: 'complexa', mode: 'generate', status: 'completed', params: {}, design_count: 0,
+        provenance: { native_generation_publication: { contract: 'complexa_v1' } }, created_at: '2026-01-01T00:00:00Z' };
+    api.defaults.adapter = async config => {
+        const url = String(config.url);
+        let data: unknown = [];
+        if (url === '/api/jobs') data = { jobs: [job], total: 1 };
+        else if (url === '/api/jobs/fixture-job') data = job;
+        else if (url.endsWith('/generation-results')) data = { records: [], total: 5, offset: 0, limit: 1, publication: { contract: 'complexa_v1' }, receipt: {},
+            record_counts: { total: 5, observations: 3, molecular_records: 2, populations: { generation: 2, observation: 3 } }, model_id: 'complexa', owner_model_id: 'complexa' };
+        else if (url === '/api/designs') data = { designs: [], total: 0, model_counts: {} };
+        else if (url.includes('/integration')) data = { enabled: false };
+        else if (url.includes('/backbones')) data = { backbones: [] };
+        return { data, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    await mount(<Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>);
+    for (let i = 0; i < 300 && !container.textContent?.includes('2 generated candidates'); i++) {
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
+    }
+    expect(container.textContent).toContain('2 generated candidates');
+    expect(container.textContent).not.toContain('5 generated candidates');
+}, 30000);
+
 it.each(['generation', 'redesign'] as const)('retains the inspected %s page and exact continuation identity on reopen', async kind => {
     const source = kind === 'generation'
         ? { job_id: 'fixture-job', design_id: 'persisted-design', output_format: 'native' as const }
