@@ -99,3 +99,7 @@ htmlcov/
 /.ngs_latest_papers/
 .idea/
 .DS_Store
+
+# A virtualenv is a host artifact, never a tracked path (a committed symlink
+# here once made the canonical checkout link to itself).
+platform/api/.venv

@@ -1,6 +1,7 @@
 """Bounded read-only analytical access to verified Parquet artifacts."""
 from __future__ import annotations
 
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -21,13 +22,26 @@ def _validated_scalar(value: object) -> object:
     raise ScientificArtifactQueryError("query filter value is outside the supported scalar types")
 
 
+_THREAD_CONNECTION = threading.local()
+
+
 def _query_connection(path: object) -> duckdb.DuckDBPyConnection:
-    connection = duckdb.connect(database=":memory:")
+    """Reuse one analytical connection per thread.
+
+    DuckDB connection setup dominated artifact reads: a results page opened a new
+    in-memory database for every artifact it inspected. One connection per thread
+    is reused instead; the allowed directory is re-scoped on every call so an
+    artifact can never read outside its own directory.
+    """
+    connection = getattr(_THREAD_CONNECTION, "connection", None)
+    if connection is None:
+        connection = duckdb.connect(database=":memory:")
+        connection.execute("SET threads=2")
+        connection.execute("SET memory_limit='512MB'")
+        connection.execute("SET max_temp_directory_size='1GB'")
+        _THREAD_CONNECTION.connection = connection
     allowed_directory = str(path).rsplit("/", 1)[0].replace("'", "''")
     connection.execute(f"SET allowed_directories=['{allowed_directory}']")
-    connection.execute("SET threads=2")
-    connection.execute("SET memory_limit='512MB'")
-    connection.execute("SET max_temp_directory_size='1GB'")
     return connection
 
 
@@ -162,11 +176,9 @@ class ArtifactQuery:
 @contextmanager
 def artifact_query(artifact: Mapping[str, Any], *, root: Path | str | None = None):
     with verified_artifact_snapshot(artifact, root=root) as path:
-        connection = _query_connection(path)
-        try:
-            yield ArtifactQuery(path, connection)
-        finally:
-            connection.close()
+        # The connection is thread-local and reused; closing it here re-created a
+        # fresh in-memory database for every artifact.
+        yield ArtifactQuery(path, _query_connection(path))
 
 
 def query_rows(
