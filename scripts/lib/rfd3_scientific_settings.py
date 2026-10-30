@@ -238,6 +238,9 @@ CONDITION_FIELDS = {
     "infer_ori_strategy": {"type": "string"},
     "plddt_enhanced": {"type": "boolean"},
     "is_non_loopy": {"type": "boolean"},
+    # rfd3 InputSpecification.partial_t: Angstroms of noise (>= 0; native docs recommend <= 15).
+    # None leaves partial diffusion off. Native rules: needs an input structure, forbids length.
+    "partial_t": {"type": "number", "minimum": 0},
     "redesign_motif_sidechains": {"type": "boolean_or_string"},
 }
 
@@ -287,4 +290,6 @@ def conditioning_settings(raw):
             result[key] = value
         else:
             result[key] = _validate(value, CONDITION_FIELDS[key], key)
+            if key == "partial_t" and result[key] < 0:
+                raise ValueError("partial_t must be non-negative")
     return result

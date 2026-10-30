@@ -60,6 +60,8 @@ def validate_request(value: Any) -> dict[str, Any]:
             raise ContractError(str(exc)) from exc
     if "source" in request:
         _exact(request["source"], {"path", "sha256"}, "source")
+    if (request.get("conditioning") or {}).get("partial_t") is not None and "source" not in request:
+        raise ContractError("partial_t (partial diffusion) requires an input structure")
     if request["schema"] != REQUEST_SCHEMA:
         raise ContractError(f"unsupported request schema: {request['schema']!r}")
     for field in ("request_id", "job_id"):

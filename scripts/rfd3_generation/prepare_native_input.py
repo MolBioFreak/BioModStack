@@ -25,6 +25,9 @@ def prepare(request: dict, *, source_destination: Path | None = None) -> tuple[d
     if "conditioning" in request:
         from scripts.lib.rfd3_scientific_settings import conditioning_settings
         native["generation_0"].update(conditioning_settings(request["conditioning"]))
+    if native["generation_0"].get("partial_t") is not None:
+        # Native RFD3 rejects `length` during partial diffusion; the input structure sets the size.
+        native["generation_0"].pop("length", None)
     source_mapping = None
     if "source" in request:
         source = Path(request["source"]["path"])

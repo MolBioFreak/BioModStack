@@ -145,6 +145,69 @@ def test_general_rfd3_request_rejects_invalid_ranges_and_unknown_fields() -> Non
         )
 
 
+def _prepare_module():
+    """Import the generation scripts with their own `contract`, not the Redesign one of the same name."""
+    import importlib
+    import sys
+    root = Path(__file__).resolve().parents[3]
+    folder = str(root / "scripts" / "rfd3_generation")
+    for name in ("contract", "prepare_native_input"):
+        sys.modules.pop(name, None)
+    sys.path.insert(0, folder)
+    try:
+        return importlib.import_module("prepare_native_input"), sys.modules["contract"]
+    finally:
+        sys.path.remove(folder)
+
+
+def _generation_request(tmp_path: Path, conditioning: dict | None, *, with_source: bool = True) -> dict:
+    request = {
+        "schema": "bms.rfd3.generation.request.v1", "request_id": "req-1", "job_id": "job-1",
+        "generation": {"min_length": 90, "max_length": 130, "num_designs": 2},
+        "execution": {"seed": 1, "dump_trajectories": False},
+    }
+    if conditioning is not None:
+        request["conditioning"] = conditioning
+    if with_source:
+        source = tmp_path / "source.cif"
+        source.write_text("data_x\n", encoding="utf-8")
+        request["source"] = {"path": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+    return request
+
+
+def test_partial_t_is_a_native_conditioning_field_that_drops_length(tmp_path: Path) -> None:
+    prepare = _prepare_module()[0].prepare
+    native, receipt = prepare(_generation_request(tmp_path, {"partial_t": 6.5}))
+    spec = native["generation_0"]
+    # rfd3 InputSpecification rejects `length` during partial diffusion and needs an input structure.
+    assert spec["partial_t"] == 6.5 and "length" not in spec and spec["input"].endswith("source.cif")
+    assert receipt["native_rfd3"]["partial_t"] == 6.5
+    plain, _ = prepare(_generation_request(tmp_path, {"is_non_loopy": True}))
+    assert plain["generation_0"]["length"] == "90-130" and "partial_t" not in plain["generation_0"]
+
+
+def test_partial_t_requires_a_source_and_a_non_negative_number(tmp_path: Path) -> None:
+    prepare, contract = _prepare_module()
+    with pytest.raises(contract.ContractError, match="requires an input structure"):
+        prepare.prepare(_generation_request(tmp_path, {"partial_t": 4}, with_source=False))
+    with pytest.raises(contract.ContractError, match="non-negative"):
+        prepare.prepare(_generation_request(tmp_path, {"partial_t": -1}))
+    with pytest.raises(contract.ContractError, match="partial_t must be finite numeric"):
+        prepare.prepare(_generation_request(tmp_path, {"partial_t": "far"}))
+    assert prepare.prepare(_generation_request(tmp_path, {"partial_t": None}))[0]["generation_0"]["length"] == "90-130"
+
+
+def test_partial_t_flows_through_the_service_request(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "in.cif"
+    source.write_text("data_x\n", encoding="utf-8")
+    monkeypatch.setattr("services.rfd3_local_redesign._resolve_local_redesign_source", lambda value: source)
+    normalized, request, _ = normalize_generation_params(
+        {"generator": "rfd3", "min_length": 90, "max_length": 130, "num_designs": 1, "input_structure": str(source),
+         "conditioning": {"partial_t": 5.0}}, job_name="partial")
+    assert request["conditioning"] == {"partial_t": 5.0} and request["source"]["path"] == str(source)
+    assert normalized["rfd3_generation_request"]["conditioning"]["partial_t"] == 5.0
+
+
 def test_backup_generators_keep_the_deferred_internal_entrypoint() -> None:
     for generator in ("disco", "laproteina"):
         params = {
