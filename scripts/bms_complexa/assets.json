@@ -74,23 +74,23 @@
     "upstream_base_tag": "24.08-py3",
     "python": "3.12.13",
     "torch": "2.7.0+cu128",
-    "jax": "0.4.29",
+    "jax": "0.4.38",
     "tmol_revision": "d8a6f7f9649d36e74440bca25246ee7c467ce490",
-    "status": "built_cpu_qualified_and_published; not activated",
+    "status": "rebuilt for sm_120; published to the development lane; GPU-qualified on one 16 GB sm_120 card only",
     "unresolved": [
-      "JAX/JAXlib 0.4.29 failed the retained tiny sm120 GPU probe; native AF2 reward/refinement on Blackwell remains unqualified. No CPU fallback, JAX upgrade, reward removal or admission gate is added.",
+      "JAX/JAXlib 0.4.38 (with the ColabDesign tree_util shim in apptainer/complexa-colabdesign-tree-compat.py) replaced 0.4.29, which could not target sm_120. On an RTX 5060 Ti (sm_120) the AF2 reward then computed real values (job a9254d51, 2 rewards, no ptxas error), but only with XLA_PYTHON_CLIENT_PREALLOCATE=false; with JAX's default preallocation the 16 GB card ran out of memory. The default-preallocation run has not been repeated on a larger GPU.",
       "SC/DSSP/HBPLUS binaries are not distributed by upstream. Foldseek/MMseqs are not installed by its public builder.",
       "Optional AF2/RF3/ESM/MPNN checkpoint identities are acquired only for selected native operations; none acquired by this packaging continuation.",
       "No checkpoint-backed inference, native oracle scoring or remote scientific acceptance has been run."
     ],
     "cuda": "12.8.1",
-    "jaxlib": "0.4.29+cuda12.cudnn91",
+    "jaxlib": "0.4.38",
     "uv": "0.11.26",
     "inputs": {
-      "apptainer/complexa.def": "e8a7f6873e23527703cfc7f188036e5f20b63c13ffe0b65e334569d735e0eef8",
+      "apptainer/complexa.def": "96c6052fb60efb16bf49ca40c247f5a3580505b2d6130708c0eab3322245bf3f",
       "apptainer/locks/complexa-NOTICES.md": "a1ffc15c678c8501ff054088467141866795c3397b1969f4784e1505eb8d67e0",
       "apptainer/locks/complexa-build.txt": "463df3594dc482c49381e9c950f11d1b76d31a9154441fb03b3572e9bd8a492f",
-      "apptainer/locks/complexa-requirements.txt": "820a9d1234ca032d9dda0b99bc6cad9f415085bb8e7abf6685c374b1c57b2a70"
+      "apptainer/locks/complexa-requirements.txt": "1c68fe8252d6941a95c5857c5bcc82cb037e510d52256b7dcf1fcaa4e74f596d"
     },
     "dependency_metadata_conflicts": [
       {
@@ -115,11 +115,10 @@
       }
     ],
     "image": {
-      "sha256": "49d75dc1d9c9e50051953df1d30e033cc4e83a91c8e47194e40ccec8d2044eac",
-      "bytes": 10889400320,
-      "hf_key": "sha256/49d75dc1d9c9e50051953df1d30e033cc4e83a91c8e47194e40ccec8d2044eac/image.sif",
+      "sha256": "06c5aac43db0c58a7637fb7820d11f690045d3802910d406e73551d2f53ecb3b",
+      "bytes": 10809212928,
       "filesystem": "squashfs-zstd",
-      "activation": "unchanged"
+      "activation": "development lane (local image store); not uploaded to Hugging Face"
     },
     "installed_inventory_sha256": {
       "installed-packages.txt": "366ad384ba5b8f98f3421fc65e299b2822c2a9e1b108ec9d5bddab469efff7de",

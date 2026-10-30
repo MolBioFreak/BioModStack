@@ -44,6 +44,8 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); api.defaults.adapter = adapter; vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.replaceChildren(); expect(unexpected).toEqual([]); });
 const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
+// The Results workspace and its native header read arrive through lazy chunks; wait on the clock, not on a tick count.
+const until = async (done: () => boolean, ms = 110000) => { const end = Date.now() + ms; while (!done() && Date.now() < end) await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); }); };
 const button = (label: string) => Array.from(container.querySelectorAll('button')).find(b => b.textContent === label)!;
 const viewer = () => JSON.parse(container.querySelector('[data-testid="viewer"]')!.textContent!);
 const mount = async (element: React.ReactNode) => { await act(async () => root.render(<MemoryRouter initialEntries={['/designs/fixture-job']}><QueryClientProvider client={client}><ThemeProvider>{element}</ThemeProvider></QueryClientProvider></MemoryRouter>)); await flush(); };
@@ -114,10 +116,12 @@ it.each([
     await mount(<Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>);
     const noun = kind === 'generation' ? 'generated' : 'published';
     const unknown = kind === 'generation' ? 'Generated count unavailable' : 'Candidate count unavailable';
-    expect(container.textContent).toContain(state === 'missing' ? unknown : `${state === 'zero' ? '0' : '1,003'} ${noun} candidates`);
+    const expected = state === 'missing' ? unknown : `${state === 'zero' ? '0' : '1,003'} ${noun} candidates`;
+    await until(() => !!container.textContent?.includes(expected));
+    expect(container.textContent).toContain(expected);
     expect(container.textContent).not.toContain('0 designs');
     expect(calls.filter(url => url.endsWith(endpoint))).toHaveLength(1);
-});
+}, 120000);
 
 it.each(['rfd4_proteina', 'complexa'] as const)('names the published %s record count in the real ResultsViewer header, not zero Design rows', async model => {
     const job = { id: 'fixture-job', name: 'TEST native publication', model_id: model, mode: 'generate', status: 'completed', params: {}, design_count: 0,
@@ -137,13 +141,11 @@ it.each(['rfd4_proteina', 'complexa'] as const)('names the published %s record c
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
     await mount(<Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>);
-    for (let i = 0; i < 300 && !container.textContent?.includes('17 generated candidates'); i++) {
-        await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });   // lazy workspace + total read
-    }
+    await until(() => !!container.textContent?.includes('17 generated candidates'));
     expect(container.textContent).toContain('17 generated candidates');
     expect(container.textContent).not.toContain('0 designs');
     expect(totals).toContain(1);   // the header reads only the total, one record
-}, 30000);
+}, 120000);
 
 it('counts generated molecules, not reward and timing rows, in the published native header', async () => {
     const job = { id: 'fixture-job', name: 'TEST native publication', model_id: 'complexa', mode: 'generate', status: 'completed', params: {}, design_count: 0,
@@ -161,12 +163,10 @@ it('counts generated molecules, not reward and timing rows, in the published nat
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
     await mount(<Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>);
-    for (let i = 0; i < 300 && !container.textContent?.includes('2 generated candidates'); i++) {
-        await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
-    }
+    await until(() => !!container.textContent?.includes('2 generated candidates'));
     expect(container.textContent).toContain('2 generated candidates');
     expect(container.textContent).not.toContain('5 generated candidates');
-}, 30000);
+}, 120000);
 
 it.each(['generation', 'redesign'] as const)('retains the inspected %s page and exact continuation identity on reopen', async kind => {
     const source = kind === 'generation'
