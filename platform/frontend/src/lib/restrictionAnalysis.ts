@@ -319,6 +319,9 @@ export async function fetchRestrictionAnalysisBatch({ source, catalog, records, 
         analysis: { counts: { ...counts }, enzyme_summaries: [...summaries], occurrences: [...occurrences], grouped_cleavages: [...groupedCleavages], warnings: [...warnings], limitations: [...limitations] },
     });
 
+    // These limits can be reduced by splitting the enzyme set. Do not retry
+    // source-size, malformed-request, or unknown failures as enzyme batches.
+    const splittableBudgets = new Set(['scan_work', 'scan_patterns', 'occurrences', 'events', 'response_bytes']);
     // Binary subdivision terminates at single IDs (at most 2N-1 attempts).
     const pending: string[][] = [];
     for (let start = 0; start < enzymeIds.length; start += maximum) pending.push(enzymeIds.slice(start, start + maximum));
@@ -329,7 +332,7 @@ export async function fetchRestrictionAnalysisBatch({ source, catalog, records, 
             response = await fetchRestrictionAnalysis({ source, catalog: binding, enzymeIds: chunkIds, transport, signal });
         } catch (error) {
             if (signal?.aborted) throw error;
-            if (error instanceof RestrictionApiError && error.status === 413 && error.code === 'request_too_large' && error.budget === 'scan_work' && chunkIds.length > 1) {
+            if (error instanceof RestrictionApiError && error.status === 413 && error.code === 'request_too_large' && error.budget !== null && splittableBudgets.has(error.budget) && chunkIds.length > 1) {
                 const middle = Math.ceil(chunkIds.length / 2);
                 pending.splice(index + 1, 0, chunkIds.slice(0, middle), chunkIds.slice(middle));
                 continue;

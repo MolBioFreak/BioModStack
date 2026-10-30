@@ -5,6 +5,7 @@
  */
 
 import { SeqViz } from "seqviz";
+import { isSequenceAnnotation } from './featureCatalog';
 import { restrictionSpecialCase } from '../../lib/restrictionSpecialCases';
 import {
     useCallback,
@@ -435,7 +436,7 @@ export function SequenceViewer({
     const sequenceLength = sequenceData.sequence.length;
 
     const featureAnnotations = useMemo(() => {
-        return sequenceData.features.flatMap((feature) => {
+        return sequenceData.features.filter(isSequenceAnnotation).flatMap((feature) => {
             const segments = feature.segments && feature.segments.length > 0
                 ? feature.segments
                 : [{ start: feature.start, end: feature.end }];

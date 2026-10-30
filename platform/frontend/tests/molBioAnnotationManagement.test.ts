@@ -24,6 +24,16 @@ test('clear annotations removes features only and preserves primers and sequence
     assert.notEqual(cleared, original);
 });
 
+test('clear annotations preserves imported source metadata, including partial source regions', () => {
+    const source = { id: 'metadata', type: ' Source ', name: 'origin', start: 1, end: 7,
+        qualifiers: { organism: ['synthetic construct'] } };
+    const original = { features: [source, { id: 'real', type: 'misc_feature', name: 'source', start: 0, end: 8 }] };
+    const cleared = clearFeatureAnnotations(original);
+    assert.deepEqual(cleared.features, [source]);
+    assert.equal(clearFeatureAnnotations(cleared), cleared);
+    assert.equal(original.features.length, 2);
+});
+
 test('annotation alignment accepts exact identity and a unique circular origin rotation', () => {
     assert.deepEqual(
         resolveAnnotationSequenceAlignment('AAAACCCCGGGG', 'AAAACCCCGGGG', true),

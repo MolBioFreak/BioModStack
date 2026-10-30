@@ -70,7 +70,7 @@ async def hub_stores(tmp_path):
         sequence = NucleotideSequence(
             id="sequence-pl1480", name="PL1480", description="Synthetic circular DNA", sequence="AACCGGTT", sequence_type="dna",
             molecule_strandedness="double", molecule_orientation="forward", is_circular=True, length=8,
-            features=[{"name": "CMV promoter", "type": "promoter", "start": 0, "end": 4, "strand": 1}, {"name": "NeoR/KanR", "type": "CDS", "start": 6, "end": 2, "strand": -1}],
+            features=[{"name": "source", "type": "source", "start": 0, "end": 8, "strand": 1}, {"name": "CMV promoter", "type": "promoter", "start": 0, "end": 4, "strand": 1}, {"name": "NeoR/KanR", "type": "CDS", "start": 6, "end": 2, "strand": -1}],
             primers=[], analysis_tracks=[], organism=None, version=1, gc_content=50.0,
         )
         molbio_session.add(sequence)
@@ -191,6 +191,9 @@ async def test_project_hub_read_model_is_exact_linked_typed_and_bulk_free(hub_st
     assert payload["plasmids"][0]["content_digest"]
     assert payload["plasmids"][0]["source_store_id"] == "molbio"
     assert payload["plasmids"][0]["schema_name"]
+    assert payload["plasmids"][0]["feature_count"] == 2
+    assert "source" not in payload["plasmids"][0]["feature_labels"]
+    assert all(segment["feature_type"] != "source" for segment in payload["plasmids"][0]["map_segments"])
     assert payload["plasmids"][0]["map_segments"][1] == {
         "start": 6, "end": 2, "tone": "accent", "label": "NeoR/KanR", "feature_type": "CDS", "strand": "reverse",
     }

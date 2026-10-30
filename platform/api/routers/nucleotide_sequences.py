@@ -727,7 +727,15 @@ async def list_sequences(
     offset: int = Query(0, ge=0),
 ):
     """List all nucleotide sequences."""
-    feature_count = func.coalesce(func.json_array_length(NucleotideSequence.features), 0)
+    # Match the viewer's annotation count without hydrating sequence blobs.
+    # GenBank source records are retained metadata, not map annotations.
+    feature_entries = func.json_each(NucleotideSequence.features).table_valued("value", "type")
+    feature_count = (
+        select(func.count()).select_from(feature_entries)
+        .where(feature_entries.c.type == "object")
+        .where(func.lower(func.trim(func.coalesce(func.json_extract(feature_entries.c.value, "$.type"), ""))) != "source")
+        .correlate(NucleotideSequence).scalar_subquery()
+    )
     summary_fields = (
         "id", "name", "description", "sequence_type", "molecule_strandedness",
         "molecule_orientation", "is_circular", "length", "gc_content", "organism",

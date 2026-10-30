@@ -1319,7 +1319,7 @@ def _complete_analysis_pipeline(
     )
     canonical_bytes = response.model_dump_json(by_alias=True).encode("utf-8")
     if len(canonical_bytes) > MAX_RESPONSE_BYTES:
-        raise AnalysisLimitError("analysis response exceeds byte limit")
+        raise AnalysisLimitError("analysis response exceeds byte limit", budget="response_bytes", limit=MAX_RESPONSE_BYTES, observed=len(canonical_bytes))
     return canonical_bytes
 
 

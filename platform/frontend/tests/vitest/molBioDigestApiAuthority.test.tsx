@@ -24,6 +24,22 @@ const simulation = { fragments: [
 const ack = (operation_id: string) => ({ schema: 'bms.molbio.restriction-digest-saved-ack.v1', operation_id, source_revision_id: 'revision', catalog_id: 'catalog-v1', catalog_sha256: 'a'.repeat(64), request_sha256: 'b'.repeat(64), result_sha256: 'c'.repeat(64), outputs: [] });
 
 describe('DigestPanel backend authority', () => {
+    it('does not apply an incomplete full-catalog result as a complete map group', async () => {
+        container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+        const mapChange = vi.fn();
+        const scan = vi.fn().mockResolvedValue({ ...analysis, complete: false, failed_enzyme_ids: ['BamHI'] });
+        await act(async () => root?.render(<DigestPanel sequenceData={sequence} sequenceId={null}
+            onHighlight={vi.fn()} selectedEnzymes={['EcoRI']} onEnzymesChange={mapChange}
+            catalog={catalog} catalogRecords={[record, bamRecord]} analysis={analysis}
+            authorityLoading={false} authorityError={null} digestSimulation={null} digestLoading={false}
+            digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={vi.fn()} onAnalyzeAll={scan} />));
+        const map = [...container.querySelectorAll('button')].find(button => button.textContent === 'Map all 1x')!;
+        await act(async () => map.click());
+        expect(scan).toHaveBeenCalledTimes(1);
+        expect(mapChange).not.toHaveBeenCalled();
+        expect(map.getAttribute('aria-pressed')).toBe('false');
+        expect(container.querySelector('[role="alert"]')?.textContent).toContain('scan is incomplete');
+    });
     it.each([false, true])('keeps the current saved result when a previous save finishes late (failure=%s)', async (lateFailure) => {
         const preview = { ...simulation, source: { kind: 'molecular_revision', sequence_id: 'source', revision_id: 'revision', content_sha256: 'a'.repeat(64), topology: 'linear' }, catalog, selected_enzyme_ids: ['EcoRI'], simulation_sha256: null } as RestrictionDigestSimulation;
         const next = { ...preview, source: { ...preview.source, revision_id: 'next-revision' } };

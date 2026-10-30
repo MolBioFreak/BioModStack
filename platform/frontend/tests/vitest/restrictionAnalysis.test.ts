@@ -146,7 +146,7 @@ describe('restriction API boundary', () => {
         } finally { vi.unstubAllGlobals(); }
     });
 
-    it('molbio-sanity-c splits only typed work budgets with complete motif-only coverage', async () => {
+    it.each(['scan_work', 'scan_patterns', 'occurrences', 'events', 'response_bytes'])('splits typed %s limits with complete coverage', async (budget) => {
         const ids = ['A', 'B', 'C', 'D'];
         const records = ids.map((enzyme_id) => ({ ...clone(RECORD), enzyme_id, canonical_name: enzyme_id, analysis_capability: 'recognition_only' as const }));
         const catalog = { ...clone(RECEIPT), counts: { ...COUNTS, total: 4, geometry_ready: 0, commercial_geometry_ready: 0, unknown_geometry: 4 } };
@@ -155,7 +155,7 @@ describe('restriction API boundary', () => {
         const transport = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
             const ids = JSON.parse(String(init?.body)).scope.enzyme_ids as string[];
             calls.push(ids);
-            if (ids.length > 1) return new Response(JSON.stringify({ detail: { code: 'request_too_large', budget: 'scan_work', limit: 1, observed: 2 } }), { status: 413 });
+            if (ids.length > 1) return new Response(JSON.stringify({ detail: { code: 'request_too_large', budget, limit: 1, observed: 2 } }), { status: 413 });
             const response = clone(ANALYSIS);
             response.catalog = catalog;
             response.source = { ...SOURCE, kind: 'molecular_revision', sequence_id: 'seq', revision_id: 'rev', revision_number: 1 };

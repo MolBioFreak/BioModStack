@@ -58,6 +58,7 @@ from services.ngs_molbio_capabilities import NgsMolBioCapabilityError
 from build_identity import deployed_source_identity
 from services.molbio_ngs_member_receipts import persist_member_receipt, resolve_molecular_revision_receipt
 from services.molbio_persistence import begin_immediate_molbio_write, record_sequence_revision
+from services.molbio_feature_display import is_sequence_annotation
 from molbio_ngs_services import RevisionConflict as NativeRevisionConflict, StateMember, save_state_revision
 from services.global_experiments.project_datasets import (
     InvalidProteinDatasetLifecycle,
@@ -737,6 +738,7 @@ async def project_hub(
             continue
         snapshot = revision.snapshot
         features = snapshot.get("features") if isinstance(snapshot.get("features"), list) else []
+        features = [feature for feature in features if is_sequence_annotation(feature)]
         labels = [str(item.get("name") or item.get("label") or item.get("type") or "Feature") for item in features if isinstance(item, dict)]
         folded = [label.casefold() for label in labels]
         sequence_id = revision.document_id
