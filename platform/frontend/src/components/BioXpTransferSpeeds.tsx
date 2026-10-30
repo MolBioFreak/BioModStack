@@ -8,6 +8,7 @@ const ROWS: Row[] = [
     { key: 'dispense_speed', label: 'Dispense speed', unit: 'µL/s', min: 1, max: 600, step: 1 },
     { key: 'air_gap_aspiration_speed_ul_s', label: 'Air gap speed', unit: 'µL/s', min: 1, max: 100, step: 1 },
     { key: 'aspiration_delay_ms', label: 'Pause after aspirate', unit: 'ms', min: 0, max: 2000, step: 10 },
+    { key: 'conditioning_volume_ul', label: 'Conditioning volume', unit: 'µL', min: 0, max: 20, step: 0.025 },
 ];
 const num = (v: unknown): number | null => { const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN; return Number.isFinite(n) ? n : null; };
 
@@ -49,6 +50,7 @@ export function BioXpTransferSpeeds({ liquid, recipe, onLiquid, onRecipe }: { li
             <span>ms</span>
             {timeout !== null ? <button type="button" onClick={() => { const next = { ...recipe }; delete next.timeout_ms; onRecipe(next); }}>Use automatic</button> : <small>automatic: 2 × expected time + 1 s, at least 2 s</small>}
         </div>
+        <small>Conditioning: extra liquid drawn with the sample and returned to the source before the dispense (Tecan's method for 1 µL contact dispenses). 0 turns it off.</small>
         <small>Defaults are starting points (Tecan ADP guide; small tips cross-checked with Opentrons), not measured on this robot.</small>
     </fieldset>;
 }

@@ -279,3 +279,40 @@ def test_default_transfer_timeout_scales_with_strokes_and_keeps_authored():
     authored = {'timeout_ms': 9000, 'commanded_aspiration_ul': 5, 'aspiration_speed_ul_s': 1}
     default_transfer_timeout(authored)
     assert authored['timeout_ms'] == 9000
+
+
+def _class_transfer(class_id, volume, requested=None):
+    import json as _json
+    from bioxp_method_compiler import compile_method
+    from bioxp_method_liquids import starter_entries
+    entry = next(e for e in starter_entries() if e['id'] == class_id)
+    step = {'step_id': 's1', 'type': 'action', 'action': 'transfer', 'label': 't', 'inputs': {
+        'source': {'station': 'LOC_RC', 'location_id': 3, 'wells': ['A1']},
+        'destination': {'station': 'LOC_OC', 'location_id': 1, 'wells': ['A1']},
+        'liquid': {'liquid_class': entry, 'context': deepcopy(entry['context']), 'requested': requested or {}},
+        'recipe': {}, 'channels': [0], 'volume_ul': volume,
+        'source_position_flag': '2', 'destination_position_flag': '2',
+        'source_lift_height_steps': None, 'destination_lift_height_steps': None}}
+    result = compile_method({'method': {'schema': 'bms.bioxp-method.v1', 'name': 't', 'steps': [step]},
+                             'bindings': {}, 'dependencies': {}, 'initial_state': {}})
+    assert result['document'], [i['message'] for i in result['issues'] if i.get('category') != 'advisory']
+    return next(a['params']['recipe'] for a in result['document']['stages'][0]['actions']
+                if a['params'].get('operation') == 'cavro_liquid_recipe')
+
+
+def test_half_microliter_runs_with_class_conditioning_and_scaled_correction():
+    recipe = _class_transfer('water-t10-1ul-single-p6', '0.5')
+    multi = recipe['multi']
+    assert recipe['mode'] == 'multi' and multi['sample_count'] == 1
+    assert multi['conditioning_volume_ul'] == 4.575 and multi['conditioning_back_to_source_count'] == 1
+    assert multi['aliquots'][0]['segments'][0]['volume_ul'] == '0.5875'  # 1.175/1 ratio at 0.5 uL
+    assert recipe['commanded_aspiration_ul'] == '5.1625' and recipe['target_liquid_ul'] == '5.075'
+
+
+def test_conditioning_is_editable_and_zero_turns_it_off():
+    on = _class_transfer('water-t50-5ul-single-p6', '2', {'conditioning_volume_ul': 3})
+    assert on['multi']['conditioning_volume_ul'] == 3
+    off = _class_transfer('water-t10-1ul-single-p6', '1', {'conditioning_volume_ul': 0})
+    assert off['multi']['conditioning_back_to_source_count'] == 0
+    plain = _class_transfer('water-t50-5ul-single-p6', '2')
+    assert plain['mode'] == 'single' and plain['commanded_aspiration_ul'] == '2.5'

@@ -293,6 +293,97 @@ def liquid_resolution(inputs, dependencies):
     return resolution
 
 
+def _dec(value):
+    try:
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _plain(value):
+    text = format(value.normalize(), 'f')
+    return text
+
+
+def conditioned_single(inputs):
+    """A single transfer whose class (or request) carries a conditioning volume.
+
+    Native Recipe holds conditioning only in its multi block, so such a transfer
+    runs as one aliquot with the conditioning returned to the source first
+    (Tecan 399156 p6: the 1 uL contact dispense includes 4.575 uL conditioning).
+    """
+    recipe, liquid = inputs.get('recipe'), inputs.get('liquid')
+    if not isinstance(recipe, dict) or not isinstance(liquid, dict) or recipe.get('mode', 'single') != 'single':
+        return False
+    requested = liquid.get('requested') if isinstance(liquid.get('requested'), dict) else {}
+    cls = liquid.get('liquid_class') if isinstance(liquid.get('liquid_class'), dict) else {}
+    explicit = 'conditioning_volume_ul' in requested
+    amount = _dec(requested.get('conditioning_volume_ul', (cls.get('settings') or {}).get('conditioning_volume_ul')))
+    if amount is None or amount < 0 or (amount == 0 and not explicit):
+        return False  # an explicit 0 still needs the receiving block so the class value is replaced
+    # Receiving multi block; the class conditioning volume lands in it via RECIPE_FIELDS.
+    recipe['multi'] = {'sample_count': 1, 'conditioning_before': [], 'conditioning_after': [],
+                       'excess_volume_ul': 0, 'excess': None, 'reaspiration': None,
+                       'dispense_to_reaspiration_delay_ms': None, 'aliquots': []}
+    return True
+
+
+def apply_conditioning(recipe, volume):
+    """Finish a conditioned single transfer as a native one-aliquot multi recipe."""
+    multi = recipe['multi']
+    conditioning = _dec(multi.get('conditioning_volume_ul'))
+    sample = _dec(volume)
+    if conditioning is None or sample is None:
+        raise ValueError('Conditioned transfer needs a volume and a conditioning volume')
+    segments = recipe.get('dispense_segments') or []
+    if not segments:
+        raise ValueError('This transfer still needs dispense segments (volume and speed); set it in the step\'s advanced recipe fields.')
+    multi.setdefault('conditioning_back_to_source_count', 1 if conditioning > 0 else 0)
+    multi.setdefault('conditioning_speed_ul_s', deepcopy(segments[0]['speed_ul_s']))
+    multi['sample_volume_ul'] = deepcopy(volume)
+    multi['aliquots'] = [{'before': [], 'segments': deepcopy(segments), 'after': []}]
+    recipe['mode'] = 'multi'
+    recipe['dispense_segments'] = []
+    # Aspirated liquid = sample + conditioning; commanded displacement adds the
+    # conditioning on top of the class's corrected sample volume.
+    returned = conditioning * Decimal(multi['conditioning_back_to_source_count'])
+    recipe['target_liquid_ul'] = _plain(sample + returned)
+    commanded = _dec(recipe.get('commanded_aspiration_ul'))
+    if commanded is not None:
+        recipe['commanded_aspiration_ul'] = _plain(commanded + returned)
+    recipe.setdefault('liquid_settings', {})['conditioning_default'] = {
+        'conditioning_ul': _plain(conditioning), 'returns_to_source': multi['conditioning_back_to_source_count'],
+        'basis': 'single transfer run as one native aliquot after conditioning back to source (Tecan 399156 p6 1 uL contact method); editable'}
+
+
+def scale_class_volume(recipe, volume, class_target):
+    """A class measured at a different volume: scale its corrected aspiration.
+
+    The class ratio (corrected / target) is kept, e.g. 1.175/1 for 0.5 uL gives
+    0.5875 uL. Only class-supplied values are scaled; the record says so.
+    """
+    resolution = (recipe.get('liquid_settings') or {}).get('bms_resolution') or {}
+    fields = resolution.get('fields') or {}
+    def from_class(field):
+        record = fields.get(field) or {}
+        return not (record.get('requested') or {}).get('present')
+    target = _dec(volume)
+    measured = _dec(class_target)
+    corrected = _dec(recipe.get('commanded_aspiration_ul'))
+    if None in (target, measured, corrected) or measured <= 0 or target == measured or not from_class('commanded_corrected_aspiration_ul'):
+        return
+    ratio = corrected / measured
+    scaled = (target * ratio).quantize(Decimal('0.0001'))
+    recipe['commanded_aspiration_ul'] = _plain(scaled)
+    segments = recipe.get('dispense_segments') or []
+    if len(segments) == 1 and from_class('dispense_segments') and _dec(segments[0].get('volume_ul')) == corrected:
+        segments[0]['volume_ul'] = _plain(scaled)
+    recipe.setdefault('liquid_settings', {})['volume_scaling'] = {
+        'class_target_ul': _plain(measured), 'step_volume_ul': _plain(target), 'ratio': _plain(ratio.quantize(Decimal('0.0001'))),
+        'commanded_aspiration_ul': _plain(scaled), 'basis': 'class corrected/target ratio applied to the step volume; editable'}
+
+
 def default_transfer_timeout(recipe):
     """Unset command timeout: twice the expected plunger time plus 1 s, at least 2 s.
 
@@ -481,8 +572,14 @@ def prepare_occurrences(occurrences, method, dependencies):
                 row['material_endpoints'] = materials
             if row['action'] == 'transfer' and 'liquid' in inputs:
                 prepare_class_transfer(inputs)
+            conditioned = row['action'] == 'transfer' and 'liquid' in inputs and conditioned_single(inputs)
+            class_entry = (inputs.get('liquid') or {}).get('liquid_class') if isinstance(inputs.get('liquid'), dict) else None
+            measured = ((class_entry or {}).get('context') or {}).get('target_volume_ul') if isinstance(class_entry, dict) else None
             resolution = liquid_resolution(inputs, dependencies)
             if row['action'] == 'transfer' and resolution:
+                scale_class_volume(inputs['recipe'], inputs.get('volume_ul'), measured)
+                if conditioned:
+                    apply_conditioning(inputs['recipe'], inputs.get('volume_ul'))
                 default_transfer_timeout(inputs['recipe'])
         except ValueError as exc:
             failures.append({'code': 'representation_error', 'category': 'representation', 'message': str(exc),
