@@ -84,3 +84,36 @@ verify_data=True)` attestation passed afterwards.
 
 Audit events (`run_group_reconciled`, about 108,000 rows, 2 MB) and status log
 chunks are left as they are. Both are append-only history, and they are small.
+
+## Database read load
+
+An idle API should not read the databases at all. These are the reads that were
+still happening after the reconcile fix, and what keeps them bounded.
+
+- **Retired runtime inventories.** A remote worker's `provider_metadata` keeps
+  its managed inventory, preload ledger, critical-runtime manifest and artifact
+  inventory. Retired workers kept those forever: 715 MB across 68 inactive rows
+  on Development, so any query touching `execution_targets` read and parsed
+  hundreds of megabytes. `scripts/compact_retired_execution_targets.py` replaces
+  those keys on inactive, unleased targets that have no nonterminal Job with a
+  compact `retired_runtime` record. Row identity, endpoint, host-key binding,
+  the small runtime binding and every Job receipt stay. Dry run by default;
+  `--apply` requires a backup. On the Development store it took 714.2 MB to
+  0.1 MB and the core database from 1.16 GB to 360 MB after VACUUM.
+- **The one-active-target index.** Remote telemetry reads
+  `execution_targets WHERE active = 1` on a short cycle. Migration 45 creates
+  `uq_execution_targets_one_active` for new databases; `database.init_db()`
+  recreates it when an older install has lost it. Without the index every one of
+  those reads is a full-table scan, which is what made the poller expensive.
+- **Jobs list.** The list joined a subquery that grouped the whole Designs
+  table, so one page of Jobs read the entire retained design history. It now
+  counts Designs for the page's Jobs only (0.39 s to 0.02 s of CPU per call on
+  Development).
+- **Binder-round recovery.** It scans completed Jobs through provenance JSON.
+  It used to run on every 3 s scheduler cycle; it now runs at most once a
+  minute (`BINDER_RECOVERY_INTERVAL_SECONDS`), which bounds the recovery delay
+  without reading the Jobs table several times a minute for nothing.
+
+`read_bytes` in `/proc/<pid>/io` stayed near zero throughout: this was page
+cache and CPU, not SSD wear. What did write continuously was the run-event
+churn described above, and that is gone.
