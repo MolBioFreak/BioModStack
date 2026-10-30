@@ -131,6 +131,24 @@ def test_real_source_mapping_and_native_source_document_reach_receiver(tmp_path,
     assert any(row['role'] == 'native_source_structure' for row in proof['descriptors'].values())
 
 
+@pytest.mark.asyncio
+async def test_freshly_produced_native_candidates_pass_the_completion_usability_check(tmp_path):
+    from services.result_state_integrity import _rfd3_candidates_are_usable
+    request, digest, _manifest_digest, root = write_native_result(tmp_path, job_id='rfd', request_id='req',
+        num_designs=2, generated=2)
+    factory, engine = await setup(tmp_path)
+    try:
+        async with factory() as session:
+            session.add_all([Job(id='rfd', name='TEST native usable', model_id='protein_local_redesign',
+                mode='local_redesign', status='completed', output_dir=str(root), params={}), request_row(request, digest)])
+            await session.commit()
+            assert await ingest_job_results('rfd', str(root), session) == 2
+            # Producer-sealed manifests carry relative storage paths; the receiver stores absolute ones.
+            assert await _rfd3_candidates_are_usable(session, 'rfd', str(root))
+    finally:
+        await engine.dispose()
+
+
 def test_each_advertised_native_generation_project_result_adapter_is_registered():
     from services.protein_project_capabilities import _NATIVE_GENERATION_SETUPS, protein_capability_record
     from services.global_experiments.adapters import registry

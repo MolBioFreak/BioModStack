@@ -284,6 +284,7 @@ async def _rfd3_candidates_are_usable(session: AsyncSession, job_id: str, output
         if len(artifact_by_role) != len(candidate_artifacts) or set(artifact_by_role) != expected_roles:
             return False
         descriptors: list[dict[str, Any]] = []
+        sealed_relative: list[dict[str, Any]] = []
         for role in role_order:
             artifact = artifact_by_role[role]
             raw_storage_path = Path(str(artifact.storage_path or "")).expanduser()
@@ -311,6 +312,7 @@ async def _rfd3_candidates_are_usable(session: AsyncSession, job_id: str, output
                     "media_type": artifact.media_type,
                 }
             )
+            sealed_relative.append({**descriptors[-1], "storage_path": artifact.relative_path})
         metadata_path = Path(artifact_by_role["native_prediction_metadata"].storage_path)
         try:
             native_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -318,8 +320,13 @@ async def _rfd3_candidates_are_usable(session: AsyncSession, job_id: str, output
             return False
         if not isinstance(native_metadata, dict):
             return False
-        descriptor_digest = hashlib.sha256(rfd3_canonical_json(descriptors).encode("utf-8")).hexdigest()
-        if descriptor_digest != candidate.artifact_manifest_sha256:
+        # The producer seals candidate artifacts with job-relative storage paths; the receiver then
+        # records each file's absolute location. Older results were sealed with the absolute path.
+        sealed_forms = {
+            hashlib.sha256(rfd3_canonical_json(form).encode("utf-8")).hexdigest()
+            for form in (descriptors, sealed_relative)
+        }
+        if candidate.artifact_manifest_sha256 not in sealed_forms:
             return False
     return len(artifacts_by_candidate) == len(candidates)
 
