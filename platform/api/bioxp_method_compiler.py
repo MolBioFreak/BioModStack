@@ -40,6 +40,10 @@ def plain_emission_message(message):
         phase = 'leading' if m.group(1) == 'leading_air' else 'trailing'
         return (f'The liquid class sets a {m.group(2)} µL {phase} air gap but no air speed. '
                 'Set "Air gap aspiration µL/s" on that liquid class (Liquid classes tab); no speed is assumed.')
+    labels = {'timeout_ms': 'a command timeout (ms)', 'dispense_segments': 'dispense segments (volume and speed)'}
+    m = re.match(r"^/: '(\w+)' is a required property$", str(message))
+    if m and m.group(1) in labels:
+        return f'This transfer still needs {labels[m.group(1)]}; set it in the step\'s advanced recipe fields.'
     return message
 
 

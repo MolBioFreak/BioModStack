@@ -304,6 +304,13 @@ def prepare_class_transfer(inputs):
     if 'channels' not in inputs:
         raise ValueError('Transfer has no plunger channels yet; choose them under Plunger channels in the step editor')
     bindings = {'mode': mode, 'channels': inputs['channels']}
+    # Structural parts only: no extra positioning hooks, no final empty, no multi block.
+    # Scientific values (speeds, segments, timeout) still come from the class or the author.
+    for key in ('before_leading_air', 'before_liquid', 'after_liquid', 'before_dispense', 'after_dispense', 'final_empty_before'):
+        recipe.setdefault(key, [])
+    recipe.setdefault('final_empty_speed_ul_s', None)
+    if mode != 'multi':
+        recipe.setdefault('multi', None)
     if mode == 'multi':
         multi = recipe.get('multi')
         if not isinstance(multi, dict):
