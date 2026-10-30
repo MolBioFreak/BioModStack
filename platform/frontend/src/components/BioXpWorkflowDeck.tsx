@@ -10,6 +10,8 @@ export type BioXpDeckLiveIntent = {
     stationDisabledReason: (target: string) => string | null;
     wellDisabledReason: string | null;
     selectedStation?: string | null;
+    /** A click on a blocked destination; the owner may offer to resolve the block first. */
+    onBlocked?: (intent: { station: string } | { locationId: number; well: string }) => void;
 };
 export type BioXpWorkflowDeckProps = {
     selection: BioXpDeckSelection; onChange: (selection: BioXpDeckSelection) => void; readOnly?: boolean;
@@ -34,12 +36,12 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
     const selected = new Set(selection.wells);
     const chooseStation = (next: string) => {
         if (readOnly) return;
-        if (live) { if (!live.stationDisabledReason(next)) live.onStation(next); return; }
+        if (live) { if (!live.stationDisabledReason(next)) live.onStation(next); else live.onBlocked?.({ station: next }); return; }
         anchor.current = null; onChange({ station: next, wells: [] });
     };
     const chooseWell = (resource: DeckResource, well: DeckWell, event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
         if (readOnly) return;
-        if (live) { if (!live.wellDisabledReason && resource.locationId !== null) live.onWell(resource.locationId, well.well); return; }
+        if (live) { if (resource.locationId === null) return; if (!live.wellDisabledReason) live.onWell(resource.locationId, well.well); else live.onBlocked?.({ locationId: resource.locationId, well: well.well }); return; }
         const start = anchor.current?.station === resource.id ? anchor.current.well : undefined;
         const effectiveMode = event.shiftKey ? 'range' : mode;
         const picked = selectedDeckWells(resource, well, effectiveMode, start);

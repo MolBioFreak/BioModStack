@@ -5,6 +5,7 @@ import { readCalibrationSettings } from '../lib/bioxpCalibration';
 import { deckResources, deckSize, deckStations, projectDeckPoint, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
 import { activeDeckResources, alignmentReference, gunCenters, poseFromAxisObservations, retainAxisObservations } from '../lib/bioxpLiveDeck';
 import { BioXpWorkflowDeck } from './BioXpWorkflowDeck';
+import './BioXpMethodsWorkspace.css';
 import './BioXpLiveDeck.css';
 
 export type BioXpLiveDeckProps = {
@@ -18,6 +19,8 @@ export type BioXpLiveDeckProps = {
     cameraControls?: React.ReactNode;
     onMoveToStation: (target: string) => void;
     onMoveToWell: (locationId: number, well: string) => void;
+    onBlockedMove?: (intent: { station: string } | { locationId: number; well: string }) => void;
+    preparation?: React.ReactNode;
     stationDisabledReason: (target: string) => string | null;
     wellDisabledReason: string | null;
     doorControls: React.ReactNode;
@@ -73,10 +76,10 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
     return <section className="bioxp-live-deck" data-testid="oem-deck-movement" aria-label="Live deck movement">
         <header className="bld-heading"><div><h2>Live deck movement</h2><p>Click a destination or well to move.</p></div><span className="bld-status">{connected ? 'Connected' : 'Disconnected'} · {geometryLabel}</span></header>
         <div className="bld-workspace">
-            <div className="bld-map-pane">
-                <BioXpWorkflowDeck selection={selection} onChange={() => { /* Authoring selection is not a live intent. */ }}
+            <div className="bld-map-pane bioxp-method-map">
+                <BioXpWorkflowDeck canvas selection={selection} onChange={() => { /* Authoring selection is not a live intent. */ }}
                     resources={resources} live={{ onStation: props.onMoveToStation, onWell: props.onMoveToWell, selectedStation: selectedStation?.id,
-                        stationDisabledReason: props.stationDisabledReason, wellDisabledReason: props.wellDisabledReason }}
+                        stationDisabledReason: props.stationDisabledReason, wellDisabledReason: props.wellDisabledReason, onBlocked: props.onBlockedMove }}
                     overlay={<>{selectedPoint && <g className="bld-chosen-point" data-selected-destination={destination?.target}
                         aria-label={`Selected destination: ${destination?.label}`}>
                         <circle cx={selectedPoint[0]} cy={selectedPoint[1]} r="14" />
@@ -101,6 +104,7 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
                 {geometry.isError && <p role="status">Geometry read unavailable. Showing {settings ? 'last known geometry' : 'the reference layout'}; the robot evaluates movement requests.</p>}
             </div>
             <aside className="bld-controls" aria-label="Live movement controls">
+                {props.preparation}
                 {props.doorControls}
                 {props.movementControls}
                 {props.cameraControls}

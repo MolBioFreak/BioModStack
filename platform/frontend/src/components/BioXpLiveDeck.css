@@ -59,3 +59,11 @@
 .bioxp-live-deck :is(.bg-slate-800, .bg-slate-900) { background-color: var(--bg-secondary); }
 .bioxp-live-deck :is(.border-slate-600, .border-slate-700, .border-slate-800) { border-color: var(--border-secondary); }
 @media (max-width: 900px) { .bld-workspace { grid-template-columns: minmax(0, 1fr); } .bld-controls { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); } }
+/* Same canvas presentation as the Workflows deck: overlay station picker and zoom, full-height map. */
+.bioxp-live-deck .bioxp-method-map { position: relative; }
+.bioxp-live-deck .bioxp-method-map .bwd-canvas-presentation .bwd-map { width: 100%; height: clamp(520px, calc(100dvh - 200px), 940px); }
+.bld-prep { border: 1px solid var(--accent-primary); border-radius: 12px; padding: 14px; background: var(--bg-secondary); font-size: 13px; }
+.bld-prep h3 { margin: 0 0 8px; font-size: 15px; font-weight: 650; }
+.bld-prep ol { margin: 6px 0 10px 18px; list-style: decimal; }
+.bld-prep li[aria-current="step"] { font-weight: 600; }
+.bld-prep-actions { display: flex; gap: 8px; }

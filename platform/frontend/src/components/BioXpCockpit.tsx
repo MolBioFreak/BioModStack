@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { BioXpServiceRestart } from './BioXpServiceRestart';
+import { BioXpMovePreparation, useBioXpMovePreparation } from './BioXpMovePreparation';
 
 import {
     bioXpDeckRecoveryResolution,
@@ -1082,6 +1083,23 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             inputs: { location_id: locationId, well, position_flag: 1 },
         }, { station: station?.id ?? String(locationId), wells: [well] });
     };
+    // Operator-confirmed preparation for a blocked live deck move (popup; nothing runs before Proceed).
+    const axisReferenced = (name: string) => { const row = dashboard?.axes?.find(axis => axis.axis === name); return !!row && ['referenced', 'homed'].includes(row.reference); };
+    const movePreparation = useBioXpMovePreparation(() => [
+        { id: 'enable', label: 'Enable controllers', done: () => dashboard?.motion?.enabled === true, submit: () => invokeLifecycleAction('meta.activate_motion'), blocked: () => v2ActionDisabledReason('meta.activate_motion') },
+        { id: 'home_z', label: 'Home Z (raise the head)', done: () => axisReferenced('z'), submit: () => runControl('z', 'home'), blocked: () => zHomeDisabledReason },
+        { id: 'home_xy', label: 'Home X and Y', done: () => axisReferenced('x') && axisReferenced('y'), submit: invokeXYHome, blocked: () => xyHomeDisabledReason },
+    ], dashboard);
+    const requestBlockedMove = (intent: { station: string } | { locationId: number; well: string }) => {
+        if ('station' in intent) {
+            const destination = deckDestinationFor(intent.station);
+            const label = deckStations.find(s => s.id === intent.station)?.label ?? destination?.label ?? intent.station;
+            movePreparation.request({ label, run: () => invokeNamedDeckMove(intent.station, false), ready: () => stationDisabledReason(intent.station) });
+        } else {
+            const label = `${deckStations.find(s => s.locationId === intent.locationId)?.label ?? `location ${intent.locationId}`} · ${intent.well}`;
+            movePreparation.request({ label, run: () => invokeWellDeckMove(intent.locationId, intent.well), ready: () => wellDisabledReason });
+        }
+    };
     const invokeYMoveSteps = (steps: number) => {
         const envelope = v2NormalEnvelope();
         if (envelope) submitV2({ ...envelope, action_id: 'oem.y.move_steps', inputs: { steps } });
@@ -1302,6 +1320,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         selection={liveDeckIntent?.generation === generation ? liveDeckIntent.selection : { station: '', wells: [] }}
                         selectedDestination={selectedDeckDestination}
                         onMoveToStation={target => invokeNamedDeckMove(target, false)} onMoveToWell={invokeWellDeckMove}
+                        onBlockedMove={requestBlockedMove} preparation={<BioXpMovePreparation state={movePreparation} />}
                         stationDisabledReason={target => {
                             const reason = stationDisabledReason(target);
                             return reason === null ? null : bioXpDeckReadinessText(reason);
