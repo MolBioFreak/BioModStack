@@ -188,3 +188,12 @@ def test_profile_does_not_pin_laproteina_samples_per_length_ahead_of_requested_d
     # A profile default would always win over the requested design count.
     assert 'laproteina_samples_per_length' not in profile
     assert 'pcad_num_designs = 8' in profile
+
+
+def test_complexa_container_points_the_af2_reward_at_the_acquired_parameters():
+    config = (REPO_ROOT / 'nextflow.config').read_text()
+    block = config[config.index('withLabel: Complexa {'):]
+    block = block[:block.index('withLabel: LaProteina')]
+    # The default protein-binder reward resolves ${oc.env:AF2_DIR}; without it generate exits 1.
+    assert '--env AF2_DIR=${params.alphafold_params}' in block
+    assert 'alphafold_params = "${params.weights_root}/alphafold/params"' in config
