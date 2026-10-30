@@ -83,23 +83,19 @@ async def verified_esmfold2_design(design, session):
 
 
 async def scientific_documents(designs, session):
-    """One verified publication per Job, documents for the requested designs."""
-    from services.scientific_viewer_contract import ViewerDocument
+    """Documents for one Job's designs from a single publication verification."""
+    if not designs:
+        return {}
+    try:
+        rows, prepared, _root, _receipt = await _verified_publication(designs[0].job_id, session)
+    except _ERRORS:
+        return {}
     documents = {}
-    if designs:
-        try:
-            rows, prepared, _root, _receipt = await _verified_publication(designs[0].job_id, session)
-        except _ERRORS:
-            return documents
-        for design in designs:
-            row = rows.get(design.id)
-            selected = prepared.get(row.name) if row is not None else None
-            if selected is None:
-                continue
-            source_kind = 'mmcif' if Path(selected['artifacts']['structure']['path']).suffix.lower() in ('.cif', '.mmcif') else 'pdb'
-            documents[design.id] = ViewerDocument(
-                documentId='primary', candidateId=design.id,
-                contentSha256=selected['artifacts']['structure']['sha256'], sourceKind=source_kind)
+    for design in designs:
+        row = rows.get(design.id)
+        selected = prepared.get(row.name) if row is not None else None
+        if selected is not None:
+            documents[design.id] = _document(design, dict(selected, source_kind=_source_kind(selected)))
     return documents
 
 
@@ -132,11 +128,14 @@ CONFIDENCE_DIALECT = {**SCALAR_DIALECT, 'name': 'biohub_esmfold2_native_confiden
 _ERRORS = (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError, BadZipFile, EOFError)
 
 
+def _source_kind(selected):
+    return 'mmcif' if Path(selected['artifacts']['structure']['path']).suffix.lower() in ('.cif', '.mmcif') else 'pdb'
+
+
 async def verified_native_design(design, session, *, structure_only=False):
     # Optional tensor parsing is deliberately NOT part of structure authority.
     selected = await verified_esmfold2_design(design, session)
-    return dict(selected, design_id=design.id,
-        source_kind='mmcif' if Path(selected['artifacts']['structure']['path']).suffix.lower() in ('.cif', '.mmcif') else 'pdb',
+    return dict(selected, design_id=design.id, source_kind=_source_kind(selected),
         native={'confidence_dialect': selected['payload'].get('confidence_dialect')})
 
 

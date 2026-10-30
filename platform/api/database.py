@@ -63,64 +63,42 @@ if DATABASE_URL.startswith("sqlite"):
     engine_kwargs["json_serializer"] = _canonical_sqlite_json
 engine = create_async_engine(DATABASE_URL, **engine_kwargs)
 
-# Opt-in statement timing. Statement work happens on aiosqlite worker threads,
-# so a Python profiler shows an idle event loop and cannot name the query; this
-# logs the statements that are actually slow. Disabled unless BMS_SLOW_SQL_MS
-# is set to a positive millisecond bound.
-_slow_sql_ms = float(os.environ.get("BMS_SLOW_SQL_MS") or 0)
-if _slow_sql_ms > 0:
-    import logging
-    import time as _time
-
-    _slow_sql_logger = logging.getLogger("bms.sql")
-
-    @event.listens_for(engine.sync_engine, "before_cursor_execute")
-    def _slow_sql_before(conn, cursor, statement, params, context, executemany):
-        context._bms_sql_started = _time.perf_counter()
-
-    @event.listens_for(engine.sync_engine, "after_cursor_execute")
-    def _slow_sql_after(conn, cursor, statement, parameters, context, executemany):
-        elapsed_ms = (_time.perf_counter() - getattr(context, "_bms_sql_started", _time.perf_counter())) * 1000
-        if elapsed_ms >= _slow_sql_ms:
-            _slow_sql_logger.warning("slow-sql %.1fms %s", elapsed_ms, " ".join(statement.split())[:320])
-
-# Opt-in aggregate statement statistics: BMS_SQL_STATS_SECONDS=30 logs the
-# top statements by total time every interval. Counts matter as much as
-# duration here: many fast scans of a large table still consume the CPU.
+# Opt-in statement statistics. Statement work runs on aiosqlite worker threads,
+# so a Python profile shows an idle event loop and cannot name the query.
+# BMS_SQL_STATS_SECONDS=N logs, every N seconds, the ten statements with the
+# most total time, with their count and slowest single run. Off unless set.
 _sql_stats_seconds = float(os.environ.get("BMS_SQL_STATS_SECONDS") or 0)
 if _sql_stats_seconds > 0:
-    import collections
     import logging
     import threading
     import time as _time
 
-    _sql_stats_logger = logging.getLogger("bms.sql")
-    _sql_counts: collections.Counter = collections.Counter()
-    _sql_ms: dict[str, float] = {}
-    _sql_lock = threading.Lock()
+    _sql_stats: dict[str, list[float]] = {}
+    _sql_stats_lock = threading.Lock()
 
     @event.listens_for(engine.sync_engine, "before_cursor_execute")
     def _sql_stats_before(conn, cursor, statement, params, context, executemany):
-        context._bms_stats_started = _time.perf_counter()
+        context._bms_sql_started = _time.perf_counter()
 
     @event.listens_for(engine.sync_engine, "after_cursor_execute")
-    def _sql_stats_after(conn, cursor, statement, parameters, context, executemany):
-        elapsed = (_time.perf_counter() - getattr(context, "_bms_stats_started", _time.perf_counter())) * 1000
+    def _sql_stats_after(conn, cursor, statement, params, context, executemany):
+        elapsed_ms = (_time.perf_counter() - context._bms_sql_started) * 1000
         key = " ".join(statement.split())[:200]
-        with _sql_lock:
-            _sql_counts[key] += 1
-            _sql_ms[key] = _sql_ms.get(key, 0.0) + elapsed
+        with _sql_stats_lock:
+            total_count_max = _sql_stats.setdefault(key, [0.0, 0, 0.0])
+            total_count_max[0] += elapsed_ms
+            total_count_max[1] += 1
+            total_count_max[2] = max(total_count_max[2], elapsed_ms)
 
     def _sql_stats_report():
+        logger = logging.getLogger("bms.sql")
         while True:
             _time.sleep(_sql_stats_seconds)
-            with _sql_lock:
-                top = sorted(_sql_ms.items(), key=lambda item: -item[1])[:10]
-                snapshot = [(key, total, _sql_counts[key]) for key, total in top]
-                _sql_counts.clear()
-                _sql_ms.clear()
-            for key, total, count in snapshot:
-                _sql_stats_logger.warning("sql-stats %6.0fms x%5d %s", total, count, key)
+            with _sql_stats_lock:
+                top = sorted(_sql_stats.items(), key=lambda item: -item[1][0])[:10]
+                _sql_stats.clear()
+            for key, (total, count, slowest) in top:
+                logger.warning("sql-stats total=%.0fms n=%d max=%.1fms %s", total, count, slowest, key)
 
     threading.Thread(target=_sql_stats_report, daemon=True, name="bms-sql-stats").start()
 
@@ -2928,7 +2906,6 @@ async def init_db():
         if engine.dialect.name == "sqlite":
             await conn.execute(text("PRAGMA journal_mode=WAL"))
             await conn.execute(text("PRAGMA busy_timeout=30000"))
-            await _ensure_execution_target_active_index(conn)
 
     if db_path is not None:
         await asyncio.to_thread(_attest_sqlite_migration_ledger, str(db_path))
@@ -2937,26 +2914,6 @@ async def init_db():
         await asyncio.to_thread(_attest_sqlite_migration_38, str(db_path))
         await asyncio.to_thread(_attest_sqlite_migration_39, str(db_path))
         await asyncio.to_thread(_attest_sqlite_migration_40, str(db_path))
-
-
-async def _ensure_execution_target_active_index(conn) -> None:
-    """Keep the one-active-target index that every status read filters on.
-
-    Remote telemetry and preload recovery read ``execution_targets WHERE
-    active = 1`` on a short cycle. Without the partial index SQLite scans the
-    whole table, which holds multi-megabyte runtime inventories, so a missing
-    index turns a cheap status read into a full-table JSON read every second.
-    Migration 45 creates it for new databases; older installs may have lost it.
-    """
-    present = await conn.execute(text(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='execution_targets'"
-    ))
-    if present.first() is None:
-        return
-    await conn.execute(text(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_targets_one_active "
-        "ON execution_targets(active) WHERE active = 1"
-    ))
 
 
 async def _ensure_sqlite_indexes(conn):

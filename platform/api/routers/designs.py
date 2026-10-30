@@ -2521,6 +2521,27 @@ async def _native_design_list(query, native, output, limit, offset, model_counts
     return DesignList(designs=responses, total=len(matching), model_counts=model_counts, scientific=scientific)
 
 
+async def _resolve_core_protein_documents(designs, responses, session):
+    """Contract revision and spatial document for a page of designs.
+
+    One Job read per Job for the revision and one publication verification per
+    Job for the documents, rather than both once per design.
+    """
+    from services.analysis_registry import scientific_contract_revisions
+    revisions = await scientific_contract_revisions(designs, session)
+    for design, response in zip(designs, responses):
+        response.core_protein_scientific_contract = (revisions.get(design.job_id)
+            or (1 if response.native_sample and response.scientific_structure_document else None))
+    pending = [(design, response) for design, response in zip(designs, responses)
+               if response.core_protein_scientific_contract == 1
+               and not response.native_sample]
+    if pending:
+        from services.core_protein_scientific_contract import scientific_documents
+        resolved = await scientific_documents([design for design, _response in pending], session)
+        for design, response in pending:
+            response.scientific_structure_document = resolved.get(design.id)
+
+
 @router.get("", response_model=DesignList)
 async def list_designs(
     native: Optional[str] = None,
@@ -2842,22 +2863,7 @@ async def list_designs(
     for design, response in zip(designs, responses):
         if design.id in bc2_documents:
             response.scientific_structure_document = bc2_documents[design.id]
-    from services.analysis_registry import scientific_contract_revisions
-    # One Job read per Job, not one per Design.
-    revisions = await scientific_contract_revisions(designs, session)
-    for design, response in zip(designs, responses):
-        response.core_protein_scientific_contract = (revisions.get(design.job_id)
-            or (1 if response.native_sample and response.scientific_structure_document else None))
-    pending = [(design, response) for design, response in zip(designs, responses)
-               if response.core_protein_scientific_contract == 1
-               and not response.native_sample
-               and design.id not in bc2_documents]
-    if pending:
-        from services.core_protein_scientific_contract import scientific_documents
-        # One verified publication per Job, not one per Design.
-        resolved = await scientific_documents([design for design, _response in pending], session)
-        for design, response in pending:
-            response.scientific_structure_document = resolved.get(design.id)
+    await _resolve_core_protein_documents(designs, responses, session)
     _enrich_design_responses_from_sources(responses)
     
     return DesignList(
@@ -3406,11 +3412,7 @@ async def get_designs_for_job(
     for design, response in zip(designs, responses):
         if design.id in bc2_documents:
             response.scientific_structure_document = bc2_documents[design.id]
-        response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
-            or (1 if response.native_sample and response.scientific_structure_document else None))
-        if response.core_protein_scientific_contract == 1 and not response.native_sample:
-            from services.core_protein_scientific_contract import scientific_document
-            response.scientific_structure_document = await scientific_document(design, session)
+    await _resolve_core_protein_documents(designs, responses, session)
     _enrich_design_responses_from_sources(responses)
     
     return DesignList(

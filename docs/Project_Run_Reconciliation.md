@@ -100,11 +100,11 @@ still happening after the reconcile fix, and what keeps them bounded.
   the small runtime binding and every Job receipt stay. Dry run by default;
   `--apply` requires a backup. On the Development store it took 714.2 MB to
   0.1 MB and the core database from 1.16 GB to 360 MB after VACUUM.
-- **The one-active-target index.** Remote telemetry reads
-  `execution_targets WHERE active = 1` on a short cycle. Migration 45 creates
-  `uq_execution_targets_one_active` for new databases; `database.init_db()`
-  recreates it when an older install has lost it. Without the index every one of
-  those reads is a full-table scan, which is what made the poller expensive.
+- **Active-target reads.** Telemetry reads `execution_targets WHERE active = 1`.
+  After retirement the table is small, so that read is cheap without an index.
+  Do not recreate `uq_execution_targets_one_active`: migration 46 drops it on
+  purpose so several workers can be active at once, and restoring it makes the
+  second activation fail with a uniqueness error.
 - **Jobs list.** The list joined a subquery that grouped the whole Designs
   table, so one page of Jobs read the entire retained design history. It now
   counts Designs for the page's Jobs only (0.39 s to 0.02 s of CPU per call on
@@ -117,14 +117,15 @@ still happening after the reconcile fix, and what keeps them bounded.
 `read_bytes` in `/proc/<pid>/io` stayed near zero throughout: this was page
 cache and CPU, not SSD wear. What did write continuously was the run-event
 churn described above, and that is gone.
-- **Results lists.** A results page verified the producer publication once per
-  row, read a full Job once per row for the contract revision, and opened an
-  in-memory DuckDB per artifact. Publication verification is once per Job now,
-  revisions are read once per page, and one analytical connection is reused per
-  thread with the allowed directory re-scoped per call.
+- **Results lists.** Both design lists (`GET /api/designs` and
+  `GET /api/designs/by-job/{job_id}`) verified the producer publication once per
+  row and read a full Job once per row for the contract revision. They now share
+  `_resolve_core_protein_documents`, which does both once per Job. Each artifact
+  query still opens its own DuckDB connection: that costs about 5 ms, and a
+  fresh connection keeps every query's settings independent.
 - **Measuring this.** `/proc/<pid>/io` separates `rchar` (bytes returned by read
   syscalls, page cache included) from `read_bytes` (actual device reads). A large
   `rchar` with a zero `read_bytes` is repeated scanning, not storage wear. Set
-  `BMS_SLOW_SQL_MS` to log slow statements, or `BMS_SQL_STATS_SECONDS` to log the
-  top statements by total time and count; statement work runs on aiosqlite
+  `BMS_SQL_STATS_SECONDS=N` to log, every N seconds, the ten statements with the
+  most total time, with their count and slowest single run; statement work runs on aiosqlite
   worker threads, so a Python profile shows an idle event loop instead.
