@@ -5,6 +5,7 @@
  */
 
 import { SeqViz } from "seqviz";
+import './SequenceViewer.css';
 import { isSequenceAnnotation } from './featureCatalog';
 import { restrictionSpecialCase } from '../../lib/restrictionSpecialCases';
 import {
@@ -38,6 +39,12 @@ import {
     getSelectionRanges,
     mapSeqVizSelectionToSource,
 } from './utils/selectionActions';
+
+function isSeqVizRenderTarget(target: EventTarget | null): target is Element {
+    return target instanceof Element
+        && Boolean(target.closest('.la-vz-viewer-event-router'))
+        && !target.closest('button, input, select, textarea, a, [contenteditable="true"], [role="dialog"], [data-seqviz-touch-control]');
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR PALETTES
@@ -636,6 +643,7 @@ export function SequenceViewer({
     const nickingOverlayRef = useRef<SVGSVGElement | null>(null);
     const previousSelectionRef = useRef<SelectionInfo | null | undefined>(selection);
     const selectionPointerButtonRef = useRef<number | null>(null);
+    const mouseSelectionActiveRef = useRef(false);
     const pendingPointerSelectionRef = useRef<SelectionInfo | null>(null);
     const selectionCommitFrameRef = useRef<number | null>(null);
     const [selectionResetVersion, setSelectionResetVersion] = useState(0);
@@ -871,15 +879,32 @@ export function SequenceViewer({
     }, [flushPendingPointerSelection]);
 
     const cancelPointerSelection = useCallback(() => {
+        if (mouseSelectionActiveRef.current) {
+            // SeqViz ends its internal drag on document mouseup, not pointercancel
+            // or blur. Release it too, so returning to the page cannot extend an
+            // abandoned selection. Keep its final callback buffered, then discard.
+            mouseSelectionActiveRef.current = false;
+            document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+        }
+        if (selectionCommitFrameRef.current !== null) {
+            window.cancelAnimationFrame(selectionCommitFrameRef.current);
+            selectionCommitFrameRef.current = null;
+        }
         pendingPointerSelectionRef.current = null;
         selectionPointerButtonRef.current = null;
     }, []);
 
     useEffect(() => {
+        const finishMouseSelection = () => {
+            mouseSelectionActiveRef.current = false;
+            finishPointerSelection();
+        };
+        window.addEventListener('mouseup', finishMouseSelection, true);
         window.addEventListener('pointerup', finishPointerSelection, true);
         window.addEventListener('pointercancel', cancelPointerSelection, true);
         window.addEventListener('blur', cancelPointerSelection);
         return () => {
+            window.removeEventListener('mouseup', finishMouseSelection, true);
             window.removeEventListener('pointerup', finishPointerSelection, true);
             window.removeEventListener('pointercancel', cancelPointerSelection, true);
             window.removeEventListener('blur', cancelPointerSelection);
@@ -946,6 +971,10 @@ export function SequenceViewer({
             }}
             onPointerDownCapture={(event) => {
                 if (event.target instanceof Element && event.target.closest('[data-restriction-label-details]')) return;
+                if (selectionCommitFrameRef.current !== null) {
+                    window.cancelAnimationFrame(selectionCommitFrameRef.current);
+                    flushPendingPointerSelection();
+                }
                 selectionPointerButtonRef.current = event.button;
                 if (event.button === 0) {
                     pendingPointerSelectionRef.current = null;
@@ -957,6 +986,28 @@ export function SequenceViewer({
                 // but omits it from some selection callbacks. Capture that exact
                 // element rather than guessing from the displayed name or range.
                 restrictionAnnotationPointerRef.current = event.target.closest('[id]')?.id ?? null;
+                if (event.button !== 0 || event.ctrlKey || !isSeqVizRenderTarget(event.target)) return;
+                // Prevent browser text/image dragging without stopping SeqViz's
+                // own mouse handlers, annotation clicks or shift-range selection.
+                event.preventDefault();
+                event.target.closest<HTMLElement>('.la-vz-viewer-event-router')?.focus({ preventScroll: true });
+                if (selectionCommitFrameRef.current !== null) {
+                    window.cancelAnimationFrame(selectionCommitFrameRef.current);
+                    flushPendingPointerSelection();
+                }
+                selectionPointerButtonRef.current = 0;
+                pendingPointerSelectionRef.current = null;
+                mouseSelectionActiveRef.current = true;
+            }}
+            onDragStartCapture={event => {
+                if (isSeqVizRenderTarget(event.target)) event.preventDefault();
+            }}
+            onMouseMoveCapture={event => {
+                if (mouseSelectionActiveRef.current && (event.buttons & 1) === 0) {
+                    // Recover when mouseup happened outside the browser window.
+                    mouseSelectionActiveRef.current = false;
+                    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+                }
             }}
             onPointerUpCapture={finishPointerSelection}
             onPointerCancelCapture={cancelPointerSelection}
