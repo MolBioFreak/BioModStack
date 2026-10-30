@@ -22,7 +22,7 @@ STATION_GEOMETRY = {
 }
 # OEM tip trays 1-4 are TECANRACK1-4; tray 5 is the tip hotel (construct_new_machine_source_model).
 TIP_TRAYS = {1: 'TECANRACK1', 2: 'TECANRACK2', 3: 'TECANRACK3', 4: 'TECANRACK4', 5: 'LOC_TIP_HOTEL'}
-TIP_TYPES = ('T50', 'T200', 'T201')
+TIP_TYPES = ('T10', 'T50', 'T200', 'T201')
 # ClassMachineStatus movable objects and their constructor locations.
 MOVABLE_OBJECTS = {
     'POOL_PLATE': 'LOC_P_TC', 'OUTPUT_PLATE': 'LOC_P_OC', 'REAGENT_PLATE': 'LOC_RC',

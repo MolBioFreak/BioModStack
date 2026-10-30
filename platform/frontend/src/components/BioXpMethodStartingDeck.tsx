@@ -11,7 +11,7 @@ const STATION_OBJECTS: Record<string, { plate?: [string, string]; cover?: { name
     LOC_STRIP1: { plate: ['STRIP_ONE', 'LOC_STRIP1'] }, LOC_STRIP2: { plate: ['STRIP_TWO', 'LOC_STRIP2'] },
     LOC_STRIP3: { plate: ['STRIP_THREE', 'LOC_STRIP3'] }, LOC_STRIP4: { plate: ['STRIP_FOUR', 'LOC_STRIP4'] },
 };
-const TIP_TYPES = ['T50', 'T200', 'T201'] as const;
+const TIP_TYPES = ['T10', 'T50', 'T200', 'T201'] as const;
 const tipTypeForProfile = (id: string): WorkflowTipRack['tip_type'] => TIP_TYPES.find(t => id.endsWith(`-${t}`)) ?? null;
 export const isStartingDeckStation = (station: string) => !!deckStations.find(s => s.id === station)?.tipTray || Object.hasOwn(STATION_OBJECTS, station) || Object.hasOwn(slotDefaults, station);
 

@@ -83,6 +83,34 @@ def recipe_accounting(settings: dict) -> dict:
             "final_empty_tip": deepcopy(settings.get("final_empty_tip"))}
 
 
+# Tecan 399156 V1.0 page 3 "Parameters" table (water, single dispense) gives
+# recommended ranges, not per-recipe values. They fill only settings the
+# recipe table leaves unreported, as editable starting points; the low end is
+# used for small-volume tips because the same page says low speeds are needed
+# below 25 uL. Every filled value is listed in settings_defaults_applied.
+GUIDELINE_SOURCE = {"document": "399156 V1.0", "pdf_page": 3, "table": "Parameters (single dispense)",
+                    "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf"}
+GUIDELINE_RANGES = {"air_gap_aspiration_speed_ul_s": (30, 70), "aspirate_speed_ul_s": (20, 200),
+                    "dispense_speed_ul_s": (250, 600), "aspiration_delay_ms": (200, 1000)}
+
+
+def guideline_defaults(settings: dict, capacity, mode: str) -> dict:
+    """Recommended starting values for unreported single-dispense settings."""
+    if mode != "single-dispense":
+        return {}
+    small = capacity is not None and Decimal(str(capacity)) <= 50
+    applied = {}
+    for key, (low, high) in GUIDELINE_RANGES.items():
+        if settings.get(key) is not None:
+            continue
+        if key == "dispense_speed_ul_s" and settings.get("dispense_segments"):
+            continue  # segmented recipes carry their own published dispense speeds
+        value = low if small else (low + high) // 2
+        settings[key] = value
+        applied[key] = {"value": value, "range": [low, high], "basis": "guideline_default", **GUIDELINE_SOURCE}
+    return applied
+
+
 def starter_entries() -> list[dict]:
     catalog = load_source_catalog()
     entries = []
@@ -105,11 +133,13 @@ def starter_entries() -> list[dict]:
             context["target_volume_ul"] = variant["target_volume_ul"]
         settings = {k: deepcopy(v) for k, v in variant.items() if k in FIELDS}
         settings.update(deepcopy(variant.get("unreported_parameters", {})))
+        applied = guideline_defaults(settings, capacity, variant["mode"])
         entries.append({"schema": "bms.bioxp-liquid-class.v1", "id": variant["id"],
                         "revision": family["revision"], "family_id": family["id"],
                         "label": family["label"], "context": context, "settings": settings,
                         "source": deepcopy(variant), "provenance_kind": "manufacturer",
-                        "qualification": "not BioXP-qualified"})
+                        "qualification": "not BioXP-qualified",
+                        **({"settings_defaults_applied": applied} if applied else {})})
     return entries
 
 

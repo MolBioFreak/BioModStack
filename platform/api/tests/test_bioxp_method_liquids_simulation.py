@@ -88,7 +88,9 @@ def test_exact_twenty_microliter_recipes(family, corrected, segments):
     item = entry(f'{family}-t200-20ul-single-p8')
     assert item['settings']['commanded_corrected_aspiration_ul'] == corrected
     assert [s['volume_ul'] for s in item['settings']['dispense_segments']] == segments
-    assert item['settings']['aspiration_delay_ms'] is None
+    # Unreported delay is the Tecan p3 guideline starting value, recorded as such.
+    assert item['settings']['aspiration_delay_ms'] == 600
+    assert item['settings_defaults_applied']['aspiration_delay_ms']['basis'] == 'guideline_default'
 
 
 def test_water_fills_only_omitted_matching_applicable_values_and_four_records():
@@ -106,7 +108,7 @@ def test_water_fills_only_omitted_matching_applicable_values_and_four_records():
     assert result['resolved']['blowout_leading_air_gap_ul'] == ''
     assert result['resolved']['target_volume_ul'] is False
     assert result['resolved']['unknown'] == {'raw': '2.000'}
-    assert 'aspiration_delay_ms' not in result['resolved']
+    assert result['resolved']['aspiration_delay_ms'] == 600  # Water's guideline starting value
     assert 'dispense_segments' in {s['field'] for s in result['water_substitutions']}
     records = result['fields']['dispense_segments']
     assert records['requested'] == {'present': False}
@@ -137,7 +139,10 @@ def test_multi_and_incomplete_small_tip_evidence_retained():
     for size in (10,50):
         small = [e for e in starter_entries() if e['context']['tip_profile_id'] == f'tecan-liha-T{size}']
         assert small
-        assert all(e['settings']['aspirate_speed_ul_s'] is None for e in small)
+        # Small tips get the low end of the Tecan p3 range, never borrowed T200/T1000 values.
+        assert all(e['settings']['aspirate_speed_ul_s'] == 20 and e['settings']['air_gap_aspiration_speed_ul_s'] == 30 for e in small)
+        assert all(e['settings_defaults_applied']['aspirate_speed_ul_s']['range'] == [20, 200] for e in small)
+        assert all(e['source']['aspirate_speed_ul_s'] is None for e in small)  # source evidence unchanged
         assert all('incomplete' in e['source']['recipe_kind'] for e in small)
 
 
