@@ -10,6 +10,7 @@ From: nvidia/cuda@sha256:61f6c08f2b59036cb935e56d1e31a6b64e3ae2c7ddb86d33fa0b044
     apptainer/locks/complexa-requirements.txt /opt/locks/requirements.txt
     apptainer/locks/complexa-build.txt /opt/locks/build.txt
     apptainer/locks/complexa-NOTICES.md /opt/locks/NOTICES.md
+    apptainer/complexa-colabdesign-tree-compat.py /opt/locks/tree_compat.py
 
 %post
     set -eu
@@ -33,11 +34,14 @@ From: nvidia/cuda@sha256:61f6c08f2b59036cb935e56d1e31a6b64e3ae2c7ddb86d33fa0b044
     git lfs pull
     printf '%s\n' 'Licensed by NVIDIA Corporation under the NVIDIA Open Model License' > /opt/complexa/licenses/NOTICE.txt
     uv venv --allow-existing --python 3.12.13 /opt/complexa/.venv
+    # Install ColabDesign from a build-owned copy so the pinned checkout stays clean.
+    cp -a /opt/complexa/community_models/colabdesign /opt/colabdesign
+    /opt/complexa/.venv/bin/python /opt/locks/tree_compat.py /opt/colabdesign/__init__.py
     uv pip install --no-config --python /opt/complexa/.venv/bin/python --default-index https://pypi.org/simple --no-deps --require-hashes -r /opt/locks/build.txt
     # Upstream sequential installs deliberately override incompatible metadata.
     # Exact overrides and qualification limits are recorded in assets.json.
     uv pip install --no-config --python /opt/complexa/.venv/bin/python --no-deps --require-hashes --no-build-isolation --default-index https://pypi.org/simple --find-links https://download.pytorch.org/whl/cu128/torch --find-links https://download.pytorch.org/whl/cu128/torchaudio --find-links https://download.pytorch.org/whl/cu128/torchvision --find-links https://download.pytorch.org/whl/cu128/triton --find-links https://data.pyg.org/whl/torch-2.7.0+cu128.html --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html -r /opt/locks/requirements.txt
-    uv pip install --no-config --python /opt/complexa/.venv/bin/python --no-deps --no-build-isolation --reinstall-package tmol 'tmol @ git+https://github.com/uw-ipd/tmol.git@d8a6f7f9649d36e74440bca25246ee7c467ce490' -e /opt/complexa -e /opt/complexa/community_models/colabdesign
+    uv pip install --no-config --python /opt/complexa/.venv/bin/python --no-deps --no-build-isolation --reinstall-package tmol 'tmol @ git+https://github.com/uw-ipd/tmol.git@d8a6f7f9649d36e74440bca25246ee7c467ce490' -e /opt/complexa -e /opt/colabdesign
     uv pip freeze --python /opt/complexa/.venv/bin/python > /opt/complexa/installed-packages.txt
     dpkg-query -W > /opt/complexa/installed-debian-packages.txt
     rm -rf /opt/build-tmp /var/lib/apt/lists/*
