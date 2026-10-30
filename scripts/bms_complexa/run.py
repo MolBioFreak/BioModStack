@@ -60,9 +60,6 @@ def run(request: Request, *, upstream: Path, weights: Path, output: Path,
     env.setdefault("COMPLEXA_INIT", "bms")
     env.setdefault("XDG_CACHE_HOME", str(native / ".cache"))
     env.setdefault("MPLCONFIGDIR", str(native / ".cache" / "matplotlib"))
-    # The AF2 reward runs on JAX beside PyTorch in the same process; JAX's default
-    # 75% preallocation starves the 16 GB card once the oracle actually loads.
-    env.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     receipt["execution"] = "running"
     try:
         with (native / "complexa.log").open("w") as log:

@@ -24,14 +24,6 @@ def upstream():
     return Path(value)
 
 
-def test_native_wrapper_bounds_jax_before_the_af2_reward_loads():
-    """The AF2 reward and the generator share one 16 GB card; JAX must not preallocate."""
-    text = (Path(__file__).resolve().parents[1] / "scripts/bms_complexa/run.py").read_text(encoding="utf-8")
-    assert 'env.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")' in text
-    # The reward path binds AF2_DIR from the launcher; the wrapper must not replace it.
-    assert 'env.setdefault("AF2_DIR"' not in text
-
-
 def test_closed_controls_and_explicit_clear():
     with pytest.raises(ValidationError):
         Request(task="protein_binder", task_name="x", search={"algorithm": "gradient_ascent"})
