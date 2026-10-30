@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
@@ -2699,6 +2700,12 @@ def build_queue_scheduler_diagnostics(
 # MAIN ORCHESTRATOR LOOP
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Binder-round recovery reconciles completed child Jobs and can schedule their
+# follow-on analyses. It scans completed Jobs with JSON predicates over the
+# provenance column; at the 3 s scheduling cadence that read the whole Jobs table
+# several times a minute for no benefit. One minute bounds the recovery delay.
+BINDER_RECOVERY_INTERVAL_SECONDS = 60.0
+
 class GPUOrchestrator:
     """
     Background service that manages GPU job scheduling.
@@ -2722,6 +2729,7 @@ class GPUOrchestrator:
         self._running = False
         self._task = None
         self._remote_reconciliation_tasks: dict[str, asyncio.Task] = {}
+        self._next_binder_recovery_at = 0.0
     
     async def start(self):
         """Start the orchestrator loop."""
@@ -3409,7 +3417,14 @@ class GPUOrchestrator:
             from services.nextflow import maybe_trigger_mutation_seed_refinement
             from services.binder_round import recover_rounds
             from experiment_database import experiment_session_factory
-            await recover_rounds(self.db_session_factory, experiment_session_factory)
+            # Recovery scans completed Jobs and their provenance JSON. It is a
+            # recovery sweep, not a progress read: once per interval is enough,
+            # and repeating it every orchestrator cycle read the whole Jobs table
+            # several times a minute.
+            now_monotonic = time.monotonic()
+            if now_monotonic >= self._next_binder_recovery_at:
+                self._next_binder_recovery_at = now_monotonic + BINDER_RECOVERY_INTERVAL_SECONDS
+                await recover_rounds(self.db_session_factory, experiment_session_factory)
 
             # Native follow-ons remain pending after remote import releases its
             # lease. Recover only explicitly requested, unconsumed MSA batches;

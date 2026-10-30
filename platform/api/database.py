@@ -2866,6 +2866,7 @@ async def init_db():
         if engine.dialect.name == "sqlite":
             await conn.execute(text("PRAGMA journal_mode=WAL"))
             await conn.execute(text("PRAGMA busy_timeout=30000"))
+            await _ensure_execution_target_active_index(conn)
 
     if db_path is not None:
         await asyncio.to_thread(_attest_sqlite_migration_ledger, str(db_path))
@@ -2874,6 +2875,26 @@ async def init_db():
         await asyncio.to_thread(_attest_sqlite_migration_38, str(db_path))
         await asyncio.to_thread(_attest_sqlite_migration_39, str(db_path))
         await asyncio.to_thread(_attest_sqlite_migration_40, str(db_path))
+
+
+async def _ensure_execution_target_active_index(conn) -> None:
+    """Keep the one-active-target index that every status read filters on.
+
+    Remote telemetry and preload recovery read ``execution_targets WHERE
+    active = 1`` on a short cycle. Without the partial index SQLite scans the
+    whole table, which holds multi-megabyte runtime inventories, so a missing
+    index turns a cheap status read into a full-table JSON read every second.
+    Migration 45 creates it for new databases; older installs may have lost it.
+    """
+    present = await conn.execute(text(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='execution_targets'"
+    ))
+    if present.first() is None:
+        return
+    await conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_targets_one_active "
+        "ON execution_targets(active) WHERE active = 1"
+    ))
 
 
 async def _ensure_sqlite_indexes(conn):
