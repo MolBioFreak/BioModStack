@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Children, createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AtomWorksStudioHost } from './AtomWorksStudioHost';
 import { importStudio, type StudioCapture } from '../lib/atomworksStudio';
 import { adoptAnnotatedCif, type CapturedAnnotatedDocument, type DocumentCaptureRegistry } from '../lib/deNovoDocumentCapture';
@@ -14,12 +14,16 @@ type Actions = {
 const EditorsContext = createContext<Actions | null>(null);
 export const useDeNovoDocumentEditors = () => useContext(EditorsContext);
 export function DeNovoDocumentEditorPanels() { return <>{useDeNovoDocumentEditors()?.panels}</>; }
-/** Form column plus Studio canvas. Wide screens put the canvas beside the form while an editor is open;
- * narrow screens keep the editor under the form as before. */
+/** AtomWorks is the primary surface: the canvas keeps its own column on wide screens, open or empty,
+ * with the settings that change it beside it. Narrow screens stack settings first, then the canvas. */
 export function DeNovoEditorLayout({ children }: { children: ReactNode }) {
-    const split = Boolean(useDeNovoDocumentEditors()?.active);
-    return <div data-editor-split={split ? 'true' : 'false'}
-        className={split ? 'space-y-5 xl:grid xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] xl:items-start xl:gap-x-5 xl:space-y-0' : 'space-y-5'}>{children}</div>;
+    const active = Boolean(useDeNovoDocumentEditors()?.active);
+    const [settings, canvas] = Children.toArray(children);
+    return <div data-editor-split={active ? 'true' : 'false'} data-editor-canvas={active ? 'open' : 'empty'}
+        className="space-y-5 xl:grid xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] xl:items-start xl:gap-x-5 xl:space-y-0">
+        <div className="min-w-0 xl:order-2">{settings}</div>
+        <div className="min-w-0 xl:order-1 xl:min-h-[520px]">{canvas}</div>
+    </div>;
 }
 // Property order is not source identity; compare every retained selector field.
 const key = (value: unknown) => JSON.stringify(value, (_name, item) => item && typeof item === 'object' && !Array.isArray(item)
@@ -106,6 +110,12 @@ export function DeNovoDocumentEditors({ registry, sources, molecularDocuments, o
     return <EditorsContext.Provider value={{ open, active: Boolean(opening) || editors.length > 0, panels: <div ref={panel} tabIndex={-1} aria-label="Molecular document editor" className="min-w-0 space-y-5">
         {opening && <p role="status">Opening {opening} in AtomWorks Studio…</p>}
         {error && <p role="status">Studio unavailable: {error}</p>}
+        {!opening && !error && editors.length === 0 && <div data-studio-canvas-empty
+            className="rounded-xl border border-dashed p-6 text-sm text-[var(--text-secondary)]"
+            style={{ borderColor: 'var(--border-primary)' }}>
+            <p className="font-medium text-[var(--text-primary)]">AtomWorks Studio</p>
+            <p className="mt-2">Choose a structure or task in the settings beside this canvas, then open it here to edit.</p>
+        </div>}
         {editors.map(editor => <DocumentEditor key={editor.id} editor={editor} source={sources?.[editor.slot]} selected={active[editor.slot] === editor.id}
             registry={registry} onAdopt={document => { setActive(previous => ({ ...previous, [editor.slot]: editor.id })); onAdopt(editor.slot, document); }} onClose={() => close(editor.id)} />)}
     </div> }}>{children}</EditorsContext.Provider>;

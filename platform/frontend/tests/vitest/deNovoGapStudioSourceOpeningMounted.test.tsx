@@ -117,16 +117,21 @@ it('an unselected ensemble does not import a first frame or mutate the ordinary 
     expect(document.body.textContent).toContain('Choose the source MODEL');
 });
 
-it('puts the Studio canvas beside the form only while an editor is open', async () => {
+it('keeps the Studio canvas as its own column, empty until an editor opens', async () => {
     await render();
     const layout = () => document.querySelector<HTMLElement>('[data-editor-split]')!;
     expect(layout().dataset.editorSplit).toBe('false');
-    expect(layout().className).not.toContain('xl:grid');
+    // The canvas pane is the primary column even before a document is opened.
+    expect(layout().className).toContain('xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]');
+    expect(layout().dataset.editorCanvas).toBe('empty');
+    expect(layout().textContent).toContain('Choose a structure or task in the settings beside this canvas');
+    expect(layout().querySelector('iframe')).toBeNull();
     await act(async () => { await actions!.open('source', original); });
     expect(layout().dataset.editorSplit).toBe('true');
-    expect(layout().className).toContain('xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]');
+    expect(layout().dataset.editorCanvas).toBe('open');
     expect(layout().querySelector('iframe')).not.toBeNull();
     const close = [...document.querySelectorAll('button')].find(node => /^Close editor/.test(node.textContent ?? ''))!;
     await act(async () => close.click());
     expect(layout().dataset.editorSplit).toBe('false');
+    expect(layout().dataset.editorCanvas).toBe('empty');
 });
