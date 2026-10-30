@@ -70,6 +70,11 @@ export function BioXpMethodPlanSummary({ result, method, stale }: { result: Meth
     const time = object(simulation.time), ms = decimal(time.known_duration_ms), unknownSteps = Array.isArray(time.unknown_occurrences) ? time.unknown_occurrences.length : 0;
     const water = Array.isArray(result.water_substitutions) ? result.water_substitutions.length : 0;
     const unaddressed = methodStepFindings(result, method).filter(f => !f.step_id && !String(f.path ?? '').startsWith('/steps/'));
+    // Same message for several settings reads as one line naming each setting.
+    const setting = (path: unknown) => String(path ?? '').replace(/^\//, '').replace(/_(ul_s|ul|ms)$/, '').replaceAll('_', ' ');
+    const grouped = new Map<string, string[]>();
+    for (const f of unaddressed) grouped.set(String(f.message), [...(grouped.get(String(f.message)) ?? []), setting(f.path)]);
+    const notes = [...grouped].map(([message, fields]) => fields.length > 1 && fields.every(Boolean) ? `${message.replace(/\.$/, '')}: ${fields.join(', ')}.` : fields.length === 1 && fields[0] ? `${fields[0]}: ${message}` : message);
     return <section aria-label="Plan summary" className="bioxp-plan-summary">
         <h3>Plan summary</h3>
         {stale && <p role="status">Updating for your latest edits…</p>}
@@ -81,7 +86,7 @@ export function BioXpMethodPlanSummary({ result, method, stale }: { result: Meth
             <div><dt>Volumes</dt><dd>{volumeRows.length ? <ul>{volumeRows.map(v => <li key={v.id}>{v.name}: {v.moved !== undefined ? `${amount(v.moved)} moved` : 'not moved'}{v.planned !== undefined ? ` · ${amount(v.planned)} on the starting deck` : ''}</li>)}</ul> : 'No liquid moves.'}</dd></div>
             {water > 0 && <div><dt>Liquid settings</dt><dd>{water} unspecified setting{water === 1 ? '' : 's'} use the matching Water class.</dd></div>}
         </dl>
-        {unaddressed.length > 0 && <section aria-label="General notes"><h4>Notes</h4><ul>{unaddressed.map((f, i) => <li key={i}>{f.message}</li>)}</ul></section>}
+        {notes.length > 0 && <section aria-label="General notes"><h4>Notes</h4><ul>{notes.map((n, i) => <li key={i}>{n}</li>)}</ul></section>}
         <small>Notes are advice only; they never block Run.</small>
     </section>;
 }

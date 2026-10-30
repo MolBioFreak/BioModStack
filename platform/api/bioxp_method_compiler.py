@@ -32,6 +32,17 @@ class RepresentationError(ValueError):
         self.path, self.code = path, code
 
 
+def plain_emission_message(message):
+    """Readable wording for common native-schema rejections; the rejection itself is unchanged."""
+    import re
+    m = re.match(r"^/(leading_air|trailing_air): \{'volume_ul': ([^}]+)\} is not valid", str(message))
+    if m:
+        phase = 'leading' if m.group(1) == 'leading_air' else 'trailing'
+        return (f'The liquid class sets a {m.group(2)} µL {phase} air gap but no air speed. '
+                'Set "Air gap aspiration µL/s" on that liquid class (Liquid classes tab); no speed is assumed.')
+    return message
+
+
 def fail(message, path='', code='representation_error') -> NoReturn:
     raise RepresentationError(message, path, code)
 
@@ -548,7 +559,7 @@ def compile_method(request):
             for issue in emission_issues:
                 o = by_id.get(issue['step_id'], {})
                 result['issues'].append({'code': 'native_representation_error', 'category': 'representation',
-                    'message': issue['message'], 'path': o.get('path', '/method'), 'step_id': o.get('step_id'), 'occurrence_id': issue['step_id']})
+                    'message': plain_emission_message(issue['message']), 'path': o.get('path', '/method'), 'step_id': o.get('step_id'), 'occurrence_id': issue['step_id']})
             if document is None:
                 return result
             liquid_actions_by_occurrence = {}
