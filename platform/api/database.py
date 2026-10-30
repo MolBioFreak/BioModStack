@@ -12,6 +12,7 @@ from datetime import datetime
 from contextvars import ContextVar
 import asyncio
 import json
+import os
 import sqlite3
 from paths import get_db_path, get_db_url
 from migrations.sqlite_sha256 import register_sqlite_sha256
@@ -61,6 +62,27 @@ if DATABASE_URL.startswith("sqlite"):
     engine_kwargs["connect_args"] = {"timeout": 30}
     engine_kwargs["json_serializer"] = _canonical_sqlite_json
 engine = create_async_engine(DATABASE_URL, **engine_kwargs)
+
+# Opt-in statement timing. Statement work happens on aiosqlite worker threads,
+# so a Python profiler shows an idle event loop and cannot name the query; this
+# logs the statements that are actually slow. Disabled unless BMS_SLOW_SQL_MS
+# is set to a positive millisecond bound.
+_slow_sql_ms = float(os.environ.get("BMS_SLOW_SQL_MS") or 0)
+if _slow_sql_ms > 0:
+    import logging
+    import time as _time
+
+    _slow_sql_logger = logging.getLogger("bms.sql")
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def _slow_sql_before(conn, cursor, statement, params, context, executemany):
+        context._bms_sql_started = _time.perf_counter()
+
+    @event.listens_for(engine.sync_engine, "after_cursor_execute")
+    def _slow_sql_after(conn, cursor, statement, parameters, context, executemany):
+        elapsed_ms = (_time.perf_counter() - getattr(context, "_bms_sql_started", _time.perf_counter())) * 1000
+        if elapsed_ms >= _slow_sql_ms:
+            _slow_sql_logger.warning("slow-sql %.1fms %s", elapsed_ms, " ".join(statement.split())[:320])
 
 if engine.dialect.name == "sqlite":
     @event.listens_for(engine.sync_engine, "connect")
