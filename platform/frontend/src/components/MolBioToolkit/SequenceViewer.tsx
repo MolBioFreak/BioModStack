@@ -441,6 +441,16 @@ export function SequenceViewer({
         : displayStrandForMoleculeOrientation(sequenceData.moleculeOrientation);
     const resolvedDisplayStrand = activeDisplayStrand ?? sourceDisplayStrand;
     const sequenceLength = sequenceData.sequence.length;
+    const [selectedRestrictionLabel, setSelectedRestrictionLabel] = useState<string | null>(null);
+    const restrictionAnnotationPointerRef = useRef<string | null>(null);
+    const restrictionLabelGroups = useMemo(() => groupRestrictionLabels(
+        restrictionAnalysis?.analysis.occurrences ?? [], selectedEnzymes, groupSameSiteLabels,
+    ), [restrictionAnalysis, selectedEnzymes, groupSameSiteLabels]);
+    const openRestrictionGroup = visibility.cutsites ? restrictionLabelGroups.find(group =>
+        new Set(group.members.map(member => member.enzyme_id)).size > 1
+        && group.representative.site_segments.some((_, index) => selectedRestrictionLabel === `${group.representative.occurrence_id}:segment:${index}`),
+    ) : undefined;
+    useEffect(() => setSelectedRestrictionLabel(null), [restrictionAnalysis, groupSameSiteLabels]);
 
     const featureAnnotations = useMemo(() => {
         return sequenceData.features.filter(isSequenceAnnotation).flatMap((feature) => {
@@ -935,10 +945,18 @@ export function SequenceViewer({
                 }
             }}
             onPointerDownCapture={(event) => {
+                if (event.target instanceof Element && event.target.closest('[data-restriction-label-details]')) return;
                 selectionPointerButtonRef.current = event.button;
                 if (event.button === 0) {
                     pendingPointerSelectionRef.current = null;
                 }
+            }}
+            onMouseDownCapture={event => {
+                if (!(event.target instanceof Element) || event.target.closest('[data-restriction-label-details]')) return;
+                // SeqViz registers the native annotation ID on its paths/labels,
+                // but omits it from some selection callbacks. Capture that exact
+                // element rather than guessing from the displayed name or range.
+                restrictionAnnotationPointerRef.current = event.target.closest('[id]')?.id ?? null;
             }}
             onPointerUpCapture={finishPointerSelection}
             onPointerCancelCapture={cancelPointerSelection}
@@ -1007,6 +1025,9 @@ export function SequenceViewer({
 
                 // Selection handling with type info
                 onSelection={(sel) => {
+                    // Keep inspection independent of the editing callback.
+                    setSelectedRestrictionLabel(sel?.type === 'ANNOTATION'
+                        ? sel.id ?? restrictionAnnotationPointerRef.current : null);
                     if (onSelection && sel && typeof sel.start === 'number' && typeof sel.end === 'number') {
                         const sourceSelection = mapSeqVizSelectionToSource(
                             {
@@ -1041,6 +1062,31 @@ export function SequenceViewer({
                 // Styling - seqviz needs explicit height
                 style={{ height: "100%", width: "100%" }}
             />
+            {openRestrictionGroup && (
+                <div role="dialog" aria-label="Enzymes at this cut site" data-restriction-label-details="true" data-seqviz-touch-control="true"
+                    className="absolute right-3 top-3 z-30 max-h-[70%] w-80 max-w-[calc(100%_-_1.5rem)] overflow-auto rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 text-sm text-[var(--text-primary)] shadow-xl"
+                    onPointerDown={event => event.stopPropagation()}
+                    onContextMenu={event => event.stopPropagation()}
+                    onKeyDown={event => {
+                        if (event.key === 'Escape') { event.stopPropagation(); setSelectedRestrictionLabel(null); viewerRef.current?.focus(); }
+                    }}>
+                    <div className="flex items-start justify-between gap-3">
+                        <strong>Enzymes at this cut site</strong>
+                        <button type="button" autoFocus aria-label="Close enzyme details"
+                            className="rounded border border-[var(--border-primary)] px-2 py-1 text-[var(--text-primary)] focus-visible:outline-2 focus-visible:outline-[var(--text-action)]"
+                            onClick={() => { setSelectedRestrictionLabel(null); viewerRef.current?.focus(); }}>Close</button>
+                    </div>
+                    <p className="mt-2 text-xs text-[var(--text-secondary)]">{openRestrictionGroup.representative.canonical_name} is shown on the map. These matches share the same cut positions.</p>
+                    <dl className="mt-3 space-y-2">
+                        {openRestrictionGroup.members.map(member => (
+                            <div key={member.occurrence_id} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-[var(--border-primary)] pt-2">
+                                <dt className="font-semibold">{member.canonical_name}</dt>
+                                <dd className="break-all font-mono text-[var(--text-secondary)]">{String(member.recognition_pattern ?? '')}</dd>
+                            </div>
+                        ))}
+                    </dl>
+                </div>
+            )}
             {nickingMapMarkers.length > 0
                 && resolvedViewerMode !== 'linear'
                 && viewerSize.width > 0

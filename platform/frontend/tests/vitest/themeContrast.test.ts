@@ -3,6 +3,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readableTextColor } from '../../src/lib/readableColors';
 import { COLOR_PALETTES } from '../../src/components/MolBioToolkit/sequenceViewerConstants';
+import { act, createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { DNASequenceProjectWorkspace } from '../../src/components/project-manager/DNASequenceProjectWorkspace';
+import type { ProjectHubReadModel } from '../../src/lib/api';
 
 /**
  * Theme contrast guard.
@@ -107,6 +113,53 @@ describe('theme contrast', () => {
 
 
 describe('native MolBio and Project readability', () => {
+    it('keeps real Project card links readable against the global link rules in all themes and action states', async () => {
+        const cardCss = readFileSync(resolve(__dirname, '../../src/components/project-manager/DNASequenceProjectWorkspace.css'), 'utf8');
+        const globalLinks = css.match(/\/\* Ensure links are visible \*\/[\s\S]*?(?=\/\* Smooth transitions)/)?.[0];
+        expect(globalLinks).toBeTruthy();
+        const model = {
+            project: {plasmid_count: 2, add_plasmid_href: '/designer'},
+            plasmids: ['Short name', 'A much longer reference sequence name that used to wrap the buttons onto another row'].map((name, i) => ({
+                sequence_id: `seq-${i}`, name, reopen_href: `/designer?id=${i}`, description: 'Imported reference',
+                revision_number: 1, length_bp: 1000, feature_count: 4, topology: 'circular',
+            })),
+            sequence_data: {items: [], launcher_href: '/ngs'}, experiments: [], results: [], activity: [], identity: {},
+        } as unknown as ProjectHubReadModel;
+        const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+        const styles = document.createElement('style'); document.head.append(styles);
+        const client = new QueryClient();
+        const rgbHex = (rgb: string) => '#' + (rgb.match(/\d+/g) ?? []).slice(0, 3).map(n => Number(n).toString(16).padStart(2, '0')).join('');
+        try {
+            await act(() => root.render(createElement(QueryClientProvider, {client}, createElement(MemoryRouter, {}, createElement(DNASequenceProjectWorkspace, {model})))));
+            const links = [...host.querySelectorAll<HTMLAnchorElement>('a')].filter(link => ['Open latest', 'Add DNA sequence'].includes(link.textContent ?? ''));
+            expect(links).toHaveLength(3);
+            for (const block of blocks.filter(row => row.name !== ':root')) {
+                const tokens = themeTokens(block);
+                // jsdom has no full cascade-layer/custom-property engine. Resolve only
+                // the theme variables, preserving the actual component/global selectors.
+                styles.textContent = `${globalLinks}\n${cardCss}`
+                    .replace(/var\((--[a-z-]+)\)/g, (_, name) => tokens[name])
+                    .replace(/:hover/g, '[data-test-hover]').replace(/:focus-visible/g, '[data-test-focus]');
+                for (const link of links) for (const state of ['normal', 'hover', 'focus']) {
+                    link.toggleAttribute('data-test-hover', state === 'hover');
+                    link.toggleAttribute('data-test-focus', state === 'focus');
+                    const computed = getComputedStyle(link);
+                    expect(contrastRatio(rgbHex(computed.color), rgbHex(computed.backgroundColor)), `${block.name}/${state}`).toBeGreaterThanOrEqual(4.5);
+                    expect(rgbHex(computed.color)).toBe(tokens['--text-on-accent']);
+                }
+                for (const badge of host.querySelectorAll('.dna-project-revision')) {
+                    const computed = getComputedStyle(badge);
+                    expect(contrastRatio(rgbHex(computed.color), rgbHex(computed.backgroundColor)), `${block.name} revision badge`).toBeGreaterThanOrEqual(4.5);
+                }
+            }
+            const headers = [...host.querySelectorAll('.dna-project-card-header')];
+            expect(headers).toHaveLength(2);
+            for (const header of headers) {
+                expect(getComputedStyle(header).flexDirection).toBe('column');
+                expect(header.lastElementChild?.classList.contains('dna-project-card-actions')).toBe(true);
+            }
+        } finally { await act(() => root.unmount()); host.remove(); styles.remove(); client.clear(); }
+    });
     it('keeps action and status text readable on every theme surface', () => {
         for (const block of blocks) {
             const tokens = themeTokens(block);
