@@ -3415,12 +3415,14 @@ class GPUOrchestrator:
             # lease. Recover only explicitly requested, unconsumed MSA batches;
             # completed historical jobs do not enter generic running finalization.
             async with self.db_session_factory() as recovery_session:
+                # Same predicate as before, in an order that lets the batch_id index and the cheap
+                # params test reject rows before the large provenance column is read on every cycle.
                 pending_batches = select(Job.batch_id).where(
-                    (Job.job_phase == 'msa_generation') |
-                    Job.provenance['mutation_seed_expansion'].as_string().is_not(None),
                     Job.batch_id.is_not(None),
                     Job.params["mutation_seed_refinement_trigger"].as_string().is_not(None),
                     func.coalesce(Job.params["_mutation_seed_refinement_triggered"].as_boolean(), False).is_(False),
+                    (Job.job_phase == 'msa_generation') |
+                    Job.provenance['mutation_seed_expansion'].as_string().is_not(None),
                 )
                 representatives = await recovery_session.execute(select(func.min(Job.id)).where(
                     Job.batch_id.in_(pending_batches),
@@ -3440,21 +3442,21 @@ class GPUOrchestrator:
                 from services.remote_execution.claims import outstanding_claim_clause
                 leased_owner = outstanding_claim_clause()
                 # Preparing claims are durable work, not scheduler-claimable jobs.
+                # The same three conditions as one OR, as a union of two selects: the queue_status
+                # index answers the first, so the large provenance column is read only for the
+                # few jobs that have a remote execution target.
+                by_queue_status = select(Job.id).where(Job.queue_status.in_(("running", "cancelling", "preparing")))
+                by_remote_owner = select(Job.id).where(
+                    Job.execution_target_id.is_not(None),
+                    leased_owner
+                    | (Job.remote_state == "results_available")
+                    | (
+                        Job.status.in_(("failed", "cancelled"))
+                        & (Job.provenance["remote_diagnostics"]["state"].as_string() == "returning")
+                    ),
+                )
                 result = await session.execute(
-                    select(Job).where(
-                        Job.queue_status.in_(("running", "cancelling", "preparing"))
-                        | leased_owner
-                        | (
-                            Job.execution_target_id.is_not(None)
-                            & (
-                                (Job.remote_state == "results_available")
-                                | (
-                                    Job.status.in_(("failed", "cancelled"))
-                                    & (Job.provenance["remote_diagnostics"]["state"].as_string() == "returning")
-                                )
-                            )
-                        )
-                    )
+                    select(Job).where(Job.id.in_(by_queue_status.union(by_remote_owner)))
                 )
                 running_jobs = result.scalars().all()
 
