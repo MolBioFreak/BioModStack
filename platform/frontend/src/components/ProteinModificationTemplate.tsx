@@ -352,6 +352,10 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const [discoExperiment, setDiscoExperiment] = useState(initialString(initialValues, 'disco_experiment', 'designable'));
     const [discoEffort, setDiscoEffort] = useState(initialString(initialValues, 'disco_effort', 'fast'));
     const [discoInferenceSeeds, setDiscoInferenceSeeds] = useState<number | '' | null>(initialValue(initialValues, 'disco_num_inference_seeds') === null ? null : initialNumber(initialValues, 'disco_num_inference_seeds', 8));
+    // Without an explicit seed count, DISCO produces the requested number of designs per input
+    // (one seed is one sample); a saved or edited count, including native null, always wins.
+    const [discoSeedCountSet, setDiscoSeedCountSet] = useState(initialValue(initialValues, 'disco_num_inference_seeds') !== undefined);
+    const discoSeedCount: number | '' | null = discoSeedCountSet ? discoInferenceSeeds : numDesigns;
     const [discoSeeds, setDiscoSeeds] = useState<string | number[] | null>(() => {
         const saved = initialValue(initialValues, 'disco_seeds');
         return saved === null || Array.isArray(saved) ? saved as number[] | null : typeof saved === 'string' ? saved : '';
@@ -482,7 +486,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
         laproteina_motif_max_length: motifMaxLength,
         disco_experiment: discoExperiment,
         disco_effort: discoEffort,
-        disco_num_inference_seeds: discoInferenceSeeds,
+        // Only an explicit count is saved; otherwise a reopened draft keeps following the requested count.
+        disco_num_inference_seeds: discoSeedCountSet ? discoInferenceSeeds : undefined,
         disco_seeds: discoSeeds,
         disco_use_deepspeed_evo_attention: discoAttention,
         disco_input_json_path: discoInputJson,
@@ -537,7 +542,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                     ...Object.fromEntries(['disco_checkpoint_path', 'disco_cutlass_path'].filter(key => Object.hasOwn(initialValues, key)).map(key => [key, initialValues[key]])),
                     disco_experiment: discoExperiment,
                     disco_effort: discoEffort,
-                    disco_num_inference_seeds: discoInferenceSeeds,
+                    disco_num_inference_seeds: discoSeedCount,
                     disco_seeds: discoSeeds === '' ? undefined : discoSeeds,
                     disco_use_deepspeed_evo_attention: discoAttention,
                     disco_input_json_path: discoInputJson || undefined,
@@ -730,7 +735,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const countHelp = generator === 'rfd3' ? 'Exact number of native RFD3 candidates.'
         : backend === 'laproteina' ? isMotif ? 'Motif sampling uses the requested design count.'
             : 'Samples per length controls generation. Requested design count is retained, not a combined sampling total.'
-        : 'Exact seeds override inference seed count. Requested design count is retained, not the native output total.';
+        : 'Inference seed count follows the requested design count unless you set it; exact seeds override both. Each seed produces one design per input.';
     const nativePresets = isMotif
         ? [['motif_idx_aa', 'Motif indexed all-atom'], ['motif_idx_tip', 'Motif indexed tip-atoms'], ['motif_uidx_aa', 'Motif unindexed all-atom'], ['motif_uidx_tip', 'Motif unindexed tip-atoms']]
         : [['ucond_tri', 'Unconditional (triangular)'], ['ucond_notri', 'Unconditional'], ['ucond_notri_long', 'Unconditional long']];
@@ -915,8 +920,8 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                                 {overrideNote('effort')}
                             </label>
                             <label className={labelClass}>Inference seed count
-                                <input className={fieldClass} type="number" min={1} max={1024} value={String(effectiveOverride('num_inference_seeds', discoInferenceSeeds) ?? '')} onChange={event => { const value = editedNumber(event.target.value); setEffectiveOverride('num_inference_seeds', value, () => setDiscoInferenceSeeds(value)); }} />
-                                {effectiveOverride('num_inference_seeds', discoInferenceSeeds) === null && <span>None (native seeds list; legacy launch may resolve a count)</span>}
+                                <input className={fieldClass} type="number" min={1} max={1024} value={String(effectiveOverride('num_inference_seeds', discoSeedCount) ?? '')} onChange={event => { const value = editedNumber(event.target.value); setEffectiveOverride('num_inference_seeds', value, () => { setDiscoSeedCountSet(true); setDiscoInferenceSeeds(value); }); }} />
+                                {effectiveOverride('num_inference_seeds', discoSeedCount) === null && <span>None (native seeds list; legacy launch may resolve a count)</span>}
                                 {overrideNote('num_inference_seeds')}
                             </label>
                             <label className={labelClass}>Exact seeds

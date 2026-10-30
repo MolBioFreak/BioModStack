@@ -194,6 +194,23 @@ it('exposes real conditional engines, retains independent goal drafts, and submi
     expect(control('Ligand SDF path')).toBeTruthy();
 });
 
+it('DISCO seed count follows the requested design count until the operator sets it', async () => {
+    const draft = vi.fn();
+    await render({ initialValues: { generator: 'disco', target_lengths: '120' }, onDraftChange: draft });
+    await edit('Requested design count', '1');
+    await click('Sampling');
+    expect(control('Inference seed count').value).toBe('1');
+    expect(latest(draft).disco_num_inference_seeds).toBeUndefined();   // derived, so a reopened draft keeps following
+    await click('Generate candidates');
+    expect(latest(mocks.submit).params).toMatchObject({ num_designs: 1, disco_num_inference_seeds: 1 });
+    await edit('Inference seed count', '4');
+    expect(control('Inference seed count').value).toBe('4');
+    await edit('Requested design count', '2');
+    expect(control('Inference seed count').value).toBe('4');            // an explicit count wins
+    await click('Generate candidates');
+    expect(latest(mocks.submit).params).toMatchObject({ num_designs: 2, disco_num_inference_seeds: 4 });
+});
+
 it('edits active DISCO native overrides at the primary controls without losing inactive values', async () => {
     const draft = vi.fn();
     await render({ initialValues: { generator: 'disco', target_lengths: '120', disco_effort: 'fast', disco_num_inference_seeds: 8, pcad_disco_settings_json: { effort: 'max', num_inference_seeds: 3, deterministic: false } }, onDraftChange: draft });
