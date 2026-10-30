@@ -25,6 +25,7 @@ import {
     type RestrictionSource,
 } from '../../lib/restrictionAnalysis';
 import { SequenceViewer, type ColorPaletteName } from './SequenceViewer';
+import { DEFAULT_MAPPED_ENZYMES } from './utils/restrictionLabels';
 import { DEFAULT_VISIBILITY } from './sequenceViewerConstants';
 import { ProjectAttachmentDialog, type ProjectAttachmentSource } from '../project-manager/ProjectAttachmentDialog';
 import { MOLECULAR_MEMBER_ADAPTER } from '../../lib/molecularProjectMembership';
@@ -736,15 +737,8 @@ export function MolBioToolkitV2() {
     const [demoRequested, setDemoRequested] = useState(false);
     const requestDemos = useCallback(() => setDemoRequested(true), []);
     // Enzymes currently displayed on the viewer - controlled by DigestPanel
-    const [selectedEnzymes, setSelectedEnzymes] = useState<string[]>([
-        // Default: Common 6-cutters for cloning
-        'EcoRI', 'BamHI', 'HindIII', 'XbaI', 'SalI', 'PstI', 'SmaI', 'KpnI', 'SacI', 'XhoI',
-        'NotI', 'NdeI', 'NcoI', 'BglII', 'SpeI', 'MluI', 'ApaI', 'ClaI', 'EcoRV', 'NheI',
-        // Golden Gate / MoClo enzymes
-        'BsaI', 'BbsI', 'SapI',
-        // Other frequently used
-        'AgeI', 'AscI', 'PacI', 'SfiI', 'FseI', 'PmeI'
-    ]);
+    const [selectedEnzymes, setSelectedEnzymes] = useState<string[]>([...DEFAULT_MAPPED_ENZYMES]);
+    const [groupSameSiteLabels, setGroupSameSiteLabels] = useState(true);
 
     // History hook for undo/redo
     const {
@@ -3207,6 +3201,7 @@ export function MolBioToolkitV2() {
                     visibility={visibility}
                     selectedEnzymes={selectedEnzymes}
                     restrictionAnalysis={restrictionAnalysis}
+                    groupSameSiteLabels={groupSameSiteLabels}
                     selection={selection}
                     onSelection={handleSelection}
                     highlightedRegions={highlightedRegions}
@@ -3286,6 +3281,8 @@ export function MolBioToolkitV2() {
                         onHighlight={setHighlightedRegions}
                         selectedEnzymes={selectedEnzymes}
                         onEnzymesChange={setSelectedEnzymes}
+                        groupSameSiteLabels={groupSameSiteLabels}
+                        onGroupSameSiteLabelsChange={setGroupSameSiteLabels}
                         onMapVisibilityRequest={ensureCutSitesVisible}
                         catalog={restrictionCatalog}
                         productEvidence={restrictionProductEvidence}
@@ -3601,7 +3598,8 @@ export function MolBioToolkitV2() {
                                                 sequenceData={viewerSequenceData}
                                                 visibility={visibility}
                                                 selectedEnzymes={selectedEnzymes}
-                    restrictionAnalysis={restrictionAnalysis}
+                                                restrictionAnalysis={restrictionAnalysis}
+                                                groupSameSiteLabels={groupSameSiteLabels}
                                                 selection={selection}
                                                 onSelection={handleSelection}
                                                 onContextMenu={isExactMolecularAuthority ? undefined : handleViewerContextMenu}
@@ -3628,7 +3626,8 @@ export function MolBioToolkitV2() {
                                             sequenceData={viewerSequenceData}
                                             visibility={visibility}
                                             selectedEnzymes={selectedEnzymes}
-                    restrictionAnalysis={restrictionAnalysis}
+                                            restrictionAnalysis={restrictionAnalysis}
+                                            groupSameSiteLabels={groupSameSiteLabels}
                                             selection={selection}
                                             onSelection={handleSelection}
                                             onContextMenu={isExactMolecularAuthority ? undefined : handleViewerContextMenu}
@@ -3822,6 +3821,8 @@ export function MolBioToolkitV2() {
                                 onHighlight={setHighlightedRegions}
                                 selectedEnzymes={selectedEnzymes}
                                 onEnzymesChange={setSelectedEnzymes}
+                                groupSameSiteLabels={groupSameSiteLabels}
+                                onGroupSameSiteLabelsChange={setGroupSameSiteLabels}
                                 onMapVisibilityRequest={ensureCutSitesVisible}
                         catalog={restrictionCatalog}
                         productEvidence={restrictionProductEvidence}

@@ -24,6 +24,35 @@ const simulation = { fragments: [
 const ack = (operation_id: string) => ({ schema: 'bms.molbio.restriction-digest-saved-ack.v1', operation_id, source_revision_id: 'revision', catalog_id: 'catalog-v1', catalog_sha256: 'a'.repeat(64), request_sha256: 'b'.repeat(64), result_sha256: 'c'.repeat(64), outputs: [] });
 
 describe('DigestPanel backend authority', () => {
+    it.each([false, true])('changes label grouping without changing mapped or digest enzymes (mobile=%s)', async mobile => {
+        container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+        const mapChange = vi.fn(), digestChange = vi.fn(), simulate = vi.fn(), analyzeAll = vi.fn();
+        const groupingChange = vi.fn(), highlight = vi.fn();
+        const render = (grouped: boolean) => root?.render(<DigestPanel mobile={mobile} compactLandscape={mobile}
+            sequenceData={sequence} sequenceId={null} onHighlight={highlight}
+            selectedEnzymes={['EcoRI']} onEnzymesChange={mapChange} groupSameSiteLabels={grouped}
+            onGroupSameSiteLabelsChange={groupingChange} catalog={catalog} catalogRecords={[record]}
+            analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={null}
+            digestLoading={false} digestError={null} onDigestSelectionChange={digestChange}
+            onSimulateDigest={simulate} onAnalyzeAll={analyzeAll} />);
+        await act(async () => render(true));
+        const add = container.querySelector('[data-enzyme-name="EcoRI"] button:last-child') as HTMLButtonElement;
+        await act(async () => add.click());
+        expect(digestChange).toHaveBeenLastCalledWith(['EcoRI']);
+        digestChange.mockClear();
+        const label = [...container.querySelectorAll('label')].find(row => row.textContent?.includes('One label per cut site'))!;
+        const checkbox = label.querySelector('input')!;
+        expect(checkbox.checked).toBe(true);
+        await act(async () => checkbox.click());
+        expect(groupingChange).toHaveBeenLastCalledWith(false);
+        await act(async () => render(false));
+        expect(checkbox.checked).toBe(false);
+        expect(mapChange).not.toHaveBeenCalled();
+        expect(digestChange).not.toHaveBeenCalled();
+        expect(container.textContent).toContain('Run Digest (1 enzyme)');
+        expect(simulate).not.toHaveBeenCalled();
+        expect(analyzeAll).not.toHaveBeenCalled();
+    });
     it('does not apply an incomplete full-catalog result as a complete map group', async () => {
         container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
         const mapChange = vi.fn();
