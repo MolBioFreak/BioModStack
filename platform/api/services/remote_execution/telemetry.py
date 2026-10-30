@@ -186,7 +186,10 @@ class RemoteTelemetry:
                 except Exception:
                     logging.getLogger(__name__).warning('Remote telemetry target refresh unavailable')
                 try:
-                    await asyncio.wait_for(stop.wait(), timeout=1)
+                    # Target status does not need a 1 s refresh: every pass reads
+                    # all execution_targets rows. Five seconds keeps the console
+                    # current without re-reading the table five times as often.
+                    await asyncio.wait_for(stop.wait(), timeout=5)
                 except asyncio.TimeoutError:
                     pass
         finally:

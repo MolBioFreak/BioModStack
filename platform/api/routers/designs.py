@@ -2842,7 +2842,11 @@ async def list_designs(
     for design, response in zip(designs, responses):
         if design.id in bc2_documents:
             response.scientific_structure_document = bc2_documents[design.id]
-        response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
+    from services.analysis_registry import scientific_contract_revisions
+    # One Job read per Job, not one per Design.
+    revisions = await scientific_contract_revisions(designs, session)
+    for design, response in zip(designs, responses):
+        response.core_protein_scientific_contract = (revisions.get(design.job_id)
             or (1 if response.native_sample and response.scientific_structure_document else None))
     pending = [(design, response) for design, response in zip(designs, responses)
                if response.core_protein_scientific_contract == 1

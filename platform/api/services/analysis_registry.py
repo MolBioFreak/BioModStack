@@ -114,6 +114,18 @@ async def scientific_contract_revision(design: Design, session: AsyncSession) ->
     return revision_for_job(job)
 
 
+async def scientific_contract_revisions(designs, session: AsyncSession) -> dict[str, int | None]:
+    """Resolve revisions for a page of designs with one Job read per Job."""
+    from services.core_protein_scientific_contract import revision_for_job
+    job_ids = {design.job_id for design in designs if design.job_id}
+    if not job_ids:
+        return {}
+    jobs = (await session.execute(
+        select(Job).options(load_only(Job.id, Job.provenance)).where(Job.id.in_(job_ids))
+    )).scalars().all()
+    return {job.id: revision_for_job(job) for job in jobs}
+
+
 def unavailable_scientific_identity(design: Design, metric: str, reason: str) -> dict[str, Any]:
     return {
         "schema_name": "core_protein_viewer_metric", "schema_version": 1,
