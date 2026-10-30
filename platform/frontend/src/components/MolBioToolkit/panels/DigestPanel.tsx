@@ -29,6 +29,8 @@ interface DigestPanelProps {
     selectedEnzymes?: string[];
     onEnzymesChange?: (enzymes: string[]) => void;
     onMapVisibilityRequest?: () => void;
+    groupSameSiteLabels?: boolean;
+    onGroupSameSiteLabelsChange?: (grouped: boolean) => void;
     catalog: RestrictionCatalogReceipt | null;
     productEvidence?: RestrictionProductReleaseReceipt | null;
     catalogRecords: Array<RestrictionRecord | RestrictionCatalogSummary>;
@@ -131,7 +133,7 @@ const CUT_FILTERS: Array<[CutFilter, string]> = [['all','All'],['unique','1x'],[
 const GROUP_FILTERS: Array<[GroupFilter, string]> = [['all','All Types'],['digest','Digest-ready'],['nicking','Nicking'],['recognition_only','Recognition only']];
 const QUICK: Array<[QuickMapGroup, string]> = [['unique','Map all 1x'],['double','Map all 2x'],['three_plus','Map all 3x+'],['nicking','Map nicking'],['type_iis','Map Golden Gate']];
 
-export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, catalog, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest, onAnalyzeAll, onReadEnzymeDetails, productEvidence, sequenceId, onUseInAssembly }: DigestPanelProps) {
+export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, groupSameSiteLabels = true, onGroupSameSiteLabelsChange, catalog, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest, onAnalyzeAll, onReadEnzymeDetails, productEvidence, sequenceId, onUseInAssembly }: DigestPanelProps) {
     const [assemblySelection, setAssemblySelection] = useState<{simulation: RestrictionDigestSimulation; indices: number[]} | null>(null);
     const assemblyIndices = assemblySelection?.simulation === digestSimulation ? assemblySelection.indices : [];
     const [digestEnzymes, setDigestEnzymes] = useState<string[]>([]);
@@ -356,6 +358,11 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
             <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search enzyme or recognition site…" data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 ${mobile ? 'min-h-12 min-w-12' : ''}`} />
             {!compactLandscape && <>{!specialCasesVisible && <div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{CUT_FILTERS.map(([value,label]) => <button key={value} onClick={() => { setCutFilter(value); if (value !== 'all') requestCountAnalysis(); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${cutFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div>}{!specialCasesVisible && <div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{GROUP_FILTERS.map(([value,label]) => <button key={value} onClick={() => { setGroupFilter(value); if (value === 'nicking') requestCountAnalysis(); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${groupFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div>}<div data-digest-bulk-map="true" className="flex gap-1 overflow-x-auto"><button disabled={hasFullAnalysis && filteredMapIds.length === 0} onClick={() => void mapFiltered()} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border border-cyan-600 bg-cyan-950/50 px-2 disabled:opacity-40`}>Map filtered ({filteredMapIds.length})</button><button disabled={selectedEnzymes.length === 0 && pendingMappingCount === 0} onClick={clearMap} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 disabled:opacity-40`}>Clear map ({selectedEnzymes.length})</button></div>{!specialCasesVisible && <div data-digest-quick-map="true" className="flex gap-1 overflow-x-auto">{QUICK.map(([value,label]) => <button key={value} aria-pressed={activeQuickMapGroups.has(value)} aria-busy={pendingGroups.current.has(value)} onClick={() => void toggleQuick(value)} className={`${mobile ? 'min-h-12 min-w-12' : ''} ${activeQuickMapGroups.has(value) ? 'border-cyan-400 bg-cyan-700' : 'border-slate-600 bg-slate-800'} rounded border px-2`}>{label}</button>)}</div>}</>}
         </div>
+        {onGroupSameSiteLabelsChange && <label className={`flex items-center gap-2 px-3 text-xs text-slate-300 ${mobile ? 'min-h-12' : ''}`}
+            title="Keep one label for matching cut positions, favoring the most specific recognition pattern. Hover over a + label for other matches, or uncheck to show every label.">
+            <input type="checkbox" checked={groupSameSiteLabels} onChange={event => onGroupSameSiteLabelsChange(event.target.checked)} />
+            One label per cut site
+        </label>}
         <nav aria-label="Enzyme display pages" className="flex items-center justify-between gap-2 px-3">
             <button type="button" disabled={currentPage === 0} onClick={() => setDisplayPage(currentPage - 1)} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 disabled:opacity-40`}>Previous enzymes</button>
             <span role="status" className="text-xs text-slate-400">{filtered.length === 0 ? '0 enzymes' : `${currentPage * 50 + 1}–${Math.min((currentPage + 1) * 50, filtered.length)} of ${filtered.length} enzymes`} · Page {currentPage + 1}/{pageCount}</span>
