@@ -3270,14 +3270,40 @@ def _core_job_progress(stage_progress: Any) -> dict[str, float | str | None]:
     return {"kind": "indeterminate", "value": None}
 
 
-def _core_job_elapsed_seconds(started_at: Any) -> int:
-    if not isinstance(started_at, datetime):
-        return 0
-    current = datetime.now(started_at.tzinfo) if started_at.tzinfo is not None else datetime.utcnow()
-    return max(0, int((current - started_at).total_seconds()))
+# Late terminal-output linking reopens and verifies the producer's whole
+# publication (for BindCraft2, every campaign file). While the Job's provenance
+# is unchanged, retry with exponential backoff (immediately once, then 15 s,
+# doubling up to _LATE_OUTPUT_RECHECK_SECONDS) instead of on every 2 s sweep.
+# A provenance change (a late publication) resets the backoff. In-process
+# only: a restart checks every pending attempt again.
+_LATE_OUTPUT_RECHECK_SECONDS = 600.0
+_late_output_checks: dict[str, tuple[str, float, int]] = {}
+
+
+def _late_output_check_due(attempt_id: str, job: Any, *, now: float | None = None) -> bool:
+    import time
+
+    current = time.monotonic() if now is None else now
+    marker = sha256_text(canonical_json({
+        "job_id": str(getattr(job, "id", "")),
+        "provenance": _public_runtime_metadata(getattr(job, "provenance", None) or {}),
+    }))
+    previous = _late_output_checks.get(attempt_id)
+    if previous is None or previous[0] != marker:
+        _late_output_checks[attempt_id] = (marker, current, 1)
+        return True
+    _, last, checks = previous
+    delay = 0.0 if checks < 2 else min(_LATE_OUTPUT_RECHECK_SECONDS, 15.0 * 2 ** (checks - 2))
+    if current - last < delay:
+        return False
+    _late_output_checks[attempt_id] = (marker, current, checks + 1)
+    return True
 
 
 def _core_job_live_receipt(job: Any, status: str) -> dict[str, Any]:
+    # The live receipt records observed Job state only. Elapsed time is derived
+    # from started_at by readers; storing a wall-clock counter here made every
+    # 2 s reconcile sweep look like a state change and append a run event.
     return {
         "schema": "bms.experiment.runtime-receipt.v1",
         "job_id": str(job.id),
@@ -3288,7 +3314,6 @@ def _core_job_live_receipt(job: Any, status: str) -> dict[str, Any]:
         "stage_progress": str(job.stage_progress) if job.stage_progress is not None else None,
         "progress": _core_job_progress(job.stage_progress),
         "started_at": str(job.started_at) if job.started_at is not None else None,
-        "elapsed_seconds": _core_job_elapsed_seconds(job.started_at),
         "assigned_gpu": job.assigned_gpu,
         "provenance": _public_runtime_metadata(job.provenance or {}),
     }
@@ -3462,7 +3487,7 @@ async def reconcile_run_group(
                         ExperimentLineageEdge.source_resource_id == attempt.resource_id,
                         ExperimentLineageEdge.edge_mode == "produced",
                         ExperimentLineageEdge.edge_key == "verified-terminal-output"))
-                    if linked is None:
+                    if linked is None and _late_output_check_due(attempt.resource_id, terminal_job):
                         try:
                             from services.global_experiments.receipts import verify_and_link_terminal_outputs
 
@@ -3470,6 +3495,8 @@ async def reconcile_run_group(
                                 await verify_and_link_terminal_outputs(
                                     session, core_session, attempt_id=attempt.resource_id,
                                 )
+                            # Linked: this attempt never needs the check again.
+                            _late_output_checks.pop(attempt.resource_id, None)
                         except Exception:
                             # Retain pending evidence without a lifecycle change.
                             pass

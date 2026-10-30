@@ -1388,6 +1388,9 @@ def _public_operational_value(value: Any) -> Any:
     return value
 
 
+_ATTEMPT_LOG_CHUNK_LIMIT = 10_000
+
+
 async def append_attempt_log_chunk(
     session: AsyncSession,
     *,
@@ -1446,7 +1449,10 @@ async def append_attempt_log_chunk(
     if stream.state == "closed":
         raise ValidationFailure("attempt log stream is closed")
     sequence = (int(last.sequence_number) + 1) if last is not None else 0
-    if sequence >= 10_000:
+    # The cap bounds open streams. The closing chunk is always accepted: it is
+    # at most one more row, and refusing it left terminal attempts unable to
+    # project, retrying the whole reconcile every sweep.
+    if sequence >= _ATTEMPT_LOG_CHUNK_LIMIT and not close:
         raise ValidationFailure("attempt log stream chunk limit reached")
     chunk = ExperimentLogChunk(
         stream_id=stream_id,
