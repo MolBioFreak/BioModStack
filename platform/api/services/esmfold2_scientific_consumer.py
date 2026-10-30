@@ -1,6 +1,8 @@
 """Pinned ESMFold2 scalar, CIF confidence and raw-token PAE readback."""
+import hashlib
 import json
 import math
+from collections import OrderedDict
 from pathlib import Path
 from zipfile import BadZipFile
 
@@ -61,9 +63,49 @@ async def _verified_publication(job_id, session):
             raise ValueError('missing_producer_publication_root')
         rows = list((await session.execute(select(Design).where(
             Design.job_id == job.id, Design.source_stage.is_(None)))).scalars())
-        prepared, receipt = prepare_esmfold2_publication(job, root, rows)
-        revalidate_prepared_publication(root, receipt)
+        key = _publication_fingerprint(job, root, rows)
+        cached = _VERIFIED_PUBLICATIONS.get(job.id)
+        if cached is not None and cached[0] == key:
+            _VERIFIED_PUBLICATIONS.move_to_end(job.id)
+            prepared, receipt = cached[1], cached[2]
+        else:
+            prepared, receipt = prepare_esmfold2_publication(job, root, rows)
+            revalidate_prepared_publication(root, receipt)
+            _VERIFIED_PUBLICATIONS[job.id] = (key, prepared, receipt)
+            _VERIFIED_PUBLICATIONS.move_to_end(job.id)
+            while len(_VERIFIED_PUBLICATIONS) > _VERIFIED_PUBLICATION_LIMIT:
+                _VERIFIED_PUBLICATIONS.popitem(last=False)
     return {row.id: row for row in rows}, prepared, root, receipt
+
+
+# Full verification re-reads, hashes and parses every structure in a Job's
+# publication; a results page repeated that on every request. The verified
+# result is reused only while nothing it depends on has changed: every file
+# under the publication root (path, size, mtime, inode, so additions and
+# removals that the inventory check would reject also invalidate), the Job's
+# recorded provenance, and the Design rows. Any change re-runs the full check.
+_VERIFIED_PUBLICATION_LIMIT = 16
+_VERIFIED_PUBLICATIONS: "OrderedDict[str, tuple[str, dict, dict]]" = OrderedDict()
+
+
+def _publication_fingerprint(job, root, rows) -> str:
+    digest = hashlib.sha256()
+    digest.update(str(root.resolve()).encode())
+    # Every persisted column of every Design row: verification also compares
+    # the stored scientific blocks with the publication, so an edited row must
+    # re-run it.
+    row_state = sorted(
+        json.dumps({c.key: getattr(r, c.key, None) for c in r.__table__.columns},
+                   sort_keys=True, default=str)
+        if hasattr(r, '__table__') else json.dumps(vars(r), sort_keys=True, default=str)
+        for r in rows
+    )
+    digest.update(json.dumps({'provenance': job.provenance or {}, 'params': job.params or {},
+                              'rows': row_state}, sort_keys=True, default=str).encode())
+    for path in sorted(p for p in root.resolve().rglob('*') if p.is_file()):
+        stat = path.stat()
+        digest.update(f'{path}\0{stat.st_size}\0{stat.st_mtime_ns}\0{stat.st_ino}\n'.encode())
+    return digest.hexdigest()
 
 
 async def verified_esmfold2_design(design, session):
