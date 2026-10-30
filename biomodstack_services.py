@@ -2664,6 +2664,15 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
     frontend_url = runtime_frontend_url(mode, project_root=root)
     wait_timeout_seconds = runtime_http_wait_timeout_seconds(mode)
     assert_runtime_listener_preflight(root, mode)
+    if mode == DEV_RUNTIME_MODE:
+        # Rewrite the adapter's Tailnet selector drop-in before the reload so
+        # the adapter starts once on the new revision (see the function).
+        import biomodstack_tailnet
+
+        try:
+            biomodstack_tailnet.refresh_installed_adapter_control_policy(root)
+        except biomodstack_tailnet.TailnetEnvironmentError:
+            pass  # Not the canonical Development checkout: the oneshot owns it.
     ensure_user_units(root, runtime_mode=mode)
 
     if mode == DEV_RUNTIME_MODE:

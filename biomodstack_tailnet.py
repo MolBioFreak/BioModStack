@@ -1076,6 +1076,23 @@ def _wait_for_adapter_policy(
     return False
 
 
+def refresh_installed_adapter_control_policy(root: Path = CANONICAL_DEVELOPMENT_ROOT) -> bool:
+    """Rewrite an already-installed selector drop-in for the current revision.
+
+    Called by the Development restart before it restarts the adapter, so the
+    adapter starts once with the new revision. Without this the global Tailnet
+    oneshot found the stale revision after every deploy and restarted the
+    adapter a second time. A host without the drop-in is left untouched.
+    """
+    dropin = _host_user_systemd_dir() / f"{WORKFLOW_ADAPTER_SERVICE}.d" / "99-tailnet-canonical-source.conf"
+    if not dropin.is_file():
+        return False
+    canonical_root = root.resolve()
+    _validate_canonical_environment_root(canonical_root, "development")
+    _install_adapter_control_policy(canonical_root, _git_revision(canonical_root))
+    return True
+
+
 def ensure_tailnet_control_policy(root: Path = CANONICAL_DEVELOPMENT_ROOT) -> dict[str, object]:
     """Synchronize the Development-owned selector policy outside selector requests.
 
