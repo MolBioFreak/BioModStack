@@ -507,6 +507,7 @@ process PrepareGeneralRFD3Input {
 
     input:
     path request_json
+    path staged_sources
 
     output:
     tuple val('generation_0'), path('rfd3_generation_native_input.json'), path({ [request_json, 'rfd3_sources'] }), emit: input_json
@@ -524,6 +525,7 @@ process PrepareGeneralRFD3Input {
       --expected-seed '${params.rfd3_generation_seed}' \
       --expected-dump-trajectories '${params.rfd3_generation_dump_trajectories}' \
       --source-dir rfd3_sources \
+      --staged-source-dir . \
       --output-native rfd3_generation_native_input.json \
       --output-receipt rfd3_generation_preparation_receipt.json
     """
@@ -717,7 +719,10 @@ workflow PROTEIN_DESIGN {
 
             if (generalRfd3Generation) {
                 def generationRequest = Channel.value(file(params.rfd3_generation_request_path))
-                PrepareGeneralRFD3Input(generationRequest)
+                // A conditioned request names a host file the container cannot see; stage it like Redesign does.
+                def requestSource = new JsonSlurper().parse(file(params.rfd3_generation_request_path)).source
+                def stagedSources = Channel.value(requestSource ? [file(requestSource.path)] : [])
+                PrepareGeneralRFD3Input(generationRequest, stagedSources)
                 RunRFD3(PrepareGeneralRFD3Input.out.input_json)
                 BuildGeneralRFD3ResultManifest(
                     RunRFD3.out.structures_metadata,

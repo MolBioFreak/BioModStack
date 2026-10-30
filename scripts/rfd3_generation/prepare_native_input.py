@@ -13,7 +13,7 @@ from pathlib import Path
 from contract import PREPARATION_RECEIPT_SCHEMA, canonical_json, canonical_sha256, validate_request
 
 
-def prepare(request: dict, *, source_destination: Path | None = None) -> tuple[dict, dict]:
+def prepare(request: dict, *, source_destination: Path | None = None, staged_source_dir: Path | None = None) -> tuple[dict, dict]:
     request = validate_request(request)
     generation = request["generation"]
     native = {
@@ -31,6 +31,8 @@ def prepare(request: dict, *, source_destination: Path | None = None) -> tuple[d
     source_mapping = None
     if "source" in request:
         source = Path(request["source"]["path"])
+        if staged_source_dir is not None and (staged_source_dir / source.name).is_file():
+            source = staged_source_dir / source.name  # the process only sees what the workflow staged
         if hashlib.sha256(source.read_bytes()).hexdigest() != request["source"]["sha256"]:
             raise ValueError("conditioned source hash mismatch")
         native["generation_0"]["input"] = str(source)
@@ -96,11 +98,13 @@ def main() -> None:
     parser.add_argument("--output-native", required=True)
     parser.add_argument("--output-receipt", required=True)
     parser.add_argument("--source-dir", help="Owned source closure staged with the native input")
+    parser.add_argument("--staged-source-dir", help="Directory holding the workflow-staged copy of the request source")
     args = parser.parse_args()
 
     request = validate_request(json.loads(Path(args.request).read_text(encoding="utf-8")))
     _require_expected(request, args)
-    native, receipt = prepare(request, source_destination=Path(args.output_native).resolve().with_name("rfd3_native_source.cif"))
+    native, receipt = prepare(request, source_destination=Path(args.output_native).resolve().with_name("rfd3_native_source.cif"),
+                              staged_source_dir=Path(args.staged_source_dir).resolve() if args.staged_source_dir else None)
     if args.source_dir:
         source_dir = Path(args.source_dir).resolve()
         source_dir.mkdir(parents=True, exist_ok=True)

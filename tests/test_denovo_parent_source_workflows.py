@@ -55,7 +55,7 @@ def test_actual_rfd3_prepare_to_run_tuple(tmp_path, kind, mapped):
         request['source'] = binding
         name = 'PrepareGeneralRFD3Input'
         filename = 'workflows/protein_design.nf'
-        invoke = f'{name}(Channel.value(file(params.request)))'
+        invoke = f'{name}(Channel.value(file(params.request)), Channel.value([file(params.source)]))'
     else:
         request = {'schema': 'bms.rfd3.local-redesign.request.v1', 'input': binding,
             'rfd3': {'input': str(source), 'contig': 'A2'}, 'sequence_policy': 'skip',
