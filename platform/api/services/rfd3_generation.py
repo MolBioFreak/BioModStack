@@ -32,7 +32,13 @@ _ALLOWED_INPUTS = {
     "input_structure",
     "source_mapping",
     "source_model",
+    "generation_task",
+    "redesign",
 } | set(EXECUTION_FIELDS)
+
+GENERATION_TASKS = ("partial_diffusion", "minimal_insertion", "native_recall")
+_REDESIGN_FIELDS = {"design_chains", "context_chains", "redesign_ranges",
+                    "insertion_anchor", "insertion_min_length", "insertion_max_length"}
 
 
 class GenerationContractError(ValueError):
@@ -67,6 +73,46 @@ def _int(value: Any, name: str, *, minimum: int, maximum: int | None = None) -> 
         return integer(value, name, minimum, maximum, coerce=True)
     except ValueError as exc:
         raise GenerationContractError(str(exc)) from exc
+
+
+def _lower_generation_task(request: dict[str, Any], raw: Mapping[str, Any], task: str) -> None:
+    """Lower a region-level task into the native RFD3 conditioning the engine already takes.
+
+    Redesign's own helpers do the residue arithmetic, so Generate and the Redesign page cannot disagree.
+    """
+    conditioning = dict(request.get("conditioning") or {})
+    region = raw.get("redesign")
+    if task == "native_recall":
+        if region is not None:
+            raise GenerationContractError("native_recall takes native conditioning, not redesign regions")
+        request["conditioning"] = conditioning
+        return
+    if not isinstance(region, Mapping) or set(region) - _REDESIGN_FIELDS:
+        raise GenerationContractError(f"{task} needs a redesign object with fields from {sorted(_REDESIGN_FIELDS)}")
+    from scripts.rfd3_local_redesign import contract as redesign
+    from services.rfd3_local_redesign import _source_residue_identities
+    try:
+        chains = _source_residue_identities(Path(request["source"]["path"]), request.get("source_model"))
+        _chains, identities = redesign._normalize_source_residue_identities(chains)
+        params = dict(region)
+        if task == "partial_diffusion":
+            if conditioning.get("partial_t") is None:
+                raise GenerationContractError("partial_diffusion requires conditioning.partial_t")
+            if conditioning.get("contig") is not None or conditioning.get("select_fixed_atoms") is not None:
+                raise GenerationContractError("partial_diffusion derives its fixed atoms from redesign_ranges")
+            conditioning["select_fixed_atoms"] = redesign._complete_partial_fixed_atom_map(params, identities)
+        else:
+            if conditioning.get("partial_t") is not None:
+                raise GenerationContractError("minimal_insertion does not take partial_t")
+            if conditioning.get("contig") is not None or conditioning.get("select_fixed_atoms") is not None:
+                raise GenerationContractError("minimal_insertion derives its contig from the anchor and length bounds")
+            contig, _low, _high = redesign._minimal_insertion_contig(params, identities)
+            conditioning["contig"] = contig
+    except redesign.ContractError as exc:
+        raise GenerationContractError(str(exc)) from exc
+    # The helpers speak author chain/residue tokens; the source map lowers them to the native file.
+    request["source_mapping"] = "bms.rfd3.source-map.v1"
+    request["conditioning"] = conditioning_settings(conditioning)
 
 
 def normalize_generation_params(
@@ -145,6 +191,16 @@ def normalize_generation_params(
             request["source_mapping"] = "bms.rfd3.source-map.v1"
             if raw.get("source_model") is not None:
                 request["source_model"] = raw["source_model"]
+    task = raw.get("generation_task")
+    if task is not None:
+        if task not in GENERATION_TASKS:
+            raise GenerationContractError(f"generation_task must be one of {list(GENERATION_TASKS)}")
+        if "source" not in request:
+            raise GenerationContractError(f"{task} requires an input_structure")
+        request["task"] = task
+        _lower_generation_task(request, raw, task)
+    elif raw.get("redesign") is not None:
+        raise GenerationContractError("redesign regions need a generation_task")
     digest = request_sha256(request)
     normalized = {
         **raw,

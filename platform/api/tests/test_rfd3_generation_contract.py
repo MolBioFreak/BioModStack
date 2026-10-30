@@ -215,6 +215,87 @@ def test_unresolvable_input_structure_is_a_contract_error_not_a_server_error() -
              "input_structure": "not-an-allowed-root/file.pdb"}, job_name="bad-source")
 
 
+def _pdb_source(tmp_path: Path, residues: int = 12) -> Path:
+    lines = []
+    for index in range(1, residues + 1):
+        x = 3.8 * index
+        lines.append(f"ATOM  {index:5d}  CA  ALA A{index:4d}    {x:8.3f}{0.0:8.3f}{0.0:8.3f}  1.00  0.00           C")
+    lines.append("END")
+    path = tmp_path / "region.pdb"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _task_params(source: Path, task: str, **extra) -> dict:
+    return {"generator": "rfd3", "min_length": 80, "max_length": 80, "num_designs": 1,
+            "input_structure": str(source), "generation_task": task, **extra}
+
+
+def test_partial_diffusion_task_fixes_everything_outside_the_redesigned_range(tmp_path: Path, monkeypatch) -> None:
+    source = _pdb_source(tmp_path)
+    monkeypatch.setattr("services.rfd3_local_redesign._resolve_local_redesign_source", lambda value: source)
+    _, request, _ = normalize_generation_params(_task_params(
+        source, "partial_diffusion", conditioning={"partial_t": 4.0},
+        redesign={"design_chains": ["A"], "redesign_ranges": "A4-6"}), job_name="region")
+    fixed = request["conditioning"]["select_fixed_atoms"]
+    assert request["task"] == "partial_diffusion" and request["conditioning"]["partial_t"] == 4.0
+    assert {key for key, atoms in fixed.items() if atoms != ["ALL"]} == {"A4", "A5", "A6"}
+    assert fixed["A1"] == ["ALL"] and len(fixed) == 12 and request["source_mapping"] == "bms.rfd3.source-map.v1"
+
+
+def test_minimal_insertion_task_builds_the_contig_from_the_anchor(tmp_path: Path, monkeypatch) -> None:
+    source = _pdb_source(tmp_path)
+    monkeypatch.setattr("services.rfd3_local_redesign._resolve_local_redesign_source", lambda value: source)
+    _, request, _ = normalize_generation_params(_task_params(
+        source, "minimal_insertion",
+        redesign={"design_chains": ["A"], "insertion_anchor": "A5", "insertion_min_length": 3, "insertion_max_length": 6}),
+        job_name="insert")
+    assert request["conditioning"]["contig"] == "A1-5,3-6,A6-12"
+    assert "partial_t" not in request["conditioning"]
+
+
+def test_region_tasks_reject_inconsistent_requests(tmp_path: Path, monkeypatch) -> None:
+    source = _pdb_source(tmp_path)
+    monkeypatch.setattr("services.rfd3_local_redesign._resolve_local_redesign_source", lambda value: source)
+    region = {"design_chains": ["A"], "redesign_ranges": "A4-6"}
+    for params, message in (
+        (_task_params(source, "partial_diffusion", redesign=region), "requires conditioning.partial_t"),
+        (_task_params(source, "partial_diffusion", conditioning={"partial_t": 4, "contig": "A1-3"}, redesign=region), "derives its fixed atoms"),
+        (_task_params(source, "minimal_insertion", conditioning={"partial_t": 4}, redesign={"design_chains": ["A"], "insertion_anchor": "A5", "insertion_min_length": 1, "insertion_max_length": 2}), "does not take partial_t"),
+        (_task_params(source, "partial_diffusion", conditioning={"partial_t": 4}, redesign={"design_chains": ["A"], "redesign_ranges": "A90-99"}), "does not match"),
+        (_task_params(source, "native_recall", redesign=region), "native conditioning"),
+        (_task_params(source, "bogus"), "generation_task must be one of"),
+    ):
+        with pytest.raises(GenerationContractError, match=message):
+            normalize_generation_params(params, job_name="bad")
+    with pytest.raises(GenerationContractError, match="requires an input_structure"):
+        normalize_generation_params({"generator": "rfd3", "min_length": 80, "max_length": 80, "num_designs": 1,
+                                     "generation_task": "partial_diffusion"}, job_name="nosource")
+
+
+def test_native_recall_passes_native_conditioning_through(tmp_path: Path, monkeypatch) -> None:
+    source = _pdb_source(tmp_path)
+    monkeypatch.setattr("services.rfd3_local_redesign._resolve_local_redesign_source", lambda value: source)
+    _, request, _ = normalize_generation_params(_task_params(
+        source, "native_recall", conditioning={"contig": "A1-12", "select_unfixed_sequence": "A4-6"}), job_name="recall")
+    assert request["task"] == "native_recall" and request["conditioning"]["contig"] == "A1-12"
+
+
+def test_region_task_requests_drop_length_from_the_native_input(tmp_path: Path, monkeypatch) -> None:
+    source = _pdb_source(tmp_path)
+    monkeypatch.setattr("services.rfd3_local_redesign._resolve_local_redesign_source", lambda value: source)
+    _, request, _ = normalize_generation_params(_task_params(
+        source, "minimal_insertion",
+        redesign={"design_chains": ["A"], "insertion_anchor": "A5", "insertion_min_length": 3, "insertion_max_length": 6}),
+        job_name="insert-native")
+    request = {**request, "source": {"path": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}}
+    prepare, contract = _prepare_module()
+    contract.validate_request(request)
+    native, receipt = prepare.prepare(request, source_destination=tmp_path / "native_source.cif")
+    spec = native["generation_0"]
+    assert "length" not in spec and spec["contig"] and receipt["task"] == "minimal_insertion"
+
+
 def test_backup_generators_keep_the_deferred_internal_entrypoint() -> None:
     for generator in ("disco", "laproteina"):
         params = {

@@ -51,7 +51,7 @@ def _integer(value: Any, field: str, minimum: int, maximum: int | None = None) -
 
 
 def validate_request(value: Any) -> dict[str, Any]:
-    optional = {key for key in ("conditioning", "source", "source_mapping", "source_model") if isinstance(value, Mapping) and key in value}
+    optional = {key for key in ("conditioning", "source", "source_mapping", "source_model", "task") if isinstance(value, Mapping) and key in value}
     request = _exact(value, {"schema", "request_id", "job_id", "generation", "execution"} | optional, "request")
     if "conditioning" in request:
         try:
@@ -60,6 +60,10 @@ def validate_request(value: Any) -> dict[str, Any]:
             raise ContractError(str(exc)) from exc
     if "source" in request:
         _exact(request["source"], {"path", "sha256"}, "source")
+    if "task" in request and request["task"] not in ("partial_diffusion", "minimal_insertion", "native_recall"):
+        raise ContractError(f"unsupported generation task: {request['task']!r}")
+    if "task" in request and "source" not in request:
+        raise ContractError(f"{request['task']} requires an input structure")
     if (request.get("conditioning") or {}).get("partial_t") is not None and "source" not in request:
         raise ContractError("partial_t (partial diffusion) requires an input structure")
     if request["schema"] != REQUEST_SCHEMA:

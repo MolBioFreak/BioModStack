@@ -16,12 +16,10 @@ from contract import PREPARATION_RECEIPT_SCHEMA, canonical_json, canonical_sha25
 def prepare(request: dict, *, source_destination: Path | None = None, staged_source_dir: Path | None = None) -> tuple[dict, dict]:
     request = validate_request(request)
     generation = request["generation"]
-    native = {
-        "generation_0": {
-            "dialect": 2,
-            "length": f"{generation['min_length']}-{generation['max_length']}",
-        }
-    }
+    native = {"generation_0": {"dialect": 2}}
+    # A region task takes its size from the input structure or its contig, never from the length range.
+    if "task" not in request:
+        native["generation_0"]["length"] = f"{generation['min_length']}-{generation['max_length']}"
     if "conditioning" in request:
         from scripts.lib.rfd3_scientific_settings import conditioning_settings
         native["generation_0"].update(conditioning_settings(request["conditioning"]))
@@ -49,6 +47,8 @@ def prepare(request: dict, *, source_destination: Path | None = None, staged_sou
         "native_input_sha256": canonical_sha256(native),
         "native_rfd3": native["generation_0"],
     }
+    if "task" in request:
+        receipt["task"] = request["task"]
     if source_mapping is not None:
         receipt["source_mapping"] = source_mapping
     return native, receipt
