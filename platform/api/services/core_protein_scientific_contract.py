@@ -239,6 +239,30 @@ async def scientific_document(design, session):
     return await consumer.scientific_document(design, session) if consumer is not None else None
 
 
+async def scientific_documents(designs, session):
+    """Resolve documents for one Job's designs with a single publication check.
+
+    Consumers that verify a whole producer publication expose a batch entry
+    point; without this a list of N designs re-verified the same publication N
+    times. Designs from different Jobs are resolved separately.
+    """
+    documents = {}
+    by_job: dict[str, list] = {}
+    for design in designs:
+        by_job.setdefault(design.job_id, []).append(design)
+    for group in by_job.values():
+        consumer = await native_spatial_consumer(group[0], session)
+        batch = getattr(consumer, "scientific_documents", None)
+        if batch is not None:
+            documents.update(await batch(group, session))
+            continue
+        for design in group:
+            documents[design.id] = (
+                await consumer.scientific_document(design, session) if consumer is not None else None
+            )
+    return documents
+
+
 async def verified_native_spatial_design(design, session, *, structure_only=False):
     consumer = await native_spatial_consumer(design, session)
     if consumer is None:

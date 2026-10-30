@@ -43,16 +43,12 @@ def canonical_bytes(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
 
 
-async def verified_esmfold2_design(design, session):
-    """Return selected {block, artifacts, payload, ...} after whole-set verification.
-
-    block.metrics are native fractional scalars. Only display pLDDT uses x100.
-    No DB writes or legacy authority inference; consumers use verified snapshots.
-    """
+async def _verified_publication(job_id, session):
+    """Verify one Job's whole publication once; callers select from it."""
     from paths import get_data_root, resolve_runtime_data_path
     from services.core_protein_result_contract import prepare_esmfold2_publication, revalidate_prepared_publication
     with session.no_autoflush:
-        job = await session.scalar(select(Job).where(Job.id == design.job_id))
+        job = await session.scalar(select(Job).where(Job.id == job_id))
         if job is None or revision_for_job(job) != 1 or job.model_id not in ('esmfold2', 'esmfold2_experimental'):
             raise ValueError('missing_esmfold2_publication_authority')
         if not isinstance(job.output_dir, str) or not job.output_dir:
@@ -66,11 +62,45 @@ async def verified_esmfold2_design(design, session):
         rows = list((await session.execute(select(Design).where(
             Design.job_id == job.id, Design.source_stage.is_(None)))).scalars())
         prepared, receipt = prepare_esmfold2_publication(job, root, rows)
-        selected = next((prepared[row.name] for row in rows if row.id == design.id), None)
-        if selected is None:
-            raise ValueError('foreign selected design')
         revalidate_prepared_publication(root, receipt)
-        return dict(selected, publication_root=root, publication_receipt=receipt)
+    return {row.id: row for row in rows}, prepared, root, receipt
+
+
+async def verified_esmfold2_design(design, session):
+    """Return selected {block, artifacts, payload, ...} after whole-set verification.
+
+    block.metrics are native fractional scalars. Only display pLDDT uses x100.
+    No DB writes or legacy authority inference; consumers use verified snapshots.
+    """
+    rows, prepared, root, receipt = await _verified_publication(design.job_id, session)
+    row = rows.get(design.id)
+    if row is None:
+        raise ValueError('foreign selected design')
+    selected = prepared.get(row.name)
+    if selected is None:
+        raise ValueError('foreign selected design')
+    return dict(selected, publication_root=root, publication_receipt=receipt)
+
+
+async def scientific_documents(designs, session):
+    """One verified publication per Job, documents for the requested designs."""
+    from services.scientific_viewer_contract import ViewerDocument
+    documents = {}
+    if designs:
+        try:
+            rows, prepared, _root, _receipt = await _verified_publication(designs[0].job_id, session)
+        except _ERRORS:
+            return documents
+        for design in designs:
+            row = rows.get(design.id)
+            selected = prepared.get(row.name) if row is not None else None
+            if selected is None:
+                continue
+            source_kind = 'mmcif' if Path(selected['artifacts']['structure']['path']).suffix.lower() in ('.cif', '.mmcif') else 'pdb'
+            documents[design.id] = ViewerDocument(
+                documentId='primary', candidateId=design.id,
+                contentSha256=selected['artifacts']['structure']['sha256'], sourceKind=source_kind)
+    return documents
 
 
 def scalar_records_from_publication(design, job, read):
