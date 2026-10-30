@@ -52,6 +52,11 @@ from services.restriction_catalog import catalog_authority
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+# httpx/httpcore log every request line at INFO. Background pollers (BioXP
+# status every 10 s, adapter health, provider probes) made that most of
+# api.log; failures still surface through WARNING and the callers' own logs.
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Global orchestrator instance

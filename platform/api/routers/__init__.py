@@ -1,61 +1,6 @@
-"""Routers package."""
+"""Routers package.
 
-from . import (
-    analyses,
-    analytics,
-    bioxp,
-    boltzgen,
-    designs,
-    files,
-    frameworks,
-    frustrampnn,
-    gpu,
-    inputs,
-    jobs,
-    mobile_apk_updates,
-    mobile_ui_updates,
-    models,
-    molbio_ops,
-    msa,
-    nucleotide_sequences,
-    queue,
-    rcsb,
-    ribocentre,
-    rna_structure,
-    smiles_converter,
-    system,
-    templates,
-    user_sequences,
-    user_templates,
-    workflow_adapter,
-)
-
-__all__ = [
-    "analyses",
-    "analytics",
-    "bioxp",
-    "boltzgen",
-    "designs",
-    "files",
-    "frameworks",
-    "frustrampnn",
-    "gpu",
-    "inputs",
-    "jobs",
-    "mobile_apk_updates",
-    "mobile_ui_updates",
-    "models",
-    "molbio_ops",
-    "msa",
-    "nucleotide_sequences",
-    "queue",
-    "rcsb",
-    "ribocentre",
-    "rna_structure",
-    "smiles_converter",
-    "system",
-    "templates",
-    "user_sequences",
-    "user_templates",
-    "workflow_adapter",
-]
+Submodules are imported by their owners (main.py, workflow_adapter_app.py).
+No eager imports here: the workflow adapter needs only two routers, and
+importing every router made each adapter start load the whole API.
+"""
