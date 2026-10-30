@@ -141,3 +141,37 @@ async def test_round_recovery_only_requests_missing_current_defaults(admission, 
     assert requested == ([] if fault is None else ['pae_matrix'])
     assert result['reused'] == (5 if fault is None else 4)
     assert child.status == 'completed'
+
+
+@pytest.mark.asyncio
+async def test_fully_analyzed_round_prediction_is_remembered_and_a_change_clears_it(admission, monkeypatch):
+    parent = Job(id='generation', name='generation', model_id='ppiflow', mode='protein_binder', params={}, status='completed')
+    admission.add_all([parent, prediction(), design()])
+    await admission.commit()
+    monkeypatch.setattr(autorun, '_SETTLED_ROUND_PREDICTIONS', {})
+    reused = {'value': True}
+
+    @asynccontextmanager
+    async def store():
+        yield admission
+
+    async def request(session, row, analysis_type, **kwargs):
+        return object(), reused['value']
+
+    monkeypatch.setattr(autorun, 'async_session', store)
+    monkeypatch.setattr(autorun, 'request_design_analysis', request)
+    assert not autorun.recently_settled('prediction')
+    result = await autorun.ensure_viewer_minimum_analyses_for_job('prediction')
+    assert result['queued'] == 0 and result['reused'] > 0
+    assert autorun.recently_settled('prediction')
+    # New analysis work means it is not settled, so the next recovery pass looks again.
+    reused['value'] = False
+    await autorun.ensure_viewer_minimum_analyses_for_job('prediction')
+    assert not autorun.recently_settled('prediction')
+
+
+def test_settled_marker_expires(monkeypatch):
+    monkeypatch.setattr(autorun, '_SETTLED_ROUND_PREDICTIONS', {'p': autorun.time.monotonic() - autorun._SETTLED_RECOVERY_SECONDS - 1})
+    assert not autorun.recently_settled('p')
+    monkeypatch.setattr(autorun, '_SETTLED_ROUND_PREDICTIONS', {'p': autorun.time.monotonic()})
+    assert autorun.recently_settled('p') and not autorun.recently_settled(None)

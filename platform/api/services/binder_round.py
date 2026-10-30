@@ -517,7 +517,7 @@ async def reconcile_selected(session, experiments, root_id, round_id, *, retry=F
 async def recover_rounds(session_factory, experiment_session_factory):
     """Existing scheduler recovery, including remote-return completion."""
     from sqlalchemy import func, or_
-    from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+    from services.analysis_autorun import recently_settled, schedule_viewer_minimum_analyses_for_job
     async with session_factory() as session:
         roots = list(await session.scalars(select(Job.id).where(
             Job.status == 'completed', or_(
@@ -528,6 +528,8 @@ async def recover_rounds(session_factory, experiment_session_factory):
         predictions = list(await session.scalars(select(Job.id).where(
             Job.status == 'completed', Job.provenance[STEP]['stage'].as_string() == 'prediction')))
     for child_id in predictions:
+        if recently_settled(child_id):
+            continue
         try:
             schedule_viewer_minimum_analyses_for_job(child_id)
         except Exception:
