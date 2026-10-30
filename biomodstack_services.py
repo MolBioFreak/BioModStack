@@ -2065,8 +2065,38 @@ def ensure_user_units(project_root: Path | None = None, runtime_mode: str | None
     DEVELOPMENT_WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
     PRODUCTION_WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
     CORE_RUNTIME_LOG.touch(exist_ok=True)
-    install_user_units(project_root=project_root, runtime_mode=runtime_mode)
-    daemon_reload(project_root=project_root)
+    written = install_user_units(project_root=project_root, runtime_mode=runtime_mode)
+    names = [path.name for path in written if path.suffix in {".service", ".target", ".slice", ".timer"}]
+    if DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE not in names:
+        names.append(DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE)
+    if units_need_daemon_reload(names, project_root=project_root):
+        daemon_reload(project_root=project_root)
+
+
+def units_need_daemon_reload(unit_names: list[str], project_root: Path | None = None) -> bool:
+    """Ask systemd whether any managed unit or drop-in changed on disk.
+
+    A daemon-reload re-reads every user unit and costs seconds on a loaded
+    host; every restart used to issue one even when nothing had changed.
+    systemd tracks edits itself (NeedDaemonReload), including drop-ins written
+    by other owners such as the Tailnet selector policy. A unit systemd has
+    never loaded reports LoadState=not-found and also requires a reload.
+    """
+    if not unit_names:
+        return False
+    try:
+        result = run_systemctl(
+            "show", "--property=Id,LoadState,NeedDaemonReload", *unit_names,
+            check=False, project_root=project_root,
+        )
+    except (FileNotFoundError, OSError):
+        return True
+    if result.returncode != 0:
+        return True
+    for line in result.stdout.splitlines():
+        if line in ("NeedDaemonReload=yes", "LoadState=not-found"):
+            return True
+    return False
 
 
 def ensure_target_enabled(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
@@ -2088,6 +2118,18 @@ def ensure_mobile_update_publisher_running(
         MOBILE_UPDATE_PUBLISHER_HEALTH_URL,
         timeout_seconds=DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS,
     )
+
+
+def _mobile_update_publisher_revision() -> str | None:
+    """Revision the running publisher reports, or None when it is not answering."""
+    try:
+        with urllib.request.urlopen(MOBILE_UPDATE_PUBLISHER_HEALTH_URL, timeout=2) as response:
+            payload = json.load(response)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return None
+    build = payload.get("build") if isinstance(payload, dict) else None
+    revision = build.get("revision") if isinstance(build, dict) else None
+    return revision if isinstance(revision, str) else None
 
 
 def service_is_active(service_name: str, project_root: Path | None = None) -> bool:
@@ -2699,7 +2741,12 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
         )
         wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
-        ensure_mobile_update_publisher_running(root, restart=True)
+        # Restart the publisher only when it serves another revision. Each
+        # restart also pulls in the global Tailnet oneshot, whose listener
+        # ownership check runs a privileged helper container (median 17 s).
+        ensure_mobile_update_publisher_running(
+            root, restart=_mobile_update_publisher_revision() != git_build_identity(root)["revision"],
+        )
         return
 
     ensure_target_enabled(root, runtime_mode=mode)

@@ -40,3 +40,25 @@ container runtime and the Production workflow adapter belong to the `container`
 runtime mode, and they are not part of this lane.
 
 The receipt is `~/.local/state/biomodstack/dev-sync.json` by default. Verify its `status` and deployed revision against `/api/health` and the served frontend build identity. A successful CLI exit with `paused` or `deferred-active-work` is not a deployment.
+
+## Restart cost
+
+A Development restart should spend its time starting processes, not on
+bookkeeping. What used to make it slow, and what it does now:
+
+- **API stop ended in SIGKILL.** Shutdown awaited the Vast inventory loop and
+  remote telemetry, which can sit in a 15 s provider request or an SSH probe,
+  so the stop crossed `TimeoutStopSec=20s`. Both loops are now cancelled.
+- **Unconditional `daemon-reload`.** Every restart reloaded systemd even when no
+  unit changed. `units_need_daemon_reload` asks systemd (`NeedDaemonReload`,
+  `LoadState=not-found`) and reloads only when it is needed.
+- **Identical rewrites.** The Tailnet selector drop-in was rewritten with three
+  fsyncs on every restart even when the bytes were unchanged, which also marked
+  the adapter as needing a reload. Identical files are left alone.
+- **Mobile publisher restart.** Restarting the publisher pulls in the global
+  Tailnet oneshot, whose listener check runs a privileged helper container
+  (median 17 s, up to 2 min). The publisher now restarts only when it serves a
+  different revision.
+- **Failed job units.** Live workflow discovery ran one `systemctl show` per
+  listed unit, including failed units kept until collection. It now skips
+  units that `list-units` already reports as not running.

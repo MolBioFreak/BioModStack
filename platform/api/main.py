@@ -267,13 +267,17 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Cleanup on shutdown
+    # Cleanup on shutdown. Cancel the two polling loops rather than wait for
+    # them: the Vast refresh can sit in a 15 s provider request and remote
+    # telemetry in an SSH probe, and waiting for either pushed the stop past
+    # systemd's 20 s TimeoutStopSec, so restarts ended in SIGKILL.
     remote_telemetry_stop.set()
-    await remote_telemetry_task
+    vast_inventory_stop.set()
+    for task in (remote_telemetry_task, vast_inventory_task):
+        task.cancel()
+    await asyncio.gather(remote_telemetry_task, vast_inventory_task, return_exceptions=True)
     await app.state.preload_controller.close()
     await app.state.attachment_controller.close()
-    vast_inventory_stop.set()
-    await vast_inventory_task
     if bioxp_runtime is not None:
         await bioxp_runtime.close()
         logger.info("[SHUTDOWN] BioXP control plane closed")

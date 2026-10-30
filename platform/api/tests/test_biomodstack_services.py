@@ -1727,6 +1727,8 @@ def test_restart_all_dev_waits_for_adapter_before_api_and_frontend(
         "wait_for_http",
         lambda url, timeout_seconds=30.0: calls.append(("wait", (url, timeout_seconds))),
     )
+    monkeypatch.setattr(services, "_mobile_update_publisher_revision", lambda: None)
+    monkeypatch.setattr(services, "git_build_identity", lambda root: {"revision": "a" * 40})
 
     services.restart_all(project_root=project_root, runtime_mode="dev")
 
@@ -1995,3 +1997,60 @@ def test_url_is_ready_requires_exact_http_200(monkeypatch, status: int, expected
     monkeypatch.setattr(services.urllib.request, "urlopen", lambda *args, **kwargs: _HttpResponse(status))
 
     assert services.url_is_ready("http://operator-surface.test/health") is expected
+
+
+@pytest.mark.parametrize(("served", "expected_restart"), [("a" * 40, False), ("b" * 40, True), (None, True)])
+def test_restart_all_dev_restarts_publisher_only_for_another_revision(
+    monkeypatch, tmp_path: Path, served, expected_restart,
+) -> None:
+    calls: list[tuple] = []
+    monkeypatch.setattr(services, "assert_runtime_listener_preflight", lambda *args, **kwargs: {})
+    monkeypatch.setattr(services, "ensure_user_units", lambda root, runtime_mode=None: None)
+    monkeypatch.setattr(services, "service_is_active", lambda name, project_root=None: True)
+    monkeypatch.setattr(services, "url_is_ready", lambda url, timeout_seconds=2.0: True)
+    monkeypatch.setattr(services, "cleanup_legacy_listener", lambda *args, **kwargs: None)
+    monkeypatch.setattr(services, "wait_for_http", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        services, "run_systemctl",
+        lambda *args, **kwargs: calls.append(args) or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(services, "_mobile_update_publisher_revision", lambda: served)
+    monkeypatch.setattr(services, "git_build_identity", lambda root: {"revision": "a" * 40})
+
+    services.restart_all(project_root=tmp_path / "repo", runtime_mode="dev")
+
+    assert (("restart", services.MOBILE_UPDATE_PUBLISHER_SERVICE) in calls) is expected_restart
+
+
+@pytest.mark.parametrize(
+    ("stdout", "returncode", "expected"),
+    [
+        ("Id=a.service\nLoadState=loaded\nNeedDaemonReload=no\n", 0, False),
+        ("Id=a.service\nLoadState=loaded\nNeedDaemonReload=yes\n", 0, True),
+        ("Id=a.service\nLoadState=not-found\nNeedDaemonReload=no\n", 0, True),
+        ("", 1, True),
+    ],
+)
+def test_units_need_daemon_reload_follows_systemd(monkeypatch, stdout, returncode, expected) -> None:
+    monkeypatch.setattr(
+        services, "run_systemctl",
+        lambda *args, **kwargs: SimpleNamespace(returncode=returncode, stdout=stdout, stderr=""),
+    )
+    assert services.units_need_daemon_reload(["a.service"]) is expected
+
+
+def test_ensure_user_units_skips_reload_when_systemd_is_current(monkeypatch, tmp_path: Path) -> None:
+    reloads: list[object] = []
+    monkeypatch.setattr(services, "LOG_DIR", tmp_path)
+    for name in ("API_LOG", "FRONTEND_LOG", "MOBILE_UPDATE_PUBLISHER_LOG", "WORKFLOW_ADAPTER_LOG",
+                 "DEVELOPMENT_WORKFLOW_ADAPTER_LOG", "PRODUCTION_WORKFLOW_ADAPTER_LOG", "CORE_RUNTIME_LOG"):
+        monkeypatch.setattr(services, name, tmp_path / f"{name}.log")
+    monkeypatch.setattr(services, "rotate_runtime_logs", lambda: None)
+    monkeypatch.setattr(services, "install_user_units", lambda **kwargs: [tmp_path / "x.service"])
+    monkeypatch.setattr(services, "daemon_reload", lambda project_root=None: reloads.append(project_root))
+    monkeypatch.setattr(services, "units_need_daemon_reload", lambda names, project_root=None: False)
+    services.ensure_user_units(tmp_path)
+    assert reloads == []
+    monkeypatch.setattr(services, "units_need_daemon_reload", lambda names, project_root=None: True)
+    services.ensure_user_units(tmp_path)
+    assert reloads == [tmp_path]
