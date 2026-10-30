@@ -83,31 +83,52 @@ def recipe_accounting(settings: dict) -> dict:
             "final_empty_tip": deepcopy(settings.get("final_empty_tip"))}
 
 
-# Tecan 399156 V1.0 page 3 "Parameters" table (water, single dispense) gives
-# recommended ranges, not per-recipe values. They fill only settings the
-# recipe table leaves unreported, as editable starting points; the low end is
-# used for small-volume tips because the same page says low speeds are needed
-# below 25 uL. Every filled value is listed in settings_defaults_applied.
+# Starting values for settings the recipe tables leave unreported. They are
+# editable defaults, never measured performance; each filled field is listed in
+# settings_defaults_applied with its basis.
+# - T200/T1000: middle of the Tecan 399156 V1.0 p3 "Parameters" ranges.
+# - T50/T10: Tecan p3 says small volumes (<25 uL) need low speeds but publishes
+#   no small-tip values, so these follow Opentrons' published water defaults for
+#   its 50 uL / 20 uL air-displacement pipettes (cross-check, not Cavro data),
+#   with the Tecan 30 uL/s air-gap floor. Approved by the operator 2026-10-29.
 GUIDELINE_SOURCE = {"document": "399156 V1.0", "pdf_page": 3, "table": "Parameters (single dispense)",
                     "url": "https://www.tecan.com/hubfs/HubDB/Te-DocDB/pdf/QG_Pipetting_with_the_ADP_399156_V1-0.pdf"}
+SMALL_TIP_SOURCE = {"cross_check": "Opentrons water liquid class (flex_1channel_50) and OT-2 P20 GEN2 default flow rates",
+                    "url": "https://docs.opentrons.com/python-api/pipettes/characteristics/",
+                    "tecan_note": "399156 p3: low speeds are needed when pipetting small volumes (<25 uL)"}
 GUIDELINE_RANGES = {"air_gap_aspiration_speed_ul_s": (30, 70), "aspirate_speed_ul_s": (20, 200),
                     "dispense_speed_ul_s": (250, 600), "aspiration_delay_ms": (200, 1000)}
+SMALL_TIP_DEFAULTS = {
+    10: {"aspirate_speed_ul_s": 10, "dispense_speed_ul_s": 20, "air_gap_aspiration_speed_ul_s": 30, "aspiration_delay_ms": 200},
+    50: {"aspirate_speed_ul_s": 20, "dispense_speed_ul_s": 50, "air_gap_aspiration_speed_ul_s": 30, "aspiration_delay_ms": 200},
+}
 
 
 def guideline_defaults(settings: dict, capacity, mode: str) -> dict:
-    """Recommended starting values for unreported single-dispense settings."""
+    """Editable starting values for unreported single-dispense settings."""
     if mode != "single-dispense":
         return {}
-    small = capacity is not None and Decimal(str(capacity)) <= 50
+    small = SMALL_TIP_DEFAULTS.get(int(capacity)) if capacity is not None else None
     applied = {}
     for key, (low, high) in GUIDELINE_RANGES.items():
         if settings.get(key) is not None:
             continue
         if key == "dispense_speed_ul_s" and settings.get("dispense_segments"):
             continue  # segmented recipes carry their own published dispense speeds
-        value = low if small else (low + high) // 2
+        if small:
+            value, basis = small[key], {"basis": "small_tip_default", **SMALL_TIP_SOURCE}
+        else:
+            value, basis = (low + high) // 2, {"basis": "guideline_default", "range": [low, high], **GUIDELINE_SOURCE}
         settings[key] = value
-        applied[key] = {"value": value, "range": [low, high], "basis": "guideline_default", **GUIDELINE_SOURCE}
+        applied[key] = {"value": value, **basis}
+    # One dispense of the whole commanded displacement at the dispense speed.
+    corrected = settings.get("commanded_corrected_aspiration_ul")
+    if not settings.get("dispense_segments") and corrected is not None and settings.get("dispense_speed_ul_s") is not None:
+        settings["dispense_segments"] = [{"source_heading": "Single dispense (default)", "volume_ul": corrected,
+                                          "speed_ul_s": settings["dispense_speed_ul_s"], "evidence": "default"}]
+        applied["dispense_segments"] = {"value": deepcopy(settings["dispense_segments"]),
+                                        "basis": "single_segment_default",
+                                        "note": "Whole commanded displacement in one dispense at the dispense speed."}
     return applied
 
 

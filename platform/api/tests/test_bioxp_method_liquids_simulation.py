@@ -139,9 +139,11 @@ def test_multi_and_incomplete_small_tip_evidence_retained():
     for size in (10,50):
         small = [e for e in starter_entries() if e['context']['tip_profile_id'] == f'tecan-liha-T{size}']
         assert small
-        # Small tips get the low end of the Tecan p3 range, never borrowed T200/T1000 values.
-        assert all(e['settings']['aspirate_speed_ul_s'] == 20 and e['settings']['air_gap_aspiration_speed_ul_s'] == 30 for e in small)
-        assert all(e['settings_defaults_applied']['aspirate_speed_ul_s']['range'] == [20, 200] for e in small)
+        # Small tips get approved small-tip defaults, never borrowed T200/T1000 values.
+        expected = {10: (10, 20), 50: (20, 50)}[size]
+        assert all((e['settings']['aspirate_speed_ul_s'], e['settings']['dispense_speed_ul_s']) == expected for e in small)
+        assert all(e['settings']['air_gap_aspiration_speed_ul_s'] == 30 for e in small)
+        assert all(e['settings_defaults_applied']['aspirate_speed_ul_s']['basis'] == 'small_tip_default' for e in small)
         assert all(e['source']['aspirate_speed_ul_s'] is None for e in small)  # source evidence unchanged
         assert all('incomplete' in e['source']['recipe_kind'] for e in small)
 

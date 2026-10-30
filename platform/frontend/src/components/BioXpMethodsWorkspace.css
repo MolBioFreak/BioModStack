@@ -236,3 +236,6 @@
 .bioxp-step-advisory { font-size: 0.85rem; border-left: 3px solid rgba(245, 158, 11, 0.7); padding-left: 0.5rem; }
 .bioxp-plan-summary dl > div { display: grid; grid-template-columns: 9rem 1fr; gap: 0.5rem; }
 .bioxp-endpoint-mode button[aria-pressed="true"], .bioxp-starting-deck [aria-pressed="true"] { font-weight: 600; outline: 2px solid currentColor; }
+.bioxp-transfer-speeds { display: grid; gap: 0.35rem; }
+.bioxp-speed-row { display: grid; grid-template-columns: 10rem minmax(8rem, 1fr) 6rem 2.5rem auto; gap: 0.5rem; align-items: center; }
+.bioxp-speed-row input[type="number"] { width: 6rem; }

@@ -7,6 +7,7 @@ import { deckResources, deckStations, type BioXpDeckSelection } from '../lib/bio
 import { BioXpSchemaVariantContext } from './BioXpSchemaInput';
 import { MethodFields, object } from './BioXpMethodFields';
 import './BioXpMethodPipettingEditor.css';
+import { BioXpTransferSpeeds } from './BioXpTransferSpeeds';
 
 const scalar = (value: unknown) => typeof value === 'string' || typeof value === 'number' ? value : '';
 const display = (value: unknown): string => value === undefined ? 'Not set' : typeof value === 'string' ? value || 'Blank' : JSON.stringify(value);
@@ -68,6 +69,7 @@ export function BioXpMethodPipettingEditor({ node, onChange, catalog, selection,
     return <section className="bioxp-transfer-scene" aria-label="Transfer editor">
         <label>Transfer mode<select aria-label="Transfer mode" value={transferMode(node)} onChange={e => onChange(switchTransferMode(node, e.target.value as 'manual' | 'class'))}><option value="manual">Manual speeds</option><option value="class">Liquid class &amp; recipe</option></select></label>
         {classResolved && <RepairWorkspaceClassSelection owner={node} value={inputs.liquid} schema={inputSchema?.oneOf?.find(s => s.properties?.liquid)?.properties?.liquid} onChange={liquid => patch({ liquid })} />}
+        {classResolved && !!object(inputs.liquid).liquid_class && <BioXpTransferSpeeds liquid={object(inputs.liquid)} recipe={recipe} onLiquid={liquid => patch({ liquid })} onRecipe={next => patch({ recipe: next })} />}
         <div className="bioxp-transfer-link">{endpoints.map((side, index) => {
             const current = object(inputs[side]);
             const station = deckStations.find(s => s.id === current.station);

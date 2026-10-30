@@ -1,6 +1,6 @@
 """Logical occurrence preparation before physical child lowering."""
 from copy import deepcopy
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from bioxp_method_liquids import resolve_liquid_settings, record_liquid_application
 from bioxp_method_simulation import channel_wells, plan_tip_policy
 
@@ -293,6 +293,37 @@ def liquid_resolution(inputs, dependencies):
     return resolution
 
 
+def default_transfer_timeout(recipe):
+    """Unset command timeout: twice the expected plunger time plus 1 s, at least 2 s.
+
+    Expected time sums each stroke's volume over its speed plus the aspiration
+    delay. Stays unset when any needed speed is unknown; an authored value wins.
+    """
+    if 'timeout_ms' in recipe:
+        return
+    def number(value):
+        try:
+            result = Decimal(str(value))
+            return result if result.is_finite() and result > 0 else None
+        except (InvalidOperation, ValueError):
+            return None
+    strokes = [(recipe.get('commanded_aspiration_ul') or recipe.get('target_liquid_ul'), recipe.get('aspiration_speed_ul_s'))]
+    strokes += [(phase.get('volume_ul'), phase.get('speed_ul_s')) for phase in (recipe.get('leading_air'), recipe.get('trailing_air')) if isinstance(phase, dict)]
+    strokes += [(seg.get('volume_ul'), seg.get('speed_ul_s')) for seg in recipe.get('dispense_segments') or [] if isinstance(seg, dict)]
+    seconds = Decimal(0)
+    for volume, speed in strokes:
+        volume, speed = number(volume), number(speed)
+        if volume is None or speed is None:
+            return
+        seconds += volume / speed
+    expected_ms = seconds * 1000 + (number(recipe.get('aspiration_delay_ms')) or 0)
+    timeout = max(2000, int((expected_ms * 2 + 1000).to_integral_value(rounding='ROUND_CEILING')))
+    recipe['timeout_ms'] = timeout
+    recipe.setdefault('liquid_settings', {})['timeout_default'] = {
+        'value_ms': timeout, 'expected_ms': format(expected_ms.quantize(Decimal('1')), 'f'),
+        'basis': 'default: 2 x expected plunger time + 1 s, minimum 2 s; editable'}
+
+
 def prepare_class_transfer(inputs):
     """Bind authored transfer quantities; no inferred recipe science or defaults."""
     recipe = inputs.get('recipe')
@@ -451,6 +482,8 @@ def prepare_occurrences(occurrences, method, dependencies):
             if row['action'] == 'transfer' and 'liquid' in inputs:
                 prepare_class_transfer(inputs)
             resolution = liquid_resolution(inputs, dependencies)
+            if row['action'] == 'transfer' and resolution:
+                default_transfer_timeout(inputs['recipe'])
         except ValueError as exc:
             failures.append({'code': 'representation_error', 'category': 'representation', 'message': str(exc),
                 'path': row.get('path', ''), 'step_id': row.get('step_id'), 'occurrence_id': row['occurrence_id']})

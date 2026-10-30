@@ -260,3 +260,22 @@ def test_draft_run_accepts_unsaved_method_and_freezes_exact_copy(monkeypatch):
     assert snapshot['method'] == original and snapshot['saved'] is None
     assert snapshot['based_on'] == {'id': 'tmpl-1', 'revision': 3, 'edited': True}
     assert reply['method_snapshot']['method'] == original
+
+
+def test_default_transfer_timeout_scales_with_strokes_and_keeps_authored():
+    from bioxp_method_planning import default_transfer_timeout
+    recipe = {'commanded_aspiration_ul': 6.25, 'aspiration_speed_ul_s': 20, 'aspiration_delay_ms': 200,
+              'leading_air': {'volume_ul': 10, 'speed_ul_s': 30}, 'trailing_air': {'volume_ul': 2, 'speed_ul_s': 30},
+              'dispense_segments': [{'volume_ul': 6.25, 'speed_ul_s': 50}]}
+    default_transfer_timeout(recipe)
+    # 0.3125 + 0.4 + 0.125 s strokes + 0.2 s delay = 1.0375 s -> 2 x + 1 s = 3075 ms
+    assert recipe['timeout_ms'] == 3075
+    tiny = {'commanded_aspiration_ul': 1, 'aspiration_speed_ul_s': 100, 'dispense_segments': [{'volume_ul': 1, 'speed_ul_s': 100}]}
+    default_transfer_timeout(tiny)
+    assert tiny['timeout_ms'] == 2000  # floor
+    unknown = {'commanded_aspiration_ul': 5, 'aspiration_speed_ul_s': None}
+    default_transfer_timeout(unknown)
+    assert 'timeout_ms' not in unknown  # no guess without speeds
+    authored = {'timeout_ms': 9000, 'commanded_aspiration_ul': 5, 'aspiration_speed_ul_s': 1}
+    default_transfer_timeout(authored)
+    assert authored['timeout_ms'] == 9000
