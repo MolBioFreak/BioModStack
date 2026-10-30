@@ -604,7 +604,10 @@ workflow PROTEIN_LOCAL_REDESIGN {
             inputPdbForNative,
             Channel.of(file(params.rfd3_request_path))
         )
-        RunRFD3(PrepareProteinLocalNativeRFD3Input.out.input_json)
+        // RunRFD3 reads the request by file name from its task directory, so stage it with the other inputs.
+        RunRFD3(PrepareProteinLocalNativeRFD3Input.out.input_json.map { design_id, input_json, runtime_source ->
+            tuple(design_id, input_json, [runtime_source, file(params.rfd3_request_path)].flatten())
+        })
         BuildProteinLocalRFD3ResultManifest(
             RunRFD3.out.structures_metadata,
             PrepareProteinLocalNativeRFD3Input.out.input_json,

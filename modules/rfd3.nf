@@ -49,9 +49,9 @@ process RunRFD3 {
     def num_designs = generalGenerationRequest
         ? params.rfd3_generation_num_designs
         : (localRedesignRequest ? (params.plr_num_designs ?: 1) : (params.rfd3_batches_per_design ?: 1))
-    // The general request is staged beside the task inputs; its controller path
-    // lives under the results root, which the container does not mount.
-    def requestPath = generalGenerationRequest ? new File(params.rfd3_generation_request_path.toString()).name : params.rfd3_request_path
+    // Both native requests are staged beside the task inputs; their controller paths
+    // live under the results root, which the container does not mount.
+    def requestPath = new File((generalGenerationRequest ? params.rfd3_generation_request_path : params.rfd3_request_path).toString()).name
     def nativeCommand = nativeRequest
         ? "python3 /scripts/rfd3_generation/run_native.py --request '${requestPath}' --inputs '${input_json}' --out-dir rfd3_results"
         : "rfd3 inputs=${input_json} out_dir=rfd3_results n_batches=${num_designs} ${extra_config}"
