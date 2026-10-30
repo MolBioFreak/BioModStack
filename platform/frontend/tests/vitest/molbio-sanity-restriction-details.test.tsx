@@ -37,6 +37,7 @@ it.each(['linear', 'circular', 'both'] as const)('opens grouped enzyme details f
         const names = host.querySelector('[role="dialog"][aria-label="Annotation names"]');
         const named = [...(names?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find(button => button.textContent === 'Exact +1');
         if (named && !host.querySelector('[data-restriction-label-details]')) await act(() => named.click());
+        await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
     };
     try {
         await act(() => render());
