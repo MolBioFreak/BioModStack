@@ -485,6 +485,8 @@ it.each(['native', 'validated'] as const)('selected %s Redesign submits retained
     expect(request.params).toMatchObject(depth === 'native' ? { input_structure: retained.path, seed: 0, partial_t: 0, dump_trajectories: false }
         : { input_pdb: retained.path, seqs_per_design: 2, fix_fixed_sidechains: false, interactive_gating: false, region_padding: 0 });
     expect(request.params.source_structure).toBeUndefined(); expect(request.parent_job_id).toBeFalsy();
+    // The API types these three selectors as objects; an untouched selector must be absent, never ''.
+    if (depth === 'native') for (const key of ['select_hotspots', 'select_hbond_donor', 'select_hbond_acceptor']) expect(request.params[key], key).toBeUndefined();
     await click('Vast · chosen'); await flush();
     await click(launch); await flush();
     let approval: HTMLButtonElement | undefined;

@@ -72,6 +72,10 @@ const selectorListText = (value: unknown): string => {
     if (Array.isArray(value) && value.every(item => typeof item === 'string')) return value.join(',');
     throw new Error('Selector must be a string or list of strings.');
 };
+const emptySelectorToUndefined = (value: unknown): unknown => (
+    value == null || value === '' || (Array.isArray(value) && value.length === 0)
+    || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length === 0) ? undefined : value
+);
 const selectorError = (value: unknown): string => {
     try {
         if (value && typeof value === 'object' && !Array.isArray(value)) {
@@ -1051,9 +1055,10 @@ export function ProteinLocalRedesignTemplate({
                 insertion_max_length: nativeRedesignMode === 'minimal_insertion' ? Number.parseInt(nativeInsertionMaxLength, 10) : undefined,
                 partial_t: requestedPartialT,
                 ligand: nativeLigand.trim() || undefined,
-                select_hotspots: nativeHotspots,
-                select_hbond_donor: nativeHbondDonors,
-                select_hbond_acceptor: nativeHbondAcceptors,
+                // The API types these as objects, so an untouched (empty) selector is omitted rather than sent as ''.
+                select_hotspots: emptySelectorToUndefined(nativeHotspots),
+                select_hbond_donor: emptySelectorToUndefined(nativeHbondDonors),
+                select_hbond_acceptor: emptySelectorToUndefined(nativeHbondAcceptors),
                 num_designs: numDesigns,
                 seed: parseOptionalIntegerInput(nativeSeed),
                 dump_trajectories: nativeDumpTrajectories,
