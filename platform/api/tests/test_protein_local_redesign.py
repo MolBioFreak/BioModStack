@@ -511,6 +511,28 @@ ATOM 1 C CA . GLY A 1 1 ? 0.0 0.0 0.0 1.0 10.0 ? 7 GLY A CA 1
     ]
 
 
+def test_source_residue_identities_omit_crystal_water_the_native_parser_drops(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdb"
+    source.write_text(
+        "ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 10.00           C\n"
+        "ATOM      2  CA  ALA A   2       3.800   0.000   0.000  1.00 10.00           C\n"
+        "HETATM    3  O   HOH A 100       9.000   0.000   0.000  1.00 20.00           O\n"
+        "HETATM    4  O   DOD A 101      12.000   0.000   0.000  1.00 20.00           O\n"
+        "END\n",
+        encoding="utf-8",
+    )
+
+    assert rfd3_service._source_residue_identities(source) == [
+        {
+            "chain_id": "A",
+            "residues": [
+                {"res_num": 1, "insertion_code": "", "residue_name": "GLY"},
+                {"res_num": 2, "insertion_code": "", "residue_name": "ALA"},
+            ],
+        }
+    ]
+
+
 def test_protein_local_redesign_is_first_class_native_model() -> None:
     frontend_text = (REPO_ROOT / "platform" / "frontend" / "src" / "components" / "JobSubmission.tsx").read_text(encoding="utf-8")
     launcher_text = (REPO_ROOT / "platform" / "frontend" / "src" / "lib" / "launcherCatalog.ts").read_text(encoding="utf-8")

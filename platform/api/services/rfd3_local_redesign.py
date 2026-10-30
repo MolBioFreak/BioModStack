@@ -396,6 +396,9 @@ def _source_model(path: Path, model_serial=None):
     return model
 
 
+_NATIVE_DROPPED_WATER = frozenset({"HOH", "DOD"})  # atomworks WATER_LIKE_CCDS
+
+
 def _source_residue_identities(path: Path, model_serial=None) -> list[dict[str, Any]]:
     model = _source_model(path, model_serial)
     chains: list[dict[str, Any]] = []
@@ -404,6 +407,10 @@ def _source_residue_identities(path: Path, model_serial=None) -> list[dict[str, 
         residues: list[dict[str, Any]] = []
         for residue in chain:
             if not any(True for _atom in residue.get_atoms()):
+                continue
+            # RFD3's AtomWorks parser drops crystal water before it builds the atom array, so a
+            # residue list that kept waters would name residues the native run cannot find.
+            if str(residue.resname or "").strip().upper() in _NATIVE_DROPPED_WATER:
                 continue
             residue_number = int(residue.id[1])
             insertion_code = str(residue.id[2] or "").strip()
