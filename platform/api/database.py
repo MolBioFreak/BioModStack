@@ -84,6 +84,46 @@ if _slow_sql_ms > 0:
         if elapsed_ms >= _slow_sql_ms:
             _slow_sql_logger.warning("slow-sql %.1fms %s", elapsed_ms, " ".join(statement.split())[:320])
 
+# Opt-in aggregate statement statistics: BMS_SQL_STATS_SECONDS=30 logs the
+# top statements by total time every interval. Counts matter as much as
+# duration here: many fast scans of a large table still consume the CPU.
+_sql_stats_seconds = float(os.environ.get("BMS_SQL_STATS_SECONDS") or 0)
+if _sql_stats_seconds > 0:
+    import collections
+    import logging
+    import threading
+    import time as _time
+
+    _sql_stats_logger = logging.getLogger("bms.sql")
+    _sql_counts: collections.Counter = collections.Counter()
+    _sql_ms: dict[str, float] = {}
+    _sql_lock = threading.Lock()
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def _sql_stats_before(conn, cursor, statement, params, context, executemany):
+        context._bms_stats_started = _time.perf_counter()
+
+    @event.listens_for(engine.sync_engine, "after_cursor_execute")
+    def _sql_stats_after(conn, cursor, statement, parameters, context, executemany):
+        elapsed = (_time.perf_counter() - getattr(context, "_bms_stats_started", _time.perf_counter())) * 1000
+        key = " ".join(statement.split())[:200]
+        with _sql_lock:
+            _sql_counts[key] += 1
+            _sql_ms[key] = _sql_ms.get(key, 0.0) + elapsed
+
+    def _sql_stats_report():
+        while True:
+            _time.sleep(_sql_stats_seconds)
+            with _sql_lock:
+                top = sorted(_sql_ms.items(), key=lambda item: -item[1])[:10]
+                snapshot = [(key, total, _sql_counts[key]) for key, total in top]
+                _sql_counts.clear()
+                _sql_ms.clear()
+            for key, total, count in snapshot:
+                _sql_stats_logger.warning("sql-stats %6.0fms x%5d %s", total, count, key)
+
+    threading.Thread(target=_sql_stats_report, daemon=True, name="bms-sql-stats").start()
+
 if engine.dialect.name == "sqlite":
     @event.listens_for(engine.sync_engine, "connect")
     def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
