@@ -63,11 +63,17 @@ export function BioXpMethodPlanSummary({ result, method, stale }: { result: Meth
         const key = names.length === 1 ? names[0] : names.length ? 'mixture' : 'unassigned';
         moved.set(key, (moved.get(key) ?? 0) + volume);
     }
+    // Liquid moved when wells have no named labware: the recipe totals.
+    const acctLiquid = decimal(object(object(simulation.accounting).liquid).known_ul);
+    if (!moved.size && acctLiquid !== null && acctLiquid > 0) moved.set('unassigned', acctLiquid);
     const planned = new Map<string, number>();
     for (const a of rows(deck.assignments)) { const v = decimal(a.volume_ul); if (v !== null) planned.set(String(a.material_id), (planned.get(String(a.material_id)) ?? 0) + v); }
     const volumeRows = [...new Set([...planned.keys(), ...moved.keys()])].map(id => ({ id, name: id === 'mixture' ? 'Mixtures' : id === 'unassigned' ? 'Liquid without a declared material' : materials.get(id) ?? id, planned: planned.get(id), moved: moved.get(id) }));
-    // Time.
-    const time = object(simulation.time), ms = decimal(time.known_duration_ms), unknownSteps = Array.isArray(time.unknown_occurrences) ? time.unknown_occurrences.length : 0;
+    // Time. Steps the simulator cannot time still have a known plunger time from their recipe.
+    const recipes = rows(object(rows(object(result.document).stages)[0]).actions).map(a => object(object(a.params).recipe)).filter(r => Object.keys(r).length);
+    const plungerMs = recipes.reduce((t, r) => t + (decimal(object(object(r.liquid_settings).timeout_default).expected_ms) ?? 0), 0);
+    const time = object(simulation.time), simMs = decimal(time.known_duration_ms), unknownSteps = Array.isArray(time.unknown_occurrences) ? time.unknown_occurrences.length : 0;
+    const ms = (simMs ?? 0) + plungerMs;
     const water = Array.isArray(result.water_substitutions) ? result.water_substitutions.length : 0;
     const unaddressed = methodStepFindings(result, method).filter(f => !f.step_id && !String(f.path ?? '').startsWith('/steps/'));
     // Same message for several settings reads as one line naming each setting.
@@ -80,7 +86,7 @@ export function BioXpMethodPlanSummary({ result, method, stale }: { result: Meth
         {stale && <p role="status">Updating for your latest edits…</p>}
         <p>{result.document ? 'Ready to run as written.' : 'Not runnable yet — see the notes below.'} Planned values, not robot measurements.</p>
         <dl>
-            <div><dt>Estimated time</dt><dd>{ms !== null && ms > 0 ? `${Math.round(ms / 60000 * 10) / 10} min` : 'No timed steps'}{unknownSteps ? ` · ${unknownSteps} step${unknownSteps === 1 ? '' : 's'} without an estimate` : ''}</dd></div>
+            <div><dt>Estimated time</dt><dd>{ms > 0 ? (ms < 60000 ? `${Math.round(ms / 100) / 10} s` : `${Math.round(ms / 60000 * 10) / 10} min`) : 'No timed steps'}{plungerMs > 0 ? ' pipetting (plunger only; head moves not included)' : ''}{unknownSteps && !plungerMs ? ` · ${unknownSteps} step${unknownSteps === 1 ? '' : 's'} without an estimate` : ''}</dd></div>
             <div><dt>Tips</dt><dd>{racks.length ? <ul>{racks.map(r => <li key={r.tray}>Tip rack {r.tray}: {r.used ?? '?'} used, {r.left ?? '?'} left</li>)}</ul> : authoredRacks.length ? <ul>{authoredRacks.map(r => <li key={r.tray}>Tip rack {r.tray}: {r.tips}{r.type ? ` · ${r.type}` : ''} at start</li>)}</ul> : 'No tip racks set on the starting deck.'}</dd></div>
             <div><dt>Covers</dt><dd>{startCovers.length || coverMoves.length ? <ol>{startCovers.map(([name, location]) => <li key={`start-${name}`}>Start: {COVERS[name]} {place(location)}</li>)}{coverMoves.map((m, i) => <li key={i}>{m.step}: {COVERS[m.name]} → {place(m.location)}</li>)}</ol> : 'No cover positions set or moved.'}</dd></div>
             <div><dt>Volumes</dt><dd>{volumeRows.length ? <ul>{volumeRows.map(v => <li key={v.id}>{v.name}: {v.moved !== undefined ? `${amount(v.moved)} moved` : 'not moved'}{v.planned !== undefined ? ` · ${amount(v.planned)} on the starting deck` : ''}</li>)}</ul> : 'No liquid moves.'}</dd></div>
