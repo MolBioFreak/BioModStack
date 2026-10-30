@@ -98,6 +98,11 @@ function Download({ name, content, mime, children }: { name: string; content: st
 export function NativeBinderGenerationResults(props: Props) {
     return <NativeGenerationWorkbench key={`${props.jobId}:${props.adapter?.key ?? "native"}`} {...props} />;
 }
+/** Reward and timing CSV rows are measurements of the run, not generated candidates. */
+function observationLabel(item: NativeGenerationRecord): string {
+    const file = String(item.artifact ?? '').split('/').pop() || 'Observation';
+    return typeof item.row === 'number' ? `${file} · row ${item.row + 1}` : file;
+}
 function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, selectedDesignId, selectedDesignIds = [], onSelectedDesignIdsChange, selectedRecordIds, onSelectedRecordIdsChange, selectedNativeSources, onSelectedNativeSourcesChange, onInspectDocument, onEditExactDocument, artifactId, targetState }: Props) {
     const [view, setView] = useState<View>(() => selectedDesignId || artifactId || new URLSearchParams(window.location.search).has('native_candidate') ? 'structure' : 'candidates');
     const [structureOpened, setStructureOpened] = useState(view === 'structure' || view === 'candidates');
@@ -141,6 +146,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     }, [query.hasNextPage, query.isFetching, query.isFetchNextPageError, query.fetchNextPage, query.data?.pages.length]);
     const page = query.data?.pages[0];
     const rfd4 = page?.model_id === 'rfd4_proteina';
+    const complexa = page?.model_id === 'complexa';
     const rows = useMemo(() => query.data?.pages.flatMap(part => part.records) ?? [], [query.data]);
     useEffect(() => {
         const inventory = readRoundStorage<Record<string, NativeCandidateSource>>(jobId, 'native-documents', {});
@@ -152,7 +158,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         }
         writeRoundStorage(jobId, 'native-documents', inventory);
     }, [jobId, rows]);
-    const cohort = useMemo<CohortRow[]>(() => rows.map((item, i) => ({ id: rowKey(item, i), label: adapter?.label(item) ?? (rfd4 ? String(item.label ?? (item.record_kind === 'observation' ? item.event ?? 'Observation' : `Candidate ${i + 1}`)) : `Candidate ${i + 1}`), values: values(item) })), [rows, adapter, rfd4]);
+    const cohort = useMemo<CohortRow[]>(() => rows.map((item, i) => ({ id: rowKey(item, i), label: adapter?.label(item) ?? (rfd4 ? String(item.label ?? (item.record_kind === 'observation' ? item.event ?? 'Observation' : `Candidate ${i + 1}`)) : complexa && item.record_kind === 'observation' ? observationLabel(item) : `Candidate ${i + 1}`), values: values(item) })), [rows, adapter, rfd4]);
     const keys = useMemo(() => metricKeys(cohort), [cohort]);
     const numericKeys = useMemo(() => numericMetricKeys(cohort), [cohort]);
     const label = (key: string) => { const nativeLabel = adapter?.metricLabel?.(key); if (nativeLabel) return nativeLabel; const unit = rows.map(item => nativeGenerationMetricUnit(item, key)).find(Boolean); return `${describeCohortMetric(key, keys).label}${unit ? ` (${unit})` : ''}`; };

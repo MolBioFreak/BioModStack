@@ -143,6 +143,25 @@ it('RFD3 labels keep exact IDs in copyable details, metrics, downloads and conti
     expect(JSON.parse(new URL(link.href).searchParams.get('source_structure')!)).toEqual(source);
 });
 
+it('Complexa reward and timing rows are named for their file, not as candidates', async () => {
+    const base = api.defaults.adapter as (config: any) => Promise<any>;
+    api.defaults.adapter = async config => {
+        if (String(config.url) === `/api/jobs/${jobId}/generation-results`) {
+            const doc = (id: string) => ({ candidate_key: id, candidate_ref: { kind: 'native_document', job_id: jobId, artifact_id: id }, record_kind: 'document', population: 'generation', metrics: {}, structures: [{ artifact_id: id, primary: true, logical_path: `${id}.pdb`, download_url: `/fixture/${id}.pdb` }] });
+            const obs = (artifact: string, row: number) => ({ candidate_key: `${artifact}:${row}`, candidate_ref: { kind: 'native_observation', job_id: jobId }, record_kind: 'observation', population: 'observation', artifact, row, metrics: {}, structures: [] });
+            const records = [doc('a'), doc('b'), obs('native/inference/x/rewards_bms_complexa_0.csv', 0), obs('native/inference/x/rewards_bms_complexa_0.csv', 1), obs('native/inference/x/timing_0.csv', 0)];
+            return { config, status: 200, statusText: 'OK', headers: {}, data: { model_id: 'complexa', records, total: 5, offset: 0, limit: 100,
+                record_counts: { total: 5, observations: 3, molecular_records: 2, populations: { generation: 2, observation: 3 } }, receipt: {}, publication: {} } };
+        }
+        return base(config);
+    };
+    await mount(<NativeBinderGenerationResults jobId={jobId} />, `/designs/${jobId}`);
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Candidate 1'); expect(text).toContain('Candidate 2');
+    expect(text).not.toContain('Candidate 3');
+    expect(text).toContain('rewards_bms_complexa_0.csv · row 1'); expect(text).toContain('timing_0.csv · row 1');
+});
+
 it.each([
     ['native CandidateRef only', undefined, undefined, 2, false],
     ['design-document CandidateRef only', undefined, undefined, 2, true],
