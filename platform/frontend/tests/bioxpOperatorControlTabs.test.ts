@@ -50,7 +50,9 @@ test('action forms and route provenance come only from the robot catalog and adm
     // Current command evidence survives an unrelated history read failure.
     assert.match(cockpit, /const displayedLatestReceipt = latestReceiptQuery\.data\?\.command_id === latestOperatorReceipt\?\.command_id/);
     assert.match(cockpit, /\? latestReceiptQuery\.data : latestOperatorReceipt/);
-    assert.match(cockpit, /const latestOperatorReceipt = interruptAggregateAbort\.data \?\? interruptZStop\.data \?\? interruptYStop\.data \?\? interruptXStop\.data \?\? invokeDeckAction\.data \?\? invokeLifecycleActionMutation\.data \?\? invokeYAction\.data \?\? xyReceipt \?\? invokeOperatorAction\.data/);
+    // Latest receipt is the newest same-generation request across every operator mutation, Stops included.
+    assert.match(cockpit, /const latestRequest = repairManualLatestRequest\(\[\s*interruptAggregateAbort, interruptZStop, interruptYStop, interruptXStop,\s*invokeDeckAction, invokeLifecycleActionMutation, invokeYAction, invokeXYAction, invokeOperatorAction, componentStop,/);
+    assert.match(cockpit, /const latestOperatorReceipt = latestRequest\?\.data;/);
     assert.match(cockpit, /resetInterruptAggregateAbort\(\)/);
     assert.match(cockpit, /resetInvokeLifecycleAction\(\)/);
     // Current history is canonical cursor pagination, not a synthesized local

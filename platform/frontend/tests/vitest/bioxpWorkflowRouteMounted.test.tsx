@@ -19,7 +19,7 @@ it.each(['/bioxp', '/bioxp/workflows'])('opens saved authoring inside the robot 
     const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const requests: Array<{ method: string | undefined; url: string | undefined }> = [];
-    const authoringReads = ['/api/bioxp/methods/catalog', '/api/bioxp/methods/schema', '/api/bioxp/methods/examples', '/api/bioxp/methods/library', '/api/bioxp/methods/presets'];
+    const authoringReads = ['/api/bioxp/methods/catalog', '/api/bioxp/methods/schema', '/api/bioxp/methods/examples', '/api/bioxp/methods/library', '/api/bioxp/methods/presets', '/api/bioxp/methods/liquid-classes/starters', '/api/bioxp/service'];
     api.defaults.adapter = async config => {
         requests.push({ method: config.method, url: config.url });
         if (config.method === 'get' && authoringReads.includes(config.url ?? '')) return { data: {}, status: 200, statusText: 'OK', config, headers: {} };
@@ -36,10 +36,9 @@ it.each(['/bioxp', '/bioxp/workflows'])('opens saved authoring inside the robot 
     if (path === '/bioxp') await act(async () => tab.click());
     const panel = host.querySelector('#control-panel-workflows') as HTMLElement;
     expect(panel.hidden).toBe(false);
-    expect(panel.querySelector('[aria-label="Saved workflow"]')).not.toBeNull();
-    expect(panel.querySelector('[aria-label="Step to append"]')?.closest('[aria-label="Step settings"]')).not.toBeNull();
-    expect([...panel.querySelectorAll('button')].some(button => button.textContent?.endsWith(' now'))).toBe(false);
-    expect(panel.textContent).toContain('Editing does not send robot commands.');
-    expect(host.querySelector('#control-panel-pipettes [aria-label="Saved workflow"]')).toBeNull();
-    expect(requests.every(request => request.method === 'get' && (request.url === '/api/bioxp/status' || authoringReads.includes(request.url ?? '')))).toBe(true);
+    // Saved workflows are authored in the Methods workspace inside the Workflows tab only.
+    expect(panel.querySelector('[aria-label="Methods workspace"]')).not.toBeNull();
+    expect(panel.querySelector('[aria-label="Method name"]')).not.toBeNull();
+    expect(host.querySelector('#control-panel-pipettes [aria-label="Methods workspace"]')).toBeNull();
+    expect(requests.filter(request => !(request.method === 'get' && (request.url === '/api/bioxp/status' || authoringReads.includes(request.url ?? ''))))).toEqual([]);
 });

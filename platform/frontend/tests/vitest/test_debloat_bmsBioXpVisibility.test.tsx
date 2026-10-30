@@ -147,6 +147,9 @@ it('uses idle camera discovery rather than 2s status polling and discovers anoth
 });
 it('refreshes selected recovery on committed updates, with no periodic or hidden receipt reads', async () => {
     recoveryVisible = true; await mount(); await click('#control-tab-live-deck'); requests = []; await advance();
+    // Opening the tab reads the selected recovery summary once; never the detail, never again on a timer.
+    expect(requests.filter(r => r.url.includes('/receipts/')).map(r => r.detail)).toEqual([false]);
+    requests = []; await advance(26000);
     expect(count('/receipts/')).toBe(0);
     recoveryRevision = 1; await advance(26000);
     expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === false)).toHaveLength(1);

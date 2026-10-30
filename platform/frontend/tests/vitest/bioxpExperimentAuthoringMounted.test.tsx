@@ -125,9 +125,11 @@ it('inserts holds and named additions at the explicit selected position inside t
     const initial: MethodValue = { steps: [{ step_id: 'program', type: 'group', label: 'Program', steps: [{ step_id: 'cycle', type: 'action', action: 'thermal_profile', inputs: { segments: [] } }] }] };
     let current = initial;
     function Owner() { const [method, setMethod] = useState(initial); current = method; return <BioXpMethodDeckWorkbench method={method} onChange={setMethod} rootSchema={{}} catalog={publishedCatalog} />; }
-    root = createRoot(host); await act(async () => root.render(<Owner />)); await settle();
+    root = createRoot(host); await act(async () => root.render(<QueryClientProvider client={new QueryClient()}><Owner /></QueryClientProvider>)); await settle();
     await selectStep('Program');
-    const cycle = host.querySelector<HTMLButtonElement>('.bioxp-method-workbench fieldset .bioxp-method-sequence button')!;
+    // Nested steps of the open group are listed as their own buttons in the workbench.
+    const cycle = [...host.querySelectorAll<HTMLButtonElement>('.bioxp-method-workbench button')].find(b => b.textContent === 'thermal_profile')!;
+    expect(cycle, 'nested cycle step').toBeTruthy();
     await act(async () => cycle.click()); await settle();
     await input('Insert step', 'before'); await click('Insert initial / final hold');
     expect(((current.steps as MethodValue[])[0].steps as MethodValue[]).map(n => n.action)).toEqual(['thermal_hold', 'thermal_profile']);

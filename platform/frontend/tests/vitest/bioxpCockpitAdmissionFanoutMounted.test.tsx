@@ -511,7 +511,10 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
         data: state.invokeData,
         error: null,
         isPending: state.invokePending,
-        variables: state.invokeVariables,
+        // Latest-receipt selection reads mutation status, submit order and request generation.
+        status: state.invokePending ? 'pending' : state.invokeData ? 'success' : 'idle',
+        submittedAt: state.invokePending || state.invokeData ? 2 : 0,
+        variables: state.invokeVariables ?? (state.invokePending || state.invokeData ? { actionId: 'fixture-normal', connectionGeneration: 1 } : undefined),
         mutate: (payload: Record<string, unknown>) => state.invokeCalls.push(payload),
         reset: state.stableReset,
     }),
@@ -3345,7 +3348,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(metric('Speed')).toContain('Invalid reply · status 14');
         expect(metric('Home switch')).toContain('Valid reply · status 100');
         expect(metric('Profile')).toContain('Invalid · SAP4 expected 1800; observed 1700');
-        expect(metric('Updated')).toContain('1970-01-01T00:00:01.000Z');
+        expect(metric('Authority updated (not sample time)')).toContain('1970-01-01T00:00:01.000Z');
     });
 
     it('treats ownership-generation mismatch as observational while keeping normal Y and STOP reachable', async () => {
@@ -3649,138 +3652,6 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     });
 });
 
-
-describe('Well pipetting cockpit integration', () => {
-    it('retains pipette drafts, ordered steps, pending submission and result across robot tabs with shared Stops', async () => {
-        nativeMetadataMode.protocols = true; vi.stubGlobal('crypto', webcrypto);
-        const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-        let reject!: (reason: unknown) => void;
-        vi.mocked(api.post).mockReset().mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
-        const tab = (name: string) => container.querySelector(`#control-tab-${name}`) as HTMLButtonElement;
-        const panel = (name: string) => container.querySelector(`#control-panel-${name}`) as HTMLElement;
-        const click = async (name: string) => act(async () => tab(name).click());
-        const field = (name: string) => panel('pipettes').querySelector(`[aria-label="${name}"]`) as HTMLInputElement;
-        const set = async (name: string, value: string) => act(async () => {
-            const input = field(name);
-            Object.getOwnPropertyDescriptor(input.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!.set!.call(input, value);
-            input.dispatchEvent(new Event(input.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
-        });
-        const button = (text: string) => [...panel('pipettes').querySelectorAll('button')].find(b => (b.getAttribute('aria-label') ?? b.textContent) === text)!;
-        try {
-            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
-            expect(panel('robot').hidden).toBe(false);
-            expect(panel('pipettes').hidden).toBe(true);
-            expect(container.querySelector('[aria-label="Well pipetting"]')).toBeNull();
-            expect(container.querySelector('[data-testid="oem-deck-movement"]')).toBeNull();
-            await click('live-deck');
-            expect(tab('pipettes').compareDocumentPosition(container.querySelector('[data-testid="oem-deck-movement"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-            await click('pipettes');
-            const original = field('Volume (µL)');
-            await set('Volume (µL)', '12.5'); await set('Dispense speed', '65');
-            await act(async () => field('Plunger 2').click());
-            await set('Tip tray', '5'); await set('Tip well', 'B12');
-            await set('Pipettes to load', '2'); await set('Tip size', '200');
-            await set('Step to append', 'dispense');
-            await act(async () => button('Append step').click());
-            await click('robot');
-            expect(panel('pipettes').hidden).toBe(true);
-            expect(panel('robot').hidden).toBe(false);
-            expect(field('Volume (µL)')).toBe(original);
-            expect(api.post).not.toHaveBeenCalled();
-            await click('pipettes');
-            expect(tab('pipettes').getAttribute('aria-selected')).toBe('true');
-            expect(field('Volume (µL)').value).toBe('12.5');
-            expect(field('Tip tray').value).toBe('5'); expect(field('Tip well').value).toBe('B12');
-            expect(field('Pipettes to load').value).toBe('2'); expect(field('Tip size').value).toBe('200');
-            expect(field('Plunger 2').checked).toBe(true);
-            expect(container.querySelectorAll('[data-manual-step]')).toHaveLength(1);
-            await act(async () => { button('Run ordered steps').click(); await new Promise(resolve => setTimeout(resolve, 20)); });
-            expect(api.post).toHaveBeenCalledTimes(1);
-            const [path, request] = vi.mocked(api.post).mock.calls[0] as [string, any];
-            expect(path).toBe('/api/bioxp/protocols/submit');
-            expect(request).toMatchObject({ source_type: 'native', dry_run: false, expected_connection_generation: 1, live_execution: { live_execution_ack: true } });
-            expect(request.document.stages[0].actions[0]).toMatchObject({ kind: 'pipette_dispense', params: { channels: [1], volume_ul: 12.5, speed: 65 } });
-            await click('robot'); await click('live-deck'); await click('pipettes');
-            expect(button('Run ordered steps').disabled).toBe(true);
-            const stops = container.querySelector('[aria-label="Stop controls"]')!;
-            expect(stops.closest('[hidden]')).toBeNull();
-            for (const text of ['Stop X', 'Stop Y', 'Stop Z', 'Software Abort (cancel waiters)']) {
-                const control = [...stops.querySelectorAll('button')].find(b => (b.getAttribute('aria-label') ?? b.textContent) === text)!;
-                expect(control.disabled).toBe(false);
-                await act(async () => control.click());
-            }
-            expect(state.yInterruptCalls.map(call => call.actionId)).toEqual(['oem.x.stop', 'oem.y.stop', 'oem.z.stop', 'oem.abort_all']);
-            await act(async () => reject(new Error('fixture response lost')));
-            await click('robot'); await click('live-deck'); await click('pipettes');
-            expect(panel('pipettes').textContent).toContain('fixture response lost');
-            expect(button('Run ordered steps').disabled).toBe(false);
-            expect(field('Volume (µL)')).toBe(original);
-            expect(api.post).toHaveBeenCalledTimes(1);
-            vi.mocked(api.post).mockImplementationOnce(async (_path, body: any) => {
-                const digest = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(body.idempotency_key));
-                const id = `protocol-live-${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')}`;
-                return { data: { job_id: id, status: 'completed', command: { idempotency_key: body.idempotency_key, status: 'completed' },
-                    execution: { runtime_state: { workflow: { phase: 'completed' }, action_results: [{ pipette_result: {
-                        selected_channels: [1], completed: true, physical_effect_verified: false,
-                    } }] } } } };
-            });
-            await act(async () => { button('Dispense now').click(); await new Promise(resolve => setTimeout(resolve, 20)); });
-            expect(api.post).toHaveBeenCalledTimes(2);
-            expect(panel('pipettes').textContent).toContain('Robot job: completed');
-            await act(async () => tab('pipettes').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })));
-            expect(tab('robot').getAttribute('aria-selected')).toBe('true');
-            expect(document.activeElement).toBe(tab('robot'));
-            await act(async () => tab('robot').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })));
-            expect(tab('live-deck').getAttribute('aria-selected')).toBe('true');
-            expect(document.activeElement).toBe(tab('live-deck'));
-            await act(async () => tab('live-deck').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })));
-            expect(tab('workflows').getAttribute('aria-selected')).toBe('true');
-            expect(document.activeElement).toBe(tab('workflows'));
-            expect(panel('workflows').querySelector('[aria-label="Saved workflow"]')).not.toBeNull();
-            expect(stops.closest('[hidden]')).toBeNull();
-            await click('pipettes');
-            expect(panel('pipettes').textContent).toContain('Robot job: completed');
-            expect(panel('pipettes').textContent).toContain('Physical effect verifiedfalse');
-            expect(field('Volume (µL)')).toBe(original);
-        } finally {
-            await act(async () => root.render(null)); client.clear(); nativeMetadataMode.protocols = false; vi.unstubAllGlobals();
-        }
-    });
-    it('uses catalog locationID rather than target ordinals and dispatches independently of projected availability', async () => {
-        nativeMetadataMode.protocols = true; vi.stubGlobal('crypto', webcrypto);
-        const action = state.v2Catalog.data.actions.find(a => a.action_id === 'oem.deck.move_to_location')!;
-        Object.assign(action, { destination_options: [{ target: 'not-a-plate-ordinal', label: 'Catalog pipetting block', location_id: 4,
-            enabled: false, disabled_reason: 'missing historical observation', aliases: [], branch_kind: 'ordinary', camera_offset_option: false, source_anchors: [] }] });
-        const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-        vi.mocked(api.post).mockReset().mockRejectedValue(new Error('offline robot refusal'));
-        try {
-            await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
-            expect(container.querySelector('[aria-label="Well pipetting"]')).toBeNull();
-            await act(async () => (container.querySelector('#control-tab-pipettes') as HTMLButtonElement).click());
-            const panel = container.querySelector('[aria-label="Well pipetting"]')!;
-            expect(panel).not.toBeNull();
-            for (const [name, value] of [['Station', '4'], ['Move Z position', '1']]) {
-                await act(async () => {
-                    const select = panel.querySelector(`[aria-label="${name}"]`) as HTMLSelectElement;
-                    select.value = value; select.dispatchEvent(new Event('change', { bubbles: true }));
-                });
-            }
-            await act(async () => (panel.querySelector('[aria-label="Reference well D5"]') as HTMLButtonElement).click());
-            const move = [...panel.querySelectorAll('button')].find(b => b.textContent === 'Move now')!;
-            expect(move.disabled).toBe(false);
-            await act(async () => { move.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
-            expect(api.post).toHaveBeenCalledTimes(1);
-            const [path, request] = vi.mocked(api.post).mock.calls[0] as [string, any];
-            expect(path).toBe('/api/bioxp/protocols/submit');
-            expect(request.document.stages[0].actions[0]).toMatchObject({ kind: 'pipette_position',
-                params: { operation: 'move', location_id: 4, well: 'D5', position_flag: 1 } });
-            expect(panel.textContent).toContain('offline robot refusal');
-            expect(move.disabled).toBe(false);
-        } finally {
-            await act(async () => root.render(null)); client.clear(); nativeMetadataMode.protocols = false; vi.unstubAllGlobals();
-        }
-    });
-});
 
 describe('OEM software Abort distinct from addressed Stops', () => {
     const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));

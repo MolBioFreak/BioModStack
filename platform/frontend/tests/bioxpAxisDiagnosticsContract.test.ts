@@ -19,7 +19,8 @@ test('manual controls expose finite robot-owned operations with dedicated Serial
 });
 
 test('manual controls contain no arbitrary motor or prompt surface', () => {
-  for (const value of ['window.prompt', 'window.confirm', 'distance', 'velocity', 'motor current', 'raw transport']) {
+  // Step-count jog presets (repairManualJogDistances) are a deliberate control; free-form distance/velocity inputs are not.
+  for (const value of ['window.prompt', 'window.confirm', 'velocity', 'motor current', 'raw transport']) {
     assert.doesNotMatch(source, new RegExp(value, 'i'));
   }
 });

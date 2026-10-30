@@ -9,7 +9,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BioXpMethodDeckWorkbench } from '../../src/components/BioXpMethodDeckWorkbench';
 import { insertMethodAction, plateBoundEndpoint, groupCanvasSteps, canUngroupCanvasNode, methodCarryLinks, duplicateCanvasNode } from '../../src/lib/bioxpMethodCanvas';
 import type { MethodValue, MethodCompile } from '../../src/lib/bioxpMethods';
-import catalog from '../fixtures/bioxp_method_deck_catalog.json';
+import deckCatalog from '../fixtures/bioxp_method_deck_catalog.json';
+// Plate/cover destinations come from the real API owner, not a hand-kept copy.
+const custody = JSON.parse(spawnSync(process.env.BMS_TEST_PYTHON!, ['-c', 'import json;from bioxp_method_custody import custody_suggestions;print(json.dumps(custody_suggestions()))'], { cwd: '../api', encoding: 'utf8' }).stdout);
+const catalog = { ...deckCatalog, authoring: { ...((deckCatalog as any).authoring ?? {}), custody } };
 const discovery = process.env.BIOXP_METHOD_MODEL_CONTRACT ? JSON.parse(readFileSync(process.env.BIOXP_METHOD_MODEL_CONTRACT, 'utf8')) : null;
 let host: HTMLDivElement, root: Root, current: MethodValue, values: MethodValue;
 let client: QueryClient, oldAdapter: typeof api.defaults.adapter;

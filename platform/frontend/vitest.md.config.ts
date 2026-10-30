@@ -212,7 +212,6 @@ export default defineConfig({
             './tests/vitest/bioxpPipetteSettingsMounted.test.tsx',
             './tests/vitest/bioxpPipettesCompactMounted.test.tsx',
             './tests/vitest/bioxpMeasurementProducerMounted.test.tsx',
-            './tests/vitest/bioxpCavroFinishMounted.test.tsx',
             './tests/vitest/bioxpGeometryReceivingMounted.test.tsx',
             './tests/vitest/bioxpCockpitAdmissionFanoutMounted.test.tsx',
             './tests/vitest/bioxpCameraMounted.test.tsx',

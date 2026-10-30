@@ -122,7 +122,7 @@ beforeEach(() => {
         if (url.endsWith('/calibration-settings')) return { data: { active_motion_positions: [], saved_motion_positions: [], active_positions: [], saved_positions: [], active_loader_adjustments: [], saved_loader_adjustments: [] } };
         if (url.includes('/camera/')) return { data: { active: false, available: false, state: 'unavailable' } };
         if (url.endsWith('/protocols/jobs') || url.endsWith('/methods/runs')) return { data: [] };
-        if (['/api/bioxp/methods/examples', '/api/bioxp/methods/library', '/api/bioxp/methods/presets'].includes(url)) return { data: [] };
+        if (['/api/bioxp/methods/examples', '/api/bioxp/methods/library', '/api/bioxp/methods/presets', '/api/bioxp/methods/liquid-classes/starters'].includes(url)) return { data: [] };
         // Unrelated tabs deliberately receive unavailable optional services. Their
         // real error presentation must not erase Robot drafts or submit anything.
         if (['/api/bioxp/methods/schema', '/api/bioxp/operator-controls/pipettes/application/status'].includes(url))
@@ -242,10 +242,11 @@ describe('Robot controls layout transport parity (inert)', () => {
         const tools = [...host.querySelectorAll('details')].find(el => el.querySelector('summary')?.textContent?.includes('Tools'));
         if (tools) await act(async () => { tools.open = true; tools.dispatchEvent(new Event('toggle')); });
         expect(api.post).not.toHaveBeenCalled();
-        await expectAction(button('Show axis settings'), v1Id(paths.settings), {}, 'v1');
-        await expectAction(button('Show position table'), v1Id(paths.positions), {}, 'v1');
+        // Settings and position table are passive read-only viewers (b8b12e2); opening Tools reads nothing.
+        expect(button('Show settings')).toBeTruthy(); expect(button('Show position table')).toBeTruthy();
+        expect(api.post).not.toHaveBeenCalled();
     });
-    it('all five rows, disclosures and all tabs retain drafts without a picker or presets', async () => {
+    it('all five rows, disclosures and all tabs retain drafts without an axis picker', async () => {
         await mount();
         for (const axis of ['x', 'y', 'z', 'g']) { await setInput(input(axis, 0), 1234); await setInput(input(axis, 1), 23456); }
         expect(host.querySelector('button[data-axis], button[aria-label^="Select "][aria-label$=" axis"]')).toBeNull();
@@ -261,19 +262,18 @@ describe('Robot controls layout transport parity (inert)', () => {
         for (const tab of ['pipettes', 'workflows', 'live-deck', 'robot']) await click(host.querySelector(`#control-tab-${tab}`)!);
         for (const axis of jogAxes) {
             expect(input(axis, 0).value).toBe('1234'); expect(input(axis, 1).value).toBe('23456');
-            expect(range(axis, 'relative steps').value).toBe('1234'); expect(range(axis, 'absolute target').value).toBe('23456');
+            expect(range(axis, 'absolute target').value).toBe('23456');
         }
         expect(api.post).not.toHaveBeenCalled();
     });
     it.each(jogAxes)('%s sliders share exact numeric drafts and submit only through existing move actions', async axis => {
         await mount();
-        const relative = range(axis, 'relative steps'), absolute = range(axis, 'absolute target');
-        expect(relative.max).toBe(String(publishedMaximum[axis]));
+        // Relative slider spans useful travel from the current position (repairManualJogDistances), covered in repairManualMounted.
+        const absolute = range(axis, 'absolute target');
         expect(absolute.max).toBe(String(publishedMaximum[axis]));
-        expect(relative.min).toBe(axis === 'y' ? '0' : '1');
         expect(Number(absolute.min)).toBe(Math.max(0, Number(input(axis, 1).min)));
         expect(input(axis, 1).labels?.[0].textContent).toContain('Absolute target (steps)');
-        await setInput(relative, 1234); await setInput(absolute, 23456);
+        await setInput(input(axis, 0), 1234); await setInput(absolute, 23456);
         expect(input(axis, 0).value).toBe('1234'); expect(input(axis, 1).value).toBe('23456');
         expect(api.post).not.toHaveBeenCalled();
         await expectAction(button('Move −', row(axis)), axis === 'g' ? v1Id(paths.relative) : `oem.${axis}.move_steps`,
@@ -283,7 +283,7 @@ describe('Robot controls layout transport parity (inert)', () => {
         await expectAction(button('Go absolute', row(axis)), axis === 'g' ? v1Id(paths.absolute) : `oem.${axis}.move_absolute`,
             axis === 'g' ? { axis, position_steps: 23456 } : axis === 'y' ? { target_steps: 23456 } : { position_steps: 23456 }, axis === 'g' ? 'v1' : 'v2');
         await setInput(input(axis, 0), 4321); await setInput(input(axis, 1), 34567);
-        expect(range(axis, 'relative steps').value).toBe('4321'); expect(range(axis, 'absolute target').value).toBe('34567');
+        expect(range(axis, 'absolute target').value).toBe('34567');
         expect(api.post).toHaveBeenCalledTimes(3);
     });
     it.each(jogAxes)('%s changing telemetry bounds and clearing an absolute entry never rewrites the draft', async axis => {
@@ -293,10 +293,8 @@ describe('Robot controls layout transport parity (inert)', () => {
         const telemetry = catalog.dashboard.telemetry.axes.find((item: any) => item.axis === axis);
         telemetry.max_steps = 40000; telemetry.min_steps = 500;
         await refreshTelemetry();
-        expect(range(axis, 'relative steps').max).toBe('40000');
         expect(range(axis, 'absolute target').max).toBe('40000');
         expect(Number(range(axis, 'absolute target').min)).toBe(Math.max(500, Number(input(axis, 1).min)));
-        expect(range(axis, 'relative steps').min).toBe(axis === 'y' ? '0' : '1');
         expect(input(axis, 0).value).toBe('54321'); expect(input(axis, 1).value).toBe('65432');
         expect([input(axis, 0).min, input(axis, 0).max, input(axis, 1).min, input(axis, 1).max]).toEqual(numericBounds);
         await setInput(input(axis, 1), '');
