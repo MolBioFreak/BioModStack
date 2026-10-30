@@ -301,6 +301,8 @@ def prepare_class_transfer(inputs):
     # A multi Transfer's amount is the per-destination sample intent. Its
     # total target/corrected aspiration and conditioning remain authored.
     mode = recipe.get('mode', 'single')
+    if 'channels' not in inputs:
+        raise ValueError('Transfer has no plunger channels yet; choose them under Plunger channels in the step editor')
     bindings = {'mode': mode, 'channels': inputs['channels']}
     if mode == 'multi':
         multi = recipe.get('multi')
@@ -335,6 +337,11 @@ def positioned_transfer_recipes(inputs):
     for endpoint in (source, destination):
         if set(endpoint) - {'station', 'location_id', 'wells'}:
             raise ValueError('Unsupported Transfer endpoint fields')
+    names = {'source_position_flag': 'source move height', 'destination_position_flag': 'destination move height',
+             'source_lift_height_steps': 'source lift height', 'destination_lift_height_steps': 'destination lift height'}
+    missing = [label for key, label in names.items() if key not in inputs]
+    if missing:
+        raise ValueError(f'Transfer still needs: {", ".join(missing)} (set the move and lift heights in the step editor)')
     multi = inputs['recipe'].get('mode') == 'multi'
     samples = len(inputs['recipe'].get('multi', {}).get('aliquots', [])) if multi else 1
     if not source['wells'] or not samples or len(source['wells']) * samples != len(destination['wells']):

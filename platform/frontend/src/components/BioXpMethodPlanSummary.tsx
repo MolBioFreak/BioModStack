@@ -49,8 +49,10 @@ export function BioXpMethodPlanSummary({ result, method, stale }: { result: Meth
         const left = decimal(summary.tips_remaining);
         return { tray, left, used: before !== null && left !== null ? before - left : null };
     });
+    // Before the method has runnable steps the simulator reports nothing; show the starting deck as authored.
+    const authoredRacks = rows(deck.tip_racks).map(r => ({ tray: String(r.tray), tips: r.tips === 'full' ? 'full' : r.tips === 'empty' ? 'empty' : `${Array.isArray(object(r.tips).available) ? (object(r.tips).available as unknown[]).length : 0} tips`, type: typeof r.tip_type === 'string' ? r.tip_type : null }));
     // Cover sequence.
-    const startCovers = Object.entries(object(initial.object_locations)).filter(([name]) => COVERS[name]);
+    const startCovers = Object.entries(Object.keys(object(initial.object_locations)).length ? object(initial.object_locations) : object(deck.movable_objects)).filter(([name]) => COVERS[name]);
     const coverMoves = rows(simulation.after_occurrences).flatMap(row => Object.entries(object(object(row.state_delta).object_locations))
         .filter(([name]) => COVERS[name]).map(([name, location]) => ({ step: steps.get(String(row.occurrence_id))?.label ?? 'Step', name, location })));
     // Volumes moved per material.
@@ -74,7 +76,7 @@ export function BioXpMethodPlanSummary({ result, method, stale }: { result: Meth
         <p>{result.document ? 'Ready to run as written.' : 'Not runnable yet — see the notes below.'} Planned values, not robot measurements.</p>
         <dl>
             <div><dt>Estimated time</dt><dd>{ms !== null && ms > 0 ? `${Math.round(ms / 60000 * 10) / 10} min` : 'No timed steps'}{unknownSteps ? ` · ${unknownSteps} step${unknownSteps === 1 ? '' : 's'} without an estimate` : ''}</dd></div>
-            <div><dt>Tips</dt><dd>{racks.length ? <ul>{racks.map(r => <li key={r.tray}>Tip rack {r.tray}: {r.used ?? '?'} used, {r.left ?? '?'} left</li>)}</ul> : 'No tip racks set on the starting deck.'}</dd></div>
+            <div><dt>Tips</dt><dd>{racks.length ? <ul>{racks.map(r => <li key={r.tray}>Tip rack {r.tray}: {r.used ?? '?'} used, {r.left ?? '?'} left</li>)}</ul> : authoredRacks.length ? <ul>{authoredRacks.map(r => <li key={r.tray}>Tip rack {r.tray}: {r.tips}{r.type ? ` · ${r.type}` : ''} at start</li>)}</ul> : 'No tip racks set on the starting deck.'}</dd></div>
             <div><dt>Covers</dt><dd>{startCovers.length || coverMoves.length ? <ol>{startCovers.map(([name, location]) => <li key={`start-${name}`}>Start: {COVERS[name]} {place(location)}</li>)}{coverMoves.map((m, i) => <li key={i}>{m.step}: {COVERS[m.name]} → {place(m.location)}</li>)}</ol> : 'No cover positions set or moved.'}</dd></div>
             <div><dt>Volumes</dt><dd>{volumeRows.length ? <ul>{volumeRows.map(v => <li key={v.id}>{v.name}: {v.moved !== undefined ? `${amount(v.moved)} moved` : 'not moved'}{v.planned !== undefined ? ` · ${amount(v.planned)} on the starting deck` : ''}</li>)}</ul> : 'No liquid moves.'}</dd></div>
             {water > 0 && <div><dt>Liquid settings</dt><dd>{water} unspecified setting{water === 1 ? '' : 's'} use the matching Water class.</dd></div>}
