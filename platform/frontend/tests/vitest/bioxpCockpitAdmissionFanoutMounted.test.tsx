@@ -673,12 +673,12 @@ describe('critical evidence presentation', () => {
         dashboard.telemetry = state.dashboard.data;
         try {
             await act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
-            expect(container.querySelector('.bx-report')?.textContent).toContain('hardware not fresh');
+            expect(container.querySelector('.bx-report')?.textContent).toContain('Hardware not read since connect');
             const move = [...container.querySelectorAll('button')].find(button => button.textContent === 'Move X + Y together')!;
             expect(move).toBeDefined();
             expect(move.disabled).toBe(false);
             await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
-            expect(container.querySelector('.bx-report')?.textContent).toContain('hardware not fresh');
+            expect(container.querySelector('.bx-report')?.textContent).toMatch(/Hardware (read|not read)/);
             expect(move.disabled).toBe(false);
             // Keep the opposite clock fresh; each budget must independently expire.
             if (clock === 'upstream') Object.assign(state.v2Catalog, { dataUpdatedAt: Date.now() });

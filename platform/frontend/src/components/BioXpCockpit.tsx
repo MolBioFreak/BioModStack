@@ -1219,7 +1219,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             </header>
             <BioXpStatusStrip connected={displayConnected} data={displayTelemetry} stale={showingLastKnown}
                 connectedLabel={connectedLabel} motionControlsAvailable={motionControlsAvailable} motionLabel={motionLabel}
-                observedAt={connection?.observed_at} hardwareFresh={connection?.hardware_fresh} ownershipLabel={ownershipLabel}
+                observedAt={connection?.observed_at} hardwareFresh={connection?.hardware_fresh} hardwareObservedAt={connection?.hardware_observed_at} ownershipLabel={ownershipLabel}
                 connectionControls={<><button
                             type="button"
                             disabled={!configured || linkHealthy || connect.isPending || disconnect.isPending}
