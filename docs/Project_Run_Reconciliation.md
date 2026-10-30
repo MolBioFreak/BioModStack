@@ -117,3 +117,14 @@ still happening after the reconcile fix, and what keeps them bounded.
 `read_bytes` in `/proc/<pid>/io` stayed near zero throughout: this was page
 cache and CPU, not SSD wear. What did write continuously was the run-event
 churn described above, and that is gone.
+- **Results lists.** A results page verified the producer publication once per
+  row, read a full Job once per row for the contract revision, and opened an
+  in-memory DuckDB per artifact. Publication verification is once per Job now,
+  revisions are read once per page, and one analytical connection is reused per
+  thread with the allowed directory re-scoped per call.
+- **Measuring this.** `/proc/<pid>/io` separates `rchar` (bytes returned by read
+  syscalls, page cache included) from `read_bytes` (actual device reads). A large
+  `rchar` with a zero `read_bytes` is repeated scanning, not storage wear. Set
+  `BMS_SLOW_SQL_MS` to log slow statements, or `BMS_SQL_STATS_SECONDS` to log the
+  top statements by total time and count; statement work runs on aiosqlite
+  worker threads, so a Python profile shows an idle event loop instead.
