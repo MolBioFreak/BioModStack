@@ -7,7 +7,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { Feature, HighlightedRegion, SelectionInfo, SequenceData } from '../types';
-import { FEATURE_COLOR_PALETTE, FEATURE_TYPES, getFeatureColor } from '../featureCatalog';
+import { FEATURE_COLOR_PALETTE, ANNOTATION_FEATURE_TYPES as FEATURE_TYPES, getFeatureColor, isSequenceAnnotation } from '../featureCatalog';
 import {
     featureCoordinateLabel,
     featureHighlightRegions,
@@ -324,7 +324,7 @@ export function FeaturePanel({
     const [editingFeatureId, setEditingFeatureId] = useState<string | null>(null);
     const [editDraft, setEditDraft] = useState<FeatureDraft>(createEmptyDraft);
 
-    const features = useMemo(() => sequenceData.features || [], [sequenceData.features]);
+    const features = useMemo(() => (sequenceData.features || []).filter(isSequenceAnnotation), [sequenceData.features]);
     const selectionSnapshot = useMemo(() => createSelectionSnapshot(
         selection,
         sequenceData.sequence,

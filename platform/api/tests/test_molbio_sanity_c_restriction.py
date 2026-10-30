@@ -80,6 +80,24 @@ async def test_work_budget_413_is_typed_before_scan(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("constant,budget,limit", [
+    ("MAX_ANALYSIS_PATTERNS", "scan_patterns", 0),
+    ("MAX_RETURNED_OCCURRENCES", "occurrences", 0),
+    ("MAX_RETURNED_EVENTS", "events", 0),
+    ("MAX_RESPONSE_BYTES", "response_bytes", 1),
+])
+async def test_output_limits_identify_the_budget_for_client_subdivision(monkeypatch, constant, budget, limit):
+    analysis._clear_cache_for_testing()
+    monkeypatch.setattr(analysis, constant, limit)
+    with pytest.raises(HTTPException) as exc:
+        await routes.analyze_restriction_sites(request(), catalog_authority, object())
+    assert exc.value.status_code == 413
+    assert exc.value.detail["budget"] == budget
+    assert exc.value.detail["limit"] == limit
+    assert exc.value.detail["observed"] > limit
+
+
+@pytest.mark.asyncio
 async def test_busy_saved_read_does_zero_sql(monkeypatch):
     capacity = threading.BoundedSemaphore(1)
     capacity.acquire()

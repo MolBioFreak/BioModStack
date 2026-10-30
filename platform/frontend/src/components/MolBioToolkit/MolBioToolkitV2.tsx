@@ -48,7 +48,7 @@ import {
 } from './SelectionActionDialog';
 import { MolecularInputModal } from './MolecularInputModal';
 import { RnaStructureViewer, type RnaStructureDisplayMode } from './RnaStructureViewer';
-import { getFeatureColor, normalizeFeatureType } from './featureCatalog';
+import { getFeatureColor, normalizeFeatureType, isSequenceAnnotation } from './featureCatalog';
 import {
     didFocusLeaveContainer,
     moveMenuFocus,
@@ -2675,7 +2675,7 @@ export function MolBioToolkitV2() {
 
     const clearAnnotations = useCallback(() => {
         if (exactMolecularAuthorityRef.current) return;
-        const featureCount = sequenceData.features.length;
+        const featureCount = sequenceData.features.filter(isSequenceAnnotation).length;
         if (featureCount === 0) return;
         setSequenceData(
             clearFeatureAnnotations(sequenceData),
@@ -2695,7 +2695,7 @@ export function MolBioToolkitV2() {
         if (!sequenceData.sequence) {
             throw new Error('Open a construct before importing annotations.');
         }
-        if (sequenceData.features.length > 0) {
+        if (sequenceData.features.some(isSequenceAnnotation)) {
             throw new Error('This construct already has existing feature annotations. Use Clear all feature annotations before importing a published annotation set; source sets are never silently merged.');
         }
 
@@ -4083,7 +4083,7 @@ export function MolBioToolkitV2() {
                 annotationSourceStatus={annotationSourceStatus}
                 isAnnotating={isAnnotating}
                 hasSequence={!!sequenceData.sequence}
-                featureCount={sequenceData.features.length}
+                featureCount={sequenceData.features.filter(isSequenceAnnotation).length}
                 sequenceLength={sequenceData.sequence.length}
                 isCircular={sequenceData.circular}
             />

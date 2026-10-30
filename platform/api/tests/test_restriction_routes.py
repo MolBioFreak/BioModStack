@@ -590,6 +590,9 @@ def test_complete_public_response_bound_rejects_wrapper_overflow_and_admits_exac
     assert rejected.json() == {"detail": {
         "code": "request_too_large",
         "message": "restriction analysis request is too large",
+        "budget": "response_bytes",
+        "limit": len(complete_bytes) - 1,
+        "observed": len(complete_bytes),
     }}
 
     monkeypatch.setattr(molbio_restriction, "MAX_RESPONSE_BYTES", len(complete_bytes))

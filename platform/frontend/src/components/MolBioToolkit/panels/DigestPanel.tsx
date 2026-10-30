@@ -249,6 +249,9 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
     const fullAnalysisRows = async (): Promise<EnzymeCutData[] | undefined> => {
         if (hasFullAnalysis || !onAnalyzeAll) return enzymeData;
         const batch = await onAnalyzeAll();
+        if (batch?.complete === false) {
+            throw new Error('The enzyme scan is incomplete. Retry Analyze full catalog before mapping a group; your existing map is unchanged.');
+        }
         return batch ? buildEnzymeRows(recordsRef.current, indexRestrictionAnalysis(batch), selection, sequenceData) : undefined;
     };
     const requestCountAnalysis = () => {

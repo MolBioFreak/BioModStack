@@ -5,6 +5,15 @@ export interface FeatureTypeDefinition {
     category: string;
 }
 
+/** GenBank source records describe the molecule, not a drawable annotation.
+ * Keep them in saved/imported data for round-trip export and provenance.
+ */
+export function isSequenceAnnotation(feature: unknown): boolean {
+    if (!feature || typeof feature !== 'object') return false;
+    const type = (feature as { type?: unknown }).type;
+    return typeof type !== 'string' || type.trim().toLowerCase() !== 'source';
+}
+
 export const FEATURE_TYPES: FeatureTypeDefinition[] = [
     { value: 'CDS', label: 'CDS', color: '#22c55e', category: 'Coding' },
     { value: 'gene', label: 'Gene', color: '#3b82f6', category: 'Coding' },
@@ -25,6 +34,8 @@ export const FEATURE_TYPES: FeatureTypeDefinition[] = [
     { value: 'misc_difference', label: 'Difference / Variant', color: '#fbbf24', category: 'Other' },
     { value: 'source', label: 'Source', color: '#94a3b8', category: 'Other' },
 ];
+
+export const ANNOTATION_FEATURE_TYPES = FEATURE_TYPES.filter((entry) => entry.value !== 'source');
 
 export const FEATURE_COLOR_PALETTE = [
     '#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16',

@@ -4,6 +4,7 @@
 
 import { useMemo } from 'react';
 import { ExportDropdown } from './ExportDropdown';
+import { isSequenceAnnotation } from './featureCatalog';
 import type { HistoryEntry } from './hooks/useSequenceHistory';
 import type { SequenceData } from './types';
 import { sequenceUnitLabel, displayStrandSymbol, type NucleotideDisplayStrand } from './utils/nucleotides';
@@ -100,7 +101,7 @@ export function SequenceHeader({
                             <span>•</span>
                             <span>GC: {gcContent}%</span>
                             <span>•</span>
-                            <span>{sequenceData.features.length} features</span>
+                            <span>{sequenceData.features.filter(isSequenceAnnotation).length} features</span>
                             {sequenceData.primers && sequenceData.primers.length > 0 && (
                                 <>
                                     <span>•</span>

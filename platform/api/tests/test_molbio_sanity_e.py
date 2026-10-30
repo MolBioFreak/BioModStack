@@ -141,6 +141,26 @@ async def test_summary_sql_projection_paging_and_history_offset(store):
 
 
 @pytest.mark.asyncio
+async def test_summary_counts_annotations_without_removing_source_metadata(store):
+    _, sessions = store
+    async with sessions() as session:
+        created = await routes.create_sequence(routes.NucleotideSequenceCreate(
+            name="metadata fixture", sequence="ACGTACGT",
+            features=[
+                {"id": "origin-metadata", "name": "source", "type": " Source ", "start": 0, "end": 8,
+                 "qualifiers": {"organism": ["synthetic construct"]}},
+                {"id": "annotation", "name": "source", "type": "misc_feature", "start": 2, "end": 4},
+            ],
+        ), session)
+        page = await routes.list_sequences(session=session, sequence_ids=None, search=None,
+            sequence_type=None, topology="all", sort_by="feature_count", sort_desc=False, limit=10, offset=0)
+        assert page[0].feature_count == 1
+        saved = await routes.get_sequence(created.id, session)
+        assert len(saved.features) == 2
+        assert saved.features[0]["qualifiers"]["organism"] == ["synthetic construct"]
+
+
+@pytest.mark.asyncio
 async def test_light_health_has_no_scientific_scans_and_deep_still_checks(store):
     engine, _ = store
     statements = []

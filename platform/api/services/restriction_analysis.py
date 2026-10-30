@@ -576,7 +576,7 @@ def _analyze_normalized_sequence(
     )
     pattern_count = len(scan_plan)
     if pattern_count > MAX_ANALYSIS_PATTERNS:
-        raise AnalysisLimitError("pattern count exceeds analysis limit")
+        raise AnalysisLimitError("pattern count exceeds analysis limit", budget="scan_patterns", limit=MAX_ANALYSIS_PATTERNS, observed=pattern_count)
     if scan_work > MAX_SCAN_WORK:
         raise AnalysisLimitError("scan work exceeds analysis limit", budget="scan_work", limit=MAX_SCAN_WORK, observed=scan_work)
 
@@ -625,15 +625,15 @@ def _analyze_normalized_sequence(
                     continue
                 next_events = _event_cardinality(record)
                 if len(raw_occurrences) >= MAX_RETURNED_OCCURRENCES:
-                    raise AnalysisLimitError("returned occurrences exceed analysis limit")
+                    raise AnalysisLimitError("returned occurrences exceed analysis limit", budget="occurrences", limit=MAX_RETURNED_OCCURRENCES, observed=len(raw_occurrences) + 1)
                 if event_count + next_events > MAX_RETURNED_EVENTS:
-                    raise AnalysisLimitError("returned events exceed analysis limit")
+                    raise AnalysisLimitError("returned events exceed analysis limit", budget="events", limit=MAX_RETURNED_EVENTS, observed=event_count + next_events)
                 next_budget = (
                     encoded_budget + _RESPONSE_OCCURRENCE_BUDGET
                     + next_events * _RESPONSE_EVENT_BUDGET
                 )
                 if next_budget > MAX_RESPONSE_BYTES:
-                    raise AnalysisLimitError("analysis response exceeds byte limit")
+                    raise AnalysisLimitError("analysis response exceeds byte limit", budget="response_bytes", limit=MAX_RESPONSE_BYTES, observed=next_budget)
                 seen.add(key)
                 raw_occurrences.append((record, start, orientation, certainty, window, pattern))
                 event_count += next_events
@@ -787,7 +787,7 @@ def _analyze_normalized_sequence(
         })
     canonical_result = result.model_dump_json(by_alias=True).encode("utf-8")
     if len(canonical_result) > MAX_RESPONSE_BYTES:
-        raise AnalysisLimitError("analysis response exceeds byte limit")
+        raise AnalysisLimitError("analysis response exceeds byte limit", budget="response_bytes", limit=MAX_RESPONSE_BYTES, observed=len(canonical_result))
     entry = _CacheEntry(key=cache_key, canonical_result=canonical_result)
     if _retained_weight(entry) <= CACHE_MAX_RESULT_WEIGHT_BYTES:
         with _cache_lock:
