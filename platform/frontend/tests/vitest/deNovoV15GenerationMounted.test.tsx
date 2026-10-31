@@ -147,7 +147,7 @@ it.each(['disco', 'laproteina'])('reopens historical %s lists without normalizin
 it('renders one RFD3 editor and one run area after scientific inputs when selected', async () => {
     await render({ initialValues: { generator: 'rfd3' }, runDetails: <div data-policy>Execution details</div> });
     expect(control('Engine').value).toBe('rfd3');
-    expect([...document.querySelectorAll('nav[aria-label="Design task"] button')].map(el => el.textContent)).toEqual(['Generate', 'Redesign structure', 'Shape']);
+    expect([...document.querySelectorAll('nav[aria-label="Design task"] button')].map(el => el.textContent)).toEqual(['Generate', 'Redesign structure', 'Resequence', 'Shape']);
     expect([...document.querySelectorAll('nav[aria-label="Generation sections"] button')].map(el => el.textContent)).toEqual(['Design', 'Sampling', 'Sequence Design']);
     expect(document.querySelectorAll('[data-execution]')).toHaveLength(1);
     expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);

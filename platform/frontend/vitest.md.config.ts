@@ -83,7 +83,7 @@ export default defineConfig({
             './tests/vitest/binderShellLaneMounted.test.tsx',
             './tests/vitest/generatorRoundLeafMounted.test.tsx',
             './tests/vitest/legacyNativeControls.test.tsx',
-            './tests/vitest/legacyRfd3Roles.test.tsx',
+            './tests/vitest/resequencePanelMounted.test.tsx',
             './tests/vitest/controllerRemoteDebloatMounted.test.tsx',
             './tests/vitest/templateManagerNavigationMounted.test.tsx',
             './tests/vitest/sourceAcquisitionDogfoodMounted.test.tsx',
