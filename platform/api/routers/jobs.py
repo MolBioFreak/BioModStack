@@ -969,6 +969,7 @@ class ResequenceLaunchRequest(BaseModel):
     fixed_positions: str = ""
     designable_positions: str = ""
     structure_validators: List[str] = Field(default_factory=lambda: ["protenix_v2"])
+    msa_provider: Literal["colabfold_api", "neurosnap_api"] = "colabfold_api"
     name: str = Field("resequence", min_length=1, max_length=200)
 
 
@@ -9048,6 +9049,8 @@ async def launch_resequence_from_structures(
         "design_chains": request.design_chains,
         "seq_method": request.seq_method,
         "structure_validators": request.structure_validators,
+        # API-based MSA only; a local search database is not part of this install.
+        "protenix_msa_backend": request.msa_provider,
     }
     if request.fixed_positions.strip():
         params["fixed_positions"] = request.fixed_positions.strip()

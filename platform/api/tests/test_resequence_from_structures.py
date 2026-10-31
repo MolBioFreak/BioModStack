@@ -74,3 +74,26 @@ def test_staging_failure_removes_the_selection_dir(tmp_path, monkeypatch):
     with pytest.raises(HTTPException) as err:
         asyncio.run(jobs.launch_resequence_from_structures(req, None, None))
     assert err.value.status_code == 422 and not sel.exists()
+
+
+def test_msa_backend_is_api_based_by_default(tmp_path, monkeypatch):
+    import routers.jobs as jobs
+    import routers.files as files
+    import services.binder_source_materialization as bsm
+    src = tmp_path / "d.pdb"; src.write_text(PDB)
+    sel = tmp_path / "sel"; sel.mkdir()
+    monkeypatch.setattr(jobs, "_create_generic_selection_dir", lambda ns, action: sel)
+    monkeypatch.setattr(files, "is_path_allowed", lambda p: True)
+    async def fake_resolve(request, session): return src, {}
+    monkeypatch.setattr(bsm, "resolve_structure_source", fake_resolve)
+    monkeypatch.setattr(bsm, "materialize_source_bytes", lambda raw, suffix, dest, **kw: {"path": str(src)})
+    monkeypatch.setattr(jobs, "resolve_allowed_path", lambda value: Path(value))
+    seen = []
+    async def fake_create(launch, background, session): seen.append(launch); return {}
+    monkeypatch.setattr(jobs, "create_job", fake_create)
+    for extra, expected in (({}, "colabfold_api"), ({"msa_provider": "neurosnap_api"}, "neurosnap_api")):
+        req = jobs.ResequenceLaunchRequest(sources=[{"path": "d.pdb"}], design_chains="A", **extra)
+        asyncio.run(jobs.launch_resequence_from_structures(req, None, None))
+        assert seen[-1].params["protenix_msa_backend"] == expected
+    with pytest.raises(Exception):
+        jobs.ResequenceLaunchRequest(sources=[{"path": "d.pdb"}], design_chains="A", msa_provider="local")
