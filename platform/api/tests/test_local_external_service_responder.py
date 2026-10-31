@@ -92,3 +92,10 @@ def test_generated_request_loads_without_the_services_package():
         str(ROOT / "scripts"), str(ROOT / "platform" / "api" / "services" / "model_msa_handoff.py"))
     out = subprocess.run([sys.executable, "-S", "-c", code], capture_output=True, text=True)
     assert out.stdout.strip() == "ok", out.stderr[-400:]
+
+
+def test_task_config_binds_the_artifact_root_with_spaces_quoted():
+    plan = {"metadata": {"static_components": []}}
+    resources = {"required": {"cpus": 1, "memory_bytes": 1024}}
+    text = ca.native_resource_config(plan, resources, "/tmp/x.lock", ROOT, bind_paths=["/data/AUDIT job 1"])
+    assert "apptainer.runOptions = '--bind \\'/data/AUDIT job 1:/data/AUDIT job 1\\''" in text

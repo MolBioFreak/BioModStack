@@ -154,7 +154,8 @@ def wf_clone_container_config(lock_path: str | Path, assembly_tool: str = "flye"
 
 
 def native_resource_config(plan: dict, resources: dict, lock_path: str, source_root: Path,
-                           container_runtime: Mapping[str, str] | None = None) -> str:
+                           container_runtime: Mapping[str, str] | None = None,
+                           bind_paths: Sequence[str | Path] = ()) -> str:
     """Bind compiled static tasks to one inherited process-lifetime compute slot.
 
     Native setup expressions are retained, including task-input closures. Dynamic
@@ -215,7 +216,12 @@ def native_resource_config(plan: dict, resources: dict, lock_path: str, source_r
     # whitelist the attempt context never reaches native scripts, so they cannot
     # reach the attempt journal (generated-MSA requests, stage reports).
     whitelist = "apptainer.envWhitelist = 'BMS_COMPONENT_CONTEXT,BMS_COMPONENT_JOB_ID,BMS_COMPONENT_OUTPUT_DIR'"
-    return '\n'.join([*lines, '}', whitelist, task_container_config(container_runtime), ''])
+    # Tasks also need the attempt's artifact root at the same path (the journal
+    # resolves it). The env-based bind list is wiped by the same `env -`, so bind
+    # through the generated config; the value is shell-quoted for Nextflow's script.
+    binds = ','.join(f'{path}:{path}' for path in dict.fromkeys(str(Path(p)) for p in bind_paths))
+    run_options = f"apptainer.runOptions = {groovy('--bind ' + shlex.quote(binds))}" if binds else ''
+    return '\n'.join([*lines, '}', whitelist, run_options, task_container_config(container_runtime), ''])
 
 
 def resource_bound_command(command, invocation, context, run_dir) -> list[str]:
@@ -243,7 +249,8 @@ def resource_bound_command(command, invocation, context, run_dir) -> list[str]:
     plan = invocation.execution_plan.to_dict() if invocation is not None else context['execution_plan']
     config = Path(run_dir) / 'component-resources.config'
     config.write_text(native_resource_config(plan, resources, context['resource_lock_path'],
-                                           Path(context['working_directory'])))
+                                           Path(context['working_directory']),
+                                           bind_paths=[context['artifact_root']]))
     placed = list(command)
     if invocation is not None:
         source = Path(context['working_directory'])
