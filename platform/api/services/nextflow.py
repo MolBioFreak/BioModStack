@@ -72,13 +72,20 @@ async def publish_terminal_job_changes(
         raise ValueError("terminal publication snapshot does not cover every Job column")
     if any(field not in columns for field in changes):
         raise ValueError("terminal publication contains an unknown Job column")
+    # A gate the workflow opened itself leaves the row running with awaiting_input set; the only
+    # change allowed through for that shape is the move to awaiting_input.
+    gate_to_review = (
+        snapshot.get("awaiting_input") is True
+        and bool(snapshot.get("awaiting_stage"))
+        and changes.get("status") == "awaiting_input"
+    )
     if (
         snapshot.get("status") != "running"
         or snapshot.get("queue_status") != "running"
         or snapshot.get("paused") is not False
-        or snapshot.get("awaiting_input") is not False
-        or snapshot.get("awaiting_stage") not in (None, "")
-        or snapshot.get("awaiting_payload") not in (None, {})
+        or (snapshot.get("awaiting_input") is not False and not gate_to_review)
+        or (snapshot.get("awaiting_stage") not in (None, "") and not gate_to_review)
+        or (snapshot.get("awaiting_payload") not in (None, {}) and not gate_to_review)
     ):
         return 0
     predicates = [Job.id == job_id]
