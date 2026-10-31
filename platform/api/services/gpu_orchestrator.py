@@ -755,12 +755,9 @@ def _has_terminal_nextflow_history(history_entry: Any) -> bool:
 
 
 def _job_requires_result_output_for_terminal_history(job: Any) -> bool:
-    from services.result_state_integrity import (
-        job_expects_design_results,
-        job_expects_rfd3_local_redesign_candidates,
-    )
+    from services.result_state_integrity import job_expects_design_results
 
-    return job_expects_design_results(job) or job_expects_rfd3_local_redesign_candidates(job)
+    return job_expects_design_results(job)
 
 
 def _reconcile_terminal_history_without_process(
@@ -3743,12 +3740,9 @@ class GPUOrchestrator:
                                         reconciled += 1
                                         continue
                                 else:
-                                    from services.result_state_integrity import (
-                                        job_expects_design_results,
-                                        job_expects_rfd3_local_redesign_candidates,
-                                    )
+                                    from services.result_state_integrity import job_expects_design_results
 
-                                    if job_expects_design_results(job) or job_expects_rfd3_local_redesign_candidates(job):
+                                    if job_expects_design_results(job):
                                         job.status = "failed"
                                         job.queue_status = "failed"
                                         job.current_stage = "Result Ingestion Failed"

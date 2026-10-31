@@ -38,7 +38,6 @@ from database import (
     NgsPooledAssignmentReleaseTarget,
     OntInstrumentRun,
     OntInstrumentRunEvent,
-    RFD3LocalRedesignRequest,
 )
 from molbio_database import molbio_session
 from molbio_models import (
@@ -60,7 +59,6 @@ from molbio_ngs_models import (
     MolBioNGSReferenceRevision,
     MolBioNGSSampleRevision,
 )
-from scripts.rfd3_local_redesign.contract import request_sha256 as rfd3_request_sha256
 from services.conformational_mapping.contracts import canonical_sha256 as cm_canonical_sha256
 from services.frustrampnn.contracts import canonical_json_bytes as frustrampnn_canonical_bytes
 from services.md.read_model import md_run_snapshot
@@ -527,111 +525,6 @@ class CoreProteinResultAdapter:
                 "result_contract_id": contract.analysis_contract_id,
                 "review_contract_version": int(design.review_contract_version or 1),
                 "review_contract_source": design.review_contract_source,
-            },
-        )
-
-
-def _verify_rfd3_result_manifest(
-    job: Job, record: RFD3LocalRedesignRequest, expected_request_digest: str,
-) -> tuple[str, int]:
-    from services.result_ingester import validate_rfd3_local_redesign_manifest, RFD3ResultIntegrityError
-
-    try:
-        root = resolve_persisted_job_result_root(job)
-        request_input = record.request_json.get("input") if isinstance(record.request_json, dict) else None
-        source = request_input.get("path") if isinstance(request_input, dict) else None
-        if isinstance(source, str):
-            source_path = resolve_runtime_data_path(source)
-            if not any(source_path.is_relative_to(base.resolve()) for base in (get_inputs_dir(), get_results_dir())):
-                raise AdapterError("source_contract_invalid", "RFD3 source structure is outside canonical roots")
-        proof = validate_rfd3_local_redesign_manifest(root, record)
-    except AdapterError:
-        raise
-    except RFD3ResultIntegrityError as exc:
-        code = {"manifest_unavailable": "source_contract_unavailable",
-                "artifact_unavailable": "source_artifact_unavailable",
-                "digest_mismatch": "source_digest_mismatch"}[exc.kind]
-        raise AdapterError(code, str(exc)) from exc
-    except (OSError, ValueError, RuntimeError, TypeError, KeyError) as exc:
-        raise AdapterError("source_contract_invalid", str(exc)) from exc
-    if proof["digest"] != record.result_manifest_sha256 or record.request_sha256 != expected_request_digest:
-        raise AdapterError("source_digest_mismatch", "RFD3 retained result identity changed")
-    return proof["digest"], len(proof["candidates"])
-
-
-class Rfd3LocalRedesignAdapter:
-    adapter_id = "bms.core-job.protein_local_redesign.adapter.v1"
-    adapter_version = 1
-    display_name = "RFD3 local redesign request/result"
-    entity_kind = "rfd3_local_redesign_request"
-    domain_kind = "protein_in_silico"
-    store_id = "core"
-
-    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
-        normalized = _search_inputs(query, limit)
-        statement = select(RFD3LocalRedesignRequest, Job).join(Job, Job.id == RFD3LocalRedesignRequest.job_id)
-        if normalized:
-            pattern = f"%{normalized}%"
-            statement = statement.where(
-                or_(
-                    RFD3LocalRedesignRequest.request_id.ilike(pattern),
-                    RFD3LocalRedesignRequest.job_id.ilike(pattern),
-                    Job.name.ilike(pattern),
-                )
-            )
-        rows = (await core_session.execute(statement.order_by(RFD3LocalRedesignRequest.created_at.desc()).limit(limit))).all()
-        return [
-            EntityProjection(
-                entity_id=record.request_id,
-                entity_kind=self.entity_kind,
-                label=_bounded_label(job.name, record.request_id),
-                canonical_state=str(record.status),
-                metadata={"job_id": record.job_id, "job_status": str(job.status), "request_status": str(record.status)},
-            )
-            for record, job in rows
-        ]
-
-    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
-        record = await core_session.get(RFD3LocalRedesignRequest, entity_id)
-        if record is None:
-            record = (
-                await core_session.execute(
-                    select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == entity_id).limit(2)
-                )
-            ).scalar_one_or_none()
-        if record is None:
-            raise AdapterError("entity_not_found", "RFD3 local-redesign request does not exist")
-        job = await core_session.get(Job, record.job_id)
-        if job is None or job.model_id != "protein_local_redesign":
-            raise AdapterError("source_contract_invalid", "RFD3 request is not bound to its native job")
-        expected_request_digest = rfd3_request_sha256(record.request_json)
-        if expected_request_digest != _sha256(record.request_sha256, "RFD3 request digest"):
-            raise AdapterError("source_digest_mismatch", "RFD3 request digest no longer matches native request")
-        profile_digest = _sha256(record.profile_registry_sha256, "RFD3 profile registry digest")
-        result_digest = record.result_manifest_sha256
-        candidate_count = 0
-        if result_digest is not None:
-            content_digest, candidate_count = _verify_rfd3_result_manifest(job, record, expected_request_digest)
-        elif str(record.status) == "completed":
-            raise AdapterError("source_contract_unavailable", "completed RFD3 result has no authoritative manifest digest")
-        else:
-            content_digest = expected_request_digest
-        return _receipt(
-            self,
-            entity_id=record.request_id,
-            content_digest=content_digest,
-            contract_digest=expected_request_digest,
-            reopen_uri=f"/designs/{job.id}",
-            metadata={
-                "canonical_state": str(record.status),
-                "job_status": str(job.status),
-                "request_status": str(record.status),
-                "job_id": job.id,
-                "request_id": record.request_id,
-                "profile_id": record.profile_id,
-                "profile_registry_sha256": profile_digest,
-                "result_contract_id": "rfd3_local_redesign_v1",
-                "candidate_count": candidate_count,
             },
         )
 
@@ -3401,7 +3294,6 @@ _TYPED_CORE_RESULT_MODELS = {
 
 for _adapter in (
     CoreProteinResultAdapter(),
-    Rfd3LocalRedesignAdapter(),
     ConformationalMappingProtenixAdapter(),
     ConformationalMappingConfornetsAdapter(),
     MolecularDynamicsResultAdapter(),

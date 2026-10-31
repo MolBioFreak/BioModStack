@@ -782,14 +782,6 @@ async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
         from services.execution_ownership import release_scheduler_gpu_assignment
 
         job.params = release_scheduler_gpu_assignment(job.params)
-    if str(getattr(job, "model_id", "") or "").strip().lower() == "protein_local_redesign":
-        from services.rfd3_local_redesign import requeue_failed_request_for_job
-
-        if not await requeue_failed_request_for_job(session, job_id=str(job.id)):
-            raise HTTPException(
-                status_code=409,
-                detail="RFD3 local-redesign request is not in a retryable failed state",
-            )
     await session.commit()
     
     return {

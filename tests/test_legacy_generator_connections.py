@@ -9,25 +9,6 @@ from scripts.rfd3_local_redesign.source_mapping import materialize_source, lower
 from test_rfd3_bounded_corrections import cif_source, local
 
 
-def test_shell_resolves_author_insertions_multichain_and_replays(tmp_path, monkeypatch):
-    from services import rfd3_local_redesign as service
-    source = tmp_path / 'source.cif'
-    source.write_text(cif_source())
-    monkeypatch.setattr(service, 'get_data_root', lambda: tmp_path)
-    monkeypatch.setattr(service, '_resolve_local_redesign_source', lambda value: source)
-    params = dict(input_structure=str(source), design_chains=['A', 'AA'], context_chains=['B'],
-                  region_mode='interface_shell', interface_cutoff=2.0, region_padding=0,
-                  source_mapping='bms.rfd3.source-map.v1')
-    before = source.read_bytes()
-    assert service.resolve_interface_shell(source, {**params, 'interface_cutoff': 1}) == 'AA2'
-    normalized, request, digest = service.normalize_local_redesign_params(params, job_name='shell')
-    assert normalized['redesign_ranges'] == 'A2A,AA2'
-    assert request['rfd3']['select_fixed_atoms']['A2A'] == []
-    assert request['rfd3']['select_fixed_atoms']['A2'] == ['ALL']
-    saved = {key: value for key, value in normalized.items() if key in service.RFD3_SCIENTIFIC_PARAM_KEYS}
-    monkeypatch.setattr(service, 'resolve_interface_shell', lambda *args: (_ for _ in ()).throw(AssertionError('replay re-resolved')))
-    assert service.normalize_local_redesign_params(saved, job_name='shell')[1:] == (request, digest)
-    assert source.read_bytes() == before
 
 
 def test_native_recall_false_null_and_symmetry_selector_lowering(tmp_path):

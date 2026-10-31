@@ -32,13 +32,6 @@ from services.workflow_adapter_registry import (
     register_workflow_adapter,
 )
 from model_registry import get_registry
-from scripts.rfd3_local_redesign.contract import ContractError
-from services.rfd3_local_redesign import (
-    canonical_local_redesign_data_alias,
-    local_redesign_requests_semantically_equal,
-    prepare_local_redesign_scheduler_params,
-    validate_local_redesign_workflow_params,
-)
 from services.resource_usage_evidence import (
     GLOBAL_DISPATCH_AUTHORITY_PARAM,
     GLOBAL_RESOURCE_ADMISSION_PARAM,
@@ -588,51 +581,11 @@ def validate_workflow_payload_for_plan(
 
 
 def public_workflow_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Publish native workflow intent while hiding every private runtime path."""
-    scheduler = payload.get("scheduler")
-    if not isinstance(scheduler, dict) or scheduler.get("model_id") != "protein_local_redesign":
-        return copy.deepcopy(payload)
-
-    def redact(value: Any) -> Any:
-        if isinstance(value, dict):
-            result: dict[str, Any] = {}
-            for key, child in value.items():
-                normalized = str(key).lower()
-                if normalized == "input_structure":
-                    try:
-                        result[str(key)] = canonical_local_redesign_data_alias(child)
-                    except ContractError:
-                        pass
-                    continue
-                if normalized in {
-                    "input",
-                    "input_pdb",
-                    "input_cif",
-                    "plr_input_pdb",
-                    "rfd3_request",
-                }:
-                    continue
-                if any(
-                    token in normalized
-                    for token in ("path", "directory", "output_dir", "command", "executable")
-                ):
-                    continue
-                result[str(key)] = redact(child)
-            return result
-        if isinstance(value, list):
-            return [redact(child) for child in value]
-        return value
-
-    return redact(payload)
+    return copy.deepcopy(payload)
 
 
 def public_preparation_scheduler(payload: dict[str, Any]) -> dict[str, Any]:
-    """Publish a prepared scheduler without private runtime paths or native request bodies."""
-    if payload.get("model_id") != "protein_local_redesign":
-        return copy.deepcopy(payload)
-    public = public_workflow_payload({"scheduler": payload})
-    scheduler = public.get("scheduler")
-    return scheduler if isinstance(scheduler, dict) else {}
+    return copy.deepcopy(payload)
 
 
 def now() -> str:
@@ -764,28 +717,6 @@ def _validate_workflow_payload(
             raise ValidationFailure("typed core workflow scheduler params must be an object")
         if scheduler["params"].get("workflow_adapter") != adapter_id:
             raise ValidationFailure("typed core workflow scheduler adapter identity disagrees")
-        if expected_model_id == "protein_local_redesign":
-            if scheduler.get("mode") != "local_redesign":
-                raise ValidationFailure("native RFD3 typed workflow requires local_redesign mode")
-            resources = scheduler.get("resources")
-            pinned_gpu = resources.get("pinned_gpu") if isinstance(resources, dict) else None
-            if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
-                raise ValidationFailure(
-                    "native RFD3 typed workflow requires scheduler.resources.pinned_gpu as a non-negative integer"
-                )
-            try:
-                native_pinned = (capability_contract or {}).get("capability", {}).get("normalized_job_request")
-                # The native Plan pins the actual normalized request (including
-                # source-derived fields). The legacy raw-parameter validator
-                # does not accept that projection; exact pinned-schema validation
-                # above remains its authority, as for other native model Plans.
-                if not isinstance(native_pinned, dict):
-                    validate_local_redesign_workflow_params(
-                        scheduler["params"],
-                        expected_adapter_id=adapter_id,
-                    )
-            except ContractError as exc:
-                raise ValidationFailure(str(exc)) from exc
     if family == "conformational_mapping":
         stage = payload.get("stage")
         stage_by_adapter = {
@@ -2573,19 +2504,6 @@ async def prepare_workflow(
             mode = scheduler_payload.get("mode")
             params = scheduler_payload.get("params")
             if isinstance(model_id, str) and isinstance(mode, str) and isinstance(params, dict):
-                native_pinned = (plan_authority[1]["capability"].get("normalized_job_request")
-                                 if plan_authority is not None else None)
-                if model_id == "protein_local_redesign" and not isinstance(native_pinned, dict):
-                    try:
-                        params = prepare_local_redesign_scheduler_params(
-                            params,
-                            job_name=str(scheduler_payload.get("name") or ""),
-                            expected_adapter_id=str(payload.get("adapter_id") or ""),
-                        )
-                    except ContractError as exc:
-                        reasons.append(str(exc))
-                    else:
-                        scheduler_payload["params"] = params
                 native_entrypoint = (
                     plan_authority[1]["capability"].get("native_entrypoint")
                     if plan_authority is not None else None
@@ -2808,21 +2726,6 @@ async def validate_preparation_authority(
     if not isinstance(raw_expected_scheduler, dict):
         raise ValidationFailure("preparation scheduler authority is unavailable")
     expected_scheduler = copy.deepcopy(raw_expected_scheduler)
-    if (
-        normalized_workflow.get("workflow_family") == "typed_core_job"
-        and expected_scheduler.get("model_id") == "protein_local_redesign"
-    ):
-        expected_params = expected_scheduler.get("params")
-        if not isinstance(expected_params, dict):
-            raise ValidationFailure("native RFD3 preparation scheduler parameters are malformed")
-        try:
-            expected_scheduler["params"] = prepare_local_redesign_scheduler_params(
-                expected_params,
-                job_name=str(expected_scheduler.get("name") or ""),
-                expected_adapter_id=str(normalized_workflow.get("adapter_id") or ""),
-            )
-        except ContractError as exc:
-            raise ValidationFailure(str(exc)) from exc
     if normalized_workflow.get("workflow_family") == "conformational_mapping":
         expected_params = expected_scheduler.get("params")
         if not isinstance(expected_params, dict):
@@ -5659,33 +5562,9 @@ class ExistingJobMaterializer:
             if scheduler.get("model_id") != expected_model_id:
                 raise DispatchFailure("typed workflow adapter and scheduler model_id disagree")
             pinned_gpu: int | None = handoff["gpu_index"]
-            if expected_model_id == "protein_local_redesign":
-                resources = scheduler.get("resources")
-                raw_pinned_gpu = resources.get("pinned_gpu") if isinstance(resources, dict) else None
-                if (
-                    isinstance(raw_pinned_gpu, bool)
-                    or not isinstance(raw_pinned_gpu, int)
-                    or raw_pinned_gpu < 0
-                    or raw_pinned_gpu != pinned_gpu
-                ):
-                    raise DispatchFailure("native RFD3 GPU authority differs from resource admission")
             existing_job = await self.core_session.get(Job, scheduler_job_id)
             if existing_job is not None:
                 params_match = dict(existing_job.params or {}) == authoritative_params
-                if expected_model_id == "protein_local_redesign":
-                    expected_request = authoritative_params.get("rfd3_request")
-                    existing_params = dict(existing_job.params or {})
-                    existing_request = existing_params.get("rfd3_request")
-                    expected_without_request = dict(authoritative_params)
-                    expected_without_request.pop("rfd3_request", None)
-                    existing_without_request = dict(existing_params)
-                    existing_without_request.pop("rfd3_request", None)
-                    params_match = (
-                        existing_without_request == expected_without_request
-                        and isinstance(expected_request, dict)
-                        and isinstance(existing_request, dict)
-                        and local_redesign_requests_semantically_equal(existing_request, expected_request)
-                    )
                 if (
                     existing_job.model_id != expected_model_id
                     or existing_job.mode != expected_mode

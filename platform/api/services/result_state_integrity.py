@@ -23,11 +23,7 @@ from database import (
     Design,
     ExecutionTarget,
     Job,
-    RFD3LocalRedesignArtifact,
-    RFD3LocalRedesignCandidate,
-    RFD3LocalRedesignRequest,
 )
-from scripts.rfd3_local_redesign.contract import canonical_json as rfd3_canonical_json
 
 
 class NoDesignResults(RuntimeError):
@@ -188,11 +184,6 @@ def job_expects_design_results(job: Job) -> bool:
     return model in design_model_ids or mode == "structure_prediction"
 
 
-def job_expects_rfd3_local_redesign_candidates(job: Job) -> bool:
-    model = re.sub(r"[^a-z0-9]+", "_", str(job.model_id or "").strip().lower()).strip("_")
-    return model == "protein_local_redesign"
-
-
 async def _design_count(session: AsyncSession, job_id: str) -> int:
     """Count direct designs plus immediate-child designs shown for a parent."""
     return int(
@@ -207,130 +198,6 @@ async def _design_count(session: AsyncSession, job_id: str) -> int:
     )
 
 
-async def _rfd3_candidate_count(session: AsyncSession, job_id: str) -> int:
-    return int(
-        (
-            await session.scalar(
-                select(func.count(RFD3LocalRedesignCandidate.id))
-                .join(
-                    RFD3LocalRedesignRequest,
-                    RFD3LocalRedesignCandidate.request_id == RFD3LocalRedesignRequest.request_id,
-                )
-                .where(RFD3LocalRedesignRequest.job_id == job_id)
-            )
-        )
-        or 0
-    )
-
-
-async def _rfd3_candidates_are_usable(session: AsyncSession, job_id: str, output_dir: str) -> bool:
-    request = (
-        await session.execute(
-            select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == job_id)
-        )
-    ).scalar_one_or_none()
-    if request is None or not isinstance(request.request_json, dict):
-        return False
-    candidates = list(
-        (
-            await session.execute(
-                select(RFD3LocalRedesignCandidate).where(
-                    RFD3LocalRedesignCandidate.request_id == request.request_id
-                )
-            )
-        ).scalars().all()
-    )
-    if not candidates:
-        return False
-    artifacts = list(
-        (
-            await session.execute(
-                select(RFD3LocalRedesignArtifact).where(
-                    RFD3LocalRedesignArtifact.request_id == request.request_id,
-                    RFD3LocalRedesignArtifact.candidate_id.is_not(None),
-                )
-            )
-        ).scalars().all()
-    )
-    artifacts_by_candidate: dict[str, list[RFD3LocalRedesignArtifact]] = {}
-    for artifact in artifacts:
-        artifacts_by_candidate.setdefault(str(artifact.candidate_id), []).append(artifact)
-
-    execution = request.request_json.get("execution")
-    expected_num_designs = execution.get("num_designs") if isinstance(execution, dict) else None
-    if (
-        not isinstance(expected_num_designs, int)
-        or isinstance(expected_num_designs, bool)
-        or expected_num_designs < 1
-        or len(candidates) != expected_num_designs
-    ):
-        return False
-    trajectories_requested = isinstance(execution, dict) and execution.get("dump_trajectories") is True
-    role_order = ["structure", "native_prediction_metadata"]
-    if trajectories_requested:
-        role_order.extend(["denoised_trajectory", "noisy_trajectory"])
-    expected_roles = set(role_order)
-    output_root = Path(output_dir).expanduser().resolve()
-
-    for candidate in candidates:
-        if (
-            candidate.status != "generated"
-            or candidate.result_set != "rfd3_local_redesign_candidates"
-            or candidate.metadata_json.get("request_sha256") != request.request_sha256
-        ):
-            return False
-        candidate_artifacts = artifacts_by_candidate.get(candidate.candidate_id, [])
-        artifact_by_role = {artifact.role: artifact for artifact in candidate_artifacts}
-        if len(artifact_by_role) != len(candidate_artifacts) or set(artifact_by_role) != expected_roles:
-            return False
-        descriptors: list[dict[str, Any]] = []
-        sealed_relative: list[dict[str, Any]] = []
-        for role in role_order:
-            artifact = artifact_by_role[role]
-            raw_storage_path = Path(str(artifact.storage_path or "")).expanduser()
-            storage_path = raw_storage_path.resolve()
-            if (
-                raw_storage_path.is_symlink()
-                or not storage_path.is_relative_to(output_root)
-                or not storage_path.is_file()
-                or storage_path.stat().st_size != artifact.size_bytes
-            ):
-                return False
-            digest = hashlib.sha256()
-            with storage_path.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    digest.update(chunk)
-            if digest.hexdigest() != artifact.content_sha256:
-                return False
-            descriptors.append(
-                {
-                    "role": artifact.role,
-                    "relative_path": artifact.relative_path,
-                    "storage_path": artifact.storage_path,
-                    "sha256": artifact.content_sha256,
-                    "bytes": artifact.size_bytes,
-                    "media_type": artifact.media_type,
-                }
-            )
-            sealed_relative.append({**descriptors[-1], "storage_path": artifact.relative_path})
-        metadata_path = Path(artifact_by_role["native_prediction_metadata"].storage_path)
-        try:
-            native_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return False
-        if not isinstance(native_metadata, dict):
-            return False
-        # The producer seals candidate artifacts with job-relative storage paths; the receiver then
-        # records each file's absolute location. Older results were sealed with the absolute path.
-        sealed_forms = {
-            hashlib.sha256(rfd3_canonical_json(form).encode("utf-8")).hexdigest()
-            for form in (descriptors, sealed_relative)
-        }
-        if candidate.artifact_manifest_sha256 not in sealed_forms:
-            return False
-    return len(artifacts_by_candidate) == len(candidates)
-
-
 async def _authoritative_result_count(session: AsyncSession, job: Job) -> int:
     if _native_binder_generation_key(job):
         # Child rounds have independent publications; they are not this native
@@ -338,8 +205,6 @@ async def _authoritative_result_count(session: AsyncSession, job: Job) -> int:
         return int(await session.scalar(select(func.count(Design.id)).where(
             Design.job_id == job.id, Design.source_stage.is_(None),
         )) or 0)
-    if job_expects_rfd3_local_redesign_candidates(job):
-        return await _rfd3_candidate_count(session, str(job.id))
     return await _design_count(session, str(job.id))
 
 
@@ -645,13 +510,6 @@ async def finalize_successful_job(
             await read_selected(job, session)
             result_kind = 'blind_pose_native_evidence'
             idempotent_prior_results = True
-        elif job_expects_rfd3_local_redesign_candidates(job):
-            result_kind = "rfd3_local_redesign_candidate"
-            if count == 0:
-                raise RuntimeError("workflow completed but result ingestion produced no typed RFD3 candidates")
-            if not await _rfd3_candidates_are_usable(session, job_id, output_dir):
-                raise RuntimeError("typed RFD3 candidate rows lack usable, contained, hash-valid structures")
-            idempotent_prior_results = int(ingested_count or 0) <= 0
         elif job_expects_design_results(job):
             from services.core_protein_result_contract import validate_persisted_publication
 
@@ -725,11 +583,7 @@ async def finalize_successful_job(
             "partial": partial,
             "design_count": count,
             "result_count": count,
-            "result_kind": (
-                "rfd3_local_redesign_candidate"
-                if job_expects_rfd3_local_redesign_candidates(job)
-                else "design"
-            ),
+            "result_kind": "design",
             "error": message,
         }
         if getattr(exc, "reason", None) is not None:
@@ -786,9 +640,6 @@ async def finalize_successful_job(
         from services.conformational_mapping.persistence import (
             terminalize_failed_request_for_job as terminalize_failed_cm_request,
         )
-        from services.rfd3_local_redesign import terminalize_failed_request_for_job
-
-        await terminalize_failed_request_for_job(session, job_id=job_id)
         await terminalize_failed_cm_request(session, job_id=job_id)
         if job.execution_target_id:
             from services.remote_execution.executor import _release_remote_target_lease
@@ -891,12 +742,6 @@ async def finalize_successful_job(
         state = "cancelled" if job is not None and job.status == "cancelled" else "awaiting_input"
         return FinalizationResult(False, count, state)
     await finalize_component_projection(job, session)
-    if job_expects_rfd3_local_redesign_candidates(job):
-        from services.rfd3_local_redesign import terminalize_completed_request_for_job
-
-        if not await terminalize_completed_request_for_job(session, job_id=job_id):
-            await session.rollback()
-            raise RuntimeError("validated RFD3 completion has no generated native request projection")
     if job.execution_target_id:
         from services.remote_execution.executor import _release_remote_target_lease
 
@@ -990,24 +835,6 @@ def _job_state_guards(job: Job) -> tuple[Any, ...]:
     return tuple(predicates)
 
 
-def _rfd3_request_completion_guards(request: RFD3LocalRedesignRequest) -> tuple[Any, ...]:
-    """Require the typed completion-relevant snapshot to remain unchanged."""
-    fields = (
-        "job_id",
-        "status",
-        "result_manifest_sha256",
-        "failure_receipt_json",
-        "terminal_at",
-        "updated_at",
-    )
-    predicates = []
-    for field in fields:
-        column = getattr(RFD3LocalRedesignRequest, field)
-        value = getattr(request, field)
-        predicates.append(column.is_(None) if value is None else column == value)
-    return tuple(predicates)
-
-
 def _apply_job_state(job: Job, after: dict[str, Any]) -> None:
     for field in (
         "status",
@@ -1061,16 +888,12 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
             design_counts[parent_id] = design_counts.get(parent_id, 0) + design_counts.get(str(child.id), 0)
     changes: list[RepairChange] = []
     pending_repairs: list[tuple[int, Job, dict[str, Any], dict[str, Any]]] = []
-    pending_rfd3_completion_repairs: list[
-        tuple[int, Job, RFD3LocalRedesignRequest, datetime]
-    ] = []
 
     for job in jobs:
         before = _job_state(job)
         after = dict(before)
         code: Optional[str] = None
         detail = ""
-        rfd3_completion_request: RFD3LocalRedesignRequest | None = None
 
         missing_parent = bool(job.parent_job_id and str(job.parent_job_id) not in job_ids)
         disposition = "repair"
@@ -1158,23 +981,6 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
                     code = 'completed_without_usable_component_results'
                     detail = 'projected child lacks native parent acceptance or hash-valid retained artifacts'
                     _set_integrity_failure(after, job, error=detail, partial=False, design_count=0)
-            elif job_expects_rfd3_local_redesign_candidates(job):
-                rfd3_count = await _rfd3_candidate_count(session, str(job.id))
-                rfd3_output_dir = str(job.child_output_dir or job.output_dir or "")
-                rfd3_usable = bool(rfd3_output_dir) and await _rfd3_candidates_are_usable(
-                    session, str(job.id), rfd3_output_dir
-                )
-                if not rfd3_usable:
-                    result_invalid = True
-                    code = "completed_without_usable_rfd3_results"
-                    detail = "completed native RFD3 workflow lacks hash-valid typed candidates"
-                    _set_integrity_failure(
-                        after,
-                        job,
-                        error="State repair: completed native RFD3 workflow has no usable typed candidates/results",
-                        partial=rfd3_count > 0,
-                        design_count=rfd3_count,
-                    )
             elif job_expects_design_results(job) and count == 0:
                 result_invalid = True
                 code = "completed_without_results"
@@ -1203,30 +1009,6 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
                     after["queue_status"] = "completed"
                     if code == "completed_without_timestamp":
                         detail += "; normalized contradictory queue state in the same pass"
-                if (
-                    code is None
-                    and job_expects_rfd3_local_redesign_candidates(job)
-                    and job.completed_at is not None
-                    and job.queue_status == "completed"
-                    and not job.awaiting_input
-                    and job.awaiting_stage is None
-                    and not bool(job.awaiting_payload)
-                    and not job.paused
-                    and job.assigned_gpu is None
-                ):
-                    request = (
-                        await session.execute(
-                            select(RFD3LocalRedesignRequest).where(
-                                RFD3LocalRedesignRequest.job_id == str(job.id),
-                                RFD3LocalRedesignRequest.status == "generated",
-                                RFD3LocalRedesignRequest.result_manifest_sha256.is_not(None),
-                                RFD3LocalRedesignRequest.failure_receipt_json.is_(None),
-                                RFD3LocalRedesignRequest.terminal_at.is_(None),
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if request is not None:
-                        rfd3_completion_request = request
         elif job.status == "failed" and job.queue_status != "failed":
             code = "failed_queue_mismatch"
             detail = "failed job had contradictory queue state"
@@ -1259,32 +1041,6 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
                 # Keep the loaded ORM row clean. A conditional SQL update below
                 # makes a concurrent operator action authoritative.
                 pending_repairs.append((len(changes) - 1, job, before, after))
-
-        if rfd3_completion_request is not None:
-            terminal_at = job.completed_at
-            assert terminal_at is not None
-            changes.append(
-                RepairChange(
-                    "completed_rfd3_request_not_terminal",
-                    "rfd3_local_redesign_request",
-                    str(rfd3_completion_request.request_id),
-                    {
-                        "job_id": str(job.id),
-                        "status": "generated",
-                        "terminal_at": None,
-                    },
-                    {
-                        "job_id": str(job.id),
-                        "status": "completed",
-                        "terminal_at": terminal_at.isoformat(),
-                    },
-                    "hash-valid completed native RFD3 job had a stale generated typed projection",
-                )
-            )
-            if apply:
-                pending_rfd3_completion_repairs.append(
-                    (len(changes) - 1, job, rfd3_completion_request, terminal_at)
-                )
 
     orphan_design_ids = list(
         (
@@ -1320,21 +1076,7 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
                 .where(Job.id == job_id, *guards)
                 .values(**values)
             )
-            if result.rowcount == 1 and job_expects_rfd3_local_redesign_candidates(job):
-                repaired_status = str(after.get("status", before.get("status")) or "").strip().lower()
-                if repaired_status == "failed":
-                    from services.rfd3_local_redesign import terminalize_failed_request_for_job
-
-                    await terminalize_failed_request_for_job(session, job_id=job_id)
-                elif repaired_status == "cancelled":
-                    from services.rfd3_local_redesign import terminalize_cancelled_request_for_job
-
-                    await terminalize_cancelled_request_for_job(session, job_id=job_id)
-                elif repaired_status == "completed":
-                    from services.rfd3_local_redesign import terminalize_completed_request_for_job
-
-                    await terminalize_completed_request_for_job(session, job_id=job_id)
-            elif result.rowcount != 1:
+            if result.rowcount != 1:
                 change = changes[index]
                 current = await session.get(Job, job_id)
                 if current is not None and (current.status == "cancelled" or current.awaiting_input):
@@ -1345,60 +1087,6 @@ async def repair_result_state(session: AsyncSession, *, apply: bool = False) -> 
                     disposition = "unresolved"
                 else:
                     detail = f"{change.detail}; guarded repair was not published because the record changed concurrently"
-                    disposition = "unresolved"
-                changes[index] = RepairChange(
-                    change.code,
-                    change.record_type,
-                    change.record_id,
-                    change.before,
-                    change.after,
-                    detail,
-                    disposition,
-                )
-        for index, job, request, terminal_at in pending_rfd3_completion_repairs:
-            job_id = str(job.id)
-            request_id = str(request.request_id)
-            job_snapshot_exists = (
-                select(Job.id)
-                .where(Job.id == job_id, *_job_state_guards(job))
-                .exists()
-            )
-            result = await session.execute(
-                update(RFD3LocalRedesignRequest)
-                .where(
-                    RFD3LocalRedesignRequest.request_id == request_id,
-                    *_rfd3_request_completion_guards(request),
-                    job_snapshot_exists,
-                )
-                .values(
-                    status="completed",
-                    updated_at=datetime.utcnow(),
-                    terminal_at=terminal_at,
-                )
-            )
-            if result.rowcount != 1:
-                change = changes[index]
-                session.expire_all()
-                current_job = await session.get(Job, job_id)
-                current_request = await session.get(RFD3LocalRedesignRequest, request_id)
-                if (
-                    current_job is not None
-                    and (
-                        current_job.status == "cancelled"
-                        or current_job.awaiting_input
-                        or (
-                            current_request is not None
-                            and current_request.status in {"failed", "cancelled", "completed"}
-                        )
-                    )
-                ):
-                    detail = f"{change.detail}; superseded by concurrent authoritative state"
-                    disposition = "superseded"
-                elif current_job is None or current_request is None:
-                    detail = f"{change.detail}; projection disappeared before guarded repair publication"
-                    disposition = "unresolved"
-                else:
-                    detail = f"{change.detail}; guarded repair was not published because a projection changed concurrently"
                     disposition = "unresolved"
                 changes[index] = RepairChange(
                     change.code,

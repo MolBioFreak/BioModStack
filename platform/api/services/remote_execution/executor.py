@@ -2445,14 +2445,6 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
             from services.conformational_mapping.persistence import terminalize_failed_request_for_job
 
             await terminalize_failed_request_for_job(session, job_id=str(job.id))
-        if str(job.model_id or "").lower() == "protein_local_redesign":
-            from services.rfd3_local_redesign import terminalize_failed_request_for_job
-
-            await terminalize_failed_request_for_job(
-                session,
-                job_id=str(job.id),
-                exit_code=status.exit_code or 1,
-            )
         await _release_remote_target_lease(session, job)
         await session.commit()
         return True
@@ -3264,14 +3256,6 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
             from services.conformational_mapping.persistence import terminalize_failed_request_for_job
 
             await terminalize_failed_request_for_job(session, job_id=str(job.id))
-        if str(job.model_id or "").lower() == "protein_local_redesign":
-            from services.rfd3_local_redesign import terminalize_failed_request_for_job
-
-            await terminalize_failed_request_for_job(
-                session,
-                job_id=str(job.id),
-                exit_code=status.exit_code or 1,
-            )
     job.assigned_gpu = None
     job.params = release_scheduler_gpu_assignment(job.params)
     job.completed_at = job.completed_at or datetime.utcnow()

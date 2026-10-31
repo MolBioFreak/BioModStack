@@ -2894,16 +2894,8 @@ async def launch_nextflow_job(
             from services.conformational_mapping.persistence import (
                 terminalize_failed_request_for_job,
             )
-            from services.rfd3_local_redesign import (
-                terminalize_failed_request_for_job as terminalize_failed_rfd3_request_for_job,
-            )
 
             await terminalize_failed_request_for_job(failure_session, job_id=job_id)
-            await terminalize_failed_rfd3_request_for_job(
-                failure_session,
-                job_id=job_id,
-                exit_code=exit_code,
-            )
         await failure_session.commit()
         if not rowcount:
             logger.info(stale_log_message, job_id)
@@ -3005,13 +2997,7 @@ async def launch_nextflow_job(
         if needs_running_transition:
             job.status = JobStatus.RUNNING.value
             job.started_at = datetime.utcnow()
-        is_native_rfd3 = str(getattr(job, "model_id", model_id) or model_id).strip().lower() == "protein_local_redesign"
-        if is_native_rfd3:
-            from services.rfd3_local_redesign import start_request_for_job
-
-            if not await start_request_for_job(session, job_id=str(job.id)):
-                raise RuntimeError("RFD3 local-redesign request is not ready for launch")
-        if needs_running_transition or is_native_rfd3:
+        if needs_running_transition:
             await session.commit()
         
         # Re-check cancellation status right before spawning (minimize race window)
@@ -3923,16 +3909,8 @@ async def launch_nextflow_job(
                         from services.conformational_mapping.persistence import (
                             terminalize_failed_request_for_job,
                         )
-                        from services.rfd3_local_redesign import (
-                            terminalize_failed_request_for_job as terminalize_failed_rfd3_request_for_job,
-                        )
 
                         await terminalize_failed_request_for_job(session, job_id=job_id)
-                        await terminalize_failed_rfd3_request_for_job(
-                            session,
-                            job_id=job_id,
-                            exit_code=exit_code,
-                        )
                     if published_rowcount:
                         await _observe_local_terminal_binder_results(session, job_id, output_dir)
                     await session.commit()

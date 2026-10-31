@@ -316,11 +316,6 @@ async def cancel_job_lineage(
 
             await _observe_local_terminal_binder_results(session, str(job.id), job.output_dir)
 
-    from services.rfd3_local_redesign import terminalize_cancelled_request_for_job
-
-    for job in [*cancellable, *already_cancelled]:
-        await terminalize_cancelled_request_for_job(session, job_id=str(job.id))
-
     if before_terminal_commit is not None:
         await before_terminal_commit()
 

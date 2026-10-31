@@ -544,9 +544,6 @@ async def _publish_interrupted_owner(
         return False
 
     await session.refresh(job)
-    from services.rfd3_local_redesign import terminalize_failed_request_for_job
-
-    await terminalize_failed_request_for_job(session, job_id=job_id)
     return True
 
 

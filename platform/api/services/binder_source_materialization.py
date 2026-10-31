@@ -329,7 +329,6 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
 
 async def resolve_structure_source(request: StructureSourceRequest, session):
     from sqlalchemy import select
-    from database import RFD3LocalRedesignRequest, RFD3LocalRedesignCandidate, RFD3LocalRedesignArtifact
     from services.binder_diagnostic_selection import root_id
     identity = {}
     if request.candidate is not None:
@@ -348,38 +347,7 @@ async def resolve_structure_source(request: StructureSourceRequest, session):
         return path, {**identity, 'candidate_ref': ref.model_dump(exclude_none=True),
                       'model': request.model_number}
     if request.request_id is not None or request.candidate_id is not None:
-        if not (request.job_id and request.request_id and request.candidate_id
-                and request.document and request.document.artifact_id) or request.design_id:
-            raise ValueError("Select an exact native request/candidate/artifact document")
-        job = await session.get(Job, request.job_id)
-        owner = await session.get(RFD3LocalRedesignRequest, request.request_id)
-        candidate = await session.scalar(select(RFD3LocalRedesignCandidate).where(
-            RFD3LocalRedesignCandidate.request_id == request.request_id,
-            RFD3LocalRedesignCandidate.candidate_id == request.candidate_id))
-        artifact = await session.get(RFD3LocalRedesignArtifact, request.document.artifact_id)
-        if (job is None or owner is None or owner.job_id != job.id
-                or job.model_id != "protein_local_redesign" or candidate is None
-                or artifact is None or artifact.request_id != owner.request_id
-                or artifact.candidate_id != candidate.candidate_id or artifact.role != "structure"
-                or request.document.target_state is not None):
-            raise ValueError("Native source document does not belong to the requested candidate")
-        from paths import resolve_runtime_data_path
-        root = resolve_runtime_data_path(str(job.output_dir or ""))
-        relative = Path(artifact.relative_path)
-        if (relative.is_absolute() or ".." in relative.parts or "\\" in artifact.relative_path
-                or relative.as_posix() != artifact.relative_path):
-            raise ValueError("Native source artifact path is unsafe")
-        path = root / relative
-        current = root
-        for part in relative.parts:
-            current = current / part
-            if current.is_symlink():
-                raise ValueError("Native source artifact path contains a symlink")
-        if path.resolve() != Path(artifact.storage_path).resolve():
-            raise ValueError("Native source artifact path binding differs")
-        identity = dict(owner_job_id=job.id, lineage_root_job_id=root_id(job),
-                        request_id=owner.request_id, candidate_id=candidate.candidate_id,
-                        artifact_id=artifact.artifact_id, artifact_sha256=artifact.content_sha256)
+        raise ValueError('RFD3 local-redesign request/candidate sources were retired; select the Design instead')
     elif request.design_id:
         design = await session.get(Design, request.design_id)
         if design is None:

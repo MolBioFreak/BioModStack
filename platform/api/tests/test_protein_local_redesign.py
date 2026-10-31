@@ -27,9 +27,7 @@ from services.nextflow import (
     normalize_plr_structure_validators,
     resolve_nextflow_executable,
 )
-from services import rfd3_local_redesign as rfd3_service
 import routers.files as files_router
-from services.result_ingester import _local_redesign_validate_native_request_artifact
 from scripts.rfd3_local_redesign.contract import ContractError, build_request, request_sha256, write_request
 
 
@@ -159,30 +157,6 @@ def test_normalize_plr_input_pdb_path_ignores_missing_empty_and_non_string() -> 
     ) == {"input_pdb": 5}
 
 
-def test_native_request_artifact_must_equal_the_immutable_request(tmp_path: Path) -> None:
-    immutable = {
-        "schema": "bms.rfd3.local-redesign.request.v1",
-        "request_id": "bound",
-        "input": {"path": "/tmp/β-structure.cif"},
-    }
-    artifact = tmp_path / "rfd3_local_redesign_request.json"
-    write_request(artifact, immutable)
-    _local_redesign_validate_native_request_artifact(
-        artifact,
-        request_payload=immutable,
-        request_sha256=request_sha256(immutable),
-    )
-    artifact.write_text(
-        json.dumps({**immutable, "request_id": "altered"}, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
-
-    with pytest.raises(RuntimeError, match="native request artifact binding is invalid"):
-        _local_redesign_validate_native_request_artifact(
-            artifact,
-            request_payload=immutable,
-            request_sha256=request_sha256(immutable),
-        )
 
 
 def test_all_protein_local_ingress_bypasses_antibody_defaults_before_contract_validation() -> None:
@@ -290,247 +264,16 @@ def test_minimal_insertion_contig_is_source_derived_and_claim_bound() -> None:
         )
 
 
-def test_api_derives_fixed_scaffold_from_the_bound_source_structure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = tmp_path / "source.pdb"
-    source.write_text(
-        "ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 10.00           C\n"
-        "ATOM      2  CA  ALA A   2       1.000   0.000   0.000  1.00 10.00           C\n"
-        "ATOM      3  CA  THR B   1       2.000   0.000   0.000  1.00 10.00           C\n"
-        "END\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(rfd3_service, "resolve_runtime_data_path", lambda _value: source)
-    monkeypatch.setattr(rfd3_service, "get_data_root", lambda: tmp_path)
-
-    normalized, request, _digest = rfd3_service.normalize_local_redesign_params(
-        {
-            "input_structure": str(source),
-            "redesign_mode": "partial_diffusion",
-            "design_chains": ["A"],
-            "redesign_ranges": "A2",
-            "sequence_policy": "preserve",
-            "source_residue_identities": [
-                {
-                    "chain_id": "A",
-                    "residues": [{"res_num": 2, "insertion_code": "", "residue_name": "ALA"}],
-                }
-            ],
-        },
-        job_name="authoritative-source",
-    )
-
-    assert normalized["source_residue_identities"] == request["selection"]["source_residue_identities"]
-    assert request["sequence_policy"] == "preserve"
-    assert "select_unfixed_sequence" not in request["rfd3"]
-    assert request["rfd3"]["select_fixed_atoms"] == {
-        "A1": ["ALL"],
-        "A2": [],
-        "B1": ["ALL"],
-    }
-
-    _explicit_normalized, explicit_request, _explicit_digest = (
-        rfd3_service.normalize_local_redesign_params(
-            {
-                "input_structure": str(source),
-                "redesign_mode": "partial_diffusion",
-                "design_chains": ["A"],
-                "redesign_ranges": "A2",
-                "sequence_policy": "explicit_positions",
-                "select_unfixed_sequence": "A2",
-            },
-            job_name="explicit-sequence-recall",
-        )
-    )
-    assert explicit_request["sequence_policy"] == "explicit_positions"
-    assert explicit_request["rfd3"]["select_unfixed_sequence"] == "A2"
-
-    _insertion_normalized, insertion_request, _insertion_digest = (
-        rfd3_service.normalize_local_redesign_params(
-            {
-                "input_structure": str(source),
-                "redesign_mode": "minimal_insertion",
-                "design_chains": ["A"],
-                "context_chains": ["B"],
-                "insertion_anchor": "A1",
-                "insertion_min_length": 1,
-                "insertion_max_length": 1,
-                "sequence_policy": "insert_only",
-            },
-            job_name="minimal-insertion-sequence-policy",
-        )
-    )
-    assert insertion_request["sequence_policy"] == "insert_only"
-    output_dir = tmp_path / "job-output"
-    output_dir.mkdir()
-    materialized, materialized_request, materialized_digest, request_path = (
-        rfd3_service.materialize_local_redesign_request(
-            normalized,
-            output_dir=output_dir,
-            job_id="owned-source-job",
-        )
-    )
-    owned_source = output_dir / "external_inputs" / source.name
-    assert owned_source.read_bytes() == source.read_bytes()
-    assert materialized_request["input"]["path"] == str(owned_source.resolve())
-    assert materialized["rfd3_request"] == materialized_request
-    for alias in ("input_structure", "input_pdb", "input_cif", "input", "plr_input_pdb"):
-        assert materialized[alias] == str(owned_source.resolve())
-    assert request_path.is_relative_to(output_dir.resolve())
-    assert request_sha256(materialized_request) == materialized_digest
-
-    unsafe_output = tmp_path / "unsafe-output"
-    unsafe_output.mkdir()
-    outside = tmp_path / "outside-owned"
-    outside.mkdir()
-    (unsafe_output / "external_inputs").symlink_to(outside, target_is_directory=True)
-    with pytest.raises(ContractError, match="source directory is unsafe"):
-        rfd3_service.materialize_local_redesign_request(
-            normalized,
-            output_dir=unsafe_output,
-            job_id="unsafe-owned-source-job",
-        )
-    assert not list(outside.iterdir())
-
-    failed_output = tmp_path / "failed-output"
-    failed_output.mkdir()
-    original_write_request = rfd3_service.write_request
-
-    def fail_request_write(_path: Path, _request: dict[str, object]) -> str:
-        raise OSError("forced request write failure")
-
-    monkeypatch.setattr(rfd3_service, "write_request", fail_request_write)
-    with pytest.raises(ContractError, match="failed to materialize"):
-        rfd3_service.materialize_local_redesign_request(
-            normalized,
-            output_dir=failed_output,
-            job_id="retryable-owned-source-job",
-        )
-    assert not list((failed_output / "external_inputs").iterdir())
-    assert not list((failed_output / "requests").iterdir())
-    monkeypatch.setattr(rfd3_service, "write_request", original_write_request)
-    retried, _, _, _ = rfd3_service.materialize_local_redesign_request(
-        normalized,
-        output_dir=failed_output,
-        job_id="retryable-owned-source-job",
-    )
-    assert Path(retried["input_structure"]).is_file()
-
-
-def test_api_rejects_source_outside_the_active_data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    source = tmp_path / "outside.pdb"
-    source.write_text(
-        "ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 10.00           C\nEND\n",
-        encoding="utf-8",
-    )
-    allowed_root = tmp_path / "allowed"
-    allowed_root.mkdir()
-    monkeypatch.setattr(rfd3_service, "resolve_runtime_data_path", lambda _value: source)
-    monkeypatch.setattr(rfd3_service, "get_data_root", lambda: allowed_root)
-
-    with pytest.raises(ContractError, match="active BioModStack data root"):
-        rfd3_service.normalize_local_redesign_params(
-            {
-                "input_structure": str(source),
-                "redesign_mode": "partial_diffusion",
-                "design_chains": ["A"],
-                "redesign_ranges": "A1",
-            },
-            job_name="outside-root",
-        )
-
-
-def test_api_rejects_tampered_current_revision_request_replay(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = tmp_path / "source.pdb"
-    source.write_text(
-        "ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 10.00           C\n"
-        "ATOM      2  CA  ALA A   2       1.000   0.000   0.000  1.00 10.00           C\n"
-        "END\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(rfd3_service, "resolve_runtime_data_path", lambda _value: source)
-    monkeypatch.setattr(rfd3_service, "get_data_root", lambda: tmp_path)
-    params = {
-        "input_structure": str(source),
-        "redesign_mode": "partial_diffusion",
-        "design_chains": ["A"],
-        "redesign_ranges": "A2",
-        "partial_t": 1.0,
-    }
-    _, request, _ = rfd3_service.normalize_local_redesign_params(params, job_name="replay")
-    tampered = json.loads(json.dumps(request))
-    tampered["rfd3"]["partial_t"] = 9.0
-
-    with pytest.raises(ContractError, match="does not match the canonical source-derived request"):
-        rfd3_service.normalize_local_redesign_params(
-            {**params, "rfd3_request": tampered},
-            job_name="replay",
-        )
 
 
 
 
-def test_api_derives_source_residue_identities_from_compressed_mmcif(tmp_path: Path) -> None:
-    source = tmp_path / "source.cif.gz"
-    mmcif = """data_source
-loop_
-_atom_site.group_PDB
-_atom_site.id
-_atom_site.type_symbol
-_atom_site.label_atom_id
-_atom_site.label_alt_id
-_atom_site.label_comp_id
-_atom_site.label_asym_id
-_atom_site.label_entity_id
-_atom_site.label_seq_id
-_atom_site.pdbx_PDB_ins_code
-_atom_site.Cartn_x
-_atom_site.Cartn_y
-_atom_site.Cartn_z
-_atom_site.occupancy
-_atom_site.B_iso_or_equiv
-_atom_site.pdbx_formal_charge
-_atom_site.auth_seq_id
-_atom_site.auth_comp_id
-_atom_site.auth_asym_id
-_atom_site.auth_atom_id
-_atom_site.pdbx_PDB_model_num
-ATOM 1 C CA . GLY A 1 1 ? 0.0 0.0 0.0 1.0 10.0 ? 7 GLY A CA 1
-"""
-    with gzip.open(source, "wt", encoding="utf-8") as handle:
-        handle.write(mmcif)
-
-    assert rfd3_service._source_residue_identities(source) == [
-        {
-            "chain_id": "A",
-            "residues": [{"res_num": 7, "insertion_code": "", "residue_name": "GLY"}],
-        }
-    ]
 
 
-def test_source_residue_identities_omit_crystal_water_the_native_parser_drops(tmp_path: Path) -> None:
-    source = tmp_path / "source.pdb"
-    source.write_text(
-        "ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 10.00           C\n"
-        "ATOM      2  CA  ALA A   2       3.800   0.000   0.000  1.00 10.00           C\n"
-        "HETATM    3  O   HOH A 100       9.000   0.000   0.000  1.00 20.00           O\n"
-        "HETATM    4  O   DOD A 101      12.000   0.000   0.000  1.00 20.00           O\n"
-        "END\n",
-        encoding="utf-8",
-    )
 
-    assert rfd3_service._source_residue_identities(source) == [
-        {
-            "chain_id": "A",
-            "residues": [
-                {"res_num": 1, "insertion_code": "", "residue_name": "GLY"},
-                {"res_num": 2, "insertion_code": "", "residue_name": "ALA"},
-            ],
-        }
-    ]
+
+
+
 
 
 def test_protein_local_redesign_is_first_class_native_model() -> None:
@@ -940,91 +683,10 @@ def test_resolve_redesign_regions_accepts_plain_manual_ranges(tmp_path: Path) ->
     assert labels_by_residue == {1: {0.0}, 2: {1.0}, 3: {0.0}}
 
 
-def test_native_rfd3_registry_matches_the_canonical_launch_contract() -> None:
-    registry_path = API_ROOT / "config" / "models" / "protein_local_redesign.yaml"
-    registry = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
-    mode_params = set(registry["modes"][0]["params"])
-    params = {entry["name"]: entry for entry in registry["params"]}
-
-    assert params["redesign_mode"]["enum"] == ["partial_diffusion", "minimal_insertion"]
-    assert params["sequence_policy"]["enum"] == ["preserve", "explicit_positions", "insert_only"]
-    assert "select_fixed_atoms" not in mode_params
-    assert "select_unfixed_sequence" in mode_params
-    assert params["select_unfixed_sequence"]["type"] == "string"
-    assert "select_unfixed_sequence" in rfd3_service.RFD3_SCIENTIFIC_PARAM_KEYS
-    assert {
-        "design_chains",
-        "context_chains",
-        "redesign_ranges",
-        "sequence_policy",
-        "insertion_anchor",
-        "insertion_min_length",
-        "insertion_max_length",
-    }.issubset(mode_params)
-    assert "contig" not in mode_params
-    assert "write_full_json" not in mode_params
 
 
-def test_native_rfd3_read_model_does_not_expose_host_storage_paths() -> None:
-    from routers.jobs import _rfd3_public_json
-
-    projected = _rfd3_public_json(
-        {
-            "request_path": "/home/operator/work/rfd3_request.json",
-            "input_structure": "/home/operator/inputs/source.pdb",
-            "plr_input_pdb": "/home/operator/inputs/source.pdb",
-            "native_rfd3": {"input": "/home/operator/inputs/source.pdb"},
-            "records": [{"output_path": "/mnt/results/candidate.cif.gz"}],
-            "trajectory_paths": ["/mnt/results/noisy.cif.gz", "/mnt/results/denoised.cif.gz"],
-            "working_dir": "/tmp/rfd3-work",
-            "paths": ["/mnt/results/a.json", "/mnt/results/b.json"],
-            "file": "/tmp/native.json",
-            "directory": "/tmp/native-output",
-            "directories": ["/tmp/native-a", "/tmp/native-b"],
-            "filepath": "/tmp/native-file.json",
-            "semantic": "/A/50",
-        }
-    )
-    assert projected == {
-        "request_path": "rfd3_request.json",
-        "input_structure": "source.pdb",
-        "plr_input_pdb": "source.pdb",
-        "native_rfd3": {"input": "source.pdb"},
-        "records": [{"output_path": "candidate.cif.gz"}],
-        "trajectory_paths": ["noisy.cif.gz", "denoised.cif.gz"],
-        "working_dir": "rfd3-work",
-        "paths": ["a.json", "b.json"],
-        "file": "native.json",
-        "directory": "native-output",
-        "directories": ["native-a", "native-b"],
-        "filepath": "native-file.json",
-        "semantic": "/A/50",
-    }
-
-    router_source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
-    route_source = router_source.split('@router.get("/{job_id}/rfd3-local-redesign")', 1)[1].split(
-        '@router.get("/{job_id}", response_model=JobResponse)', 1
-    )[0]
-
-    assert '"request_path_scope": "basename"' in route_source
-    assert '"provenance_path_scope": "basename"' in route_source
-    assert '"storage_path": row.storage_path' not in route_source
-    assert "params=job.params" not in router_source
-    assert "params=existing_child.params" not in router_source
-    assert "params=first_job.params" not in router_source
-    assert "RFD3 local-redesign source artifact path binding is invalid" in router_source
 
 
-def test_native_rfd3_ingester_requires_exact_candidate_assignment_and_receipt() -> None:
-    ingester_source = (API_ROOT / "services" / "result_ingester.py").read_text(encoding="utf-8")
-
-    assert "RFD3 local-redesign candidate artifact is reused" in ingester_source
-    assert "RFD3 local-redesign candidate artifact assignment is incomplete" in ingester_source
-    assert 'receipt_relative_path != "collected/protein_local_redesign/rfd3_preparation_receipt.json"' in ingester_source
-    assert "RFD3 local-redesign preparation receipt is unavailable" in ingester_source
-    assert '"native_producer_input"' in ingester_source
-    assert "RFD3 local-redesign native producer input path is invalid" in ingester_source
-    assert "not source.is_relative_to(data_root)" in ingester_source
 
 
 def test_plr_profile_does_not_override_scheduler_gpu_concurrency() -> None:

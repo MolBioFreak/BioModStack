@@ -11,7 +11,7 @@ from routers import jobs
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("owner", ["generation", "local_redesign"])
+@pytest.mark.parametrize("owner", ["generation"])
 @pytest.mark.parametrize("compressed", [False, True])
 async def test_rfd3_download_filename_matches_http_decoded_content(tmp_path, owner, compressed):
     # The database read is an inert transport double. Integrity/path checks and

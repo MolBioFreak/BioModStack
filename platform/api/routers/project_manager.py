@@ -112,7 +112,6 @@ from services.ngs_molbio_run_control import (
     request_run_group_cancellation,
     require_launch_not_fenced,
 )
-from services.rfd3_local_redesign import project_local_redesign_scheduler_params
 from schemas import LaunchContextCreateRequest, LaunchContextResponse
 from routers.experiment_workspaces import _require_mutation_owner
 
@@ -324,11 +323,7 @@ async def _project_bound_job(
     timestamp = datetime.now(timezone.utc).isoformat()
     adapter_id = f"bms.core-job.{job.model_id}.adapter.v1"
     if context.workflow_id is None:
-        projected_params = (
-            project_local_redesign_scheduler_params(job.params or {})
-            if job.model_id == "protein_local_redesign"
-            else {**(job.params or {}), "workflow_adapter": adapter_id}
-        )
+        projected_params = {**(job.params or {}), "workflow_adapter": adapter_id}
         scheduler: dict[str, object] = {
             "name": job.name,
             "model_id": job.model_id,

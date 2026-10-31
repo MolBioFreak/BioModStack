@@ -26,10 +26,6 @@ from experiment_models import (
     ExperimentWorkflowPreparation,
     ExperimentWorkflowRun,
 )
-from services.rfd3_local_redesign import (
-    local_redesign_requests_semantically_equal,
-    prepare_local_redesign_scheduler_params,
-)
 
 
 LAUNCH_CONTEXT_SCHEMA = "bms.launch-context.v1"
@@ -588,46 +584,12 @@ async def validate_bound_job_request(
             key in prepared_params and prepared_params[key] == value
             for key, value in expected_params.items()
         )
-    if model_id == "protein_local_redesign":
-        supplied_adapter = params.get("workflow_adapter")
-        if supplied_adapter not in (None, expected_adapter):
-            raise LaunchContextError(
-                "launch_context_workflow_mismatch",
-                "Native RFD3 workflow_adapter does not match the bound Workflow Revision.",
-                status_code=409,
-            )
-        try:
-            actual_params = prepare_local_redesign_scheduler_params(
-                {**params, "workflow_adapter": expected_adapter},
-                job_name=job_name,
-                expected_adapter_id=expected_adapter,
-            )
-            expected_native_params = prepare_local_redesign_scheduler_params(
-                expected_params,
-                job_name=str(scheduler.get("name") or ""),
-                expected_adapter_id=expected_adapter,
-            )
-        except Exception as exc:
-            raise LaunchContextError(
-                "launch_context_workflow_mismatch",
-                "Job request does not satisfy the bound native RFD3 Workflow Revision.",
-                status_code=409,
-            ) from exc
-        actual_request = actual_params.get("rfd3_request")
-        expected_request = expected_native_params.get("rfd3_request")
-        params_match = (
-            isinstance(actual_request, dict)
-            and isinstance(expected_request, dict)
-            and local_redesign_requests_semantically_equal(actual_request, expected_request)
-        )
-        prepared_params = {**params, "workflow_adapter": expected_adapter}
     resources = scheduler.get("resources")
     expected_pinned_gpu = resources.get("pinned_gpu") if isinstance(resources, dict) else None
     if (
         scheduler.get("model_id") != model_id
         or scheduler.get("mode") != mode
         or not params_match
-        or (model_id == "protein_local_redesign" and expected_pinned_gpu != pinned_gpu)
     ):
         mismatched_params = sorted(
             key for key, value in expected_params.items()
@@ -1307,23 +1269,6 @@ async def validate_bound_job(
                     and all(key in base_job_params and base_job_params[key] == value
                             for key, value in effective.items() if key != "boltzgen_yaml_config")
                 )
-        if job.model_id == "protein_local_redesign":
-            try:
-                expected_native_params = prepare_local_redesign_scheduler_params(
-                    expected_job_params,
-                    job_name=str(scheduler.get("name") or ""),
-                    expected_adapter_id=str(expected_adapter or ""),
-                )
-            except Exception:
-                expected_native_params = {}
-            expected_request = expected_native_params.get("rfd3_request")
-            observed_request = base_job_params.get("rfd3_request")
-            params_match = (
-                job_adapter == expected_adapter
-                and isinstance(expected_request, dict)
-                and isinstance(observed_request, dict)
-                and local_redesign_requests_semantically_equal(observed_request, expected_request)
-            )
         if (
             scheduler.get("model_id") != job.model_id
             or scheduler.get("mode") != job.mode
