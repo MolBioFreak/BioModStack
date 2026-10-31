@@ -498,8 +498,13 @@ class LocalExternalServiceResponder:
             delay = max(1.0, float((exc.operation or {}).get('retry_after_seconds', ClientConfig().poll_seconds)))
             self.retry_at = time.monotonic() + delay
         except BaseException as exc:
-            print(f'[component_adapter] generated MSA preparation failed: {type(exc).__name__}: {exc}',
-                  file=sys.stderr, flush=True)
+            message = f'generated MSA preparation failed: {type(exc).__name__}: {str(exc)[:500]}'
+            print('[component_adapter] ' + message, file=sys.stderr, flush=True)
+            try:  # the ledger keeps only a fixed message; keep the cause beside it
+                root.mkdir(parents=True, exist_ok=True)
+                (root / (request_id + '.failure.txt')).write_text(message + '\n')
+            except OSError:
+                pass
             if not self.stop_event.is_set():
                 runtime.fail_external_service(request_id)
         finally:
