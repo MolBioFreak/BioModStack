@@ -99,3 +99,11 @@ def test_task_config_binds_the_artifact_root_with_spaces_quoted():
     resources = {"required": {"cpus": 1, "memory_bytes": 1024}}
     text = ca.native_resource_config(plan, resources, "/tmp/x.lock", ROOT, bind_paths=["/data/AUDIT job 1"])
     assert "apptainer.runOptions = '--bind \\'/data/AUDIT job 1:/data/AUDIT job 1\\''" in text
+
+
+def test_service_provider_follows_the_model_backend_when_no_launch_provider():
+    import services.model_msa_handoff as h
+    service = {"logical_id": "protenix:generated_msa", "state": "planned_from_generated_candidates",
+               "provider": "colabfold_api", "authority": "modules/protenix.nf:ProtenixFromComplex"}
+    assert h.generated_msa_service_supported(service)
+    assert not h.generated_msa_service_supported(dict(service, provider=None))

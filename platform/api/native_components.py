@@ -621,7 +621,9 @@ class _NativeAnnotations:
         self.roles.append(NativeArtifactRole(key, predictor, 'input', 'native_chain_alignments',
             'platform/api/services/model_msa_handoff.py', requiredness='required' if enabled else 'optional',
             format='native_msa_handoff', identity_authority='biomodstack_msa_handoff.py'))
-        self.services.append(ExternalServiceIntent(key, self.p.get('msa_provider'),
+        backend = self.p.get('protenix_msa_backend')
+        provider = self.p.get('msa_provider') or (backend if backend in {'colabfold_api', 'neurosnap_api'} else None)
+        self.services.append(ExternalServiceIntent(key, provider,
             'platform/api/services/model_msa_handoff.py; platform/api/services/msa_preparation.py'
                 + ('; ' + consumer if consumer else ''),
             canonical_bytes({k: v for k, v in self.p.items()

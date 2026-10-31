@@ -9051,7 +9051,6 @@ async def launch_resequence_from_structures(
         "structure_validators": request.structure_validators,
         # API-based MSA only; a local search database is not part of this install.
         "protenix_msa_backend": request.msa_provider,
-        "msa_provider": request.msa_provider,
     }
     if request.fixed_positions.strip():
         params["fixed_positions"] = request.fixed_positions.strip()
