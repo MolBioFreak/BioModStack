@@ -74,6 +74,20 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
     assert declaration['input_domain'] is None
     assert len(declaration['inputs']) == 2
     invocation = compile_job_nextflow_invocation(row, row.params, str(tmp_path / 'compiled'))
+    # Qualify the selected worker source closure, not just host imports.
+    plan = invocation.execution_plan
+    assert plan is not None
+    prep = next(component for component in plan.metadata.static_components
+                if component.authority == 'workflows/protein_local_redesign.nf:PrepProteinLocalFAMPNN')
+    helpers = {'scripts/prep_fampnn_constraints_from_spec.py', 'scripts/prep_fampnn_designs.py',
+               'scripts/fampnn_policy_resolution.py', 'scripts/antibody_fampnn_provenance.py'}
+    assert {'support_tool:' + path for path in helpers} <= set(prep.dependency_ids)
+    assert any(role.native_declaration == 'val fixed_args' and role.format == 'native_value'
+               for role in plan.metadata.artifact_roles if role.role_id in prep.input_role_ids)
+    from services.remote_execution import bundle
+    monkeypatch.setattr(bundle, 'get_code_root', lambda: ROOT)
+    assert bundle._runtime_assets(row.model_id, row.mode, invocation.native_parameters,
+        selected_plan=plan, only_kinds=frozenset({'support_tool'})) == []
     invocation.materialize_inputs(tmp_path / 'compiled')
     command = list(invocation.command)
     transport = Path(command[command.index('--fampnn_analysis_declaration_path') + 1])
