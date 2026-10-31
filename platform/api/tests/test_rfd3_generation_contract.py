@@ -200,7 +200,7 @@ def test_partial_t_requires_a_source_and_a_non_negative_number(tmp_path: Path) -
 def test_partial_t_flows_through_the_service_request(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "in.cif"
     source.write_text("data_x\n", encoding="utf-8")
-    monkeypatch.setattr("services.rfd3_local_redesign._resolve_local_redesign_source", lambda value: source)
+    monkeypatch.setattr("services.rfd3_source._resolve_local_redesign_source", lambda value: source)
     normalized, request, _ = normalize_generation_params(
         {"generator": "rfd3", "min_length": 90, "max_length": 130, "num_designs": 1, "input_structure": str(source),
          "conditioning": {"partial_t": 5.0}}, job_name="partial")
@@ -233,7 +233,7 @@ def _task_params(source: Path, task: str, **extra) -> dict:
 
 def test_partial_diffusion_task_fixes_everything_outside_the_redesigned_range(tmp_path: Path, monkeypatch) -> None:
     source = _pdb_source(tmp_path)
-    monkeypatch.setattr("services.rfd3_local_redesign._resolve_local_redesign_source", lambda value: source)
+    monkeypatch.setattr("services.rfd3_source._resolve_local_redesign_source", lambda value: source)
     _, request, _ = normalize_generation_params(_task_params(
         source, "partial_diffusion", conditioning={"partial_t": 4.0},
         redesign={"design_chains": ["A"], "redesign_ranges": "A4-6"}), job_name="region")
@@ -245,7 +245,7 @@ def test_partial_diffusion_task_fixes_everything_outside_the_redesigned_range(tm
 
 def test_minimal_insertion_task_builds_the_contig_from_the_anchor(tmp_path: Path, monkeypatch) -> None:
     source = _pdb_source(tmp_path)
-    monkeypatch.setattr("services.rfd3_local_redesign._resolve_local_redesign_source", lambda value: source)
+    monkeypatch.setattr("services.rfd3_source._resolve_local_redesign_source", lambda value: source)
     _, request, _ = normalize_generation_params(_task_params(
         source, "minimal_insertion",
         redesign={"design_chains": ["A"], "insertion_anchor": "A5", "insertion_min_length": 3, "insertion_max_length": 6}),
@@ -256,7 +256,7 @@ def test_minimal_insertion_task_builds_the_contig_from_the_anchor(tmp_path: Path
 
 def test_region_tasks_reject_inconsistent_requests(tmp_path: Path, monkeypatch) -> None:
     source = _pdb_source(tmp_path)
-    monkeypatch.setattr("services.rfd3_local_redesign._resolve_local_redesign_source", lambda value: source)
+    monkeypatch.setattr("services.rfd3_source._resolve_local_redesign_source", lambda value: source)
     region = {"design_chains": ["A"], "redesign_ranges": "A4-6"}
     for params, message in (
         (_task_params(source, "partial_diffusion", redesign=region), "requires conditioning.partial_t"),
@@ -275,7 +275,7 @@ def test_region_tasks_reject_inconsistent_requests(tmp_path: Path, monkeypatch) 
 
 def test_native_recall_passes_native_conditioning_through(tmp_path: Path, monkeypatch) -> None:
     source = _pdb_source(tmp_path)
-    monkeypatch.setattr("services.rfd3_local_redesign._resolve_local_redesign_source", lambda value: source)
+    monkeypatch.setattr("services.rfd3_source._resolve_local_redesign_source", lambda value: source)
     _, request, _ = normalize_generation_params(_task_params(
         source, "native_recall", conditioning={"contig": "A1-12", "select_unfixed_sequence": "A4-6"}), job_name="recall")
     assert request["task"] == "native_recall" and request["conditioning"]["contig"] == "A1-12"
@@ -283,7 +283,7 @@ def test_native_recall_passes_native_conditioning_through(tmp_path: Path, monkey
 
 def test_region_task_requests_drop_length_from_the_native_input(tmp_path: Path, monkeypatch) -> None:
     source = _pdb_source(tmp_path)
-    monkeypatch.setattr("services.rfd3_local_redesign._resolve_local_redesign_source", lambda value: source)
+    monkeypatch.setattr("services.rfd3_source._resolve_local_redesign_source", lambda value: source)
     _, request, _ = normalize_generation_params(_task_params(
         source, "minimal_insertion",
         redesign={"design_chains": ["A"], "insertion_anchor": "A5", "insertion_min_length": 3, "insertion_max_length": 6}),

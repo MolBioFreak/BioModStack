@@ -90,7 +90,7 @@ def _lower_generation_task(request: dict[str, Any], raw: Mapping[str, Any], task
     if not isinstance(region, Mapping) or set(region) - _REDESIGN_FIELDS:
         raise GenerationContractError(f"{task} needs a redesign object with fields from {sorted(_REDESIGN_FIELDS)}")
     from scripts.rfd3_local_redesign import contract as redesign
-    from services.rfd3_local_redesign import _source_residue_identities
+    from services.rfd3_source import _source_residue_identities
     try:
         chains = _source_residue_identities(Path(request["source"]["path"]), request.get("source_model"))
         _chains, identities = redesign._normalize_source_residue_identities(chains)
@@ -181,7 +181,7 @@ def normalize_generation_params(
     except ValueError as exc:
         raise GenerationContractError(str(exc)) from exc
     if raw.get("input_structure"):
-        from services.rfd3_local_redesign import _resolve_local_redesign_source
+        from services.rfd3_source import _resolve_local_redesign_source
         try:
             source = _resolve_local_redesign_source(raw["input_structure"])
         except ValueError as exc:  # Redesign's ContractError; a bad source path is a 422, not a 500
