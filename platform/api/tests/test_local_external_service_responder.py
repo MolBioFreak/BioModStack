@@ -82,3 +82,13 @@ def test_adapter_imports_without_the_repo_scripts_package():
             "sys.modules['scripts'] = type(sys)('scripts'); import component_adapter") % (str(ROOT), str(ROOT / 'scripts' / 'lib'))
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env={"PYTHONPATH": str(ROOT / "platform" / "api")})
     assert out.returncode == 0, out.stderr[-400:]
+
+
+def test_generated_request_loads_without_the_services_package():
+    import subprocess
+    code = ("import importlib.util,sys; sys.path.insert(0, %r);"
+            "s=importlib.util.spec_from_file_location('h', %r); m=importlib.util.module_from_spec(s); s.loader.exec_module(m);"
+            "assert 'services' not in sys.modules; print('ok')") % (
+        str(ROOT / "scripts"), str(ROOT / "platform" / "api" / "services" / "model_msa_handoff.py"))
+    out = subprocess.run([sys.executable, "-S", "-c", code], capture_output=True, text=True)
+    assert out.stdout.strip() == "ok", out.stderr[-400:]

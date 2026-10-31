@@ -852,7 +852,14 @@ def main() -> None:
         if args.prepared_inputs:
             raise ValueError('Generated service and direct prepared inputs are distinct authorities')
         from component_adapter import await_external_service
-        from services.model_msa_handoff import generated_protenix_request
+        # Load the stdlib-only module by path: importing it as services.* runs the
+        # API package init, which a task container does not carry the dependencies for.
+        import importlib.util
+        handoff_path = Path(__file__).resolve().parents[1] / 'platform' / 'api' / 'services' / 'model_msa_handoff.py'
+        handoff_spec = importlib.util.spec_from_file_location('bms_model_msa_handoff', handoff_path)
+        handoff = importlib.util.module_from_spec(handoff_spec)
+        handoff_spec.loader.exec_module(handoff)
+        generated_protenix_request = handoff.generated_protenix_request
         source, sha = await_external_service(args.generated_service, generated_protenix_request(payload))
         args.prepared_inputs, args.prepared_sha256 = str(source), sha
     if getattr(args, 'prepared_inputs', ''):
