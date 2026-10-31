@@ -1085,12 +1085,16 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         }, { station: station?.id ?? String(locationId), wells: [well] });
     };
     // Operator-confirmed preparation for a blocked live deck move (popup; nothing runs before Proceed).
-    const axisReferenced = (name: string) => { const row = dashboard?.axes?.find(axis => axis.axis === name); return !!row && ['referenced', 'homed'].includes(row.reference); };
+    // Z is in the axes list; X and Y report through their own axis rows.
+    const referencedState = (value: unknown) => typeof value === 'string' && ['referenced', 'homed'].includes(value);
+    const axisReferenced = (name: 'x' | 'y' | 'z') => name === 'x' ? referencedState(xReference)
+        : name === 'y' ? referencedState(yAxisV2?.reference_state)
+        : referencedState(dashboard?.axes?.find(axis => axis.axis === 'z')?.reference);
     const movePreparation = useBioXpMovePreparation(() => [
         { id: 'enable', label: 'Enable controllers', done: () => dashboard?.motion?.enabled === true, submit: () => invokeLifecycleAction('meta.activate_motion'), blocked: () => v2ActionDisabledReason('meta.activate_motion') },
         { id: 'home_z', label: 'Home Z (raise the head)', done: () => axisReferenced('z'), submit: () => runControl('z', 'home'), blocked: () => zHomeDisabledReason },
         { id: 'home_xy', label: 'Home X and Y', done: () => axisReferenced('x') && axisReferenced('y'), submit: invokeXYHome, blocked: () => xyHomeDisabledReason },
-    ], dashboard);
+    ], dashboard, () => { void operatorCatalog.refetch(); });
     const requestBlockedMove = (intent: { station: string } | { locationId: number; well: string }) => {
         if ('station' in intent) {
             const destination = deckDestinationFor(intent.station);

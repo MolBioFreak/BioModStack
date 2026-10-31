@@ -13,7 +13,7 @@ const STEP_TIMEOUT_MS = 120_000;
  * existing robot action; the next starts only after the robot reports the
  * previous one done. The move itself is still evaluated by the robot.
  */
-export function useBioXpMovePreparation(plan: () => PrepStep[], tick: unknown) {
+export function useBioXpMovePreparation(plan: () => PrepStep[], tick: unknown, refresh?: () => void) {
     const [offer, setOffer] = useState<{ intent: PrepIntent; steps: PrepStep[] } | null>(null);
     const [run, setRun] = useState<Run | null>(null);
     const runRef = useRef(run); runRef.current = run;
@@ -52,6 +52,14 @@ export function useBioXpMovePreparation(plan: () => PrepStep[], tick: unknown) {
         }
         if (Date.now() - current.submittedAt > STEP_TIMEOUT_MS) setRun({ ...current, error: `${step.label} did not finish within ${STEP_TIMEOUT_MS / 1000} s; the move was not sent.` });
     }, [tick, run]);
+    // While a step runs, re-read robot state every second instead of waiting for the slow poll.
+    const refreshRef = useRef(refresh); refreshRef.current = refresh;
+    const waiting = !!run && !run.finished && !run.error && run.submittedAt !== null;
+    useEffect(() => {
+        if (!waiting) return;
+        const timer = setInterval(() => refreshRef.current?.(), 1_000);
+        return () => clearInterval(timer);
+    }, [waiting]);
     return { offer, run, request, proceed, cancel, live };
 }
 
