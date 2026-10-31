@@ -241,6 +241,11 @@ def compile_declaration(model_id, mode, params, overrides=None, *, parent=None):
         if overrides.summary is not None or overrides.mutation is not None:
             raise ValueError('FA-MPNN declaration owner unresolved for this caller')
         return None
+    if local and not (params.get('input_pdb') or params.get('plr_input_pdb')):
+        # Resequence-loop launch: designs arrive as backbone_input_pdbs with
+        # caller-chosen fixed/designable positions, so there is no single-source
+        # region to declare. The workflow resolves positions itself.
+        return None
     if local:
         domain, authorized = _local_region(params)
         fixed = set(domain) - set(authorized)

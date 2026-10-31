@@ -98,3 +98,9 @@ def test_msa_backend_is_api_based_by_default(tmp_path, monkeypatch):
         assert "msa_provider" not in seen[-1].params  # launch preflight is for structure launches only
     with pytest.raises(Exception):
         jobs.ResequenceLaunchRequest(sources=[{"path": "d.pdb"}], design_chains="A", msa_provider="local")
+
+
+def test_fampnn_loop_launch_without_single_source_is_not_a_region_declaration():
+    from services.fampnn_policy_admission import compile_declaration
+    params = {"backbone_input_pdbs": "/x/selection", "design_chains": "A", "seq_method": "fampnn"}
+    assert compile_declaration("protein_modification_experimental", "region_redesign", params, None) is None
