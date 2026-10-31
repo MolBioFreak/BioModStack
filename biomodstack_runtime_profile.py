@@ -244,6 +244,36 @@ def get_core_runtime_env_path() -> Path:
     return get_biomodstack_config_dir() / CORE_RUNTIME_ENV_FILENAME
 
 
+def asset_publication_environment(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Project only the non-secret publication selector from its existing owner.
+
+    The controller's hf-assets.env may also contain credentials. Never attach that
+    whole file to an adapter/runner unit. Explicit caller values (including an
+    empty selection) take precedence; rendering is read-only and optional.
+    """
+    import shlex
+
+    key = "BMS_HF_WEIGHT_ARCHIVE"
+    source = os.environ if environ is None else environ
+    if key in source:
+        return {key: source[key]}
+    try:
+        text = (get_biomodstack_config_dir() / "hf-assets.env").read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    selected = {}
+    for line in text.splitlines():
+        name, separator, value = line.partition("=")
+        if separator and name.strip() == key:
+            try:
+                words = shlex.split(value, comments=False)
+            except ValueError:
+                continue
+            if len(words) <= 1:
+                selected[key] = words[0] if words else ""
+    return selected
+
+
 HOST_SELECTORS_FILENAME = "host-selectors.env"
 # Installation selectors that generated units and lifecycle commands consume.
 # They describe this host's provisioned toolchain and storage policy, not lane
