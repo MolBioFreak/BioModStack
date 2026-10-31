@@ -20,7 +20,6 @@ import { ExecutionPolicyControl } from '../../src/components/ExecutionPolicyCont
 import { EXECUTION_TARGET_STORAGE_KEY } from '../../src/lib/api';
 import { setDraftExecutionPolicy } from '../../src/lib/executionPolicy';
 // These alternative workflows are not mounted in the de-novo request-owner tests.
-vi.mock('../../src/components/ProteinLocalRedesignTemplate', () => ({ ProteinLocalRedesignTemplate: () => null }));
 vi.mock('../../src/components/ShapeBlueprintTemplate', () => ({ default: () => null }));
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });

@@ -246,7 +246,6 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
 test('dedicated model launchers expose compact documentation linkouts instead of explainer panels', () => {
   const structureSource = readSource('src', 'components', 'StructurePredictionTemplate.tsx');
 
-  const localRedesignSource = readSource('src', 'components', 'ProteinLocalRedesignTemplate.tsx');
 
   requireSnippet(structureSource, "import { ModelDocumentationLinks, type ModelDocumentationTopic } from './ModelDocumentationLinks';");
   requireSnippet(structureSource, 'const structureDocumentationTopics = useMemo<ModelDocumentationTopic[]>(() => {');
@@ -266,12 +265,4 @@ test('dedicated model launchers expose compact documentation linkouts instead of
   rejectSnippet(structureSource, 'This workflow stays on single-fold Boltz mode and reuses the standard structure input flow.');
 
 
-  requireSnippet(localRedesignSource, "import { ModelDocumentationLinks } from './ModelDocumentationLinks';");
-  requireSnippet(localRedesignSource, "topics={['rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2']}");
-  requireSnippet(localRedesignSource, 'Visual region pick → RFD3 remodeling → sequence redesign → ESMFold2 and Protenix validation.');
-  requireSnippet(localRedesignSource, 'Real structure-driven loop; inspect outputs before reuse.');
-  requireSnippet(localRedesignSource, 'Method background and upstream references are linked out; the launcher stays focused on source, region, and validation controls.');
-  rejectSnippet(localRedesignSource, 'Choose an existing complex visually');
-  rejectSnippet(localRedesignSource, 'make constrained local protein editing a first-class BMS workflow');
-  rejectSnippet(localRedesignSource, 'Current status: early alpha');
 });

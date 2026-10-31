@@ -30,7 +30,6 @@ vi.mock('../../src/lib/api', async (original) => ({
 }));
 import { api, EXECUTION_TARGET_STORAGE_KEY } from '../../src/lib/api';
 import ShapeBlueprintTemplate from '../../src/components/ShapeBlueprintTemplate';
-import ProteinLocalRedesignTemplate from '../../src/components/ProteinLocalRedesignTemplate';
 import { StructurePredictionTemplate } from '../../src/components/StructurePredictionTemplate';
 import { prepareDeNovoContinuation } from '../../src/lib/deNovoContinuation';
 import recipes from './fixtures/deNovoContinuationRecipes.json';
@@ -99,34 +98,6 @@ beforeEach(() => {
     } });
 });
 afterEach(async () => { await unmount(); vi.unstubAllGlobals(); document.body.replaceChildren(); restoreTransport(); });
-
-it('cold two-chain native roles remain separate selected chains in the actual request owner', async () => {
-    const twoChains = pdb.replace('TER\nEND\n', '') + pdb.replaceAll(' A   ', ' B   ');
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, blob: async () => new Blob([twoChains]), json: async () => ({ structures: [], cached: [] }) })));
-    const changed = vi.fn();
-    await mount(<ProteinLocalRedesignTemplate embedded onBack={vi.fn()} onDraftChange={changed} initialValues={{ input_structure: 'retained/two-chains.pdb', _source_prepared: { path: 'retained/two-chains.pdb', format: 'pdb', sha256: 'a'.repeat(64), model_number: 1 }, design_chains: ['A', 'B'], context_chains: [], redesign_ranges: 'A1,B2', select_unfixed_sequence: 'A1,B2', seed: 0 }} />);
-    await waitForViewer();
-    await vi.waitFor(async () => { await flush(); expect(changed.mock.lastCall![0].native_job_request?.params.design_chains, JSON.stringify(changed.mock.lastCall![0])).toEqual(['A', 'B']); });
-    expect(changed.mock.lastCall![0].native_job_request.params.redesign_ranges).toBe('A1,B2');
-    expect([...container.querySelectorAll('button[aria-pressed="true"]')].filter(node => node.textContent?.startsWith('Chain ')).map(node => node.textContent)).toEqual(['Chain A (2 aa)', 'Chain B (2 aa)']);
-    expect(container.textContent).not.toContain('Saved design chain A,B is unavailable');
-});
-
-it('preserves explicitly cleared insertion bounds through serialized draft reopen', async () => {
-    const changed = vi.fn();
-    await mount(<ProteinLocalRedesignTemplate embedded onBack={vi.fn()} onDraftChange={changed}
-        initialValues={{ redesign_mode: 'minimal_insertion', insertion_min_length: 3, insertion_max_length: 6 }} />);
-    await click('Sampling');
-    await edit(field('Minimum inserted length'), '');
-    await edit(field('Maximum inserted length'), '');
-    const draft = JSON.parse(JSON.stringify(changed.mock.lastCall![0]));
-    expect(draft).toMatchObject({ insertion_min_length: '', insertion_max_length: '' });
-    await unmount();
-    await mount(<ProteinLocalRedesignTemplate embedded onBack={vi.fn()} onDraftChange={changed} initialValues={draft} />);
-    expect(field('Minimum inserted length').value).toBe('');
-    expect(field('Maximum inserted length').value).toBe('');
-    expect(mocks.submit).not.toHaveBeenCalled();
-});
 
 it('keeps the real geometry controls and active preview mounted across sections, reporting a complete restorable draft', async () => {
     const changed = vi.fn();
@@ -219,50 +190,6 @@ it('prepares and submits the exact current Shape request, keeping retry identity
         await act(async () => familyButton.click()); await flush();
         expect(posts.at(-1)!.body).toEqual({ kind: 'workflow_pack', workflow_id: 'de_novo_design' });
     } finally { api.defaults.adapter = adapter; }
-});
-
-it('preserves Redesign real pasted-source controls, viewer, ranges and blank seed across presentation toggles and remount', async () => {
-    const changed = vi.fn();
-    await mount(<ProteinLocalRedesignTemplate embedded onBack={vi.fn()} onDraftChange={changed} runDetails={<div data-testid="policy">Policy</div>} />);
-    expect(container.querySelector('h1')).toBeNull();
-    const paste = container.querySelector<HTMLTextAreaElement>('[placeholder="ATOM ... or data_entry"]')!;
-    await edit(paste, pdb); await click('Use pasted structure in Mol*'); await waitForViewer();
-    const preview = container.querySelector('[data-testid="molecule"]');
-    expect(preview, container.textContent ?? '').not.toBeNull();
-    await edit(field('Range string'), 'A1');
-    await click('Sampling'); await edit(field('Seed'), '0');
-    await click('Optional next steps'); await click('Source and regions');
-    expect(container.querySelector('[placeholder="ATOM ... or data_entry"]')).toBe(paste);
-    expect(container.querySelector('[data-testid="molecule"]')).toBe(preview);
-    expect(mocks.moleculeMount).toHaveBeenCalledTimes(1);
-    await click('Hide 3D'); await click('Show 3D');
-    expect(mocks.moleculeMount).toHaveBeenCalledTimes(1);
-    await click('Sampling'); await edit(field('Seed'), ''); await edit(field('Job name'), '');
-    const draft = changed.mock.lastCall![0];
-    expect(draft).toMatchObject({ seed: null, job_name: '', redesign_ranges: 'A1', dump_trajectories: false, context_chains: [] });
-    expect(draft._redesign_source_text).toContain('ATOM');
-    expect(draft._redesign_source.file).toBeUndefined();
-    await unmount(); await mount(<ProteinLocalRedesignTemplate embedded initialValues={draft} onBack={vi.fn()} onDraftChange={changed} />);
-    await waitForViewer();
-    expect(field('Range string').value).toBe('A1'); expect(field('Job name').value).toBe('');
-    expect(field('Seed').value).toBe(''); expect(container.querySelector('[data-testid="molecule"]')).not.toBeNull();
-    expect(mocks.submit).not.toHaveBeenCalled();
-});
-
-it('does not emit Redesign defaults before saved hydration and preserves explicit clears during late source load', async () => {
-    let read!: (value: unknown) => void;
-    vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { read = resolve; })));
-    const changed = vi.fn(); const back = vi.fn();
-    await mount(<ProteinLocalRedesignTemplate onBack={back} initialValues={{ input_structure: 'saved.pdb',
-        job_name: '', seed: 0, partial_t: 0, dump_trajectories: false, context_chains: [], redesign_ranges: 'A1',
-        interactive_gating: false, fix_fixed_sidechains: false, region_padding: 0 }} onDraftChange={changed} />);
-    expect(changed.mock.calls[0][0]).toMatchObject({ job_name: '', seed: 0, partial_t: 0, dump_trajectories: false,
-        interactive_gating: false, fix_fixed_sidechains: false, region_padding: 0, redesign_ranges: 'A1' });
-    await edit(field('Range string'), '');
-    await act(async () => read({ ok: true, blob: async () => new Blob([pdb]) })); await waitForViewer();
-    expect(field('Range string').value).toBe('');
-    expect(changed.mock.lastCall![0]).toMatchObject({ redesign_ranges: '', context_chains: [], seed: 0 });
-    await click('Back'); expect(back).toHaveBeenCalledTimes(1);
 });
 
 // These lifecycle cases use the real continuation and submission helpers and
@@ -402,130 +329,3 @@ _ma_qa_metric_local.metric_value
 1 A 1 GLY 1 0
 #
 `;
-it.each(['native', 'validated'] as const)('unselected multi-MODEL CIF mounts, selects MODEL 2, reopens and prepares only the selected %s consumer', async depth => {
-    const posts = await selectedTransport(); const changed = vi.fn();
-    const exactSource = { ...source, document: { artifact_id: '70e6bea4-3518-5283-a76a-d06550619962' } };
-    const digest = 'a1916e81afe2cb0511e68fc3af3c39a8801a665f14fa11ae4fe176a2dfebc5d5';
-    expect(createHash('sha256').update(retainedEnsembleCif).digest('hex')).toBe(digest);
-    const native = { ...selectedMaterialization, path: 'inputs/retained/ensemble.cif', format: 'cif', sha256: digest,
-        model_number: null, model_numbers: [1, 2], source_structure: { ...exactSource, path: 'inputs/retained/ensemble.cif', expected_sha256: digest } };
-    const consumerPdb = 'ATOM      1  CA AGLY A  12B      9.000   2.000   3.000  0.50 20.00           C  \nTER\nEND\n';
-    const prior = api.defaults.adapter as (config: any) => Promise<any>;
-    api.defaults.adapter = async config => {
-        if (config.url !== '/api/files/materialize-structure') return prior(config);
-        const body = JSON.parse(String(config.data));
-        posts.push({ url: config.url, body });
-        if (body.output_format === 'pdb' && body.model_number == null) throw new Error('Selected CIF has no single PDB-representable model');
-        return { data: body.output_format === 'native' ? native : { ...native, path: 'inputs/retained/model-2.pdb', format: 'pdb', model_number: 2 },
-            status: 200, statusText: 'OK', headers: {}, config };
-    };
-    vi.stubGlobal('fetch', vi.fn(async url => String(url).includes('model-2.pdb')
-        ? { ok: true, text: async () => consumerPdb }
-        : { ok: true, blob: async () => new Blob([retainedEnsembleCif]), json: async () => ({ structures: [], cached: [] }) }));
-    const prepared = await prepareDeNovoContinuation(exactSource, 'redesign');
-    expect(posts).toHaveLength(1);
-    expect(prepared.model_number).toBeUndefined();
-    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={{ ...prepared, execution_depth: depth,
-        redesign_ranges: 'A12B', select_unfixed_sequence: 'A12B', seq_method: 'mpnn', pinned_gpu: 0 }} onDraftChange={changed} />);
-    await waitForViewer();
-    const models = [...container.querySelectorAll<HTMLSelectElement>('select')].find(node => [...node.options].some(option => option.textContent?.includes('Model 2')))!;
-    expect(models, container.textContent ?? '').toBeTruthy();
-    await edit(models, '2');
-    expect(posts).toHaveLength(1); // Mounting/selecting MODEL never prepares or submits.
-    const draft = JSON.parse(JSON.stringify(changed.mock.lastCall![0]));
-    expect(draft).toMatchObject({ model_number: 2, source_structure: native.source_structure, _source_prepared: native,
-        _redesign_source_text: retainedEnsembleCif });
-    await unmount();
-    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={draft} onDraftChange={changed} />);
-    await waitForViewer();
-    expect(changed.mock.lastCall![0].model_number).toBe(2);
-    expect(posts).toHaveLength(1);
-    await click(depth === 'native' ? 'Launch Native RFD3' : 'Launch RFD3 + Sequence + Validation'); await flush();
-    expect(posts.filter(p => p.url === '/api/files/materialize-structure').map(p => p.body)).toEqual([
-        { ...exactSource, output_format: 'native' },
-        { path: native.path, expected_sha256: digest, output_format: 'pdb', model_number: 2 },
-    ]);
-    const request = posts.find(p => p.url === '/api/jobs')?.body;
-    expect(request, container.textContent ?? '').toMatchObject({ source_structure: { ...native.source_structure, model_number: 2 } });
-    expect(request.params).toMatchObject(depth === 'native' ? { input_structure: 'inputs/retained/model-2.pdb' }
-        : { input_pdb: 'inputs/retained/model-2.pdb', model_number: 1 });
-    expect(changed.mock.lastCall![0]._source_prepared).toEqual(native);
-    expect(posts.some(p => p.url === '/api/files/upload')).toBe(false);
-    // A nonrepresentable selected source keeps its native custody/error; never
-    // fall back to uploading the browser's PDB preview or submit another Job.
-    api.defaults.adapter = async config => {
-        if (config.url === '/api/files/materialize-structure') throw new Error('Selected CIF chain/residue identifiers cannot be represented in PDB');
-        return prior(config);
-    };
-    await click(depth === 'native' ? 'Launch Native RFD3' : 'Launch RFD3 + Sequence + Validation'); await flush();
-    expect(container.textContent).toContain('Selected CIF chain/residue identifiers cannot be represented in PDB');
-    expect(posts.filter(p => p.url === '/api/jobs')).toHaveLength(1);
-    expect(changed.mock.lastCall![0]).toMatchObject({ model_number: 2, source_structure: native.source_structure, _source_prepared: native });
-});
-
-it.each(['native', 'validated'] as const)('selected %s Redesign submits retained path, placement and native settings through serialized reopen', async depth => {
-    const posts = await selectedTransport(); const changed = vi.fn();
-    const prepared = await prepareDeNovoContinuation(source, 'redesign');
-    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={{ ...prepared, execution_depth: depth,
-        redesign_ranges: 'A1', select_unfixed_sequence: 'A1', seq_method: 'mpnn', pinned_gpu: 0,
-        seed: 0, partial_t: 0, dump_trajectories: false, interactive_gating: false, region_padding: 0,
-        fix_fixed_sidechains: false, seqs_per_design: 2 }} onDraftChange={changed} />);
-    await waitForViewer();
-    expect(posts.filter(p => p.url === '/api/jobs')).toEqual([]);
-    const draft = JSON.parse(JSON.stringify(changed.mock.lastCall![0]));
-    expect(draft).toMatchObject({ source_structure: retained, _source_prepared: selectedMaterialization, seed: 0, partial_t: 0, dump_trajectories: false });
-    await unmount();
-    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={draft} onDraftChange={changed} />);
-    await waitForViewer();
-    const launch = depth === 'native' ? 'Launch Native RFD3' : 'Launch RFD3 + Sequence + Validation';
-    await click(launch); await flush();
-    let request = posts.filter(p => p.url === '/api/jobs').at(-1)?.body;
-    expect(request, container.textContent ?? '').toMatchObject({ source_structure: { ...retained, model_number: 1 }, execution_target_id: null,
-        model_id: depth === 'native' ? 'protein_local_redesign' : 'protein_modification_experimental', mode: depth === 'native' ? 'local_redesign' : 'region_redesign' });
-    expect(request.params).toMatchObject(depth === 'native' ? { input_structure: retained.path, seed: 0, partial_t: 0, dump_trajectories: false }
-        : { input_pdb: retained.path, seqs_per_design: 2, fix_fixed_sidechains: false, interactive_gating: false, region_padding: 0 });
-    expect(request.params.source_structure).toBeUndefined(); expect(request.parent_job_id).toBeFalsy();
-    // The API types these three selectors as objects; an untouched selector must be absent, never ''.
-    if (depth === 'native') for (const key of ['select_hotspots', 'select_hbond_donor', 'select_hbond_acceptor']) expect(request.params[key], key).toBeUndefined();
-    await click('Vast · chosen'); await flush();
-    await click(launch); await flush();
-    let approval: HTMLButtonElement | undefined;
-    for (let attempt = 0; attempt < 40 && !approval; attempt++) {
-        await flush();
-        approval = [...document.querySelectorAll<HTMLButtonElement>('button')].find(n => n.textContent === 'Approve and submit');
-    }
-    expect(approval, container.textContent ?? '').toBeTruthy();
-    await act(async () => approval!.click()); await flush();
-    request = posts.filter(p => p.url === '/api/jobs').at(-1)?.body;
-    expect(request.execution_target_id).toBe('vast:chosen');
-    expect(request.source_structure).toEqual({ ...retained, model_number: 1 });
-    expect(request.execution_plan_approval).toBe('a'.repeat(64));
-    await click('Local'); await flush(); await click(launch); await flush();
-    expect(posts.filter(p => p.url === '/api/jobs').at(-1)?.body.execution_target_id).toBeNull();
-});
-
-it.each([[null], [''], [[]]])('exact Redesign preserves an explicit cleared design role (%j) instead of selecting the first chain', async cleared => {
-    await selectedTransport(); const changed = vi.fn();
-    const prepared = await prepareDeNovoContinuation(source, 'redesign');
-    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={{ ...prepared, design_chains: cleared, context_chains: [] }} onDraftChange={changed} />);
-    await waitForViewer();
-    expect(changed.mock.lastCall![0].design_chains).toEqual([]);
-    expect(changed.mock.lastCall![0].context_chains).toEqual([]);
-});
-
-it('Redesign clear ignores a late selected-source read and replacement drops old ancestry', async () => {
-    await selectedTransport(); const changed = vi.fn();
-    let finish!: (value: unknown) => void;
-    vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { finish = resolve; })));
-    const prepared = await prepareDeNovoContinuation(source, 'redesign');
-    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={prepared} onDraftChange={changed} />);
-    await click('Clear source');
-    expect(container.textContent).not.toContain('Parsing structure');
-    await act(async () => finish({ ok: true, blob: async () => new Blob([pdb]) })); await flush();
-    expect(container.querySelector('[data-testid="molecule"]')).toBeNull();
-    expect(changed.mock.lastCall![0].source_structure).toBeUndefined();
-    await edit(container.querySelector<HTMLTextAreaElement>('[placeholder="ATOM ... or data_entry"]')!, pdb);
-    await click('Use pasted structure in Mol*'); await waitForViewer();
-    expect(changed.mock.lastCall![0].source_structure).toBeUndefined();
-    expect(changed.mock.lastCall![0]._source_prepared).toBeUndefined();
-});

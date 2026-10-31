@@ -14,7 +14,6 @@ vi.mock('../../src/components/EpitopeMolstarViewer', () => ({ default: () => nul
 vi.mock('../../src/components/Rfd3SourceSelector', () => ({ Rfd3SourceSelector: () => null }));
 import { api } from '../../src/lib/api';
 import { AntibodyDenovoTemplate } from '../../src/components/AntibodyDenovoTemplate';
-import { ProteinLocalRedesignTemplate } from '../../src/components/ProteinLocalRedesignTemplate';
 import { execFileSync } from 'node:child_process';
 const catalogs = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON || 'python3', ['-c', "import json,yaml; from pathlib import Path; p=Path('../api/config/models'); print(json.dumps([yaml.safe_load((p/(x+'.yaml')).read_text()) for x in ['fampnn','proteinmpnn','protenix','boltz2']]))"], { encoding: 'utf8' }));
 const originalAdapter = api.defaults.adapter;
@@ -36,16 +35,6 @@ function sourceFetch() {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, blob: async () => new Blob([pdb]), text: async () => pdb })));
     URL.createObjectURL = vi.fn(() => 'blob:fixture'); URL.revokeObjectURL = vi.fn();
 }
-it('local validated launcher sends hydrated scope through its actual submit callback', async () => {
-    sourceFetch();
-    const overrides = { summary: [], mutation: [{ chain_id: 'A', author_number: 1, insertion_code: '' }] };
-    await mount(<ProteinLocalRedesignTemplate onBack={() => {}} submissionModelId="protein_modification_experimental" initialValues={{ input_pdb: 'data/source.pdb', design_chains: 'A', redesign_ranges: 'A1-1', sequence_redesign_ranges: 'A1-1', seq_method: 'fampnn', fampnn_analysis_overrides: overrides }} />);
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
-    await click('Launch RFD3 + Sequence + Validation');
-    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); expect(mocks.submit).toHaveBeenCalledTimes(1); });
-    expect(mocks.submit, document.body.textContent || '').toHaveBeenCalledTimes(1);
-    expect(mocks.submit.mock.calls[0][0].fampnn_analysis_overrides).toEqual(overrides);
-});
 it('antibody de novo clone retains legacy scope in its draft and submits the independent native round', async () => {
     sourceFetch();
     await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ seq_design_fampnn: true, binder_round: round, target_pdb: 'data/source.pdb', antigen_chains: 'A', epitope_residues: 'A1', fampnn_analysis_overrides: { mutation: [] } }} />);
@@ -195,17 +184,4 @@ it('antibody saved summary overrides are visibly forbidden and never submitted',
     expect([...document.querySelectorAll('[role="alert"]')].map(el => el.textContent).join(' ')).toContain('summary');
     await click('Launch Antibody Refinement');
     expect(mocks.iteration).not.toHaveBeenCalled();
-});
-it('local redraw rehydrates new prefill scopes and preserves exact draft instead of stale initialization', async () => {
-    const drafts = vi.fn();
-    function Harness() { const [values, setValues] = React.useState<any>({ seq_method: 'fampnn', fampnn_analysis_overrides: { mutation: [] } }); return <><button onClick={() => setValues({ seq_method: 'fampnn', fampnn_analysis_overrides: mutation })}>Rerun prefill</button><ProteinLocalRedesignTemplate onBack={() => {}} submissionModelId="protein_modification_experimental" initialValues={values} onDraftChange={drafts} /></>; }
-    await mount(<Harness />);
-    await click('Rerun prefill');
-    expect(drafts.mock.calls.at(-1)?.[0].fampnn_analysis_overrides).toEqual(mutation);
-});
-it('local malformed prefill is visible and fails closed, not a render crash or default', async () => {
-    await mount(<ProteinLocalRedesignTemplate onBack={() => {}} submissionModelId="protein_modification_experimental" initialValues={{ seq_method: 'fampnn', fampnn_analysis_overrides: { mutation: 'bad' } }} />);
-    expect([...document.querySelectorAll('[role="alert"]')].map(el => el.textContent).join(' ')).toContain('FA-MPNN');
-    await click('Launch RFD3 + Sequence + Validation');
-    expect(mocks.submit).not.toHaveBeenCalled();
 });

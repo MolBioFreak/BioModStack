@@ -26,7 +26,7 @@ test('overview binder cards and binding distributions require declared review ca
 test('antibody and PPIFlow controls cannot be enabled by job names, arbitrary params, or ungated labels', () => {
     const contextBlock = resultsSource.slice(
         resultsSource.indexOf('const isAntibodyContext'),
-        resultsSource.indexOf('const isProteinLocalRedesignContext'),
+        resultsSource.indexOf('const showReviewWorkingSetPanel'),
     );
     assert.doesNotMatch(contextBlock, /activeJob\.name|activeJob\.params|includes\('antibody'\)/);
     assert.match(resultsSource, /tableReviewCapabilities\.antibody && \(\s*<button[\s\S]{0,160}runAntibodyAnalysis/);

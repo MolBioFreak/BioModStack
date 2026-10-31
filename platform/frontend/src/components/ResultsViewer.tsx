@@ -71,13 +71,8 @@ import { readRoundStorage, type CandidateRef } from '../lib/binderSelectedRound'
 import { RFantibodyCandidateResults } from './RFantibodyCandidateResults';
 import NativeSequenceResults, { nativeSequenceResultKind } from './NativeSequenceResults';
 import { fetchNativeBinderGeneration, isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
-import { fetchRFD3Generation, fetchRFD3LocalRedesign } from '../lib/api';
+import { fetchRFD3Generation } from '../lib/api';
 import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
-import {
-    getRFD3LocalRedesignCandidateLabel,
-    isRFD3LocalRedesignResultJob,
-} from './rfd3LocalRedesignResultsView';
-import ProteinLocalRedesignResultsPane, { isProteinLocalRedesignResultJob } from './ProteinLocalRedesignResultsPane';
 import { readBinderSelection, writeBinderSelection, readBinderCandidateDocuments, writeBinderCandidateDocuments, readBinderNativeSources, writeBinderNativeSources, type NativeCandidateSource } from '../lib/binderContinuation';
 import { BinderResultFamily } from './BinderResultFamily';
 const BinderResultComparison = lazy(() => import('./BinderResultComparison').then(module => ({ default: module.BinderResultComparison })));
@@ -118,7 +113,6 @@ const ShapeDocumentInspector = lazy(() => import('./StructureViewerPane').then(m
 const MDResultsPane = lazy(() => import('./MDResultsPane'));
 const BindCraft2JobResults = lazy(() => import('./BindCraft2JobResults').then(module => ({ default: module.BindCraft2JobResults })));
 const NativeBinderGenerationResults = lazy(() => import('./NativeBinderGenerationResults').then(module => ({ default: module.NativeBinderGenerationResults })));
-const RFD3LocalRedesignResultsPane = lazy(() => import('./RFD3LocalRedesignResultsPane'));
 const RFD3GenerationResultsPane = lazy(() => import('./RFD3GenerationResultsPane'));
 const ConformationalMappingViewer = lazy(() => import('./conformationalMapping/ConformationalMappingViewer').then(module => ({ default: module.ConformationalMappingViewer })));
 const BlindPoseSelectedControls = lazy(() => import('./BlindPoseSelectedControls'));
@@ -2221,8 +2215,6 @@ function ResultsViewerContent() {
                 if (jobCategory(job) === 'alignments') return 'Family alignment';
                 if (jobCategory(job) === 'ngs') return 'NGS results';
                 if (isRFD3GenerationResultJob(job)) return 'RFD3 generation';
-                const rfd3CandidateLabel = getRFD3LocalRedesignCandidateLabel(job);
-                if (rfd3CandidateLabel) return `Requested: ${rfd3CandidateLabel}`;
                 if (isPostRfantibodyStage(job)) {
                     const rawCount = Number(job.awaiting_payload?.raw_candidate_count || 0);
                     const screenedCount = Number(job.awaiting_payload?.filtered_candidate_count || 0);
@@ -2309,18 +2301,7 @@ function ResultsViewerContent() {
             isAntibodyRefinementMode(mode)
         );
     }, [activeJob]);
-    const isProteinLocalRedesignContext = useMemo(() => {
-        if (!activeJob) return false;
-        const modelId = String(activeJob.model_id || '').toLowerCase();
-        const mode = String(activeJob.mode || '').toLowerCase();
-        const rfdMode = String(activeJob.params?.rfd_mode || '').toLowerCase();
-        return modelId === 'protein_local_redesign' || mode === 'local_redesign' || rfdMode === 'protein_local_redesign';
-    }, [activeJob]);
-    const isProteinLocalRedesignReviewContext = useMemo(
-        () => isProteinLocalRedesignContext && Boolean(activeJob?.awaiting_input) && Boolean(activeJob?.awaiting_stage),
-        [activeJob?.awaiting_input, activeJob?.awaiting_stage, isProteinLocalRedesignContext],
-    );
-    const showReviewWorkingSetPanel = isAntibodyContext || isProteinLocalRedesignReviewContext;
+    const showReviewWorkingSetPanel = isAntibodyContext;
     const showBinderTargetConfidence = useMemo(() => hasExplicitBinderTargetRoles(activeJob), [activeJob]);
     const rfRawCount = Number(activeJob?.awaiting_payload?.raw_candidate_count || 0);
     const rfFilteredCount = Number(activeJob?.awaiting_payload?.filtered_candidate_count || 0);
@@ -2591,7 +2572,6 @@ function ResultsViewerContent() {
             && !isShapeResultJob(activeJob)
             && activeJob.model_id !== 'molecular_dynamics'
             && !isRFD3GenerationResultJob(activeJob)
-            && !isRFD3LocalRedesignResultJob(activeJob)
             && !reviewSelectionRequired,
     });
     // A failed retry can be paused while hidden/offline. It is not still loading.
@@ -3329,25 +3309,12 @@ function ResultsViewerContent() {
     // Reward-table and timing rows are observations, not generated candidates; the page reports the
     // molecular count separately, and the raw total is the fallback when it does not.
     const publishedNativeTotal = publishedNativeTotalQuery.data?.record_counts?.molecular_records ?? publishedNativeTotalQuery.data?.total;
-    const nativeRedesignQuery = useQuery({
-        queryKey: ['rfd3-local-redesign', activeJob?.id],
-        queryFn: () => fetchRFD3LocalRedesign(activeJob!.id),
-        enabled: isRFD3LocalRedesignResultJob(activeJob),
-        retry: false,
-    });
-    const nativeRedesign = nativeRedesignQuery.data?.data;
-    const nativeRedesignCount = nativeRedesign?.schema === 'bms.rfd3.local-redesign.read-model.v1'
-        && nativeRedesign.job_id === activeJob?.id ? nativeRedesign.candidates.length : undefined;
-    const activeRFD3CandidateLabel = isRFD3LocalRedesignResultJob(activeJob)
-        ? nativeRedesignCount == null ? 'Candidate count unavailable' : `${nativeRedesignCount.toLocaleString()} published candidates`
-        : null;
     const activeBadgeLabel = useMemo(() => {
         if (activeJob?.model_id === 'bindcraft2') return 'Campaign results';
         if (isShapeResultJob(activeJob)) return 'Native Shape results';
         if (nativeSequenceResultKind(activeJob)) return 'Native sequence results';
         if (isNativeGeneration) return nativeGenerationCount == null ? 'Generated count unavailable' : `${nativeGenerationCount.toLocaleString()} generated candidates`;
         if (publishedNativeJob) return publishedNativeTotal == null ? 'Native results' : `${publishedNativeTotal.toLocaleString()} generated candidates`;
-        if (activeRFD3CandidateLabel) return activeRFD3CandidateLabel;
         if (isPostRFantibodyReview && reviewSelectionRequired) {
             return 'Select a review source';
         }
@@ -3358,7 +3325,7 @@ function ResultsViewerContent() {
             return `${tableDesigns.length.toLocaleString()} visible`;
         }
         return `${totalDesigns.toLocaleString()} designs`;
-    }, [activeJob, isNativeGeneration, nativeGenerationCount, publishedNativeJob, publishedNativeTotal, activeCurrentSetLabel, activeRFD3CandidateLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
+    }, [activeJob, isNativeGeneration, nativeGenerationCount, publishedNativeJob, publishedNativeTotal, activeCurrentSetLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
     const paginationSubject = isPostRFantibodyReview
         ? reviewSelectionRequired
             ? 'outputs'
@@ -5429,14 +5396,14 @@ function ResultsViewerContent() {
 
     const showResultFamily = !!activeJob && (
         ['bindcraft2', 'boltzgen', 'ppiflow', 'rfantibody', 'template_antibody_denovo', 'binder_refinement'].includes(activeJob.model_id)
-        || !!nativeSequenceResultKind(activeJob) || isRFD3GenerationResultJob(activeJob) || isRFD3LocalRedesignResultJob(activeJob)
+        || !!nativeSequenceResultKind(activeJob) || isRFD3GenerationResultJob(activeJob)
         || !!(activeJob.lineage_root_job_id || activeJob.selection_source_job_id || activeJob.source_stage_job_id
             || activeJob.params?.lineage_root_job_id || activeJob.params?.iteration_source_root_job_id));
     const selectedCandidateDocuments = activeJob ? { ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}), ...(returnParams.get('model_number') !== null ? { model: Number(returnParams.get('model_number')) } : {}) } } : {}) } : {};
     const selectedCandidateControls = activeJob && <>
         <BinderSelectedControls key={`binder-${activeJob.id}`}
             sourceJobId={activeJob.id} selectedDesignIds={selectedDesignIds} selectedNativeSources={selectedNativeSources}
-            operationScope={isRFD3GenerationResultJob(activeJob) || isRFD3LocalRedesignResultJob(activeJob) || ['rfd4_proteina', 'complexa'].includes(activeJob.model_id) || ['disco', 'laproteina'].includes(activeJob.params?.backend ?? activeJob.params?.generator) ? 'whole_composition' : undefined}
+            operationScope={isRFD3GenerationResultJob(activeJob) || ['rfd4_proteina', 'complexa'].includes(activeJob.model_id) || ['disco', 'laproteina'].includes(activeJob.params?.backend ?? activeJob.params?.generator) ? 'whole_composition' : undefined}
             projectDraftRef={returnParams.get('project_id') && returnParams.get('setup_context_id') ? { project_id: returnParams.get('project_id')!, setup_context_id: returnParams.get('setup_context_id')! } : undefined}
             launchContextId={destinationLaunchContextId}
             candidateDocuments={selectedCandidateDocuments}
@@ -5661,9 +5628,6 @@ function ResultsViewerContent() {
                     selectedNativeSources={selectedNativeSources.length || (nativeSelection.jobId === selectedJobId && nativeSelection.changed) ? selectedNativeSources : undefined}
                     candidateDocuments={Object.keys(selectedCandidateDocuments).length || (designSelection.jobId === selectedJobId && designSelection.changed) || (nativeSelection.jobId === selectedJobId && nativeSelection.changed) ? selectedCandidateDocuments : undefined}
                     launchContextId={destinationLaunchContextId} />}
-                {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && (
-                    <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
-                )}
 
                 {activeJob?.sequence_design && (
                     <ProteinDesignPanel title="Sequence design" description="Generation results remain unchanged. Each follow-on opens in its model’s native result view.">
@@ -5727,8 +5691,6 @@ function ResultsViewerContent() {
                         </>
                     ) : isRFD3GenerationResultJob(activeJob) ? (
                         <RFD3GenerationResultsPane key={activeJob.id} jobId={activeJob.id} />
-                    ) : isRFD3LocalRedesignResultJob(activeJob) ? (
-                        <RFD3LocalRedesignResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : activeJob.model_id === 'molecular_dynamics' ? (
                         <MDResultsPane key={activeJob.id} jobId={activeJob.id} returnTo={typeof activeJob.params?.intent === 'object' && activeJob.params.intent !== null && 'return_to' in activeJob.params.intent && typeof activeJob.params.intent.return_to === 'string' ? activeJob.params.intent.return_to : undefined} />
                     ) : designsError && !nativeResults ? (
@@ -5842,12 +5804,10 @@ function ResultsViewerContent() {
                                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                                         <div>
                                             <div className="text-sm font-medium text-indigo-100">
-                                                {isProteinLocalRedesignReviewContext ? 'Review Working Set' : 'Antibody Refinement'}
+                                                Antibody Refinement
                                             </div>
                                             <p className="mt-1 text-xs text-slate-400">
-                                                {isProteinLocalRedesignReviewContext
-                                                    ? 'Filter/promote outputs, then continue the paused PLR workflow.'
-                                                    : 'Promote visible, filtered, or top-ranked outputs into antibody refinement.'}
+                                                Promote visible, filtered, or top-ranked outputs into antibody refinement.
                                             </p>
                                         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                                             <span className="rounded-full border border-indigo-500/30 bg-slate-900/70 px-2 py-1 text-indigo-100">
