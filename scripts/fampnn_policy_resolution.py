@@ -52,6 +52,18 @@ def prep_receipt(source, output, pairs):
 
 def resolve_declaration(declaration, receipts, prepared_dir):
     """Validate all actual prepared inputs before any native model execution."""
+    if isinstance(declaration, dict) and 'inputs' in declaration:
+        result = None
+        for name, receipt in receipts.items():
+            # Collection declarations select the staged PDB's own identities,
+            # not an upstream coordinate-redesign source namespace.
+            receipt = {k: v for k, v in receipt.items() if k != 'local_redesign_source_mapping'}
+            resolved = resolve_declaration(declaration['inputs'][name], {name: receipt}, prepared_dir)
+            if result is None:
+                result = resolved
+            else:
+                result['inputs'].update(resolved['inputs'])
+        return result
     if isinstance(declaration, dict) and 'materialization' in declaration:
         if (declaration.get('owner'), declaration.get('declaration')) != ('antibody_denovo', 'authorized_sequence_design_region'):
             raise ValueError('unsupported deferred antibody declaration')

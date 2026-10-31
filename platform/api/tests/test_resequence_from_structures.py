@@ -100,7 +100,10 @@ def test_msa_backend_is_api_based_by_default(tmp_path, monkeypatch):
         jobs.ResequenceLaunchRequest(sources=[{"path": "d.pdb"}], design_chains="A", msa_provider="local")
 
 
-def test_fampnn_loop_launch_without_single_source_is_not_a_region_declaration():
+def test_fampnn_loop_launch_declares_each_selected_source(tmp_path):
     from services.fampnn_policy_admission import compile_declaration
-    params = {"backbone_input_pdbs": "/x/selection", "design_chains": "A", "seq_method": "fampnn"}
-    assert compile_declaration("protein_modification_experimental", "region_redesign", params, None) is None
+    (tmp_path / 'selected.pdb').write_text(PDB)
+    params = {"backbone_input_pdbs": str(tmp_path), "design_chains": "A", "seq_method": "fampnn"}
+    declaration = compile_declaration("protein_modification_experimental", "region_redesign", params, None)
+    assert declaration['owner'] == 'protein_local_redesign'
+    assert declaration['inputs']['selected']['sequence_design'] == ['A:1:', 'A:2:', 'A:3:']

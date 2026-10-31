@@ -456,7 +456,8 @@ workflow PROTEIN_LOCAL_REDESIGN {
     def manifestArg = params.plr_region_manifest ? "--manifest ${shellQuote(params.plr_region_manifest)}" : ''
     def fixedArg = params.plr_fixed_positions ? "--fixed_positions ${shellQuote(params.plr_fixed_positions)}" : ''
     def designableArg = params.plr_designable_positions ? "--designable_positions ${shellQuote(params.plr_designable_positions)}" : ''
-    def fampnnFixedArgs = Channel.value("${manifestArg} ${fixedArg}".trim())
+    def designChainsArg = params.plr_design_chains ? "--design_chains ${shellQuote(params.plr_design_chains)}" : ''
+    def fampnnFixedArgs = Channel.value("${manifestArg} ${fixedArg} ${designableArg} ${designChainsArg}".trim())
     def mpnnDesignableArgs = Channel.value("${manifestArg} ${designableArg}".trim())
 
     if (resumeFromBackbones) {
@@ -548,7 +549,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
         PrepProteinLocalFAMPNN(mergedBackboneArtifacts, fampnnFixedArgs)
 
         PrepProteinLocalFAMPNN.out.csv
-            .collectFile(name: 'merged_protein_local_redesign.csv', keepHeader: true)
+            .collectFile(name: 'merged_protein_local_redesign.csv')
             .set { megaCsv }
 
         PrepProteinLocalFAMPNN.out.pdbs
