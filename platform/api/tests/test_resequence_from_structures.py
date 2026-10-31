@@ -95,5 +95,6 @@ def test_msa_backend_is_api_based_by_default(tmp_path, monkeypatch):
         req = jobs.ResequenceLaunchRequest(sources=[{"path": "d.pdb"}], design_chains="A", **extra)
         asyncio.run(jobs.launch_resequence_from_structures(req, None, None))
         assert seen[-1].params["protenix_msa_backend"] == expected
+        assert seen[-1].params["msa_provider"] == expected
     with pytest.raises(Exception):
         jobs.ResequenceLaunchRequest(sources=[{"path": "d.pdb"}], design_chains="A", msa_provider="local")
