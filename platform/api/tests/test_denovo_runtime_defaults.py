@@ -107,15 +107,6 @@ def test_general_rfd3_request_is_read_from_the_staged_task_copy():
     assert "path({ [request_json, 'rfd3_sources'] })" in workflow
 
 
-def test_local_redesign_request_is_staged_into_the_rfd3_task():
-    module = (REPO_ROOT / 'modules/rfd3.nf').read_text()
-    # RunRFD3 reads the request by file name from its task directory for both native request kinds.
-    assert 'new File((generalGenerationRequest ? params.rfd3_generation_request_path : params.rfd3_request_path).toString()).name' in module
-    workflow = (REPO_ROOT / 'workflows/protein_local_redesign.nf').read_text()
-    assert 'file(params.rfd3_request_path)].flatten()' in workflow
-    assert 'RunRFD3(PrepareProteinLocalNativeRFD3Input.out.input_json.map' in workflow
-
-
 def test_native_runners_set_the_environment_their_images_require():
     complexa = (REPO_ROOT / 'scripts/bms_complexa/run.py').read_text()
     assert 'env.setdefault("COMPLEXA_INIT", "bms")' in complexa

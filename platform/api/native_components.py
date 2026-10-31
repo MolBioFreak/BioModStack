@@ -231,11 +231,6 @@ PROCESS_CONTRACTS = {
     'workflows/protein_local_redesign.nf:EnforceProteinLocalValidatorSuite': (('process_low',), ('path suite_receipt',), ("path 'validator_suite_complete', emit: complete",), (), ()),
     'workflows/protein_local_redesign.nf:StageProteinLocalValidatedCandidates': (('process_low',), ('path candidate_pdbs', 'path suite_receipt', 'path validator_suite_complete'), ("path 'review_candidates/*.pdb', emit: candidates",), (), ()),
     'workflows/protein_local_redesign.nf:OpenInteractiveGate': (('process_low',), ('val job_id', 'val stage_name', 'val gate_trigger', 'val candidate_dir', 'val raw_dir', 'val filtered_dir', 'val framework_type', 'val antibody_chains', 'val structure_validator'), ('path "gate_${stage_name}.json", emit: report',), ('scripts/open_stage_gate.py',), ()),
-    'workflows/protein_local_redesign.nf:ResolveProteinLocalRegion': (('pyrosetta_tools',), ('path input_pdb',), ("path 'resolved_design_chain.pdb', emit: seed_pdb", "path 'region_manifest.json', emit: manifest"), ('scripts/resolve_redesign_regions.py', 'scripts/rfd3_local_redesign/source_mapping.py'), ()),
-    'workflows/protein_local_redesign.nf:PrepProteinLocalRFD3Input': (('pyrosetta_tools',), ('path seed_pdb', 'path manifest_json'), ("tuple val('protein_local_redesign_0'), path('rfd3_input_protein_local_redesign_0.json'), path(seed_pdb), emit: input_json",), ('scripts/prep_protein_local_redesign_rfd3_input.py',), ()),
-    'workflows/protein_local_redesign.nf:PrepareProteinLocalNativeRFD3Input': (('pyrosetta_tools',), ('path input_structure', 'path request_json'), ("tuple val('protein_local_redesign_0'), path('rfd3_input_protein_local_redesign_0.json'), path(input_structure), emit: input_json", "path 'rfd3_preparation_receipt.json', emit: receipt"), (), ()),
-    'workflows/protein_local_redesign.nf:BuildProteinLocalRFD3ResultManifest': (('process_low',), ('tuple path(cif_files), path(json_files)', 'tuple val(native_input_id), path(native_input_json), path(source_structure)', 'path trajectory_dir', 'path request_json', 'path preparation_receipt', 'path producer_log', 'path producer_metadata_jsonl'), ("path 'rfd3_result_manifest.json', emit: manifest",), (), ()),
-    'workflows/protein_local_redesign.nf:MergeProteinLocalComplexes': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'path original_complex', 'path manifest_json'), ("tuple path('merged/*.pdb'), path('merged/*.json'), emit: structures_metadata",), ('scripts/merge_redesigned_complexes.py', 'scripts/resolve_redesign_regions.py'), ()),
     'workflows/protein_local_redesign.nf:PrepProteinLocalFAMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'path manifest_json'), ("path('fampnn_input/*.pdb'), emit: pdbs", "path('fampnn_input/*.fampnn_prep.json'), emit: provenance, optional: true", "path('fampnn.csv'), emit: csv"), ('scripts/prep_fampnn_constraints_from_spec.py', 'scripts/prep_fampnn_designs.py', 'lib/FampnnNativeControls.groovy', 'lib/FampnnAnalysisPolicy.groovy', 'scripts/fampnn_native_runtime.py', 'scripts/fampnn_native_binding.py', 'scripts/prep_fampnn_constraints_generic.py', 'scripts/maturation_native_adapter.py', 'scripts/maturation_correspondence.py', 'scripts/analyse_fampnn.py', 'scripts/analyse_fampnn_seq_probs.py'), ()),
     'workflows/protein_local_redesign.nf:PrepProteinLocalMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'path manifest_json'), ("path('mpnn_fixed/*.pdb'), emit: pdbs",), ('scripts/add_fixed_labels_from_spec.py', 'scripts/prep_mpnn_designs.py', 'scripts/proteinmpnn_native_binding.py'), ()),
     'workflows/protein_local_redesign.nf:ExportProteinLocalMPNNResults': (('process_low',), ('tuple path(pdb_files), path(json_files)',), ("path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: jsons"), (), ()),
@@ -1026,16 +1021,10 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         return True
 
     if workflow == 'protein_local_redesign':
-        native = bool(p.get('rfd3_request_path'))
         resume_validation = bool(p.get('plr_validation_input_pdbs'))
         resume_sequence = not resume_validation and bool(p.get('plr_sequence_input_pdbs'))
         resume_backbone = not resume_validation and not resume_sequence and bool(p.get('plr_backbone_input_pdbs'))
         after = ()
-        if native:
-            a.chain(['PrepareProteinLocalNativeRFD3Input', 'RunRFD3', 'BuildProteinLocalRFD3ResultManifest'])
-            return True
-        if not any((resume_validation, resume_sequence, resume_backbone)):
-            after = a.chain(['ResolveProteinLocalRegion', 'PrepProteinLocalRFD3Input', 'RunRFD3', 'FilterRFD3', 'MergeProteinLocalComplexes'])
         if not resume_validation and not resume_sequence:
             if p.get('plr_seq_method', 'fampnn') == 'mpnn':
                 after = a.chain(['PrepProteinLocalMPNN', 'RunMPNN', 'ExportProteinLocalMPNNResults', 'FilterMPNN'], after)
