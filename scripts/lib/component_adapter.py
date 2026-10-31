@@ -422,6 +422,76 @@ def resume_md_workflow(context_path: Path, *, operation_id: str, pause_operation
         resources=resources, checkpoints=supplied, compiler_context=context)
 
 
+class LocalExternalServiceResponder:
+    """Answer declared controller services for a local attempt.
+
+    Remote attempts get the same data from the controller reconciler over SSH;
+    here the attempt owner is already the controller host, so it calls the same
+    provider-agnostic preparation and acceptance code and writes into the same
+    ledger. Provider choice, credentials and retry timing stay in the shared
+    MSA modules; nothing here names a provider.
+    """
+
+    def __init__(self, runtime):
+        import threading
+        self.runtime = runtime
+        self.stop_event = threading.Event()
+        self.thread = None
+        self.retry_at = 0.0
+
+    def poll(self) -> None:
+        import threading
+        import time
+        if self.runtime.target_id != 'local' or self.stop_event.is_set():
+            return
+        if self.thread is not None and self.thread.is_alive():
+            return
+        if time.monotonic() < self.retry_at:
+            return
+        pending = self.runtime.pending_external_services()
+        if not pending:
+            return
+        self.thread = threading.Thread(target=self._serve, args=(pending[0],), daemon=True,
+                                       name='local-external-service')
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+
+    def _serve(self, request: dict) -> None:
+        import shutil
+        import time
+        from biomodstack_msa_api import ClientConfig, PendingMSA, preparation_stop_scope
+        from services.model_msa_handoff import (accept_generated_msa, generated_msa_service_supported,
+                                                prepare_generated_msa)
+        runtime, request_id = self.runtime, request['request_id']
+        if not generated_msa_service_supported(request['service']):
+            runtime.fail_external_service(request_id)
+            return
+        root = runtime.artifact_root / 'external-services'
+        staging = root / ('.staging-' + request_id)
+        try:
+            shutil.rmtree(staging, ignore_errors=True)
+            staging.mkdir(parents=True)
+            with preparation_stop_scope(self.stop_event):
+                sha = prepare_generated_msa(request, staging / 'prepared')
+            destination = root / request_id / sha
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if not destination.exists():
+                os.replace(staging / 'prepared', destination)
+            accept_generated_msa(runtime, request_id, sha)
+        except PendingMSA as exc:
+            delay = max(1.0, float((exc.operation or {}).get('retry_after_seconds', ClientConfig().poll_seconds)))
+            self.retry_at = time.monotonic() + delay
+        except BaseException as exc:
+            print(f'[component_adapter] generated MSA preparation failed: {type(exc).__name__}: {exc}',
+                  file=sys.stderr, flush=True)
+            if not self.stop_event.is_set():
+                runtime.fail_external_service(request_id)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
+
 def run_component_workflow(context_path: Path) -> int:
     """Pump native root and serialized children on the same selected worker.
 
@@ -487,6 +557,7 @@ def run_component_workflow(context_path: Path) -> int:
     processes = []
     root = None
     active = []
+    responder = LocalExternalServiceResponder(runtime)
     stopping = False
     old_handlers = {}
 
@@ -615,6 +686,7 @@ def run_component_workflow(context_path: Path) -> int:
                         reason="native workflow collectors finished" if state == "completed" else "native workflow failed or children remain queued")
                 return 0 if state == "completed" else 1
 
+            responder.poll()
             pending = runtime.pending()
             if active:
                 # Only descend into the active parent's declared children;
@@ -674,6 +746,7 @@ def run_component_workflow(context_path: Path) -> int:
                     reason="component owner interrupted; durable claims retained")
         raise
     finally:
+        responder.stop()
         for signum, handler in old_handlers.items():
             signal.signal(signum, handler)
 
