@@ -958,6 +958,19 @@ class ManualMutagenesisLaunchRequest(BaseModel):
     param_overrides: Dict[str, Any] = Field(default_factory=dict)
 
 
+class ResequenceLaunchRequest(BaseModel):
+    """Resequence and validate designs from any finished job."""
+    source_job_id: str = Field(..., min_length=1)
+    design_ids: List[str] = Field(default_factory=list)
+    review_filter_set_id: Optional[str] = None
+    seq_method: Literal["fampnn", "mpnn"] = "fampnn"
+    design_chains: str = Field(..., min_length=1)
+    fixed_positions: str = ""
+    designable_positions: str = ""
+    structure_validators: List[str] = Field(default_factory=lambda: ["protenix_v2"])
+    name_suffix: Optional[str] = None
+
+
 class ManualMutagenesisLaunchResponse(BaseModel):
     """Response for viewer-driven manual mutation launches."""
     message: str
@@ -8991,6 +9004,62 @@ async def launch_manual_mutagenesis_from_designs(
         source_job_id=source_job.id,
         selected_design_count=len(ordered_designs),
         variant_count=variant_count,
+        launched_job=launched_job,
+    )
+
+
+@router.post("/resequence/from-designs", response_model=ManualMutagenesisLaunchResponse, status_code=201)
+async def launch_resequence_from_designs(
+    request: ResequenceLaunchRequest,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+):
+    """Resequence and validate selected designs from any generator.
+
+    Fixed or designable positions are caller-selected; with neither given every residue of the
+    design chains is designable. The source job's model does not matter.
+    """
+    source_job = await session.get(Job, request.source_job_id)
+    if source_job is None:
+        raise HTTPException(status_code=404, detail="Source job not found.")
+    saved_filter_set = _resolve_saved_review_filter_set(request.review_filter_set_id, [source_job])
+    design_ids = _resolve_launch_design_ids(request.design_ids, saved_filter_set)
+    if not design_ids:
+        raise HTTPException(status_code=422, detail="Select at least one design to resequence.")
+    found = (await session.execute(select(Design).where(Design.id.in_(design_ids)))).scalars().all()
+    by_id = {design.id: design for design in found}
+    missing = [design_id for design_id in design_ids if design_id not in by_id]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Some selected designs were not found: {', '.join(missing[:10])}")
+    ordered = [by_id[design_id] for design_id in design_ids]
+    await _validate_selected_design_owners(session, source_job, None, ordered)
+    selection_dir = _materialize_protein_local_selection(source_job, source_job, ordered, "resequence")
+    params: Dict[str, Any] = {
+        "backbone_input_pdbs": str(selection_dir),
+        "design_chains": request.design_chains,
+        "seq_method": request.seq_method,
+        "structure_validators": request.structure_validators,
+        "source_job_id": source_job.id,
+    }
+    if request.fixed_positions.strip():
+        params["fixed_positions"] = request.fixed_positions.strip()
+    if request.designable_positions.strip():
+        params["designable_positions"] = request.designable_positions.strip()
+    launch_request = JobCreate(
+        name=f"{source_job.name}{request.name_suffix or '_resequence'}",
+        model_id="protein_modification_experimental",
+        mode="region_redesign",
+        params=params,
+        execution_target_id=source_job.execution_target_id,
+        execution_policy=ExecutionPolicy.from_params(source_job.params),
+        pinned_gpu=None,
+    )
+    launched_job = await create_job(launch_request, background_tasks, session)
+    return ManualMutagenesisLaunchResponse(
+        message=f"Launched resequence of {len(ordered)} designs with {request.seq_method}.",
+        source_job_id=source_job.id,
+        selected_design_count=len(ordered),
+        variant_count=0,
         launched_job=launched_job,
     )
 

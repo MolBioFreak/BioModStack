@@ -108,6 +108,9 @@ modes:
       - num_designs
       - seq_method
       - structure_validators
+      - backbone_input_pdbs
+      - fixed_positions
+      - designable_positions
 
 params:
   - name: generator
@@ -313,3 +316,21 @@ params:
     enum: [boltz2, esmfold2, protenix_v2]
     ui_group: Region Redesign
     ui_order: 38
+  - name: backbone_input_pdbs
+    type: string
+    description: Directory of existing designs to resequence and validate
+    required: false
+    ui_group: Region Redesign
+    ui_order: 39
+  - name: fixed_positions
+    type: string
+    description: Residues kept as-is during resequencing, e.g. A1-20,B5
+    required: false
+    ui_group: Region Redesign
+    ui_order: 40
+  - name: designable_positions
+    type: string
+    description: Residues the sequence engine may change, e.g. A21-40
+    required: false
+    ui_group: Region Redesign
+    ui_order: 41
