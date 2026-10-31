@@ -67,3 +67,10 @@ def test_remote_targets_are_not_served_here(tmp_path):
     r = ca.LocalExternalServiceResponder(rt)
     r.poll()
     assert r.thread is None
+
+
+def test_task_config_whitelists_the_attempt_context_for_containers():
+    plan = {"metadata": {"static_components": []}}
+    resources = {"required": {"cpus": 1, "memory_bytes": 1024}}
+    text = ca.native_resource_config(plan, resources, "/tmp/x.lock", ROOT)
+    assert "apptainer.envWhitelist" in text and "BMS_COMPONENT_CONTEXT" in text

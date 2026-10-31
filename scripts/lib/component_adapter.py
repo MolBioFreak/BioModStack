@@ -208,7 +208,11 @@ def native_resource_config(plan: dict, resources: dict, lock_path: str, source_r
                   f'      def nativeSetup = {expression}',
                   f'      return {groovy(acquire)} + (nativeSetup instanceof Closure ? nativeSetup.call() : nativeSetup)',
                   '    }', '  }']
-    return '\n'.join([*lines, '}', task_container_config(container_runtime), ''])
+    # Nextflow launches apptainer tasks with `env -`; without an explicit
+    # whitelist the attempt context never reaches native scripts, so they cannot
+    # reach the attempt journal (generated-MSA requests, stage reports).
+    whitelist = "apptainer.envWhitelist = 'BMS_COMPONENT_CONTEXT,BMS_COMPONENT_JOB_ID,BMS_COMPONENT_OUTPUT_DIR'"
+    return '\n'.join([*lines, '}', whitelist, task_container_config(container_runtime), ''])
 
 
 def resource_bound_command(command, invocation, context, run_dir) -> list[str]:
