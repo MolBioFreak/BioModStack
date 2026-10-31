@@ -8,6 +8,7 @@ import { BioXpSchemaVariantContext } from './BioXpSchemaInput';
 import { MethodFields, object } from './BioXpMethodFields';
 import './BioXpMethodPipettingEditor.css';
 import { BioXpTransferSpeeds } from './BioXpTransferSpeeds';
+import { BioXpLiquidDetection } from './BioXpLiquidDetection';
 
 const scalar = (value: unknown) => typeof value === 'string' || typeof value === 'number' ? value : '';
 const display = (value: unknown): string => value === undefined ? 'Not set' : typeof value === 'string' ? value || 'Blank' : JSON.stringify(value);
@@ -103,6 +104,7 @@ export function BioXpMethodPipettingEditor({ node, onChange, catalog, selection,
         <div className="bioxp-transfer-amount"><label>Volume per channel<div><input aria-label="Volume per channel (µL)" inputMode="decimal" value={scalar(inputs.volume_ul)} disabled={!volumeEditable} placeholder={volumeEditable ? '—' : 'Retained'} onChange={e => patch({ volume_ul: e.target.value })} /><span>µL / channel / pair</span></div></label><div><strong>Ordered head-reference pairs</strong><ol aria-label="Transfer pairs">{Array.from({ length: Math.max(references('source').length, references('destination').length) }, (_, i) => <li key={i}>{display(references('source')[i])} → {display(references('destination')[i])}</li>)}</ol><small>No source broadcasting. Each source pairs with the destination at the same index.</small>{!volumeEditable && <small>Volume: {display(inputs.volume_ul)} · edit in Advanced.</small>}</div></div>
         {classResolved && <RepairWorkspaceClassSelection owner={node} value={inputs.liquid} schema={inputSchema?.oneOf?.find(s => s.properties?.liquid)?.properties?.liquid} onChange={liquid => patch({ liquid })} />}
         {classResolved && !!object(inputs.liquid).liquid_class && <BioXpTransferSpeeds liquid={object(inputs.liquid)} recipe={recipe} onLiquid={liquid => patch({ liquid })} onRecipe={next => patch({ recipe: next })} />}
+        {classResolved && <BioXpLiquidDetection value={inputs.liquid_detection} onChange={next => patch({ liquid_detection: next })} />}
         <div className="bioxp-transfer-motion" aria-label="Pipetting speeds and heights">
             {!classResolved && (['aspirate_speed', 'dispense_speed'] as const).map(key => { const title = key === 'aspirate_speed' ? 'Aspirate speed' : 'Dispense speed'; const editable = inputs[key] === undefined || typeof inputs[key] === 'string' || typeof inputs[key] === 'number'; return <label key={key}>{title}<input aria-label={title} inputMode="decimal" value={scalar(inputs[key])} disabled={!editable} placeholder={editable ? 'Not set' : 'Retained value — see Advanced'} onChange={e => patch({ [key]: e.target.value })} /></label>; })}
             {endpoints.map(side => {

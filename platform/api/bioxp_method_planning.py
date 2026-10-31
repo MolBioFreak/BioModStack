@@ -454,12 +454,41 @@ def prepare_class_transfer(inputs):
         raise ValueError('Class Transfer uses ordered recipe segment speeds; remove legacy dispense_speed explicitly')
 
 
-def positioned_transfer_recipes(inputs):
-    """Position around a resolved recipe; the native owner alone expands strokes."""
+Z_STEPS_PER_MM = Decimal('2015.748')  # robot tip_length.Z_STEPS_PER_MM (51200 / 25.4)
+LIQUID_DETECTION_DEFAULTS = {'when': 'first_draw', 'mode': 'by_level', 'expected': True,
+    'submerge_mm': '1', 'follow_mm': '0', 'floor_clearance_mm': '1', 'level_tolerance_mm': '0.5',
+    'search_speed_native': 300, 'start_mode': 0}
+
+
+def liquid_detection_settings(value):
+    """Transfer liquid detection, mm in the editor and steps on the robot."""
+    settings = {**LIQUID_DETECTION_DEFAULTS, **(value or {})}
+    unknown = set(settings) - set(LIQUID_DETECTION_DEFAULTS)
+    if unknown:
+        raise ValueError(f'Unsupported liquid detection settings: {sorted(unknown)}')
+    if settings['when'] not in ('off', 'first_draw', 'every_draw'):
+        raise ValueError('liquid detection: when must be off, first_draw or every_draw')
+    if settings['mode'] not in ('by_level', 'together', 'one_at_a_time'):
+        raise ValueError('liquid detection: mode must be by_level, together or one_at_a_time')
+    steps = {}
+    for key in ('submerge_mm', 'follow_mm', 'floor_clearance_mm', 'level_tolerance_mm'):
+        mm = Decimal(str(settings[key]))
+        if mm < 0 or mm > 20:
+            raise ValueError(f'liquid detection: {key} must be between 0 and 20 mm')
+        steps[key.replace('_mm', '_steps')] = int((mm * Z_STEPS_PER_MM).to_integral_value())
+    return settings, steps
+
+
+def positioned_transfer_recipes(inputs, detected_wells=None):
+    """Position around a resolved recipe; the native owner alone expands strokes.
+
+    detected_wells carries (location_id, well) pairs already searched in this run,
+    so first-draw detection runs once per source well across the whole method.
+    """
     from bioxp_workflow_authoring import native_intent
     allowed = {'source', 'destination', 'channels', 'volume_ul', 'aspirate_speed', 'recipe',
                'source_position_flag', 'destination_position_flag',
-               'source_lift_height_steps', 'destination_lift_height_steps'}
+               'source_lift_height_steps', 'destination_lift_height_steps', 'liquid_detection'}
     if set(inputs) - allowed:
         raise ValueError(f'Unsupported class Transfer fields: {sorted(set(inputs) - allowed)}')
     source, destination = inputs['source'], inputs['destination']
@@ -476,6 +505,12 @@ def positioned_transfer_recipes(inputs):
     if not source['wells'] or not samples or len(source['wells']) * samples != len(destination['wells']):
         raise ValueError('Transfer requires one destination reference per source and authored aliquot' if multi
                          else 'Transfer requires equal nonempty reference-well pairs')
+    # Transfers saved before liquid detection keep their calibrated lowering; new
+    # transfers carry liquid_detection (an empty object means the defaults).
+    detection, detection_steps = liquid_detection_settings(inputs['liquid_detection']) if 'liquid_detection' in inputs \
+        else liquid_detection_settings({'when': 'off'})
+    if detected_wells is None:
+        detected_wells = set()
     recipes = []
     for pair, sw in enumerate(source['wells']):
         destinations = destination['wells'][pair * samples:(pair + 1) * samples]
@@ -492,7 +527,18 @@ def positioned_transfer_recipes(inputs):
         recipe['before_leading_air'] = [position('move', 'source', sw)] + recipe.get('before_leading_air', [])
         # Search precedes ordinary calibrated lowering; authored retraction and
         # post-dispense motions precede ordinary lifts. Never reorder the arrays.
-        recipe['before_liquid'] = recipe.get('before_liquid', []) + [position('lower', 'source', sw)]
+        key = (int(source['location_id']), str(sw).upper())
+        detect = detection['when'] == 'every_draw' or (detection['when'] == 'first_draw' and key not in detected_wells)
+        if detect and recipe.get('aspiration_tracking') is None:
+            # The search replaces the calibrated lower: Z stops on each channel's surface.
+            detected_wells.add(key)
+            recipe['liquid_detection'] = {'location_id': key[0], 'expected': bool(detection['expected']),
+                'mode': detection['mode'], 'start_mode': detection['start_mode'],
+                'search_speed_native': detection['search_speed_native'],
+                'detection_id': f'pair-{pair}-{key[1]}', **detection_steps}
+            recipe['before_liquid'] = recipe.get('before_liquid', [])
+        else:
+            recipe['before_liquid'] = recipe.get('before_liquid', []) + [position('lower', 'source', sw)]
         recipe['after_liquid'] = recipe.get('after_liquid', []) + [position('lift', 'source', sw)]
         if multi:
             m = recipe['multi']

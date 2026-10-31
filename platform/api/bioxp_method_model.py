@@ -7,6 +7,21 @@ SCHEMA = 'bms.bioxp-method.v1'
 EXPRESSION_OPS = ('literal', 'param', 'arg', 'loop_index', 'loop_item', 'add', 'sub', 'mul', 'div', 'eq', 'ne', 'lt', 'le', 'gt', 'ge', 'and', 'or', 'not')
 
 
+def liquid_detection_schema():
+    mm = lambda title: {'type': ['number', 'string'], 'title': title, 'minimum': 0, 'maximum': 20}
+    return {'type': 'object', 'additionalProperties': False, 'title': 'Liquid detection',
+        'description': ('Find each channel\'s liquid surface before aspirating. Defaults: first draw from each source well, '
+                        'by level, 1 mm below the surface, stop 1 mm above calibrated low. A listed well with no liquid pauses the run.'),
+        'properties': {
+            'when': {'enum': ['first_draw', 'every_draw', 'off'], 'default': 'first_draw'},
+            'mode': {'enum': ['by_level', 'together', 'one_at_a_time'], 'default': 'by_level'},
+            'expected': {'type': 'boolean', 'default': True, 'title': 'Liquid expected (missing liquid pauses the run)'},
+            'submerge_mm': mm('Depth below surface (mm)'), 'follow_mm': mm('Follow down while aspirating (mm)'),
+            'floor_clearance_mm': mm('Stop above calibrated low (mm)'), 'level_tolerance_mm': mm('Same level within (mm)'),
+            'search_speed_native': {'type': 'integer', 'minimum': 1, 'default': 300},
+            'start_mode': {'enum': [0, 1], 'default': 0}}}
+
+
 def validate_method(raw):
     """Persistence validation only: incomplete/unknown scientific fields survive."""
     if not isinstance(raw, dict) or raw.get('schema') != SCHEMA:
@@ -146,7 +161,8 @@ def method_catalog():
     class_transfer['required'] = [k for k in class_transfer['required'] if k not in {'aspirate_speed', 'dispense_speed'}] + ['liquid', 'recipe']
     class_transfer['properties'].pop('dispense_speed', None)
     recipe_editor = deepcopy(next(a['inputs'] for a in actions if a['action'] == 'liquid_recipe'))
-    class_transfer['properties'].update(liquid=liquid_selection_schema(), recipe=recipe_editor['properties']['recipe'])
+    class_transfer['properties'].update(liquid=liquid_selection_schema(), recipe=recipe_editor['properties']['recipe'],
+                                        liquid_detection=liquid_detection_schema())
     class_transfer['properties']['recipe']['required'] = [k for k in class_transfer['properties']['recipe']['required']
         if k not in {'mode', 'channels', 'before_leading_air', 'before_liquid', 'after_liquid', 'before_dispense', 'after_dispense'}]
     for entry in actions:

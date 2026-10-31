@@ -376,6 +376,7 @@ def emit_rows(rows):
     document['protocol_id'] = 'method-content'
     actions = document['stages'][0]['actions'] = []
     visible, issues = [], []
+    detected_wells = set()  # first-draw liquid detection is once per source well per run
     for row in rows:
         intent = row['intent']
         from bioxp_method_native import native_action
@@ -387,7 +388,7 @@ def emit_rows(rows):
         if intent.get('operation') == 'transfer' and 'recipe' in intent:
             from bioxp_method_planning import positioned_transfer_recipes
             try:
-                recipes = positioned_transfer_recipes({k: v for k, v in intent.items() if k != 'operation'})
+                recipes = positioned_transfer_recipes({k: v for k, v in intent.items() if k != 'operation'}, detected_wells)
                 generated = []
                 for pair, recipe in enumerate(recipes):
                     kind, params = native_action('liquid_recipe', {'recipe': recipe})

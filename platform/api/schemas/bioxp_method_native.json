@@ -1,5 +1,5 @@
 {
-  "source_commit": "e4decce4308235148b8bb2cb21046309fcbcfed6",
+  "source_commit": "9db14461c6db60012c7b3ea7ac14d2a346fd3258",
   "application": {
     "$defs": {
       "AccountingContext": {
@@ -1084,6 +1084,95 @@
           "command"
         ],
         "title": "Initialize",
+        "type": "object"
+      },
+      "LiquidSearch": {
+        "additionalProperties": false,
+        "description": "Find each active channel's liquid surface in one shared descent.\n\nStart and floor come from the station's calibrated high/low with the loaded\ntip offset; Z stops once every channel reports or the floor is reached.",
+        "properties": {
+          "channels": {
+            "items": {
+              "maximum": 3,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Channels",
+            "type": "array"
+          },
+          "timeout_ms": {
+            "exclusiveMinimum": 0,
+            "title": "Timeout Ms",
+            "type": "integer"
+          },
+          "operation": {
+            "const": "liquid_search",
+            "title": "Operation",
+            "type": "string"
+          },
+          "location_id": {
+            "minimum": 0,
+            "title": "Location Id",
+            "type": "integer"
+          },
+          "detection_id": {
+            "default": "last_detection",
+            "minLength": 1,
+            "title": "Detection Id",
+            "type": "string"
+          },
+          "start_mode": {
+            "default": 0,
+            "enum": [
+              0,
+              1
+            ],
+            "title": "Start Mode",
+            "type": "integer"
+          },
+          "floor_clearance_steps": {
+            "default": 2016,
+            "minimum": 0,
+            "title": "Floor Clearance Steps",
+            "type": "integer"
+          },
+          "search_speed_native": {
+            "default": 300,
+            "exclusiveMinimum": 0,
+            "title": "Search Speed Native",
+            "type": "integer"
+          },
+          "z_motor_current": {
+            "default": 25,
+            "title": "Z Motor Current",
+            "type": "integer"
+          },
+          "expected_channels": {
+            "anyOf": [
+              {
+                "items": {
+                  "maximum": 3,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Channels"
+          }
+        },
+        "required": [
+          "channels",
+          "timeout_ms",
+          "operation",
+          "location_id"
+        ],
+        "title": "LiquidSearch",
         "type": "object"
       },
       "LldParameter": {
@@ -2419,6 +2508,148 @@
         "title": "StrokeIntent",
         "type": "object"
       },
+      "SurfaceAspirate": {
+        "additionalProperties": false,
+        "description": "Aspirate below each channel's detected surface, grouped by liquid level.",
+        "properties": {
+          "channels": {
+            "items": {
+              "maximum": 3,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Channels",
+            "type": "array"
+          },
+          "timeout_ms": {
+            "exclusiveMinimum": 0,
+            "title": "Timeout Ms",
+            "type": "integer"
+          },
+          "operation": {
+            "const": "surface_aspirate",
+            "title": "Operation",
+            "type": "string"
+          },
+          "detection_id": {
+            "default": "last_detection",
+            "minLength": 1,
+            "title": "Detection Id",
+            "type": "string"
+          },
+          "mode": {
+            "default": "by_level",
+            "enum": [
+              "by_level",
+              "together",
+              "one_at_a_time"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "level_tolerance_steps": {
+            "default": 1008,
+            "minimum": 0,
+            "title": "Level Tolerance Steps",
+            "type": "integer"
+          },
+          "submerge_steps": {
+            "default": 2016,
+            "minimum": 0,
+            "title": "Submerge Steps",
+            "type": "integer"
+          },
+          "follow_steps": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Follow Steps",
+            "type": "integer"
+          },
+          "z_speed_native": {
+            "default": 1791,
+            "exclusiveMinimum": 0,
+            "title": "Z Speed Native",
+            "type": "integer"
+          },
+          "follow_speed_native": {
+            "default": 300,
+            "exclusiveMinimum": 0,
+            "title": "Follow Speed Native",
+            "type": "integer"
+          },
+          "volume_ul": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Volume Ul"
+          },
+          "speed_ul_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Speed Ul S"
+          },
+          "target_liquid_ul": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target Liquid Ul"
+          },
+          "accounting_intent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StrokeIntent"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "channels",
+          "timeout_ms",
+          "operation",
+          "volume_ul",
+          "speed_ul_s"
+        ],
+        "title": "SurfaceAspirate",
+        "type": "object"
+      },
       "SurfaceMove": {
         "additionalProperties": false,
         "properties": {
@@ -3218,12 +3449,14 @@
               "dispense": "#/$defs/Stroke",
               "empty": "#/$defs/Empty",
               "leading_air": "#/$defs/Stroke",
+              "liquid_search": "#/$defs/LiquidSearch",
               "plld": "#/$defs/Plld",
               "position": "#/$defs/Position",
               "pressure_capture": "#/$defs/PressureCapture",
               "profile_pickup": "#/$defs/ProfilePickup",
               "reaspirate": "#/$defs/Stroke",
               "settings": "#/$defs/Settings",
+              "surface_aspirate": "#/$defs/SurfaceAspirate",
               "surface_move": "#/$defs/SurfaceMove",
               "tracked_aspirate": "#/$defs/TrackedAspirate",
               "trailing_air": "#/$defs/Stroke",
@@ -3252,6 +3485,12 @@
             },
             {
               "$ref": "#/$defs/Plld"
+            },
+            {
+              "$ref": "#/$defs/LiquidSearch"
+            },
+            {
+              "$ref": "#/$defs/SurfaceAspirate"
             },
             {
               "$ref": "#/$defs/SurfaceMove"
@@ -3452,12 +3691,14 @@
                   "dispense": "#/$defs/Stroke",
                   "empty": "#/$defs/Empty",
                   "leading_air": "#/$defs/Stroke",
+                  "liquid_search": "#/$defs/LiquidSearch",
                   "plld": "#/$defs/Plld",
                   "position": "#/$defs/Position",
                   "pressure_capture": "#/$defs/PressureCapture",
                   "profile_pickup": "#/$defs/ProfilePickup",
                   "reaspirate": "#/$defs/Stroke",
                   "settings": "#/$defs/Settings",
+                  "surface_aspirate": "#/$defs/SurfaceAspirate",
                   "surface_move": "#/$defs/SurfaceMove",
                   "tracked_aspirate": "#/$defs/TrackedAspirate",
                   "trailing_air": "#/$defs/Stroke",
@@ -3486,6 +3727,12 @@
                 },
                 {
                   "$ref": "#/$defs/Plld"
+                },
+                {
+                  "$ref": "#/$defs/LiquidSearch"
+                },
+                {
+                  "$ref": "#/$defs/SurfaceAspirate"
                 },
                 {
                   "$ref": "#/$defs/SurfaceMove"
@@ -3528,12 +3775,14 @@
                   "dispense": "#/$defs/Stroke",
                   "empty": "#/$defs/Empty",
                   "leading_air": "#/$defs/Stroke",
+                  "liquid_search": "#/$defs/LiquidSearch",
                   "plld": "#/$defs/Plld",
                   "position": "#/$defs/Position",
                   "pressure_capture": "#/$defs/PressureCapture",
                   "profile_pickup": "#/$defs/ProfilePickup",
                   "reaspirate": "#/$defs/Stroke",
                   "settings": "#/$defs/Settings",
+                  "surface_aspirate": "#/$defs/SurfaceAspirate",
                   "surface_move": "#/$defs/SurfaceMove",
                   "tracked_aspirate": "#/$defs/TrackedAspirate",
                   "trailing_air": "#/$defs/Stroke",
@@ -3562,6 +3811,12 @@
                 },
                 {
                   "$ref": "#/$defs/Plld"
+                },
+                {
+                  "$ref": "#/$defs/LiquidSearch"
+                },
+                {
+                  "$ref": "#/$defs/SurfaceAspirate"
                 },
                 {
                   "$ref": "#/$defs/SurfaceMove"
@@ -4716,6 +4971,177 @@
         "title": "Initialize",
         "type": "object"
       },
+      "LiquidDetection": {
+        "additionalProperties": false,
+        "description": "Find the source surface, then aspirate below it (replaces the calibrated source lower).",
+        "properties": {
+          "location_id": {
+            "minimum": 0,
+            "title": "Location Id",
+            "type": "integer"
+          },
+          "expected": {
+            "default": true,
+            "title": "Expected",
+            "type": "boolean"
+          },
+          "mode": {
+            "default": "by_level",
+            "enum": [
+              "by_level",
+              "together",
+              "one_at_a_time"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "start_mode": {
+            "default": 0,
+            "enum": [
+              0,
+              1
+            ],
+            "title": "Start Mode",
+            "type": "integer"
+          },
+          "submerge_steps": {
+            "default": 2016,
+            "minimum": 0,
+            "title": "Submerge Steps",
+            "type": "integer"
+          },
+          "follow_steps": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Follow Steps",
+            "type": "integer"
+          },
+          "floor_clearance_steps": {
+            "default": 2016,
+            "minimum": 0,
+            "title": "Floor Clearance Steps",
+            "type": "integer"
+          },
+          "level_tolerance_steps": {
+            "default": 1008,
+            "minimum": 0,
+            "title": "Level Tolerance Steps",
+            "type": "integer"
+          },
+          "search_speed_native": {
+            "default": 300,
+            "exclusiveMinimum": 0,
+            "title": "Search Speed Native",
+            "type": "integer"
+          },
+          "search_timeout_ms": {
+            "default": 15000,
+            "exclusiveMinimum": 0,
+            "title": "Search Timeout Ms",
+            "type": "integer"
+          },
+          "detection_id": {
+            "default": "source",
+            "minLength": 1,
+            "title": "Detection Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "location_id"
+        ],
+        "title": "LiquidDetection",
+        "type": "object"
+      },
+      "LiquidSearch": {
+        "additionalProperties": false,
+        "description": "Find each active channel's liquid surface in one shared descent.\n\nStart and floor come from the station's calibrated high/low with the loaded\ntip offset; Z stops once every channel reports or the floor is reached.",
+        "properties": {
+          "channels": {
+            "items": {
+              "maximum": 3,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Channels",
+            "type": "array"
+          },
+          "timeout_ms": {
+            "exclusiveMinimum": 0,
+            "title": "Timeout Ms",
+            "type": "integer"
+          },
+          "operation": {
+            "const": "liquid_search",
+            "title": "Operation",
+            "type": "string"
+          },
+          "location_id": {
+            "minimum": 0,
+            "title": "Location Id",
+            "type": "integer"
+          },
+          "detection_id": {
+            "default": "last_detection",
+            "minLength": 1,
+            "title": "Detection Id",
+            "type": "string"
+          },
+          "start_mode": {
+            "default": 0,
+            "enum": [
+              0,
+              1
+            ],
+            "title": "Start Mode",
+            "type": "integer"
+          },
+          "floor_clearance_steps": {
+            "default": 2016,
+            "minimum": 0,
+            "title": "Floor Clearance Steps",
+            "type": "integer"
+          },
+          "search_speed_native": {
+            "default": 300,
+            "exclusiveMinimum": 0,
+            "title": "Search Speed Native",
+            "type": "integer"
+          },
+          "z_motor_current": {
+            "default": 25,
+            "title": "Z Motor Current",
+            "type": "integer"
+          },
+          "expected_channels": {
+            "anyOf": [
+              {
+                "items": {
+                  "maximum": 3,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Channels"
+          }
+        },
+        "required": [
+          "channels",
+          "timeout_ms",
+          "operation",
+          "location_id"
+        ],
+        "title": "LiquidSearch",
+        "type": "object"
+      },
       "LldParameter": {
         "additionalProperties": false,
         "properties": {
@@ -5053,12 +5479,14 @@
                   "dispense": "#/$defs/Stroke",
                   "empty": "#/$defs/Empty",
                   "leading_air": "#/$defs/Stroke",
+                  "liquid_search": "#/$defs/LiquidSearch",
                   "plld": "#/$defs/Plld",
                   "position": "#/$defs/Position",
                   "pressure_capture": "#/$defs/PressureCapture",
                   "profile_pickup": "#/$defs/ProfilePickup",
                   "reaspirate": "#/$defs/Stroke",
                   "settings": "#/$defs/Settings",
+                  "surface_aspirate": "#/$defs/SurfaceAspirate",
                   "surface_move": "#/$defs/SurfaceMove",
                   "tracked_aspirate": "#/$defs/TrackedAspirate",
                   "trailing_air": "#/$defs/Stroke",
@@ -5087,6 +5515,12 @@
                 },
                 {
                   "$ref": "#/$defs/Plld"
+                },
+                {
+                  "$ref": "#/$defs/LiquidSearch"
+                },
+                {
+                  "$ref": "#/$defs/SurfaceAspirate"
                 },
                 {
                   "$ref": "#/$defs/SurfaceMove"
@@ -5122,12 +5556,14 @@
                   "dispense": "#/$defs/Stroke",
                   "empty": "#/$defs/Empty",
                   "leading_air": "#/$defs/Stroke",
+                  "liquid_search": "#/$defs/LiquidSearch",
                   "plld": "#/$defs/Plld",
                   "position": "#/$defs/Position",
                   "pressure_capture": "#/$defs/PressureCapture",
                   "profile_pickup": "#/$defs/ProfilePickup",
                   "reaspirate": "#/$defs/Stroke",
                   "settings": "#/$defs/Settings",
+                  "surface_aspirate": "#/$defs/SurfaceAspirate",
                   "surface_move": "#/$defs/SurfaceMove",
                   "tracked_aspirate": "#/$defs/TrackedAspirate",
                   "trailing_air": "#/$defs/Stroke",
@@ -5156,6 +5592,12 @@
                 },
                 {
                   "$ref": "#/$defs/Plld"
+                },
+                {
+                  "$ref": "#/$defs/LiquidSearch"
+                },
+                {
+                  "$ref": "#/$defs/SurfaceAspirate"
                 },
                 {
                   "$ref": "#/$defs/SurfaceMove"
@@ -6488,6 +6930,148 @@
         "title": "StrokeIntent",
         "type": "object"
       },
+      "SurfaceAspirate": {
+        "additionalProperties": false,
+        "description": "Aspirate below each channel's detected surface, grouped by liquid level.",
+        "properties": {
+          "channels": {
+            "items": {
+              "maximum": 3,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Channels",
+            "type": "array"
+          },
+          "timeout_ms": {
+            "exclusiveMinimum": 0,
+            "title": "Timeout Ms",
+            "type": "integer"
+          },
+          "operation": {
+            "const": "surface_aspirate",
+            "title": "Operation",
+            "type": "string"
+          },
+          "detection_id": {
+            "default": "last_detection",
+            "minLength": 1,
+            "title": "Detection Id",
+            "type": "string"
+          },
+          "mode": {
+            "default": "by_level",
+            "enum": [
+              "by_level",
+              "together",
+              "one_at_a_time"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "level_tolerance_steps": {
+            "default": 1008,
+            "minimum": 0,
+            "title": "Level Tolerance Steps",
+            "type": "integer"
+          },
+          "submerge_steps": {
+            "default": 2016,
+            "minimum": 0,
+            "title": "Submerge Steps",
+            "type": "integer"
+          },
+          "follow_steps": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Follow Steps",
+            "type": "integer"
+          },
+          "z_speed_native": {
+            "default": 1791,
+            "exclusiveMinimum": 0,
+            "title": "Z Speed Native",
+            "type": "integer"
+          },
+          "follow_speed_native": {
+            "default": 300,
+            "exclusiveMinimum": 0,
+            "title": "Follow Speed Native",
+            "type": "integer"
+          },
+          "volume_ul": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Volume Ul"
+          },
+          "speed_ul_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Speed Ul S"
+          },
+          "target_liquid_ul": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target Liquid Ul"
+          },
+          "accounting_intent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StrokeIntent"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "channels",
+          "timeout_ms",
+          "operation",
+          "volume_ul",
+          "speed_ul_s"
+        ],
+        "title": "SurfaceAspirate",
+        "type": "object"
+      },
       "SurfaceMove": {
         "additionalProperties": false,
         "properties": {
@@ -7347,6 +7931,17 @@
         ],
         "default": null
       },
+      "liquid_detection": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/LiquidDetection"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "shared_head": {
         "anyOf": [
           {
@@ -7421,12 +8016,14 @@
               "dispense": "#/$defs/Stroke",
               "empty": "#/$defs/Empty",
               "leading_air": "#/$defs/Stroke",
+              "liquid_search": "#/$defs/LiquidSearch",
               "plld": "#/$defs/Plld",
               "position": "#/$defs/Position",
               "pressure_capture": "#/$defs/PressureCapture",
               "profile_pickup": "#/$defs/ProfilePickup",
               "reaspirate": "#/$defs/Stroke",
               "settings": "#/$defs/Settings",
+              "surface_aspirate": "#/$defs/SurfaceAspirate",
               "surface_move": "#/$defs/SurfaceMove",
               "tracked_aspirate": "#/$defs/TrackedAspirate",
               "trailing_air": "#/$defs/Stroke",
@@ -7455,6 +8052,12 @@
             },
             {
               "$ref": "#/$defs/Plld"
+            },
+            {
+              "$ref": "#/$defs/LiquidSearch"
+            },
+            {
+              "$ref": "#/$defs/SurfaceAspirate"
             },
             {
               "$ref": "#/$defs/SurfaceMove"
@@ -7490,12 +8093,14 @@
               "dispense": "#/$defs/Stroke",
               "empty": "#/$defs/Empty",
               "leading_air": "#/$defs/Stroke",
+              "liquid_search": "#/$defs/LiquidSearch",
               "plld": "#/$defs/Plld",
               "position": "#/$defs/Position",
               "pressure_capture": "#/$defs/PressureCapture",
               "profile_pickup": "#/$defs/ProfilePickup",
               "reaspirate": "#/$defs/Stroke",
               "settings": "#/$defs/Settings",
+              "surface_aspirate": "#/$defs/SurfaceAspirate",
               "surface_move": "#/$defs/SurfaceMove",
               "tracked_aspirate": "#/$defs/TrackedAspirate",
               "trailing_air": "#/$defs/Stroke",
@@ -7524,6 +8129,12 @@
             },
             {
               "$ref": "#/$defs/Plld"
+            },
+            {
+              "$ref": "#/$defs/LiquidSearch"
+            },
+            {
+              "$ref": "#/$defs/SurfaceAspirate"
             },
             {
               "$ref": "#/$defs/SurfaceMove"
@@ -7559,12 +8170,14 @@
               "dispense": "#/$defs/Stroke",
               "empty": "#/$defs/Empty",
               "leading_air": "#/$defs/Stroke",
+              "liquid_search": "#/$defs/LiquidSearch",
               "plld": "#/$defs/Plld",
               "position": "#/$defs/Position",
               "pressure_capture": "#/$defs/PressureCapture",
               "profile_pickup": "#/$defs/ProfilePickup",
               "reaspirate": "#/$defs/Stroke",
               "settings": "#/$defs/Settings",
+              "surface_aspirate": "#/$defs/SurfaceAspirate",
               "surface_move": "#/$defs/SurfaceMove",
               "tracked_aspirate": "#/$defs/TrackedAspirate",
               "trailing_air": "#/$defs/Stroke",
@@ -7593,6 +8206,12 @@
             },
             {
               "$ref": "#/$defs/Plld"
+            },
+            {
+              "$ref": "#/$defs/LiquidSearch"
+            },
+            {
+              "$ref": "#/$defs/SurfaceAspirate"
             },
             {
               "$ref": "#/$defs/SurfaceMove"
@@ -7628,12 +8247,14 @@
               "dispense": "#/$defs/Stroke",
               "empty": "#/$defs/Empty",
               "leading_air": "#/$defs/Stroke",
+              "liquid_search": "#/$defs/LiquidSearch",
               "plld": "#/$defs/Plld",
               "position": "#/$defs/Position",
               "pressure_capture": "#/$defs/PressureCapture",
               "profile_pickup": "#/$defs/ProfilePickup",
               "reaspirate": "#/$defs/Stroke",
               "settings": "#/$defs/Settings",
+              "surface_aspirate": "#/$defs/SurfaceAspirate",
               "surface_move": "#/$defs/SurfaceMove",
               "tracked_aspirate": "#/$defs/TrackedAspirate",
               "trailing_air": "#/$defs/Stroke",
@@ -7662,6 +8283,12 @@
             },
             {
               "$ref": "#/$defs/Plld"
+            },
+            {
+              "$ref": "#/$defs/LiquidSearch"
+            },
+            {
+              "$ref": "#/$defs/SurfaceAspirate"
             },
             {
               "$ref": "#/$defs/SurfaceMove"
@@ -7697,12 +8324,14 @@
               "dispense": "#/$defs/Stroke",
               "empty": "#/$defs/Empty",
               "leading_air": "#/$defs/Stroke",
+              "liquid_search": "#/$defs/LiquidSearch",
               "plld": "#/$defs/Plld",
               "position": "#/$defs/Position",
               "pressure_capture": "#/$defs/PressureCapture",
               "profile_pickup": "#/$defs/ProfilePickup",
               "reaspirate": "#/$defs/Stroke",
               "settings": "#/$defs/Settings",
+              "surface_aspirate": "#/$defs/SurfaceAspirate",
               "surface_move": "#/$defs/SurfaceMove",
               "tracked_aspirate": "#/$defs/TrackedAspirate",
               "trailing_air": "#/$defs/Stroke",
@@ -7731,6 +8360,12 @@
             },
             {
               "$ref": "#/$defs/Plld"
+            },
+            {
+              "$ref": "#/$defs/LiquidSearch"
+            },
+            {
+              "$ref": "#/$defs/SurfaceAspirate"
             },
             {
               "$ref": "#/$defs/SurfaceMove"
@@ -7785,12 +8420,14 @@
               "dispense": "#/$defs/Stroke",
               "empty": "#/$defs/Empty",
               "leading_air": "#/$defs/Stroke",
+              "liquid_search": "#/$defs/LiquidSearch",
               "plld": "#/$defs/Plld",
               "position": "#/$defs/Position",
               "pressure_capture": "#/$defs/PressureCapture",
               "profile_pickup": "#/$defs/ProfilePickup",
               "reaspirate": "#/$defs/Stroke",
               "settings": "#/$defs/Settings",
+              "surface_aspirate": "#/$defs/SurfaceAspirate",
               "surface_move": "#/$defs/SurfaceMove",
               "tracked_aspirate": "#/$defs/TrackedAspirate",
               "trailing_air": "#/$defs/Stroke",
@@ -7819,6 +8456,12 @@
             },
             {
               "$ref": "#/$defs/Plld"
+            },
+            {
+              "$ref": "#/$defs/LiquidSearch"
+            },
+            {
+              "$ref": "#/$defs/SurfaceAspirate"
             },
             {
               "$ref": "#/$defs/SurfaceMove"
@@ -8986,6 +9629,95 @@
             "command"
           ],
           "title": "Initialize",
+          "type": "object"
+        },
+        "LiquidSearch": {
+          "additionalProperties": false,
+          "description": "Find each active channel's liquid surface in one shared descent.\n\nStart and floor come from the station's calibrated high/low with the loaded\ntip offset; Z stops once every channel reports or the floor is reached.",
+          "properties": {
+            "channels": {
+              "items": {
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 4,
+              "minItems": 1,
+              "title": "Channels",
+              "type": "array"
+            },
+            "timeout_ms": {
+              "exclusiveMinimum": 0,
+              "title": "Timeout Ms",
+              "type": "integer"
+            },
+            "operation": {
+              "const": "liquid_search",
+              "title": "Operation",
+              "type": "string"
+            },
+            "location_id": {
+              "minimum": 0,
+              "title": "Location Id",
+              "type": "integer"
+            },
+            "detection_id": {
+              "default": "last_detection",
+              "minLength": 1,
+              "title": "Detection Id",
+              "type": "string"
+            },
+            "start_mode": {
+              "default": 0,
+              "enum": [
+                0,
+                1
+              ],
+              "title": "Start Mode",
+              "type": "integer"
+            },
+            "floor_clearance_steps": {
+              "default": 2016,
+              "minimum": 0,
+              "title": "Floor Clearance Steps",
+              "type": "integer"
+            },
+            "search_speed_native": {
+              "default": 300,
+              "exclusiveMinimum": 0,
+              "title": "Search Speed Native",
+              "type": "integer"
+            },
+            "z_motor_current": {
+              "default": 25,
+              "title": "Z Motor Current",
+              "type": "integer"
+            },
+            "expected_channels": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 3,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected Channels"
+            }
+          },
+          "required": [
+            "channels",
+            "timeout_ms",
+            "operation",
+            "location_id"
+          ],
+          "title": "LiquidSearch",
           "type": "object"
         },
         "LldParameter": {
@@ -10321,6 +11053,148 @@
           "title": "StrokeIntent",
           "type": "object"
         },
+        "SurfaceAspirate": {
+          "additionalProperties": false,
+          "description": "Aspirate below each channel's detected surface, grouped by liquid level.",
+          "properties": {
+            "channels": {
+              "items": {
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 4,
+              "minItems": 1,
+              "title": "Channels",
+              "type": "array"
+            },
+            "timeout_ms": {
+              "exclusiveMinimum": 0,
+              "title": "Timeout Ms",
+              "type": "integer"
+            },
+            "operation": {
+              "const": "surface_aspirate",
+              "title": "Operation",
+              "type": "string"
+            },
+            "detection_id": {
+              "default": "last_detection",
+              "minLength": 1,
+              "title": "Detection Id",
+              "type": "string"
+            },
+            "mode": {
+              "default": "by_level",
+              "enum": [
+                "by_level",
+                "together",
+                "one_at_a_time"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "level_tolerance_steps": {
+              "default": 1008,
+              "minimum": 0,
+              "title": "Level Tolerance Steps",
+              "type": "integer"
+            },
+            "submerge_steps": {
+              "default": 2016,
+              "minimum": 0,
+              "title": "Submerge Steps",
+              "type": "integer"
+            },
+            "follow_steps": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Follow Steps",
+              "type": "integer"
+            },
+            "z_speed_native": {
+              "default": 1791,
+              "exclusiveMinimum": 0,
+              "title": "Z Speed Native",
+              "type": "integer"
+            },
+            "follow_speed_native": {
+              "default": 300,
+              "exclusiveMinimum": 0,
+              "title": "Follow Speed Native",
+              "type": "integer"
+            },
+            "volume_ul": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Volume Ul"
+            },
+            "speed_ul_s": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Speed Ul S"
+            },
+            "target_liquid_ul": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Target Liquid Ul"
+            },
+            "accounting_intent": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StrokeIntent"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "channels",
+            "timeout_ms",
+            "operation",
+            "volume_ul",
+            "speed_ul_s"
+          ],
+          "title": "SurfaceAspirate",
+          "type": "object"
+        },
         "SurfaceMove": {
           "additionalProperties": false,
           "properties": {
@@ -11120,12 +11994,14 @@
                 "dispense": "#/$defs/Stroke",
                 "empty": "#/$defs/Empty",
                 "leading_air": "#/$defs/Stroke",
+                "liquid_search": "#/$defs/LiquidSearch",
                 "plld": "#/$defs/Plld",
                 "position": "#/$defs/Position",
                 "pressure_capture": "#/$defs/PressureCapture",
                 "profile_pickup": "#/$defs/ProfilePickup",
                 "reaspirate": "#/$defs/Stroke",
                 "settings": "#/$defs/Settings",
+                "surface_aspirate": "#/$defs/SurfaceAspirate",
                 "surface_move": "#/$defs/SurfaceMove",
                 "tracked_aspirate": "#/$defs/TrackedAspirate",
                 "trailing_air": "#/$defs/Stroke",
@@ -11154,6 +12030,12 @@
               },
               {
                 "$ref": "#/$defs/Plld"
+              },
+              {
+                "$ref": "#/$defs/LiquidSearch"
+              },
+              {
+                "$ref": "#/$defs/SurfaceAspirate"
               },
               {
                 "$ref": "#/$defs/SurfaceMove"
@@ -15435,6 +16317,95 @@
           "title": "Initialize",
           "type": "object"
         },
+        "LiquidSearch": {
+          "additionalProperties": false,
+          "description": "Find each active channel's liquid surface in one shared descent.\n\nStart and floor come from the station's calibrated high/low with the loaded\ntip offset; Z stops once every channel reports or the floor is reached.",
+          "properties": {
+            "channels": {
+              "items": {
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 4,
+              "minItems": 1,
+              "title": "Channels",
+              "type": "array"
+            },
+            "timeout_ms": {
+              "exclusiveMinimum": 0,
+              "title": "Timeout Ms",
+              "type": "integer"
+            },
+            "operation": {
+              "const": "liquid_search",
+              "title": "Operation",
+              "type": "string"
+            },
+            "location_id": {
+              "minimum": 0,
+              "title": "Location Id",
+              "type": "integer"
+            },
+            "detection_id": {
+              "default": "last_detection",
+              "minLength": 1,
+              "title": "Detection Id",
+              "type": "string"
+            },
+            "start_mode": {
+              "default": 0,
+              "enum": [
+                0,
+                1
+              ],
+              "title": "Start Mode",
+              "type": "integer"
+            },
+            "floor_clearance_steps": {
+              "default": 2016,
+              "minimum": 0,
+              "title": "Floor Clearance Steps",
+              "type": "integer"
+            },
+            "search_speed_native": {
+              "default": 300,
+              "exclusiveMinimum": 0,
+              "title": "Search Speed Native",
+              "type": "integer"
+            },
+            "z_motor_current": {
+              "default": 25,
+              "title": "Z Motor Current",
+              "type": "integer"
+            },
+            "expected_channels": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 3,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected Channels"
+            }
+          },
+          "required": [
+            "channels",
+            "timeout_ms",
+            "operation",
+            "location_id"
+          ],
+          "title": "LiquidSearch",
+          "type": "object"
+        },
         "LldParameter": {
           "additionalProperties": false,
           "properties": {
@@ -16768,6 +17739,148 @@
           "title": "StrokeIntent",
           "type": "object"
         },
+        "SurfaceAspirate": {
+          "additionalProperties": false,
+          "description": "Aspirate below each channel's detected surface, grouped by liquid level.",
+          "properties": {
+            "channels": {
+              "items": {
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 4,
+              "minItems": 1,
+              "title": "Channels",
+              "type": "array"
+            },
+            "timeout_ms": {
+              "exclusiveMinimum": 0,
+              "title": "Timeout Ms",
+              "type": "integer"
+            },
+            "operation": {
+              "const": "surface_aspirate",
+              "title": "Operation",
+              "type": "string"
+            },
+            "detection_id": {
+              "default": "last_detection",
+              "minLength": 1,
+              "title": "Detection Id",
+              "type": "string"
+            },
+            "mode": {
+              "default": "by_level",
+              "enum": [
+                "by_level",
+                "together",
+                "one_at_a_time"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "level_tolerance_steps": {
+              "default": 1008,
+              "minimum": 0,
+              "title": "Level Tolerance Steps",
+              "type": "integer"
+            },
+            "submerge_steps": {
+              "default": 2016,
+              "minimum": 0,
+              "title": "Submerge Steps",
+              "type": "integer"
+            },
+            "follow_steps": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Follow Steps",
+              "type": "integer"
+            },
+            "z_speed_native": {
+              "default": 1791,
+              "exclusiveMinimum": 0,
+              "title": "Z Speed Native",
+              "type": "integer"
+            },
+            "follow_speed_native": {
+              "default": 300,
+              "exclusiveMinimum": 0,
+              "title": "Follow Speed Native",
+              "type": "integer"
+            },
+            "volume_ul": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Volume Ul"
+            },
+            "speed_ul_s": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Speed Ul S"
+            },
+            "target_liquid_ul": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Target Liquid Ul"
+            },
+            "accounting_intent": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StrokeIntent"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "channels",
+            "timeout_ms",
+            "operation",
+            "volume_ul",
+            "speed_ul_s"
+          ],
+          "title": "SurfaceAspirate",
+          "type": "object"
+        },
         "SurfaceMove": {
           "additionalProperties": false,
           "properties": {
@@ -17567,12 +18680,14 @@
                 "dispense": "#/$defs/Stroke",
                 "empty": "#/$defs/Empty",
                 "leading_air": "#/$defs/Stroke",
+                "liquid_search": "#/$defs/LiquidSearch",
                 "plld": "#/$defs/Plld",
                 "position": "#/$defs/Position",
                 "pressure_capture": "#/$defs/PressureCapture",
                 "profile_pickup": "#/$defs/ProfilePickup",
                 "reaspirate": "#/$defs/Stroke",
                 "settings": "#/$defs/Settings",
+                "surface_aspirate": "#/$defs/SurfaceAspirate",
                 "surface_move": "#/$defs/SurfaceMove",
                 "tracked_aspirate": "#/$defs/TrackedAspirate",
                 "trailing_air": "#/$defs/Stroke",
@@ -17601,6 +18716,12 @@
               },
               {
                 "$ref": "#/$defs/Plld"
+              },
+              {
+                "$ref": "#/$defs/LiquidSearch"
+              },
+              {
+                "$ref": "#/$defs/SurfaceAspirate"
               },
               {
                 "$ref": "#/$defs/SurfaceMove"
@@ -17801,12 +18922,14 @@
                     "dispense": "#/$defs/Stroke",
                     "empty": "#/$defs/Empty",
                     "leading_air": "#/$defs/Stroke",
+                    "liquid_search": "#/$defs/LiquidSearch",
                     "plld": "#/$defs/Plld",
                     "position": "#/$defs/Position",
                     "pressure_capture": "#/$defs/PressureCapture",
                     "profile_pickup": "#/$defs/ProfilePickup",
                     "reaspirate": "#/$defs/Stroke",
                     "settings": "#/$defs/Settings",
+                    "surface_aspirate": "#/$defs/SurfaceAspirate",
                     "surface_move": "#/$defs/SurfaceMove",
                     "tracked_aspirate": "#/$defs/TrackedAspirate",
                     "trailing_air": "#/$defs/Stroke",
@@ -17835,6 +18958,12 @@
                   },
                   {
                     "$ref": "#/$defs/Plld"
+                  },
+                  {
+                    "$ref": "#/$defs/LiquidSearch"
+                  },
+                  {
+                    "$ref": "#/$defs/SurfaceAspirate"
                   },
                   {
                     "$ref": "#/$defs/SurfaceMove"
@@ -17877,12 +19006,14 @@
                     "dispense": "#/$defs/Stroke",
                     "empty": "#/$defs/Empty",
                     "leading_air": "#/$defs/Stroke",
+                    "liquid_search": "#/$defs/LiquidSearch",
                     "plld": "#/$defs/Plld",
                     "position": "#/$defs/Position",
                     "pressure_capture": "#/$defs/PressureCapture",
                     "profile_pickup": "#/$defs/ProfilePickup",
                     "reaspirate": "#/$defs/Stroke",
                     "settings": "#/$defs/Settings",
+                    "surface_aspirate": "#/$defs/SurfaceAspirate",
                     "surface_move": "#/$defs/SurfaceMove",
                     "tracked_aspirate": "#/$defs/TrackedAspirate",
                     "trailing_air": "#/$defs/Stroke",
@@ -17911,6 +19042,12 @@
                   },
                   {
                     "$ref": "#/$defs/Plld"
+                  },
+                  {
+                    "$ref": "#/$defs/LiquidSearch"
+                  },
+                  {
+                    "$ref": "#/$defs/SurfaceAspirate"
                   },
                   {
                     "$ref": "#/$defs/SurfaceMove"
@@ -19065,6 +20202,177 @@
           "title": "Initialize",
           "type": "object"
         },
+        "LiquidDetection": {
+          "additionalProperties": false,
+          "description": "Find the source surface, then aspirate below it (replaces the calibrated source lower).",
+          "properties": {
+            "location_id": {
+              "minimum": 0,
+              "title": "Location Id",
+              "type": "integer"
+            },
+            "expected": {
+              "default": true,
+              "title": "Expected",
+              "type": "boolean"
+            },
+            "mode": {
+              "default": "by_level",
+              "enum": [
+                "by_level",
+                "together",
+                "one_at_a_time"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "start_mode": {
+              "default": 0,
+              "enum": [
+                0,
+                1
+              ],
+              "title": "Start Mode",
+              "type": "integer"
+            },
+            "submerge_steps": {
+              "default": 2016,
+              "minimum": 0,
+              "title": "Submerge Steps",
+              "type": "integer"
+            },
+            "follow_steps": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Follow Steps",
+              "type": "integer"
+            },
+            "floor_clearance_steps": {
+              "default": 2016,
+              "minimum": 0,
+              "title": "Floor Clearance Steps",
+              "type": "integer"
+            },
+            "level_tolerance_steps": {
+              "default": 1008,
+              "minimum": 0,
+              "title": "Level Tolerance Steps",
+              "type": "integer"
+            },
+            "search_speed_native": {
+              "default": 300,
+              "exclusiveMinimum": 0,
+              "title": "Search Speed Native",
+              "type": "integer"
+            },
+            "search_timeout_ms": {
+              "default": 15000,
+              "exclusiveMinimum": 0,
+              "title": "Search Timeout Ms",
+              "type": "integer"
+            },
+            "detection_id": {
+              "default": "source",
+              "minLength": 1,
+              "title": "Detection Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "location_id"
+          ],
+          "title": "LiquidDetection",
+          "type": "object"
+        },
+        "LiquidSearch": {
+          "additionalProperties": false,
+          "description": "Find each active channel's liquid surface in one shared descent.\n\nStart and floor come from the station's calibrated high/low with the loaded\ntip offset; Z stops once every channel reports or the floor is reached.",
+          "properties": {
+            "channels": {
+              "items": {
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 4,
+              "minItems": 1,
+              "title": "Channels",
+              "type": "array"
+            },
+            "timeout_ms": {
+              "exclusiveMinimum": 0,
+              "title": "Timeout Ms",
+              "type": "integer"
+            },
+            "operation": {
+              "const": "liquid_search",
+              "title": "Operation",
+              "type": "string"
+            },
+            "location_id": {
+              "minimum": 0,
+              "title": "Location Id",
+              "type": "integer"
+            },
+            "detection_id": {
+              "default": "last_detection",
+              "minLength": 1,
+              "title": "Detection Id",
+              "type": "string"
+            },
+            "start_mode": {
+              "default": 0,
+              "enum": [
+                0,
+                1
+              ],
+              "title": "Start Mode",
+              "type": "integer"
+            },
+            "floor_clearance_steps": {
+              "default": 2016,
+              "minimum": 0,
+              "title": "Floor Clearance Steps",
+              "type": "integer"
+            },
+            "search_speed_native": {
+              "default": 300,
+              "exclusiveMinimum": 0,
+              "title": "Search Speed Native",
+              "type": "integer"
+            },
+            "z_motor_current": {
+              "default": 25,
+              "title": "Z Motor Current",
+              "type": "integer"
+            },
+            "expected_channels": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 3,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected Channels"
+            }
+          },
+          "required": [
+            "channels",
+            "timeout_ms",
+            "operation",
+            "location_id"
+          ],
+          "title": "LiquidSearch",
+          "type": "object"
+        },
         "LldParameter": {
           "additionalProperties": false,
           "properties": {
@@ -19402,12 +20710,14 @@
                     "dispense": "#/$defs/Stroke",
                     "empty": "#/$defs/Empty",
                     "leading_air": "#/$defs/Stroke",
+                    "liquid_search": "#/$defs/LiquidSearch",
                     "plld": "#/$defs/Plld",
                     "position": "#/$defs/Position",
                     "pressure_capture": "#/$defs/PressureCapture",
                     "profile_pickup": "#/$defs/ProfilePickup",
                     "reaspirate": "#/$defs/Stroke",
                     "settings": "#/$defs/Settings",
+                    "surface_aspirate": "#/$defs/SurfaceAspirate",
                     "surface_move": "#/$defs/SurfaceMove",
                     "tracked_aspirate": "#/$defs/TrackedAspirate",
                     "trailing_air": "#/$defs/Stroke",
@@ -19436,6 +20746,12 @@
                   },
                   {
                     "$ref": "#/$defs/Plld"
+                  },
+                  {
+                    "$ref": "#/$defs/LiquidSearch"
+                  },
+                  {
+                    "$ref": "#/$defs/SurfaceAspirate"
                   },
                   {
                     "$ref": "#/$defs/SurfaceMove"
@@ -19471,12 +20787,14 @@
                     "dispense": "#/$defs/Stroke",
                     "empty": "#/$defs/Empty",
                     "leading_air": "#/$defs/Stroke",
+                    "liquid_search": "#/$defs/LiquidSearch",
                     "plld": "#/$defs/Plld",
                     "position": "#/$defs/Position",
                     "pressure_capture": "#/$defs/PressureCapture",
                     "profile_pickup": "#/$defs/ProfilePickup",
                     "reaspirate": "#/$defs/Stroke",
                     "settings": "#/$defs/Settings",
+                    "surface_aspirate": "#/$defs/SurfaceAspirate",
                     "surface_move": "#/$defs/SurfaceMove",
                     "tracked_aspirate": "#/$defs/TrackedAspirate",
                     "trailing_air": "#/$defs/Stroke",
@@ -19505,6 +20823,12 @@
                   },
                   {
                     "$ref": "#/$defs/Plld"
+                  },
+                  {
+                    "$ref": "#/$defs/LiquidSearch"
+                  },
+                  {
+                    "$ref": "#/$defs/SurfaceAspirate"
                   },
                   {
                     "$ref": "#/$defs/SurfaceMove"
@@ -20837,6 +22161,148 @@
           "title": "StrokeIntent",
           "type": "object"
         },
+        "SurfaceAspirate": {
+          "additionalProperties": false,
+          "description": "Aspirate below each channel's detected surface, grouped by liquid level.",
+          "properties": {
+            "channels": {
+              "items": {
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 4,
+              "minItems": 1,
+              "title": "Channels",
+              "type": "array"
+            },
+            "timeout_ms": {
+              "exclusiveMinimum": 0,
+              "title": "Timeout Ms",
+              "type": "integer"
+            },
+            "operation": {
+              "const": "surface_aspirate",
+              "title": "Operation",
+              "type": "string"
+            },
+            "detection_id": {
+              "default": "last_detection",
+              "minLength": 1,
+              "title": "Detection Id",
+              "type": "string"
+            },
+            "mode": {
+              "default": "by_level",
+              "enum": [
+                "by_level",
+                "together",
+                "one_at_a_time"
+              ],
+              "title": "Mode",
+              "type": "string"
+            },
+            "level_tolerance_steps": {
+              "default": 1008,
+              "minimum": 0,
+              "title": "Level Tolerance Steps",
+              "type": "integer"
+            },
+            "submerge_steps": {
+              "default": 2016,
+              "minimum": 0,
+              "title": "Submerge Steps",
+              "type": "integer"
+            },
+            "follow_steps": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Follow Steps",
+              "type": "integer"
+            },
+            "z_speed_native": {
+              "default": 1791,
+              "exclusiveMinimum": 0,
+              "title": "Z Speed Native",
+              "type": "integer"
+            },
+            "follow_speed_native": {
+              "default": 300,
+              "exclusiveMinimum": 0,
+              "title": "Follow Speed Native",
+              "type": "integer"
+            },
+            "volume_ul": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Volume Ul"
+            },
+            "speed_ul_s": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Speed Ul S"
+            },
+            "target_liquid_ul": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Target Liquid Ul"
+            },
+            "accounting_intent": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StrokeIntent"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "channels",
+            "timeout_ms",
+            "operation",
+            "volume_ul",
+            "speed_ul_s"
+          ],
+          "title": "SurfaceAspirate",
+          "type": "object"
+        },
         "SurfaceMove": {
           "additionalProperties": false,
           "properties": {
@@ -21696,6 +23162,17 @@
           ],
           "default": null
         },
+        "liquid_detection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LiquidDetection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "shared_head": {
           "anyOf": [
             {
@@ -21770,12 +23247,14 @@
                 "dispense": "#/$defs/Stroke",
                 "empty": "#/$defs/Empty",
                 "leading_air": "#/$defs/Stroke",
+                "liquid_search": "#/$defs/LiquidSearch",
                 "plld": "#/$defs/Plld",
                 "position": "#/$defs/Position",
                 "pressure_capture": "#/$defs/PressureCapture",
                 "profile_pickup": "#/$defs/ProfilePickup",
                 "reaspirate": "#/$defs/Stroke",
                 "settings": "#/$defs/Settings",
+                "surface_aspirate": "#/$defs/SurfaceAspirate",
                 "surface_move": "#/$defs/SurfaceMove",
                 "tracked_aspirate": "#/$defs/TrackedAspirate",
                 "trailing_air": "#/$defs/Stroke",
@@ -21804,6 +23283,12 @@
               },
               {
                 "$ref": "#/$defs/Plld"
+              },
+              {
+                "$ref": "#/$defs/LiquidSearch"
+              },
+              {
+                "$ref": "#/$defs/SurfaceAspirate"
               },
               {
                 "$ref": "#/$defs/SurfaceMove"
@@ -21839,12 +23324,14 @@
                 "dispense": "#/$defs/Stroke",
                 "empty": "#/$defs/Empty",
                 "leading_air": "#/$defs/Stroke",
+                "liquid_search": "#/$defs/LiquidSearch",
                 "plld": "#/$defs/Plld",
                 "position": "#/$defs/Position",
                 "pressure_capture": "#/$defs/PressureCapture",
                 "profile_pickup": "#/$defs/ProfilePickup",
                 "reaspirate": "#/$defs/Stroke",
                 "settings": "#/$defs/Settings",
+                "surface_aspirate": "#/$defs/SurfaceAspirate",
                 "surface_move": "#/$defs/SurfaceMove",
                 "tracked_aspirate": "#/$defs/TrackedAspirate",
                 "trailing_air": "#/$defs/Stroke",
@@ -21873,6 +23360,12 @@
               },
               {
                 "$ref": "#/$defs/Plld"
+              },
+              {
+                "$ref": "#/$defs/LiquidSearch"
+              },
+              {
+                "$ref": "#/$defs/SurfaceAspirate"
               },
               {
                 "$ref": "#/$defs/SurfaceMove"
@@ -21908,12 +23401,14 @@
                 "dispense": "#/$defs/Stroke",
                 "empty": "#/$defs/Empty",
                 "leading_air": "#/$defs/Stroke",
+                "liquid_search": "#/$defs/LiquidSearch",
                 "plld": "#/$defs/Plld",
                 "position": "#/$defs/Position",
                 "pressure_capture": "#/$defs/PressureCapture",
                 "profile_pickup": "#/$defs/ProfilePickup",
                 "reaspirate": "#/$defs/Stroke",
                 "settings": "#/$defs/Settings",
+                "surface_aspirate": "#/$defs/SurfaceAspirate",
                 "surface_move": "#/$defs/SurfaceMove",
                 "tracked_aspirate": "#/$defs/TrackedAspirate",
                 "trailing_air": "#/$defs/Stroke",
@@ -21942,6 +23437,12 @@
               },
               {
                 "$ref": "#/$defs/Plld"
+              },
+              {
+                "$ref": "#/$defs/LiquidSearch"
+              },
+              {
+                "$ref": "#/$defs/SurfaceAspirate"
               },
               {
                 "$ref": "#/$defs/SurfaceMove"
@@ -21977,12 +23478,14 @@
                 "dispense": "#/$defs/Stroke",
                 "empty": "#/$defs/Empty",
                 "leading_air": "#/$defs/Stroke",
+                "liquid_search": "#/$defs/LiquidSearch",
                 "plld": "#/$defs/Plld",
                 "position": "#/$defs/Position",
                 "pressure_capture": "#/$defs/PressureCapture",
                 "profile_pickup": "#/$defs/ProfilePickup",
                 "reaspirate": "#/$defs/Stroke",
                 "settings": "#/$defs/Settings",
+                "surface_aspirate": "#/$defs/SurfaceAspirate",
                 "surface_move": "#/$defs/SurfaceMove",
                 "tracked_aspirate": "#/$defs/TrackedAspirate",
                 "trailing_air": "#/$defs/Stroke",
@@ -22011,6 +23514,12 @@
               },
               {
                 "$ref": "#/$defs/Plld"
+              },
+              {
+                "$ref": "#/$defs/LiquidSearch"
+              },
+              {
+                "$ref": "#/$defs/SurfaceAspirate"
               },
               {
                 "$ref": "#/$defs/SurfaceMove"
@@ -22046,12 +23555,14 @@
                 "dispense": "#/$defs/Stroke",
                 "empty": "#/$defs/Empty",
                 "leading_air": "#/$defs/Stroke",
+                "liquid_search": "#/$defs/LiquidSearch",
                 "plld": "#/$defs/Plld",
                 "position": "#/$defs/Position",
                 "pressure_capture": "#/$defs/PressureCapture",
                 "profile_pickup": "#/$defs/ProfilePickup",
                 "reaspirate": "#/$defs/Stroke",
                 "settings": "#/$defs/Settings",
+                "surface_aspirate": "#/$defs/SurfaceAspirate",
                 "surface_move": "#/$defs/SurfaceMove",
                 "tracked_aspirate": "#/$defs/TrackedAspirate",
                 "trailing_air": "#/$defs/Stroke",
@@ -22080,6 +23591,12 @@
               },
               {
                 "$ref": "#/$defs/Plld"
+              },
+              {
+                "$ref": "#/$defs/LiquidSearch"
+              },
+              {
+                "$ref": "#/$defs/SurfaceAspirate"
               },
               {
                 "$ref": "#/$defs/SurfaceMove"
@@ -22134,12 +23651,14 @@
                 "dispense": "#/$defs/Stroke",
                 "empty": "#/$defs/Empty",
                 "leading_air": "#/$defs/Stroke",
+                "liquid_search": "#/$defs/LiquidSearch",
                 "plld": "#/$defs/Plld",
                 "position": "#/$defs/Position",
                 "pressure_capture": "#/$defs/PressureCapture",
                 "profile_pickup": "#/$defs/ProfilePickup",
                 "reaspirate": "#/$defs/Stroke",
                 "settings": "#/$defs/Settings",
+                "surface_aspirate": "#/$defs/SurfaceAspirate",
                 "surface_move": "#/$defs/SurfaceMove",
                 "tracked_aspirate": "#/$defs/TrackedAspirate",
                 "trailing_air": "#/$defs/Stroke",
@@ -22168,6 +23687,12 @@
               },
               {
                 "$ref": "#/$defs/Plld"
+              },
+              {
+                "$ref": "#/$defs/LiquidSearch"
+              },
+              {
+                "$ref": "#/$defs/SurfaceAspirate"
               },
               {
                 "$ref": "#/$defs/SurfaceMove"
@@ -23335,6 +24860,95 @@
               "command"
             ],
             "title": "Initialize",
+            "type": "object"
+          },
+          "LiquidSearch": {
+            "additionalProperties": false,
+            "description": "Find each active channel's liquid surface in one shared descent.\n\nStart and floor come from the station's calibrated high/low with the loaded\ntip offset; Z stops once every channel reports or the floor is reached.",
+            "properties": {
+              "channels": {
+                "items": {
+                  "maximum": 3,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 4,
+                "minItems": 1,
+                "title": "Channels",
+                "type": "array"
+              },
+              "timeout_ms": {
+                "exclusiveMinimum": 0,
+                "title": "Timeout Ms",
+                "type": "integer"
+              },
+              "operation": {
+                "const": "liquid_search",
+                "title": "Operation",
+                "type": "string"
+              },
+              "location_id": {
+                "minimum": 0,
+                "title": "Location Id",
+                "type": "integer"
+              },
+              "detection_id": {
+                "default": "last_detection",
+                "minLength": 1,
+                "title": "Detection Id",
+                "type": "string"
+              },
+              "start_mode": {
+                "default": 0,
+                "enum": [
+                  0,
+                  1
+                ],
+                "title": "Start Mode",
+                "type": "integer"
+              },
+              "floor_clearance_steps": {
+                "default": 2016,
+                "minimum": 0,
+                "title": "Floor Clearance Steps",
+                "type": "integer"
+              },
+              "search_speed_native": {
+                "default": 300,
+                "exclusiveMinimum": 0,
+                "title": "Search Speed Native",
+                "type": "integer"
+              },
+              "z_motor_current": {
+                "default": 25,
+                "title": "Z Motor Current",
+                "type": "integer"
+              },
+              "expected_channels": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "maximum": 3,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Expected Channels"
+              }
+            },
+            "required": [
+              "channels",
+              "timeout_ms",
+              "operation",
+              "location_id"
+            ],
+            "title": "LiquidSearch",
             "type": "object"
           },
           "LldParameter": {
@@ -24670,6 +26284,148 @@
             "title": "StrokeIntent",
             "type": "object"
           },
+          "SurfaceAspirate": {
+            "additionalProperties": false,
+            "description": "Aspirate below each channel's detected surface, grouped by liquid level.",
+            "properties": {
+              "channels": {
+                "items": {
+                  "maximum": 3,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 4,
+                "minItems": 1,
+                "title": "Channels",
+                "type": "array"
+              },
+              "timeout_ms": {
+                "exclusiveMinimum": 0,
+                "title": "Timeout Ms",
+                "type": "integer"
+              },
+              "operation": {
+                "const": "surface_aspirate",
+                "title": "Operation",
+                "type": "string"
+              },
+              "detection_id": {
+                "default": "last_detection",
+                "minLength": 1,
+                "title": "Detection Id",
+                "type": "string"
+              },
+              "mode": {
+                "default": "by_level",
+                "enum": [
+                  "by_level",
+                  "together",
+                  "one_at_a_time"
+                ],
+                "title": "Mode",
+                "type": "string"
+              },
+              "level_tolerance_steps": {
+                "default": 1008,
+                "minimum": 0,
+                "title": "Level Tolerance Steps",
+                "type": "integer"
+              },
+              "submerge_steps": {
+                "default": 2016,
+                "minimum": 0,
+                "title": "Submerge Steps",
+                "type": "integer"
+              },
+              "follow_steps": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Follow Steps",
+                "type": "integer"
+              },
+              "z_speed_native": {
+                "default": 1791,
+                "exclusiveMinimum": 0,
+                "title": "Z Speed Native",
+                "type": "integer"
+              },
+              "follow_speed_native": {
+                "default": 300,
+                "exclusiveMinimum": 0,
+                "title": "Follow Speed Native",
+                "type": "integer"
+              },
+              "volume_ul": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                    "type": "string"
+                  }
+                ],
+                "title": "Volume Ul"
+              },
+              "speed_ul_s": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                    "type": "string"
+                  }
+                ],
+                "title": "Speed Ul S"
+              },
+              "target_liquid_ul": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Target Liquid Ul"
+              },
+              "accounting_intent": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StrokeIntent"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "channels",
+              "timeout_ms",
+              "operation",
+              "volume_ul",
+              "speed_ul_s"
+            ],
+            "title": "SurfaceAspirate",
+            "type": "object"
+          },
           "SurfaceMove": {
             "additionalProperties": false,
             "properties": {
@@ -25469,12 +27225,14 @@
                   "dispense": "#/$defs/Stroke",
                   "empty": "#/$defs/Empty",
                   "leading_air": "#/$defs/Stroke",
+                  "liquid_search": "#/$defs/LiquidSearch",
                   "plld": "#/$defs/Plld",
                   "position": "#/$defs/Position",
                   "pressure_capture": "#/$defs/PressureCapture",
                   "profile_pickup": "#/$defs/ProfilePickup",
                   "reaspirate": "#/$defs/Stroke",
                   "settings": "#/$defs/Settings",
+                  "surface_aspirate": "#/$defs/SurfaceAspirate",
                   "surface_move": "#/$defs/SurfaceMove",
                   "tracked_aspirate": "#/$defs/TrackedAspirate",
                   "trailing_air": "#/$defs/Stroke",
@@ -25503,6 +27261,12 @@
                 },
                 {
                   "$ref": "#/$defs/Plld"
+                },
+                {
+                  "$ref": "#/$defs/LiquidSearch"
+                },
+                {
+                  "$ref": "#/$defs/SurfaceAspirate"
                 },
                 {
                   "$ref": "#/$defs/SurfaceMove"

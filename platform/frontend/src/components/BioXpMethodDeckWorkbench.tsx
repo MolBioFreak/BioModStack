@@ -179,8 +179,8 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
         setSelectedId('');
     };
     const localPlate = plan.labware.find(l => l.id === plateId && plateBoundEndpoint({}, l.id, plan, occurrenceState)?.station === selection.station) ?? (plan.labware.filter(l => plateBoundEndpoint({}, l.id, plan, occurrenceState)?.station === selection.station).length === 1 ? plan.labware.find(l => plateBoundEndpoint({}, l.id, plan, occurrenceState)?.station === selection.station) : undefined);
-    const plateAddition = () => ({ ...(transferMode === 'class' ? { liquid: {}, recipe: {} } : {}), ...(endpointReady ? { destination: { station: station!.id, location_id: station!.locationId, wells: [...selection.wells], ...(localPlate ? { labware_id: localPlate.id } : {}) } } : localPlate ? { destination: plateBoundEndpoint({}, localPlate.id, plan, occurrenceState) } : {}) });
-    const transferInputs = () => ({ ...(endpointReady ? { source: { station: station!.id, location_id: station!.locationId, wells: [...selection.wells] } } : {}), ...(transferMode === 'class' ? { liquid: {}, recipe: {} } : {}) });
+    const plateAddition = () => ({ ...(transferMode === 'class' ? { liquid: {}, recipe: {}, liquid_detection: {} } : {}), ...(endpointReady ? { destination: { station: station!.id, location_id: station!.locationId, wells: [...selection.wells], ...(localPlate ? { labware_id: localPlate.id } : {}) } } : localPlate ? { destination: plateBoundEndpoint({}, localPlate.id, plan, occurrenceState) } : {}) });
+    const transferInputs = () => ({ ...(endpointReady ? { source: { station: station!.id, location_id: station!.locationId, wells: [...selection.wells] } } : {}), ...(transferMode === 'class' ? { liquid: {}, recipe: {}, liquid_detection: {} } : {}) });
     const allNodes = entries.map(e => e.node);
     const nodePath = (node: MethodValue) => entries.find(e => e.node === node)?.path ?? String(node.step_id);
     const carryLinks = methodCarryLinks(method, bindings, plan, catalog);
