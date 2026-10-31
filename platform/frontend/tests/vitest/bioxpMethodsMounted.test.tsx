@@ -513,7 +513,7 @@ it.each(['manual', 'class'])('composes map-driven Move and %s Transfer, selected
     await click('Select step 2'); await click('Save');
     const saved = structuredClone(db.m2.method);
     expect(saved.steps[0]).toEqual({ step_id: moveId, type: 'action', action: 'move', inputs: { location_id: 2, well: 'B2', position_flag: 1 } });
-    expect(saved.steps[1].inputs).toEqual({ source: { station: 'LOC_RC', location_id: 3, wells: ['A3'] }, destination: { station: 'LOC_OC', location_id: 1, wells: ['B4'] }, volume_ul: '020.000100', ...(mode === 'class' ? { liquid: {}, recipe: {} } : {}) });
+    expect(saved.steps[1].inputs).toEqual({ source: { station: 'LOC_RC', location_id: 3, wells: ['A3'] }, destination: { station: 'LOC_OC', location_id: 1, wells: ['B4'] }, volume_ul: '020.000100', ...(mode === 'class' ? { liquid: {}, recipe: {}, liquid_detection: {} } : {}) });
     expect(saved.deck_plan.labware[0].station).toBe('LOC_OC');
     expect(saved.deck_plan.assignments[0]).toMatchObject({ well: 'B4', volume_ul: '' });
     await act(async () => root.unmount()); client.clear(); await mount(); await input('Library entry', 'm2'); await click('Open');

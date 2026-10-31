@@ -10,7 +10,7 @@ from bioxp_method_model import method_catalog
 
 
 def test_committed_native_pin_and_registration():
-    assert EXPORT['source_commit'] == 'e4decce4308235148b8bb2cb21046309fcbcfed6'
+    assert EXPORT['source_commit'] == '9db14461c6db60012c7b3ea7ac14d2a346fd3258'
     assert not any('classifier' in k for k in EXPORT['capabilities'])
     for name, schema in EXPORT['method_contract']['action_params'].items():
         assert all(CONTRACTS[name][key] == value for key, value in schema.items())
