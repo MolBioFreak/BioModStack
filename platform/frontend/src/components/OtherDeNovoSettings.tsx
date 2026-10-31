@@ -14,7 +14,7 @@ export function retainedRfd3Settings(value: Record<string, unknown> = {}) {
 // General generation owns nested conditioning and exact source selectors, not
 // flat redesign conditions. Keep this finite projection separate from execution.
 export function retainedRfd3Draft(value: Record<string, unknown> = {}) {
-    const keys = ['conditioning', 'input_structure', 'source_mapping', 'source_model', 'generation_mode'];
+    const keys = ['conditioning', 'input_structure', 'source_mapping', 'source_model', 'generation_mode', 'generation_task', 'redesign'];
     return { ...retainedRfd3Settings(value), ...Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])) };
 }
 export function useRfd3GenerationBounds(enabled: boolean) {

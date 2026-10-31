@@ -19,12 +19,12 @@ const python = process.env.BMS_TEST_PYTHON ?? 'python3';
 const inventories = { rfd3: JSON.parse(execFileSync(python, ['tests/test_de_novo_gap_rfd3.py', 'inventory'], { cwd: '../..', encoding: 'utf8' })) };
 function replay(params: unknown) { return JSON.parse(execFileSync(python, ['tests/test_de_novo_gap_rfd3.py', 'replay'], { cwd: '../..', input: JSON.stringify(params), encoding: 'utf8' })); }
 let root: Root; let client: QueryClient; const previous = api.defaults.adapter;
-let requests: string[] = []; let unexpected: string[] = [];
+let requests: string[] = []; let unexpected: string[] = []; let allowSourceRead = false;
 afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); api.defaults.adapter = previous; vi.restoreAllMocks(); expect(unexpected).toEqual([]); requests = []; unexpected = []; });
 async function render(node: React.ReactNode) {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (...args) => { unexpected.push(`fetch:${String(args[0])}`); throw Error('Unexpected fetch'); });
     vi.spyOn(XMLHttpRequest.prototype, 'send').mockImplementation(() => { unexpected.push('XMLHttpRequest'); throw Error('Unexpected XMLHttpRequest'); });
-    api.defaults.adapter = async config => { const name = String(config.url); if (name === '/api/models/protein_modification_experimental') return { data: { engine_references: {} }, config, status: 200, statusText: 'OK', headers: {} }; requests.push(`${name}:${config.params?.generator}`); if (!name.endsWith('/generation-settings')) { unexpected.push(name); throw Error(name); } return { data: inventories.rfd3, config, status: 200, statusText: 'OK', headers: {} }; };
+    api.defaults.adapter = async config => { const name = String(config.url); if (name === '/api/models/protein_modification_experimental') return { data: { engine_references: {} }, config, status: 200, statusText: 'OK', headers: {} }; requests.push(`${name}:${config.params?.generator}`); if (allowSourceRead && name === '/api/files/materialize-structure') throw Error('inert source read'); if (!name.endsWith('/generation-settings')) { unexpected.push(name); throw Error(name); } return { data: inventories.rfd3, config, status: 200, statusText: 'OK', headers: {} }; };
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host); client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter>{node}</MemoryRouter></QueryClientProvider>); });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
@@ -160,6 +160,24 @@ it('source-bound nested selectors and exact MODEL survive unrelated editing and 
         expect(prepared.native.generation_0.select_fixed_atoms).toEqual({ A1: ['CA'] });
         expect(prepared.receipt.source_mapping.original_sha256).toBe(prepared.request.source.sha256);
     } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+it('region tasks write the typed redesign request, keep it on reopen, and clear it with the structure', async () => {
+    const draft = vi.fn(); allowSourceRead = true;
+    await render(<ProteinModificationTemplate onBack={() => {}} onDraftChange={draft} initialValues={{ generator: 'rfd3', input_structure: 'inputs/region.pdb' }} />);
+    await click('Choose / edit RFD3 context');
+    expect(document.querySelector('[aria-label="Redesign ranges"]')).toBeNull();
+    await edit('RFD3 region task', 'partial_diffusion');
+    await edit('Redesign ranges', 'A30-40'); await edit('Partial noise exact Å', '5');
+    expect(request().params).toMatchObject({ generation_task: 'partial_diffusion', redesign: { design_chains: ['A'], redesign_ranges: 'A30-40' }, conditioning: { partial_t: 5 } });
+    await edit('RFD3 region task', 'minimal_insertion');
+    expect(request().params.conditioning).not.toHaveProperty('partial_t');
+    await edit('Insertion anchor', 'A40'); await edit('Insertion minimum length', '4'); await edit('Insertion maximum length', '6');
+    const saved = JSON.parse(JSON.stringify(draft.mock.calls.at(-1)![0]));
+    await reopen(saved);
+    expect(request().params).toMatchObject({ generation_task: 'minimal_insertion', redesign: { design_chains: ['A'], insertion_anchor: 'A40', insertion_min_length: 4, insertion_max_length: 6 } });
+    await click('Choose / edit RFD3 context'); await click('Clear input structure');
+    expect(request().params).not.toHaveProperty('generation_task'); expect(request().params).not.toHaveProperty('redesign');
+    allowSourceRead = false;
 });
 it('redesign sourceConditions stays flat and does not adopt the general nested owner', async () => {
     let saved: Record<string, unknown> = {};

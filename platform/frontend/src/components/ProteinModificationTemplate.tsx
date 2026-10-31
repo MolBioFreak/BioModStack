@@ -6,6 +6,7 @@ import { DeNovoNativeGenerationSettings } from './DeNovoNativeGenerationSettings
 import { OtherDeNovoSettings, retainedRfd3Draft, rfd3ExecutionKeys, useRfd3GenerationBounds } from './OtherDeNovoSettings';
 import { DiscoJobsInput } from './DiscoJobsInput';
 import { Rfd3SelectionWorkbench } from './Rfd3SelectionWorkbench';
+import { Rfd3RegionTask } from './Rfd3RegionTask';
 import type { Rfd3SourceSelection } from '../lib/rfd3SourceSelection';
 import type { Rfd3SelectionObservations, Rfd3InspectionSource } from '../lib/rfd3SelectionObservations';
 import { projectRfd3SourceSelection } from '../lib/rfd3SourceSelection';
@@ -431,7 +432,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     } : undefined;
     useEffect(() => { setRfd3Picks(undefined); }, [rfd3Source?.path, rfd3Source?.model_number]);
     const clearRfd3Source = () => setRfd3Settings(previous => {
-        const next = { ...previous }; delete next.input_structure; delete next.source_model; delete next.source_mapping; return next;
+        const next = { ...previous }; delete next.input_structure; delete next.source_model; delete next.source_mapping; delete next.generation_task; delete next.redesign; return next;
     });
     const rfd3Bounds = useRfd3GenerationBounds(generator === 'rfd3');
     const rfd3LengthsInvalid = requestMinLength === '' || requestMaxLength === '' || !Number.isInteger(requestMinLength) || !Number.isInteger(requestMaxLength) || Number(requestMinLength) > Number(requestMaxLength) ||
@@ -497,7 +498,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     };
     // Retain unrecognized editor imports, without reintroducing cleared fields
     // owned by this child or placing extras in the native request.
-    const clearable = new Set<string>([...rfd3ExecutionKeys, 'conditioning', 'input_structure', 'source_mapping', 'source_model', 'generation_mode', 'native_job_request', 'de_novo_drafts', 'generator', 'backend', 'design_task', 'modification_mode', 'native_mode', 'suite_view', 'suite_last_tasks', 'suite_last_modes', 'laproteina_settings', 'disco_settings', 'sequence_design_null', 'sequence_design_omitted', 'pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path']);
+    const clearable = new Set<string>([...rfd3ExecutionKeys, 'conditioning', 'generation_task', 'redesign', 'input_structure', 'source_mapping', 'source_model', 'generation_mode', 'native_job_request', 'de_novo_drafts', 'generator', 'backend', 'design_task', 'modification_mode', 'native_mode', 'suite_view', 'suite_last_tasks', 'suite_last_modes', 'laproteina_settings', 'disco_settings', 'sequence_design_null', 'sequence_design_omitted', 'pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path']);
     const extras = Object.fromEntries(Object.entries(initialValues).filter(([key]) => !Object.hasOwn(draftValues, key) && !clearable.has(key)));
     const draftJson = JSON.stringify({ ...extras, ...draftValues });
     const submitMutation = useMutation({
@@ -822,6 +823,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
                         }}><option value="">Manual / historical source mapping</option><option value="bms.rfd3.source-map.v1">Exact author-to-native source map</option>
                             {rfd3Settings.source_mapping && rfd3Settings.source_mapping !== 'bms.rfd3.source-map.v1' ? <option value={String(rfd3Settings.source_mapping)}>{String(rfd3Settings.source_mapping)} · retained historical mapping</option> : null}
                         </select></label>
+                        {rfd3Source && <Rfd3RegionTask settings={rfd3Settings} onChange={setRfd3Settings} />}
                         <Rfd3SelectionWorkbench key={JSON.stringify([rfd3Source?.path, rfd3Source?.model_number])}
                             value={settingsObject(rfd3Settings.conditioning)} visual={rfd3Visual}
                             retainedObservations={rfd3Observations} onObservationsChange={setRfd3Observations} inspectionSource={rfd3InspectionSource}
