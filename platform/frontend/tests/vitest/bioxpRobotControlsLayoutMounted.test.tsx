@@ -122,7 +122,7 @@ beforeEach(() => {
         if (url.endsWith('/calibration-settings')) return { data: { active_motion_positions: [], saved_motion_positions: [], active_positions: [], saved_positions: [], active_loader_adjustments: [], saved_loader_adjustments: [] } };
         if (url.includes('/camera/')) return { data: { active: false, available: false, state: 'unavailable' } };
         if (url.endsWith('/protocols/jobs') || url.endsWith('/methods/runs')) return { data: [] };
-        if (['/api/bioxp/methods/examples', '/api/bioxp/methods/library', '/api/bioxp/methods/presets', '/api/bioxp/methods/liquid-classes/starters'].includes(url)) return { data: [] };
+        if (['/api/bioxp/methods/examples', '/api/bioxp/methods/library', '/api/bioxp/methods/presets', '/api/bioxp/methods/liquid-classes/starters', '/api/bioxp/methods/plates'].includes(url)) return { data: [] };
         // Unrelated tabs deliberately receive unavailable optional services. Their
         // real error presentation must not erase Robot drafts or submit anything.
         if (['/api/bioxp/methods/schema', '/api/bioxp/operator-controls/pipettes/application/status'].includes(url))

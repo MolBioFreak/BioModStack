@@ -1,0 +1,41 @@
+{
+  "schema": "bms.bioxp-plate-library.v1",
+  "note": "Plate profiles for Workflows. Pick one per labware; it is pinned into the workflow. height_to_volume is [[height_mm_above_well_bottom, volume_ul], ...]; calibrated_low_gap_mm is how far calibrated low sits above the well bottom. Volume checks run only when both are set; otherwise they report 'not measured'. Add plates by appending entries.",
+  "profiles": [
+    {
+      "id": "thermo-4483485-enduraplate-fast",
+      "revision": 1,
+      "name": "Thermo MicroAmp EnduraPlate Optical 96-Well Fast (4483485)",
+      "catalog_numbers": ["4483485", "4483486", "4483487", "4483492", "4483495", "4483493", "4483494", "4483496"],
+      "native_addressing": {"row_increment": 2, "column_increment": 0, "reference_channel": 0},
+      "vessel_geometry": {
+        "format": "SBS 96", "skirt": "semi-skirted", "rows": 8, "columns": 12,
+        "length_mm": 127.76, "width_mm": 85.48, "a1_x_mm": 14.38, "a1_y_mm": 11.24, "pitch_mm": 9.0,
+        "well_top_diameter_mm": 5.49, "bottom": "V", "well_depth_mm": null,
+        "max_volume_ul": 100, "working_volume_ul": null,
+        "height_to_volume": null, "calibrated_low_gap_mm": null
+      },
+      "dead_volume_ul": null,
+      "source": "Thermo/Life Technologies customer drawing 4473713 rev A-11 sheet 3 (footprint, A1, pitch, well top). 0.1 mL Fast format per product page. Well depth and height-to-volume not on that sheet: measure.",
+      "adapter_support": "unknown", "consumable_fit": "in use (NGS commissioning)", "qualification": "not BioXP-qualified"
+    },
+    {
+      "id": "thermo-4483354-enduraplate",
+      "revision": 1,
+      "name": "Thermo MicroAmp EnduraPlate Optical 96-Well (4483354)",
+      "catalog_numbers": ["4483354"],
+      "native_addressing": {"row_increment": 2, "column_increment": 0, "reference_channel": 0},
+      "vessel_geometry": {
+        "format": "SBS 96", "skirt": "semi-skirted", "rows": 8, "columns": 12,
+        "length_mm": 127.76, "width_mm": 85.48, "pitch_mm": 9.0,
+        "well_top_diameter_mm": 5.49, "bottom": "V", "well_depth_mm": 20.1,
+        "max_volume_ul": 300, "working_volume_ul": 200,
+        "height_to_volume": [[0.0, 0.0], [0.17, 4.0], [0.77, 8.0], [2.27, 20.0], [6.57, 70.0], [9.17, 120.0], [11.17, 170.0], [13.17, 220.0], [15.17, 260.0]],
+        "calibrated_low_gap_mm": null
+      },
+      "dead_volume_ul": null,
+      "source": "PyLabRobot resources/thermo_fisher/plates.py Thermo_AB_96_wellplate_300ul_Vb_EnduraPlate (measured height-to-volume). Not the Fast plate.",
+      "adapter_support": "unknown", "consumable_fit": "unknown", "qualification": "not BioXP-qualified"
+    }
+  ]
+}

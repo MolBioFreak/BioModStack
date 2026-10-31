@@ -14,7 +14,11 @@ def liquid_detection_schema():
                         'by level, 1 mm below the surface, stop 1 mm above calibrated low. A listed well with no liquid pauses the run.'),
         'properties': {
             'when': {'enum': ['first_draw', 'every_draw', 'off'], 'default': 'first_draw'},
-            'mode': {'enum': ['by_level', 'together', 'one_at_a_time'], 'default': 'by_level'},
+            'mode': {'enum': ['by_level', 'together', 'one_at_a_time', 'on_contact'], 'default': 'by_level'},
+            'on_contact_delay_ms': {'type': 'integer', 'minimum': 0, 'maximum': 5000, 'default': 0},
+            'mismatch_response': {'enum': ['pause', 'proceed', 'fail'], 'default': 'pause'},
+            'mismatch_tolerance_mm': mm('Mismatch allowance (mm)'),
+            'mismatch_tolerance_percent': {'type': ['number', 'string'], 'minimum': 0, 'maximum': 100, 'default': 15},
             'expected': {'type': 'boolean', 'default': True, 'title': 'Liquid expected (missing liquid pauses the run)'},
             'submerge_mm': mm('Depth below surface (mm)'), 'follow_mm': mm('Follow down while aspirating (mm)'),
             'floor_clearance_mm': mm('Stop above calibrated low (mm)'), 'level_tolerance_mm': mm('Same level within (mm)'),

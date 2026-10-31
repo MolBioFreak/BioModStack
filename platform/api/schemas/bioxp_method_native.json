@@ -1,5 +1,5 @@
 {
-  "source_commit": "8b0977b15086b9281dcf748a880c558839681a98",
+  "source_commit": "6b996d76b6d21dd67354c259ddd6a6ea9d56c5d6",
   "application": {
     "$defs": {
       "AccountingContext": {
@@ -1174,6 +1174,28 @@
             ],
             "default": null,
             "title": "Expected Channels"
+          },
+          "on_contact": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OnContact"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "volume_check": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/VolumeCheck"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -1447,6 +1469,84 @@
           "speed_native"
         ],
         "title": "NativeOffset",
+        "type": "object"
+      },
+      "OnContact": {
+        "additionalProperties": false,
+        "properties": {
+          "volume_ul": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Volume Ul"
+          },
+          "speed_ul_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Speed Ul S"
+          },
+          "delay_ms": {
+            "default": 0,
+            "maximum": 5000,
+            "minimum": 0,
+            "title": "Delay Ms",
+            "type": "integer"
+          },
+          "target_liquid_ul": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target Liquid Ul"
+          },
+          "accounting_intent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StrokeIntent"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "volume_ul",
+          "speed_ul_s"
+        ],
+        "title": "OnContact",
         "type": "object"
       },
       "PickupCalibration": {
@@ -3362,6 +3462,74 @@
         "title": "VesselReference",
         "type": "object"
       },
+      "VolumeCheck": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_ul": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Expected Ul",
+            "type": "object"
+          },
+          "table": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Table"
+          },
+          "gap_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gap Mm"
+          },
+          "tolerance_mm": {
+            "default": 1.0,
+            "minimum": 0,
+            "title": "Tolerance Mm",
+            "type": "number"
+          },
+          "tolerance_fraction": {
+            "default": 0.15,
+            "minimum": 0,
+            "title": "Tolerance Fraction",
+            "type": "number"
+          },
+          "response": {
+            "default": "pause",
+            "enum": [
+              "proceed",
+              "pause",
+              "fail"
+            ],
+            "title": "Response",
+            "type": "string"
+          }
+        },
+        "title": "VolumeCheck",
+        "type": "object"
+      },
       "ZMove": {
         "additionalProperties": false,
         "properties": {
@@ -5017,7 +5185,8 @@
             "enum": [
               "by_level",
               "together",
-              "one_at_a_time"
+              "one_at_a_time",
+              "on_contact"
             ],
             "title": "Mode",
             "type": "string"
@@ -5030,6 +5199,26 @@
             ],
             "title": "Start Mode",
             "type": "integer"
+          },
+          "on_contact_delay_ms": {
+            "default": 0,
+            "maximum": 5000,
+            "minimum": 0,
+            "title": "On Contact Delay Ms",
+            "type": "integer"
+          },
+          "volume_check": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Volume Check"
           },
           "submerge_steps": {
             "default": 2016,
@@ -5178,6 +5367,28 @@
             ],
             "default": null,
             "title": "Expected Channels"
+          },
+          "on_contact": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OnContact"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "volume_check": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/VolumeCheck"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -5765,6 +5976,84 @@
           "speed_native"
         ],
         "title": "NativeOffset",
+        "type": "object"
+      },
+      "OnContact": {
+        "additionalProperties": false,
+        "properties": {
+          "volume_ul": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Volume Ul"
+          },
+          "speed_ul_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Speed Ul S"
+          },
+          "delay_ms": {
+            "default": 0,
+            "maximum": 5000,
+            "minimum": 0,
+            "title": "Delay Ms",
+            "type": "integer"
+          },
+          "target_liquid_ul": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target Liquid Ul"
+          },
+          "accounting_intent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StrokeIntent"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "volume_ul",
+          "speed_ul_s"
+        ],
+        "title": "OnContact",
         "type": "object"
       },
       "PickupCalibration": {
@@ -7821,6 +8110,74 @@
         "title": "VesselReference",
         "type": "object"
       },
+      "VolumeCheck": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_ul": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Expected Ul",
+            "type": "object"
+          },
+          "table": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Table"
+          },
+          "gap_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gap Mm"
+          },
+          "tolerance_mm": {
+            "default": 1.0,
+            "minimum": 0,
+            "title": "Tolerance Mm",
+            "type": "number"
+          },
+          "tolerance_fraction": {
+            "default": 0.15,
+            "minimum": 0,
+            "title": "Tolerance Fraction",
+            "type": "number"
+          },
+          "response": {
+            "default": "pause",
+            "enum": [
+              "proceed",
+              "pause",
+              "fail"
+            ],
+            "title": "Response",
+            "type": "string"
+          }
+        },
+        "title": "VolumeCheck",
+        "type": "object"
+      },
       "ZMove": {
         "additionalProperties": false,
         "properties": {
@@ -9766,6 +10123,28 @@
               ],
               "default": null,
               "title": "Expected Channels"
+            },
+            "on_contact": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OnContact"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "volume_check": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VolumeCheck"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
@@ -10039,6 +10418,84 @@
             "speed_native"
           ],
           "title": "NativeOffset",
+          "type": "object"
+        },
+        "OnContact": {
+          "additionalProperties": false,
+          "properties": {
+            "volume_ul": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Volume Ul"
+            },
+            "speed_ul_s": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Speed Ul S"
+            },
+            "delay_ms": {
+              "default": 0,
+              "maximum": 5000,
+              "minimum": 0,
+              "title": "Delay Ms",
+              "type": "integer"
+            },
+            "target_liquid_ul": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Target Liquid Ul"
+            },
+            "accounting_intent": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StrokeIntent"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "volume_ul",
+            "speed_ul_s"
+          ],
+          "title": "OnContact",
           "type": "object"
         },
         "PickupCalibration": {
@@ -11952,6 +12409,74 @@
             "fallback_position_steps"
           ],
           "title": "VesselReference",
+          "type": "object"
+        },
+        "VolumeCheck": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_ul": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Expected Ul",
+              "type": "object"
+            },
+            "table": {
+              "anyOf": [
+                {
+                  "items": {
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Table"
+            },
+            "gap_mm": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gap Mm"
+            },
+            "tolerance_mm": {
+              "default": 1.0,
+              "minimum": 0,
+              "title": "Tolerance Mm",
+              "type": "number"
+            },
+            "tolerance_fraction": {
+              "default": 0.15,
+              "minimum": 0,
+              "title": "Tolerance Fraction",
+              "type": "number"
+            },
+            "response": {
+              "default": "pause",
+              "enum": [
+                "proceed",
+                "pause",
+                "fail"
+              ],
+              "title": "Response",
+              "type": "string"
+            }
+          },
+          "title": "VolumeCheck",
           "type": "object"
         },
         "ZMove": {
@@ -16462,6 +16987,28 @@
               ],
               "default": null,
               "title": "Expected Channels"
+            },
+            "on_contact": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OnContact"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "volume_check": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VolumeCheck"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
@@ -16735,6 +17282,84 @@
             "speed_native"
           ],
           "title": "NativeOffset",
+          "type": "object"
+        },
+        "OnContact": {
+          "additionalProperties": false,
+          "properties": {
+            "volume_ul": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Volume Ul"
+            },
+            "speed_ul_s": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Speed Ul S"
+            },
+            "delay_ms": {
+              "default": 0,
+              "maximum": 5000,
+              "minimum": 0,
+              "title": "Delay Ms",
+              "type": "integer"
+            },
+            "target_liquid_ul": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Target Liquid Ul"
+            },
+            "accounting_intent": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StrokeIntent"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "volume_ul",
+            "speed_ul_s"
+          ],
+          "title": "OnContact",
           "type": "object"
         },
         "PickupCalibration": {
@@ -18650,6 +19275,74 @@
           "title": "VesselReference",
           "type": "object"
         },
+        "VolumeCheck": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_ul": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Expected Ul",
+              "type": "object"
+            },
+            "table": {
+              "anyOf": [
+                {
+                  "items": {
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Table"
+            },
+            "gap_mm": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gap Mm"
+            },
+            "tolerance_mm": {
+              "default": 1.0,
+              "minimum": 0,
+              "title": "Tolerance Mm",
+              "type": "number"
+            },
+            "tolerance_fraction": {
+              "default": 0.15,
+              "minimum": 0,
+              "title": "Tolerance Fraction",
+              "type": "number"
+            },
+            "response": {
+              "default": "pause",
+              "enum": [
+                "proceed",
+                "pause",
+                "fail"
+              ],
+              "title": "Response",
+              "type": "string"
+            }
+          },
+          "title": "VolumeCheck",
+          "type": "object"
+        },
         "ZMove": {
           "additionalProperties": false,
           "properties": {
@@ -20305,7 +20998,8 @@
               "enum": [
                 "by_level",
                 "together",
-                "one_at_a_time"
+                "one_at_a_time",
+                "on_contact"
               ],
               "title": "Mode",
               "type": "string"
@@ -20318,6 +21012,26 @@
               ],
               "title": "Start Mode",
               "type": "integer"
+            },
+            "on_contact_delay_ms": {
+              "default": 0,
+              "maximum": 5000,
+              "minimum": 0,
+              "title": "On Contact Delay Ms",
+              "type": "integer"
+            },
+            "volume_check": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Volume Check"
             },
             "submerge_steps": {
               "default": 2016,
@@ -20466,6 +21180,28 @@
               ],
               "default": null,
               "title": "Expected Channels"
+            },
+            "on_contact": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OnContact"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "volume_check": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VolumeCheck"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
@@ -21053,6 +21789,84 @@
             "speed_native"
           ],
           "title": "NativeOffset",
+          "type": "object"
+        },
+        "OnContact": {
+          "additionalProperties": false,
+          "properties": {
+            "volume_ul": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Volume Ul"
+            },
+            "speed_ul_s": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Speed Ul S"
+            },
+            "delay_ms": {
+              "default": 0,
+              "maximum": 5000,
+              "minimum": 0,
+              "title": "Delay Ms",
+              "type": "integer"
+            },
+            "target_liquid_ul": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Target Liquid Ul"
+            },
+            "accounting_intent": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/StrokeIntent"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "volume_ul",
+            "speed_ul_s"
+          ],
+          "title": "OnContact",
           "type": "object"
         },
         "PickupCalibration": {
@@ -23109,6 +23923,74 @@
           "title": "VesselReference",
           "type": "object"
         },
+        "VolumeCheck": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_ul": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Expected Ul",
+              "type": "object"
+            },
+            "table": {
+              "anyOf": [
+                {
+                  "items": {
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Table"
+            },
+            "gap_mm": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gap Mm"
+            },
+            "tolerance_mm": {
+              "default": 1.0,
+              "minimum": 0,
+              "title": "Tolerance Mm",
+              "type": "number"
+            },
+            "tolerance_fraction": {
+              "default": 0.15,
+              "minimum": 0,
+              "title": "Tolerance Fraction",
+              "type": "number"
+            },
+            "response": {
+              "default": "pause",
+              "enum": [
+                "proceed",
+                "pause",
+                "fail"
+              ],
+              "title": "Response",
+              "type": "string"
+            }
+          },
+          "title": "VolumeCheck",
+          "type": "object"
+        },
         "ZMove": {
           "additionalProperties": false,
           "properties": {
@@ -25054,6 +25936,28 @@
                 ],
                 "default": null,
                 "title": "Expected Channels"
+              },
+              "on_contact": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/OnContact"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "volume_check": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/VolumeCheck"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
               }
             },
             "required": [
@@ -25327,6 +26231,84 @@
               "speed_native"
             ],
             "title": "NativeOffset",
+            "type": "object"
+          },
+          "OnContact": {
+            "additionalProperties": false,
+            "properties": {
+              "volume_ul": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                    "type": "string"
+                  }
+                ],
+                "title": "Volume Ul"
+              },
+              "speed_ul_s": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                    "type": "string"
+                  }
+                ],
+                "title": "Speed Ul S"
+              },
+              "delay_ms": {
+                "default": 0,
+                "maximum": 5000,
+                "minimum": 0,
+                "title": "Delay Ms",
+                "type": "integer"
+              },
+              "target_liquid_ul": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Target Liquid Ul"
+              },
+              "accounting_intent": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StrokeIntent"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "volume_ul",
+              "speed_ul_s"
+            ],
+            "title": "OnContact",
             "type": "object"
           },
           "PickupCalibration": {
@@ -27240,6 +28222,74 @@
               "fallback_position_steps"
             ],
             "title": "VesselReference",
+            "type": "object"
+          },
+          "VolumeCheck": {
+            "additionalProperties": false,
+            "properties": {
+              "expected_ul": {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "title": "Expected Ul",
+                "type": "object"
+              },
+              "table": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Table"
+              },
+              "gap_mm": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Gap Mm"
+              },
+              "tolerance_mm": {
+                "default": 1.0,
+                "minimum": 0,
+                "title": "Tolerance Mm",
+                "type": "number"
+              },
+              "tolerance_fraction": {
+                "default": 0.15,
+                "minimum": 0,
+                "title": "Tolerance Fraction",
+                "type": "number"
+              },
+              "response": {
+                "default": "pause",
+                "enum": [
+                  "proceed",
+                  "pause",
+                  "fail"
+                ],
+                "title": "Response",
+                "type": "string"
+              }
+            },
+            "title": "VolumeCheck",
             "type": "object"
           },
           "ZMove": {

@@ -19,7 +19,7 @@ it.each(['/bioxp', '/bioxp/workflows'])('opens saved authoring inside the robot 
     const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const requests: Array<{ method: string | undefined; url: string | undefined }> = [];
-    const authoringReads = ['/api/bioxp/methods/catalog', '/api/bioxp/methods/schema', '/api/bioxp/methods/examples', '/api/bioxp/methods/library', '/api/bioxp/methods/presets', '/api/bioxp/methods/liquid-classes/starters', '/api/bioxp/service'];
+    const authoringReads = ['/api/bioxp/methods/catalog', '/api/bioxp/methods/schema', '/api/bioxp/methods/examples', '/api/bioxp/methods/library', '/api/bioxp/methods/presets', '/api/bioxp/methods/plates', '/api/bioxp/methods/liquid-classes/starters', '/api/bioxp/service'];
     api.defaults.adapter = async config => {
         requests.push({ method: config.method, url: config.url });
         if (config.method === 'get' && authoringReads.includes(config.url ?? '')) return { data: {}, status: 200, statusText: 'OK', config, headers: {} };

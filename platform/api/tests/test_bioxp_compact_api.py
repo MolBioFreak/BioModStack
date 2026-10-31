@@ -101,6 +101,7 @@ EXPECTED = {
     ('POST', '/methods/compile'),
     ('POST', '/methods/migrate'),
     ('GET', '/methods/liquid-classes/starters'),
+    ('GET', '/methods/plates'),
     ('GET', '/methods/liquid-classes/source'),
     ('POST', '/methods/quick-runs'),
     ('GET', '/methods/runs'),
@@ -146,7 +147,7 @@ def _inventory() -> set[tuple[str, str]]:
 
 def test_compact_api_inventory_is_exact_and_bounded() -> None:
     assert _inventory() == EXPECTED
-    assert len(_inventory()) == 111
+    assert len(_inventory()) == 112
 
 
 def test_every_non_read_route_carries_the_global_containment_dependency() -> None:

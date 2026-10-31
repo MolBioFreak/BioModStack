@@ -457,7 +457,8 @@ def prepare_class_transfer(inputs):
 Z_STEPS_PER_MM = Decimal('2015.748')  # robot tip_length.Z_STEPS_PER_MM (51200 / 25.4)
 LIQUID_DETECTION_DEFAULTS = {'when': 'first_draw', 'mode': 'by_level', 'expected': True,
     'submerge_mm': '1', 'follow_mm': '0', 'floor_clearance_mm': '1', 'level_tolerance_mm': '0.5',
-    'search_speed_native': 300, 'start_mode': 0, 'sensing': 'hybrid'}
+    'search_speed_native': 300, 'start_mode': 0, 'sensing': 'hybrid', 'on_contact_delay_ms': 0,
+    'mismatch_response': 'pause', 'mismatch_tolerance_mm': '1', 'mismatch_tolerance_percent': '15'}
 
 
 def liquid_detection_settings(value):
@@ -468,8 +469,10 @@ def liquid_detection_settings(value):
         raise ValueError(f'Unsupported liquid detection settings: {sorted(unknown)}')
     if settings['when'] not in ('off', 'first_draw', 'every_draw'):
         raise ValueError('liquid detection: when must be off, first_draw or every_draw')
-    if settings['mode'] not in ('by_level', 'together', 'one_at_a_time'):
-        raise ValueError('liquid detection: mode must be by_level, together or one_at_a_time')
+    if settings['mode'] not in ('by_level', 'together', 'one_at_a_time', 'on_contact'):
+        raise ValueError('liquid detection: mode must be by_level, together, one_at_a_time or on_contact')
+    if settings['mismatch_response'] not in ('proceed', 'pause', 'fail'):
+        raise ValueError('liquid detection: mismatch_response must be proceed, pause or fail')
     steps = {}
     for key in ('submerge_mm', 'follow_mm', 'floor_clearance_mm', 'level_tolerance_mm'):
         mm = Decimal(str(settings[key]))
@@ -489,7 +492,7 @@ def positioned_transfer_recipes(inputs, detected_wells=None):
     allowed = {'source', 'destination', 'channels', 'volume_ul', 'aspirate_speed', 'recipe',
                'source_position_flag', 'destination_position_flag',
                'source_lift_height_steps', 'destination_lift_height_steps', 'liquid_detection',
-               'source_liquid_channels'}
+               'source_liquid_channels', 'source_expected_ul', 'source_vessel_geometry'}
     if set(inputs) - allowed:
         raise ValueError(f'Unsupported class Transfer fields: {sorted(set(inputs) - allowed)}')
     source, destination = inputs['source'], inputs['destination']
@@ -534,7 +537,16 @@ def positioned_transfer_recipes(inputs, detected_wells=None):
             # The search replaces the calibrated lower: Z stops on each channel's surface.
             detected_wells.add(key)
             planned = inputs.get('source_liquid_channels')
+            expected_ul = (inputs.get('source_expected_ul') or [None] * (pair + 1))[pair]
+            geometry = inputs.get('source_vessel_geometry') or {}
+            check = {'expected_ul': expected_ul, 'table': geometry.get('height_to_volume'),
+                     'gap_mm': geometry.get('calibrated_low_gap_mm'),
+                     'tolerance_mm': float(detection['mismatch_tolerance_mm']),
+                     'tolerance_fraction': float(detection['mismatch_tolerance_percent']) / 100,
+                     'response': detection['mismatch_response']} if expected_ul else None
             recipe['liquid_detection'] = {'location_id': key[0], 'expected': bool(detection['expected']),
+                'on_contact_delay_ms': int(detection['on_contact_delay_ms']),
+                **({'volume_check': check} if check else {}),
                 **({'expected_channels': planned[pair]} if detection['expected'] and planned else {}),
                 'mode': detection['mode'], 'start_mode': detection['start_mode'],
                 'search_speed_native': detection['search_speed_native'], 'sensing': detection['sensing'],
@@ -581,6 +593,13 @@ def prepare_occurrences(occurrences, method, dependencies):
     # Wells holding liquid during the run: starting deck assignments, then every dispense.
     planned_labware = {str(a.get('labware_id')) for a in deck.get('assignments', [])}
     filled = {(str(a.get('labware_id')), str(a.get('well', '')).upper()) for a in deck.get('assignments', [])}
+    well_ul = {}
+    for a in deck.get('assignments', []):
+        try:
+            k = (str(a.get('labware_id')), str(a.get('well', '')).upper())
+            well_ul[k] = well_ul.get(k, 0.0) + float(a['volume_ul'])
+        except (KeyError, TypeError, ValueError):
+            pass
     expanded = []
     count = sum(len(o['inputs'].get('transfers', [])) if o['action'] in ('distribute', 'consolidate') and o['inputs'].get('mode') == 'repeated_single' else 1 for o in occurrences)
     if count > 10000:
@@ -703,9 +722,31 @@ def prepare_occurrences(occurrences, method, dependencies):
                 if held and effect['channel'] not in channels:
                     channels.append(effect['channel'])
             inputs['source_liquid_channels'] = [sorted(by_pair.get(i, [])) for i in range(len(inputs['source']['wells']))]
+            # Expected volume in each source well at this draw (plan amounts +/- earlier transfers).
+            expected = {}
+            for effect in inputs['channel_transfers']:
+                src = effect.get('source') or {}
+                k = (str(src.get('labware_id')), str(src.get('well', '')).upper())
+                if k in well_ul:
+                    expected.setdefault(effect.get('pair_index', 0), {})[str(effect['channel'])] = round(well_ul[k], 3)
+            inputs['source_expected_ul'] = [expected.get(i) for i in range(len(inputs['source']['wells']))]
+            vessel = next((x for x in labware if x.get('id') == (inputs['channel_transfers'][0].get('source') or {}).get('labware_id')), {})
+            geometry = profiles.get(vessel.get('profile_id'), {}).get('vessel_geometry')
+            if isinstance(geometry, dict):
+                inputs['source_vessel_geometry'] = {k: geometry.get(k) for k in ('height_to_volume', 'calibrated_low_gap_mm')}
         for effect in inputs.get('channel_transfers', []) if row['action'] == 'transfer' else []:
-            dst = effect.get('destination') or {}
+            dst, src = effect.get('destination') or {}, effect.get('source') or {}
             filled.add((str(dst.get('labware_id')), str(dst.get('well', '')).upper()))
+            try:
+                moved = float(effect.get('volume_ul'))
+            except (TypeError, ValueError):
+                continue
+            s_key = (str(src.get('labware_id')), str(src.get('well', '')).upper())
+            d_key = (str(dst.get('labware_id')), str(dst.get('well', '')).upper())
+            if s_key in well_ul:
+                well_ul[s_key] = max(0.0, well_ul[s_key] - moved)
+            if d_key in well_ul or d_key[0] in planned_labware:
+                well_ul[d_key] = well_ul.get(d_key, 0.0) + moved
         result.append(row)
         if row['action'] == 'plate_move' and 'labware_id' in inputs:
             for vessel in labware:

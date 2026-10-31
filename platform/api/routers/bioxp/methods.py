@@ -177,6 +177,13 @@ def starter_classes():
     return starter_entries()
 
 
+@router.get("/plates")
+def plate_library():
+    import json
+    from pathlib import Path
+    return json.loads((Path(__file__).resolve().parents[2] / 'schemas' / 'bioxp_plate_library.json').read_text(encoding='utf-8'))
+
+
 @router.get("/liquid-classes/source")
 def liquid_source():
     from bioxp_method_liquids import source_catalog_text
