@@ -1078,7 +1078,7 @@ export function JobSubmission() {
         const preparation = native.format === 'pdb' ? Promise.resolve(native)
             : materializeExactStructure({ path: native.path, expected_sha256: native.sha256, output_format: 'pdb', ...(native.model_number == null ? {} : { model_number: native.model_number }) });
         preparation.then(prepared => {
-            if (current) setParams(previous => ({ ...previous, input_pdb: prepared.path, _source_prepared: prepared }));
+            if (current) setParams(previous => ({ ...previous, input_pdb: prepared.path, ...(selectedModelId === 'ligandmpnn' || selectedModelId === 'protonpottsmpnn' ? { target_pdb: prepared.path } : {}), _source_prepared: prepared }));
         }).catch(error => { if (current) setSequencePreparationError(String(error)); });
         return () => { current = false; };
     }, [isSequenceContinuation, selectedModelId, selectedModeId, params._source_native_prepared, params.input_pdb, clonedValues]);

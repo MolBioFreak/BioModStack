@@ -46,3 +46,17 @@ it('refuses fixed and designable positions together, and an empty validator list
     await click(q('Validate with ESMFold2'));
     expect(run().disabled).toBe(true);
 });
+
+it('hands LigandMPNN, ProtonPottsMPNN and Caliby the chosen structure instead of running the loop', async () => {
+    await mount();
+    await click([...document.querySelectorAll('button')].find(b => b.textContent === 'pick source')!);
+    for (const [value, model, mode] of [['ligandmpnn:metal_aware', 'ligandmpnn', 'metal_aware'], ['protonpottsmpnn:redesign', 'protonpottsmpnn', 'redesign'], ['caliby_experimental:ensemble_design', 'caliby_experimental', 'ensemble_design']]) {
+        await set('Resequence engine', value);
+        expect(run()).toBeUndefined();
+        const link = document.querySelector<HTMLAnchorElement>('[aria-label="Open the selected designer"]')!;
+        const query = new URL(link.href, 'http://x').searchParams;
+        expect([query.get('model'), query.get('mode'), query.get('continuation')]).toEqual([model, mode, 'sequence']);
+        expect(JSON.parse(query.get('source_structure')!)).toMatchObject({ job_id: 'job-1', design_id: 'd-1' });
+    }
+    expect(posts).toEqual([]);
+});

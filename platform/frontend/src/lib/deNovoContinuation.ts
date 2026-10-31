@@ -15,9 +15,14 @@ export const sequenceDestinations = [
     ['fampnn', 'fixed_backbone', 'FA-MPNN fixed backbone'],
     ['caliby_experimental', 'ensemble_design', 'Caliby ensemble design'],
     ['caliby_experimental', 'sidechain_pack', 'Caliby sequence-preserving side-chain packing'],
+    ['ligandmpnn', 'ligand_aware', 'LigandMPNN ligand-aware design'],
+    ['ligandmpnn', 'ntp_aware', 'LigandMPNN NTP-aware design'],
+    ['ligandmpnn', 'metal_aware', 'LigandMPNN metal-aware design'],
+    ['ligandmpnn', 'dna_aware', 'LigandMPNN DNA-aware design'],
+    ['protonpottsmpnn', 'redesign', 'ProtonPottsMPNN pH-specific redesign'],
 ] as const;
 
-export function continuationHref(source: StructureSourceSelection, destination: DeNovoDestination): string {
+export function continuationHref(source: StructureSourceSelection, destination: DeNovoDestination, sequenceModel?: readonly [string, string]): string {
     const query = new URLSearchParams({ source_structure: JSON.stringify(source), continuation: destination });
     query.set('return_to', `${window.location.pathname}${window.location.search}${window.location.hash}`);
     const context = new URLSearchParams(window.location.search);
@@ -33,7 +38,7 @@ export function continuationHref(source: StructureSourceSelection, destination: 
         query.set('generator', 'rfd4_proteina');
         query.set('native_mode', destination === 'rfd4_evaluate' ? 'evaluate' : 'generate');
     } else if (destination === 'prediction') query.set('template', 'structure_prediction');
-    else { query.set('model', 'proteinmpnn'); query.set('mode', 'design'); }
+    else { query.set('model', sequenceModel?.[0] ?? 'proteinmpnn'); query.set('mode', sequenceModel?.[1] ?? 'design'); }
     return `${mountedApplicationBase()}submit?${query}`;
 }
 
@@ -63,7 +68,9 @@ export function continuationRoleDefaults(native: StructureMaterialization, desti
 export function nativeSequenceInput(model: string, prepared: StructureMaterialization, native: StructureMaterialization = prepared): Record<string, unknown> {
     return model === 'caliby_experimental'
         ? { ensembles: [{ ensemble_id: 'selected-candidate', states: [{ state_id: 'selected-structure', path: native.path }] }] }
-        : prepared.format === 'pdb' ? { input_pdb: prepared.path } : {};
+        : model === 'ligandmpnn' || model === 'protonpottsmpnn'
+            ? (prepared.format === 'pdb' ? { input_pdb: prepared.path, target_pdb: prepared.path } : {})
+            : prepared.format === 'pdb' ? { input_pdb: prepared.path } : {};
 }
 
 // Materialization retains immutable input only; never submits a scientific Job.
