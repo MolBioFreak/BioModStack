@@ -6667,6 +6667,8 @@ def compile_nextflow_invocation(
             'sequence_input_pdbs': 'plr_sequence_input_pdbs',
             'validation_input_pdbs': 'plr_validation_input_pdbs',
             'region_manifest': 'plr_region_manifest',
+            'fixed_positions': 'plr_fixed_positions',
+            'designable_positions': 'plr_designable_positions',
             'final_candidate_dir': 'plr_final_candidate_dir',
         }
         for src_key, dest_key in protein_local_mappings.items():

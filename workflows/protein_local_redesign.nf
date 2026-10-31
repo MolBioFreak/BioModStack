@@ -255,7 +255,7 @@ process PrepProteinLocalFAMPNN {
 
     input:
     tuple path(pdb_files), path(json_files)
-    path manifest_json
+    val fixed_args
 
     output:
     path('fampnn_input/*.pdb'), emit: pdbs
@@ -274,7 +274,7 @@ process PrepProteinLocalFAMPNN {
 
     python3 ${params.code_root}/scripts/prep_fampnn_constraints_from_spec.py \
         --input_dir fampnn_input \
-        --manifest ${manifest_json} \
+        ${fixed_args} \
         --out_csv fampnn.csv \
         ${fixSidechainsFlag}
     """
@@ -285,7 +285,7 @@ process PrepProteinLocalMPNN {
 
     input:
     tuple path(pdb_files), path(json_files)
-    path manifest_json
+    val designable_args
 
     output:
     path('mpnn_fixed/*.pdb'), emit: pdbs
@@ -302,7 +302,7 @@ process PrepProteinLocalMPNN {
     python3 ${params.code_root}/scripts/add_fixed_labels_from_spec.py \
         --input_dir mpnn_input \
         --output_dir mpnn_fixed \
-        --manifest ${manifest_json}
+        ${designable_args}
     """
 }
 
@@ -396,16 +396,15 @@ workflow PROTEIN_LOCAL_REDESIGN {
     def resumeFromBackbones = !resumeFromValidation && !resumeFromSequences && params.plr_backbone_input_pdbs ? true : false
 
     def mergedBackboneArtifacts
-    def manifestChannel
+    // Selectable positions: an optional manifest, or explicit specs such as A1-20,B5.
+    def manifestArg = params.plr_region_manifest ? "--manifest ${shellQuote(params.plr_region_manifest)}" : ''
+    def fixedArg = params.plr_fixed_positions ? "--fixed_positions ${shellQuote(params.plr_fixed_positions)}" : ''
+    def designableArg = params.plr_designable_positions ? "--designable_positions ${shellQuote(params.plr_designable_positions)}" : ''
+    def fampnnFixedArgs = Channel.value("${manifestArg} ${fixedArg}".trim())
+    def mpnnDesignableArgs = Channel.value("${manifestArg} ${designableArg}".trim())
 
     if (resumeFromBackbones) {
-        if (!params.plr_region_manifest) {
-            error('plr_backbone_input_pdbs resume requires plr_region_manifest')
-        }
-        manifestChannel = Channel.of(file(params.plr_region_manifest))
         mergedBackboneArtifacts = loadProteinLocalDesignArtifacts(params.plr_backbone_input_pdbs)
-    } else {
-        manifestChannel = Channel.empty()
     }
 
     def shouldPauseAfterBackboneRemodel = interactiveGateEnabled &&
@@ -443,7 +442,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
         finalDesignPdbs = loadProteinLocalPdbCollection(params.plr_sequence_input_pdbs ?: params.plr_validation_input_pdbs)
         rawSequenceDir = params.plr_sequence_input_pdbs ?: params.plr_validation_input_pdbs
     } else if (sequenceMethod == 'mpnn') {
-        PrepProteinLocalMPNN(mergedBackboneArtifacts, manifestChannel)
+        PrepProteinLocalMPNN(mergedBackboneArtifacts, mpnnDesignableArgs)
 
         if ((params.mpnn_relax_max_cycles ?: 0) > 0) {
             PrepProteinLocalMPNN.out.pdbs
@@ -470,7 +469,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
         rawSequenceDir = params.out_dir ? "${params.out_dir}/run/mpnn/results" : null
     }
     else {
-        PrepProteinLocalFAMPNN(mergedBackboneArtifacts, manifestChannel)
+        PrepProteinLocalFAMPNN(mergedBackboneArtifacts, fampnnFixedArgs)
 
         PrepProteinLocalFAMPNN.out.csv
             .collectFile(name: 'merged_protein_local_redesign.csv', keepHeader: true)

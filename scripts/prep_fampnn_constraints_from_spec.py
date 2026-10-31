@@ -11,14 +11,15 @@ from pathlib import Path
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate FA-MPNN fixed-position CSV from a redesign manifest")
     parser.add_argument("--input_dir", required=True, help="Directory containing prepared PDB files")
-    parser.add_argument("--manifest", required=True, help="Region manifest JSON")
+    parser.add_argument("--manifest", default="", help="Optional region manifest JSON")
+    parser.add_argument("--fixed_positions", default="", help="Fixed positions, e.g. A1-20,B5 (overrides the manifest)")
     parser.add_argument("--out_csv", required=True, help="Output CSV path")
     parser.add_argument("--fix_sidechains", action="store_true", help="Fix sidechains for all fixed positions")
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
-    manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-    fixed_spec = str(manifest.get("sequence_fixed_positions_spec", manifest.get("fixed_positions_spec", "")) or "")
+    manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8")) if args.manifest else {}
+    fixed_spec = args.fixed_positions or str(manifest.get("sequence_fixed_positions_spec", manifest.get("fixed_positions_spec", "")) or "")
     fixed_sidechains = fixed_spec if args.fix_sidechains else ""
 
     pdb_files = sorted(input_dir.glob("*.pdb"))

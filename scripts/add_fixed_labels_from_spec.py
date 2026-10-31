@@ -46,7 +46,7 @@ def residue_token_from_line(line: str) -> ResidueToken | None:
     return chain, int(raw_resnum), line[26].strip()
 
 
-def add_labels(input_pdb: Path, output_pdb: Path, designable_tokens: Set[ResidueToken]) -> None:
+def add_labels(input_pdb: Path, output_pdb: Path, designable_tokens: Set[ResidueToken] | None) -> None:
     if __package__:
         from .proteinmpnn_native_binding import ROLE_REMARK, role_contract, pdb_domain
     else:
@@ -60,7 +60,7 @@ def add_labels(input_pdb: Path, output_pdb: Path, designable_tokens: Set[Residue
     roles = role_contract(input_pdb, {'design_chain': chains}, data=data, strict=False)
     import hashlib
     roles['source_pdb_sha256'] = hashlib.sha256(input_pdb.read_bytes()).hexdigest()
-    roles['fixed_positions'] = [list(r) for r in domain if r not in designable_tokens]
+    roles['fixed_positions'] = [] if designable_tokens is None else [list(r) for r in domain if r not in designable_tokens]
     output_pdb.write_bytes((ROLE_REMARK + json.dumps(roles) + '\n').encode() + data)
 
 
@@ -68,14 +68,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Apply ProteinMPNN fixed labels from protein-local-redesign manifest")
     parser.add_argument("--input_dir", required=True, help="Input directory containing PDB files")
     parser.add_argument("--output_dir", required=True, help="Output directory for labeled PDB files")
-    parser.add_argument("--manifest", required=True, help="Region manifest JSON")
+    parser.add_argument("--manifest", default="", help="Optional region manifest JSON")
+    parser.add_argument("--designable_positions", default="", help="Designable positions, e.g. A21-40 (overrides the manifest); none given means every residue is designable")
     args = parser.parse_args()
 
-    manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8")) if args.manifest else {}
     designable_tokens = parse_position_spec(
-        manifest.get("sequence_redesign_positions_spec")
+        args.designable_positions
+        or manifest.get("sequence_redesign_positions_spec")
         or manifest.get("movable_positions_spec", "")
     )
+    explicit = bool(args.designable_positions or args.manifest)
 
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
@@ -83,7 +86,7 @@ def main() -> None:
 
     pdb_files = sorted(input_dir.glob("*.pdb"))
     for pdb_path in pdb_files:
-        add_labels(pdb_path, output_dir / pdb_path.name, designable_tokens)
+        add_labels(pdb_path, output_dir / pdb_path.name, designable_tokens if explicit else None)
         print(f"Labeled {pdb_path.name}")
 
 
