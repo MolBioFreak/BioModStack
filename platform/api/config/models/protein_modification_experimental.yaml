@@ -109,6 +109,7 @@ modes:
       - seq_method
       - structure_validators
       - backbone_input_pdbs
+      - designer_template
       - fixed_positions
       - designable_positions
 
@@ -305,7 +306,7 @@ params:
     description: Sequence redesign engine
     required: false
     default: fampnn
-    enum: [fampnn, mpnn]
+    enum: [fampnn, mpnn, ligandmpnn, caliby, protonpottsmpnn]
     ui_group: Region Redesign
     ui_order: 37
   - name: structure_validators
@@ -322,6 +323,12 @@ params:
     required: false
     ui_group: Region Redesign
     ui_order: 39
+  - name: designer_template
+    type: string
+    description: Prepared request template for LigandMPNN, Caliby or ProtonPottsMPNN
+    required: false
+    ui_group: Region Redesign
+    ui_order: 42
   - name: fixed_positions
     type: string
     description: Residues kept as-is during resequencing, e.g. A1-20,B5

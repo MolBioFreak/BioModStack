@@ -17,8 +17,8 @@ async function mount() {
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     await act(async () => { root.render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><ResequencePanel /></MemoryRouter></QueryClientProvider>); });
 }
-const q = (label: string) => document.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!;
-async function set(label: string, value: string) { const n = q(label); await act(async () => { const proto = n instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(n, value); n.dispatchEvent(new Event(n instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true })); }); }
+const q = (label: string) => document.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`[aria-label="${label}"]`)!;
+async function set(label: string, value: string) { const n = q(label); await act(async () => { const proto = n instanceof HTMLSelectElement ? HTMLSelectElement.prototype : n instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(n, value); n.dispatchEvent(new Event(n instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true })); }); }
 const run = () => [...document.querySelectorAll('button')].find(b => b.textContent === 'Run resequence and validate') as HTMLButtonElement;
 async function click(el: Element) { await act(async () => (el as HTMLElement).click()); }
 
@@ -28,11 +28,11 @@ it('cannot run without a structure, and sends the chosen engine, positions and v
     await click([...document.querySelectorAll('button')].find(b => b.textContent === 'pick source')!);
     expect(run().disabled).toBe(false);
     await set('Resequence engine', 'fampnn'); await set('Resequence design chains', 'A,B'); await set('Resequence fixed positions', 'A1-20');
-    await click(q('Validate with Protenix'));
+    await click(q('Validate with ESMFold2 (optional)'));
     await click(run());
     expect(posts).toHaveLength(1);
     expect(posts[0].url).toBe('/api/jobs/resequence/from-structures');
-    expect(posts[0].body).toMatchObject({ sources: [{ job_id: 'job-1', design_id: 'd-1' }], seq_method: 'fampnn', design_chains: 'A,B', fixed_positions: 'A1-20', structure_validators: ['esmfold2', 'protenix_v2'] });
+    expect(posts[0].body).toMatchObject({ sources: [{ job_id: 'job-1', design_id: 'd-1' }], seq_method: 'fampnn', design_chains: 'A,B', fixed_positions: 'A1-20', structure_validators: ['protenix_v2', 'esmfold2'] });
     expect(posts[0].body).not.toHaveProperty('designable_positions');
 });
 
@@ -43,20 +43,22 @@ it('refuses fixed and designable positions together, and an empty validator list
     expect(run().disabled).toBe(true);
     await set('Resequence fixed positions', '');
     expect(run().disabled).toBe(false);
-    await click(q('Validate with ESMFold2'));
+    await click(q('Validate with Protenix v2'));
     expect(run().disabled).toBe(true);
 });
 
-it('hands LigandMPNN, ProtonPottsMPNN and Caliby the chosen structure instead of running the loop', async () => {
+it('runs LigandMPNN, Caliby and ProtonPottsMPNN inside the loop with their own mode and settings', async () => {
     await mount();
     await click([...document.querySelectorAll('button')].find(b => b.textContent === 'pick source')!);
-    for (const [value, model, mode] of [['ligandmpnn:metal_aware', 'ligandmpnn', 'metal_aware'], ['protonpottsmpnn:redesign', 'protonpottsmpnn', 'redesign'], ['caliby_experimental:ensemble_design', 'caliby_experimental', 'ensemble_design']]) {
-        await set('Resequence engine', value);
-        expect(run()).toBeUndefined();
-        const link = document.querySelector<HTMLAnchorElement>('[aria-label="Open the selected designer"]')!;
-        const query = new URL(link.href, 'http://x').searchParams;
-        expect([query.get('model'), query.get('mode'), query.get('continuation')]).toEqual([model, mode, 'sequence']);
-        expect(JSON.parse(query.get('source_structure')!)).toMatchObject({ job_id: 'job-1', design_id: 'd-1' });
-    }
-    expect(posts).toEqual([]);
+    await set('Resequence engine', 'ligandmpnn'); await set('LigandMPNN mode', 'metal_aware');
+    await set('Designer settings', '{"batch_size": 3}');
+    await click(run());
+    expect(posts[0].body).toMatchObject({ seq_method: 'ligandmpnn', designer_mode: 'metal_aware', designer_settings: { batch_size: 3 } });
+    await set('Resequence engine', 'caliby'); await click(run());
+    expect(posts[1].body).toMatchObject({ seq_method: 'caliby' });
+    expect(posts[1].body).not.toHaveProperty('designer_mode');
+    await set('Resequence engine', 'protonpottsmpnn'); await set('Designer settings', '{not json');
+    expect(run().disabled).toBe(true);
+    await set('Designer settings', '');
+    expect(run().disabled).toBe(false);
 });

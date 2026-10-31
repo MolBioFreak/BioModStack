@@ -377,6 +377,59 @@ process ExportProteinLocalBoltzPredictions {
     """
 }
 
+// Sequence designers beyond ProteinMPNN/FAMPNN. One native run per input design; position
+// selection is explicit (plr_fixed_positions / plr_designable_positions); outputs are one PDB per design.
+process RunLigandMPNNResequence {
+    label 'Foundry'
+    label 'gpu'
+    input:
+    tuple path(pdb_files), path(json_files)
+    path template
+    val position_args
+    output:
+    path('designs/*.pdb'), emit: pdbs
+    script:
+    """
+    export HOME=/tmp
+    python /scripts/run_resequence_designer.py ligandmpnn --template ${template} --input-dir . --out-dir designs ${position_args}
+    """
+}
+
+process RunCalibyResequence {
+    label 'Caliby'
+    label 'gpu'
+    input:
+    tuple path(pdb_files), path(json_files)
+    path template
+    val position_args
+    output:
+    path('designs/*.pdb'), emit: pdbs
+    script:
+    """
+    export TMPDIR=\$PWD/tmp; mkdir -p \$TMPDIR
+    python3 /scripts/run_resequence_designer.py caliby --template ${template} --input-dir . --out-dir designs ${position_args}
+    """
+}
+
+process RunProtonPottsResequence {
+    label 'cpu'
+    input:
+    tuple path(pdb_files), path(json_files)
+    path template
+    val position_args
+    output:
+    path('designs/*.pdb'), emit: pdbs
+    script:
+    def image = System.getenv('BMS_SELECTED_IMAGE_PROTONPOTTSMPNN_SIF') ?: params.protonpottsmpnn_container_path ?: System.getenv('BMS_PROTONPOTTSMPNN_CONTAINER_PATH') ?: "${params.container_dir}/protonpottsmpnn-09682ab-cpu-locked-20261003.sif"
+    """
+    apptainer exec --no-home --env CUDA_VISIBLE_DEVICES= \\
+      --bind "\$PWD:\$PWD" \\
+      --bind '${params.code_root}/scripts:/probe' \\
+      --bind '${params.code_root}/scripts/lib:/probe/lib:ro' \\
+      '${image}' python /probe/run_resequence_designer.py protonpottsmpnn --template ${template} --input-dir . --out-dir designs --n-jobs ${task.cpus} --device cpu ${position_args}
+    """
+}
+
 workflow PROTEIN_LOCAL_REDESIGN {
     main:
     if (!params.containsKey('interactive_gating')) params.interactive_gating = false
@@ -435,12 +488,32 @@ workflow PROTEIN_LOCAL_REDESIGN {
     def sequenceMethod = params.plr_seq_method ?: 'fampnn'
 
     def finalDesignPdbs
+    def designerPdbs
     def rawSequenceDir = null
     def filteredSequenceDir = null
 
     if (resumeFromSequences || resumeFromValidation) {
         finalDesignPdbs = loadProteinLocalPdbCollection(params.plr_sequence_input_pdbs ?: params.plr_validation_input_pdbs)
         rawSequenceDir = params.plr_sequence_input_pdbs ?: params.plr_validation_input_pdbs
+    } else if (sequenceMethod in ['ligandmpnn', 'caliby', 'protonpottsmpnn']) {
+        if (!params.plr_designer_template) error('plr_designer_template is required for ' + sequenceMethod)
+        def designerPositionArgs = Channel.value([
+            params.plr_fixed_positions ? "--fixed-positions ${shellQuote(params.plr_fixed_positions)}" : '',
+            params.plr_designable_positions ? "--designable-positions ${shellQuote(params.plr_designable_positions)}" : ''
+        ].findAll { it }.join(' '))
+        def designerTemplate = Channel.value(file(params.plr_designer_template, checkIfExists: true))
+        if (sequenceMethod == 'ligandmpnn') {
+            RunLigandMPNNResequence(mergedBackboneArtifacts, designerTemplate, designerPositionArgs)
+            designerPdbs = RunLigandMPNNResequence.out.pdbs
+        } else if (sequenceMethod == 'caliby') {
+            RunCalibyResequence(mergedBackboneArtifacts, designerTemplate, designerPositionArgs)
+            designerPdbs = RunCalibyResequence.out.pdbs
+        } else {
+            RunProtonPottsResequence(mergedBackboneArtifacts, designerTemplate, designerPositionArgs)
+            designerPdbs = RunProtonPottsResequence.out.pdbs
+        }
+        finalDesignPdbs = designerPdbs.flatten().collect()
+        rawSequenceDir = params.out_dir ? "${params.out_dir}/run/${sequenceMethod}" : null
     } else if (sequenceMethod == 'mpnn') {
         PrepProteinLocalMPNN(mergedBackboneArtifacts, mpnnDesignableArgs)
 

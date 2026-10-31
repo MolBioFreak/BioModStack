@@ -6675,6 +6675,7 @@ def compile_nextflow_invocation(
             'validation_input_pdbs': 'plr_validation_input_pdbs',
             'region_manifest': 'plr_region_manifest',
             'fixed_positions': 'plr_fixed_positions',
+            'designer_template': 'plr_designer_template',
             'designable_positions': 'plr_designable_positions',
             'final_candidate_dir': 'plr_final_candidate_dir',
         }

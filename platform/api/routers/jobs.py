@@ -962,7 +962,9 @@ class ManualMutagenesisLaunchRequest(BaseModel):
 class ResequenceLaunchRequest(BaseModel):
     """Resequence and validate exact structures from any generator."""
     sources: List[StructureSourceRequest] = Field(..., min_length=1, max_length=500)
-    seq_method: Literal["fampnn", "mpnn"] = "fampnn"
+    seq_method: Literal["fampnn", "mpnn", "ligandmpnn", "caliby", "protonpottsmpnn"] = "fampnn"
+    designer_mode: Optional[str] = None
+    designer_settings: Dict[str, Any] = Field(default_factory=dict)
     design_chains: str = Field(..., min_length=1)
     fixed_positions: str = ""
     designable_positions: str = ""
@@ -9051,6 +9053,17 @@ async def launch_resequence_from_structures(
         params["fixed_positions"] = request.fixed_positions.strip()
     if request.designable_positions.strip():
         params["designable_positions"] = request.designable_positions.strip()
+    if request.seq_method in ("ligandmpnn", "caliby", "protonpottsmpnn"):
+        from services.resequence_designers import build_template
+        try:
+            template = build_template(request.seq_method, mode=request.designer_mode,
+                                      design_chains=request.design_chains, settings=request.designer_settings)
+        except Exception as exc:
+            shutil.rmtree(selection_dir, ignore_errors=True)
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        template_path = selection_dir.with_name(selection_dir.name + "_designer.json")
+        template_path.write_text(json.dumps(template, sort_keys=True))
+        params["designer_template"] = str(template_path)
     launch_request = JobCreate(
         name=request.name,
         model_id="protein_modification_experimental",
