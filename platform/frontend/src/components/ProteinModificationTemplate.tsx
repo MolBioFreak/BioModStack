@@ -19,7 +19,6 @@ import { useNavigate } from 'react-router-dom';
 import { api, completeCurrentLaunchContext, submitJob, type NativeGenerationSourceBinding, type StructureMaterialization, type Job } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { ModelReferenceCard } from './ModelReferenceCard';
-import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 import ShapeBlueprintTemplate from './ShapeBlueprintTemplate';
 import { ProteinDesignSections, ProteinDesignPanel, ProteinDesignRun, themedInsetStyle } from './ProteinDesignWorkflow';
 import { LaProteinaMotifInput, type LaProteinaMotifInspection } from './LaProteinaMotifInput';
@@ -42,7 +41,6 @@ export interface DeNovoNavigationState {
 interface ProteinModificationTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, unknown>;
-    requiredPinnedGpu?: number | null;
     onDraftChange?: (draft: Record<string, unknown>) => void;
     onNavigationChange?: (state: DeNovoNavigationState) => void;
     navigationState?: DeNovoNavigationState;
@@ -118,7 +116,7 @@ const draftKey = (state: DeNovoNavigationState) => state.modification_mode === '
     ? `${state.modification_mode}:${state.generator}:${state.design_task}${state.generator === 'rfd4_proteina' || state.generator === 'complexa' || state.generator === 'laproteina' && state.native_mode === 'evaluate' ? `:${state.native_mode ?? 'generate'}:v1` : ''}` : state.generator === 'rfd4_proteina' ? `${state.modification_mode}:rfd4_proteina:${state.native_mode ?? 'generate'}:v1` : state.modification_mode;
 
 export function ProteinModificationTemplate({
-    onBack, initialValues, requiredPinnedGpu = null, onDraftChange, onNavigationChange, navigationState, runDetails, onOpenTemplateManager, launchContextId,
+    onBack, initialValues, onDraftChange, onNavigationChange, navigationState, runDetails, onOpenTemplateManager, launchContextId,
 }: ProteinModificationTemplateProps) {
     const [navigation, setNavigation] = useState(() => resolveNavigation({ ...navigationState, ...initialValues }));
     // Suite-owned authoring, not a generator override or engine-specific draft.
@@ -288,17 +286,15 @@ export function ProteinModificationTemplate({
                     initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} />
                     : ['rfd3', 'disco', 'laproteina'].includes(generator) ? <GenerationEditor key={activeKey} initialValues={childValues.current.values} generator={generator}
                     designTask={task} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} /> : <p role="alert">No native editor registered for {generator}. Retained settings have not been translated to another engine.</p>}
-            </> : mode === 'rfd3_iteration' ? <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} /> : <ProteinLocalRedesignTemplate key={activeKey} embedded
-                onBack={onBack} initialValues={childValues.current.values}
-                submissionModelId={validatedRedesign ? 'protein_modification_experimental' : 'protein_local_redesign'}
-                requiredPinnedGpu={requiredPinnedGpu} runDetails={runDetails} onDraftChange={reportDraft} />}</>
+            </> : mode === 'rfd3_iteration' ? <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} /> : <GenerationEditor key={activeKey} initialValues={childValues.current.values.input_structure ? { generation_task: 'partial_diffusion', ...childValues.current.values } : childValues.current.values} generator="rfd3"
+                designTask="unconditional" runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} />}</>
                 : <ShapeBlueprintTemplate launchContextId={launchContextId} key={activeKey} embedded initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />}
             {onOpenTemplateManager && <button type="button" className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm"
                 onClick={() => onOpenTemplateManager({
                     currentParams: { ...drafts.current[activeKey], ...activeRequest.current, ...(constructionRef.current ? { molecular_construction: constructionRef.current } : {}), ...(Object.keys(preparedRef.current).length ? { prepared_geometry_documents: preparedRef.current } : {}), ...navigation, suite_view: suiteView, suite_last_generation: { ...lastGeneration.current }, suite_last_tasks: { ...lastTaskByEngine.current }, suite_last_modes: { ...lastModeByEngine.current }, modification_mode: savedMode, de_novo_drafts: Object.fromEntries(Object.entries(drafts.current).filter(([key]) => key !== activeKey)) },
-                    currentModelId: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? generator : mode === 'rfd3_iteration' && !validatedRedesign ? 'protein_local_redesign' : 'protein_modification_experimental',
+                    currentModelId: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? generator : 'protein_modification_experimental',
                     baseTemplateId: 'protein_modification_experimental',
-                    currentMode: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? navigation.native_mode ?? 'generate' : mode === 'rfd3_iteration' ? validatedRedesign ? 'region_redesign' : 'rfd3_local_redesign' : mode,
+                    currentMode: generator === 'rfd4_proteina' || generator === 'complexa' || generator === 'laproteina' && navigation.native_mode === 'evaluate' ? navigation.native_mode ?? 'generate' : mode === 'rfd3_iteration' ? validatedRedesign ? 'region_redesign' : 'de_novo_design' : mode,
                 })}>Template Manager</button>}
         </div>
         </PreparedGeometryContext.Provider>

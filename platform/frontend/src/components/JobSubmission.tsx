@@ -1915,7 +1915,6 @@ export function JobSubmission() {
                                     navigationState={deNovoNavigationState}
                                     onNavigationChange={navigateDeNovo}
                                     onOpenTemplateManager={openTemplateManager}
-                                    requiredPinnedGpu={launchContextQuery.data?.pinned_gpu ?? null}
                                     onDraftChange={reportDeNovoDraft}
                                     runDetails={<details className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3"><summary className="cursor-pointer text-sm text-[var(--text-secondary)]">Transfer policy</summary><ExecutionPolicyControl initialPolicy={initialReturnPolicy} /></details>}
                                 />

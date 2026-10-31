@@ -36,7 +36,7 @@ const documents = [
 ];
 const source = { job_id: jobId, document: { artifact_id: 'alternate', target_state: 'B' }, model_number: 2 };
 const materialized = {
-    path: 'inputs/retained/alternate.pdb', format: 'pdb', sha256: 'a'.repeat(64), model_number: 2,
+    path: 'inputs/retained/alternate.pdb', format: 'pdb', native_format: 'pdb', sha256: 'a'.repeat(64), model_number: 2, model_numbers: [2],
     source_structure: source, native_recipe: recipes.simple,
     author_residues: [
         { model_number: 2, auth_asym_id: 'A', auth_seq_id: 1, residue_name: 'ALA' },
@@ -270,29 +270,25 @@ it('actual Results MD action opens the real receiving editor and inspects exact 
     expect(posts.filter(p => p.url === '/api/jobs' || p.url.includes('launch'))).toEqual([]);
 });
 
-it.each(['native', 'validated'] as const)('actual Results redesign reaches distinct %s request transport', async depth => {
+it('actual Results redesign opens the unified RFD3 editor with the exact source and submits a region task', async () => {
     const route = await resultLink('Redesign exact structure');
     await mount(<JobSubmission />, route);
-    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[data-webgl]'), document.body.textContent ?? '').not.toBeNull(); });
-    const range = document.querySelector<HTMLInputElement>('[aria-label="Range string"]')!;
-    await edit(range, 'A1');
-    await edit(document.querySelector<HTMLInputElement>('[aria-label="Sequence-recall ranges"]')!, 'A1');
-    await click('Optional next steps');
-    const label = depth === 'native' ? 'Native RFD3 only' : 'Continue through sequence design and validation';
-    const choice = [...document.querySelectorAll<HTMLButtonElement>('button')].find(n => n.querySelector('span')?.textContent === label)!;
-    expect(choice).toBeTruthy(); await act(async () => choice.click());
-    if (depth === 'native') await edit([...document.querySelectorAll('label')].find(n => n.textContent?.includes('Physical GPU (required)'))!.querySelector('select')!, '0');
+    await vi.waitFor(async () => { await settle(); expect([...document.querySelectorAll('button')].some(n => n.textContent === 'Choose / edit RFD3 context'), document.body.textContent ?? '').toBe(true); });
+    await click('Choose / edit RFD3 context');
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[aria-label="RFD3 region task"]'), document.body.textContent ?? '').not.toBeNull(); });
+    const task = document.querySelector<HTMLSelectElement>('[aria-label="RFD3 region task"]')!;
+    expect(task.value).toBe('partial_diffusion');
+    await edit(document.querySelector<HTMLInputElement>('[aria-label="Redesign ranges"]')!, 'A1');
+    await edit(document.querySelector<HTMLInputElement>('[aria-label="Partial noise exact Å"]')!, '4');
     expect(posts.filter(p => p.url === '/api/jobs')).toEqual([]);
-    await click(depth === 'native' ? 'Launch Native RFD3' : 'Launch RFD3 + Sequence + Validation');
+    await click('Generate candidates');
     await vi.waitFor(async () => { await settle(); expect(posts.some(p => p.url === '/api/jobs'), document.body.textContent ?? '').toBe(true); });
     const request = posts.find(p => p.url === '/api/jobs')?.body;
-    expect(request, document.body.textContent ?? '').toMatchObject({ model_id: depth === 'native' ? 'protein_local_redesign' : 'protein_modification_experimental', mode: depth === 'native' ? 'local_redesign' : 'region_redesign', source_structure: source, execution_target_id: null });
+    expect(request).toMatchObject({ model_id: 'protein_modification_experimental', mode: 'de_novo_design',
+        params: { generator: 'rfd3', generation_task: 'partial_diffusion', input_structure: 'inputs/retained/alternate.pdb',
+            redesign: { redesign_ranges: 'A1' }, conditioning: { partial_t: 4 } } });
     expect(request.parent_job_id).toBeFalsy();
-    if (depth === 'native') {
-        expect(request.params).toMatchObject({ sequence_policy: 'explicit_positions', select_unfixed_sequence: 'A1' });
-        expect(request.params.seq_method).toBeUndefined(); expect(request.params.run_boltz).toBeUndefined();
-        expect(request.round_plan).toBeUndefined();
-    }
+    expect(request.params.seq_method).toBeUndefined();
 });
 
 it.each(['auto', 'skip', 'external'] as const)('actual Shape cold %s replay emits geometry and contextual validation without duplicate general sequence stages', async policy => {

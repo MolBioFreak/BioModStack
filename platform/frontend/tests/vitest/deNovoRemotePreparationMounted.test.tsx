@@ -117,7 +117,7 @@ it.each([
   expect(JSON.stringify(changed.mock.lastCall?.[0])).toBe(draft);
 });
 
-it.each(['rfd3_iteration', 'region_redesign', 'shape_blueprint'])('prepares %s with no source or geometry through the actual leaf', async modification_mode => {
+it.each(['shape_blueprint'])('prepares %s with no source or geometry through the actual leaf', async modification_mode => {
   const changed = vi.fn();
   await mount(<ProteinModificationTemplate onBack={() => {}} onDraftChange={changed} initialValues={{ modification_mode }} />);
   expect(posts).toEqual([]);

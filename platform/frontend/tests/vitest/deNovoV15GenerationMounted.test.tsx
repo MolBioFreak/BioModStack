@@ -16,7 +16,6 @@ function Child({ initialValues, onDraftChange, embedded, runDetails, kind, submi
     useEffect(() => { onDraftChange({ ...initialValues, source: value, enabled: false, amount: 0, selection: null }); }, [value, onDraftChange]);
     return <section data-child={kind} data-embedded={embedded} data-model={submissionModelId}><label>Source<input value={value} onChange={e => setValue(e.target.value)} /></label>{runDetails}<button>Child launch</button></section>;
 }
-vi.mock('../../src/components/ProteinLocalRedesignTemplate', () => ({ ProteinLocalRedesignTemplate: (props: any) => <Child {...props} kind="redesign" /> }));
 vi.mock('../../src/components/ShapeBlueprintTemplate', () => ({ default: (props: any) => <Child {...props} kind="shape" /> }));
 import { ProteinModificationTemplate, type DeNovoNavigationState } from '../../src/components/ProteinModificationTemplate';
 import { api } from '../../src/lib/api';
@@ -281,31 +280,30 @@ it('hydrates saved identity first then follows explicit browser navigation witho
     expect(navigation).not.toHaveBeenCalled();
 });
 
-it('mounts only the active child, forwards embedded run details, and preserves cleared child snapshots', async () => {
+it('mounts only the active child and forwards embedded run details; Redesign is the RFD3 editor', async () => {
     const draft = vi.fn(); const navigation = vi.fn();
-    await render({ initialValues: { modification_mode: 'region_redesign', source: 'original' }, onDraftChange: draft, onNavigationChange: navigation, runDetails: <div data-policy /> });
-    expect(control('Source').value).toBe('original');
-    await edit('Source', ''); await click('Shape'); await edit('Source', 'geometry'); await click('Redesign structure');
-    expect(control('Source').value).toBe('');
-    expect(latest(navigation)).toEqual({ modification_mode: 'region_redesign' });
-    expect(document.querySelector('[data-child]')?.getAttribute('data-model')).toBe('protein_modification_experimental');
+    await render({ initialValues: { modification_mode: 'region_redesign', generator: 'rfd3' }, onDraftChange: draft, onNavigationChange: navigation, runDetails: <div data-policy /> });
+    // Redesign is a task of the RFD3 editor, not a separate child form.
+    expect(control('Engine').value).toBe('rfd3');
+    expect(document.querySelector('[data-child]')).toBeNull();
+    expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);
+    await click('Shape');
     expect(document.querySelectorAll('[data-child]')).toHaveLength(1);
     expect(document.querySelector('[data-child]')?.getAttribute('data-embedded')).toBe('true');
     expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);
-    expect(latest(draft)).toMatchObject({ source: '', enabled: false, amount: 0, selection: null });
-    await click('Shape'); expect(control('Source').value).toBe('geometry');
+    await click('Redesign structure');
+    expect(document.querySelector('[data-child]')).toBeNull();
+    expect(control('Engine').value).toBe('rfd3');
+    expect(document.querySelectorAll('[data-policy]')).toHaveLength(1);
 });
 
-it('keeps validated and native redesign route identities and snapshots distinct', async () => {
-    const initialValues = { modification_mode: 'region_redesign', source: 'validated' };
-    await render({ initialValues, navigationState: { modification_mode: 'region_redesign' } });
-    await render({ initialValues, navigationState: { modification_mode: 'rfd3_local_redesign' } });
-    expect(document.querySelector('[data-child]')?.getAttribute('data-model')).toBe('protein_local_redesign');
-    expect(control('Source').value).toBe('');
-    await edit('Source', 'native');
-    await render({ initialValues, navigationState: { modification_mode: 'region_redesign' } });
-    expect(document.querySelector('[data-child]')?.getAttribute('data-model')).toBe('protein_modification_experimental');
-    expect(control('Source').value).toBe('validated');
+it('both historical Redesign routes open the same unified RFD3 editor', async () => {
+    const initialValues = { modification_mode: 'region_redesign' };
+    for (const modification_mode of ['region_redesign', 'rfd3_local_redesign']) {
+        await render({ initialValues, navigationState: { modification_mode } });
+        expect(document.querySelector('[data-child]')).toBeNull();
+        expect(control('Engine').value).toBe('rfd3');
+    }
 });
 
 it('forwards the full retained draft envelope to Template Manager without submitting', async () => {
