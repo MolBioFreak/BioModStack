@@ -235,7 +235,7 @@ export function BioXpPipetteAdvancedTools({ visible = true, generation = 0, conn
             {localError && <p className="mt-2 text-red-300">{localError}</p>}
             {status.error && <p className="mt-2 text-red-300">Status unavailable: {bioXpErrorText(status.error)}</p>}
             {planner.error && <p className="mt-2 text-red-300">Plan failed: {bioXpErrorText(planner.error)}</p>}
-            {planner.data && <p className="mt-2"><strong>Plan only:</strong> {planner.data.operation} · dependencies satisfied {String(planner.data.dependencies_satisfied)} · motion commanded {String(planner.data.motion_commanded)} · receipt {planner.data.receipt_id}</p>}
+            {planner.data && <p className="mt-2"><strong>Plan only:</strong> {planner.data.operation} · dependencies satisfied {String(planner.data.dependencies_satisfied)} · motion commanded {String(planner.data.motion_commanded)} · controller acknowledged {String(planner.data.controller_acknowledged)} · physical effect verified {String(planner.data.physical_effect_verified)} · receipt {planner.data.receipt_id}</p>}
         </details>
     </div>;
 }
