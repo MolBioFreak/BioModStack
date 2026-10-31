@@ -24,7 +24,8 @@ export function BioXpLiquidDetection({ value, onChange }: { value: unknown; onCh
         <legend>Liquid detection</legend>
         <label>Detect<select aria-label="Detect liquid" value={when} onChange={e => set('when', e.target.value === 'first_draw' ? undefined : e.target.value)}>{WHEN.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
         <label>Descent<select aria-label="Descent mode" value={mode} disabled={off} onChange={e => set('mode', e.target.value === 'by_level' ? undefined : e.target.value)}>{MODES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
-        <label><input type="checkbox" aria-label="Liquid expected" checked={current.expected !== false} disabled={off} onChange={e => set('expected', e.target.checked ? undefined : false)} />Liquid expected: a well with no liquid pauses the run</label>
+        <label>Sensing<select aria-label="Sensing mode" value={typeof current.sensing === 'string' ? current.sensing : 'hybrid'} disabled={off} onChange={e => set('sensing', e.target.value === 'hybrid' ? undefined : e.target.value)}><option value="hybrid">Hybrid: capacitive + pressure (conductive tips)</option><option value="capacitive">Capacitive only</option><option value="pressure">Pressure only</option></select></label>
+        <label><input type="checkbox" aria-label="Liquid expected" checked={current.expected !== false} disabled={off} onChange={e => set('expected', e.target.checked ? undefined : false)} />Liquid expected: a well the plan lists as filled, with no liquid found, pauses the run</label>
         {ROWS.map(row => {
             const own = num(current[row.key]);
             return <div key={row.key} className="bioxp-speed-row">

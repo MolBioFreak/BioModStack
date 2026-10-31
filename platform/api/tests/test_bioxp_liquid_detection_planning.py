@@ -50,3 +50,11 @@ def test_bad_settings_are_rejected():
         positioned_transfer_recipes(_inputs(liquid_detection={'submerge_mm': 50}))
     with pytest.raises(ValueError):
         positioned_transfer_recipes(_inputs(liquid_detection={'when': 'sometimes'}))
+
+
+def test_plan_listed_wells_set_expected_channels_per_pair():
+    rows = positioned_transfer_recipes(_inputs(liquid_detection={}, source_liquid_channels=[[0], [0, 1], [1]]))
+    assert rows[0]['liquid_detection']['expected_channels'] == [0]
+    assert rows[2]['liquid_detection']['expected_channels'] == [1]
+    off = positioned_transfer_recipes(_inputs(liquid_detection={'expected': False}, source_liquid_channels=[[0], [0], [1]]))
+    assert 'expected_channels' not in off[0]['liquid_detection']

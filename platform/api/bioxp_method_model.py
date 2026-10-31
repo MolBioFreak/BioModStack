@@ -19,7 +19,8 @@ def liquid_detection_schema():
             'submerge_mm': mm('Depth below surface (mm)'), 'follow_mm': mm('Follow down while aspirating (mm)'),
             'floor_clearance_mm': mm('Stop above calibrated low (mm)'), 'level_tolerance_mm': mm('Same level within (mm)'),
             'search_speed_native': {'type': 'integer', 'minimum': 1, 'default': 300},
-            'start_mode': {'enum': [0, 1], 'default': 0}}}
+            'start_mode': {'enum': [0, 1], 'default': 0},
+            'sensing': {'enum': ['hybrid', 'pressure', 'capacitive'], 'default': 'hybrid'}}}
 
 
 def validate_method(raw):

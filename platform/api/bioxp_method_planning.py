@@ -457,7 +457,7 @@ def prepare_class_transfer(inputs):
 Z_STEPS_PER_MM = Decimal('2015.748')  # robot tip_length.Z_STEPS_PER_MM (51200 / 25.4)
 LIQUID_DETECTION_DEFAULTS = {'when': 'first_draw', 'mode': 'by_level', 'expected': True,
     'submerge_mm': '1', 'follow_mm': '0', 'floor_clearance_mm': '1', 'level_tolerance_mm': '0.5',
-    'search_speed_native': 300, 'start_mode': 0}
+    'search_speed_native': 300, 'start_mode': 0, 'sensing': 'hybrid'}
 
 
 def liquid_detection_settings(value):
@@ -488,7 +488,8 @@ def positioned_transfer_recipes(inputs, detected_wells=None):
     from bioxp_workflow_authoring import native_intent
     allowed = {'source', 'destination', 'channels', 'volume_ul', 'aspirate_speed', 'recipe',
                'source_position_flag', 'destination_position_flag',
-               'source_lift_height_steps', 'destination_lift_height_steps', 'liquid_detection'}
+               'source_lift_height_steps', 'destination_lift_height_steps', 'liquid_detection',
+               'source_liquid_channels'}
     if set(inputs) - allowed:
         raise ValueError(f'Unsupported class Transfer fields: {sorted(set(inputs) - allowed)}')
     source, destination = inputs['source'], inputs['destination']
@@ -532,9 +533,11 @@ def positioned_transfer_recipes(inputs, detected_wells=None):
         if detect and recipe.get('aspiration_tracking') is None:
             # The search replaces the calibrated lower: Z stops on each channel's surface.
             detected_wells.add(key)
+            planned = inputs.get('source_liquid_channels')
             recipe['liquid_detection'] = {'location_id': key[0], 'expected': bool(detection['expected']),
+                **({'expected_channels': planned[pair]} if detection['expected'] and planned else {}),
                 'mode': detection['mode'], 'start_mode': detection['start_mode'],
-                'search_speed_native': detection['search_speed_native'],
+                'search_speed_native': detection['search_speed_native'], 'sensing': detection['sensing'],
                 'detection_id': f'pair-{pair}-{key[1]}', **detection_steps}
             recipe['before_liquid'] = recipe.get('before_liquid', [])
         else:
@@ -575,6 +578,9 @@ def prepare_occurrences(occurrences, method, dependencies):
     issues.extend(deck_issues)
     profiles = {p['id']: p for p in dependencies.get('labware_profiles', [])}
     labware = deepcopy(deck.get('labware', []))
+    # Wells holding liquid during the run: starting deck assignments, then every dispense.
+    planned_labware = {str(a.get('labware_id')) for a in deck.get('assignments', [])}
+    filled = {(str(a.get('labware_id')), str(a.get('well', '')).upper()) for a in deck.get('assignments', [])}
     expanded = []
     count = sum(len(o['inputs'].get('transfers', [])) if o['action'] in ('distribute', 'consolidate') and o['inputs'].get('mode') == 'repeated_single' else 1 for o in occurrences)
     if count > 10000:
@@ -685,6 +691,21 @@ def prepare_occurrences(occurrences, method, dependencies):
                         effect.setdefault('air_ul', None)
                     effect['dispense_segments'] = deepcopy(recipe.get('dispense_segments'))
                     effect['final_empty_tip'] = recipe.get('final_empty_speed_ul_s') is not None
+        if row['action'] == 'transfer' and isinstance(inputs.get('liquid_detection'), dict) and inputs.get('channel_transfers'):
+            # Per pair: channels whose source well holds liquid per the plan. Labware the
+            # plan says nothing about keeps "every channel expected".
+            by_pair = {}
+            for effect in inputs['channel_transfers']:
+                src = effect.get('source') or {}
+                vessel = str(src.get('labware_id'))
+                held = vessel not in planned_labware or (vessel, str(src.get('well', '')).upper()) in filled
+                channels = by_pair.setdefault(effect.get('pair_index', 0), [])
+                if held and effect['channel'] not in channels:
+                    channels.append(effect['channel'])
+            inputs['source_liquid_channels'] = [sorted(by_pair.get(i, [])) for i in range(len(inputs['source']['wells']))]
+        for effect in inputs.get('channel_transfers', []) if row['action'] == 'transfer' else []:
+            dst = effect.get('destination') or {}
+            filled.add((str(dst.get('labware_id')), str(dst.get('well', '')).upper()))
         result.append(row)
         if row['action'] == 'plate_move' and 'labware_id' in inputs:
             for vessel in labware:

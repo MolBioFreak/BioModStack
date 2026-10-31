@@ -1,5 +1,5 @@
 {
-  "source_commit": "9db14461c6db60012c7b3ea7ac14d2a346fd3258",
+  "source_commit": "8b0977b15086b9281dcf748a880c558839681a98",
   "application": {
     "$defs": {
       "AccountingContext": {
@@ -1147,6 +1147,16 @@
             "default": 25,
             "title": "Z Motor Current",
             "type": "integer"
+          },
+          "sensing": {
+            "default": "hybrid",
+            "enum": [
+              "pressure",
+              "capacitive",
+              "hybrid"
+            ],
+            "title": "Sensing",
+            "type": "string"
           },
           "expected_channels": {
             "anyOf": [
@@ -4985,6 +4995,23 @@
             "title": "Expected",
             "type": "boolean"
           },
+          "expected_channels": {
+            "anyOf": [
+              {
+                "items": {
+                  "maximum": 3,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Channels"
+          },
           "mode": {
             "default": "by_level",
             "enum": [
@@ -5044,6 +5071,16 @@
             "default": "source",
             "minLength": 1,
             "title": "Detection Id",
+            "type": "string"
+          },
+          "sensing": {
+            "default": "hybrid",
+            "enum": [
+              "pressure",
+              "capacitive",
+              "hybrid"
+            ],
+            "title": "Sensing",
             "type": "string"
           }
         },
@@ -5114,6 +5151,16 @@
             "default": 25,
             "title": "Z Motor Current",
             "type": "integer"
+          },
+          "sensing": {
+            "default": "hybrid",
+            "enum": [
+              "pressure",
+              "capacitive",
+              "hybrid"
+            ],
+            "title": "Sensing",
+            "type": "string"
           },
           "expected_channels": {
             "anyOf": [
@@ -9692,6 +9739,16 @@
               "default": 25,
               "title": "Z Motor Current",
               "type": "integer"
+            },
+            "sensing": {
+              "default": "hybrid",
+              "enum": [
+                "pressure",
+                "capacitive",
+                "hybrid"
+              ],
+              "title": "Sensing",
+              "type": "string"
             },
             "expected_channels": {
               "anyOf": [
@@ -16379,6 +16436,16 @@
               "title": "Z Motor Current",
               "type": "integer"
             },
+            "sensing": {
+              "default": "hybrid",
+              "enum": [
+                "pressure",
+                "capacitive",
+                "hybrid"
+              ],
+              "title": "Sensing",
+              "type": "string"
+            },
             "expected_channels": {
               "anyOf": [
                 {
@@ -20216,6 +20283,23 @@
               "title": "Expected",
               "type": "boolean"
             },
+            "expected_channels": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 3,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Expected Channels"
+            },
             "mode": {
               "default": "by_level",
               "enum": [
@@ -20275,6 +20359,16 @@
               "default": "source",
               "minLength": 1,
               "title": "Detection Id",
+              "type": "string"
+            },
+            "sensing": {
+              "default": "hybrid",
+              "enum": [
+                "pressure",
+                "capacitive",
+                "hybrid"
+              ],
+              "title": "Sensing",
               "type": "string"
             }
           },
@@ -20345,6 +20439,16 @@
               "default": 25,
               "title": "Z Motor Current",
               "type": "integer"
+            },
+            "sensing": {
+              "default": "hybrid",
+              "enum": [
+                "pressure",
+                "capacitive",
+                "hybrid"
+              ],
+              "title": "Sensing",
+              "type": "string"
             },
             "expected_channels": {
               "anyOf": [
@@ -24923,6 +25027,16 @@
                 "default": 25,
                 "title": "Z Motor Current",
                 "type": "integer"
+              },
+              "sensing": {
+                "default": "hybrid",
+                "enum": [
+                  "pressure",
+                  "capacitive",
+                  "hybrid"
+                ],
+                "title": "Sensing",
+                "type": "string"
               },
               "expected_channels": {
                 "anyOf": [
