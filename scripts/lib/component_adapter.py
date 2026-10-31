@@ -127,7 +127,10 @@ def _stop_processes(processes: Sequence[Any], timeout: float = 10) -> bool:
     return quiet
 
 # Kept as the shared public interface for root, child and nested consumers.
-from scripts.lib.container_runtime import nextflow_container_config as task_container_config
+try:
+    from scripts.lib.container_runtime import nextflow_container_config as task_container_config
+except ImportError:  # inside a task container another `scripts` package can shadow the repo's
+    from container_runtime import nextflow_container_config as task_container_config
 
 
 def wf_clone_container_config(lock_path: str | Path, assembly_tool: str = "flye") -> str:

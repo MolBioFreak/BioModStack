@@ -74,3 +74,11 @@ def test_task_config_whitelists_the_attempt_context_for_containers():
     resources = {"required": {"cpus": 1, "memory_bytes": 1024}}
     text = ca.native_resource_config(plan, resources, "/tmp/x.lock", ROOT)
     assert "apptainer.envWhitelist" in text and "BMS_COMPONENT_CONTEXT" in text
+
+
+def test_adapter_imports_without_the_repo_scripts_package():
+    import subprocess
+    code = ("import sys; sys.path[:] = [p for p in sys.path if p not in ('', %r)]; sys.path.insert(0, %r); "
+            "sys.modules['scripts'] = type(sys)('scripts'); import component_adapter") % (str(ROOT), str(ROOT / 'scripts' / 'lib'))
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env={"PYTHONPATH": str(ROOT / "platform" / "api")})
+    assert out.returncode == 0, out.stderr[-400:]
