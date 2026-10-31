@@ -25,9 +25,9 @@ from . import protocols
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 
 router = APIRouter(prefix="/methods")
-Collection = Literal["library", "liquid-classes", "presets"]
+Collection = Literal["library", "liquid-classes", "presets", "plate-profiles"]
 SCHEMAS = {"library": "bms.bioxp-method.v1", "liquid-classes": "bms.bioxp-liquid-class.v1",
-           "presets": "bms.bioxp-method-preset.v1"}
+           "presets": "bms.bioxp-method-preset.v1", "plate-profiles": "bms.bioxp-plate-profile.v1"}
 LEGACY = {"bms.bioxp-workflow-draft.v1", "bms.bioxp-workflow-draft.v2"}
 Revision = Annotated[StrictInt, Field(ge=0)]
 
@@ -178,10 +178,20 @@ def starter_classes():
 
 
 @router.get("/plates")
-def plate_library():
+async def plate_library(session: AsyncSession = Depends(get_session)):
+    """Built-in plate profiles, with measured ones saved from Pipettes > Calibration replacing them by id."""
     import json
     from pathlib import Path
-    return json.loads((Path(__file__).resolve().parents[2] / 'schemas' / 'bioxp_plate_library.json').read_text(encoding='utf-8'))
+    library = json.loads((Path(__file__).resolve().parents[2] / 'schemas' / 'bioxp_plate_library.json').read_text(encoding='utf-8'))
+    rows = (await session.scalars(select(UserTemplate).where(UserTemplate.mode == "bioxp_workflow",
+        UserTemplate.params["schema"].as_string() == SCHEMAS["plate-profiles"]).order_by(UserTemplate.created_at))).all()
+    saved = {}
+    for row in rows:
+        profile = (row.params or {}).get("profile")
+        if isinstance(profile, dict) and isinstance(profile.get("id"), str):
+            saved[profile["id"]] = {**profile, "saved_record_id": row.id}
+    merged = [saved.pop(p["id"], p) for p in library["profiles"]] + list(saved.values())
+    return {**library, "profiles": merged}
 
 
 @router.get("/liquid-classes/source")

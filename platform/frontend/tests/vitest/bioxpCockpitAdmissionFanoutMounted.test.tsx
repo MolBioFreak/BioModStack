@@ -634,7 +634,9 @@ vi.mock('../../src/lib/bioxpClient', async (importOriginal) => {
 
 vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: (props: Record<string, unknown>) => <output data-testid="camera-session">{JSON.stringify(props)}</output> }));
 vi.mock('../../src/components/BioXpOperatorControlTabs', () => ({ BioXpOperatorControlTabs: () => null }));
-vi.mock('../../src/components/BioXpPipetteControlPanel', () => ({ BioXpPipetteControlPanel: (props: Record<string, unknown>) => { state.pipetteProps = props; return null; } }));
+vi.mock('../../src/components/BioXpPipetteControlPanel', () => ({ BioXpPipetteControlPanel: () => null, BioXpSoftwareTipType: () => null,
+    BioXpPipetteAdvancedTools: (props: Record<string, unknown>) => { state.pipetteProps = props; return null; } }));
+vi.mock('../../src/components/BioXpPipetteCalibration', () => ({ BioXpPipetteCalibration: () => null }));
 vi.mock('../../src/components/BioXpOperatorReports', () => ({ BioXpOperatorReports: () => null }));
 
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
@@ -762,6 +764,8 @@ describe('primary cockpit query ownership', () => {
         expect(emergencyButton().disabled).toBe(false);
         const disclosure = container.querySelector('#control-tab-pipettes') as HTMLButtonElement;
         await act(async () => disclosure.click());
+        const advanced = [...container.querySelectorAll('[role="tab"]')].find(node => node.textContent === 'Advanced') as HTMLButtonElement;
+        await act(async () => advanced.click());
         expect(state.pipetteProps?.connected).toBe(true);
         expect(state.pipetteProps?.actions).toContain(pipette);
         expect(pipette.enabled).toBe(false);

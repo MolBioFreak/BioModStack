@@ -195,6 +195,7 @@ export default defineConfig({
             './tests/vitest/bioxpMethodsWorkflowAuthoringMounted.test.tsx',
             './tests/vitest/bioxpMovePreparationMounted.test.tsx',
             './tests/vitest/bioxpLiquidDetectionMounted.test.tsx',
+            './tests/vitest/bioxpPipetteCalibrationMounted.test.tsx',
             './tests/vitest/bioxpExperimentAuthoringMounted.test.tsx',
             './tests/vitest/bioxpCustodyAuthoringMounted.test.tsx',
             './tests/vitest/bioxpMethodSimulationMounted.test.tsx',

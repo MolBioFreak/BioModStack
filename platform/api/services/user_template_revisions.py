@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from database import UserTemplateRevision
 
 REVISIONED_SCHEMAS = {
-    "bms.bioxp-method.v1", "bms.bioxp-liquid-class.v1", "bms.bioxp-method-preset.v1",
+    "bms.bioxp-method.v1", "bms.bioxp-liquid-class.v1", "bms.bioxp-method-preset.v1", "bms.bioxp-plate-profile.v1",
 }
 
 

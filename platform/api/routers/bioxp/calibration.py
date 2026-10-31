@@ -97,6 +97,34 @@ async def save_operation_parameters(request: OperationParametersRequest, runtime
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
 
+class TipOffsetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_connection_generation: Annotated[int, Field(strict=True, ge=0)]
+    tip_type: Literal[10, 50, 200, 201]
+    offset_steps: Annotated[int, Field(strict=True)]
+    source: str = Field(min_length=1, max_length=300)
+
+
+@router.get("/tip-offsets")
+async def read_tip_offsets(expected_connection_generation: int = Query(ge=0),
+                           runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    try:
+        return await runtime.connection.request_active_v2_query("tip_offsets", expected_generation=expected_connection_generation)
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+@router.put("/tip-offsets")
+async def save_tip_offset(request: TipOffsetRequest, runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    """Record-only: the robot stores the confirmed value; nothing moves."""
+    try:
+        return await runtime.connection.request_active(
+            "save_tip_offset", expected_generation=request.expected_connection_generation, require_fresh=False,
+            json_data=request.model_dump(mode="json", exclude={"expected_connection_generation"}))
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
 @router.get("/calibration-settings")
 async def read_calibration_settings(
     expected_connection_generation: int = Query(ge=0),

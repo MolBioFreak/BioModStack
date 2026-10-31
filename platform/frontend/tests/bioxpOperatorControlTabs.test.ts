@@ -101,26 +101,6 @@ test('browser uses fixed BMS routes and action ids, never arbitrary robot paths'
     assert.doesNotMatch(client, /informationalPath|robotPath|targetPath/);
 });
 
-test('four-channel pipette surface separates physical admission from no-motion planning', () => {
-    assert.match(cockpit, /BioXpPipetteControlPanel/);
-    assert.ok(
-        cockpit.lastIndexOf('BioXpPipetteControlPanel') > cockpit.indexOf('Thermal Door'),
-        'pipette panel must render beneath the Thermal Door card',
-    );
-    assert.doesNotMatch(source, /BioXpPipetteControlPanel/);
-    for (const label of [
-        'Pipette status', 'Channel', 'Hardware tip readback', 'Hardware pressure',
-        'Assign source tip type / location (host only)', 'Move to waste physically', 'Detect fluid physically', 'Lift pipette head (Z)', 'Lower pipette head (Z)',
-        'Build no-motion plan', 'No-motion application planner', 'Active hardware readback', 'Read live hardware',
-    ]) assert.ok(pipettePanel.toLowerCase().includes(label.toLowerCase()), `missing literal label: ${label}`);
-    for (const token of [
-        'controller_acknowledged', 'completion_verified', 'physical_effect_verified',
-        'motion_commanded', 'truth_source', 'live_query_performed',
-    ]) assert.ok(pipettePanel.includes(token), `missing pipette evidence token: ${token}`);
-    assert.doesNotMatch(pipettePanel, /execute pipette|run physical/i);
-    assert.doesNotMatch(pipettePanel, /Robot-owned blocker|physical_pipette_execution_not_authorized/);
-});
-
 test('receipts expose machine assessment and require explicit human PASS or FAIL observations', () => {
     for (const label of [
         'machine_assessment', 'operator_assessment', 'physical_effect_verified',

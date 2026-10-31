@@ -24,12 +24,12 @@ async function mount(generation = 77, options = destinations) {
 function button(text: string) { return [...host.querySelectorAll('button')].find(el => el.textContent === text)!; }
 async function category(name: string) { await act(async () => button(name).click()); }
 function categoryFor(label: string) {
-    if (/^(Move|Lower|Lift|Station|Location|Reference)/.test(label) && label !== 'Lift Z after pickup') return 'Position / Z';
-    if (/^(Diagnostic|Pipette diagnostics)/.test(label)) return 'Diagnostics';
-    if (/^(Source mix|Source purge|Aspirate air|Dispense air|Advanced mix|Purge|Dip tips)/.test(label)) return 'Other native tools';
+    if (/^(Move|Lower|Lift|Station|Location|Reference)/.test(label) && label !== 'Lift Z after pickup') return 'Move & pipette';
+    if (/^(Diagnostic|Pipette diagnostics)/.test(label)) return 'Advanced';
+    if (/^(Source mix|Source purge|Aspirate air|Dispense air|Advanced mix|Purge|Dip tips)/.test(label)) return 'Advanced';
     if (/^(Tip|Load selected|Pick up|Eject|Overpress|Lift Z after|Force new|Pipettes to load)/.test(label)) return 'Tips';
     if (/^(Detection|Measure fluid|OEM fluid|OEM Detect|OEM calibrate|Offset scan|Sample every|Prefill)/.test(label)) return 'Calibration';
-    if (/^(Aspirate now|Dispense now|Mix now|Volume|Aspirate speed|Dispense speed|Mix cycles)/.test(label)) return 'Liquid strokes';
+    if (/^(Aspirate now|Dispense now|Mix now|Volume|Aspirate speed|Dispense speed|Mix cycles)/.test(label)) return 'Move & pipette';
     return null;
 }
 async function click(text: string) { const name = categoryFor(text); if (name) await category(name); await act(async () => button(text).click()); await tick(); }
@@ -43,7 +43,7 @@ async function change(label: string, value: string) {
     });
 }
 async function check(channel: number) { await act(async () => (host.querySelector(`[aria-label="Plunger ${channel}"]`) as HTMLInputElement).click()); }
-async function well(value: string) { await act(async () => (host.querySelector(`[aria-label="Reference well ${value}"]`) as HTMLButtonElement).click()); }
+async function well(value: string) { await change('Reference well', value); }
 async function fields() {
     await change('Station', '4'); await well('C3'); await change('Move Z position', '1');
     await change('Lift target', 'high'); await change('Volume (µL)', '12.5');
@@ -90,7 +90,7 @@ it.each([
     expect((host.querySelector('[aria-label="Plunger 1"]') as HTMLInputElement).checked).toBe(true);
     expect((host.querySelector('[aria-label="Eject pipette 3"]') as HTMLInputElement).checked).toBe(true);
     expect(requests).toEqual([]);
-    await category('Diagnostics');
+    await category('Advanced');
     const diagnosticBefore = (host.querySelector('[aria-label="Diagnostic action"]') as HTMLSelectElement).value;
     await click(label);
     expect(requests).toHaveLength(1);
@@ -99,7 +99,7 @@ it.each([
     expect(request.document).toEqual(manualPipettingDocument({ protocol_id: 'bms-manual-pipetting', steps: [step] }));
     expect(requests[0].url).toBe('/api/bioxp/protocols/submit');
     expect(request).toMatchObject({ dry_run: false, expected_connection_generation: 77, live_execution: { live_execution_ack: true } });
-    await category('Diagnostics');
+    await category('Advanced');
     expect((host.querySelector('[aria-label="Diagnostic action"]') as HTMLSelectElement).value).toBe(diagnosticBefore);
     expect((host.querySelector('[aria-label="Plunger 1"]') as HTMLInputElement).checked).toBe(true);
     expect((host.querySelector('[aria-label="Plunger 2"]') as HTMLInputElement).checked).toBe(false);
@@ -168,8 +168,8 @@ it.each(['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'] as const)('moun
     const wire = JSON.stringify(request);
     for (const forbidden of ['tip_loaded', '"tip_location":', 'oem_prepared', 'source_location', 'initialize', 'Park']) expect(wire).not.toContain(forbidden);
     if (op !== 'move') expect(wire).not.toContain('C3');
-    await category('Liquid strokes'); expect(host.textContent).toContain('This does not load tips or change tip alignment');
-    await category(['move','lower','lift'].includes(op) ? 'Position / Z' : 'Liquid strokes');
+    await category('Move & pipette'); expect(host.textContent).toContain('tips keep their fixed spacing');
+    await category(['move','lower','lift'].includes(op) ? 'Move & pipette' : 'Move & pipette');
     expect(button(`${op[0].toUpperCase()}${op.slice(1)} now`).disabled).toBe(false);
     exports.push({ name: op, authoring: { protocol_id: 'bms-manual-pipetting', steps: [expected[op]] }, request });
 });
@@ -328,7 +328,7 @@ it('permits explicit canonical IDs without catalog/proof and does not invent def
 });
 
 it('reserves only its own delayed HTTP and never locks against a retained active job or failed receipt', async () => {
-    await mount(); await fields(); await category('Position / Z'); let release!: () => void;
+    await mount(); await fields(); await category('Move & pipette'); let release!: () => void;
     delay = () => new Promise(resolve => { release = resolve; });
     await act(async () => { button('Move now').click(); button('Move now').click(); }); await tick();
     expect(requests).toHaveLength(1); expect(button('Move now').disabled).toBe(true);
@@ -340,7 +340,7 @@ it('reserves only its own delayed HTTP and never locks against a retained active
 });
 
 it('fences generation changes during digest without converting uncertainty into a new lock', async () => {
-    await mount(); await fields(); await category('Position / Z'); let release!: (value: ArrayBuffer) => void;
+    await mount(); await fields(); await category('Move & pipette'); let release!: (value: ArrayBuffer) => void;
     vi.spyOn(webcrypto.subtle, 'digest').mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
     await act(async () => button('Move now').click()); await mount(78);
     await act(async () => release(new Uint8Array(32).buffer)); await tick();
@@ -349,9 +349,9 @@ it('fences generation changes during digest without converting uncertainty into 
 });
 
 it('changes categories without submitting or losing the native form draft', async () => {
-    await mount(); await fields(); await category('Tips'); await category('Position / Z');
+    await mount(); await fields(); await category('Tips'); await category('Move & pipette');
     expect((host.querySelector('[aria-label="Location number"]') as HTMLInputElement).value).toBe('4');
-    await category('Liquid strokes'); expect((host.querySelector('[aria-label="Volume (µL)"]') as HTMLInputElement).value).toBe('12.5');
+    await category('Move & pipette'); expect((host.querySelector('[aria-label="Volume (µL)"]') as HTMLInputElement).value).toBe('12.5');
     expect(requests).toHaveLength(0);
 });
 
@@ -391,7 +391,7 @@ it.each([-1, 0, 1, 2, 3])('source-selected pipette %s preserves source indices i
     await change('Pipettes to load', String(pipette)); await change('Tip size', '200'); await toggle('Force new tip');
     await click('Load selected tips now');
     expect(requests[0].request.document.stages[0].actions[0].params).toEqual({operation:'source_load_tips',tip_type:200,pipette,force_new_tip:true});
-    await category('Liquid strokes');
+    await category('Move & pipette');
     expect([...host.querySelectorAll<HTMLInputElement>('[aria-label^="Plunger "]')].filter(el=>el.checked).map(el=>Number(el.getAttribute('aria-label')!.split(' ')[1])-1)).toEqual(pipette === -1 ? [0,1,2,3] : [pipette]);
     exports.push({ name: `selected-transfer-${pipette}`, request: requests[0].request });
     await toggle('Force new tip'); await click('Load selected tips now');
@@ -406,7 +406,7 @@ it('retains every source mixing/air/purge field across categories without changi
     await mount(); await advanced();
     for (const [key, value] of Object.entries({ volume_ul: '23.5', air_ul: '7.5', aspirate_speed: '81', dispense_speed: '42', aspirate_delay_ms: '0', dispense_delay_ms: '-1', cycles: '0' })) await change(`Source mix ${key}`, value);
     await change('Source mix type', 'C'); await toggle('Dip tips while mixing'); await click('Advanced mix now');
-    await category('Tips'); await category('Other native tools');
+    await category('Tips'); await category('Advanced');
     expect((host.querySelector('[aria-label="Source mix volume_ul"]') as HTMLInputElement).value).toBe('23.5');
     await change('Aspirate air volume (µL)', '6.25'); await click('Aspirate air now');
     await change('Dispense air volume (µL)', '3.5'); await click('Dispense air now');
@@ -428,7 +428,7 @@ it.each(['aspirate', 'dispense', 'eject', 'plunger_up', 'plunger_down', 'dispens
     }
     if (['aspirate', 'dispense'].includes(action)) { await change('Diagnostic volume (µL)', '12.25'); await change('Diagnostic speed', '71'); Object.assign(diagnostic, { volume_ul: 12.25, speed: 71 }); }
     if (action.startsWith('plunger_')) { await change('Diagnostic Z steps', '321'); diagnostic.steps = 321; }
-    await category('Tips'); await category('Diagnostics');
+    await category('Tips'); await category('Advanced');
     expect((host.querySelector('[aria-label="Diagnostic action"]') as HTMLSelectElement).value).toBe(action);
     await click('Pipette diagnostics now');
     expect(requests[0].request.document.stages[0].actions[0].params).toEqual({ operation: 'diagnostic_pipette', diagnostic });
@@ -440,7 +440,7 @@ it('renders useful compact diagnostic values without events or raw results and r
     job = { ...job, execution: { ...job.execution, runtime_state: { ...job.execution.runtime_state, action_results: [{ pipette_result: { action: 'get_data', completed: false, channels: [{ channel: 0, part_number: 'ADP-123', revision: 'R2', firmware: 'FW-7', data: 42, information: 'RAW_HIDDEN', result: 'RAW_HIDDEN' }], error: 'partial channel read failure', events: ['RAW_HIDDEN'], tests: [{ number: 0, label: 'Plunger force', channels: [{ channel: 0, diagnosis: 1, display: 'Passed' }], result: 'RAW_HIDDEN' }], attempts: [{}, {}] } }] } } };
     await act(async () => { await client.invalidateQueries({ queryKey: ['bioxp', 'protocols', 'jobs'] }); }); await tick();
     for (const text of ['ADP-123', 'R2', 'FW-7', 'Plunger force', 'Passed', 'partial channel read failure', 'Initialize attempts']) expect(host.textContent).toContain(text);
-    expect(host.textContent).not.toContain('RAW_HIDDEN'); await category('Liquid strokes'); expect(button('Aspirate now').disabled).toBe(false);
+    expect(host.textContent).not.toContain('RAW_HIDDEN'); await category('Move & pipette'); expect(button('Aspirate now').disabled).toBe(false);
 });
 it('rejects schema-invalid diagnostic inputs without refusing later valid source actions', async () => {
     await mount(); await advanced(); await change('Diagnostic action', 'aspirate'); await change('Diagnostic speed', '1.5'); await click('Pipette diagnostics now');

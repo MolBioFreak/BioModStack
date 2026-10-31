@@ -1,6 +1,8 @@
 """Transfer liquid detection: first draw per source well, mm -> robot steps, legacy transfers unchanged."""
 import pytest
 
+from test_bioxp_methods_api import store  # noqa: F401
+
 from bioxp_method_planning import positioned_transfer_recipes
 
 
@@ -79,3 +81,17 @@ def test_plate_library_is_served():
     lib = json.loads((Path(__file__).resolve().parents[1] / 'schemas/bioxp_plate_library.json').read_text())
     fast = next(p for p in lib['profiles'] if p['id'] == 'thermo-4483485-enduraplate-fast')
     assert fast['vessel_geometry']['well_top_diameter_mm'] == 5.49 and fast['native_addressing']
+
+
+
+@pytest.mark.asyncio
+async def test_measured_plate_profile_replaces_builtin(store):
+    client = store[0]
+    BASE = '/api/bioxp/methods'
+    profile = {'id': 'thermo-4483485-enduraplate-fast', 'name': 'measured', 'native_addressing': {'row_increment': 2, 'column_increment': 0, 'reference_channel': 0},
+               'vessel_geometry': {'height_to_volume': [[0, 0], [3.1, 20]], 'calibrated_low_gap_mm': 0.4}}
+    r = await client.post(BASE + '/plate-profiles', json={'method': {'schema': 'bms.bioxp-plate-profile.v1', 'name': 'Fast measured', 'profile': profile}})
+    assert r.status_code == 201, r.text
+    plates = (await client.get(BASE + '/plates')).json()['profiles']
+    fast = next(p for p in plates if p['id'] == 'thermo-4483485-enduraplate-fast')
+    assert fast['vessel_geometry']['calibrated_low_gap_mm'] == 0.4 and fast['saved_record_id']

@@ -17,8 +17,13 @@ const operations: Operation[] = ['move', 'lower', 'lift', 'aspirate', 'dispense'
 const label = (operation: Operation) => operation in sourceLabels ? sourceLabels[operation as BioXpSourceStep['operation']] : operation === 'load_tip' ? 'Load tip' : operation === 'measure_fluid_height' ? 'Measure fluid height' : operation === 'source_fluid_offset' ? 'OEM fluid offset scan' : operation === 'diagnostic_detect_fluid' ? 'OEM Detect Fluid' : operation === 'source_calwith_fluid' ? 'OEM calibrate with fluid' : operation[0].toUpperCase() + operation.slice(1);
 const wells = [...'ABCDEFGH'].flatMap(row => Array.from({ length: 12 }, (_, col) => `${row}${col + 1}`));
 
-export function BioXpWellPipettingPanel({ generation, connected, destinations = [], positionTableRevision, visible = true }: { visible?: boolean;
+export const PIPETTE_SECTIONS = ['Move & pipette', 'Tips', 'Calibration', 'Advanced'] as const;
+export type PipetteSection = typeof PIPETTE_SECTIONS[number];
+
+export function BioXpWellPipettingPanel({ generation, connected, destinations = [], positionTableRevision, visible = true, section }: { visible?: boolean;
     controlsEnabled?: boolean; generation: number; connected: boolean; destinations?: BioXpDeckDestinationV1[]; positionTableRevision?: string | null;
+    /** Controlled by the Pipettes tab; uncontrolled renders its own section switcher. */
+    section?: PipetteSection;
 }) {
     const invalidateSettings = useInvalidateSettings(generation);
     const [sourceDrafts, setSourceDrafts] = useState<Record<BioXpSourceStep['operation'], NativeDraft<BioXpSourceStep>>>(sourceDefaults);
@@ -117,20 +122,18 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         } catch (cause) { if (mounted.current) setError(bioXpErrorText(cause)); }
         finally { busy.current = false; if (mounted.current) setPending(false); }
     }
-    const [category, setCategory] = useState('Liquid strokes');
-    const categories: Record<string, Operation[]> = {
-        'Liquid strokes': ['aspirate', 'dispense', 'mix'],
+    const [ownSection, setOwnSection] = useState<PipetteSection>('Move & pipette');
+    const category = section ?? ownSection;
+    const categories: Record<PipetteSection, Operation[]> = {
+        'Move & pipette': ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'],
         Tips: ['load_tip', 'source_load_tips'],
-        Diagnostics: ['diagnostic_pipette'],
-        'Position / Z': ['move', 'lower', 'lift'],
         Calibration: ['measure_fluid_height', 'source_fluid_offset', 'diagnostic_detect_fluid', 'source_calwith_fluid'],
-        'Other native tools': ['source_mix', 'source_aspirate_air', 'source_dispense_air', 'source_purge'],
+        Advanced: ['diagnostic_pipette', 'source_mix', 'source_aspirate_air', 'source_dispense_air', 'source_purge'],
     };
     const show = (...ops: Operation[]) => ops.some(op => categories[category].includes(op));
-    return <section aria-label="Well pipetting" className={'mt-4 min-w-0 space-y-3 rounded border border-slate-700 p-4 [&_select]:max-w-full [&_select]:rounded [&_select]:bg-slate-950 [&_select]:p-2 [&_input[type=number]]:min-w-0 [&_input[type=number]]:rounded [&_input[type=number]]:bg-slate-950 [&_input[type=number]]:p-2'}>
+    return <section aria-label="Well pipetting" className={'min-w-0 space-y-3 [&_select]:max-w-full [&_select]:rounded [&_select]:bg-slate-950 [&_select]:p-2 [&_input[type=number]]:min-w-0 [&_input[type=number]]:rounded [&_input[type=number]]:bg-slate-950 [&_input[type=number]]:p-2'}>
         <>
-            <h3 className="font-semibold">Basic tests & immediate controls</h3>
-            <div className="flex flex-wrap gap-2" aria-label="Test categories">{Object.keys(categories).map(name => <button type="button" aria-pressed={category === name} key={name} onClick={() => setCategory(name)}>{name}</button>)}</div>
+            {section === undefined && <div role="tablist" className="flex flex-wrap gap-2" aria-label="Pipette sections">{PIPETTE_SECTIONS.map(name => <button type="button" role="tab" aria-selected={category === name} aria-pressed={category === name} key={name} onClick={() => setOwnSection(name)}>{name}</button>)}</div>}
             <section hidden={category !== 'Tips'} aria-label="Tip ejection" className="space-y-2 rounded border border-slate-700 p-3">
                 <h3 className="font-semibold">Tip ejection</h3>
                 <p className="text-sm">Releases tips at the current head position. Move over waste first; these buttons do not move the head.</p>
@@ -147,31 +150,25 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
                         className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">Eject selected tips</button>
                 </div>
             </section>
-            <p className="text-sm">One deliberate action at a time. Build ordered procedures in Workflows.</p>
         </>
         <section className='space-y-3' aria-label="Step settings">
-        <h3 className="font-semibold">{category}</h3>
-        {category === 'Position / Z' && <p className="text-sm">Move positions the head at a station and reference well. Lower and Lift act vertically in place.</p>}
-        {category === 'Liquid strokes' && <p className="text-sm text-amber-200">Choose which pipettes aspirate, dispense or mix. This does not load tips or change tip alignment. Use Load selected tips for physical loading. With four tips, the selected well positions the head; the tips keep their fixed spacing.</p>}
-        <details className="text-xs text-slate-300"><summary>Position details</summary><p>Calibration revision: {positionTableRevision ?? 'unavailable'}. Not every well is usable at every station.</p></details>
-        <div hidden={!show('move', 'lower', 'lift')} className="grid gap-3 sm:grid-cols-3">
+        {category === 'Move & pipette' && <p className="text-sm text-slate-400">Move puts the head over a station and reference well. Lower and Lift act in place. Strokes act on the ticked pipettes; tips keep their fixed spacing.</p>}
+        <div hidden={!show('move', 'lower', 'lift')} className="grid gap-3 sm:grid-cols-4">
             <label>Station<select aria-label="Station" className="block w-full bg-slate-950 p-2" value={destinations.some(d => String(d.location_id) === location) ? location : ''} onChange={e => setLocation(e.target.value)}>
                 <option value="">Select a station</option>
                 {destinations.map(d => <option key={d.target} value={d.location_id}>{d.label}</option>)}
             </select></label>
-            <details open><summary>Native location ID</summary>
-                <label>Location number<input aria-label="Location number" className="block w-full bg-slate-950 p-2" type="number" step="1" value={location} onChange={e => setLocation(e.target.value)} /></label>
-            </details>
+            <label hidden={!show('move')}>Reference well<select aria-label="Reference well" className="block w-full bg-slate-950 p-2" value={well} onChange={e => setWell(e.target.value)}>
+                <option value="">Select a well</option>{wells.map(value => <option key={value}>{value}</option>)}
+            </select></label>
             <label hidden={!show('move')}>Move Z position<select aria-label="Move Z position" className="block w-full bg-slate-950 p-2" value={flag} onChange={e => setFlag(e.target.value)}>
                 <option value="">Select height</option><option value="0">Clearance height</option><option value="1">Calibrated high</option><option value="2">Calibrated low</option>
             </select></label>
+            <details className="text-xs text-slate-300"><summary>Location number</summary>
+                <label>Location number<input aria-label="Location number" className="block w-full bg-slate-950 p-2" type="number" step="1" value={location} onChange={e => setLocation(e.target.value)} /></label>
+                <p>Calibration revision: {positionTableRevision ?? 'unavailable'}. Not every well is usable at every station.</p>
+            </details>
         </div>
-        <fieldset hidden={!show('move')} className="min-w-0"><legend>Reference well: {well || 'not selected'}</legend>
-            <div className="grid grid-cols-12 gap-1 overflow-x-auto" aria-label="Reference well grid">
-                {wells.map(value => <button key={value} type="button" aria-label={`Reference well ${value}`} aria-pressed={well === value}
-                    className={`min-w-7 rounded border p-1 text-xs ${well === value ? 'border-cyan-300 bg-cyan-800' : 'border-slate-700 bg-slate-950'}`} onClick={() => setWell(value)}>{value}</button>)}
-            </div>
-        </fieldset>
         <div hidden={!show('lift')} className="grid gap-3 sm:grid-cols-3">
             <label>Lift target<select aria-label="Lift target" className="block w-full bg-slate-950 p-2" value={liftMode} onChange={e => setLiftMode(e.target.value)}>
                 <option value="">Select calibrated target</option><option value="high">Calibrated high</option><option value="height">Height above calibrated low</option>
@@ -179,7 +176,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             {liftMode === 'height' && <label>Lift height (steps)<input aria-label="Lift height (steps)" type="number" step="1" value={height} onChange={e => setHeight(e.target.value)} className="block w-full bg-slate-950 p-2" /></label>}
             <p className="text-sm">Lower and Lift move vertically at the current position, not to the selected well.</p>
         </div>
-        <fieldset hidden={!show('aspirate', 'dispense', 'mix')}><legend>Pipettes for liquid strokes</legend><div className="flex flex-wrap gap-4">
+        <fieldset hidden={!show('aspirate', 'dispense', 'mix')}><legend>Pipettes for strokes</legend><div className="flex flex-wrap gap-4">
             {[0, 1, 2, 3].map(channel => <label key={channel}><input type="checkbox" aria-label={`Plunger ${channel + 1}`} checked={channels.includes(channel)} onChange={e => setChannels(current => e.target.checked ? [...current, channel].sort() : current.filter(c => c !== channel))} /> Pipette {channel + 1}</label>)}
         </div></fieldset>
         <div hidden={!show('aspirate', 'dispense', 'mix')} className="grid gap-3 sm:grid-cols-4">
@@ -188,8 +185,8 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         </div>
         <p hidden={!show('mix')} className="text-xs">Mix repeats the selected aspiration and dispense strokes (1–50 cycles). Speeds use controller units.</p>
         <div className="flex flex-wrap gap-2">{operations.filter(op => ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'].includes(op) && show(op)).map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{label(op)} now</button>)}</div>
-        <details hidden={!show('load_tip')} className="rounded border border-slate-700 p-3">
-            <summary className="cursor-pointer font-semibold">Tips: tray pickup</summary>
+        <section hidden={!show('load_tip')} aria-label="Tray pickup" className="rounded border border-slate-700 p-3">
+            <h3 className="font-semibold">Pick up tips</h3>
             <p className="my-2 text-sm">Picks up a tip from the selected tray and well. This moves the head.</p>
             <div className="my-3 grid gap-3 sm:grid-cols-2">
             <label>Tip tray<select aria-label="Tip tray" value={tray} onChange={e => setTray(e.target.value)}>{[1,2,3,4].map(n => <option key={n}>{n}</option>)}</select></label>
@@ -198,9 +195,9 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             <label><input aria-label="Lift Z after pickup" type="checkbox" checked={liftZ} onChange={e => setLiftZ(e.target.checked)} />Lift Z after pickup</label>
             </div>
         <div className="flex flex-wrap gap-2">{(['load_tip'] as Operation[]).map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{op === 'load_tip' ? 'Pick up from tray' : `${label(op)} now`}</button>)}</div>
-        </details>
+        </section>
         <details hidden={!show('measure_fluid_height','source_fluid_offset','diagnostic_detect_fluid','source_calwith_fluid')} className="rounded border border-slate-700 p-3">
-            <summary className="cursor-pointer font-semibold">Fluid diagnostics & calibration</summary>
+            <summary className="cursor-pointer font-semibold">OEM fluid calibration routines</summary>
             <div className="my-3 grid gap-3 sm:grid-cols-2">
             <label hidden={!show('measure_fluid_height','source_fluid_offset')}>Detection speed<input aria-label="Detection speed" type="number" step="1" value={detectionSpeed} onChange={e => setDetectionSpeed(e.target.value)} /></label>
             <label hidden={!show('source_fluid_offset')}>Offset scan plate<select aria-label="Offset scan plate" value={scanPlate} onChange={e => setScanPlate(e.target.value as typeof scanPlate)}>{(['TC', 'MS', 'OC', 'RC', 'STRIP', 'OCMS'] as const).map(plate => <option key={plate}>{plate}</option>)}</select></label>
@@ -212,7 +209,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         <div className="flex flex-wrap gap-2">{(['measure_fluid_height', 'source_fluid_offset', 'diagnostic_detect_fluid', 'source_calwith_fluid'] as Operation[]).map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{label(op)} now</button>)}</div>
         </details>
         <BioXpSourcePipettingEditor drafts={sourceDrafts} onChange={updateSource} enabled={enabled} run={op => void run(op)} visibleOperations={categories[category]} />
-        <BioXpPipetteNativeTools visible={visible && category === 'Other native tools'} enabled={enabled} run={(action, inputs) => void run(undefined, undefined, { action, inputs })} />
+        <BioXpPipetteNativeTools visible={visible && category === 'Advanced'} enabled={enabled} run={(action, inputs) => void run(undefined, undefined, { action, inputs })} />
         </section>
         {pending && <p role="status">Submitting pipetting program…</p>}
         {attempt && <p className="break-all text-xs">Job {attempt.id} · request {attempt.key}</p>}
@@ -226,7 +223,8 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             pipetteResults(result).flatMap(value => value.run_id ? [value.run_id] : [])))].map(runId =>
             <BioXpCalibrationRun key={`${attempt?.generation}:${runId}`} runId={runId}
                 generation={attempt?.generation ?? generation} connected={connected && sameConnection} />)}
-        <BioXpCalibrationRun key={`recover:${generation}`} generation={generation} connected={connected} />
+        {category === 'Calibration' && <details className="rounded border border-slate-700 p-3 text-sm"><summary className="cursor-pointer font-semibold">Earlier calibration run</summary>
+            <BioXpCalibrationRun key={`recover:${generation}`} generation={generation} connected={connected} /></details>}
         {error && <p role="alert">{error}</p>}
     </section>;
 }

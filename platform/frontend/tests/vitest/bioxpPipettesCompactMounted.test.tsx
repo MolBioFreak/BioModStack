@@ -56,14 +56,14 @@ it('removes the Pipettes sequence editor, retains drafts across categories and e
     expect(host.textContent).not.toContain('Ordered well-to-well program'); expect(host.textContent).not.toContain('Append step');
     await change('Volume (µL)', '12.50'); await click('Tips'); await change('Tip tray', '3'); await change('Tip well', 'B4'); await click('Pick up from tray');
     expect(calls).toHaveLength(1); expect(calls[0].url).toBe('/api/bioxp/protocols/submit'); expect(calls[0].body.document.stages[0].actions[0].params).toEqual({operation: 'load_tip', tray: 3, well: 'B4', overpress: false, lift_z: false});
-    await click('Liquid strokes'); expect((host.querySelector('[aria-label="Volume (µL)"]') as HTMLInputElement).value).toBe('12.50');
-    await click('Diagnostics'); expect(host.querySelectorAll('[aria-label="Diagnostic action"] option')).toHaveLength(11); expect(calls).toHaveLength(1);
+    await click('Move & pipette'); expect((host.querySelector('[aria-label="Volume (µL)"]') as HTMLInputElement).value).toBe('12.50');
+    await click('Advanced'); expect(host.querySelectorAll('[aria-label="Diagnostic action"] option')).toHaveLength(11); expect(calls).toHaveLength(1);
 });
 
 it('keeps an in-flight failure outside hidden forms when changing test category', async () => {
     let reject!: (error: Error) => void;
     api.defaults.adapter = async config => { if (config.method === 'get') throw new Error('not found'); return new Promise((_resolve, fail) => { reject = fail; }); };
-    await mount(<BioXpWellPipettingPanel generation={7} connected/>); await click('Tips'); await click('Pick up from tray'); await click('Liquid strokes');
+    await mount(<BioXpWellPipettingPanel generation={7} connected/>); await click('Tips'); await click('Pick up from tray'); await click('Move & pipette');
     const pending = [...host.querySelectorAll('[role="status"]')].find(n => n.textContent!.includes('Submitting')); expect(pending?.closest('[hidden], details')).toBeNull();
     await act(async () => reject(new Error('pickup transport failure'))); await tick();
     const failure = [...host.querySelectorAll('[role="alert"]')].find(n => n.textContent!.includes('pickup transport failure')); expect(failure).toBeDefined(); expect(failure?.closest('[hidden], details')).toBeNull();

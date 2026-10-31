@@ -66,6 +66,8 @@ EXPECTED = {
     ('GET', '/protocols/jobs/{job_id}'),
     ('GET', '/status'),
     ('GET', '/calibration-settings'),
+    ('GET', '/tip-offsets'),
+    ('PUT', '/tip-offsets'),
     ('GET', '/calibration-settings/runs/{run_id}'),
     ('POST', '/calibration-settings/manual-tip-set'),
     ('POST', '/calibration-settings/runs/{run_id}/decision'),
@@ -147,7 +149,7 @@ def _inventory() -> set[tuple[str, str]]:
 
 def test_compact_api_inventory_is_exact_and_bounded() -> None:
     assert _inventory() == EXPECTED
-    assert len(_inventory()) == 112
+    assert len(_inventory()) == 114
 
 
 def test_every_non_read_route_carries_the_global_containment_dependency() -> None:

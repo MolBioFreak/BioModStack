@@ -42,6 +42,8 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "calibration_run_decision": ("POST", "/motion/oem/calibration_settings/runs/{run_id}/decision", 120.0),
     "manual_tip_set": ("POST", "/motion/oem/pipette/tip_tray_set", 120.0),
     "operation_parameters": ("GET", "/liquid/pipette/settings", 10.0),
+    "tip_offsets": ("GET", "/liquid/pipette/tip-offsets", 10.0),
+    "save_tip_offset": ("PUT", "/liquid/pipette/tip-offsets", 10.0),
     "save_operation_parameters": ("PATCH", "/liquid/pipette/settings", 10.0),
     "protocol_calibration_analyze": ("POST", "/protocol/calibration/analyze", 30.0),
     "pipette_pressure_capture": ("GET", "/pipettes/pressure-captures/{stream_session_id}", 10.0),

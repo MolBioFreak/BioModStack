@@ -42,10 +42,11 @@ import { BioXpHistoryReceiptCard, BioXpHistoryPager, useBioXpHistoryPagination }
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
 import { BioXpCalibrationAnalysis } from './BioXpCalibrationAnalysis';
 import { BioXpPressureCapture } from './BioXpPressureCapture';
-import { BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
+import { BioXpPipetteAdvancedTools, BioXpPipetteControlPanel, BioXpSoftwareTipType } from './BioXpPipetteControlPanel';
+import { BioXpPipetteCalibration } from './BioXpPipetteCalibration';
 import { BioXpCalibrationSettings } from './BioXpCalibrationSettings';
 import { BioXpPipetteSettings } from './BioXpPipetteSettings';
-import { BioXpWellPipettingPanel } from './BioXpWellPipettingPanel';
+import { BioXpWellPipettingPanel, PIPETTE_SECTIONS, type PipetteSection } from './BioXpWellPipettingPanel';
 import { BioXpMethodsWorkspace } from './BioXpMethodsWorkspace';
 import { BioXpWorkflowMutationProvider } from './BioXpWorkflowMutationOwner';
 import { BioXpLiveDeck } from './BioXpLiveDeck';
@@ -320,7 +321,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     }, [generation]);
     const [historyOpen, setHistoryOpen] = useState(false);
     const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(8);
-    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [pipetteSection, setPipetteSection] = useState<PipetteSection>('Move & pipette');
     const [reportsOpen, setReportsOpen] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [cameraOpen, setCameraOpen] = useState(true);
@@ -1720,21 +1721,34 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                     connected={robotControlReady && operatorCatalog.data !== undefined}
                     pipettes={operatorCatalog.data?.dashboard.pipettes ?? undefined}
                     freshness={operatorCatalog.data?.dashboard.snapshot.freshness}
-                    actions={catalog?.actions}
-                    catalogLoading={operatorCatalog.isLoading}
-                    invokePending={invokeOperatorAction.isPending}
-                    invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)}
                 />
-                <BioXpWellPipettingPanel visible={documentVisible && controlTab === 'pipettes'} generation={generation} connected={linkConnected}
-                    destinations={selectionAction?.destination_options ?? []}
-                    positionTableRevision={selectionAction?.position_table_revision} />
-                <BioXpCalibrationAnalysis visible={documentVisible && controlTab === 'pipettes'} connected={linkConnected} generation={generation} />
-                <BioXpPressureCapture visible={documentVisible && controlTab === 'pipettes'} connected={linkConnected} generation={generation} />
-                <section className="mt-4 rounded border border-slate-700 p-3">
-                    <button type="button" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(open => !open)}>Settings & calibration</button>
-                    <BioXpPipetteSettings visible={settingsOpen && documentVisible && controlTab === 'pipettes'} key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />
-                    <BioXpCalibrationSettings visible={settingsOpen && documentVisible && controlTab === 'pipettes'} key={`calibration:${generation}:${active}`} generation={generation} connected={linkConnected} />
-                </section>
+                <div role="tablist" aria-label="Pipette sections" className="mt-4 flex flex-wrap gap-2">
+                    {PIPETTE_SECTIONS.map(name => <button key={name} type="button" role="tab" aria-selected={pipetteSection === name} aria-pressed={pipetteSection === name}
+                        onClick={() => setPipetteSection(name)} className={`rounded border px-3 py-1 text-sm ${pipetteSection === name ? 'border-cyan-400 bg-cyan-900 text-white' : 'border-slate-700 bg-slate-900 text-slate-300'}`}>{name}</button>)}
+                </div>
+                <div className="mt-3 rounded border border-slate-700 p-4">
+                    {pipetteSection === 'Tips' && <div className="mb-3"><BioXpSoftwareTipType connected={robotControlReady && operatorCatalog.data !== undefined}
+                        pipettes={operatorCatalog.data?.dashboard.pipettes ?? undefined} actions={catalog?.actions} catalogLoading={operatorCatalog.isLoading}
+                        invokePending={invokeOperatorAction.isPending} invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)} /></div>}
+                    {pipetteSection === 'Calibration' && <div className="mb-4 space-y-4">
+                        <BioXpPipetteCalibration visible={documentVisible && controlTab === 'pipettes'} generation={generation} connected={linkConnected}
+                            destinations={selectionAction?.destination_options ?? []} />
+                        <details className="rounded border border-slate-700 p-3"><summary className="cursor-pointer font-semibold">Station heights</summary>
+                            <BioXpPipetteSettings visible={documentVisible && controlTab === 'pipettes'} key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />
+                            <BioXpCalibrationSettings visible={documentVisible && controlTab === 'pipettes'} key={`calibration:${generation}:${active}`} generation={generation} connected={linkConnected} />
+                        </details>
+                    </div>}
+                    <BioXpWellPipettingPanel visible={documentVisible && controlTab === 'pipettes'} generation={generation} connected={linkConnected} section={pipetteSection}
+                        destinations={selectionAction?.destination_options ?? []}
+                        positionTableRevision={selectionAction?.position_table_revision} />
+                    {pipetteSection === 'Advanced' && <div className="mt-4 space-y-4">
+                        <BioXpPipetteAdvancedTools visible={documentVisible && controlTab === 'pipettes'} generation={generation}
+                            connected={robotControlReady && operatorCatalog.data !== undefined} actions={catalog?.actions} catalogLoading={operatorCatalog.isLoading}
+                            invokePending={invokeOperatorAction.isPending} invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)} />
+                        <BioXpCalibrationAnalysis visible={documentVisible && controlTab === 'pipettes'} connected={linkConnected} generation={generation} />
+                        <BioXpPressureCapture visible={documentVisible && controlTab === 'pipettes'} connected={linkConnected} generation={generation} />
+                    </div>}
+                </div>
                 </>}
             </div>
             <section aria-label="Latest command" className="bx-ui bx-last"><strong>Last command</strong>
