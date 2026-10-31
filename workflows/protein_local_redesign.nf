@@ -381,6 +381,7 @@ process ExportProteinLocalBoltzPredictions {
 // selection is explicit (plr_fixed_positions / plr_designable_positions); outputs are one PDB per design.
 process RunLigandMPNNResequence {
     label 'Foundry'
+    stageInMode 'copy'
     label 'gpu'
     input:
     tuple path(pdb_files), path(json_files)
@@ -397,6 +398,7 @@ process RunLigandMPNNResequence {
 
 process RunCalibyResequence {
     label 'Caliby'
+    stageInMode 'copy'
     label 'gpu'
     input:
     tuple path(pdb_files), path(json_files)
@@ -413,6 +415,7 @@ process RunCalibyResequence {
 
 process RunProtonPottsResequence {
     label 'cpu'
+    stageInMode 'copy'
     input:
     tuple path(pdb_files), path(json_files)
     path template
