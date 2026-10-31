@@ -47,7 +47,7 @@ def declaration_dependencies(declaration):
                  'redesign_ranges', 'context_chains', 'interface_cutoff',
                  'region_padding', 'sequence_redesign_ranges', 'seq_method',
                  'backbone_input_pdbs', 'fixed_positions', 'designable_positions',
-                 'region_manifest', 'fix_fixed_sidechains'}
+                 'region_manifest'}
         keys.update(local)
         keys.update('plr_' + key for key in local)
         keys.add('rfd3_request')

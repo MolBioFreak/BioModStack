@@ -164,6 +164,10 @@ def test_collection_overrides_child_and_cached_dependencies(tmp_path, value):
     child = compile_declaration('fampnn_child', 'sequence_design', {}, {'summary': [], 'mutation': []}, parent=parent)
     assert child['inputs']['source']['summary_override'] == child['inputs']['source']['mutation_override'] == []
     guard_cached_declaration(declaration, params, {'backbone_input_pdbs': str(tmp_path)})
+    # Sidechain sampling is not sequence/summary declaration authority. Preserve
+    # its existing independent retry control, without adding a new refusal.
+    guard_cached_declaration(declaration, params, {'fix_fixed_sidechains': True})
+    guard_cached_declaration(declaration, params, {'plr_fix_fixed_sidechains': True})
     for key in ('backbone_input_pdbs', 'designable_positions', 'fixed_positions', 'design_chains'):
         for prefix in ('', 'plr_'):
             with pytest.raises(ValueError, match='fresh admission'):
