@@ -8,7 +8,7 @@ import { parseScientificPae } from '../lib/scientificViewerIdentity';
 import { hashKey, useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
 
-import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, exportNativeResults, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, fetchChainPairIptm } from '../lib/api';
+import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, exportNativeResults, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, analyzeLoopCandidates, fetchChainPairIptm } from '../lib/api';
 import { isNgsJob, ngsResultHref } from '../lib/ngsResultRouting';
 import { jobCategory, isCategoryVisible } from '../lib/jobCategories';
 import { useJobCategoryVisibility } from '../lib/useJobCategoryVisibility';
@@ -5334,6 +5334,22 @@ function ResultsViewerContent() {
         },
     });
 
+    const frustraLoopMutation = useMutation({
+        mutationFn: async () => {
+            if (!selectedJobId) throw new Error('Select a resequence job first.');
+            const chosen = new Set(selectedDesignIds);
+            const names = designs.filter(design => chosen.has(design.id) && design.pdb_path)
+                .map(design => String(design.pdb_path).split('/').pop() as string);
+            if (!names.length) throw new Error('Select at least one design to analyze.');
+            return analyzeLoopCandidates(selectedJobId, names);
+        },
+        onSuccess: (response) => {
+            setIterationMessage({ kind: 'success', text: `FrustraMPNN analysis queued for ${response.data.analyses.length} design(s).` });
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+        },
+        onError: (error) => setIterationMessage({ kind: 'error', text: getErrorMessage(error) }),
+    });
+
     const launchBusy = launchIterationMutation.isPending || launchManualMutagenesisMutation.isPending || continueProteinLocalReviewMutation.isPending;
     const manualMutationSetCount = manualMutagenesisConfig.mutation_sets_text
         .split('\n')
@@ -6132,6 +6148,17 @@ function ResultsViewerContent() {
                                                         : 'Load a saved dataset or select outputs before continuing.'}
                                             >
                                                 Continue Workflow
+                                            </button>
+                                        )}
+                                        {!isAntibodyContext && activeJob?.awaiting_stage === 'post_structure_validation' && (
+                                            <button
+                                                type="button"
+                                                onClick={() => frustraLoopMutation.mutate()}
+                                                disabled={selectedDesignIds.length === 0 || frustraLoopMutation.isPending}
+                                                className="flex items-center gap-1.5 rounded-lg border border-cyan-500/60 bg-cyan-500/20 px-4 py-2 text-xs font-semibold text-cyan-100 disabled:opacity-50"
+                                                title="Optional: run FrustraMPNN on the highlighted designs for guidance. Does not change this workflow."
+                                            >
+                                                Analyze with FrustraMPNN
                                             </button>
                                         )}
                                         {!workflowOnlyRefinement && isAntibodyContext && (

@@ -3159,6 +3159,68 @@ async def handoff_external_candidate(
         raise HTTPException(422, str(exc)) from exc
 
 
+class AnalyzeLoopCandidatesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    names: list[str] = Field(min_length=1, max_length=64)
+    frustrampnn_settings: Optional[dict[str, Any]] = None
+
+
+def _heavy_atoms_only(payload: bytes) -> bytes:
+    """Hydrogens are dropped from an in-memory copy; the stored design is untouched."""
+    kept = []
+    for line in payload.decode("utf-8", "replace").splitlines():
+        if line.startswith(("ATOM", "HETATM")) and line[76:78].strip().upper() in {"H", "D"}:
+            continue
+        kept.append(line)
+    return ("\n".join(kept) + "\n").encode("utf-8")
+
+
+@router.post(
+    "/jobs/{loop_job_id}/analyze-loop-candidates",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def analyze_loop_candidates(
+    loop_job_id: str,
+    body: AnalyzeLoopCandidatesRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Advisory FrustraMPNN on selected resequence-loop candidates (optional, caller-requested)."""
+    from services.stage_review import resolve_output_dir
+
+    job = await session.get(Job, loop_job_id)
+    if job is None:
+        raise HTTPException(404, "loop job not found")
+    root = resolve_output_dir(job.output_dir)
+    review = (root / "validation" / "review_candidates").resolve() if root else None
+    if review is None or not review.is_dir():
+        raise HTTPException(409, "loop job has no review candidates yet")
+    try:
+        requested = (
+            validate_complete_requested_settings(body.frustrampnn_settings)
+            if body.frustrampnn_settings is not None else default_settings()
+        )
+    except (RequestedSettingsPayloadError, ValidationError, TypeError, ValueError) as exc:
+        raise HTTPException(422, f"invalid frustrampnn_settings: {exc}") from exc
+    receipts = []
+    try:
+        for name in body.names:
+            path = (review / Path(name).name).resolve()
+            if path.parent != review or not path.is_file() or path.suffix.lower() != ".pdb":
+                raise HTTPException(422, f"candidate not found: {Path(name).name}")
+            selection = upload_selection(
+                filename=path.name, payload=_heavy_atoms_only(path.read_bytes()), expected_sha256=None)
+            child = await create_child_job(
+                session, selections=[selection], source_parent=None,
+                trigger="resequence_loop_candidate", requested_settings=requested)
+            receipt = await _child_job_receipt(session, child)
+            receipt["candidate"] = path.name
+            receipts.append(receipt)
+    except FrustraMPNNChildError as exc:
+        await session.rollback()
+        raise HTTPException(422, str(exc)) from exc
+    return {"loop_job_id": loop_job_id, "analyses": receipts}
+
+
 @router.post(
     "/jobs/{parent_job_id}/analyze",
     status_code=status.HTTP_202_ACCEPTED,

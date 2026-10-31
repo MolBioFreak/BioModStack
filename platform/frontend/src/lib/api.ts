@@ -2289,6 +2289,11 @@ export const resumeJob = (
     }>(`/api/jobs/${jobId}/resume`, requestBody, { params: { from_stage: fromStage } }));
 };
 
+/** Advisory FrustraMPNN on selected resequence-loop candidates (hydrogens dropped from a copy server-side). */
+export const analyzeLoopCandidates = (jobId: string, names: string[]) =>
+    api.post<{ loop_job_id: string; analyses: Array<{ job_id: string; candidate: string }> }>(
+        `/api/frustrampnn/jobs/${encodeURIComponent(jobId)}/analyze-loop-candidates`, { names });
+
 export const continueProteinLocalReview = (
     jobId: string,
     designIds: string[],
