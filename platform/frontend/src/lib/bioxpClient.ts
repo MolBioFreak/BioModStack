@@ -1,3 +1,4 @@
+import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query';
 
@@ -2720,7 +2721,7 @@ export async function stopBioXpCameraStream(connectionGeneration: number): Promi
 
 export function buildBioXpCameraMjpegUrl(connectionGeneration: number, streamId?: string | null): string {
     const owner = streamId ? `&stream_id=${encodeURIComponent(streamId)}` : '';
-    return `${BIOXP_CAMERA_ENDPOINTS.mjpeg}?expected_generation=${encodeURIComponent(String(connectionGeneration))}${owner}`;
+    return resolveApiResourceUrl(`${BIOXP_CAMERA_ENDPOINTS.mjpeg}?expected_generation=${encodeURIComponent(String(connectionGeneration))}${owner}`);
 }
 
 export async function fetchBioXpCameraFrame(connectionGeneration: number): Promise<BioXpCameraImage> {

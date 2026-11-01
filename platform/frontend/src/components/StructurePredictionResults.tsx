@@ -1,3 +1,4 @@
+import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import { useState, type ReactNode } from 'react';
 import { predictionDisplayLabel } from '../lib/designFriendlyLabel';
 import { useQuery } from '@tanstack/react-query';
@@ -169,7 +170,7 @@ export function NativeArtifactDownloads({ design }: { design: Design }) {
         {open && (query.isPending ? <p>Loading files…</p> : query.isError ? <p>File inventory could not be read. Structure remains available.</p>
             : query.data?.status !== 'ok' ? <p>Original confidence file inventory is unavailable for this result.</p>
             : <ul className="space-y-2">{query.data.artifacts.map(a => <li key={a.role}>{a.download_url
-                ? <a className="underline" href={a.download_url}>{a.role} · {a.filename}</a>
+                ? <a className="underline" href={resolveApiResourceUrl(a.download_url)}>{a.role} · {a.filename}</a>
                 : <span>{a.role} · {a.retained ? 'Retained; no download link available' : 'Not retained'}</span>}</li>)}</ul>)}
     </details>;
 }

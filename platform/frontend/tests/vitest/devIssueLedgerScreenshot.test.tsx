@@ -9,6 +9,8 @@ import { BMS_STATS_THEME_TOKEN_NAMES } from '../../src/runtime/statsToolkitTheme
 import { MemoryRouter } from 'react-router-dom';
 import { Layout } from '../../src/components/Layout';
 import { api } from '../../src/lib/api';
+import { buildBioXpCameraMjpegUrl } from '../../src/lib/bioxpClient';
+import { resolveApiResourceUrl } from '../../src/runtime/tailnetEnvironment';
 
 let root: Root;
 let container: HTMLDivElement;
@@ -83,7 +85,48 @@ it.each([
         vi.useFakeTimers();
         await act(async () => { await vi.advanceTimersByTimeAsync(61_000); window.dispatchEvent(new Event('focus')); window.dispatchEvent(new Event('online')); });
         expect(requests.mock.calls.filter(([url]) => url === '/api/tailnet-environment/status')).toHaveLength(1);
+        expect(container.querySelector('a[href="/bioxp"]') !== null).toBe(visible);
         expect(requests.mock.calls.every(([, options]) => !options?.method || options.method === 'GET')).toBe(true);
+    } finally { api.defaults.adapter = oldAdapter; }
+});
+
+it('React raw image and file-link resources use the server without any camera mutation', async () => {
+    vi.stubGlobal('__BMS_API_BASE_URL__', 'https://node.example.ts.net');
+    await act(async () => root.render(<>
+        <img alt="camera transport fixture" src={buildBioXpCameraMjpegUrl(77, 'stream/one')} />
+        <a href={resolveApiResourceUrl('/api/files/download/report%20one.csv')} download>Download fixture</a>
+    </>));
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('https://node.example.ts.net/api/bioxp/camera/mjpeg?expected_generation=77&stream_id=stream%2Fone');
+    expect(container.querySelector('a')?.getAttribute('href')).toBe('https://node.example.ts.net/api/files/download/report%20one.csv');
+    expect(requests).not.toHaveBeenCalled();
+});
+
+it('packaged runtime switching still uses the remote selector when status observation fails', async () => {
+    vi.stubGlobal('__BMS_API_BASE_URL__', 'https://node.example.ts.net');
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    Element.prototype.scrollIntoView = vi.fn();
+    requests.mockImplementation(async (url: string, options?: RequestInit) => {
+        if (url === '/api/system/features') return new Response(JSON.stringify({ features: { bioxp: true }, dev_features: { bioxp: true } }));
+        if (url === '/api/health') return new Response(JSON.stringify({ status: 'healthy', build: { revision: 'a'.repeat(40) } }));
+        if (url === '/api/tailnet-environment/status') return new Response('', { status: 503 });
+        // Stop at the actual mutation boundary; do not navigate or change a live target.
+        if (url === '/api/tailnet-environment/select' && options?.method === 'POST') return new Response(JSON.stringify({ detail: 'inert selector stop' }), { status: 409 });
+        throw new Error('Unexpected request: ' + url);
+    });
+    const oldAdapter = api.defaults.adapter;
+    api.defaults.adapter = async config => ({ data: {}, status: 200, statusText: 'OK', headers: {}, config });
+    try {
+        await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><ThemeContext.Provider value={{ theme: 'midnight', setTheme: () => {}, themeConfig: THEMES[0] }}><Layout><span>workspace remains open</span></Layout></ThemeContext.Provider></MemoryRouter></QueryClientProvider>));
+        await flush();
+        await act(async () => container.querySelector<HTMLButtonElement>('button[title="Diagnostics"]')!.click()); await flush();
+        const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Switch to Development')!;
+        expect(button.disabled).toBe(false);
+        await act(async () => button.click()); await flush();
+        const calls = requests.mock.calls.filter(([url]) => url === '/api/tailnet-environment/select');
+        expect(calls).toHaveLength(1);
+        expect(JSON.parse(calls[0][1].body)).toEqual({ environment: 'development' });
+        expect(container.textContent).toContain('inert selector stop');
+        expect(requests.mock.calls.some(([url]) => url === '/api/system/runtime-ports')).toBe(false);
     } finally { api.defaults.adapter = oldAdapter; }
 });
 

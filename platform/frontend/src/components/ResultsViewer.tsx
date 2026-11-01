@@ -1,3 +1,4 @@
+import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import type { NativeResults, NativeScalarQuery } from '../lib/scientificAnalytics';
 import { MSA_POLICY } from '../lib/msaPolicy';
 import { predictionDisplayLabel, predictionJobLabel } from '../lib/designFriendlyLabel';
@@ -7877,7 +7878,7 @@ function ResultsViewerContent() {
                                                                     {selectedDesign.frustration_csv_relpath && (
                                                                         <div className="flex items-center gap-2">
                                                                             <a
-                                                                                href={buildFileStreamUrl(selectedDesign.frustration_csv_relpath)}
+                                                                                href={resolveApiResourceUrl(buildFileStreamUrl(selectedDesign.frustration_csv_relpath))}
                                                                                 target="_blank"
                                                                                 rel="noreferrer"
                                                                                 className="rounded-lg border border-slate-600 px-2.5 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
@@ -7885,7 +7886,7 @@ function ResultsViewerContent() {
                                                                                 Open CSV
                                                                             </a>
                                                                             <a
-                                                                                href={buildFileDownloadUrl(selectedDesign.frustration_csv_relpath)}
+                                                                                href={resolveApiResourceUrl(buildFileDownloadUrl(selectedDesign.frustration_csv_relpath))}
                                                                                 className="rounded-lg border border-slate-600 px-2.5 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
                                                                             >
                                                                                 Download CSV

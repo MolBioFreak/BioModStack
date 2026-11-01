@@ -1,3 +1,4 @@
+import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import { FrustraMpnnLaunchControls } from './frustrampnn/FrustraMpnnLaunchControls';
 import type { FrustraMpnnLaunchOptions } from '../lib/frustraMpnnApi';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -694,7 +695,7 @@ export default function FrustraMpnnResultsViewer({
                             }}
                         />}
 
-                        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><h2 className="font-semibold">Downloads</h2><p className="mt-1 text-xs text-slate-500">Saved structures and analysis files.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{artifacts.data?.items.map((artifact) => <a key={artifact.artifact_id} href={artifact.download_url} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-cyan-500 focus:border-cyan-400"><div className="font-medium text-slate-200">{artifact.role.replaceAll('_', ' ')}</div><div className="mt-1 text-slate-500">{artifact.media_type} · {artifact.size_bytes.toLocaleString()} bytes</div><div className="mt-1 font-mono text-[10px] text-slate-600" title={artifact.content_sha256}>{shortHash(artifact.content_sha256)}</div></a>)}</div></section>
+                        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><h2 className="font-semibold">Downloads</h2><p className="mt-1 text-xs text-slate-500">Saved structures and analysis files.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{artifacts.data?.items.map((artifact) => <a key={artifact.artifact_id} href={resolveApiResourceUrl(artifact.download_url)} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-cyan-500 focus:border-cyan-400"><div className="font-medium text-slate-200">{artifact.role.replaceAll('_', ' ')}</div><div className="mt-1 text-slate-500">{artifact.media_type} · {artifact.size_bytes.toLocaleString()} bytes</div><div className="mt-1 font-mono text-[10px] text-slate-600" title={artifact.content_sha256}>{shortHash(artifact.content_sha256)}</div></a>)}</div></section>
                     </>
                 )}
                 <details className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">

@@ -1,3 +1,4 @@
+import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import { useState, useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react';
 import './StructurePredictionResults.css';
 import { useQuery } from '@tanstack/react-query';
@@ -2745,7 +2746,7 @@ export default function StructureViewerPane({
                         {selectedDesign.frustration_csv_relpath && (
                             <div className="flex items-center gap-2">
                                 <a
-                                    href={buildFileStreamUrl(selectedDesign.frustration_csv_relpath)}
+                                    href={resolveApiResourceUrl(buildFileStreamUrl(selectedDesign.frustration_csv_relpath))}
                                     target="_blank"
                                     rel="noreferrer"
                                     className="rounded border border-slate-600 px-2 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
@@ -2753,7 +2754,7 @@ export default function StructureViewerPane({
                                     Open CSV
                                 </a>
                                 <a
-                                    href={buildFileDownloadUrl(selectedDesign.frustration_csv_relpath)}
+                                    href={resolveApiResourceUrl(buildFileDownloadUrl(selectedDesign.frustration_csv_relpath))}
                                     className="rounded border border-slate-600 px-2 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
                                 >
                                     Download CSV

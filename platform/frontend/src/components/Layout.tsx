@@ -792,7 +792,7 @@ function DiagnosticsMenu() {
         setRuntimeAction(`switch-${targetMode}`);
         setRuntimeMessage(null);
         try {
-            if (tailnetEnvironment) {
+            if (tailnetEnvironment || resolveConfiguredTailnetOrigin(window.__BMS_API_BASE_URL__)) {
                 const environment = targetMode === 'dev' ? 'development' : 'production';
                 await selectTailnetRuntimeEnvironment(targetMode);
                 setTailnetEnvironment({ ...tailnetEnvironment, selected_environment: environment });
