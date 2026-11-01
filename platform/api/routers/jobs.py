@@ -112,6 +112,7 @@ from model_registry import get_registry
 from services.ligandmpnn_design import MODES as LIGANDMPNN_DESIGN_MODES
 from services.stage_review import (
     REVIEWABLE_STAGES,
+    ensure_stage_review_rows,
     gate_file_for_stage,
     has_stage_gate,
     infer_antibody_stage_state,
@@ -10130,6 +10131,14 @@ async def open_stage_gate(
     job.current_stage = stage
     _write_gate_snapshot(job)
     await session.commit()
+
+    # Results views only read review rows (they no longer create them on GET), so the
+    # worker that opens the gate publishes them. Best effort: the gate is already open.
+    try:
+        await ensure_stage_review_rows(session, job)
+    except Exception:
+        logger.exception("Job %s: review rows for gate '%s' were not published; the gate stays open", job_id, stage)
+        await session.rollback()
 
     logger.info("Job %s opened interactive gate '%s'", job_id, stage)
 
