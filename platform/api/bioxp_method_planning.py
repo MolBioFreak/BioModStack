@@ -457,7 +457,7 @@ def prepare_class_transfer(inputs):
 Z_STEPS_PER_MM = Decimal('2015.748')  # robot tip_length.Z_STEPS_PER_MM (51200 / 25.4)
 LIQUID_DETECTION_DEFAULTS = {'when': 'first_draw', 'mode': 'by_level', 'expected': True,
     'submerge_mm': '1', 'follow_mm': '0', 'floor_clearance_mm': '1', 'level_tolerance_mm': '0.5',
-    'search_speed_native': 300, 'start_mode': 0, 'sensing': 'hybrid', 'on_contact_delay_ms': 0,
+    'search_speed_native': 300, 'start_mode': 0, 'sensing': 'pressure', 'on_contact_delay_ms': 0,
     'mismatch_response': 'pause', 'mismatch_tolerance_mm': '1', 'mismatch_tolerance_percent': '15'}
 
 
