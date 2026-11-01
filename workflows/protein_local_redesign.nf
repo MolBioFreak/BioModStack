@@ -607,7 +607,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
             PrepBoltz.out.yamls
                 .collect()
                 .map { allPdbs -> partitionProteinLocalGpuBatches(allPdbs, params.gpus) }
-                .flatten()
+                .flatMap { batches -> batches }
                 .groupTuple()
                 .set { boltzInput }
             RunBoltz(boltzInput)

@@ -248,3 +248,10 @@ def test_protein_local_validator_failure_policy_is_scoped_to_plr() -> None:
     assert "params.plr_region_padding ?: 2" not in workflow_text
     assert "and Path('predictions', f'{candidate_id}_boltzpred.json').is_file()" in boltz_text
     assert ") + '\\\\n'," in boltz_text
+
+
+def test_protein_local_boltz_batches_use_flatmap_so_group_tuple_gets_pairs() -> None:
+    source = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
+
+    assert ".map { allPdbs -> partitionProteinLocalGpuBatches(allPdbs, params.gpus) }\n                .flatMap { batches -> batches }\n                .groupTuple()" in source
+    assert "partitionProteinLocalGpuBatches(allPdbs, params.gpus) }\n                .flatten()" not in source
