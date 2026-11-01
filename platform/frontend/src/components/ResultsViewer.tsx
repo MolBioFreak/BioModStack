@@ -2302,7 +2302,13 @@ function ResultsViewerContent() {
             isAntibodyRefinementMode(mode)
         );
     }, [activeJob]);
-    const showReviewWorkingSetPanel = isAntibodyContext;
+    // A Resequence loop paused at its validation gate reuses the working-set panel (select designs,
+    // Continue Workflow, optional FrustraMPNN). Antibody jobs keep their own refinement wording.
+    const isResequenceReviewContext = Boolean(activeJob?.awaiting_input)
+        && String(activeJob?.awaiting_stage || '').toLowerCase() === 'post_structure_validation'
+        && activeJob?.model_id === 'protein_modification_experimental'
+        && activeJob?.mode === 'region_redesign';
+    const showReviewWorkingSetPanel = isAntibodyContext || isResequenceReviewContext;
     const showBinderTargetConfidence = useMemo(() => hasExplicitBinderTargetRoles(activeJob), [activeJob]);
     const rfRawCount = Number(activeJob?.awaiting_payload?.raw_candidate_count || 0);
     const rfFilteredCount = Number(activeJob?.awaiting_payload?.filtered_candidate_count || 0);
@@ -5821,10 +5827,12 @@ function ResultsViewerContent() {
                                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                                         <div>
                                             <div className="text-sm font-medium text-indigo-100">
-                                                Antibody Refinement
+                                                {isAntibodyContext ? 'Antibody Refinement' : 'Review Working Set'}
                                             </div>
                                             <p className="mt-1 text-xs text-slate-400">
-                                                Promote visible, filtered, or top-ranked outputs into antibody refinement.
+                                                {isAntibodyContext
+                                                    ? 'Promote visible, filtered, or top-ranked outputs into antibody refinement.'
+                                                    : 'Select designs, then continue the paused workflow or optionally analyze them with FrustraMPNN.'}
                                             </p>
                                         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                                             <span className="rounded-full border border-indigo-500/30 bg-slate-900/70 px-2 py-1 text-indigo-100">
