@@ -100,3 +100,14 @@ it('external measurement fields retain exact decimals and zero independently of 
     await mount(render()); await change('Probe reading 1 (degC)', '36.9000'); await mount(render()); await change('Probe reading 2 (degC)', '0'); await tick();
     expect(values).toEqual({probe:['36.9000','0']}); expect(host.textContent).toContain('Target: 37.0'); expect(host.textContent).toContain('Controller reported: 36.9'); expect(calls).toHaveLength(0);
 });
+
+it('workflow results show detected liquid levels per channel, including pump errors', async () => {
+    await mount(<BioXpPipetteResults value={{ pipette_result: { kind: 'cavro_application', liquid_levels: [{ location_id: 11, channels: {
+        '0': { found: true, contact_steps: 52000, height_above_floor_mm: '2.5' },
+        '1': { found: false, contact_steps: null, height_above_floor_mm: null, device_error: 38 },
+        '2': { found: false, contact_steps: null, height_above_floor_mm: null, outcome: 'timeout' } } }] } }} />);
+    const table = host.querySelector('[aria-label="Liquid levels 1"]')!.textContent!;
+    expect(table).toContain('2.50 mm (estimated)');
+    expect(table).toContain('no: pump error 38');
+    expect(table).toContain('no: timed out');
+});
