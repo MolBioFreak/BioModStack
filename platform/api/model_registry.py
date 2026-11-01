@@ -161,6 +161,8 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
     refs = [RuntimeDependencyRef(kind="image", relative_path=model.container)]
     if model_id == 'rfd4_proteina':
         refs.append(RuntimeDependencyRef(kind='weights', relative_path='rfd4-proteina'))
+    if model_id == 'laproteina':
+        refs.append(RuntimeDependencyRef(kind='weights', relative_path='laproteina'))
     if model_id == 'complexa':
         from scripts.lib.complexa_contract import PROFILES
         refs.extend(RuntimeDependencyRef(kind='weights', relative_path='complexa/' + pair + suffix)
@@ -705,24 +707,48 @@ def model_acquisition_plan(model_id: str) -> dict:
     model = get_registry().get_model(model_id)
     assert model is not None  # Closure resolution above already checked availability.
     artifacts, blockers = [], []
-    allowed = {(ref.kind, ref.relative_path) for ref in refs}
+
+    def binds(dependency, ref):
+        # An entry binds to the dependency it names, or to the pinned weight layout
+        # root that contains a requested member (e.g. complexa/ for complexa/x.ckpt).
+        return dependency.kind == ref.kind and (
+            dependency.relative_path == ref.relative_path or (
+                ref.kind == "weights" and ref.relative_path.startswith(dependency.relative_path + "/")))
+
+    def supplies(entry, ref):
+        # Coverage stays exact: a layout root supplies only the members it pins.
+        dependency = entry.dependency
+        return dependency == ref or (
+            ref.kind == "weights" and entry.member_path is not None
+            and ref.relative_path == dependency.relative_path + "/" + entry.member_path)
+
     ids = [entry.artifact_id for entry in model.acquisition]
     if len(ids) != len(set(ids)) or any(
-        (entry.dependency.kind, entry.dependency.relative_path) not in allowed
-        for entry in model.acquisition
+        not any(binds(entry.dependency, ref) for ref in refs) for entry in model.acquisition
     ):
         return {"model_id": model_id, "artifacts": [], "blockers": [
             {"code": "invalid_acquisition_dependency_binding"}]}
+    emitted = set()
     for ref in refs:
-        entries = [entry for entry in model.acquisition
-                   if entry.dependency == ref]
+        entries = [entry for entry in model.acquisition if supplies(entry, ref)]
         if not entries:
             blockers.append({"code": "approved_acquisition_metadata_missing",
                              **ref.model_dump()})
         for entry in entries:
-            artifacts.append({"dependency": ref.model_dump(), "member_path": entry.member_path,
+            if entry.artifact_id in emitted:
+                continue
+            emitted.add(entry.artifact_id)
+            artifacts.append({"dependency": entry.dependency.model_dump(), "member_path": entry.member_path,
                               "manifest": {
-                **entry.model_dump(exclude={"dependency", "member_path"}), "kind": ref.kind}})
+                **entry.model_dump(exclude={"dependency", "member_path"}), "kind": entry.dependency.kind}})
+    # Entries that bind through a layout root but supply no requested member still
+    # belong to that pinned layout generation; keep them so its digest is complete.
+    for entry in model.acquisition:
+        if entry.artifact_id not in emitted:
+            emitted.add(entry.artifact_id)
+            artifacts.append({"dependency": entry.dependency.model_dump(), "member_path": entry.member_path,
+                              "manifest": {
+                **entry.model_dump(exclude={"dependency", "member_path"}), "kind": entry.dependency.kind}})
     return {"model_id": model_id, "artifacts": artifacts, "blockers": blockers}
 
 

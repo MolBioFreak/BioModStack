@@ -176,3 +176,111 @@ params:
   - caliby_packer_030
 enabled: true
 experimental: true
+
+# Pinned weight members; the release-approved manifests behind the installed layouts/caliby generation.
+acquisition:
+- artifact_id: caliby-caliby-4a1c22c5f1c6
+  url: https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/caliby.ckpt
+  sha256: 4a1c22c5f1c62c62a3aa9c1e6bec65e63a37faeccad5cd6b7d94536cedb1ee74
+  size_bytes: 47462225
+  source_authority: huggingface.co
+  approval_ref: de-novo-full-20261021-ASSET-04-Caliby
+  license_id: Apache-2.0
+  redirect_policy:
+    source_url: https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/caliby.ckpt
+    approval_ref: de-novo-full-20261021-ASSET-04-Caliby
+    allowed_authorities:
+    - huggingface.co
+    - us.aws.cdn.hf.co
+    - cas-bridge.xethub.hf.co
+    - cdn-lfs.hf.co
+    - cdn-lfs-us-1.hf.co
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: caliby
+  member_path: model_params/caliby/caliby.ckpt
+- artifact_id: caliby-caliby-packer-000-2cbdfd97ed56
+  url: https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/caliby_packer_000.ckpt
+  sha256: 2cbdfd97ed562524cf03873b87c6ea5183ddf78d7626d5b1c030ff74b45652be
+  size_bytes: 121317804
+  source_authority: huggingface.co
+  approval_ref: de-novo-full-20261021-ASSET-04-Caliby
+  license_id: Apache-2.0
+  redirect_policy:
+    source_url: https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/caliby_packer_000.ckpt
+    approval_ref: de-novo-full-20261021-ASSET-04-Caliby
+    allowed_authorities:
+    - huggingface.co
+    - us.aws.cdn.hf.co
+    - cas-bridge.xethub.hf.co
+    - cdn-lfs.hf.co
+    - cdn-lfs-us-1.hf.co
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: caliby
+  member_path: model_params/caliby/caliby_packer_000.ckpt
+- artifact_id: caliby-caliby-packer-010-1e437578ffb7
+  url: https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/caliby_packer_010.ckpt
+  sha256: 1e437578ffb7a4e97fc41de38cc9862ad48cd6300e73611e1b1b1801c7027b99
+  size_bytes: 121317804
+  source_authority: huggingface.co
+  approval_ref: de-novo-full-20261021-ASSET-04-Caliby
+  license_id: Apache-2.0
+  redirect_policy:
+    source_url: https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/caliby_packer_010.ckpt
+    approval_ref: de-novo-full-20261021-ASSET-04-Caliby
+    allowed_authorities:
+    - huggingface.co
+    - us.aws.cdn.hf.co
+    - cas-bridge.xethub.hf.co
+    - cdn-lfs.hf.co
+    - cdn-lfs-us-1.hf.co
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: caliby
+  member_path: model_params/caliby/caliby_packer_010.ckpt
+- artifact_id: caliby-caliby-packer-030-760cc5c4bcf4
+  url: https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/caliby_packer_030.ckpt
+  sha256: 760cc5c4bcf4708ac6d5add3ce5163cfeaeb7a319470ee0f8eb16d498d2142d2
+  size_bytes: 121317484
+  source_authority: huggingface.co
+  approval_ref: de-novo-full-20261021-ASSET-04-Caliby
+  license_id: Apache-2.0
+  redirect_policy:
+    source_url: https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/caliby_packer_030.ckpt
+    approval_ref: de-novo-full-20261021-ASSET-04-Caliby
+    allowed_authorities:
+    - huggingface.co
+    - us.aws.cdn.hf.co
+    - cas-bridge.xethub.hf.co
+    - cdn-lfs.hf.co
+    - cdn-lfs-us-1.hf.co
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: caliby
+  member_path: model_params/caliby/caliby_packer_030.ckpt
+- artifact_id: caliby-soluble-caliby-49a720458cb8
+  url: https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/soluble_caliby.ckpt
+  sha256: 49a720458cb86625a74e73ad2a3351c9b91b06c0371040b85896aad507820c98
+  size_bytes: 47462481
+  source_authority: huggingface.co
+  approval_ref: de-novo-full-20261021-ASSET-04-Caliby
+  license_id: Apache-2.0
+  redirect_policy:
+    source_url: https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/soluble_caliby.ckpt
+    approval_ref: de-novo-full-20261021-ASSET-04-Caliby
+    allowed_authorities:
+    - huggingface.co
+    - us.aws.cdn.hf.co
+    - cas-bridge.xethub.hf.co
+    - cdn-lfs.hf.co
+    - cdn-lfs-us-1.hf.co
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: caliby
+  member_path: model_params/caliby/soluble_caliby.ckpt

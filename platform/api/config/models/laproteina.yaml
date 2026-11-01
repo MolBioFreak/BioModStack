@@ -17,3 +17,176 @@ params:
   label: Native evaluation request
   description: Typed retained-output evaluation; discover generation-settings for the complete schema.
   required: true
+
+# Pinned weight members; the release-approved manifests behind the installed layouts/laproteina generation.
+acquisition:
+- artifact_id: laproteina-AE1_ucond_512.ckpt
+  url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ae1_ucond_512.ckpt/versions/1.0/files/AE1_ucond_512.ckpt
+  sha256: 898da17022cdeaaaea7caace41c8b6fe7bfcb78be4876b0113127eb9bb1527e6
+  size_bytes: 4100184649
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021-la-build
+  license_id: NVIDIA-Open-Model-License
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ae1_ucond_512.ckpt/versions/1.0/files/AE1_ucond_512.ckpt
+    approval_ref: NGC HEAD verified xfiles.ngc.nvidia.com
+    allowed_authorities:
+    - xfiles.ngc.nvidia.com
+    max_hops: 2
+  dependency:
+    kind: weights
+    relative_path: laproteina
+  member_path: AE1_ucond_512.ckpt
+- artifact_id: laproteina-AE2_ucond_800.ckpt
+  url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ae2_ucond_800.ckpt/versions/1.0/files/AE2_ucond_800.ckpt
+  sha256: fb782e242d881dc33239a1a9eb5056943f4559f4ae22314a99acff650e9939e7
+  size_bytes: 4100184389
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021-la-build
+  license_id: NVIDIA-Open-Model-License
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ae2_ucond_800.ckpt/versions/1.0/files/AE2_ucond_800.ckpt
+    approval_ref: NGC HEAD verified xfiles.ngc.nvidia.com
+    allowed_authorities:
+    - xfiles.ngc.nvidia.com
+    max_hops: 2
+  dependency:
+    kind: weights
+    relative_path: laproteina
+  member_path: AE2_ucond_800.ckpt
+- artifact_id: laproteina-AE3_motif.ckpt
+  url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ae3_motif.ckpt/versions/1.0/files/AE3_motif.ckpt
+  sha256: 63b1358c5459e968628094fdc9a2a6a95ac003606fcf7b1a3a21174458a69734
+  size_bytes: 4100197925
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021-la-build
+  license_id: NVIDIA-Open-Model-License
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ae3_motif.ckpt/versions/1.0/files/AE3_motif.ckpt
+    approval_ref: NGC HEAD verified xfiles.ngc.nvidia.com
+    allowed_authorities:
+    - xfiles.ngc.nvidia.com
+    max_hops: 2
+  dependency:
+    kind: weights
+    relative_path: laproteina
+  member_path: AE3_motif.ckpt
+- artifact_id: laproteina-LD1_ucond_notri_512.ckpt
+  url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld1_ucond_notri_512.ckpt/versions/1.0/files/LD1_ucond_notri_512.ckpt
+  sha256: 6d9ec013f73be6bc305876a02f2aa5dbf3183a938332bac9262aa30f8c963f66
+  size_bytes: 2926616286
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021-la-build
+  license_id: NVIDIA-Open-Model-License
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld1_ucond_notri_512.ckpt/versions/1.0/files/LD1_ucond_notri_512.ckpt
+    approval_ref: NGC HEAD verified xfiles.ngc.nvidia.com
+    allowed_authorities:
+    - xfiles.ngc.nvidia.com
+    max_hops: 2
+  dependency:
+    kind: weights
+    relative_path: laproteina
+  member_path: LD1_ucond_notri_512.ckpt
+- artifact_id: laproteina-LD2_ucond_tri_512.ckpt
+  url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld2_ucond_tri_512.ckpt/versions/1.0/files/LD2_ucond_tri_512.ckpt
+  sha256: 6650b6df1e26077cebc78c970edfb6c3fb8c8f5d8a40688024b5d02485867199
+  size_bytes: 3035803871
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021-la-build
+  license_id: NVIDIA-Open-Model-License
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld2_ucond_tri_512.ckpt/versions/1.0/files/LD2_ucond_tri_512.ckpt
+    approval_ref: NGC HEAD verified xfiles.ngc.nvidia.com
+    allowed_authorities:
+    - xfiles.ngc.nvidia.com
+    max_hops: 2
+  dependency:
+    kind: weights
+    relative_path: laproteina
+  member_path: LD2_ucond_tri_512.ckpt
+- artifact_id: laproteina-LD3_ucond_notri_800.ckpt
+  url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld3_ucond_notri_800.ckpt/versions/1.0/files/LD3_ucond_notri_800.ckpt
+  sha256: 7c026d7cb853f8f6c9d02d8df31db4f419183044d5553638e82ce6c933a6699a
+  size_bytes: 2926602846
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021-la-build
+  license_id: NVIDIA-Open-Model-License
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld3_ucond_notri_800.ckpt/versions/1.0/files/LD3_ucond_notri_800.ckpt
+    approval_ref: NGC HEAD verified xfiles.ngc.nvidia.com
+    allowed_authorities:
+    - xfiles.ngc.nvidia.com
+    max_hops: 2
+  dependency:
+    kind: weights
+    relative_path: laproteina
+  member_path: LD3_ucond_notri_800.ckpt
+- artifact_id: laproteina-LD4_motif_idx_aa.ckpt
+  url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld4_motif_idx_aa.ckpt/versions/1.0/files/LD4_motif_idx_aa.ckpt
+  sha256: 8bd61de905c62bbe6b26c2669694e413e547c23d7a91515de965371cddd7db7d
+  size_bytes: 2931464466
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021-la-build
+  license_id: NVIDIA-Open-Model-License
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld4_motif_idx_aa.ckpt/versions/1.0/files/LD4_motif_idx_aa.ckpt
+    approval_ref: NGC HEAD verified xfiles.ngc.nvidia.com
+    allowed_authorities:
+    - xfiles.ngc.nvidia.com
+    max_hops: 2
+  dependency:
+    kind: weights
+    relative_path: laproteina
+  member_path: LD4_motif_idx_aa.ckpt
+- artifact_id: laproteina-LD5_motif_idx_tip.ckpt
+  url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld5_motif_idx_tip.ckpt/versions/1.0/files/LD5_motif_idx_tip.ckpt
+  sha256: dd0a888c2fe69715c1fb246339375f464c2d442a46566199191371ddcde9f441
+  size_bytes: 2928462198
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021-la-build
+  license_id: NVIDIA-Open-Model-License
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld5_motif_idx_tip.ckpt/versions/1.0/files/LD5_motif_idx_tip.ckpt
+    approval_ref: NGC HEAD verified xfiles.ngc.nvidia.com
+    allowed_authorities:
+    - xfiles.ngc.nvidia.com
+    max_hops: 2
+  dependency:
+    kind: weights
+    relative_path: laproteina
+  member_path: LD5_motif_idx_tip.ckpt
+- artifact_id: laproteina-LD6_motif_uidx_aa.ckpt
+  url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld6_motif_uidx_aa.ckpt/versions/1.0/files/LD6_motif_uidx_aa.ckpt
+  sha256: 9c52db67d2fec4b30134cd8c15132732f188bf1e82d72c9adc3c941086dcf589
+  size_bytes: 2928525858
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021-la-build
+  license_id: NVIDIA-Open-Model-License
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld6_motif_uidx_aa.ckpt/versions/1.0/files/LD6_motif_uidx_aa.ckpt
+    approval_ref: NGC HEAD verified xfiles.ngc.nvidia.com
+    allowed_authorities:
+    - xfiles.ngc.nvidia.com
+    max_hops: 2
+  dependency:
+    kind: weights
+    relative_path: laproteina
+  member_path: LD6_motif_uidx_aa.ckpt
+- artifact_id: laproteina-LD7_motif_uidx_tip.ckpt
+  url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld7_motif_uidx_tip.ckpt/versions/1.0/files/LD7_motif_uidx_tip.ckpt
+  sha256: 6b4a5f15dfabbe5594550c9d3042b3770bb9ee11632101b392cdda6a304fb393
+  size_bytes: 2928525538
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021-la-build
+  license_id: NVIDIA-Open-Model-License
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld7_motif_uidx_tip.ckpt/versions/1.0/files/LD7_motif_uidx_tip.ckpt
+    approval_ref: NGC HEAD verified xfiles.ngc.nvidia.com
+    allowed_authorities:
+    - xfiles.ngc.nvidia.com
+    max_hops: 2
+  dependency:
+    kind: weights
+    relative_path: laproteina
+  member_path: LD7_motif_uidx_tip.ckpt

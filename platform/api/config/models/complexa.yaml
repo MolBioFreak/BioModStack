@@ -24,3 +24,114 @@ params:
   description: Closed versioned native contract from services.complexa.discovery; nested typed controls, not a raw JSON editor.
   required: true
   ui_control: parameter-group
+
+# Pinned weight members; the release-approved manifests behind the installed layouts/complexa generation.
+acquisition:
+- artifact_id: complexa.ckpt
+  url: https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa.ckpt
+  sha256: 589db1741f29838c7961386f6b873087238c72682e56189b89e0ae02610c19e9
+  size_bytes: 2934289381
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021/complexa-build
+  license_id: NVIDIA-Open-Model-License-2025-04-28
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa.ckpt
+    approval_ref: de-novo-full-20261021/complexa-build
+    allowed_authorities:
+    - api.ngc.nvidia.com
+    - xfiles.ngc.nvidia.com
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: complexa
+  member_path: complexa.ckpt
+- artifact_id: complexa_ae.ckpt
+  url: https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa_ae.ckpt
+  sha256: 35f8865efd269995eeaf1670e1c1085acfe2988c40abdeda8e09a0e15eb40816
+  size_bytes: 4100101779
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021/complexa-build
+  license_id: NVIDIA-Open-Model-License-2025-04-28
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa_ae.ckpt
+    approval_ref: de-novo-full-20261021/complexa-build
+    allowed_authorities:
+    - api.ngc.nvidia.com
+    - xfiles.ngc.nvidia.com
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: complexa
+  member_path: complexa_ae.ckpt
+- artifact_id: complexa_ame.ckpt
+  url: https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame.ckpt
+  sha256: d11319693d024d0427abc356a86350a694a1cb7dceb8db642c8041e5a20a9f7b
+  size_bytes: 1792013880
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021/complexa-build
+  license_id: NVIDIA-Open-Model-License-2025-04-28
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame.ckpt
+    approval_ref: de-novo-full-20261021/complexa-build
+    allowed_authorities:
+    - api.ngc.nvidia.com
+    - xfiles.ngc.nvidia.com
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: complexa
+  member_path: complexa_ame.ckpt
+- artifact_id: complexa_ame_ae.ckpt
+  url: https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame_ae.ckpt
+  sha256: 63b1358c5459e968628094fdc9a2a6a95ac003606fcf7b1a3a21174458a69734
+  size_bytes: 4100197925
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021/complexa-build
+  license_id: NVIDIA-Open-Model-License-2025-04-28
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame_ae.ckpt
+    approval_ref: de-novo-full-20261021/complexa-build
+    allowed_authorities:
+    - api.ngc.nvidia.com
+    - xfiles.ngc.nvidia.com
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: complexa
+  member_path: complexa_ame_ae.ckpt
+- artifact_id: complexa_ligand.ckpt
+  url: https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand.ckpt
+  sha256: 8175213eac5ec6433fed1756d055ce3f867129bfdb033040e1a0560ca558bfe5
+  size_bytes: 1790554392
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021/complexa-build
+  license_id: NVIDIA-Open-Model-License-2025-04-28
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand.ckpt
+    approval_ref: de-novo-full-20261021/complexa-build
+    allowed_authorities:
+    - api.ngc.nvidia.com
+    - xfiles.ngc.nvidia.com
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: complexa
+  member_path: complexa_ligand.ckpt
+- artifact_id: complexa_ligand_ae.ckpt
+  url: https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand_ae.ckpt
+  sha256: 898da17022cdeaaaea7caace41c8b6fe7bfcb78be4876b0113127eb9bb1527e6
+  size_bytes: 4100184649
+  source_authority: api.ngc.nvidia.com
+  approval_ref: de-novo-full-20261021/complexa-build
+  license_id: NVIDIA-Open-Model-License-2025-04-28
+  redirect_policy:
+    source_url: https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand_ae.ckpt
+    approval_ref: de-novo-full-20261021/complexa-build
+    allowed_authorities:
+    - api.ngc.nvidia.com
+    - xfiles.ngc.nvidia.com
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: complexa
+  member_path: complexa_ligand_ae.ckpt
