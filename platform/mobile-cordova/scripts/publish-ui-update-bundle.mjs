@@ -195,7 +195,7 @@ async function main(argv = process.argv.slice(2)) {
   console.log(`Channel: ${channel}`);
   console.log(`Version: ${version}`);
 
-  run('pnpm', ['exec', 'vite', 'build', '--base', './', '--outDir', outDir, '--emptyOutDir'], {
+  run('pnpm', ['run', 'build', '--base', './', '--outDir', outDir, '--emptyOutDir'], {
     cwd: frontendDir,
   });
 
