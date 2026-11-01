@@ -11,6 +11,7 @@ import { Layout } from '../../src/components/Layout';
 import { api } from '../../src/lib/api';
 import { buildBioXpCameraMjpegUrl } from '../../src/lib/bioxpClient';
 import { resolveApiResourceUrl } from '../../src/runtime/tailnetEnvironment';
+import { NgsDataRecords } from '../../src/components/project-manager/NgsDataRecords';
 
 let root: Root;
 let container: HTMLDivElement;
@@ -127,6 +128,24 @@ it('packaged runtime switching still uses the remote selector when status observ
         expect(JSON.parse(calls[0][1].body)).toEqual({ environment: 'development' });
         expect(container.textContent).toContain('inert selector stop');
         expect(requests.mock.calls.some(([url]) => url === '/api/system/runtime-ports')).toBe(false);
+    } finally { api.defaults.adapter = oldAdapter; }
+});
+
+it('Project NGS file links retain encoded server paths in the downloaded phone UI', async () => {
+    vi.stubGlobal('__BMS_API_BASE_URL__', 'https://node.example.ts.net');
+    const oldAdapter = api.defaults.adapter;
+    const seen: string[] = [];
+    api.defaults.adapter = async config => {
+        seen.push(`${config.method} ${config.url}`);
+        return { data: { schema: 'bns.ngs-data-record-list.v1', next_cursor: null, items: [{ id: 'transport-fixture', created_at: '2025-01-01T00:00:00Z', author: null, payload: {
+            schema: 'bns.ngs-data-record.v1', record_key: 'fixture', title: 'Transport fixture', sample_name: '', data_format: 'fastq', use_case: 'sequence_identity', workflow_stage: 'acquired', data_location: '', notes: '', files: [{ name: 'read one.fastq', path: 'ngs folder/read one.fastq', size: 10 }],
+        } }] }, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    try {
+        await act(async () => root.render(<QueryClientProvider client={client}><NgsDataRecords projectId="project fixture" onAdd={vi.fn()} /></QueryClientProvider>));
+        await flush();
+        expect(container.querySelector('a')?.getAttribute('href')).toBe('https://node.example.ts.net/api/files/download/ngs%20folder/read%20one.fastq');
+        expect(seen).toEqual(['get /api/projects/project%20fixture/ngs-data-records']);
     } finally { api.defaults.adapter = oldAdapter; }
 });
 
