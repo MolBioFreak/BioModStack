@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { api, type NativeGenerationSourceBinding, type NativeGenerationSourceBindings, type StructureSourceSelection } from '../lib/api';
 import { NativeSourceInput } from './DeNovoNativeSources';
+import { DesignerSettingsForm } from './DesignerSettingsForm';
 
 const ENGINES = [['mpnn', 'ProteinMPNN'], ['fampnn', 'FAMPNN'], ['ligandmpnn', 'LigandMPNN'], ['caliby', 'Caliby'], ['protonpottsmpnn', 'ProtonPottsMPNN (pH-specific redesign)']] as const;
 const LIGAND_MODES = [['ligand_aware', 'Ligand-aware'], ['ntp_aware', 'NTP-aware'], ['metal_aware', 'Metal-aware'], ['dna_aware', 'DNA-aware']] as const;
@@ -14,7 +15,7 @@ export function ResequencePanel() {
     const [bindings, setBindings] = useState<NativeGenerationSourceBindings | undefined>();
     const [engine, setEngine] = useState<string>('mpnn');
     const [ligandMode, setLigandMode] = useState('ligand_aware');
-    const [designerSettings, setDesignerSettings] = useState('');
+    const [designer, setDesigner] = useState<{ values: Record<string, unknown>; valid: boolean }>({ values: {}, valid: true });
     const [chains, setChains] = useState('A');
     const [fixed, setFixed] = useState('');
     const [designable, setDesignable] = useState('');
@@ -27,7 +28,7 @@ export function ResequencePanel() {
         mutationFn: async () => (await api.post<{ id: string }>('/api/jobs/resequence/from-structures', {
             sources: [source], seq_method: engine,
             ...(engine === 'ligandmpnn' ? { designer_mode: ligandMode } : {}),
-            ...(ownSettings && designerSettings.trim() ? { designer_settings: parsedSettings } : {}), design_chains: chains.trim(), name: name.trim() || 'Resequence',
+            ...(ownSettings && Object.keys(designer.values).length ? { designer_settings: designer.values } : {}), design_chains: chains.trim(), name: name.trim() || 'Resequence',
             structure_validators: validators,
             ...(fixed.trim() ? { fixed_positions: fixed.trim() } : {}),
             ...(designable.trim() ? { designable_positions: designable.trim() } : {}),
@@ -36,10 +37,8 @@ export function ResequencePanel() {
         onError: (cause: Error) => setError(cause.message || 'Failed to start resequencing'),
     });
     const toggle = (id: string) => setValidators(previous => previous.includes(id) ? previous.filter(x => x !== id) : [...previous, id]);
-    let parsedSettings: Record<string, unknown> | null = {};
-    if (designerSettings.trim()) { try { const value = JSON.parse(designerSettings); parsedSettings = value && typeof value === 'object' && !Array.isArray(value) ? value : null; } catch { parsedSettings = null; } }
     const ownSettings = ['ligandmpnn', 'caliby', 'protonpottsmpnn'].includes(engine);
-    const ready = Boolean(source) && chains.trim() !== '' && validators.length > 0 && !(fixed.trim() && designable.trim()) && parsedSettings !== null;
+    const ready = Boolean(source) && chains.trim() !== '' && validators.length > 0 && !(fixed.trim() && designable.trim()) && (!ownSettings || designer.valid);
     return <section className="space-y-3" aria-label="Resequence and validate" data-resequence-panel>
         <p className="text-xs text-[var(--text-secondary)]">Resequence a design from any generator, then validate it. The loop pauses for review when it finishes. ProtonPottsMPNN picks its own sites, so keep/change positions are not applied to it.</p>
         <NativeSourceInput integrated label="Structure to resequence" value={source ? 'input' : ''} bindings={bindings}
@@ -60,8 +59,7 @@ export function ResequencePanel() {
         {error && <p role="alert">{error}</p>}
         {engine === 'ligandmpnn' && <label>LigandMPNN mode<select aria-label="LigandMPNN mode" value={ligandMode} onChange={event => setLigandMode(event.target.value)}>
             {LIGAND_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
-        {ownSettings && <label>Designer settings (JSON, optional)<textarea aria-label="Designer settings" placeholder='{"batch_size": 4}' value={designerSettings} onChange={event => setDesignerSettings(event.target.value)} />
-            {parsedSettings === null && <span role="alert"> Enter a JSON object.</span>}</label>}
+        {ownSettings && <DesignerSettingsForm key={`${engine}:${ligandMode}`} engine={engine} mode={ligandMode} onChange={(values, valid) => setDesigner({ values, valid })} />}
         <button type="button" disabled={!ready || submit.isPending} onClick={() => { setError(null); submit.mutate(); }}>Run resequence and validate</button>
     </section>;
 }

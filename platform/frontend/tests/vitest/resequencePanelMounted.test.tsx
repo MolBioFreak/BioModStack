@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
+import models from './fixtures/resequenceDesignerModels.json';
 
 vi.mock('../../src/components/DeNovoNativeSources', () => ({
     NativeSourceInput: ({ onAcquire }: any) => <button onClick={() => onAcquire({ job_id: 'job-1', design_id: 'd-1', output_format: 'native' })}>pick source</button>,
@@ -13,7 +14,12 @@ import { ResequencePanel } from '../../src/components/ResequencePanel';
 let root: Root; const posts: any[] = []; const previous = api.defaults.adapter;
 afterEach(async () => { if (root) await act(async () => root.unmount()); document.body.replaceChildren(); api.defaults.adapter = previous; posts.length = 0; });
 async function mount() {
-    api.defaults.adapter = async config => { posts.push({ url: config.url, body: JSON.parse(String(config.data)) }); return { data: { id: 'new-job' }, config, status: 201, statusText: 'Created', headers: {} } as any; };
+    api.defaults.adapter = async config => {
+        const model = /^\/api\/models\/([^/]+)$/.exec(String(config.url));
+        if (config.method === 'get' && model) return { data: (models as any)[model[1]], config, status: 200, statusText: 'OK', headers: {} } as any;
+        posts.push({ url: config.url, body: JSON.parse(String(config.data)) });
+        return { data: { id: 'new-job' }, config, status: 201, statusText: 'Created', headers: {} } as any;
+    };
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     await act(async () => { root.render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><ResequencePanel /></MemoryRouter></QueryClientProvider>); });
 }
@@ -47,18 +53,62 @@ it('refuses fixed and designable positions together, and an empty validator list
     expect(run().disabled).toBe(true);
 });
 
-it('runs LigandMPNN, Caliby and ProtonPottsMPNN inside the loop with their own mode and settings', async () => {
+const flush = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); }); };
+const fieldNames = () => [...document.querySelectorAll('[aria-label^="Designer setting "]')].map(n => n.getAttribute('aria-label')!.replace('Designer setting ', ''));
+
+it('builds each designer\'s settings from its served inventory and sends only what was changed', async () => {
     await mount();
     await click([...document.querySelectorAll('button')].find(b => b.textContent === 'pick source')!);
-    await set('Resequence engine', 'ligandmpnn'); await set('LigandMPNN mode', 'metal_aware');
-    await set('Designer settings', '{"batch_size": 3}');
+    await set('Resequence engine', 'ligandmpnn'); await set('LigandMPNN mode', 'metal_aware'); await flush();
+    for (const group of document.querySelectorAll('details')) (group as HTMLDetailsElement).open = true;
+    expect(fieldNames()).toEqual(expect.arrayContaining(['temperature', 'batch_size', 'metal_type', 'omit']));
+    expect(fieldNames()).not.toEqual(expect.arrayContaining(['target_pdb']));
+    expect(fieldNames()).not.toEqual(expect.arrayContaining(['fixed_residues']));
     await click(run());
-    expect(posts[0].body).toMatchObject({ seq_method: 'ligandmpnn', designer_mode: 'metal_aware', designer_settings: { batch_size: 3 } });
-    await set('Resequence engine', 'caliby'); await click(run());
-    expect(posts[1].body).toMatchObject({ seq_method: 'caliby' });
-    expect(posts[1].body).not.toHaveProperty('designer_mode');
-    await set('Resequence engine', 'protonpottsmpnn'); await set('Designer settings', '{not json');
+    expect(posts[0].body).toMatchObject({ seq_method: 'ligandmpnn', designer_mode: 'metal_aware' });
+    expect(posts[0].body).not.toHaveProperty('designer_settings');
+    await set('Designer setting batch_size', '3'); await set('Designer setting temperature', '0.25');
+    await click(run());
+    expect(posts[1].body.designer_settings).toEqual({ batch_size: 3, temperature: 0.25 });
+    await set('Designer setting batch_size', '');
+    await click(run());
+    expect(posts[2].body.designer_settings).toEqual({ temperature: 0.25 });
+});
+
+it('switching engine drops the previous engine\'s settings; Caliby and ProtonPottsMPNN show their own fields', async () => {
+    await mount();
+    await click([...document.querySelectorAll('button')].find(b => b.textContent === 'pick source')!);
+    await set('Resequence engine', 'ligandmpnn'); await flush();
+    for (const group of document.querySelectorAll('details')) (group as HTMLDetailsElement).open = true;
+    await set('Designer setting batch_size', '5');
+    await set('Resequence engine', 'caliby'); await flush();
+    for (const group of document.querySelectorAll('details')) (group as HTMLDetailsElement).open = true;
+    expect(fieldNames()).toEqual(expect.arrayContaining(['num_seqs_per_pdb', 'temperature', 'model_name']));
+    expect(fieldNames()).not.toContain('ensembles');
+    await set('Designer setting num_seqs_per_pdb', '2');
+    await click(run());
+    expect(posts[0].body).toMatchObject({ seq_method: 'caliby', designer_settings: { num_seqs_per_pdb: 2 } });
+    expect(posts[0].body).not.toHaveProperty('designer_mode');
+    await set('Resequence engine', 'protonpottsmpnn'); await flush();
+    for (const group of document.querySelectorAll('details')) (group as HTMLDetailsElement).open = true;
+    expect(fieldNames()).toContain('seed');
+    expect(fieldNames()).not.toContain('target_pdb');
+    expect(fieldNames()).not.toContain('binder_chain');
+    await click(run());
+    expect(posts[1].body).toMatchObject({ seq_method: 'protonpottsmpnn' });
+    expect(posts[1].body).not.toHaveProperty('designer_settings');
+});
+
+it('structured native tables go through a JSON box that rejects unknown names and blocks the run', async () => {
+    await mount();
+    await click([...document.querySelectorAll('button')].find(b => b.textContent === 'pick source')!);
+    await set('Resequence engine', 'ligandmpnn'); await flush();
+    await set('Structured designer settings', '{not json');
     expect(run().disabled).toBe(true);
-    await set('Designer settings', '');
+    await set('Structured designer settings', '{"target_pdb": "x.pdb"}');
+    expect(run().disabled).toBe(true);
+    await set('Structured designer settings', '{"bias": {"A": -1}}');
     expect(run().disabled).toBe(false);
+    await click(run());
+    expect(posts[0].body.designer_settings).toEqual({ bias: { A: -1 } });
 });
