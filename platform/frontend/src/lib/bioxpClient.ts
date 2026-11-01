@@ -1711,7 +1711,7 @@ interface BioXpOperatorActionV2Envelope {
 }
 
 export type BioXpOperatorActionV2Request =
-    | (BioXpOperatorActionV2Envelope & { action_id: 'meta.activate_motion' | 'meta.recover_motion_non_homing'; inputs: Record<string, never> })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'meta.activate_motion' | 'meta.deactivate_motion' | 'meta.recover_motion_non_homing'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_steps' | 'oem.z.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_absolute' | 'oem.z.move_absolute'; inputs: { position_steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.manual_panel_home' | 'oem.z.manual_home' | 'oem.z.diagnostic_home_axis' | 'oem.z.clear' | 'oem.xy.home' | 'oem.deck.collect_authority'; inputs: Record<string, never> })
@@ -2909,6 +2909,81 @@ export const useAssessBioXpOperatorAction = () => {
         },
         onSuccess: (_receipt, variables) => {
             refreshBioXpHistoryCaches(queryClient, variables.connectionGeneration);
+            void queryClient.invalidateQueries({ queryKey: operatorCatalogKey });
+        },
+    });
+};
+
+
+// --- Deck record (record-only correction; the robot moves nothing) ---------
+export interface BioXpDeckStateV1 {
+    schema_version: 'bioxp.operator_deck_state.v1';
+    semantic: {
+        current_location?: string | null; tip_loaded?: boolean | null;
+        plate_on_gantry?: number | null; semantic_state_revision?: number;
+        movable_plate_locations?: Record<string, string>;
+        [key: string]: unknown;
+    };
+    movable_objects: Record<string, { location: string; source: 'sqlite_record' | 'provider_machine_status' }>;
+    physical_observation: false;
+}
+
+export interface BioXpTipTrayRowV1 {
+    tray: number; tray_id: number; unavailable?: string;
+    occupancy?: boolean[]; tips_present?: number | null; four_channel_groups_available?: number | null;
+    [key: string]: unknown;
+}
+
+export interface BioXpTipTraysV1 { schema_version: 'bioxp.operator_tip_trays.v1'; trays: BioXpTipTrayRowV1[]; physical_observation: false }
+
+export interface BioXpDeckRecordRequestV1 {
+    expected_connection_generation: number;
+    record_id?: string;
+    reason?: string;
+    movable_objects?: Record<string, string>;
+    tip_trays?: Array<{ tray: number; tips: 'full' | 'empty' | string[] }>;
+    gantry?: string;
+}
+
+export interface BioXpDeckRecordResultV1 {
+    schema_version: 'bioxp.operator_deck_record_result.v1';
+    record_id: string; motion_commanded: false; physical_observation: false;
+    warnings?: Array<{ code: string; objects?: string[]; message?: string }>;
+    [key: string]: unknown;
+}
+
+export const bioXpDeckRecordKey = (generation: number) => ['bioxp', 'operator-controls', 'deck-record', generation] as const;
+
+export const useBioXpDeckState = (generation: number, enabled = true) => useQuery({
+    queryKey: [...bioXpDeckRecordKey(generation), 'state'],
+    queryFn: async ({ signal }) => (await api.get<BioXpDeckStateV1>('/api/bioxp/operator-controls/deck/state', { signal })).data,
+    enabled: enabled && generation > 0,
+    retry: false,
+    refetchInterval: enabled ? 15_000 : false,
+    refetchOnWindowFocus: false,
+});
+
+export const useBioXpTipTrays = (generation: number, enabled = true) => useQuery({
+    queryKey: [...bioXpDeckRecordKey(generation), 'tip-trays'],
+    queryFn: async ({ signal }) => (await api.get<BioXpTipTraysV1>('/api/bioxp/operator-controls/tip-trays', { signal })).data,
+    enabled: enabled && generation > 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+});
+
+export const useRecordBioXpDeck = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        retry: false,
+        networkMode: 'always',
+        mutationFn: async (request: BioXpDeckRecordRequestV1) => {
+            const hasChange = (request.movable_objects && Object.keys(request.movable_objects).length > 0)
+                || (request.tip_trays && request.tip_trays.length > 0) || request.gantry != null;
+            if (!hasChange) throw new Error('Choose at least one change to record.');
+            return (await api.post<BioXpDeckRecordResultV1>('/api/bioxp/operator-controls/deck/record', request)).data;
+        },
+        onSettled: (_result, _error, request) => {
+            void queryClient.invalidateQueries({ queryKey: bioXpDeckRecordKey(request.expected_connection_generation) });
             void queryClient.invalidateQueries({ queryKey: operatorCatalogKey });
         },
     });

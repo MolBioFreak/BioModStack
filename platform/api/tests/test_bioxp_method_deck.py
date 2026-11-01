@@ -316,3 +316,9 @@ def test_conditioning_is_editable_and_zero_turns_it_off():
     assert off['multi']['conditioning_back_to_source_count'] == 0
     plain = _class_transfer('water-t50-5ul-single-p6', '2')
     assert plain['mode'] == 'single' and plain['commanded_aspiration_ul'] == '2.5'
+
+
+def test_motion_off_is_relayed_through_the_closed_v2_contract():
+    from routers.bioxp import operator_controls
+    from services.bioxp.operator_requests import OperatorEmptyInputsV2
+    assert operator_controls._V2_NORMAL_INPUT_TYPES["meta.deactivate_motion"] is OperatorEmptyInputsV2

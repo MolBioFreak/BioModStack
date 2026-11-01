@@ -6,6 +6,7 @@ import { deckResources, deckSize, deckStations, projectDeckPoint, type BioXpDeck
 import { activeDeckResources, alignmentReference, gunCenters, poseFromAxisObservations, retainAxisObservations } from '../lib/bioxpLiveDeck';
 import { BioXpWorkflowDeck } from './BioXpWorkflowDeck';
 import './BioXpMethodsWorkspace.css';
+import { BioXpDeckObjectsCard, BioXpDeckRecordPanel } from './BioXpDeckRecord';
 import './BioXpLiveDeck.css';
 
 export type BioXpLiveDeckProps = {
@@ -35,6 +36,7 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
     const { generation, connected, visible, dashboard, selection } = props;
     const updates = useBioXpOperatorUpdates(generation, connected && visible);
     const [transferOpen, setTransferOpen] = useState(false);
+    const [recordOpen, setRecordOpen] = useState(false);
     const revision = dashboard?.deck?.position_table_revision ?? null;
     const geometry = useQuery({
         queryKey: ['bioxp-live-deck-geometry', generation, revision],
@@ -108,6 +110,7 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
                 {props.doorControls}
                 {props.movementControls}
                 {props.cameraControls}
+                <BioXpDeckObjectsCard generation={generation} connected={connected} visible={visible} />
                 <section className="bld-pose-card" aria-label="Reported pose"><h3>{pose ? lastKnown ? 'Last known position' : 'Reported gantry position' : 'Position unavailable'}</h3>
                     <dl className="bld-coordinates"><div><dt>X steps</dt><dd>{axes?.axes.find(axis => axis.axis === 'x')?.position_steps ?? 'Unavailable'}</dd></div><div><dt>Y steps</dt><dd>{axes?.axes.find(axis => axis.axis === 'y')?.position_steps ?? 'Unavailable'}</dd></div><div><dt>Z steps</dt><dd>{axes?.axes.find(axis => axis.axis === 'z')?.position_steps ?? 'Unavailable'}</dd></div></dl>
                     {updates.isError && <p role="status">Position updates unavailable. Retaining last observed values.</p>}
@@ -125,6 +128,9 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
         <details className="bld-details" open={props.commandDetailsOpen} onToggle={event => props.onCommandDetailsToggle?.(event.currentTarget.open)}><summary>Command details</summary>{props.commandDetails}</details>
         <details className="bld-details" onToggle={event => setTransferOpen(event.currentTarget.open)}><summary>Plate and cover handling</summary>
             {typeof props.transferControls === 'function' ? props.transferControls(visible && transferOpen) : props.transferControls}
+        </details>
+        <details className="bld-details" onToggle={event => setRecordOpen(event.currentTarget.open)}><summary>Deck record</summary>
+            {recordOpen && <BioXpDeckRecordPanel generation={generation} connected={connected} visible={visible && recordOpen} />}
         </details>
     </section>;
 }

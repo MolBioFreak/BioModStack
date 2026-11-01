@@ -12,6 +12,8 @@ import { deckResources, deckStations, projectDeckPoint } from '../../src/lib/bio
 let host: HTMLDivElement, root: Root, query: QueryClient;
 let props: BioXpLiveDeckProps;
 const station = vi.fn(), well = vi.fn(), geometryRead = vi.fn();
+// The plates/covers card reads the robot deck record; keep it apart from the geometry count.
+const deckStateRead = vi.fn();
 const settings = { active_motion_positions: [{ location_id: 'LOC_MS', base_coordinates: { x: 51000, y: 16000 }, inc_factor: 1 }],
     saved_motion_positions: [{ location_id: 'LOC_MS', base_coordinates: { x: 1, y: 2 }, inc_factor: 1 }] };
 function dashboard(x: number | null = 50000, y: number | null = 10000, at = Date.now() / 1000): BioXpOperatorDashboardV2 {
@@ -47,7 +49,10 @@ beforeEach(() => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     query = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }); station.mockClear(); well.mockClear();
     geometryRead.mockReset().mockResolvedValue({ data: settings });
-    vi.spyOn(api, 'get').mockImplementation((url, config) => url.endsWith('/updates') ? new Promise(() => {}) : geometryRead(url, config));
+    deckStateRead.mockReset().mockResolvedValue({ data: { schema_version: 'bioxp.operator_deck_state.v1', physical_observation: false,
+        semantic: { plate_on_gantry: null, tip_loaded: null }, movable_objects: { OUTPUT_COVER: { location: 'LOC_OC_COVER', source: 'sqlite_record' } } } });
+    vi.spyOn(api, 'get').mockImplementation((url, config) => url.endsWith('/updates') ? new Promise(() => {})
+        : url === '/api/bioxp/operator-controls/deck/state' ? deckStateRead(url, config) : geometryRead(url, config));
     vi.spyOn(api, 'post').mockRejectedValue(new Error('No leaf mutation allowed'));
     props = { generation: 1, connected: true, visible: true, stale: false, dashboard: dashboard(), selection: { station: '', wells: [] },
         onMoveToStation: station, onMoveToWell: well, stationDisabledReason: () => null, wellDisabledReason: null,
@@ -255,4 +260,12 @@ it('respects only parent action admission, not missing pose/geometry, and preser
     expect(el('Magnetic station A1').getAttribute('aria-disabled')).toBe('true');
     await render({ wellDisabledReason: null, stationDisabledReason: () => null });
     await key('Select Waste bin', 'Enter'); await key('Magnetic station A1', ' '); expect(station).toHaveBeenCalledTimes(1); expect(well).toHaveBeenCalledTimes(1);
+});
+
+it('shows the recorded plate/cover card from the deck record, read-only', async () => {
+    await render();
+    await vi.waitFor(() => expect(host.querySelector('[data-object="OUTPUT_COVER"]')?.textContent).toContain('Output chiller (cover on)'));
+    expect(deckStateRead).toHaveBeenCalledWith('/api/bioxp/operator-controls/deck/state', expect.anything());
+    expect(host.textContent).toContain('Deck record');
+    expect(api.post).not.toHaveBeenCalled();
 });

@@ -366,7 +366,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const [yCommandId, setYCommandId] = useState<string | null>(null);
     const [zHomeCommandId, setZHomeCommandId] = useState<string | null>(null);
     const [lifecycleCommandId, setLifecycleCommandId] = useState<string | null>(null);
-    const [lifecycleActionId, setLifecycleActionId] = useState<'meta.activate_motion' | 'meta.recover_motion_non_homing' | null>(null);
+    const [lifecycleActionId, setLifecycleActionId] = useState<'meta.activate_motion' | 'meta.deactivate_motion' | 'meta.recover_motion_non_homing' | null>(null);
     const [lifecycleOwnershipGeneration, setLifecycleOwnershipGeneration] = useState<number | null>(null);
     const [lifecycleDashboardBaselineAt, setLifecycleDashboardBaselineAt] = useState<number | null>(null);
     const [yPendingActionId, setYPendingActionId] = useState<string | null>(null);
@@ -796,7 +796,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         mutation.mutate({ actionId, connectionGeneration: generation, ownershipGeneration, inputs });
     };
 
-    const invokeLifecycleAction = (actionId: 'meta.activate_motion' | 'meta.recover_motion_non_homing') => {
+    const invokeLifecycleAction = (actionId: 'meta.activate_motion' | 'meta.deactivate_motion' | 'meta.recover_motion_non_homing') => {
         if (v2ActionDisabledReason(actionId) !== null) return;
         const envelope = v2NormalEnvelope();
         if (!envelope) return;
@@ -824,6 +824,9 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     };
     const claimTransport = () => invokeLifecycleAction('meta.activate_motion');
     const recoverMotionNonHoming = () => invokeLifecycleAction('meta.recover_motion_non_homing');
+    // Motion On/Off: On = Activate Motion; Off = host motion switch (refuses new moves, sends nothing to controllers).
+    const motionToggleAction = motionControlsAvailable === true ? 'meta.deactivate_motion' as const : 'meta.activate_motion' as const;
+    const motionToggleReason = v2ActionDisabledReason(motionToggleAction);
 
     const operatorPathForControl = (axis: Axis, operation: Operation): string | null => {
         if (operation === 'move-negative' || operation === 'move-positive') return '/motion/oem/manual/relative';
@@ -1266,6 +1269,18 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         onClick={claimTransport}
                         className="rounded bg-[var(--surface-control,var(--bg-tertiary))] px-4 py-2 font-semibold  disabled:cursor-not-allowed "
                      aria-label="Enable controllers">Enable</button>
+                    <button
+                        type="button"
+                        role="switch"
+                        aria-checked={motionControlsAvailable === true}
+                        disabled={!linkConnected || motionToggleReason !== null || busy}
+                        title={motionToggleReason ?? (motionToggleAction === 'meta.deactivate_motion'
+                            ? 'Turn motion off: new moves are refused until motion is turned on again. Does not stop a move in progress; use Stop for that.'
+                            : 'Turn motion on (Activate Motion, no homing).')}
+                        onClick={() => invokeLifecycleAction(motionToggleAction)}
+                        data-testid="motion-toggle"
+                        className={`rounded px-4 py-2 font-semibold disabled:cursor-not-allowed ${motionControlsAvailable === true ? 'bg-teal-700' : 'bg-[var(--surface-control,var(--bg-tertiary))]'}`}
+                     aria-label="Motion">Motion {motionControlsAvailable === true ? 'On' : motionControlsAvailable === false ? 'Off' : '?'}</button>
                     <button
                         type="button"
                         disabled={!linkConnected || v2ActionDisabledReason('meta.recover_motion_non_homing') !== null || busy}
