@@ -67,6 +67,16 @@ The cache helper is the same protocol consumed by `cache.stage_cached_bundle` an
 
 `POST /api/execution-targets/{id}/preload` accepts the typed body `{ "job_id": "<saved-job-id>" }`. The saved job is a recipe for exact current-source settings; the call does not submit or alter scientific work. Progress is persisted in the execution-target response. A historical recipe bound to a different source is rejected rather than silently upgraded.
 
+### Weights stored in pinned layouts
+
+La-Proteina, Complexa and the Caliby packer checkpoints are installed only as immutable generations under
+`weights/layouts/<name>/<digest>/`; they have no plain `weights/<name>` path. Preview and provisioning resolve a
+declared weights dependency through `paths.resolve_weight_dependency`: a plain path wins, otherwise the longest
+declared prefix with exactly one generation supplies the file, and zero or several generations are never guessed.
+This is the same resolution local launches use. A managed release manifest carries only `containers/` and
+`weights/` rows; other selected bytes such as `data/md-preparation/env-v1-explicit.txt` travel through the artifact
+cache and are not release members.
+
 ### De Novo Design preparation
 
 On a selected worker, **Workflow → De Novo Design → All De Novo dependencies** prepares the built-in family through the catalog selection `{"kind":"model","model_id":"protein_modification_experimental"}`. The same action is available beside placement in Generate, Redesign structure and Shape, even before a source, geometry or scientific draft is complete. Preview and Start provision remain explicit actions; opening or switching editors does not upload inputs, search MSAs, create a Job or rent a worker.

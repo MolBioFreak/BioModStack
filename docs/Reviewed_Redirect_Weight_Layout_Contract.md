@@ -2,7 +2,9 @@
 
 This implements byte acquisition/materialization, **not** release approval,
 scientific qualification, license acceptance, SIF construction, or activation.
-No production model YAML approvals were added. Upstream inventory remains
+Production YAML approvals exist only for pinned layouts the release owners already acquired:
+`rfd4-proteina`, `laproteina`, `complexa` and `caliby`. Each entry carries the exact source URL, SHA-256,
+size, license and redirect policy that produced the installed generation. Other upstream inventory remains
 candidate metadata until reviewed by the release/license owners.
 
 ## Registry integration contract
