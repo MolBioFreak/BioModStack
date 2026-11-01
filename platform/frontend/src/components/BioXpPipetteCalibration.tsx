@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { bioXpErrorText, type BioXpDeckDestinationV1 } from '../lib/bioxpClient';
 import { methodsGet, methodsPost, type MethodValue } from '../lib/bioxpMethods';
-import { compileImmediate, liquidLevels, useBioXpImmediateRun } from '../lib/bioxpImmediateRun';
+import { compileImmediate, liquidLevels, searchClearanceMm, useBioXpImmediateRun } from '../lib/bioxpImmediateRun';
 
 const STEPS_PER_MM = 2015.748;
 const ROWS = [...'ABCDEFGH'];
@@ -44,7 +44,7 @@ export function BioXpPipetteCalibration({ generation, connected, destinations, v
     const [location, setLocation] = useState('');
     const [well, setWell] = useState('A1');
     const [channels, setChannels] = useState<number[]>([0, 1, 2, 3]);
-    const [sensing, setSensing] = useState<'hybrid' | 'capacitive' | 'pressure'>('hybrid');
+    const [sensing, setSensing] = useState<'hybrid' | 'capacitive' | 'pressure'>('pressure');
     const [speed, setSpeed] = useState(300);
     const [clearance, setClearance] = useState(1);
     const [edits, setEdits] = useState<Record<number, string>>({});
@@ -63,6 +63,8 @@ export function BioXpPipetteCalibration({ generation, connected, destinations, v
         floor_clearance_steps: Math.round(clearance * STEPS_PER_MM) }] } } };
     const levels = liquidLevels(runner.job);
     const latest = levels[levels.length - 1];
+    // Heights are shown with the stop height the search ran with, not the current box value.
+    const ranClearance = searchClearanceMm(runner.job) ?? clearance;
     const tips = offsets.data?.tips ?? [];
     const profiles = (Array.isArray(plates.data?.profiles) ? plates.data!.profiles : []) as MethodValue[];
     const profile = profiles.find(p => p.id === plateId);
@@ -84,7 +86,7 @@ export function BioXpPipetteCalibration({ generation, connected, destinations, v
         for (const [key, value] of Object.entries(latest.channels ?? {}) as [string, any][]) {
             const volume = Number(knownUl[Number(key)]);
             if (!value?.found || value.height_above_floor_mm == null || !Number.isFinite(volume)) continue;
-            rows.push([Number(value.height_above_floor_mm) + clearance, volume]);   // height above calibrated low
+            rows.push([Number(value.height_above_floor_mm) + ranClearance, volume]);   // height above calibrated low
         }
         if (!rows.length) { setPlateMessage('No channel found liquid with a known volume entered.'); return; }
         setPoints(p => [...p, ...rows].sort((a, b) => a[1] - b[1])); setPlateMessage(null);
@@ -114,6 +116,7 @@ export function BioXpPipetteCalibration({ generation, connected, destinations, v
             <h4 className="font-semibold">Tip offsets</h4>
             <p className="text-xs text-slate-400">How much lower (+) or higher (−) each tip type goes than a 50 µL tip. Load a tip, move to calibrated low, check the tip end, then save the corrected value. Saving only records it.</p>
             {offsets.error && <p role="alert">Tip offsets unavailable: {bioXpErrorText(offsets.error)}</p>}
+            {!connected && <p className="text-xs">Connect to the robot to read tip offsets.</p>}
             <table aria-label="Tip offset values" className="mt-2 w-full text-left text-xs [&_td]:px-2 [&_td]:py-1 [&_th]:px-2">
                 <thead className="text-slate-400"><tr><th>Tip</th><th>In use</th><th>Datasheet</th><th>Source</th><th>New value (mm)</th><th /></tr></thead>
                 <tbody>{tips.map(row => <tr key={row.tip_type}>
@@ -128,8 +131,8 @@ export function BioXpPipetteCalibration({ generation, connected, destinations, v
             </table>
             {saveError && <p role="alert">{saveError}</p>}
             <div className="mt-2 flex flex-wrap gap-2">
-                <button type="button" disabled={!ready} onClick={() => void runner.run(() => compileImmediate('Tip offset check', [move(2)]))}>Move to calibrated low</button>
-                <button type="button" disabled={!ready} onClick={() => void runner.run(() => compileImmediate('Lift', [lift]))}>Lift to calibrated high</button>
+                <button type="button" className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35" disabled={!ready} onClick={() => void runner.run(() => compileImmediate('Tip offset check', [move(2)]))}>Move to calibrated low</button>
+                <button type="button" className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35" disabled={!ready} onClick={() => void runner.run(() => compileImmediate('Lift', [lift]))}>Lift to calibrated high</button>
             </div>
         </section>
 
@@ -139,16 +142,16 @@ export function BioXpPipetteCalibration({ generation, connected, destinations, v
             <Channels value={channels} onChange={setChannels} prefix="Detection" />
             <div className="flex flex-wrap gap-3">
                 <label>Sensing<select aria-label="Detection sensing" value={sensing} onChange={e => setSensing(e.target.value as typeof sensing)} className="ml-2">
-                    <option value="hybrid">Hybrid (capacitive + pressure)</option><option value="capacitive">Capacitive</option><option value="pressure">Pressure</option></select></label>
+                    <option value="pressure">Pressure (pLLD)</option><option value="capacitive">Capacitive: needs external cLLD board</option><option value="hybrid">Hybrid: needs external cLLD board</option></select></label>
                 <label>Search speed<input aria-label="Detection search speed" type="number" min={1} value={speed} onChange={e => setSpeed(Number(e.target.value) || 300)} className="ml-2 w-20" /></label>
                 <label>Stop above calibrated low (mm)<input aria-label="Detection stop height (mm)" type="number" min={0} step={0.1} value={clearance} onChange={e => setClearance(Number(e.target.value))} className="ml-2 w-20" /></label>
             </div>
-            <button type="button" disabled={!ready || channels.length === 0} onClick={() => void runner.run(() => compileImmediate('Liquid detection test', [move(0), search, lift]))}>Find liquid</button>
+            <button type="button" className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35" disabled={!ready || channels.length === 0} onClick={() => void runner.run(() => compileImmediate('Liquid detection test', [move(0), search, lift]))}>Find liquid</button>
             {latest && <table aria-label="Detected liquid" className="w-full text-left text-xs [&_td]:px-2 [&_th]:px-2">
                 <thead className="text-slate-400"><tr><th>Channel</th><th>Found</th><th>Above calibrated low</th><th>Z (steps)</th><th>Method</th></tr></thead>
                 <tbody>{Object.entries(latest.channels ?? {}).map(([key, value]: [string, any]) => <tr key={key}>
-                    <th scope="row">P{Number(key) + 1}</th><td>{value.found ? 'yes' : 'no liquid'}</td>
-                    <td>{value.height_above_floor_mm == null ? '—' : `${(Number(value.height_above_floor_mm) + clearance).toFixed(2)} mm`}</td>
+                    <th scope="row">P{Number(key) + 1}</th><td>{value.found ? 'yes' : value.device_error ? `no: pump error ${value.device_error}` : value.outcome === 'timeout' ? 'no: timed out' : 'no liquid'}</td>
+                    <td>{value.height_above_floor_mm == null ? '—' : `${(Number(value.height_above_floor_mm) + ranClearance).toFixed(2)} mm`}</td>
                     <td>{value.contact_steps ?? '—'}</td><td>{value.method}</td></tr>)}</tbody>
             </table>}
         </section>

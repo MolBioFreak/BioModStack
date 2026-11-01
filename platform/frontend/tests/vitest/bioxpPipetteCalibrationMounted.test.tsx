@@ -37,7 +37,7 @@ beforeEach(() => {
         if (config.url === '/api/bioxp/methods/plate-profiles') return ok({ id: 'saved' });
         if (config.url === '/api/bioxp/protocols/submit') {
             const id = `protocol-live-${createHash('sha256').update(body.idempotency_key).digest('hex')}`;
-            job = { job_id: id, status: 'completed', command: { command_id: id, idempotency_key: body.idempotency_key, terminal: true, status: 'completed' },
+            job = { job_id: id, status: 'completed', protocol: { document: body }, command: { command_id: id, idempotency_key: body.idempotency_key, terminal: true, status: 'completed' },
                 execution: { dry_run: false, runtime_state: { workflow: { phase: 'terminal' }, action_results: [{ pipette_result: { kind: 'cavro_application',
                     liquid_levels: [{ detection_id: 'd', floor_steps: 78000, channels: {
                         '0': { found: true, contact_steps: 70000, height_above_floor_mm: '3.969', method: 'interpolated_descent:monotonic' },
@@ -75,11 +75,13 @@ it('liquid detection test compiles move, search and lift at the selected well an
     const steps = calls.find(c => c.url === '/api/bioxp/methods/compile')!.body.method.steps;
     expect(steps.map((s: any) => s.inputs.operation ?? s.inputs.application.operations[0].operation)).toEqual(['move', 'liquid_search', 'lift']);
     expect(steps[0].inputs).toMatchObject({ location_id: 3, well: 'C4', position_flag: 0 });
-    expect(steps[1].inputs.application.operations[0]).toMatchObject({ channels: [0, 1, 3], location_id: 3, sensing: 'hybrid', floor_clearance_steps: 2016 });
+    expect(steps[1].inputs.application.operations[0]).toMatchObject({ channels: [0, 1, 3], location_id: 3, sensing: 'pressure', floor_clearance_steps: 2016 });
     expect(calls.filter(c => c.url === '/api/bioxp/protocols/submit')).toHaveLength(1);
     const table = host.querySelector('[aria-label="Detected liquid"]')!.textContent!;
     expect(table).toContain('4.97 mm');   // 3.969 above stop + 1 mm stop height
     expect(table).toContain('no liquid');
+    await change('Detection stop height (mm)', '3');             // editing after the search must not change the result
+    expect(host.querySelector('[aria-label="Detected liquid"]')!.textContent).toContain('4.97 mm');
 });
 
 it('plate measurement builds a table from detected heights and saves it with the well-bottom gap', async () => {

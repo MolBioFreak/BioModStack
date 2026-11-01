@@ -63,6 +63,20 @@ export function useBioXpImmediateRun(generation: number, connected: boolean, vis
 }
 
 /** Every liquid_levels record a finished job returned, in order. */
+/** Stop height (mm above calibrated low) the job's liquid search actually ran with. */
+export function searchClearanceMm(job: BioXpWorkflowJob | null | undefined): number | null {
+    let steps: number | null = null;
+    const visit = (value: unknown) => {
+        if (Array.isArray(value)) { value.forEach(visit); return; }
+        if (!value || typeof value !== 'object') return;
+        const record = value as Record<string, unknown>;
+        if (record.operation === 'liquid_search' && typeof record.floor_clearance_steps === 'number') steps = record.floor_clearance_steps;
+        Object.values(record).forEach(visit);
+    };
+    visit(job?.protocol ?? null);
+    return steps === null ? null : steps / 2015.748;
+}
+
 export function liquidLevels(job: BioXpWorkflowJob | null | undefined): Record<string, any>[] {
     const out: Record<string, any>[] = [];
     const visit = (value: unknown) => {
