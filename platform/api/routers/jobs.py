@@ -8900,6 +8900,20 @@ async def launch_manual_mutagenesis_from_designs(
     )
 
 
+def _structure_stem(source) -> str:
+    """File name without any structure extension (.cif.gz, .pdb, ...).
+
+    FAMPNN strips .pdb/.cif from its fixed-position row names but not from the staged
+    file stem, so a name like design.cif.pdb would miss its own row.
+    """
+    name = Path(str(source)).name
+    while True:
+        base, ext = os.path.splitext(name)
+        if ext.lower() not in {".gz", ".cif", ".mmcif", ".pdb", ".ent", ".bcif"} or not base:
+            return name
+        name = base
+
+
 @router.post("/resequence/from-structures", response_model=JobResponse, status_code=201)
 async def launch_resequence_from_structures(
     request: ResequenceLaunchRequest,
@@ -8926,7 +8940,7 @@ async def launch_resequence_from_structures(
             result = materialize_source_bytes(raw, structure_suffix(source), staging, output_format="pdb",
                                               model_number=source_request.model_number)
             produced = resolve_allowed_path(result["path"])
-            shutil.copyfile(produced, selection_dir / f"{index:03d}_{Path(source).stem}.pdb")
+            shutil.copyfile(produced, selection_dir / f"{index:03d}_{_structure_stem(source)}.pdb")
             shutil.rmtree(staging)
     except HTTPException:
         shutil.rmtree(selection_dir, ignore_errors=True)

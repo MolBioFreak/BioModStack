@@ -26,7 +26,7 @@ def test_launch_stages_pdb_and_builds_loop_job(tmp_path, monkeypatch):
     import routers.files as files
     import services.binder_source_materialization as bsm
 
-    src = tmp_path / "design.cif"
+    src = tmp_path / "design.cif.gz"
     src.write_text(PDB)
     sel = tmp_path / "sel"
     sel.mkdir()
@@ -107,3 +107,11 @@ def test_fampnn_loop_launch_declares_each_selected_source(tmp_path):
     declaration = compile_declaration("protein_modification_experimental", "region_redesign", params, None)
     assert declaration['owner'] == 'protein_local_redesign'
     assert declaration['inputs']['selected']['sequence_design'] == ['A:1:', 'A:2:', 'A:3:']
+
+
+def test_staged_name_drops_every_structure_extension():
+    import routers.jobs as jobs
+    assert jobs._structure_stem("/x/design_model_0.cif.gz") == "design_model_0"
+    assert jobs._structure_stem("/x/design.cif") == "design"
+    assert jobs._structure_stem("/x/design.pdb") == "design"
+    assert jobs._structure_stem("/x/my.design.v2.cif.gz") == "my.design.v2"
