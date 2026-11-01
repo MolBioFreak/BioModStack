@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 
 from lib.shared_runtime_images import _publish_image_locked
@@ -22,12 +23,19 @@ ALLOWED_KEYS = frozenset({
     "BMS_FOLD_CP_CONTAINER_PATH", "BMS_PROTONPOTTSMPNN_CONTAINER_PATH",
     "BMS_RUNTIME_IMAGE_MSA_ENGINES_SIF",
 })
+# Semantic selectors resolved by services/remote_execution/images.py for any
+# <name>.sif (e.g. BMS_RUNTIME_IMAGE_BOLTZ2_SIF for boltz2.sif).
+SEMANTIC_KEY = re.compile(r"BMS_RUNTIME_IMAGE_[A-Z0-9_]+_SIF")
+
+
+def supported_key(key: str) -> bool:
+    return key in ALLOWED_KEYS or SEMANTIC_KEY.fullmatch(key) is not None
 
 
 def publish_references(store_root: Path, lane: str, images: dict) -> Path:
     if lane not in {"development", "production"}:
         raise ValueError("unknown runtime lane")
-    if not isinstance(images, dict) or not images or not set(images) <= ALLOWED_KEYS:
+    if not isinstance(images, dict) or not images or not all(supported_key(key) for key in images):
         raise ValueError("references require supported runtime environment keys")
     store_root = Path(os.path.abspath(store_root))
     # No shell interpolation or ambiguous systemd EnvironmentFile tokens.
