@@ -45,6 +45,11 @@ export function tipCounts(row: BioXpTipTrayRowV1 | undefined) {
     const pickups = row?.four_channel_groups_available ?? (typeof row?.available_count === 'number' ? row.available_count : null);
     return { tips, pickups };
 }
+/** Recorded tip size in uL (T10/T50/T200), or null when the robot does not report it. */
+export function tipSize(row: BioXpTipTrayRowV1 | undefined): 10 | 50 | 200 | null {
+    const value = row?.tip_type;
+    return value === 'T10' ? 10 : value === 'T50' ? 50 : value === 'T200' || value === 'T201' ? 200 : null;
+}
 export function occupancyByTray(data: BioXpTipTraysV1 | undefined): Record<number, boolean[]> | undefined {
     if (!data) return undefined;
     const result: Record<number, boolean[]> = {};
@@ -56,6 +61,7 @@ export type DeckRecordDraft = {
     covers: Partial<Record<'OUTPUT_COVER' | 'REAGENT_COVER', string>>;
     gripper?: string; // 'empty' or object name
     tips: Partial<Record<number, 'full' | 'empty' | string[]>>;
+    tipTypes?: Partial<Record<number, 10 | 50 | 200>>;
     note: string;
 };
 /** Only fields the operator set that differ from what the robot believes. */
@@ -67,15 +73,20 @@ export function deckRecordBody(generation: number, draft: DeckRecordDraft, state
     if (Object.keys(objects).length) body.movable_objects = objects;
     const held = gripperObject(state);
     if (draft.gripper && draft.gripper !== (held === null ? 'empty' : held)) body.gantry = draft.gripper;
-    const tipTrays: { tray: number; tips: BioXpDeckRecordTips }[] = [];
+    const tipTrays: { tray: number; tips?: BioXpDeckRecordTips; tip_type?: 10 | 50 | 200 }[] = [];
     for (const tray of DECK_TIP_TRAYS) {
+        const row: { tray: number; tips?: BioXpDeckRecordTips; tip_type?: 10 | 50 | 200 } = { tray };
+        const size = draft.tipTypes?.[tray];
+        if (size && tipSize(trays?.trays.find(r => r.tray === tray)) !== size) row.tip_type = size;
         const want = draft.tips[tray];
-        if (!want) continue;
-        const occupancy = trays?.trays.find(row => row.tray === tray)?.occupancy;
-        const present = Array.isArray(occupancy) ? occupancy.flatMap((tip, index) => tip ? [wellName(index)] : []) : null;
-        const wells = want === 'full' ? Array.from({ length: 96 }, (_, i) => wellName(i)) : want === 'empty' ? [] : want;
-        if (present && present.length === wells.length && present.every(well => wells.includes(well))) continue;
-        tipTrays.push({ tray, tips: want === 'full' || want === 'empty' ? want : [...want] });
+        if (want) {
+            const occupancy = trays?.trays.find(r => r.tray === tray)?.occupancy;
+            const present = Array.isArray(occupancy) ? occupancy.flatMap((tip, index) => tip ? [wellName(index)] : []) : null;
+            const wells = want === 'full' ? Array.from({ length: 96 }, (_, i) => wellName(i)) : want === 'empty' ? [] : want;
+            if (!(present && present.length === wells.length && present.every(well => wells.includes(well))))
+                row.tips = want === 'full' || want === 'empty' ? want : [...want];
+        }
+        if (row.tips !== undefined || row.tip_type !== undefined) tipTrays.push(row);
     }
     if (tipTrays.length) body.tip_trays = tipTrays;
     if (!body.movable_objects && !body.gantry && !body.tip_trays) return null;

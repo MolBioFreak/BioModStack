@@ -6,7 +6,6 @@ import { deckResources, deckSize, deckStations, projectDeckPoint, type BioXpDeck
 import { activeDeckResources, alignmentReference, gunCenters, poseFromAxisObservations, retainAxisObservations } from '../lib/bioxpLiveDeck';
 import { BioXpWorkflowDeck } from './BioXpWorkflowDeck';
 import './BioXpMethodsWorkspace.css';
-import { BioXpDeckObjectsCard, BioXpDeckRecordPanel } from './BioXpDeckRecord';
 import './BioXpLiveDeck.css';
 
 export type BioXpLiveDeckProps = {

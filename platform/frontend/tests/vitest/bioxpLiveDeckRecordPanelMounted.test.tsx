@@ -98,6 +98,27 @@ it('saves only changed fields, shows robot warnings and reads the record again',
     expect(select('Set Reagent cover to').value).toBe('');
 });
 
+it('shows and records the tip size per rack', async () => {
+    vi.mocked(api.get).mockImplementation(async path => {
+        if (path === '/api/bioxp/operator-controls/deck/state') return { data: deckState() } as never;
+        if (path === '/api/bioxp/operator-controls/tip-trays') {
+            const data = tipTrays();
+            data.trays[0] = { ...data.trays[0], tip_type: 'T10' } as never;
+            data.trays[3] = { ...data.trays[3], tip_type: 'T50' } as never;
+            return { data } as never;
+        }
+        throw new Error(`Unexpected GET ${path}`);
+    });
+    vi.mocked(api.post).mockResolvedValue({ data: { schema_version: 'bioxp.operator_deck_record_result.v1', record_id: 'auto-2',
+        motion_commanded: false, physical_observation: false } } as never);
+    await render(<BioXpDeckRecordPanel generation={3} connected />);
+    expect(host.querySelector('[data-testid="tips-1"]')!.textContent).toBe('10 µL · 96/96 tips · 24 pickups');
+    await choose('Set Tips 1 size', '10'); // already 10: omitted
+    await choose('Set Tips 2 size', '10');
+    await act(async () => button('Save record').click()); await tick();
+    expect(vi.mocked(api.post).mock.calls[0][1]).toEqual({ expected_connection_generation: 3, tip_trays: [{ tray: 2, tip_type: 10 }] });
+});
+
 it('shows a robot refusal without retrying', async () => {
     vi.mocked(api.post).mockRejectedValue({ response: { status: 422, data: { detail: { error: 'deck_record_invalid_objects' } } } });
     await render(<BioXpDeckRecordPanel generation={3} connected />);

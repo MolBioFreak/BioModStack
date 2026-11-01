@@ -2931,6 +2931,7 @@ export interface BioXpDeckStateV1 {
 export interface BioXpTipTrayRowV1 {
     tray: number; tray_id: number; unavailable?: string;
     occupancy?: boolean[]; tips_present?: number | null; four_channel_groups_available?: number | null;
+    tip_type?: 'T10' | 'T50' | 'T200' | 'T201' | null;
     [key: string]: unknown;
 }
 
@@ -2941,7 +2942,7 @@ export interface BioXpDeckRecordRequestV1 {
     record_id?: string;
     reason?: string;
     movable_objects?: Record<string, string>;
-    tip_trays?: Array<{ tray: number; tips: 'full' | 'empty' | string[] }>;
+    tip_trays?: Array<{ tray: number; tips?: 'full' | 'empty' | string[]; tip_type?: 10 | 50 | 200 }>;
     gantry?: string;
 }
 

@@ -2,12 +2,12 @@ import React, { useRef, useState } from 'react';
 import { bioXpErrorText, useBioXpDeckState, useBioXpTipTrays, useRecordBioXpDeck, type BioXpDeckRecordResultV1 } from '../lib/bioxpClient';
 import {
     COVER_LOCATIONS, DECK_TIP_TRAYS, OBJECT_LABELS, ROWS, coverLocation, deckRecordBody, gripperObject, locationLabel,
-    objectLabel, tipCounts, wellName, type DeckRecordDraft,
+    objectLabel, tipCounts, tipSize, wellName, type DeckRecordDraft,
 } from '../lib/bioxpDeckRecord';
 
 export type BioXpDeckRecordPanelProps = { generation: number; connected: boolean; visible?: boolean; compact?: boolean };
 
-const emptyDraft = (): DeckRecordDraft => ({ covers: {}, tips: {}, note: '' });
+const emptyDraft = (): DeckRecordDraft => ({ covers: {}, tips: {}, tipTypes: {}, note: '' });
 const selectClass = 'rounded border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-1 py-0.5 text-xs';
 
 function WellPicker({ tray, wells, onChange }: { tray: number; wells: string[]; onChange: (next: string[]) => void }) {
@@ -97,8 +97,13 @@ export function BioXpDeckRecordPanel({ generation, connected, visible = true, co
                     return <tr key={tray} data-row={`TIPS_${tray}`}>
                         <th scope="row" className={`${cell} align-top font-normal`}>Tips {tray}</th>
                         <td className={`${cell} align-top`} data-testid={`tips-${tray}`}>{row?.unavailable ? 'Unavailable'
-                            : tips === null ? '—' : `${tips}/96 tips · ${pickups ?? '?'} pickups`}</td>
+                            : tips === null ? '—' : `${tipSize(row) ? `${tipSize(row)} µL · ` : ''}${tips}/96 tips · ${pickups ?? '?'} pickups`}</td>
                         <td className={`${cell} align-top`}>
+                            <select aria-label={`Set Tips ${tray} size`} className={`${selectClass} mr-1`} value={draft.tipTypes?.[tray] ?? ''}
+                                onChange={e => setDraft(d => ({ ...d, tipTypes: { ...d.tipTypes, [tray]: e.target.value ? Number(e.target.value) as 10 | 50 | 200 : undefined } }))}>
+                                <option value="">Size: no change</option>
+                                {[10, 50, 200].map(size => <option key={size} value={size}>{size} µL</option>)}
+                            </select>
                             <select aria-label={`Set Tips ${tray} to`} className={selectClass} value={Array.isArray(want) ? 'pick' : want ?? ''}
                                 onChange={e => setTips(tray, e.target.value)}>
                                 <option value="">No change</option><option value="full">Full</option>

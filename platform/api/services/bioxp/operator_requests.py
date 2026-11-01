@@ -227,7 +227,8 @@ class OperatorReportExportRequestV1(BaseModel):
 class OperatorDeckRecordTipTrayV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     tray: StrictInt = Field(ge=1, le=5, description="OEM/load_tip tray 1-5 (5 = tip hotel)")
-    tips: Literal["full", "empty"] | list[str] = Field(description="'full', 'empty' or the wells that hold tips")
+    tips: Literal["full", "empty"] | list[str] | None = Field(None, description="'full', 'empty' or the wells that hold tips")
+    tip_type: Literal[10, 50, 200] | None = Field(None, description="Tip size the rack holds, in uL")
 
 
 class OperatorDeckRecordRequestV1(BaseModel):
