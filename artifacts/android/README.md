@@ -6,11 +6,11 @@ Native APK promotion to `main` occurs only through the normal reviewed
 
 ## Current internal-update artifact
 
-- File: `BioModStack-0.4.17-internal-update.apk`
-- SHA-256: `f8ef502cbce60f2df8b1caaf4929eb87afcc68942d98fb65b418edca788446eb`
-- Source revision: `ff4c316669a041f61ec49c32c187752c2e94a1e2`
+- File: `BioModStack-0.4.18-internal-update.apk`
+- SHA-256: `6fa225ea751dca00d7c091ea4de151574aaefa20cc62e442c70c9ade3cadf3e8`
+- Source revision: `5039d4467d255aea1620ab0658ac8eb8c4a0440c`
 - Package: `org.biomodstack.mobile`
-- Version: `0.4.17` (`versionCode 417`)
+- Version: `0.4.18` (`versionCode 418`)
 - Build variant: non-debuggable internal update
 - Signing certificate SHA-256: `43cce218275179b99aad810bfc246732226a9a408e616d9d5615d5b0709b595a`
 - SDK: min 24, target 35
