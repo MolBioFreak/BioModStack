@@ -26,7 +26,7 @@ beforeEach(() => {
     vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(cb, 0));
     vi.stubGlobal('cancelAnimationFrame', clearTimeout);
 });
-afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); document.documentElement.classList.remove('bms-cordova-compact'); vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); document.documentElement.classList.remove('bms-cordova-compact'); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); localStorage.removeItem('show_dev_features'); });
 async function mountStats() {
     await act(async () => root.render(<QueryClientProvider client={client}><ThemeContext.Provider value={{ theme: 'midnight', setTheme: () => {}, themeConfig: THEMES[0] }}><StatsToolkitLauncher /></ThemeContext.Provider></QueryClientProvider>));
     await flush();
@@ -40,6 +40,53 @@ it.each([null, false])('opens workspace without a readiness gate (%s), with no r
     await act(async () => { await vi.advanceTimersByTimeAsync(46_000); window.dispatchEvent(new Event('focus')); window.dispatchEvent(new Event('online')); });
     expect(requests).toHaveBeenCalledTimes(1);
 });
+it('packaged Stats uses the configured server origin and keeps exact theme-origin targeting', async () => {
+    vi.stubGlobal('__BMS_API_BASE_URL__', 'https://node.example.ts.net');
+    await mountStats();
+    const frame = container.querySelector('iframe')!;
+    expect(frame.getAttribute('src')).toBe('https://node.example.ts.net/stats/embed/?ui=66882da');
+    const post = vi.spyOn(frame.contentWindow!, 'postMessage');
+    await act(async () => frame.dispatchEvent(new Event('load'))); await flush();
+    expect(post).toHaveBeenCalledWith(expect.any(Object), 'https://node.example.ts.net');
+    expect(requests.mock.calls.map(([url]) => url)).toEqual(['/api/system/stats-toolkit']);
+});
+
+it.each([
+    ['development', null, true, true],
+    ['production', null, true, false],
+    ['development', 'false', true, false],
+    ['production', 'true', true, true],
+    ['unavailable', null, true, false],
+    ['unavailable', 'true', true, true],
+    ['development', 'true', false, false],
+] as const)('packaged Layout uses selected %s, preference %s, installed %s for visible BioXP %s', async (environment, preference, installed, visible) => {
+    vi.stubEnv('MODE', 'production');
+    vi.stubGlobal('__BMS_API_BASE_URL__', 'https://node.example.ts.net');
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    Element.prototype.scrollIntoView = vi.fn();
+    if (preference !== null) localStorage.setItem('show_dev_features', preference);
+    requests.mockImplementation(async (url: string) => {
+        if (url === '/api/system/features') return new Response(JSON.stringify({ features: { bioxp: installed }, dev_features: { bioxp: true } }));
+        if (url === '/api/tailnet-environment/status') return environment === 'unavailable'
+            ? new Response('', { status: 503 }) : new Response(JSON.stringify({ selected_environment: environment }));
+        throw new Error('Unexpected request: ' + url);
+    });
+    const oldAdapter = api.defaults.adapter;
+    api.defaults.adapter = async config => ({ data: {}, status: 200, statusText: 'OK', headers: {}, config });
+    try {
+        await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><ThemeContext.Provider value={{ theme: 'midnight', setTheme: () => {}, themeConfig: THEMES[0] }}><Layout><span>workspace remains open</span></Layout></ThemeContext.Provider></MemoryRouter></QueryClientProvider>));
+        await flush();
+        await vi.waitFor(() => expect(container.querySelector('a[href="/bioxp"]') !== null).toBe(visible));
+        expect(container.textContent).toContain('workspace remains open');
+        expect(localStorage.getItem('show_dev_features')).toBe(preference);
+        expect(requests.mock.calls.filter(([url]) => url === '/api/tailnet-environment/status')).toHaveLength(1);
+        vi.useFakeTimers();
+        await act(async () => { await vi.advanceTimersByTimeAsync(61_000); window.dispatchEvent(new Event('focus')); window.dispatchEvent(new Event('online')); });
+        expect(requests.mock.calls.filter(([url]) => url === '/api/tailnet-environment/status')).toHaveLength(1);
+        expect(requests.mock.calls.every(([, options]) => !options?.method || options.method === 'GET')).toBe(true);
+    } finally { api.defaults.adapter = oldAdapter; }
+});
+
 it('keeps the actual error and explicit retry, then opens workspace', async () => {
     requests.mockResolvedValueOnce(new Response('', { status: 503 }));
     await mountStats();

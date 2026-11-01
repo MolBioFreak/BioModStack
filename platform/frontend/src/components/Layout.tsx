@@ -28,6 +28,7 @@ import {
 } from '../runtime/installFeatures';
 import {
     readTailnetEnvironmentStatus,
+    resolveConfiguredTailnetOrigin,
     type TailnetEnvironmentStatus,
 } from '../runtime/tailnetEnvironment';
 import { ThemeSelector } from './ThemeSelector';
@@ -151,14 +152,11 @@ async function collectUiDiagnosticsPayload(): Promise<UiDiagnosticsPayload> {
 
 const SHOW_DEV_FEATURES_KEY = 'show_dev_features';
 
-function readShowDevFeatures(): boolean {
+function readShowDevFeaturesPreference(): string | null {
     try {
-        return resolveShowDevFeaturesDefault(
-            import.meta.env.MODE === 'development',
-            localStorage.getItem(SHOW_DEV_FEATURES_KEY),
-        );
+        return localStorage.getItem(SHOW_DEV_FEATURES_KEY);
     } catch {
-        return import.meta.env.MODE === 'development';
+        return null;
     }
 }
 
@@ -470,7 +468,23 @@ export function Layout({ children }: LayoutProps) {
     const queryClient = useQueryClient();
     const isMobileTopbar = useIsMobileTopbar();
     const bmsFeatureState = useBmsFeatureState();
-    const [showDevFeatures, setShowDevFeatures] = useState<boolean>(() => readShowDevFeatures());
+    const configuredOrigin = resolveConfiguredTailnetOrigin(window.__BMS_API_BASE_URL__);
+    const selectedEnvironment = useQuery({
+        queryKey: ['packaged-tailnet-environment', configuredOrigin],
+        queryFn: () => readTailnetEnvironmentStatus(),
+        enabled: configuredOrigin !== null,
+        staleTime: Infinity,
+        retry: false,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
+    });
+    const [showDevFeaturesPreference, setShowDevFeaturesPreference] = useState<string | null>(readShowDevFeaturesPreference);
+    // A production-built phone bundle can be viewing Development. Only the
+    // default follows that selected runtime; explicit operator choices win.
+    const developmentDefault = selectedEnvironment.data
+        ? selectedEnvironment.data.selected_environment === 'development'
+        : import.meta.env.MODE === 'development';
+    const showDevFeatures = resolveShowDevFeaturesDefault(developmentDefault, showDevFeaturesPreference);
     const showBioXpDevFeature = isBmsFeatureVisible(bmsFeatureState, 'bioxp', showDevFeatures, bmsFeatureState.known);
 
     const isActive = (path: string) => location.pathname === path
@@ -484,7 +498,7 @@ export function Layout({ children }: LayoutProps) {
     }, [location.pathname, showDevFeatures]);
 
     const handleSetShowDevFeatures = (enabled: boolean) => {
-        setShowDevFeatures(enabled);
+        setShowDevFeaturesPreference(String(enabled));
         if (enabled) void queryClient.invalidateQueries({ queryKey: ['bms-install-features'] });
         try {
             localStorage.setItem(SHOW_DEV_FEATURES_KEY, String(enabled));

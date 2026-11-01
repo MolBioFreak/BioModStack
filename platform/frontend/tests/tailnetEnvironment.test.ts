@@ -5,6 +5,7 @@ import {
   isTailnetHostname,
   readTailnetEnvironmentStatus,
   resolveStatsToolkitEntryUrl,
+  resolveConfiguredTailnetOrigin,
 } from '../src/runtime/tailnetEnvironment';
 
 test('Tailnet detection and Stats Toolkit entry stay same-origin on the stable hostname', () => {
@@ -22,6 +23,18 @@ test('Tailnet detection and Stats Toolkit entry stay same-origin on the stable h
     resolveStatsToolkitEntryUrl('/stats/embed/', '127.0.0.1'),
     'http://127.0.0.1:18180/stats/',
   );
+});
+
+test('packaged UI routes Stats to its configured Tailnet API owner, never phone loopback', () => {
+  const api = 'https://node.example.ts.net';
+  for (const entry of ['/stats/embed/', 'http://127.0.0.1:18180/stats/']) {
+    assert.equal(resolveStatsToolkitEntryUrl(entry, 'localhost', api), `${api}/stats/embed/?ui=66882da`);
+  }
+  assert.equal(resolveConfiguredTailnetOrigin(api + '/'), api);
+  for (const invalid of [undefined, '', 'not a URL', 'http://127.0.0.1:8000']) {
+    assert.equal(resolveConfiguredTailnetOrigin(invalid), null);
+    assert.equal(resolveStatsToolkitEntryUrl('/stats/embed/', 'localhost', invalid), 'http://127.0.0.1:18180/stats/');
+  }
 });
 
 test('Tailnet status treats absent local control surfaces as unavailable', async () => {

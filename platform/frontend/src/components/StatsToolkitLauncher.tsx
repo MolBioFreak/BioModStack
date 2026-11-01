@@ -34,9 +34,10 @@ export function StatsToolkitLauncher() {
     refetchOnReconnect: false,
   });
   const status = query.data;
+  const apiBaseUrl = window.__BMS_API_BASE_URL__;
   const entryUrl = useMemo(
-    () => status?.entry_url ? resolveStatsToolkitEntryUrl(status.entry_url, window.location.hostname) : null,
-    [status?.entry_url],
+    () => status?.entry_url ? resolveStatsToolkitEntryUrl(status.entry_url, window.location.hostname, apiBaseUrl) : null,
+    [status?.entry_url, apiBaseUrl],
   );
   const sendTheme = useCallback(() => {
     const frameWindow = frameRef.current?.contentWindow;
