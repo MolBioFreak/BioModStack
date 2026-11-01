@@ -10,6 +10,9 @@ let host: HTMLDivElement, root: Root, client: QueryClient, calls: { method: stri
 const original = api.defaults.adapter;
 const tips = [{ tip_type: 10, offset_steps: 45757, measured: true, datasheet_delta_steps: 45757, confirmed: null },
     { tip_type: 50, offset_steps: 0, measured: true, datasheet_delta_steps: 0, confirmed: null }];
+const lldRow = (adc: number, measured = false) => ({ threshold_adc: adc, threshold_duration_ms: 5, speed_increments_per_second: 150, measured, source: measured ? 'Measured' : 'Default' });
+const lld = { filtered_tips: true, profiles: { '10': { filtered: lldRow(200), unfiltered: lldRow(15) },
+    '50': { filtered: lldRow(200, true), unfiltered: lldRow(15) }, '200': { filtered: lldRow(200), unfiltered: lldRow(15) } } };
 const plates = { profiles: [{ id: 'thermo-4483485-enduraplate-fast', name: 'Fast plate', vessel_geometry: { well_top_diameter_mm: 5.49 } }] };
 async function tick() { await act(async () => { await new Promise(r => setTimeout(r, 20)); }); }
 const button = (text: string) => [...host.querySelectorAll('button')].find(b => b.textContent === text)!;
@@ -32,6 +35,7 @@ beforeEach(() => {
         const ok = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config });
         if (config.url === '/api/bioxp/tip-offsets' && config.method === 'get') return ok({ tips });
         if (config.url === '/api/bioxp/tip-offsets') return ok({ tips });
+        if (config.url === '/api/bioxp/lld-profiles') return ok(lld);
         if (config.url === '/api/bioxp/methods/plates') return ok(plates);
         if (config.url === '/api/bioxp/methods/compile') return ok({ document: { stages: [], steps: body.method.steps }, issues: [] });
         if (config.url === '/api/bioxp/methods/plate-profiles') return ok({ id: 'saved' });
@@ -102,4 +106,17 @@ it('plate measurement builds a table from detected heights and saves it with the
     expect(saved.profile.id).toBe('thermo-4483485-enduraplate-fast');
     expect(saved.profile.vessel_geometry).toMatchObject({ calibrated_low_gap_mm: 0.5, well_top_diameter_mm: 5.49 });
     expect(saved.profile.vessel_geometry.height_to_volume).toEqual([[0, 0], [5.469, 20], [5.469, 40]]);
+});
+
+it('shows six pLLD rows, marks the in-use kind and saves one threshold without moving anything', async () => {
+    await mount();
+    expect(host.querySelectorAll('[data-lld-row]')).toHaveLength(6);
+    expect(host.querySelector('[data-lld-row="10:filtered"]')!.textContent).toContain('(in use)');
+    expect(host.querySelector('[data-lld-row="10:unfiltered"]')!.textContent).not.toContain('(in use)');
+    await change('10 uL filtered threshold', '120');
+    await act(async () => { [...host.querySelectorAll('[data-lld-row="10:filtered"] button')][0].dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await tick();
+    const put = calls.find(c => c.method === 'put' && c.url === '/api/bioxp/lld-profiles')!;
+    expect(put.body).toMatchObject({ expected_connection_generation: 5, tip_type: 10, kind: 'filtered', threshold_adc: 120 });
+    expect(calls.some(c => c.url === '/api/bioxp/protocols/submit')).toBe(false);
 });

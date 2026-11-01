@@ -11,6 +11,59 @@ const mm = (steps: number) => (steps / STEPS_PER_MM).toFixed(2);
 type TipRow = { tip_type: number; offset_steps: number; measured: boolean; datasheet_length_mm: number | null;
     datasheet_delta_steps: number | null; source: string | null; confirmed?: { offset_steps: number; source: string; confirmed_at: string } | null };
 
+type LldRow = { threshold_adc: number; threshold_duration_ms: number; speed_increments_per_second: number; measured: boolean; source: string };
+type LldProfiles = { filtered_tips: boolean; profiles: Record<string, { filtered: LldRow; unfiltered: LldRow }> };
+
+/** pLLD settings per tip size; the robot applies the loaded tip's row at every liquid search. */
+export function BioXpLldProfiles({ generation, connected, visible = true }: { generation: number; connected: boolean; visible?: boolean }) {
+    const client = useQueryClient();
+    const key = ['bioxp', 'lld-profiles', generation];
+    const query = useQuery({ queryKey: key, enabled: connected && visible, retry: false,
+        queryFn: async () => (await api.get<LldProfiles>('/api/bioxp/lld-profiles', { params: { expected_connection_generation: generation } })).data });
+    const [edits, setEdits] = useState<Record<string, string>>({});
+    const [error, setError] = useState<string | null>(null);
+    const data = query.data;
+    async function put(body: Record<string, unknown>) {
+        setError(null);
+        try {
+            await api.put('/api/bioxp/lld-profiles', { expected_connection_generation: generation, ...body });
+            await client.invalidateQueries({ queryKey: key });
+            return true;
+        } catch (cause) { setError(bioXpErrorText(cause)); return false; }
+    }
+    async function save(tip: string, kind: 'filtered' | 'unfiltered') {
+        const value = Number(edits[`${tip}:${kind}`]);
+        if (!Number.isInteger(value) || value < 1 || value > 1000) { setError('Threshold must be a whole number 1-1000 ADC.'); return; }
+        if (await put({ tip_type: Number(tip), kind, threshold_adc: value, source: `Operator ${new Date().toISOString().slice(0, 10)}` }))
+            setEdits(e => { const next = { ...e }; delete next[`${tip}:${kind}`]; return next; });
+    }
+    return <section aria-label="Liquid detection settings" className="rounded border border-slate-700 p-3">
+        <h4 className="font-semibold">Liquid detection settings (pLLD)</h4>
+        <p className="text-xs text-slate-400">The robot sets these on the pumps at the start of every liquid search, for the tip type loaded. Saving only records them.</p>
+        {query.error && <p role="alert">Detection settings unavailable: {bioXpErrorText(query.error)}</p>}
+        {data && <>
+            <label className="mt-2 block text-xs">Tips in use<select aria-label="Tips in use" className="ml-2" value={data.filtered_tips ? 'filtered' : 'unfiltered'}
+                onChange={e => void put({ filtered_tips: e.target.value === 'filtered' })}>
+                <option value="filtered">Filtered</option><option value="unfiltered">Unfiltered</option></select></label>
+            <table aria-label="Detection thresholds" className="mt-2 w-full text-left text-xs [&_td]:px-2 [&_td]:py-1 [&_th]:px-2">
+                <thead className="text-slate-400"><tr><th>Tip</th><th>Type</th><th>Threshold (ADC)</th><th>Source</th><th>New</th><th /></tr></thead>
+                <tbody>{Object.entries(data.profiles).flatMap(([tip, rows]) => (['filtered', 'unfiltered'] as const).map(kind => {
+                    const row = rows[kind]; const id = `${tip}:${kind}`;
+                    const inUse = (kind === 'filtered') === data.filtered_tips;
+                    return <tr key={id} data-lld-row={id} className={inUse ? '' : 'text-slate-500'}>
+                        <th scope="row">{tip} µL</th><td>{kind}{inUse ? ' (in use)' : ''}</td><td>{row.threshold_adc}</td>
+                        <td>{row.measured ? row.source : `${row.source} (not measured)`}</td>
+                        <td><input aria-label={`${tip} uL ${kind} threshold`} type="number" step="1" className="w-20" value={edits[id] ?? ''}
+                            placeholder={String(row.threshold_adc)} onChange={e => setEdits(x => ({ ...x, [id]: e.target.value }))} /></td>
+                        <td><button type="button" disabled={!connected || edits[id] === undefined} onClick={() => void save(tip, kind)}>Save</button></td>
+                    </tr>;
+                }))}</tbody>
+            </table>
+        </>}
+        {error && <p role="alert">{error}</p>}
+    </section>;
+}
+
 /** Station + reference well, as two compact selects. */
 function Target({ destinations, location, setLocation, well, setWell, prefix }: { destinations: BioXpDeckDestinationV1[];
     location: string; setLocation: (v: string) => void; well: string; setWell: (v: string) => void; prefix: string }) {
@@ -135,6 +188,8 @@ export function BioXpPipetteCalibration({ generation, connected, destinations, v
                 <button type="button" className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35" disabled={!ready} onClick={() => void runner.run(() => compileImmediate('Lift', [lift]))}>Lift to calibrated high</button>
             </div>
         </section>
+
+        <BioXpLldProfiles generation={generation} connected={connected} visible={visible} />
 
         <section aria-label="Liquid detection test" className="rounded border border-slate-700 p-3 space-y-2">
             <h4 className="font-semibold">Liquid detection test</h4>
