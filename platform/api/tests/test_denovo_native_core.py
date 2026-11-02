@@ -8,7 +8,7 @@ from routers import models, jobs
 from schemas import JobCreate
 from services.nextflow import compile_nextflow_invocation, resolve_nextflow_entrypoint
 from component_runtime import SourceIdentity
-from model_registry import workflow_pack_dependencies, get_registry
+from model_registry import workflow_pack_dependencies, get_registry, model_runtime_dependencies
 from test_project_workflow_setups import setup_store
 from test_project_generation_bound_jobs import isolated_core
 from test_project_setup_job_preparation import isolate_applied_local_policy
@@ -100,7 +100,11 @@ def test_named_pack_separate_from_exact_request():
     assert len(refs) == len(set(refs))
     paths = {ref.relative_path for ref in refs}
     assert {'rfd4_proteina.sif', 'complexa.sif', 'rfd4-proteina', 'gromacs-md-2025.3.sif',
-            'disco.sif', 'laproteina.sif', 'foundry.sif', 'shape_rfd3.sif'} <= paths
+            'disco.sif', 'laproteina.sif', 'foundry.sif'} <= paths
+    # shape_rfd3.sif is foundry.sif plus three Python files; the pack carries Foundry once.
+    assert 'shape_rfd3.sif' not in paths
+    family = {ref.relative_path for ref in model_runtime_dependencies('protein_modification_experimental')}
+    assert 'shape_rfd3.sif' in family
     assert 'protenix/mmcif' not in paths
 
 

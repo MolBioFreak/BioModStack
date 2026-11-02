@@ -339,7 +339,12 @@ def workflow_pack_dependencies(workflow_id: str, component_ids=None):
     groups = workflow_pack_weight_groups(workflow_id)  # closed supported identity
     if workflow_id == 'de_novo_design':
         from native_components import LABEL_ASSETS
-        refs = list(_denovo_runtime_dependencies())
+        # shape_rfd3.sif is foundry.sif plus three Python files (113,761 of 113,767 files identical),
+        # so the pack ships the Foundry image once. A Shape run prepares its own image through the
+        # current-request preview; the model-family selection still lists it.
+        shape_image = LABEL_ASSETS['ShapeRFD3'][0]
+        refs = [ref for ref in _denovo_runtime_dependencies()
+                if not (ref.kind == 'image' and ref.relative_path == shape_image)]
         for label in ('RFD4Proteina', 'Complexa', 'MolecularDynamicsPreparation',
                       'MolecularDynamicsGromacs', 'MolecularDynamicsAnalysis'):
             refs.append(RuntimeDependencyRef(kind='image', relative_path=LABEL_ASSETS[label][0]))
