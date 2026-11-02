@@ -359,7 +359,15 @@ async def resolve_structure_source(request: StructureSourceRequest, session):
         # Preserve existing artifact-root containment; never trust a client path.
         from services.job_result_roots import resolve_persisted_job_result_root
         path = path.resolve() if path.is_absolute() else resolve_allowed_path(str(path))
-        path.relative_to(resolve_persisted_job_result_root(job).resolve())
+        try:
+            path.relative_to(resolve_persisted_job_result_root(job).resolve())
+        except ValueError:
+            # A remote Resequence continuation publishes its finals in the reviewed selection folder, which sits
+            # above the continuation folder child_output_dir names. Accept that folder when the job itself names
+            # it and it lies inside the job's result root (same allowance the finalizer applies).
+            from services.result_state_integrity import _in_reviewed_final_dir
+            if not _in_reviewed_final_dir(job, path):
+                raise
     elif request.job_id and request.document and request.document.artifact_id:
         from services.binder_native_selection import resolve_native_source
         path, identity = await resolve_native_source(session, request.job_id, request.document.artifact_id)
