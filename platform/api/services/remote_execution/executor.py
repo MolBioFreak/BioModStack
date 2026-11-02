@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -1633,6 +1634,40 @@ async def retrieve_remote_checkpoint_review(session: AsyncSession, job: Job, che
     return destination
 
 
+_review_row_attempts: dict[str, float] = {}
+
+
+async def publish_remote_review_rows(session: AsyncSession, job: Job) -> int:
+    """Fetch a remote gate's bounded review set and publish the review rows the results view reads.
+
+    A remote gate carries its candidates only as checkpoint artifacts on the worker, so the host-side
+    row publisher (which scans a local candidate directory) saw nothing and the gate listed 0 designs.
+    Best effort: the gate is already open and never depends on this.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    checkpoint = (job.awaiting_payload or {}).get('component_checkpoint')
+    if not checkpoint:
+        return 0
+    try:
+        from services.stage_review import ensure_stage_review_rows
+        root = await retrieve_remote_checkpoint_review(session, job, checkpoint)
+        folders = sorted({(root / item['relative_path']).parent for item in checkpoint['artifacts']
+                          if item.get('schema') == 'bms.stage-review.candidate.v1'})
+        if len(folders) != 1:
+            return 0
+        payload = dict(job.awaiting_payload or {})
+        payload['candidate_dir'] = str(folders[0])
+        job.awaiting_payload = payload
+        await session.commit()
+        return await ensure_stage_review_rows(session, job)
+    except Exception:
+        log.exception("Job %s: remote review rows for gate '%s' were not published; the gate stays open",
+                      job.id, job.awaiting_stage)
+        await session.rollback()
+        return 0
+
+
 async def remote_status(session: AsyncSession, job: Job, *, recover_staging: bool = True) -> RemoteAttemptStatus:
     if not job.execution_target_id or not job.remote_attempt_id:
         raise RemoteExecutionError("Job has no complete remote attempt identity")
@@ -2346,13 +2381,19 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
                     or not checkpoint.get("checkpoint_sha256") or not checkpoint.get("artifacts")):
                 raise RemoteExecutionError("Remote review checkpoint identity is incomplete or foreign")
         if job.remote_state == "awaiting_input" and job.awaiting_input:
+            # Rows missing (first attempt failed or predates this publisher): retry, at most once a minute.
+            if 'candidate_dir' not in (job.awaiting_payload or {}):
+                now = time.monotonic()
+                if now - _review_row_attempts.get(str(job.id), -60.0) >= 60.0:
+                    _review_row_attempts[str(job.id)] = now
+                    await publish_remote_review_rows(session, job)
             return False
         receipt = dict((job.provenance or {}).get('remote_execution_receipt') or {})
         receipt.update(boot_id=status.boot_id, generation=status.generation,
             continuation_lease_id=status.continuation_lease_id, plan_sha256=status.plan_sha256,
             native_output_directory=status.native_output_directory,
             started_at=status.started_at.isoformat() if status.started_at else None)
-        return await _publish_remote_transition(session, job, {
+        published = await _publish_remote_transition(session, job, {
             "provenance": dict(job.provenance or {}, remote_execution_receipt=receipt),
             "status": "awaiting_input", "queue_status": "completed", "remote_state": "awaiting_input",
             "awaiting_input": True, "awaiting_stage": status.checkpoints[0]["stage"],
@@ -2361,6 +2402,10 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
             "assigned_gpu": None,
             "params": release_scheduler_gpu_assignment(job.params),
         }, release_lease=True)
+        if published:
+            _review_row_attempts[str(job.id)] = time.monotonic()
+            await publish_remote_review_rows(session, job)
+        return published
     if (job.status, job.queue_status) not in {("running", "running"), ("queued", "preparing")}:
         return False
     if status.state == "prepared":
