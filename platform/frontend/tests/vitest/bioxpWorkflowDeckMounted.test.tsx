@@ -121,3 +121,12 @@ it('shows compiled action highlights without inert selection controls, retaining
     expect(el('Output chiller B1').getAttribute('aria-pressed')).toBe('true');
     expect(el('Magnetic station A1')).toBe(well);
 });
+
+it('selects a rectangle by pressing on one well and dragging across others', async () => {
+    await mount(); await station('LOC_RC');
+    const well = (w: string) => host.querySelector(`[data-station="LOC_RC"][data-well="${w}"]`)!;
+    await act(async () => { well('B2').dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 })); });
+    await act(async () => { well('C3').dispatchEvent(new MouseEvent('pointerover', { bubbles: true })); well('D4').dispatchEvent(new MouseEvent('pointerover', { bubbles: true })); });
+    await act(async () => { document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true })); });
+    expect(latest.wells).toEqual(['B2', 'B3', 'B4', 'C2', 'C3', 'C4', 'D2', 'D3', 'D4']);
+});

@@ -1,4 +1,4 @@
-import React, { useId, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { deckBounds, deckPark, deckRegions, deckResources, deckSize, deckStations, selectedDeckWells,
     type BioXpDeckSelection, type DeckBounds, type DeckResource, type DeckSelectionMode, type DeckWell } from '../lib/bioxpWorkflowDeck';
 import './BioXpWorkflowDeck.css';
@@ -84,6 +84,20 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
     // Capture only background pans: capturing a target retargets trusted clicks to SVG.
     const drag = useRef<{ x: number; y: number; view: DeckBounds; pan: boolean; moved: boolean } | null>(null);
     const suppressClick = useRef(false);
+    // Press on a well and drag across others to select the rectangle between them.
+    const wellDrag = useRef<{ resource: string; start: string; dragged: boolean } | null>(null);
+    useEffect(() => { const end = () => { if (wellDrag.current?.dragged) suppressClick.current = true; wellDrag.current = null; }; document.addEventListener('pointerup', end); return () => document.removeEventListener('pointerup', end); }, []);
+    const wellPointerDown = (event: React.PointerEvent, resource: DeckResource, well: DeckWell) => {
+        if (readOnly || live || event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey) return;
+        wellDrag.current = { resource: resource.id, start: well.well, dragged: false };
+    };
+    const wellPointerEnter = (resource: DeckResource, well: DeckWell) => {
+        const d = wellDrag.current;
+        if (!d || d.resource !== resource.id || (!d.dragged && d.start === well.well)) return;
+        d.dragged = true;
+        anchor.current = { station: resource.id, well: d.start };
+        onChange({ station: resource.id, wells: selectedDeckWells(resource, well, 'range', d.start) });
+    };
     const pointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
         if (event.button !== 0) return;
         suppressClick.current = false;
@@ -185,6 +199,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                             className={`bwd-well${selection.station === resource.id && selected.has(well.well) ? ' is-selected' : ''}`}
                             aria-disabled={live ? !!live.wellDisabledReason : undefined}
                             onClick={e => activate(e, () => chooseWell(resource, well, e))} onKeyDown={e => keyboardWell(e, resource, well)}
+                            onPointerDown={e => wellPointerDown(e, resource, well)} onPointerEnter={() => wellPointerEnter(resource, well)}
                             onFocus={() => setHover(`${resource.label} · ${well.well}`)} onMouseEnter={() => setHover(`${resource.label} · ${well.well}`)}>
                             <title>{resource.label} · {well.well}{live?.wellDisabledReason ? ` · ${live.wellDisabledReason}` : ''}</title>
                             <circle className="bwd-ring" cx={well.x} cy={well.y} r="5.4" />

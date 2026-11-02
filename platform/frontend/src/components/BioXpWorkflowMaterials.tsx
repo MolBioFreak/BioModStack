@@ -3,6 +3,7 @@ import { BioXpWorkflowProfilesContext } from './BioXpWorkflowProfiles';
 import type { MethodValue } from '../lib/bioxpMethods';
 import { deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
 import type { WorkflowDeckPlan, WorkflowMaterial } from '../lib/bioxpWorkflowPlan';
+import { BioXpSampleSheetImport } from './BioXpSampleSheetImport';
 import './BioXpWorkflowMaterials.css';
 
 export interface BioXpWorkflowMaterialsProps {
@@ -69,11 +70,13 @@ export function BioXpWorkflowMaterials({ plan, onChange, selection, methodAuthor
                 <button type="button" onClick={() => onChange({ ...plan, labware: plan.labware.filter(l => l.id !== item.id), assignments: plan.assignments.filter(a => a.labware_id !== item.id) })}>Remove labware {index + 1} and its assignments</button>
             </div>)}
         </fieldset>
+        <BioXpSampleSheetImport plan={plan} onChange={onChange} selection={selection} />
         <fieldset><legend>Samples & reagents</legend>
             <div className="bioxp-plan-actions"><button type="button" onClick={() => addMaterial('sample')}>Add sample</button><button type="button" onClick={() => addMaterial('reagent')}>Add reagent</button></div>
             {plan.materials.map((material, index) => contextual && material.id !== materialId && !plan.assignments.some(a => a.material_id === material.id && (!selectedLabwareId || a.labware_id === selectedLabwareId) && available.some(l => l.id === a.labware_id) && (!selection.wells.length || selection.wells.includes(a.well))) ? null : <div className="bioxp-plan-row" key={material.id}>
                 <label>Material {index + 1} name<input value={material.name ?? ''} onChange={e => onChange({ ...plan, materials: plan.materials.map(m => m.id === material.id ? { ...m, name: e.target.value } : m) })} /></label>
                 <label>Material {index + 1} kind<select value={material.kind} onChange={e => onChange({ ...plan, materials: plan.materials.map(m => m.id === material.id ? { ...m, kind: e.target.value as WorkflowMaterial['kind'] } : m) })}><option value="sample">Sample</option><option value="reagent">Reagent</option>{methodAuthoring && <><option value="product">Product</option><option value="waste">Waste</option></>}</select></label>
+                {material.barcode && <small>Barcode: {material.barcode}</small>}
                 <label>Material {index + 1} description<input value={material.description ?? ''} onChange={e => onChange({ ...plan, materials: plan.materials.map(m => m.id === material.id ? { ...m, description: e.target.value } : m) })} /></label>
                 {methodAuthoring && <><label>Material {index + 1} concentration<input aria-label={`Material ${index + 1} concentration`} inputMode="decimal" value={material.concentration ?? ''} placeholder="Unknown" onChange={e => onChange({ ...plan, materials: plan.materials.map(m => m.id === material.id ? { ...m, concentration: e.target.value } : m) })} /></label><label>Material {index + 1} concentration unit<input aria-label={`Material ${index + 1} concentration unit`} value={material.concentration_unit ?? ''} placeholder="Authored unit" onChange={e => onChange({ ...plan, materials: plan.materials.map(m => m.id === material.id ? { ...m, concentration_unit: e.target.value } : m) })} /></label></>}
                 <button type="button" onClick={() => onChange({ ...plan, materials: plan.materials.filter(m => m.id !== material.id), assignments: plan.assignments.filter(a => a.material_id !== material.id) })}>Remove material {index + 1} and its assignments</button>
