@@ -5185,6 +5185,10 @@ def compile_component_checkpoint_continuation(context, checkpoint, decision):
             raise ValueError('Retained continuation requires native model/mode identity in the runtime edge')
         parent.update(model_id=previous['model_id'], mode=previous['mode'], params=previous['native_parameters'])
     params = deepcopy(parent["params"])
+    # The compiler binds out_dir from the generation's own directory. A saved parent out_dir would be passed
+    # through a second time, win on the command line and send the continuation into the original results,
+    # where the previous generation's projection already exists.
+    params.pop("out_dir", None)
     job = SimpleNamespace(**{**parent, "params": params, "awaiting_input": True,
         "awaiting_stage": stage, "awaiting_payload": {"candidate_dir": str(root / directory)},
         "output_dir": str(root)})
