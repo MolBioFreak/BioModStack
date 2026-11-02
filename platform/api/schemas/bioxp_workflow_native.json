@@ -566,6 +566,30 @@
             "default": false,
             "title": "Lift Z",
             "type": "boolean"
+          },
+          "keep_channels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "maxItems": 4,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keep Channels"
+          },
+          "release_lift_mm": {
+            "default": 5.0,
+            "maximum": 10,
+            "minimum": 0,
+            "title": "Release Lift Mm",
+            "type": "number"
           }
         },
         "required": [

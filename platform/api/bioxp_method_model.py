@@ -192,9 +192,12 @@ def method_catalog():
     pickup = deepcopy(schema['$defs']['ManualLoadTip'])
     pickup['properties'].pop('operation', None)
     pickup['required'] = [k for k in pickup.get('required', []) if k != 'operation']
-    pickup['properties']['channels'] = {'const': [0, 1, 2, 3]}
+    pickup['properties'].pop('keep_channels', None)
+    pickup['properties']['channels'] = {'type': 'array', 'items': {'enum': [0, 1, 2, 3]}, 'minItems': 1, 'maxItems': 4,
+        'uniqueItems': True, 'description': 'Channels that keep tips; the others are released back into the rack after a short lift'}
     actions.append({'action': 'tip_pickup', 'inputs': pickup,
-        'status': {'authorable': True, 'emitted': True, 'registered': True}, 'effects': 'Source group-of-four pickup'})
+        'status': {'authorable': True, 'emitted': True, 'registered': True},
+        'effects': 'Group-of-four pickup; unneeded tips go straight back into their rack wells'})
     for entry in actions:
         if entry['action'] in {'plate_move', 'move_cover', 'plate_catch', 'plate_release', 'plate_press', 'gripper_catch', 'gripper_release', 'gripper_press'}:
             entry['inputs']['properties']['labware_id'] = {'type': 'string', 'description': 'Stable logical identity; retained as metadata, not a controller setting'}

@@ -537,10 +537,18 @@ def compile_method(request):
                     diagnostic = validate(inputs, _NATIVE['request']['$defs']['DiagnosticPlunger'])
                     intent = {'operation': 'diagnostic_pipette', 'diagnostic': diagnostic}
                 elif occurrence['action'] == 'tip_pickup':
-                    if 'channels' in inputs and (inputs['channels'] != [0, 1, 2, 3] or any(type(c) is not int for c in inputs['channels'])):
-                        fail('Source pickup is a group of four, not selected independent channels', occurrence['path'])
+                    channels = inputs.get('channels', [0, 1, 2, 3])
+                    if (not isinstance(channels, list) or not channels or len(set(channels)) != len(channels)
+                            or any(type(c) is not int or c not in range(4) for c in channels)):
+                        fail('Pickup channels must be distinct channels 0..3', occurrence['path'])
                     intent['operation'] = 'load_tip'
-                    intent.pop('channels', None)  # source pickup is a group of four
+                    intent.pop('channels', None)
+                    if sorted(channels) != [0, 1, 2, 3]:
+                        # Keep these; the robot releases the rest back into the rack after a 5 mm lift.
+                        intent['keep_channels'] = sorted(channels)
+                        intent.setdefault('release_lift_mm', 5.0)
+                    else:
+                        intent.pop('release_lift_mm', None)
                 elif occurrence['action'] in ('tip_eject', 'eject_tip'):
                     if set(inputs) != {'channels'} or inputs.get('channels') != [0, 1, 2, 3] or any(type(c) is not int for c in inputs['channels']):
                         fail('Source eject requires exactly explicit channels [0,1,2,3]; other settings are not discarded', occurrence['path'])

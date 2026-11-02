@@ -224,11 +224,14 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                 from bioxp_method_deck import pickup_indices
                 rack = state["tip_racks"].get(str(inputs.get("tray")))
                 indices = pickup_indices(inputs.get("well"))
+                kept = inputs.get("channels")
+                if indices is not None and isinstance(kept, list) and kept:
+                    indices = [i for ch, i in enumerate(indices) if ch in kept]
                 if rack is not None and indices is not None:
                     missing = [i for i in indices if not rack["occupancy"][i]]
                     if missing:
                         issue("planned_tip_unavailable", occurrence,
-                              f"Tray {inputs.get('tray')} {inputs.get('well')}: {len(missing)} of 4 tips already used or absent in the starting deck; not a runtime gate.")
+                              f"Tray {inputs.get('tray')} {inputs.get('well')}: {len(missing)} of {len(indices)} tips already used or absent in the starting deck; not a runtime gate.")
                     for i in indices:
                         rack["occupancy"][i] = False
                     changed_other["tip_racks"] = {str(inputs.get("tray")): {

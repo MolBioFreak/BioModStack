@@ -137,3 +137,13 @@ def test_all_eight_bound_documents_exported_separately():
     assert len(documents) == 8 and all(documents)
     if os.environ.get('BIOXP_BOUND_EXPORT'):
         Path(os.environ['BIOXP_BOUND_EXPORT']).write_text(json.dumps(documents))
+
+
+def test_partial_tip_pickup_sends_keep_channels_and_books_only_kept_tips():
+    f, _ = class_transfer()
+    f['method']['tip_policy'] = {'mode': 'per_transfer', 'tip_pickup': {'tray': 1, 'well': 'A1', 'overpress': False, 'lift_z': True, 'channels': [0]}, 'tip_eject': {'channels': [0, 1, 2, 3]}}
+    emitted = actions(compile_method(f))
+    pickup = emitted[0]['params']
+    assert pickup['operation'] == 'load_tip' and pickup['keep_channels'] == [0] and pickup['release_lift_mm'] == 5.0
+    f['method']['tip_policy']['tip_pickup']['channels'] = [0, 1, 2, 3]
+    assert 'keep_channels' not in actions(compile_method(f))[0]['params']
