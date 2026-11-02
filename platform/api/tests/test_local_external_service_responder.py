@@ -118,6 +118,24 @@ def test_remote_container_backend_binds_the_artifact_root_through_the_enabled_sc
     assert f"apptainer.runOptions = {bind}" in text
 
 
+def test_root_launch_binds_the_ledger_directory_with_the_artifact_root(tmp_path):
+    """Tasks open the attempt ledger by path; without its directory bound, a container sees a private copy.
+
+    On a worker that copy never reaches the controller, so a generated-MSA request is written where
+    nothing reads it and the validator task waits forever.
+    """
+    attempt = tmp_path / "attempt"
+    (attempt / "results").mkdir(parents=True)
+    context = {"resources": {"required": {"cpus": 1, "memory_bytes": 1024}},
+               "execution_plan": {"metadata": {"static_components": []}},
+               "resource_lock_path": str(attempt / "compute.lock"), "working_directory": str(ROOT),
+               "artifact_root": str(attempt / "results"), "ledger_path": str(attempt / "component-runtime.sqlite")}
+    ca.resource_bound_command(["nextflow", "run", "x.nf"], None, context, attempt)
+    text = (attempt / "component-resources.config").read_text()
+    assert f"{attempt / 'results'}:{attempt / 'results'}" in text
+    assert f"{attempt}:{attempt}" in text
+
+
 def test_service_provider_follows_the_model_backend_when_no_launch_provider():
     import services.model_msa_handoff as h
     service = {"logical_id": "protenix:generated_msa", "state": "planned_from_generated_candidates",

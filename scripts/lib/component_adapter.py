@@ -253,7 +253,8 @@ def resource_bound_command(command, invocation, context, run_dir) -> list[str]:
     config = Path(run_dir) / 'component-resources.config'
     config.write_text(native_resource_config(plan, resources, context['resource_lock_path'],
                                            Path(context['working_directory']),
-                                           bind_paths=[context['artifact_root']]))
+                                           bind_paths=[context['artifact_root'],
+                                                       Path(context['ledger_path']).parent]))
     placed = list(command)
     if invocation is not None:
         source = Path(context['working_directory'])
