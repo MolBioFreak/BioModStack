@@ -311,8 +311,74 @@ def workflow_pack_weight_owners(workflow_id: str) -> dict[str, str]:
             for member in groups[group]}
 
 
+# De novo design preparation leaves: (component id, label, prepared by default). The ids select what is sent to a
+# worker; they do not change inference settings. The default is the usual loop (RFD4 generation, the common
+# sequence models, FrustraMPNN, Protenix); the rest are added when a run needs them.
+DENOVO_PACK_COMPONENTS = (
+    ('rfd4_proteina', 'RFD4 (Proteina)', True),
+    ('rfd3', 'RFD3 (Foundry)', False),
+    ('disco', 'DISCO', False),
+    ('laproteina', 'La-Proteina', False),
+    ('complexa', 'Complexa', False),
+    ('proteinmpnn', 'ProteinMPNN', True),
+    ('fampnn', 'FAMPNN', True),
+    ('ligandmpnn', 'LigandMPNN', False),
+    ('protonpottsmpnn', 'ProtonPottsMPNN', False),
+    ('caliby_experimental', 'Caliby', False),
+    ('frustrampnn', 'FrustraMPNN', True),
+    ('protenix', 'Protenix v2', True),
+    ('boltz2', 'Boltz-2', False),
+    ('esmfold2', 'ESMFold2', False),
+    ('molecular_dynamics', 'Molecular dynamics', False),
+)
+
+
+def _denovo_component_dependencies(component_id: str) -> tuple[RuntimeDependencyRef, ...]:
+    """One de novo component's images and weights, from the same owners the full pack unions."""
+    from native_components import LABEL_ASSETS
+
+    def image(label):
+        return RuntimeDependencyRef(kind='image', relative_path=LABEL_ASSETS[label][0])
+
+    def native(process, settings=None):
+        deps, _ = native_checkpoint_dependencies(process, settings or {})
+        return [RuntimeDependencyRef(kind=d.kind, relative_path=d.relative_path) for d in deps]
+
+    if component_id == 'rfd4_proteina':
+        refs = [image('RFD4Proteina'), RuntimeDependencyRef(kind='weights', relative_path='rfd4-proteina')]
+    elif component_id == 'rfd3':
+        refs = [image('Foundry'), *native('RunRFD3')]
+    elif component_id == 'disco':
+        refs = [image('DISCO'), RuntimeDependencyRef(kind='weights', relative_path='disco')]
+    elif component_id == 'laproteina':
+        refs = [image('LaProteina'), *native('RunLaProteina')]
+    elif component_id == 'complexa':
+        refs = list(model_runtime_dependencies('complexa'))
+    elif component_id in {'proteinmpnn', 'fampnn', 'boltz2', 'esmfold2'}:
+        refs = list(model_runtime_dependencies(component_id))
+        if component_id == 'boltz2':
+            refs.extend(native('RunShapeBoltzValidator'))
+    elif component_id in {'ligandmpnn', 'protonpottsmpnn', 'frustrampnn'}:
+        refs = list(model_runtime_dependencies(component_id, internal=True))
+    elif component_id == 'caliby_experimental':
+        refs = [*model_runtime_dependencies('caliby_experimental'), *native('RunShapeCaliby')]
+    elif component_id == 'protenix':
+        refs = [*model_image_dependencies('protenix'), *native('ProtenixPredict'),
+                *native('RunShapeProtenixValidator')]
+    elif component_id == 'molecular_dynamics':
+        refs = [image('MolecularDynamicsPreparation'), image('MolecularDynamicsGromacs'),
+                image('MolecularDynamicsAnalysis'),
+                RuntimeDependencyRef(kind='runtime_data', relative_path='md-preparation/env-v1-explicit.txt')]
+    else:
+        raise ValueError('Unknown workflow preparation component')
+    return tuple(refs)
+
+
 def workflow_pack_components(workflow_id: str):
     """Selectable preparation leaves, not inference settings or dependency copies."""
+    if workflow_id == 'de_novo_design':
+        return tuple({'model_id': component_id, 'label': label, 'selected_by_default': default}
+                     for component_id, label, default in DENOVO_PACK_COMPONENTS)
     if workflow_id != 'structure_prediction':
         return ()
     registry = get_registry()
@@ -327,6 +393,9 @@ def workflow_pack_dependencies(workflow_id: str, component_ids=None):
         available = {item['model_id'] for item in workflow_pack_components(workflow_id)}
         if set(component_ids) - available:
             raise ValueError('Unknown workflow preparation component')
+        if workflow_id == 'de_novo_design':
+            return tuple({(ref.kind, ref.relative_path): ref for component_id in component_ids
+                          for ref in _denovo_component_dependencies(component_id)}.values())
         refs = []
         for model_id in component_ids:
             if model_id == 'protenix':
