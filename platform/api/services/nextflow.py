@@ -2743,6 +2743,36 @@ def _local_component_checkpoints(context_path):
     return component_checkpoint_projection(runtime)
 
 
+async def _publish_local_review_rows(session, job_id):
+    """List a local component gate's candidates as review rows.
+
+    A local gate that runs under the component runtime writes its review files into the job's result root as
+    checkpoint artifacts; the HTTP gate route that used to publish rows refuses component gates. Without this the
+    gate listed 0 designs and Continue / FrustraMPNN had nothing to act on. Best effort: the gate is already open.
+    """
+    from database import Job
+    from services.stage_review import ensure_stage_review_rows
+
+    job = await session.get(Job, job_id, populate_existing=True)
+    if job is None or not job.awaiting_input or job.execution_target_id or not job.output_dir:
+        return 0
+    checkpoint = (job.awaiting_payload or {}).get('component_checkpoint')
+    if not checkpoint:
+        return 0
+    root = Path(job.output_dir)
+    folders = sorted({(root / item['relative_path']).parent for item in checkpoint.get('artifacts', [])
+                      if item.get('schema') == 'bms.stage-review.candidate.v1'})
+    if len(folders) != 1:
+        return 0
+    payload = dict(job.awaiting_payload or {})
+    payload['candidate_dir'] = str(folders[0])
+    job.awaiting_payload = payload
+    await session.commit()
+    count = await ensure_stage_review_rows(session, job)
+    await session.commit()
+    return count
+
+
 async def _project_local_components(job, session, context_path):
     """Project stopped local ledger executions before native terminal handling."""
     if not context_path:
@@ -3937,6 +3967,11 @@ async def launch_nextflow_job(
                         session.expire_all()
                         await reconcile_md_analysis_parent_if_current(md_analysis_parent_id, session)
                         await session.commit()
+                try:
+                    await _publish_local_review_rows(session, job_id)
+                except Exception:
+                    logger.exception("Job %s: review rows for its local gate were not published; the gate stays open", job_id)
+                    await session.rollback()
                 _running_units.pop(job_id, None)
                 
         except Exception as e:
