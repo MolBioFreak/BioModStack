@@ -1439,11 +1439,21 @@ async def _retry_remote_component_owned(session, job, intent: dict[str, Any]):
         raise RemoteExecutionError('Retry start is unresolved; original lease retained: ' + str(exc)) from exc
 
 
+# The orchestrator's periodic status check holds the per-job controller lock while it reads the worker (up to its
+# 30 s transport timeout). A Continue that lands in that window waits for it instead of being refused at once.
+CHECKPOINT_RESUME_LOCK_WAIT_SECONDS = 40.0
+
+
 async def request_remote_checkpoint_resume(session: AsyncSession, job: Job, checkpoint: dict, decision: dict) -> dict:
-    with _controller_attempt_guard(str(job.id)) as owned:
-        if not owned:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + CHECKPOINT_RESUME_LOCK_WAIT_SECONDS
+    while True:
+        with _controller_attempt_guard(str(job.id)) as owned:
+            if owned:
+                return await _request_remote_checkpoint_resume_owned(session, job, checkpoint, decision)
+        if loop.time() >= deadline:
             raise RemoteExecutionError('Checkpoint controller operation is already active')
-        return await _request_remote_checkpoint_resume_owned(session, job, checkpoint, decision)
+        await asyncio.sleep(0.25)
 
 
 async def _request_remote_checkpoint_resume_owned(session: AsyncSession, job: Job, checkpoint: dict, decision: dict) -> dict:
