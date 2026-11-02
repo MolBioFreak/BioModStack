@@ -396,6 +396,9 @@ process RunLigandMPNNResequence {
     """
 }
 
+// Caliby scratch is a short real directory, not the task directory: Python's multiprocessing binds its listener
+// socket at TMPDIR/pymp-*/listener-*, and a rented worker's task directory pushes that past the 107-character
+// AF_UNIX limit. The data workers then die silently and the run waits forever.
 process RunCalibyResequence {
     label 'Caliby'
     stageInMode 'copy'
@@ -408,7 +411,8 @@ process RunCalibyResequence {
     path('designs/*.pdb'), emit: pdbs
     script:
     """
-    export TMPDIR=\$PWD/tmp; mkdir -p \$TMPDIR
+    export TMPDIR=\$(mktemp -d /tmp/bms-caliby.XXXXXX)
+    trap 'rm -rf \$TMPDIR' EXIT
     python3 /scripts/run_resequence_designer.py caliby --template ${template} --input-dir . --out-dir designs ${position_args}
     """
 }
@@ -423,9 +427,11 @@ process RunProtonPottsResequence {
     output:
     path('designs/*.pdb'), emit: pdbs
     script:
+    // The rented worker's selected scientific launcher (unset keeps apptainer).
+    def launcher = System.getenv('BMS_CONTAINER_EXECUTABLE') ?: 'apptainer'
     def image = System.getenv('BMS_SELECTED_IMAGE_PROTONPOTTSMPNN_SIF') ?: params.protonpottsmpnn_container_path ?: System.getenv('BMS_PROTONPOTTSMPNN_CONTAINER_PATH') ?: "${params.container_dir}/protonpottsmpnn-09682ab-cpu-locked-20261003.sif"
     """
-    apptainer exec --no-home --env CUDA_VISIBLE_DEVICES= \\
+    ${launcher} exec --no-home --env CUDA_VISIBLE_DEVICES= \\
       --bind "\$PWD:\$PWD" \\
       --bind '${params.code_root}/scripts:/probe' \\
       --bind '${params.code_root}/scripts/lib:/probe/lib:ro' \\
