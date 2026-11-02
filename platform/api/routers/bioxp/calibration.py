@@ -157,6 +157,49 @@ async def save_lld_profile(request: LldProfileRequest, runtime: BioXpRuntime = D
         raise _translate_robot_error(exc) from exc
 
 
+class DepthOffsetKey(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_connection_generation: Annotated[int, Field(strict=True, ge=0)]
+    tip_type: Literal[10, 50, 200] | None = None
+    location: str | None = Field(default=None, max_length=40)
+    plate_type: str | None = Field(default=None, max_length=80)
+
+
+class DepthOffsetRequest(DepthOffsetKey):
+    offset_mm: Annotated[float, Field(ge=-15, le=15)]
+    source: str | None = Field(default=None, max_length=300)
+
+
+@router.get("/depth-offsets")
+async def read_depth_offsets(expected_connection_generation: int = Query(ge=0),
+                             runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    try:
+        return await runtime.connection.request_active_v2_query("depth_offsets", expected_generation=expected_connection_generation)
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+@router.put("/depth-offsets")
+async def save_depth_offset(request: DepthOffsetRequest, runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    """Record-only: used by the next lowering move or liquid search that matches; nothing moves."""
+    try:
+        return await runtime.connection.request_active(
+            "save_depth_offset", expected_generation=request.expected_connection_generation, require_fresh=False,
+            json_data=request.model_dump(mode="json", exclude={"expected_connection_generation"}))
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+@router.post("/depth-offsets/remove")
+async def remove_depth_offset(request: DepthOffsetKey, runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    try:
+        return await runtime.connection.request_active(
+            "remove_depth_offset", expected_generation=request.expected_connection_generation, require_fresh=False,
+            json_data=request.model_dump(mode="json", exclude={"expected_connection_generation"}))
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
 @router.get("/calibration-settings")
 async def read_calibration_settings(
     expected_connection_generation: int = Query(ge=0),

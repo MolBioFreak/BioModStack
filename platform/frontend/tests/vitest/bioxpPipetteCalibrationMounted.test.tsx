@@ -13,6 +13,8 @@ const tips = [{ tip_type: 10, offset_steps: 45757, measured: true, datasheet_del
 const lldRow = (adc: number, measured = false) => ({ threshold_adc: adc, threshold_duration_ms: 5, speed_increments_per_second: 150, measured, source: measured ? 'Measured' : 'Default' });
 const lld = { filtered_tips: true, profiles: { '10': { filtered: lldRow(200), unfiltered: lldRow(15) },
     '50': { filtered: lldRow(200, true), unfiltered: lldRow(15) }, '200': { filtered: lldRow(200), unfiltered: lldRow(15) } } };
+const depth = { max_mm: 15, entries: [{ tip_type: 10, location: 'LOC_RC', plate_type: null, offset_mm: 4.4, source: 'creep' }],
+    standard: [{ offset_mm: 0, label: 'None', source: 'x' }, { offset_mm: 5, label: '+5 mm', source: 'RC plate bottom' }] };
 const plates = { profiles: [{ id: 'thermo-4483485-enduraplate-fast', name: 'Fast plate', vessel_geometry: { well_top_diameter_mm: 5.49 } }] };
 async function tick() { await act(async () => { await new Promise(r => setTimeout(r, 20)); }); }
 const button = (text: string) => [...host.querySelectorAll('button')].find(b => b.textContent === text)!;
@@ -36,6 +38,7 @@ beforeEach(() => {
         if (config.url === '/api/bioxp/tip-offsets' && config.method === 'get') return ok({ tips });
         if (config.url === '/api/bioxp/tip-offsets') return ok({ tips });
         if (config.url === '/api/bioxp/lld-profiles') return ok(lld);
+        if (config.url === '/api/bioxp/depth-offsets') return ok(depth);
         if (config.url === '/api/bioxp/methods/plates') return ok(plates);
         if (config.url === '/api/bioxp/methods/compile') return ok({ document: { stages: [], steps: body.method.steps }, issues: [] });
         if (config.url === '/api/bioxp/methods/plate-profiles') return ok({ id: 'saved' });
@@ -118,5 +121,18 @@ it('shows six pLLD rows, marks the in-use kind and saves one threshold without m
     await tick();
     const put = calls.find(c => c.method === 'put' && c.url === '/api/bioxp/lld-profiles')!;
     expect(put.body).toMatchObject({ expected_connection_generation: 5, tip_type: 10, kind: 'filtered', threshold_adc: 120 });
+    expect(calls.some(c => c.url === '/api/bioxp/protocols/submit')).toBe(false);
+});
+
+it('lists saved depth offsets and saves a plate-type offset by tip and station, without moving', async () => {
+    await mount();
+    expect(host.querySelector('[data-depth-row="10:LOC_RC:any"]')!.textContent).toContain('+4.4 mm');
+    await change('Offset plate type', 'ONT barcode 96');
+    await change('Offset mm', '5');
+    const save = [...host.querySelectorAll('button')].find(b => b.textContent === 'Save offset')!;
+    await act(async () => { save.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await tick();
+    const put = calls.find(c => c.method === 'put' && c.url === '/api/bioxp/depth-offsets')!;
+    expect(put.body).toMatchObject({ expected_connection_generation: 5, tip_type: 10, location: 'LOC_RC', plate_type: 'ONT barcode 96', offset_mm: 5 });
     expect(calls.some(c => c.url === '/api/bioxp/protocols/submit')).toBe(false);
 });
