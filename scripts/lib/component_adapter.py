@@ -220,7 +220,10 @@ def native_resource_config(plan: dict, resources: dict, lock_path: str, source_r
     # resolves it). The env-based bind list is wiped by the same `env -`, so bind
     # through the generated config; the value is shell-quoted for Nextflow's script.
     binds = ','.join(f'{path}:{path}' for path in dict.fromkeys(str(Path(p)) for p in bind_paths))
-    run_options = f"apptainer.runOptions = {groovy('--bind ' + shlex.quote(binds))}" if binds else ''
+    # The udocker/bms-container backend (remote workers) enables Nextflow's `singularity` scope and
+    # disables `apptainer`, so the bind must be written to both scopes; only the enabled one applies.
+    run_options = '\n'.join(f"{scope}.runOptions = {groovy('--bind ' + shlex.quote(binds))}"
+                            for scope in ('apptainer', 'singularity')) if binds else ''
     return '\n'.join([*lines, '}', whitelist, run_options, task_container_config(container_runtime), ''])
 
 

@@ -101,6 +101,23 @@ def test_task_config_binds_the_artifact_root_with_spaces_quoted():
     assert "apptainer.runOptions = '--bind \\'/data/AUDIT job 1:/data/AUDIT job 1\\''" in text
 
 
+def test_remote_container_backend_binds_the_artifact_root_through_the_enabled_scope():
+    """Remote workers run udocker, which enables Nextflow's singularity scope and disables apptainer.
+
+    The artifact-root bind must reach the enabled scope or every task that opens the attempt journal
+    (generated MSA requests, stage reports) fails with FileNotFoundError on the results directory.
+    """
+    plan = {"metadata": {"static_components": []}}
+    resources = {"required": {"cpus": 1, "memory_bytes": 1024}}
+    runtime = {"backend": "udocker", "executable": "/opt/bms/bin/bms-container"}
+    text = ca.native_resource_config(plan, resources, "/tmp/x.lock", ROOT, container_runtime=runtime,
+                                     bind_paths=["/root/bms/attempts/a1/results"])
+    assert "singularity.enabled = true" in text and "apptainer.enabled = false" in text
+    bind = "'--bind /root/bms/attempts/a1/results:/root/bms/attempts/a1/results'"
+    assert f"singularity.runOptions = {bind}" in text
+    assert f"apptainer.runOptions = {bind}" in text
+
+
 def test_service_provider_follows_the_model_backend_when_no_launch_provider():
     import services.model_msa_handoff as h
     service = {"logical_id": "protenix:generated_msa", "state": "planned_from_generated_candidates",
