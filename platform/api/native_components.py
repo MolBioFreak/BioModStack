@@ -1048,7 +1048,11 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
                           if yes('plr_validator_suite_active') and not p.get('protenix_prepared_msa_dir') else None)
                 else:unresolved(workflow, 'dependency_closure', entrypoint, 'Unsupported validator: ' + str(validator))
             after = a.chain(['FinalizeProteinLocalValidatorSuite', 'EnforceProteinLocalValidatorSuite', 'StageProteinLocalValidatedCandidates'], tuple(branches))
-        if yes('interactive_gating') and not yes('interactive_gate_continue'):
+        # The region_redesign profile (nextflow.config profiles.protein_local_redesign) defaults interactive_gating
+        # to true and the job params do not carry it, so an absent value is the gate that actually runs. Without
+        # it the plan omitted the gate and its component_adapter dependency, the worker launched no component
+        # context, and the gate task fell back to the controller-HTTP path.
+        if yes('interactive_gating', True) and not yes('interactive_gate_continue'):
             a.stage('OpenInteractiveGate', after, source=entrypoint,
                 condition='interactive_gating && !interactive_gate_continue; native interactive_gate_stage',
                 expansion={'authority': entrypoint + ':OpenInteractiveGate', 'grouping': 'selected stage artifacts',
