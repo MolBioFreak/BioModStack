@@ -492,7 +492,7 @@ def positioned_transfer_recipes(inputs, detected_wells=None):
     allowed = {'source', 'destination', 'channels', 'volume_ul', 'aspirate_speed', 'recipe',
                'source_position_flag', 'destination_position_flag',
                'source_lift_height_steps', 'destination_lift_height_steps', 'liquid_detection',
-               'source_liquid_channels', 'source_expected_ul', 'source_vessel_geometry'}
+               'source_liquid_channels', 'source_expected_ul', 'source_vessel_geometry', 'source_plate_type'}
     if set(inputs) - allowed:
         raise ValueError(f'Unsupported class Transfer fields: {sorted(set(inputs) - allowed)}')
     source, destination = inputs['source'], inputs['destination']
@@ -550,7 +550,9 @@ def positioned_transfer_recipes(inputs, detected_wells=None):
                 **({'expected_channels': planned[pair]} if detection['expected'] and planned else {}),
                 'mode': detection['mode'], 'start_mode': detection['start_mode'],
                 'search_speed_native': detection['search_speed_native'], 'sensing': detection['sensing'],
-                'detection_id': f'pair-{pair}-{key[1]}', **detection_steps}
+                'detection_id': f'pair-{pair}-{key[1]}', **detection_steps,
+                # Source plate profile, so the robot can apply a saved plate-type depth offset.
+                **({'plate_type': str(inputs['source_plate_type'])} if inputs.get('source_plate_type') else {})}
             recipe['before_liquid'] = recipe.get('before_liquid', [])
         else:
             recipe['before_liquid'] = recipe.get('before_liquid', []) + [position('lower', 'source', sw)]
@@ -731,6 +733,8 @@ def prepare_occurrences(occurrences, method, dependencies):
                     expected.setdefault(effect.get('pair_index', 0), {})[str(effect['channel'])] = round(well_ul[k], 3)
             inputs['source_expected_ul'] = [expected.get(i) for i in range(len(inputs['source']['wells']))]
             vessel = next((x for x in labware if x.get('id') == (inputs['channel_transfers'][0].get('source') or {}).get('labware_id')), {})
+            if vessel.get('profile_id'):
+                inputs['source_plate_type'] = str(vessel['profile_id'])
             geometry = profiles.get(vessel.get('profile_id'), {}).get('vessel_geometry')
             if isinstance(geometry, dict):
                 inputs['source_vessel_geometry'] = {k: geometry.get(k) for k in ('height_to_volume', 'calibrated_low_gap_mm')}

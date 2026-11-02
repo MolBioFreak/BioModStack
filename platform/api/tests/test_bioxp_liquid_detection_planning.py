@@ -95,3 +95,9 @@ async def test_measured_plate_profile_replaces_builtin(store):
     plates = (await client.get(BASE + '/plates')).json()['profiles']
     fast = next(p for p in plates if p['id'] == 'thermo-4483485-enduraplate-fast')
     assert fast['vessel_geometry']['calibrated_low_gap_mm'] == 0.4 and fast['saved_record_id']
+
+
+def test_source_plate_type_reaches_the_search():
+    rows = positioned_transfer_recipes(_inputs(liquid_detection={}, source_plate_type='ont-barcode-96'))
+    assert rows[0]['liquid_detection']['plate_type'] == 'ont-barcode-96'
+    assert 'plate_type' not in positioned_transfer_recipes(_inputs(liquid_detection={}))[0]['liquid_detection']

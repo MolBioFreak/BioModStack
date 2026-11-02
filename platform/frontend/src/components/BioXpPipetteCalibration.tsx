@@ -68,7 +68,7 @@ type DepthEntry = { tip_type: number | null; location: string | null; plate_type
 type DepthTable = { entries: DepthEntry[]; standard: { offset_mm: number; label: string; source: string }[]; max_mm: number };
 const DEPTH_STATIONS: [string, string][] = [['LOC_RC', 'Reagent chiller (RC)'], ['LOC_OC', 'Output chiller (OC)'], ['LOC_TC', 'Thermal cycler'],
     ['LOC_STRIP1', 'Strip 1'], ['LOC_STRIP2', 'Strip 2'], ['LOC_STRIP3', 'Strip 3'], ['LOC_STRIP4', 'Strip 4'], ['LOC_TROUGH', 'Trough'], ['LOC_MS', 'Magnet station']];
-const PLATE_SUGGESTIONS = ['ONT barcode 96', '96-well PCR', 'Thermo 8-strip'];
+const PLATE_SUGGESTIONS = ['thermo-4483485-enduraplate-fast', 'thermo-4483354-enduraplate', 'ont-barcode-96'];
 const stationName = (id: string | null) => id === null ? 'Any station' : (DEPTH_STATIONS.find(([v]) => v === id)?.[1] ?? id);
 
 /** Extra depth per tip type, station and plate type; no entry means no offset. */
@@ -100,6 +100,7 @@ export function BioXpDepthOffsets({ generation, connected, visible = true }: { g
     return <section aria-label="Depth offsets" className="rounded border border-slate-700 p-3">
         <h4 className="font-semibold">Depth offsets</h4>
         <p className="text-xs text-slate-400">Extra depth below a station&apos;s calibrated bottom, for reaching the last liquid in a well. With no matching row the robot uses no offset. The most specific row wins: plate type, then station, then tip size. Tip racks never use one. Saving only records it.</p>
+        <p className="text-xs text-slate-400">Plate type is the plate profile ID a workflow&apos;s source labware uses (for example thermo-4483485-enduraplate-fast). Workflow transfers with liquid detection send it to the robot.</p>
         {query.error && <p role="alert">Depth offsets unavailable: {bioXpErrorText(query.error)}</p>}
         {data && <table aria-label="Saved depth offsets" className="mt-2 w-full text-left text-xs [&_td]:px-2 [&_td]:py-1 [&_th]:px-2">
             <thead className="text-slate-400"><tr><th>Tip</th><th>Station</th><th>Plate type</th><th>Offset</th><th>Source</th><th /></tr></thead>
