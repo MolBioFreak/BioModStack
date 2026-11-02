@@ -3044,6 +3044,24 @@ def _native_result_view(job, status, artifact_root, manifest):
     return relative, root, manifest.model_copy(update={'artifacts': records, 'directories': directories})
 
 
+def _resequence_final_candidate_dir(job, relative, local_output):
+    """The reviewed selection a remote Resequence continuation publishes, as its final candidate directory.
+
+    A local Continue runs as a new job whose params name that selection (plr_final_candidate_dir). A remote
+    continuation is the same job, so nothing names it, and the ingester would look in the continuation's
+    log-only output folder. The selection is the continuation folder's parent, taken from the authenticated
+    continuation output path. Only the final validation gate publishes finals.
+    """
+    binding = ((job.provenance or {}).get('remote_checkpoint_operation') or {}).get('binding') or {}
+    resequence = (job.model_id == 'protein_local_redesign'
+                  or (job.model_id == 'protein_modification_experimental' and job.mode == 'region_redesign'))
+    parts = PurePosixPath(relative).parts
+    if (not resequence or not str(binding.get('checkpoint_id') or '').endswith(':post_structure_validation')
+            or len(parts) < 4 or parts[-1] != 'continuation' or parts[-3] != 'selections'):
+        return None
+    return Path(local_output).parent
+
+
 def retained_result_view(job, *, diagnostics: bool = False):
     """One job-scoped authority for current logs and manifest-listed history.
 
@@ -3212,6 +3230,9 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
         except (OSError, RemoteExecutionError) as exc:
             raise RemoteCollectionPending(str(exc)) from exc
         local_output = _safe_result_path(local_artifact_root, relative.as_posix(), allow_root=True)
+        final_candidates = _resequence_final_candidate_dir(job, relative, local_output)
+        if final_candidates is not None:
+            job.params = {**dict(job.params or {}), 'plr_final_candidate_dir': str(final_candidates)}
         if projection_context is not None:
             from services.result_ingester import ingest_component_projection
             await ingest_component_projection(job, str(local_artifact_root), session,
