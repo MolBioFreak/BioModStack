@@ -369,7 +369,7 @@ def project_bindings(requested, inputs, direct_images, *, shared=None, writable_
     # Project each maximal protected root only once, including nested ro aliases.
     roots = sorted((root for root in roots if not any(root != other and root.is_relative_to(other)
                     for other in roots)), key=str)
-    projected, guarded = {}, []
+    projected, guarded, strict_views = {}, [], {}
     writable = {Path(s).resolve(strict=True) for s, _, mode in writable_overrides if mode == "rw"}
     writable -= {source for source, _, mode in requested if mode == "ro"}
     for index, source in enumerate(roots):
@@ -380,7 +380,9 @@ def project_bindings(requested, inputs, direct_images, *, shared=None, writable_
         if snapshot(source, excluded) != before:
             raise ValueError('declared input changed during projection')
         strict = any(mode == 'ro' and source == path for path, _, mode in requested)
+        # The strict view snapshot is taken below, after the object mirrors hardlink into the view.
         guarded.append((source, before, view, snapshot(view, excluded) if strict else None))
+        strict_views[source] = (strict, excluded)
         projected[source] = view
     # The selected weight layout already records its CAS identities. Reuse that
     # authority to shadow direct object aliases too, without copying/scanning the
@@ -389,6 +391,11 @@ def project_bindings(requested, inputs, direct_images, *, shared=None, writable_
     if shared is not None and (shared / '.bms-weights.json').is_file():
         donor = next(root for root in roots if shared.is_relative_to(root))
         view = projected[donor] / shared.relative_to(donor)
+        # One bind per object directory, not per object: a Boltz-2/ESMFold2 layout holds ~45,000 files, and a
+        # volume per file overflowed ARG_MAX (udocker, then PRoot) and made PRoot's bind list unusable.
+        # Each mirror hardlinks the same private view inodes, so a write through any CAS alias still lands
+        # in the private projection and the existing postcheck sees it.
+        members = {}
         for row in json.loads((shared / '.bms-weights.json').read_bytes()):
             if 'target' in row:
                 continue
@@ -398,7 +405,17 @@ def project_bindings(requested, inputs, direct_images, *, shared=None, writable_
                           objects / 'modes' / digest[:2] / (digest + '-' + format(row['mode'], '03o'))]
             for candidate in candidates:
                 if candidate.is_file():
-                    aliases[candidate] = view / row['name']
+                    members.setdefault(candidate.parent, {})[candidate.name] = view / row['name']
+        for number, (directory, names) in enumerate(sorted(members.items(), key=lambda item: str(item[0]))):
+            mirror = inputs / ('objects-' + str(number))
+            mirror.mkdir(mode=0o700)
+            for name, private in names.items():
+                os.link(private, mirror / name, follow_symlinks=False)
+            aliases[directory] = mirror
+        # The mirrors' hardlinks changed link count and ctime of the view's files; the strict postcheck
+        # must compare against the view as the container will see it.
+        guarded = [(source, before, view, snapshot(view, strict_views[source][1]) if strict_views[source][0] else None)
+                   for source, before, view, _ in guarded]
     volumes, shadows = [], []
     for source, target, mode in requested:
         donor = next((root for root in roots if source.is_relative_to(root)), None)
