@@ -112,3 +112,63 @@ it('structured native tables go through a JSON box that rejects unknown names an
     await click(run());
     expect(posts[0].body.designer_settings).toEqual({ bias: { A: -1 } });
 });
+
+it('ProteinMPNN and FAMPNN show only the settings the loop forwards, with model defaults as placeholders', async () => {
+    await mount();
+    await click([...document.querySelectorAll('button')].find(b => b.textContent === 'pick source')!);
+    await set('Resequence engine', 'mpnn'); await flush();
+    for (const group of document.querySelectorAll('details')) (group as HTMLDetailsElement).open = true;
+    expect(fieldNames()).toEqual(expect.arrayContaining(['mpnn_temperature', 'seqs_per_design', 'mpnn_omitAAs', 'mpnn_checkpoint_model']));
+    for (const owned of ['input_pdb', 'fixed_positions', 'design_chain', 'target_chain', 'binder_chains', 'target_chains', 'mpnn_bias_AA_jsonl', 'mpnn_extra_config'])
+        expect(fieldNames()).not.toContain(owned);
+    expect(q('Designer setting mpnn_temperature').getAttribute('placeholder')).toBe('0.1');
+    await click(run());
+    expect(posts[0].body).not.toHaveProperty('designer_settings');
+    await set('Designer setting mpnn_temperature', '0.3'); await set('Designer setting mpnn_checkpoint_model', 'v_48_030');
+    await click(run());
+    expect(posts[1].body).toMatchObject({ seq_method: 'mpnn', designer_settings: { mpnn_temperature: 0.3, mpnn_checkpoint_model: 'v_48_030' } });
+    await set('Resequence engine', 'fampnn'); await flush();
+    for (const group of document.querySelectorAll('details')) (group as HTMLDetailsElement).open = true;
+    expect(fieldNames()).toEqual(expect.arrayContaining(['fampnn_temperature', 'fampnn_checkpoint', 'fampnn_num_steps', 'fampnn_seed', 'fampnn_exclude_cys']));
+    for (const owned of ['input_pdb', 'fixed_positions', 'design_chain', 'target_chain', 'fampnn_checkpoint_path', 'fampnn_constraint_mode', 'fampnn_extra_config', 'fampnn_fix_target_sidechains'])
+        expect(fieldNames()).not.toContain(owned);
+    expect(fieldNames()).not.toContain('mpnn_temperature');
+    await set('Designer setting fampnn_temperature', '0.5');
+    await click(run());
+    expect(posts[2].body.designer_settings).toEqual({ fampnn_temperature: 0.5 });
+});
+
+const validatorNames = (id: string) => [...document.querySelectorAll(`[data-validator-settings="${id}"] [aria-label^="Validator setting "]`)]
+    .map(n => n.getAttribute('aria-label')!.replace(`Validator setting ${id} `, ''));
+
+it('each selected validator gets its own settings; defaults read as loop defaults and only changes are sent', async () => {
+    await mount();
+    await click([...document.querySelectorAll('button')].find(b => b.textContent === 'pick source')!);
+    await flush();
+    expect(document.querySelector('[data-validator-settings="protenix_v2"]')).not.toBeNull();
+    expect(document.querySelector('[data-validator-settings="boltz2"]')).toBeNull();
+    for (const group of document.querySelectorAll('details')) (group as HTMLDetailsElement).open = true;
+    expect(validatorNames('protenix_v2')).toEqual(expect.arrayContaining(['protenix_n_sample', 'protenix_n_step', 'protenix_n_cycle', 'protenix_seeds']));
+    for (const owned of ['sequence', 'protenix_msa_backend', 'msa_provider', 'protenix_model_weights', 'complex_components'])
+        expect(validatorNames('protenix_v2')).not.toContain(owned);
+    // The catalog default is not what the loop runs, so no catalog number is shown as a placeholder.
+    expect(document.querySelector('[aria-label="Validator setting protenix_v2 protenix_n_sample"]')!.getAttribute('placeholder')).toBe('');
+    await click(run());
+    expect(posts[0].body).not.toHaveProperty('validator_settings');
+    await click(q('Validate with Boltz-2')); await click(q('Validate with ESMFold2 (optional)')); await flush();
+    for (const group of document.querySelectorAll('details')) (group as HTMLDetailsElement).open = true;
+    expect(validatorNames('boltz2')).toEqual(expect.arrayContaining(['boltz_recycling_steps', 'boltz_sampling_steps', 'boltz_diffusion_samples']));
+    expect(validatorNames('boltz2')).not.toContain('sequence');
+    expect(validatorNames('esmfold2')).toEqual(expect.arrayContaining(['num_loops', 'num_sampling_steps', 'num_diffusion_samples', 'model_variant', 'seed']));
+    expect(validatorNames('esmfold2')).not.toContain('pdb_sequence_path');
+    await set('Validator setting protenix_v2 protenix_n_sample', '2');
+    await set('Validator setting boltz2 boltz_sampling_steps', '100');
+    await set('Validator setting esmfold2 num_loops', '4');
+    await click(run());
+    expect(posts[1].body.validator_settings).toEqual({ protenix_v2: { protenix_n_sample: 2 }, boltz2: { boltz_sampling_steps: 100 }, esmfold2: { num_loops: 4 } });
+    // Deselecting a validator drops its settings from the request.
+    await click(q('Validate with Boltz-2')); await flush();
+    await click(run());
+    expect(posts[2].body.validator_settings).toEqual({ protenix_v2: { protenix_n_sample: 2 }, esmfold2: { num_loops: 4 } });
+    expect(posts[2].body.structure_validators).toEqual(['protenix_v2', 'esmfold2']);
+});

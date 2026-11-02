@@ -957,6 +957,7 @@ class ResequenceLaunchRequest(BaseModel):
     seq_method: Literal["fampnn", "mpnn", "ligandmpnn", "caliby", "protonpottsmpnn"] = "fampnn"
     designer_mode: Optional[str] = None
     designer_settings: Dict[str, Any] = Field(default_factory=dict)
+    validator_settings: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     design_chains: str = Field(..., min_length=1)
     fixed_positions: str = ""
     designable_positions: str = ""
@@ -8972,6 +8973,15 @@ async def launch_resequence_from_structures(
         template_path = selection_dir.with_name(selection_dir.name + "_designer.json")
         template_path.write_text(json.dumps(template, sort_keys=True))
         params["designer_template"] = str(template_path)
+    if request.seq_method in ("mpnn", "fampnn") or request.validator_settings:
+        from services.resequence_settings import designer_params, validator_params
+        try:
+            if request.seq_method in ("mpnn", "fampnn"):
+                params.update(designer_params(request.seq_method, request.designer_settings))
+            params.update(validator_params(request.structure_validators, request.validator_settings))
+        except ValueError as exc:
+            shutil.rmtree(selection_dir, ignore_errors=True)
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     launch_request = JobCreate(
         name=request.name,
         model_id="protein_modification_experimental",

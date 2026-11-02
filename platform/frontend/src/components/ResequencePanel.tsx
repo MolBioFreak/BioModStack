@@ -16,6 +16,7 @@ export function ResequencePanel() {
     const [engine, setEngine] = useState<string>('mpnn');
     const [ligandMode, setLigandMode] = useState('ligand_aware');
     const [designer, setDesigner] = useState<{ values: Record<string, unknown>; valid: boolean }>({ values: {}, valid: true });
+    const [validatorSettings, setValidatorSettings] = useState<Record<string, { values: Record<string, unknown>; valid: boolean }>>({});
     const [chains, setChains] = useState('A');
     const [fixed, setFixed] = useState('');
     const [designable, setDesignable] = useState('');
@@ -30,6 +31,7 @@ export function ResequencePanel() {
             ...(engine === 'ligandmpnn' ? { designer_mode: ligandMode } : {}),
             ...(ownSettings && Object.keys(designer.values).length ? { designer_settings: designer.values } : {}), design_chains: chains.trim(), name: name.trim() || 'Resequence',
             structure_validators: validators,
+            ...(Object.keys(sentValidatorSettings).length ? { validator_settings: sentValidatorSettings } : {}),
             ...(fixed.trim() ? { fixed_positions: fixed.trim() } : {}),
             ...(designable.trim() ? { designable_positions: designable.trim() } : {}),
         })).data,
@@ -37,8 +39,14 @@ export function ResequencePanel() {
         onError: (cause: Error) => setError(cause.message || 'Failed to start resequencing'),
     });
     const toggle = (id: string) => setValidators(previous => previous.includes(id) ? previous.filter(x => x !== id) : [...previous, id]);
-    const ownSettings = ['ligandmpnn', 'caliby', 'protonpottsmpnn'].includes(engine);
-    const ready = Boolean(source) && chains.trim() !== '' && validators.length > 0 && !(fixed.trim() && designable.trim()) && (!ownSettings || designer.valid);
+    const ownSettings = ['mpnn', 'fampnn', 'ligandmpnn', 'caliby', 'protonpottsmpnn'].includes(engine);
+    // Only selected validators' non-empty settings are sent; deselecting a validator drops its settings.
+    const sentValidatorSettings = Object.fromEntries(validators
+        .filter(id => Object.keys(validatorSettings[id]?.values ?? {}).length > 0)
+        .map(id => [id, validatorSettings[id].values]));
+    const validatorsValid = validators.every(id => validatorSettings[id]?.valid !== false);
+    const ready = Boolean(source) && chains.trim() !== '' && validators.length > 0 && !(fixed.trim() && designable.trim())
+        && (!ownSettings || designer.valid) && validatorsValid;
     return <section className="space-y-3" aria-label="Resequence and validate" data-resequence-panel>
         <p className="text-xs text-[var(--text-secondary)]">Resequence a design from any generator, then validate it. The loop pauses for review when it finishes. ProtonPottsMPNN picks its own sites, so keep/change positions are not applied to it.</p>
         <NativeSourceInput integrated label="Structure to resequence" value={source ? 'input' : ''} bindings={bindings}
@@ -55,6 +63,11 @@ export function ResequencePanel() {
         <fieldset><legend>Validate with</legend>
             {VALIDATORS.map(([id, label]) => <label key={id} className="mr-4"><input type="checkbox" aria-label={`Validate with ${label}`} checked={validators.includes(id)} onChange={() => toggle(id)} /> {label}</label>)}
         </fieldset>
+        {VALIDATORS.filter(([id]) => validators.includes(id)).map(([id, label]) =>
+            <details key={id} className="rounded border border-[var(--border-primary)] p-3" data-validator-settings={id}>
+                <summary className="cursor-pointer text-sm font-medium">{label} settings</summary>
+                <DesignerSettingsForm engine={id} mode="" onChange={(values, valid) => setValidatorSettings(previous => ({ ...previous, [id]: { values, valid } }))} />
+            </details>)}
         <label>Job name<input aria-label="Resequence job name" value={name} onChange={event => setName(event.target.value)} /></label>
         {error && <p role="alert">{error}</p>}
         {engine === 'ligandmpnn' && <label>LigandMPNN mode<select aria-label="LigandMPNN mode" value={ligandMode} onChange={event => setLigandMode(event.target.value)}>
