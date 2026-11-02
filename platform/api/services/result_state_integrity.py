@@ -522,7 +522,9 @@ async def finalize_successful_job(
                     "protein_local_redesign", "conformational_mapping",
                 } or (
                     str(job.model_id or "").strip().lower() == "protein_modification_experimental"
-                    and (str(job.mode or "").strip().lower() == "shape_blueprint" or (
+                    # Resequence (region_redesign) is the protein_local_redesign workflow under its current
+                    # model id; it publishes no generic candidate record, so it is its own native owner.
+                    and (str(job.mode or "").strip().lower() in {"shape_blueprint", "region_redesign"} or (
                         str(job.mode or "").strip().lower() == "de_novo_design"
                         and str(_parse_job_params(job.params).get("generator") or "rfd3").strip().lower() == "rfd3"
                     ))
