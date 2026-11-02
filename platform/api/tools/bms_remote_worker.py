@@ -447,6 +447,37 @@ def _launch_environment(envelope: dict):
                 os.environ[key] = value
 
 
+def _place_paths(value: Any, path_map: dict) -> Any:
+    """Rewrite absolute controller paths with the launch path map, exactly as the first launch rewrote its argv."""
+    if isinstance(value, str):
+        candidate = PurePosixPath(value)
+        if not candidate.is_absolute() or ".." in candidate.parts:
+            return value
+        for local, remote in sorted(path_map.items(), key=lambda item: len(item[0]), reverse=True):
+            try:
+                relative = candidate.relative_to(PurePosixPath(local))
+            except ValueError:
+                continue
+            return str(PurePosixPath(remote) / relative)
+        return value
+    if isinstance(value, dict):
+        return {key: _place_paths(item, path_map) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_place_paths(item, path_map) for item in value]
+    return value
+
+
+def _placed_checkpoint_context(envelope: dict, context: dict) -> dict:
+    """The controller built this context in its own filesystem; compile the continuation in the worker's.
+
+    Only the parent's native settings carry controller paths. Without placing them the continuation's output
+    directory is the controller's, outside this attempt's artifact custody.
+    """
+    path_map = dict(envelope.get("path_map") or {})
+    parent = dict(context["parent"], params=_place_paths(context["parent"].get("params") or {}, path_map))
+    return dict(context, parent=parent)
+
+
 def _component_checkpoint_runtime(envelope: dict):
     """Use only the launch-bound source/context, not SSH shell configuration."""
     value = (envelope.get("environment") or {}).get("BMS_COMPONENT_CONTEXT")
@@ -536,7 +567,8 @@ def checkpoint_control(attempt_dir: Path, *, attempt_id: str, expected_boot_id: 
                 component_checkpoint_parent_snapshot, component_checkpoint_resources)
             try:
                 with _launch_environment(envelope):
-                    invocation = compile_component_checkpoint_continuation(context, checkpoint, decision)
+                    invocation = compile_component_checkpoint_continuation(
+                        _placed_checkpoint_context(envelope, context), checkpoint, decision)
                 runtime.resume_checkpoint(checkpoint_id, checkpoint_sha256=checkpoint_sha256,
                     decision=decision, actor="jobs.resume", boot_id=expected_boot_id,
                     invocation=invocation, continuation_lease_id=continuation_lease_id,
