@@ -208,6 +208,22 @@ async def _authoritative_result_count(session: AsyncSession, job: Job) -> int:
     return await _design_count(session, str(job.id))
 
 
+def _in_reviewed_final_dir(owner: Job, resolved: Path) -> bool:
+    """A remote Resequence continuation publishes its finals in the reviewed selection folder.
+
+    That folder is the parent of the continuation folder that ``child_output_dir`` names, so measuring
+    against ``child_output_dir`` alone rejects real finals. Accept a path inside the job's own
+    ``plr_final_candidate_dir`` only when that folder is itself inside the job's result root.
+    """
+    from services.result_ingester import _parse_job_params
+
+    raw = str(_parse_job_params(owner.params).get("plr_final_candidate_dir") or "").strip()
+    if not raw or not owner.output_dir:
+        return False
+    final_dir = Path(raw).expanduser().resolve()
+    return final_dir.is_relative_to(Path(owner.output_dir).expanduser().resolve()) and resolved.is_relative_to(final_dir)
+
+
 async def _existing_designs_are_usable(
     session: AsyncSession, job_id: str, output_dir: str
 ) -> bool:
@@ -230,7 +246,9 @@ async def _existing_designs_are_usable(
         output_root = Path(artifact_root).expanduser().resolve()
         pdb_path = Path(str(design.pdb_path).strip()).expanduser()
         resolved = pdb_path.resolve() if pdb_path.is_absolute() else (output_root / pdb_path).resolve()
-        if not resolved.is_relative_to(output_root) or not resolved.is_file():
+        if not resolved.is_file() or not (
+            resolved.is_relative_to(output_root) or _in_reviewed_final_dir(owner, resolved)
+        ):
             return False
     return True
 
