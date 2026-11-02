@@ -231,6 +231,11 @@ PROCESS_CONTRACTS = {
     'workflows/protein_local_redesign.nf:EnforceProteinLocalValidatorSuite': (('process_low',), ('path suite_receipt',), ("path 'validator_suite_complete', emit: complete",), (), ()),
     'workflows/protein_local_redesign.nf:StageProteinLocalValidatedCandidates': (('process_low',), ('path candidate_pdbs', 'path suite_receipt', 'path validator_suite_complete'), ("path 'review_candidates/*.pdb', emit: candidates",), (), ()),
     'workflows/protein_local_redesign.nf:OpenInteractiveGate': (('process_low',), ('val job_id', 'val stage_name', 'val gate_trigger', 'val candidate_dir', 'val raw_dir', 'val filtered_dir', 'val framework_type', 'val antibody_chains', 'val structure_validator'), ('path "gate_${stage_name}.json", emit: report',), ('scripts/open_stage_gate.py',), ()),
+    'workflows/protein_local_redesign.nf:RunLigandMPNNResequence': (('Foundry', 'gpu'), ('tuple path(pdb_files), path(json_files)', 'path template', 'val position_args'), ("path('designs/*.pdb'), emit: pdbs",), ('scripts/run_resequence_designer.py', 'scripts/run_ligandmpnn_design.py', 'scripts/designer_outputs_to_pdb.py'), ()),
+    'workflows/protein_local_redesign.nf:RunCalibyResequence': (('Caliby', 'gpu'), ('tuple path(pdb_files), path(json_files)', 'path template', 'val position_args'), ("path('designs/*.pdb'), emit: pdbs",), ('scripts/run_resequence_designer.py', 'scripts/run_caliby_experimental.py', 'scripts/prep_caliby_request.py',
+        'scripts/caliby_runtime.py', 'scripts/designer_outputs_to_pdb.py'), ()),
+    'workflows/protein_local_redesign.nf:RunProtonPottsResequence': (('cpu',), ('tuple path(pdb_files), path(json_files)', 'path template', 'val position_args'), ("path('designs/*.pdb'), emit: pdbs",), ('scripts/run_resequence_designer.py', 'scripts/run_protonpottsmpnn_design.py', 'scripts/lib/protonpottsmpnn_contract.py',
+        'scripts/designer_outputs_to_pdb.py'), ()),
     'workflows/protein_local_redesign.nf:PrepProteinLocalFAMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'val fixed_args'), ("path('fampnn_input/*.pdb'), emit: pdbs", "path('fampnn_input/*.fampnn_prep.json'), emit: provenance, optional: true", "path('fampnn.csv'), emit: csv"), ('scripts/prep_fampnn_constraints_from_spec.py', 'scripts/prep_fampnn_designs.py', 'scripts/fampnn_policy_resolution.py', 'scripts/antibody_fampnn_provenance.py', 'lib/FampnnNativeControls.groovy', 'lib/FampnnAnalysisPolicy.groovy', 'scripts/fampnn_native_runtime.py', 'scripts/fampnn_native_binding.py', 'scripts/prep_fampnn_constraints_generic.py', 'scripts/maturation_native_adapter.py', 'scripts/maturation_correspondence.py', 'scripts/analyse_fampnn.py', 'scripts/analyse_fampnn_seq_probs.py'), ()),
     'workflows/protein_local_redesign.nf:PrepProteinLocalMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)', 'path manifest_json'), ("path('mpnn_fixed/*.pdb'), emit: pdbs",), ('scripts/add_fixed_labels_from_spec.py', 'scripts/prep_mpnn_designs.py', 'scripts/proteinmpnn_native_binding.py'), ()),
     'workflows/protein_local_redesign.nf:ExportProteinLocalMPNNResults': (('process_low',), ('tuple path(pdb_files), path(json_files)',), ("path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: jsons"), (), ()),
@@ -270,6 +275,13 @@ PROCESS_CONTRACTS.update({
         ('process_low',), ('tuple val(meta), path(sample_pdb)',),
         ("path '*_sample_identity.json', emit: sidecar",), ('scripts/maturation_identity.py',), ()),
 })
+
+# Resequence designers that run as one native stage each (ProteinMPNN and FAMPNN have their own chains).
+LOOP_DESIGNER_STAGES = {
+    'ligandmpnn': 'RunLigandMPNNResequence',
+    'caliby': 'RunCalibyResequence',
+    'protonpottsmpnn': 'RunProtonPottsResequence',
+}
 
 # Images are the existing nextflow.config labels, not top-level model guesses.
 LABEL_ASSETS = {
@@ -1028,8 +1040,18 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         resume_backbone = not resume_validation and not resume_sequence and bool(p.get('plr_backbone_input_pdbs'))
         after = ()
         if not resume_validation and not resume_sequence:
-            if p.get('plr_seq_method', 'fampnn') == 'mpnn':
+            designer = p.get('plr_seq_method', 'fampnn')
+            if designer == 'mpnn':
                 after = a.chain(['PrepProteinLocalMPNN', 'RunMPNN', 'ExportProteinLocalMPNNResults', 'FilterMPNN'], after)
+            elif designer in LOOP_DESIGNER_STAGES:
+                # One native run per input design; the image (and Caliby checkpoint) come with the stage.
+                extra = ()
+                if designer == 'protonpottsmpnn':
+                    from services.protonpottsmpnn_design import selected_assets
+                    extra = tuple(a.asset(item['kind'], item['relative_path'],
+                                  'services.protonpottsmpnn_design:selected_assets', 'protonpottsmpnn_container_path')
+                                  for item in selected_assets())
+                after = a.chain([LOOP_DESIGNER_STAGES[designer]], after, extra=extra)
             else:
                 after = a.chain(['PrepProteinLocalFAMPNN', 'RunFAMPNN', 'FilterFAMPNN'], after)
         if not resume_validation:

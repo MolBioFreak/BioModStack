@@ -534,6 +534,21 @@ def native_checkpoint_dependencies(process: str, params: dict):
             relative = 'caliby/model_params/' + member
             dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
                 'scripts/caliby_runtime.py:resolve_expected_caliby_checkpoint; MODEL_PARAMS_DIR'))
+    elif process == 'RunCalibyResequence':
+        import json
+        from services.caliby_native import selected_assets
+        # The loop keeps the caller's model choice in the designer template file, not in job params.
+        template = params.get('plr_designer_template') or params.get('designer_template')
+        name = None
+        if template:
+            try:
+                name = json.loads(Path(str(template)).read_text()).get('model_name')
+            except (OSError, ValueError, AttributeError):
+                name = None
+        assets = selected_assets('ensemble_design', {'model_name': name} if name else {})
+        relative = assets['model_params_subdir'] + '/' + assets['checkpoint']
+        dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
+            'services.caliby_native:selected_assets; MODEL_PARAMS_DIR'))
     elif process in {'RunCalibyNative', 'RunShapeCaliby'}:
         from services.caliby_native import selected_assets
         if process == 'RunShapeCaliby':
