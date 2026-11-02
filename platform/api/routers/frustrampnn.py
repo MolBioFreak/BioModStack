@@ -3192,6 +3192,12 @@ async def analyze_loop_candidates(
         raise HTTPException(404, "loop job not found")
     root = resolve_output_dir(job.output_dir)
     review = (root / "validation" / "review_candidates").resolve() if root else None
+    if (review is None or not review.is_dir()) and root is not None:
+        # A remote gate keeps its candidates in the fetched checkpoint review set, which the gate payload names.
+        from services.stage_review import resolve_review_path
+        gate = resolve_review_path((getattr(job, "awaiting_payload", None) or {}).get("candidate_dir"), job.output_dir)
+        if gate is not None and gate.is_dir():
+            review = gate.resolve()
     if review is None or not review.is_dir():
         raise HTTPException(409, "loop job has no review candidates yet")
     try:
