@@ -2628,8 +2628,21 @@ def component_checkpoint_resources(invocation, context, resource_admission=None)
     # Only new native input bytes need space; retained runtime/images are installed.
     scratch = sum(len(item.payload) for item in invocation.generated_inputs
                   if not (Path(context['artifact_root']) / item.relative_path).exists())
-    resources = selected_plan_target_resources(SimpleNamespace(id=context['target_id']),
-        invocation.execution_plan, gpu_ids=previous['gpu_ids'], scratch_bytes=scratch)
+    plan = invocation.execution_plan
+    metadata = plan['metadata'] if isinstance(plan, dict) else plan.metadata
+    static, dynamic = ((metadata['static_components'], metadata['dynamic_templates']) if isinstance(metadata, dict)
+                       else (metadata.static_components, metadata.dynamic_templates))
+    if not (static or dynamic):
+        # The workflow has nothing left to compute (the final review gate only publishes the chosen designs).
+        # There is no new native requirement to project, so the continuation keeps the budget the attempt was
+        # already admitted with; the launch-time projection still refuses a plan with no declarations.
+        from copy import deepcopy
+        resources = deepcopy(previous)
+        resources.pop('admission', None)
+        resources.update(components=[], required=dict(previous['required'], scratch_bytes=scratch))
+    else:
+        resources = selected_plan_target_resources(SimpleNamespace(id=context['target_id']),
+            invocation.execution_plan, gpu_ids=previous['gpu_ids'], scratch_bytes=scratch)
     if context['target_id'] == 'local':
         from biomodstack_local_resources import applied_local_policy, detect_local_capacity
         import shutil
