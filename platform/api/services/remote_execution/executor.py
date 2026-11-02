@@ -112,8 +112,12 @@ def _worker_argv(
     attempt_dir: str,
     *extra: str,
 ) -> list[str]:
+    # -B: these run over SSH beside live containers that guard the read-only release tree. Without it the
+    # worker interpreter writes bytecode into that tree mid-task (for example while delivering a generated
+    # MSA) and the container reports "declared scientific input changed during execution".
     return [
         connection.runtime_binding["paths"]["python"] if connection.runtime_binding else "python3",
+        "-B",
         _worker_path(connection),
         command,
         "--attempt-dir",
@@ -1701,7 +1705,7 @@ async def remote_live_logs(session: AsyncSession, job: Job, *, tail: int = 200) 
     script = helpers + "\nexec(" + repr(Path(native_diagnostics.__file__).read_text()) + ")\n" + Path(reader.__file__).read_text()
     response = await run_remote(connection, [
         connection.runtime_binding['paths']['python'] if connection.runtime_binding else 'python3',
-        '-c', script, attempt_dir,
+        '-B', '-c', script, attempt_dir,
         json.dumps(identity), str(max(1, min(int(tail), 5000))),
     ], timeout=30)
     # A retry/reattachment while SSH was in flight must not expose predecessor logs.

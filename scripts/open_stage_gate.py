@@ -10,7 +10,10 @@ import re
 import sys
 from pathlib import Path
 
-import requests
+try:  # Worker containers have no `requests`; their gate opens through the attempt journal, not HTTP.
+    import requests
+except ImportError:  # pragma: no cover - exercised by test_open_stage_gate_worker_imports
+    requests = None
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CODE_ROOT / "platform" / "api"))
@@ -249,6 +252,8 @@ def main() -> int:
             directories={"candidate": candidate_dir, "raw": raw_dir, "filtered": filtered_dir},
             payload_path=Path(args.payload_json).resolve() if args.payload_json else None)
     else:
+        if requests is None:
+            raise RuntimeError("controller-local gate opening needs the requests package")
         response = requests.post(
             f"{args.api_url}/api/jobs/{args.job_id}/stage-gates/{args.stage}/open",
             json={"payload": payload},
