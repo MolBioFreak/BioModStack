@@ -51,6 +51,12 @@ async def test_incomplete_native_editor_null_persists_and_cold_reopens(native_ht
 @pytest.mark.parametrize('model,status,count', [('rfd4_proteina', 'failed', 2), ('complexa', 'completed', 0)])
 async def test_project_native_custody_survives_producer_deletion(
         native_http, setup_store, native_core_store, tmp_path, monkeypatch, model, status, count):
+    # Match the inert inventory in test_native_setup_gpu_placement: custody
+    # exercises real admission, not the host's optional GPU device namespace.
+    from routers import gpu
+    monkeypatch.setattr(gpu, '_query_smi_gpu_map', lambda: {
+        0: {'uuid': 'GPU-fixture-zero'}, 2: {'uuid': 'GPU-fixture-two'},
+    })
     monkeypatch.setenv('BMS_EXPERIMENT_ARTIFACT_ROOT', str(tmp_path / 'project-artifacts'))
     from services import job_result_roots
     monkeypatch.setattr(job_result_roots, 'get_results_dir', lambda: tmp_path / 'results')
