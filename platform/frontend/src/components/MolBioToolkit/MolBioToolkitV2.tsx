@@ -1672,10 +1672,11 @@ export function MolBioToolkitV2() {
         sequence: string;
         sequenceType: 'dna' | 'rna';
         circular: boolean;
+        moleculeStrandedness?: 'single' | 'double' | 'unknown';
         description?: string;
     }) => {
         if (exactMolecularAuthorityRef.current) return;
-        const moleculeStrandedness = data.sequenceType === 'rna' ? 'single' : 'double';
+        const moleculeStrandedness = data.moleculeStrandedness ?? (data.sequenceType === 'rna' ? 'single' : 'double');
         const moleculeOrientation = moleculeStrandedness === 'double' ? 'not_applicable' : 'unknown';
         const newSequence: SequenceData = {
             name: data.name,
@@ -1702,14 +1703,16 @@ export function MolBioToolkitV2() {
     const handleOpenPrimerAsConstruct = useCallback((data: {
         name: string;
         sequence: string;
+        sequenceType?: 'dna' | 'rna';
         description?: string;
     }) => {
         handlePasteSequence({
             name: data.name,
             description: data.description,
             sequence: data.sequence.toUpperCase(),
-            sequenceType: inferSequenceTypeFromSequence(data.sequence),
+            sequenceType: data.sequenceType || inferSequenceTypeFromSequence(data.sequence),
             circular: false,
+            moleculeStrandedness: 'single',
         });
     }, [handlePasteSequence]);
 

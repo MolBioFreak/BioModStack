@@ -669,6 +669,7 @@ class SequenceInput(BaseModel):
 
 class PrimerTmSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["primer-tm-settings-v1"] = "primer-tm-settings-v1"
     algorithm: str = "nn_santalucia_hicks_2004"
     salt_correction: str = "owczarzy_2008"
     primer_concentration_nM: float = Field(default=250.0, gt=0, allow_inf_nan=False)
@@ -3685,7 +3686,7 @@ def tm_algorithm_capabilities(algorithm: str) -> dict[str, Any]:
         scope = "RNA reference condition: 1 M Na. Only perfectly paired overlap is supported; RNA/RNA dangling ends use RNA_DE1. No DNA salt extrapolation."
     else:
         salts = list(TM_SALT_CORRECTION_DEFS)
-        scope = "Perfect DNA duplex unless an explicit 3′→5′ complementary strand is supplied through the API."
+        scope = "Perfect DNA duplex unless an explicit 3′→5′ complementary strand is supplied in Advanced duplex Tm."
     return {"salt_corrections": salts, "applicability": scope}
 
 
@@ -3721,16 +3722,34 @@ DEFAULT_TM_SETTINGS_BY_SEQUENCE_TYPE = {
 }
 
 
+class PrimerDesignSearchProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    version: Literal["flanking_exact_v1"] = "flanking_exact_v1"
+    candidates_per_strand: Literal[48] = 48
+    target_overlap_bases: Literal[4] = 4
+    origin_wrapping_candidates: Literal[False] = False
+    product_size_includes_tails: Literal[True] = True
+    overlapping_footprints: Literal[False] = False
+    substrate: Literal["dna_template"] = "dna_template"
+    qc: PrimerQcProfile = Field(default_factory=PrimerQcProfile)
+
+
 class PrimerTmInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["primer-tm-input-v1"] = "primer-tm-input-v1"
     id: Optional[str] = None
     name: Optional[str] = None
     sequence: str
-    sequence_type: Optional[str] = None
-    complement_sequence: Optional[str] = None
-    shift: int = 0
+    sequence_type: Optional[Literal["dna", "rna"]] = None
+    complement_sequence: Optional[str] = Field(default=None, description="Aligned complementary strand written 3′ to 5′; omitted means a perfect complement.")
+    shift: int = Field(default=0, description="Complement index aligned to oligo index zero; positive shifts move oligo right.")
 
 
 class PrimerTmResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["primer-tm-result-v1"] = "primer-tm-result-v1"
+    effective_settings: PrimerTmSettings
+    effective_input: PrimerTmInput
     id: Optional[str] = None
     name: Optional[str] = None
     sequence: str
@@ -3747,6 +3766,8 @@ class PrimerTmResult(BaseModel):
 
 
 class PrimerTmBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["primer-tm-batch-v1"] = "primer-tm-batch-v1"
     primers: List[PrimerTmInput]
     settings: Optional[PrimerTmSettings] = None
 
@@ -3768,6 +3789,9 @@ class PrimerTmSaltCorrectionOption(BaseModel):
 
 
 class PrimerTmOptionsResponse(BaseModel):
+    schema_version: Literal["primer-options-v1"] = "primer-options-v1"
+    qc_profile: PrimerQcProfile = Field(default_factory=PrimerQcProfile)
+    design_profile: PrimerDesignSearchProfile = Field(default_factory=PrimerDesignSearchProfile)
     algorithms: List[PrimerTmOption]
     salt_corrections: List[PrimerTmSaltCorrectionOption]
     defaults: dict[str, PrimerTmSettings]
@@ -3875,10 +3899,14 @@ def calculate_primer_tm_result(
         resolved_sequence_type
     )
     gc_percent = calculate_gc_percent(cleaned)
+    receipt = dict(effective_settings=resolved_settings, effective_input=PrimerTmInput(
+        sequence=cleaned, sequence_type=resolved_sequence_type,
+        complement_sequence=clean_primer_sequence(complement_sequence) if complement_sequence is not None else None, shift=shift))
     warnings: List[str] = []
 
     if not cleaned:
         return PrimerTmResult(
+            **receipt,
             sequence=cleaned,
             sequence_type=resolved_sequence_type,
             length=0,
@@ -3894,6 +3922,7 @@ def calculate_primer_tm_result(
 
     if not all(base in "ATCGUMRWSYKVHDBN" for base in cleaned):
         return PrimerTmResult(
+            **receipt,
             sequence=cleaned,
             sequence_type=resolved_sequence_type,
             length=len(cleaned),
@@ -3912,6 +3941,7 @@ def calculate_primer_tm_result(
 
     if algorithm_def is None:
         return PrimerTmResult(
+            **receipt,
             sequence=cleaned,
             sequence_type=resolved_sequence_type,
             length=len(cleaned),
@@ -3927,6 +3957,7 @@ def calculate_primer_tm_result(
 
     if salt_def is None:
         return PrimerTmResult(
+            **receipt,
             sequence=cleaned,
             sequence_type=resolved_sequence_type,
             length=len(cleaned),
@@ -3946,6 +3977,7 @@ def calculate_primer_tm_result(
 
     if resolved_sequence_type not in algorithm_def["sequence_types"]:
         return PrimerTmResult(
+            **receipt,
             sequence=cleaned,
             sequence_type=resolved_sequence_type,
             length=len(cleaned),
@@ -4050,6 +4082,7 @@ def calculate_primer_tm_result(
         warnings.append(str(exc))
 
     return PrimerTmResult(
+            **receipt,
         sequence=cleaned,
         sequence_type=resolved_sequence_type,
         length=len(cleaned),
@@ -4064,17 +4097,13 @@ def calculate_primer_tm_result(
     )
 
 
-class PrimerDesignSearchProfile(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    version: Literal["flanking_exact_v1"] = "flanking_exact_v1"
-    candidates_per_strand: Literal[48] = 48
-    target_overlap_bases: Literal[4] = 4
-    origin_wrapping_candidates: Literal[False] = False
-    product_size_includes_tails: Literal[True] = True
-    qc: PrimerQcProfile = Field(default_factory=PrimerQcProfile)
 
 
 class PrimerDesignRequest(SequenceInput):
+    sequence_type: Optional[Literal["dna", "rna"]] = None
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["primer-design-v1"] = "primer-design-v1"
+    search_profile: PrimerDesignSearchProfile = Field(default_factory=PrimerDesignSearchProfile)
     target_start: int = 0
     target_end: Optional[int] = None
     primer_min_length: int = 18
@@ -4131,6 +4160,8 @@ class PrimerDesignPairResponse(BaseModel):
 
 
 class PrimerDesignResponse(BaseModel):
+    schema_version: Literal["primer-design-result-v1"] = "primer-design-result-v1"
+    effective_request: PrimerDesignRequest
     search_profile: PrimerDesignSearchProfile = Field(default_factory=PrimerDesignSearchProfile)
     sequence_name: Optional[str] = None
     sequence_type: str
@@ -4228,8 +4259,10 @@ def _design_candidate(
 def design_primer_pairs_for_request(
     request: PrimerDesignRequest, sequence_name: Optional[str]
 ) -> PrimerDesignResponse:
-    search_profile = PrimerDesignSearchProfile()
+    search_profile = request.search_profile
     sequence_type = normalize_sequence_type(request.sequence_type, request.sequence)
+    if sequence_type != "dna":
+        raise HTTPException(status_code=400, detail="PCR primer design requires a DNA template. Supply the intended cDNA sequence for an RNA source; reverse transcription is not modeled.")
     template = clean_inline_sequence(request.sequence or "", sequence_type)
     if not template:
         raise HTTPException(
@@ -4268,7 +4301,7 @@ def design_primer_pairs_for_request(
         raise HTTPException(status_code=400, detail="Primer design requires unambiguous 5′ tails so candidates can be scored.")
     forward_candidates: list[dict[str, Any]] = []
     reverse_candidates: list[dict[str, Any]] = []
-    warnings: list[str] = ["Search considers at most 48 Tm-ranked candidates per strand; results are not an exhaustive primer search."]
+    warnings: list[str] = ["Search considers at most 48 Tm-ranked candidates per strand and excludes overlapping primer footprints; results are not an exhaustive primer search."]
 
     if request.is_circular:
         warnings.append(
@@ -4369,6 +4402,10 @@ def design_primer_pairs_for_request(
     pair_candidates: list[dict[str, Any]] = []
     for forward in forward_candidates:
         for reverse in reverse_candidates:
+            # Match the supported PCR sequence geometry; overlapping 3′ ends
+            # require a different extension/primer-dimer model.
+            if forward["end"] > reverse["start"]:
+                continue
             product_length = (reverse["end"] - forward["start"]
                               + forward["overhang_length"] + reverse["overhang_length"])
             if (
@@ -4439,6 +4476,8 @@ def design_primer_pairs_for_request(
         )
 
     return PrimerDesignResponse(
+        search_profile=search_profile,
+        effective_request=request.model_copy(update={"sequence": template, "sequence_type": sequence_type, "target_end": target_end, "tm_settings": tm_settings, "overhang_forward": forward_overhang, "overhang_reverse": reverse_overhang}),
         sequence_name=sequence_name,
         sequence_type=sequence_type,
         target_start=request.target_start,
@@ -4565,20 +4604,31 @@ class PrimerPairQcResultResponse(BaseModel):
 
 
 class PrimerQcEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     id: Optional[str] = None
     name: Optional[str] = None
     sequence: str
-    sequence_type: Optional[str] = None
+    sequence_type: Optional[Literal["dna", "rna"]] = None
 
-    intended_binding_start: Optional[int] = None
-    intended_binding_end: Optional[int] = None
-    intended_binding_strand: Optional[int] = None
+    intended_binding_start: Optional[int] = Field(default=None, ge=0)
+    intended_binding_end: Optional[int] = Field(default=None, ge=0)
+    intended_binding_strand: Optional[Literal[-1, 1]] = None
+
+    @model_validator(mode="after")
+    def complete_intended_site(self):
+        fields = (self.intended_binding_start, self.intended_binding_end, self.intended_binding_strand)
+        if any(value is not None for value in fields) and not all(value is not None for value in fields):
+            raise ValueError("Intended binding start, end and strand must be supplied together")
+        return self
 
 
 class PrimerQcRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["primer-qc-v1"] = "primer-qc-v1"
+    profile: PrimerQcProfile = Field(default_factory=PrimerQcProfile)
     primers: List[PrimerQcEntry]
     template_sequence: Optional[str] = None
-    template_sequence_type: Optional[str] = None
+    template_sequence_type: Optional[Literal["dna", "rna"]] = None
     template_is_circular: bool = False
     include_pairwise: bool = True
 
@@ -4590,6 +4640,8 @@ class PrimerQcEntryResponse(BaseModel):
 
 
 class PrimerQcBatchResponse(BaseModel):
+    schema_version: Literal["primer-qc-result-v1"] = "primer-qc-result-v1"
+    effective_request: PrimerQcRequest
     profile: PrimerQcProfile = Field(default_factory=PrimerQcProfile)
     primers: List[PrimerQcEntryResponse]
     pairwise: List[dict[str, Any]] = Field(default_factory=list)
@@ -4649,6 +4701,7 @@ def _calculate_primer_tm_batch(request: PrimerTmBatchRequest):
         )
         result.id = primer.id
         result.name = primer.name
+        result.effective_input = result.effective_input.model_copy(update={"id": primer.id, "name": primer.name})
         results.append(result)
     return results
 
@@ -4729,6 +4782,8 @@ def _calculate_primer_qc(request: PrimerQcRequest):
                 )
 
     return PrimerQcBatchResponse(
+        profile=request.profile,
+        effective_request=request.model_copy(update={"template_sequence": template_sequence, "template_sequence_type": template_sequence_type, "primers": [entry.model_copy(update={"sequence": qc.qc.sequence, "sequence_type": qc.qc.sequence_type}) for entry, qc in zip(request.primers, primer_results)]}),
         primers=primer_results,
         pairwise=pairwise,
     )

@@ -92,11 +92,70 @@ def test_degenerate_secondary_structure_is_unknown_not_zero_or_literal_pairing()
 
 
 def test_profiles_are_closed_and_report_fixed_scientific_search_scope():
-    from routers.molbio_ops import PrimerQcBatchResponse, PrimerDesignSearchProfile
-    qc=PrimerQcBatchResponse(primers=[],pairwise=[]).profile
+    from routers.molbio_ops import PrimerQcRequest, _calculate_primer_qc, PrimerDesignSearchProfile
+    qc=_calculate_primer_qc(PrimerQcRequest(primers=[])).profile
     assert qc.version == 'exact_match_v1' and qc.binding_core_bases == 12
     assert (qc.hairpin_min_loop,qc.hairpin_max_loop)==(3,12)
     assert qc.three_prime_requires_both_ends
     search=PrimerDesignSearchProfile()
     assert search.candidates_per_strand==48 and search.target_overlap_bases==4
     with pytest.raises(ValidationError): type(qc)(binding_core_bases=8)
+
+
+@pytest.mark.parametrize("model,payload", [
+    ("PrimerTmInput", {"sequence": "ACGT", "saltcorr": 7}),
+    ("PrimerTmBatchRequest", {"primers": [], "mismatch_table": "ignored"}),
+    ("PrimerQcEntry", {"sequence": "ACGT", "binding_core_bases": 8}),
+    ("PrimerQcRequest", {"primers": [], "hairpin_max_loop": 50}),
+    ("PrimerQcRequest", {"primers": [], "profile": {"binding_core_bases": 8}}),
+    ("PrimerDesignRequest", {"sequence": "ACGT", "candidates_per_strand": 96}),
+    ("PrimerDesignRequest", {"sequence": "ACGT", "search_profile": {"candidates_per_strand": 96}}),
+    ("PrimerTmBatchRequest", {"primers": [], "schema_version": "future"}),
+])
+def test_scientific_requests_reject_unrecognized_or_unsupported_settings(model, payload):
+    from routers import molbio_ops
+    with pytest.raises(ValidationError): getattr(molbio_ops, model).model_validate(payload)
+
+
+def test_effective_calculation_receipts_preserve_complete_settings_and_strands():
+    from routers.molbio_ops import PrimerTmBatchRequest, PrimerQcRequest, _calculate_primer_tm_batch, _calculate_primer_qc
+    complement="A"+SEQ.translate(str.maketrans("ACGT","TGCA"))+"A"
+    request=PrimerTmBatchRequest(primers=[{"sequence": SEQ, "complement_sequence": complement, "shift": 1}])
+    result=_calculate_primer_tm_batch(request)[0]
+    assert result.effective_input.complement_sequence==complement and result.effective_input.shift==1
+    assert result.effective_settings.model_dump()==PrimerTmSettings().model_dump()
+    assert result.effective_settings.schema_version=='primer-tm-settings-v1'
+    assert result.tm==round(mt.Tm_NN(SEQ,c_seq=complement,shift=1,nn_table=mt.DNA_NN4,Na=50,Mg=1.5,dNTPs=.6,dnac1=250,dnac2=0,saltcorr=7),2)
+    qc=_calculate_primer_qc(PrimerQcRequest(primers=[{"sequence":SEQ}],template_sequence=SEQ))
+    assert qc.profile==qc.effective_request.profile
+    assert qc.effective_request.include_pairwise and not qc.effective_request.template_is_circular
+    with pytest.raises(ValidationError): PrimerQcRequest(primers=[{"sequence":SEQ,"intended_binding_start":0}])
+
+
+def test_design_excludes_overlapping_three_prime_footprints():
+    rng=random.Random(4); sequence="".join(rng.choice("ACGT") for _ in range(400))
+    req=PrimerDesignRequest(sequence=sequence,sequence_type="dna",target_start=100,target_end=101,
+        primer_min_length=18,primer_max_length=18,product_min_length=40,product_max_length=70,
+        flank_search_span=50,gc_min_percent=0,gc_max_percent=100,tm_target_c=60,tm_max_delta_c=15,
+        gc_clamp_min=0,max_poly_x=6,max_pairs=8,overhang_forward="GGTCTCAACGTACTGATCGAT",
+        overhang_reverse="GGTCTCTGACGATCGACTAG")
+    result=design_primer_pairs_for_request(req,"tiny target")
+    assert not result.pairs
+    assert result.search_profile.overlapping_footprints is False
+    assert result.effective_request.tm_settings is not None
+    # Broader product bounds retain usable candidates, each supported by native PCR.
+    result=design_primer_pairs_for_request(req.model_copy(update={"product_max_length":150}),"tiny target")
+    assert result.pairs
+    for pair in result.pairs:
+        assert pair.forward.end <= pair.reverse.start
+        assert len(native_pcr(pair.forward.sequence,pair.reverse.sequence,Dseqrecord(sequence)))==pair.product_length
+
+
+@pytest.mark.parametrize("sequence", ["ACGU" * 100, "ACGC" * 100])
+def test_pcr_primer_design_rejects_rna_with_or_without_uracil(sequence):
+    from fastapi import HTTPException
+    request=PrimerDesignRequest(sequence=sequence,sequence_type="rna",target_start=100,target_end=200)
+    with pytest.raises(HTTPException) as error: design_primer_pairs_for_request(request,"RNA")
+    assert error.value.status_code==400 and "cDNA" in error.value.detail
+    # The separate generic RNA-oligo thermodynamic capability remains available.
+    assert calculate_primer_tm_result("ACGUACGUACGUACGUACGU", "rna").tm is not None

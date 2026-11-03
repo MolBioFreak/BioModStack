@@ -92,6 +92,16 @@ it('real generic import rejects retained JSON before parsing, storage or chemist
     await act(async () => shell.input.onImportFile(file));
     expect(shell.parsed).not.toHaveBeenCalled(); expect(requests).toEqual(before); expect(alert).toHaveBeenCalledWith(expect.stringContaining('exact duplex ends'));
 });
+it.each(['dna', 'rna'] as const)('opening a known %s primer preserves its single-stranded substrate identity', async sequenceType => {
+    await render(<MolBioToolkitV2 />);
+    await act(async () => shell.input.onOpenPrimerAsConstruct({
+        name: 'ordered oligo', sequence: 'ACGACGACGACGACGACGAC', sequenceType,
+    }));
+    expect(shell.viewer.sequenceData).toMatchObject({
+        sequenceType, moleculeStrandedness: 'single', moleculeOrientation: 'unknown', circular: false,
+    });
+    expect(shell.viewer.sequenceData.moleculeLabel).not.toContain('dsDNA');
+});
 it('GenBank blocks review-needed placement while JSON preserves review status', async () => {
     const data = { ...sequence, digestFragment: undefined, primers: [{ name: 'moved', sequence: 'AATT', start: 0, end: 0, strand: 1 as const, binding_status: 'needs_review' as const, binding_warning: 'Sequence changed' }] };
     await render(<ExportDropdown sequenceData={data} />); await click('Export'); await click('GenBank (.gb)');

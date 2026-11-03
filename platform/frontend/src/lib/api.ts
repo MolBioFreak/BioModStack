@@ -4025,7 +4025,14 @@ export interface SequenceAlignmentResult {
     variants: SequenceAlignmentVariant[];
 }
 
+export interface PrimerDesignSearchProfile {
+    version: 'flanking_exact_v1'; candidates_per_strand: 48; target_overlap_bases: 4;
+    origin_wrapping_candidates: false; product_size_includes_tails: true; overlapping_footprints: false; substrate: 'dna_template'; qc: PrimerQcProfile;
+}
+
 export interface PrimerDesignRequest {
+    schema_version?: 'primer-design-v1';
+    search_profile?: PrimerDesignSearchProfile;
     sequence_id?: string;
     name?: string;
     sequence?: string;
@@ -4087,7 +4094,9 @@ export interface PrimerDesignPair {
 }
 
 export interface PrimerDesignResponse {
-    search_profile?: { version: string; candidates_per_strand: number; target_overlap_bases: number; origin_wrapping_candidates: boolean; product_size_includes_tails: boolean; qc: PrimerQcProfile };
+    schema_version?: 'primer-design-result-v1';
+    effective_request?: PrimerDesignRequest;
+    search_profile?: PrimerDesignSearchProfile;
     sequence_name?: string | null;
     sequence_type: 'dna' | 'rna';
     target_start: number;
@@ -4154,6 +4163,8 @@ export interface PrimerQcProfile {
 }
 
 export interface PrimerQcResponse {
+    schema_version?: 'primer-qc-result-v1';
+    effective_request?: PrimerQcRequest;
     profile?: PrimerQcProfile;
     primers: PrimerQcEntry[];
     pairwise: PrimerPairQcEntry[];
@@ -4617,6 +4628,7 @@ export const annotateFrameworkCdrs = (pdbCode: string, scheme: string = 'imgt') 
 // ============================================================
 
 export interface PrimerTmSettings {
+    schema_version?: 'primer-tm-settings-v1';
     algorithm: string;
     salt_correction: string;
     primer_concentration_nM: number;
@@ -4648,6 +4660,9 @@ export interface PrimerTmSaltCorrectionOption {
 }
 
 export interface PrimerTmOptionsResponse {
+    schema_version?: 'primer-options-v1';
+    qc_profile?: PrimerQcProfile;
+    design_profile?: PrimerDesignSearchProfile;
     algorithms: PrimerTmOption[];
     salt_corrections: PrimerTmSaltCorrectionOption[];
     defaults: {
@@ -4657,6 +4672,7 @@ export interface PrimerTmOptionsResponse {
 }
 
 export interface PrimerTmInput {
+    schema_version?: 'primer-tm-input-v1';
     id?: string;
     name?: string;
     sequence: string;
@@ -4666,6 +4682,9 @@ export interface PrimerTmInput {
 }
 
 export interface PrimerTmResult {
+    schema_version?: 'primer-tm-result-v1';
+    effective_input?: PrimerTmInput;
+    effective_settings?: PrimerTmSettings;
     id?: string | null;
     name?: string | null;
     sequence: string;
@@ -4737,11 +4756,14 @@ export const fetchPrimerTmOptions = (signal?: AbortSignal) =>
     api.get<PrimerTmOptionsResponse>('/api/molbio/primer-tm/options', { signal });
 
 export const calculatePrimerTm = (data: {
+    schema_version?: 'primer-tm-batch-v1';
     primers: PrimerTmInput[];
     settings?: PrimerTmSettings;
-}, signal?: AbortSignal) => api.post<PrimerTmResult[]>('/api/molbio/primer-tm/calculate', data, { signal });
+}, signal?: AbortSignal) => api.post<PrimerTmResult[]>('/api/molbio/primer-tm/calculate', { schema_version: 'primer-tm-batch-v1', ...data, primers: data.primers.map(primer => ({ schema_version: 'primer-tm-input-v1', ...primer })), settings: data.settings ? { schema_version: 'primer-tm-settings-v1', ...data.settings } : undefined }, { signal });
 
-export const calculatePrimerQc = (data: {
+export interface PrimerQcRequest {
+    schema_version?: 'primer-qc-v1';
+    profile?: PrimerQcProfile;
     primers: Array<{
         id?: string;
         name?: string;
@@ -4755,10 +4777,12 @@ export const calculatePrimerQc = (data: {
     template_sequence_type?: 'dna' | 'rna';
     template_is_circular?: boolean;
     include_pairwise?: boolean;
-}, signal?: AbortSignal) => api.post<PrimerQcResponse>('/api/molbio/primer-qc', data, { signal });
+}
+
+export const calculatePrimerQc = (data: PrimerQcRequest, signal?: AbortSignal) => api.post<PrimerQcResponse>('/api/molbio/primer-qc', { schema_version: 'primer-qc-v1', ...data }, { signal });
 
 export const designPrimers = (data: PrimerDesignRequest, signal?: AbortSignal) =>
-    api.post<PrimerDesignResponse>('/api/molbio/primer-design', data, { signal });
+    api.post<PrimerDesignResponse>('/api/molbio/primer-design', { schema_version: 'primer-design-v1', ...data }, { signal });
 
 export const fetchPrimers = (params?: {
     search?: string;
