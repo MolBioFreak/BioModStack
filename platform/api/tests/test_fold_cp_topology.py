@@ -237,7 +237,7 @@ def test_real_nextflow_module_emits_native_cli(tmp_path, size, topology, count, 
     topology_args = ['--bcp_cp_topology', topology] if topology is not None else []
     result = subprocess.run(['/usr/local/bin/nextflow', '-C', str(config), 'run', str(workflow), '-offline',
                             '-w', str(tmp_path / 'work'), '--out_dir', str(tmp_path / 'out'),
-                            '--bcp_repo_path', str(native), '--bcp_input_path', str(input_yaml),
+                            '--bcp_repo_path', str(native), '--bcp_input_path', str(input_yaml), '--code_root', str(ROOT),
                             *topology_args, '--bcp_size_cp', str(size),
                             '--run_frustrampnn', 'false',
                             '--bcp_gpu_ids', ','.join(map(str, range(count)))], cwd=tmp_path, env=env,

@@ -314,6 +314,9 @@ async def test_actual_compiled_command_native_wrapper_and_sqlite_consumer(admiss
     assert index['engine'] == model and index['mode'] == mode
     assert index['unfiltered_count'] == index['selected_count'] == expected_count
     assert index['settings'].get('seqs_per_design', 8) == expected_count
+    # be96037: native publication must come from the Job's owned output root, so the
+    # executed Nextflow output directory is the Job's output owner before receiving.
+    job.output_dir = str(output)
     job.status = 'completed'; await admission.commit()
     assert await ingest_job_results(response.id, output, admission) == expected_count
     admission.expire_all()
