@@ -47,10 +47,18 @@ from pathlib import Path
 import hashlib, json, subprocess
 for name in ('requirements.txt', 'build.txt', 'NOTICES.md'):
     assert Path('/opt/locks', name).read_bytes() == Path('/bms/apptainer/locks', 'complexa-' + name).read_bytes()
+wrapper = Path('/bms/scripts/bms_complexa/colabfold_cli.py').read_bytes()
+assert Path('/opt/locks/colabfold_cli.py').read_bytes() == wrapper
+assert Path('/opt/complexa/.venv/bin/colabfold_batch').read_bytes() == wrapper
 metadata = json.loads(Path('/bms/scripts/bms_complexa/assets.json').read_text())
 git = ['git', '-c', 'safe.directory=/opt/complexa', '-c', 'lfs.storage=/qualification/git-lfs', '-C', '/opt/complexa']
 assert subprocess.check_output(git + ['rev-parse', 'HEAD'], text=True).strip() == metadata['source']['revision']
-subprocess.run(git + ['diff', '--exit-code', 'HEAD'], check=True)
+# One documented Python-3.12 temporary-directory bound compatibility edit.
+novelty = 'src/proteinfoundation/metrics/novelty.py'
+original = subprocess.check_output(git + ['show', 'HEAD:' + novelty])
+assert Path('/opt/complexa', novelty).read_bytes() == original.replace(b'random.randint(1, 1e12)', b'random.randint(1, 10**12)')
+assert subprocess.check_output(git + ['diff', '--name-only', 'HEAD'], text=True).splitlines() == [novelty]
+subprocess.run(git + ['diff', '--exit-code', 'HEAD', '--', '.', ':!' + novelty], check=True)
 for name, digest in metadata['upstream_files'].items():
     assert hashlib.sha256(Path('/opt/complexa', name).read_bytes()).hexdigest() == digest, name
 print('BUILD_INPUTS_MATCH')
