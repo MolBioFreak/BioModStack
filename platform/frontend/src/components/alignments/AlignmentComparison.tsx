@@ -3,8 +3,9 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../lib/api';
 import { searchProjects, listGlobalExperiments, listDomainExperiments } from '../../lib/projectManager';
+import { errorText, statusText } from './alignmentText';
 
-type Receipt = {receipt_id: string; entity_kind: string; availability: string};
+type Receipt = {receipt_id: string; entity_kind: string; availability: string; label?: string; created_at?: string};
 type Artifact = {id: string; role: string; logical_path?: string | null};
 type Inputs = {left_receipt_id: string; left_artifact_id: string; right_receipt_id: string; right_artifact_id: string};
 type Agreement = {method: string; matched_rows: number; shared_mapped_residues: number; left_unmapped_residues: number; right_unmapped_residues: number; rows_with_unknown_mapping: number; left_only_mapped_residues_known: number; right_only_mapped_residues_known: number; left_aligned_pairs: number; right_aligned_pairs: number; shared_aligned_pairs: number; union_aligned_pairs: number; jaccard: number | null};
@@ -18,22 +19,23 @@ function Report({result}: {result: Result}) {
   const [offset, setOffset] = useState(0);
   const row = rowIndex ? result.report.rows?.[Number(rowIndex) - 1] : undefined;
   const positions = (values: number[]) => values.slice(0, 100).map(p => p + 1).join(', ') || 'none';
-  return <section aria-label="Comparison report"><h3>Source-coordinate agreement</h3>
-    <p>Method: {result.method} / {a.method}. Observed agreement is not biological accuracy.</p>
-    <p>Aligned-pair intersection / union: {a.shared_aligned_pairs} / {a.union_aligned_pairs}; Jaccard: {a.jaccard === null ? 'undefined (no comparable pairs)' : a.jaccard.toFixed(4)}.</p>
-    <p>Left aligned pairs: {a.left_aligned_pairs}; right aligned pairs: {a.right_aligned_pairs}.</p>
-    <p>Matched rows: {a.matched_rows}; shared mapped residues: {a.shared_mapped_residues}; excluded rows: left {result.report.left_excluded}, right {result.report.right_excluded}.</p>
-    <p>Rows with unknown mapping: {a.rows_with_unknown_mapping}; unmapped residues: left {a.left_unmapped_residues}, right {a.right_unmapped_residues}; known mapped residues outside shared scope: left {a.left_only_mapped_residues_known}, right {a.right_only_mapped_residues_known}.</p>
-    <details><summary>Inspect source correspondence and unmapped positions</summary>
-      <p>Displayed coordinates are 1-based; retained report coordinates are zero-based. Different column numbers show placement changes, not biological correctness. Open each result to inspect its gaps.</p>
-      <label>Mapped occurrence <select value={rowIndex} onChange={e => {setRowIndex(e.target.value); setOffset(0);}}><option value="">Choose an occurrence</option>{result.report.rows?.map((r, i) => <option key={i} value={i + 1}>{r.source_member_id} / {r.occurrence_id} ({r.left_row_id} → {r.right_row_id})</option>)}</select></label>
-      {row && <><p>Source mapping: {row.mapping_unknown ? 'partly unknown' : 'known'}; shared positions {row.positions.length}.</p>
-        <p>Left unmapped columns ({row.left_unmapped_columns.length}; first 100): {positions(row.left_unmapped_columns)}. Right unmapped columns ({row.right_unmapped_columns.length}; first 100): {positions(row.right_unmapped_columns)}.</p>
-        <p>Known left-only source positions ({row.left_only_positions.length}; first 100): {positions(row.left_only_positions)}. Known right-only source positions ({row.right_only_positions.length}; first 100): {positions(row.right_only_positions)}.</p>
-        <table><caption>Shared source positions {row.positions.length ? offset + 1 : 0}–{Math.min(offset + 100, row.positions.length)} of {row.positions.length}</caption><thead><tr><th>Source position</th><th>Left column</th><th>Right column</th><th>Placement</th></tr></thead><tbody>{row.positions.slice(offset, offset + 100).map(p => <tr key={p.source}><td>{p.source + 1}</td><td>{p.left_column + 1}</td><td>{p.right_column + 1}</td><td>{p.left_column === p.right_column ? 'same column' : 'shifted'}</td></tr>)}</tbody></table>
+  return <section aria-label="Comparison report"><h3>Agreement</h3>
+    <p title={`${result.method} / ${a.method}`}>Agreement: {a.jaccard === null ? '—' : a.jaccard.toFixed(4)} ({a.shared_aligned_pairs} of {a.union_aligned_pairs} aligned pairs shared). {a.matched_rows} rows matched.</p>
+    <details><summary>Details</summary>
+      <p>Aligned pairs: left {a.left_aligned_pairs}, right {a.right_aligned_pairs}.</p>
+      <p>Shared residues: {a.shared_mapped_residues}. Rows left out: left {result.report.left_excluded}, right {result.report.right_excluded}.</p>
+      <p>Rows not fully matched: {a.rows_with_unknown_mapping}. Residues not matched: left {a.left_unmapped_residues}, right {a.right_unmapped_residues}. Residues in only one alignment: left {a.left_only_mapped_residues_known}, right {a.right_only_mapped_residues_known}.</p>
+    </details>
+    <details><summary>Compare positions row by row</summary>
+      <p>Positions are 1-based.</p>
+      <label>Row <select value={rowIndex} onChange={e => {setRowIndex(e.target.value); setOffset(0);}}><option value="">Choose a row</option>{result.report.rows?.map((r, i) => <option key={i} value={i + 1}>{r.left_row_id} → {r.right_row_id}</option>)}</select></label>
+      {row && <><p>{row.mapping_unknown ? 'Partly matched' : 'Fully matched'}; {row.positions.length} shared positions.</p>
+        <p>Unmatched columns, left ({row.left_unmapped_columns.length}; first 100): {positions(row.left_unmapped_columns)}. Right ({row.right_unmapped_columns.length}; first 100): {positions(row.right_unmapped_columns)}.</p>
+        <p>Positions only in left ({row.left_only_positions.length}; first 100): {positions(row.left_only_positions)}. Only in right ({row.right_only_positions.length}; first 100): {positions(row.right_only_positions)}.</p>
+        <table><caption>Shared positions {row.positions.length ? offset + 1 : 0}–{Math.min(offset + 100, row.positions.length)} of {row.positions.length}</caption><thead><tr><th>Sequence position</th><th>Left column</th><th>Right column</th><th>Placement</th></tr></thead><tbody>{row.positions.slice(offset, offset + 100).map(p => <tr key={p.source}><td>{p.source + 1}</td><td>{p.left_column + 1}</td><td>{p.right_column + 1}</td><td>{p.left_column === p.right_column ? 'same column' : 'shifted'}</td></tr>)}</tbody></table>
         <button disabled={offset === 0} onClick={() => setOffset(n => Math.max(0, n - 100))}>Previous positions</button><button disabled={offset + 100 >= row.positions.length} onClick={() => setOffset(n => n + 100)}>Next positions</button>
       </>}
-      <p>Rows with unknown source identity: left {result.report.left_unknown_identity_rows?.length ?? 'not reported'}; right {result.report.right_unknown_identity_rows?.length ?? 'not reported'}.</p>
+      <p>Rows with unknown source: left {result.report.left_unknown_identity_rows?.length ?? '—'}; right {result.report.right_unknown_identity_rows?.length ?? '—'}.</p>
     </details>
   </section>;
 }
@@ -75,7 +77,7 @@ function ProjectComparison({project, savedState, operationJob}: {project: string
   async function compare() {
     setBusy(true); setError(''); setResult(undefined); setSaved(undefined);
     try { setJobId((await api.post<{job_id: string}>(`${prefix}/operations`, {operation: 'compare', molecule, domain_experiment_id: domain, name, inputs})).data.job_id); }
-    catch (e) { setError(String(e)); } finally { setBusy(false); }
+    catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }
   async function save() {
     if (!result) return;
@@ -85,34 +87,34 @@ function ProjectComparison({project, savedState, operationJob}: {project: string
         schema: 'bms.family-msa.shared-state.v1', marks: [], views: [], comparisons: [{id: crypto.randomUUID(), name, ...result, left_artifact_id: inputs.left_artifact_id, right_artifact_id: inputs.right_artifact_id, provenance: {...inputs}}],
       }});
       setSaved((await api.get<Saved>(`${prefix}/shared-state/${encodeURIComponent(data.id)}`, {params: {revision_id: data.revision_id}})).data);
-    } catch (e) { setError(String(e)); } finally { setBusy(false); }
+    } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }
   return <>
-    {(error || failure) && <p role="alert">Comparison unavailable: {error || String(failure)}</p>}
-    {receipts.isLoading && <p role="status">Loading retained results…</p>}
-    {receipts.data?.length === 0 && <p>No retained alignment results in this Project.</p>}
-    <fieldset disabled={running}><legend>Comparison inputs</legend>
+    {(error || failure) && <p role="alert">Comparison unavailable: {error || errorText(failure)}</p>}
+    {receipts.isLoading && <p role="status">Loading alignments…</p>}
+    {receipts.data?.length === 0 && <p>No alignments in this project yet.</p>}
+    <fieldset disabled={running}><legend>Alignments to compare</legend>
       <label>Molecule <select value={molecule} onChange={e => setMolecule(e.target.value as typeof molecule)}><option value="protein">Protein</option><option value="dna">DNA</option><option value="rna">RNA</option></select></label>
-      <label>Destination domain <select value={domain} onChange={e => setDomain(e.target.value)}><option value="">Choose a domain</option>{domains.data?.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></label>
+      <label>Save to experiment <select value={domain} onChange={e => setDomain(e.target.value)}><option value="">Choose experiment</option>{domains.data?.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></label>
       {(['left', 'right'] as const).map(side => <div key={side} className="alignment-comparison-side">
         <label>{side === 'left' ? 'Left' : 'Right'} result <select aria-label={`${side} result`} value={inputs[`${side}_receipt_id`]} onChange={e => change(side, 'receipt', e.target.value)}>
-          <option value="">Choose a retained result</option>{receipts.data?.map((r, i) => <option key={r.receipt_id} value={r.receipt_id}>{r.entity_kind === 'family_msa_import' ? 'Imported alignment' : 'Alignment result'} {i + 1} · {r.availability} ({r.receipt_id})</option>)}
+          <option value="">Choose an alignment</option>{receipts.data?.map((r, i) => <option key={r.receipt_id} value={r.receipt_id} title={r.receipt_id}>{r.label || `${r.entity_kind === 'family_msa_import' ? 'Imported alignment' : 'Alignment'} ${i + 1}`}{r.created_at ? ` · ${new Date(r.created_at).toLocaleDateString()}` : ''}</option>)}
         </select></label>
-        <label>{side === 'left' ? 'Left' : 'Right'} member <select aria-label={`${side} member`} value={inputs[`${side}_artifact_id`]} onChange={e => change(side, 'artifact', e.target.value)}>
-          <option value="">Choose an alignment member</option>{(side === 'left' ? left.data : right.data)?.map(a => <option key={a.id} value={a.id}>{a.logical_path || a.id}</option>)}
+        <label>{side === 'left' ? 'Left' : 'Right'} alignment file <select aria-label={`${side} member`} value={inputs[`${side}_artifact_id`]} onChange={e => change(side, 'artifact', e.target.value)}>
+          <option value="">Choose a file</option>{(side === 'left' ? left.data : right.data)?.map((a, i) => <option key={a.id} value={a.id} title={a.id}>{a.logical_path || `Alignment ${i + 1}`}</option>)}
         </select></label>
         {inputs[`${side}_receipt_id`] && <Link to={`/alignments/results/${encodeURIComponent(inputs[`${side}_receipt_id`])}?project_id=${encodeURIComponent(project)}`}>Open {side} result</Link>}
       </div>)}
       <button type="button" disabled={!domain || !Object.values(inputs).every(Boolean)} onClick={compare}>Compare alignments</button>
     </fieldset>
-    {jobId && <p role="status">Managed comparison Job {jobId}: {operation.data?.status || 'submitted'}. <Link to={`/jobs/${encodeURIComponent(jobId)}`}>Open Job</Link> · <a href={`/alignments/compare?project_id=${encodeURIComponent(project)}&operation_job_id=${encodeURIComponent(jobId)}`}>Resume comparison</a> {operation.data?.artifact_url && <> · <a href={`${prefix}/operations/${encodeURIComponent(jobId)}/artifact`} download>Download report</a></>}</p>}
+    {jobId && <p role="status">Comparison: {statusText(operation.data?.status)}. <Link to={`/jobs/${encodeURIComponent(jobId)}`} title={jobId}>Open job</Link> · <a href={`/alignments/compare?project_id=${encodeURIComponent(project)}&operation_job_id=${encodeURIComponent(jobId)}`}>Resume comparison</a> {operation.data?.artifact_url && <> · <a href={`${prefix}/operations/${encodeURIComponent(jobId)}/artifact`} download>Download report</a></>}</p>}
     {operation.data?.error_message && <p role="alert">{operation.data.error_message}</p>}
-    {result && <><Report result={result}/><fieldset disabled={busy}><legend>Save comparison to Project</legend>
+    {result && <><Report result={result}/><fieldset disabled={busy}><legend>Save comparison to project</legend>
       <label>Comparison name <input value={name} onChange={e => setName(e.target.value)}/></label>
       <button type="button" disabled={!domain || !Object.values(inputs).every(Boolean) || !name.trim() || Boolean(saved)} onClick={save}>Save comparison</button>
     </fieldset></>}
-    {saved && <p role="status">Saved revision {saved.revision_id}. <Link to={`/alignments/compare?project_id=${encodeURIComponent(project)}&shared_state_id=${encodeURIComponent(saved.id)}`}>Reopen saved comparison</Link></p>}
-    {reopened.data?.state.comparisons.map(c => <section key={c.id}><h3>{c.name}</h3><p>Saved revision {reopened.data.revision_id}; left artifact {c.left_artifact_id}; right artifact {c.right_artifact_id}.</p><Report result={c}/></section>)}
+    {saved && <p role="status" title={`Revision ${saved.revision_id}`}>Saved. <Link to={`/alignments/compare?project_id=${encodeURIComponent(project)}&shared_state_id=${encodeURIComponent(saved.id)}`}>Reopen saved comparison</Link></p>}
+    {reopened.data?.state.comparisons.map(c => <section key={c.id}><h3>{c.name}</h3><p title={`Revision ${reopened.data.revision_id}; left ${c.left_artifact_id}; right ${c.right_artifact_id}`}>Saved comparison.</p><Report result={c}/></section>)}
   </>;
 }
 
@@ -125,11 +127,12 @@ export default function AlignmentComparison({initialProject, savedState, operati
     return items;
   }});
   return <section aria-label="Alignment comparison"><h2>Compare alignments</h2>
-    <p>Select exact retained results and members. Comparison uses verified source occurrences and coordinates, not matching labels or same-numbered columns. Missing provenance remains unknown.</p>
-    <label>Comparison Project <select value={project} onChange={e => setProject(e.target.value)}><option value="">Choose a Project</option>{projects.data?.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+    <p>Pick two alignments to compare. Rows are matched by source sequence, not by name.</p>
+    <p className="alignment-hint">Use this to see whether two engines or settings gave the same answer. Agreement runs from 0 (nothing in common) to 1 (identical): it is the share of lined-up residue pairs found in both alignments. High agreement means the result is robust; it does not prove it is biologically right.</p>
+    <label>Project <select value={project} onChange={e => setProject(e.target.value)}><option value="">Choose a Project</option>{projects.data?.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
     {projects.isLoading && <p role="status">Loading Projects…</p>}
-    {projects.error && <p role="alert">Projects unavailable: {String(projects.error)} <button onClick={() => void projects.refetch()}>Retry Projects</button></p>}
-    {!project && <div className="alignment-empty"><h3>Choose a Project to compare retained alignments</h3><p>Select a left and right result, then their alignment members. You can inspect either result before comparing.</p><Link to="/alignments/library">Open alignment library</Link></div>}
+    {projects.error && <p role="alert">Projects unavailable: {errorText(projects.error)} <button onClick={() => void projects.refetch()}>Retry Projects</button></p>}
+    {!project && <div className="alignment-empty"><h3>Choose a project to compare its alignments</h3><p>Pick a left and right alignment. You can open either one before comparing.</p><Link to="/alignments/library">Open alignment library</Link></div>}
     {projects.isSuccess && !projects.data.length && <p>No Projects found. <Link to="/projects">Open Project Manager</Link>.</p>}
     {project && <ProjectComparison key={`${project}:${operationJob || ''}`} project={project} savedState={project === initialProject ? savedState : undefined} operationJob={project === initialProject ? operationJob : undefined}/>}
   </section>;

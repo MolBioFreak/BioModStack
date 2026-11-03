@@ -120,18 +120,21 @@ const submits = () => calls.filter(call => call.url.endsWith('/submit'));
 async function remoteReview() { await click('Vast · Test worker'); await click('Review and submit'); await until(() => expect(button('Approve and submit')).toBeTruthy()); }
 
 describe('ordinary NGS prepared launch through mounted consumers and real API transport', () => {
-    it.each(['plasmidQc', 'dna'])('preserves tandem modkit settings for %s', async selectedWorkflow => {
+    it.each(['plasmidQc', 'dna', 'clone', 'constructScreening'])('preserves tandem modkit settings for %s', async selectedWorkflow => {
         await mount({ ...base, selectedWorkflow, doradoModel: 'hac', modifiedBases: '6mA',
             runModkit: true, modkitFilterThreshold: 0, runFastqQc: true,
             ngsReferenceRevisionId: 'reference-revision-1', doradoDevice: 'cpu' });
-        await click('Show advanced controls');
+        // The methylation card is visible without opening advanced controls.
+        expect(container.querySelector('[data-testid="ngs-methylation-card"]')).not.toBeNull();
         const checkbox = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
             .find(node => node.parentElement?.textContent?.includes('Generate methylation tables'))!;
         expect(checkbox.checked).toBe(true);
         expect(container.querySelector<HTMLSelectElement>('#dorado-device')!.value).toBe('cpu');
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(submits()[0].body.params).toMatchObject({ run_modkit: true, modified_bases: '6mA',
-            modkit_filter_threshold: 0, run_fastq_qc: true, dorado_device: 'cpu' });
+            modkit_filter_threshold: 0, dorado_device: 'cpu' });
+        // Assembly report and construct screening only take run_fastq_qc for FASTQ input.
+        if (selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'dna') expect(submits()[0].body.params).toMatchObject({ run_fastq_qc: true });
         expect(submits()[0].body.pinned_gpu).toBeNull();
     });
     it('separates worker defaults from controller CPU and preserves explicit CPU across placement changes', async () => {

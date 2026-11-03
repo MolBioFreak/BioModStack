@@ -55,6 +55,7 @@ export default memo(function AlignmentSimilaritySummary({document, selectedRowId
     <div><strong>Identity at nongap positions: {percent(stats.mean_pairwise_identity_percent)}</strong>{' '}
       <span>{stats.pairs_complete ? '(mean across all comparable pairs)' : '(pairwise calculation exceeds quick-summary limits)'}</span>
     </div>
+    <p className="alignment-hint">Identity is the share of paired positions where two sequences have the same base or residue. 100% means identical; plasmid variants usually sit above 95%.</p>
     <h3>Compare one sequence against the others</h3>
     <p>{document.rows.length} sequences · {stats.pair_count} unique sequence pairs</p>
     <p>Click a sequence name below or a base in the viewer to use that sequence as the reference.</p>

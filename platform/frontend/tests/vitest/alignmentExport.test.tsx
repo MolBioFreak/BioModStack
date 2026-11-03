@@ -4,7 +4,7 @@ import {afterEach, expect, it, vi} from 'vitest'
 import AlignmentShared from '../../src/components/alignments/AlignmentShared'
 import {api} from '../../src/lib/api'
 
-vi.mock('../../src/lib/projectManager', () => ({
+vi.mock('../../src/lib/projectManager', async importOriginal => ({...await importOriginal<object>(),
   listGlobalExperiments: vi.fn().mockResolvedValue([{id:'experiment', name:'Experiment'}]),
   listDomainExperiments: vi.fn().mockResolvedValue([{id:'domain', name:'Domain'}]),
 }))
@@ -21,29 +21,29 @@ it('submits a managed export with Project selection, resumes once, refreshes man
   const render = () => root.render(<AlignmentShared projectId="p" receiptId="receipt" artifactId="a" viewer="jbrowse" applyViewer={() => {}} importedStateIds={['saved']}/> )
   const button = (text: string) => [...div.querySelectorAll('button')].find(b => b.textContent === text)!
   await act(async () => render())
-  await act(async () => button('Open imported saved state 1').click())
+  await act(async () => button('Open imported notes 1').click())
   await act(async () => {
     const selects = div.querySelectorAll('select')
     selects[0].value = 'domain'; selects[0].dispatchEvent(new Event('change', {bubbles:true}))
     selects[1].value = 'rna'; selects[1].dispatchEvent(new Event('change', {bubbles:true}))
   })
-  await act(async () => button('Export result and saved shared state').click())
+  await act(async () => button('Export ZIP').click())
   expect(post).toHaveBeenCalledExactlyOnceWith('/api/family-msa/projects/p/operations', {operation:'export', molecule:'rna', domain_experiment_id:'domain', name:'Alignment project bundle', inputs:{receipt_id:'receipt', shared_state_ids:['saved']}})
-  expect(div.textContent).toContain('queued (pending)')
+  expect(div.textContent).toContain('Export: Queued.')
   await act(async () => root.unmount())
   root = createRoot(div)
   await act(async () => render())
-  await act(async () => button('Open imported saved state 1').click())
+  await act(async () => button('Open imported notes 1').click())
   expect(get.mock.calls.filter(([url]) => String(url).includes('/operations/'))).toHaveLength(1)
   vi.useFakeTimers()
   await act(async () => vi.advanceTimersByTime(3600000))
   expect(get.mock.calls.filter(([url]) => String(url).includes('/operations/'))).toHaveLength(1)
   get.mockResolvedValueOnce({data:{...operation, status:'completed', queue_status:null, artifact_url:'/api/family-msa/projects/p/operations/export-job/artifact'}})
-  await act(async () => button('Refresh / resume export').click())
+  await act(async () => button('Refresh export status').click())
   expect(div.querySelector('a[download]')?.getAttribute('href')).toBe('/api/family-msa/projects/p/operations/export-job/artifact')
   expect(div.querySelector('a[download]')?.getAttribute('download')).toBe('alignment-project-bundle.zip')
   get.mockResolvedValueOnce({data:{...operation, status:'failed', error_message:'Worker failed'}})
-  await act(async () => button('Refresh / resume export').click())
+  await act(async () => button('Refresh export status').click())
   expect(div.textContent).toContain('Worker failed')
   expect(div.querySelector('a[download]')).toBeNull()
   expect(post).toHaveBeenCalledTimes(1)

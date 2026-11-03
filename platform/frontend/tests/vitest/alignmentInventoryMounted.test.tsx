@@ -7,7 +7,7 @@ import AlignmentEditor, { settingsInventory } from '../../src/components/alignme
 const mocks = vi.hoisted(() => ({get:vi.fn(),submit:vi.fn()}));
 vi.mock('../../src/components/project-manager/ProjectWorkflowSetup',()=>({useProjectWorkflowSetup:()=>({active:false})}));
 vi.mock('../../src/lib/api',()=>({submitJob:mocks.submit,api:{get:mocks.get}}));
-vi.mock('../../src/lib/projectManager',()=>({getLaunchContext:vi.fn()}));
+vi.mock('../../src/lib/projectManager',async importOriginal=>({...await importOriginal<object>(),getLaunchContext:vi.fn()}));
 
 describe('native alignment inventory',()=>{
  it('preserves numeric enum types and zero defaults from schema metadata',()=>{

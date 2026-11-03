@@ -6,7 +6,7 @@ import {afterEach, expect, it, vi} from 'vitest';
 import AlignmentComparison from '../../src/components/alignments/AlignmentComparison';
 import {api} from '../../src/lib/api';
 
-vi.mock('../../src/lib/projectManager', () => ({
+vi.mock('../../src/lib/projectManager', async importOriginal => ({...await importOriginal<object>(),
   searchProjects: vi.fn().mockResolvedValue({items: [{id: 'p', name: 'Project'}, {id: 'other', name: 'Other'}], next_cursor: null}),
   listGlobalExperiments: vi.fn().mockResolvedValue([{id: 'e', name: 'Experiment'}]),
   listDomainExperiments: vi.fn().mockResolvedValue([{id: 'd', name: 'Domain'}]),
@@ -40,24 +40,24 @@ it('selects retained members, runs managed work, saves and reads back the exact 
   try {
     await act(async () => root.render(<QueryClientProvider client={cache}><MemoryRouter><AlignmentComparison initialProject="p"/></MemoryRouter></QueryClientProvider>)); await settle();
     expect(post).not.toHaveBeenCalled();
-    await select('Destination domain', 'd');
-    await select('Left result', 'l'); await select('Left member', 'a');
-    await select('Right result', 'r'); await select('Right member', 'b');
+    await select('Save to experiment', 'd');
+    await select('Left result', 'l'); await select('Left alignment file', 'a');
+    await select('Right result', 'r'); await select('Right alignment file', 'b');
     expect(div.querySelector('option[value="log"]')).toBeNull();
     await click('Compare alignments'); await settle(); await settle();
     expect(post).toHaveBeenCalledWith('/api/family-msa/projects/p/operations', {operation: 'compare', molecule: 'protein', domain_experiment_id: 'd', name: 'Alignment comparison', inputs: {left_receipt_id: 'l', left_artifact_id: 'a', right_receipt_id: 'r', right_artifact_id: 'b'}});
-    expect(div.textContent).toContain('2 / 5'); expect(div.textContent).toContain('not biological accuracy');
-    expect(div.textContent).toContain('excluded rows: left 1, right 2');
-    await select('Mapped occurrence', '1');
+    expect(div.textContent).toContain('2 of 5 aligned pairs shared');
+    expect(div.textContent).toContain('Rows left out: left 1, right 2');
+    await select('Row', '1');
     expect(div.querySelector('tbody')?.textContent).toBe('613shifted');
-    expect(div.textContent).toContain('Left unmapped columns (1; first 100): 2');
+    expect(div.textContent).toContain('Unmatched columns, left (1; first 100): 2');
     await click('Save comparison');
     expect(get).toHaveBeenCalledWith('/api/family-msa/projects/p/shared-state/s', {params: {revision_id: 'rev'}});
-    expect(div.textContent).toContain('Saved revision rev');
+    expect(div.querySelector('[title="Revision rev"]')?.textContent).toContain('Saved.');
     await select('Left result', 'r');
     expect(div.querySelector('select[aria-label="left member"]')).toHaveProperty('value', '');
-    expect(div.textContent).not.toContain('Aligned-pair intersection');
-    await select('Comparison Project', 'other');
+    expect(div.textContent).not.toContain('aligned pairs shared');
+    await select('Project', 'other');
     expect(div.querySelector('select[aria-label="right result"]')).toHaveProperty('value', '');
   } finally { await act(async () => root.unmount()); cache.clear(); div.remove(); }
 });
@@ -69,7 +69,7 @@ it('resumes a managed comparison without submitting another Job', async () => {
   try {
     await act(async () => root.render(<QueryClientProvider client={cache}><MemoryRouter><AlignmentComparison initialProject="p" operationJob="retained-job"/></MemoryRouter></QueryClientProvider>));
     for (let i = 0; i < 3; i++) await act(async () => {await new Promise(resolve => setTimeout(resolve, 30));});
-    expect(div.textContent).toContain('Managed comparison Job retained-job: completed');
+    expect(div.textContent).toContain('Comparison: Done.'); expect(div.querySelector('a[href="/jobs/retained-job"]')).not.toBeNull();
     expect(div.textContent).toContain('0.4000'); expect(post).not.toHaveBeenCalled();
     expect([...div.querySelectorAll('button')].find(b => b.textContent === 'Save comparison')?.disabled).toBe(true);
   } finally { await act(async () => root.unmount()); cache.clear(); }

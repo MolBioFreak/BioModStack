@@ -14,9 +14,9 @@ type WorkflowChoice = {
 const WORKFLOW_PANEL = 'rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 shadow-[var(--shadow-card)]';
 
 const PLASMID_METHODS = [
-    { key: 'clone', title: 'Assembly and validation report', description: 'Vendor wf-clone-validation report, de novo assembly and construct evidence.' },
-    { key: 'plasmidQc', title: 'Plasmid read QC', description: 'Per-base support, consensus and multimer evidence against the saved plasmid, from POD5, BAM or FASTQ. Optional tandem methylation tables from POD5 or tagged BAM. No vendor assembly report.' },
-    { key: 'constructScreening', title: 'Construct screening', description: 'Compare reads against the saved construct and review screening results.' },
+    { key: 'clone', title: 'Assembly and validation report', description: 'EPI2ME wf-clone-validation: de novo assembly, validation report and construct check. Optional methylation tables from POD5 or tagged BAM.' },
+    { key: 'plasmidQc', title: 'Plasmid read QC', description: 'Per-base support, consensus and multimer check against the reference, from POD5, BAM or FASTQ. Optional methylation tables from POD5 or tagged BAM. No assembly.' },
+    { key: 'constructScreening', title: 'Construct screening', description: 'Align reads to the expected construct and review screening results. Optional assembly and methylation tables.' },
 ] as const;
 
 type WorkflowGroup = { label: string; hint: string; choices: readonly WorkflowChoice[] };
@@ -41,25 +41,25 @@ const WORKFLOW_GROUPS: readonly WorkflowGroup[] = [
         ],
     },
     {
-        label: 'Analyse reads against a saved sequence',
-        hint: 'Needs a saved MolBio sequence revision.',
+        label: 'Analyse reads against a reference',
+        hint: 'Needs a reference sequence: paste or upload one, or pick it from this Project or Molecular Tools.',
         choices: [
             {
                 key: 'clone',
                 title: 'Plasmid analysis',
-                input: 'POD5, BAM, or FASTQ + saved MolBio revision',
-                result: 'Assembly report, plasmid read QC or construct screening (choose below)',
+                input: 'POD5, BLOW5, BAM or FASTQ + reference',
+                result: 'Assembly report, plasmid read QC or construct screening (choose below), with optional methylation',
             },
             {
                 key: 'fastqQc',
                 title: 'FASTQ read QC',
-                input: 'FASTQ + saved MolBio revision',
+                input: 'FASTQ + reference',
                 result: 'Read-length, quality and alignment QC only. No consensus or per-base support; use Plasmid analysis for those',
             },
             {
                 key: 'modified',
                 title: 'Methylation analysis',
-                input: 'DNA POD5 or modification-tagged BAM + saved reference',
+                input: 'DNA POD5, BLOW5 or modification-tagged BAM + reference',
                 result: 'Per-site methylation tables and modification summaries',
             },
         ],
@@ -71,8 +71,8 @@ const WORKFLOW_GROUPS: readonly WorkflowGroup[] = [
             {
                 key: 'pooledAssignment',
                 title: 'Assign pooled FASTQ references',
-                input: 'FASTQ + 2-96 exact saved revisions',
-                result: 'Review-only assignment; explicit target release gates consensus',
+                input: 'FASTQ + 2-96 candidate sequences',
+                result: 'Assigns reads to candidates for review; consensus runs after you release a target',
                 badge: 'REVIEW ONLY',
             },
         ],
@@ -149,8 +149,16 @@ export function NanoporeWorkflowChooser({
                 </label>
                 <p className="mt-2 text-sm text-[var(--text-secondary)]">{plasmidMethod.description}</p>
             </div>}
-            <div className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/50 p-3 text-xs text-[var(--text-secondary)]">
-                <strong className="text-[var(--text-primary)]">How to use this page:</strong> choose a workflow → choose the requested POD5, BAM, or FASTQ input → select a saved MolBio sequence and exact revision when required → enter a job name → submit. Completed jobs appear through <strong className="text-[var(--text-primary)]">Runs</strong>; no completed sequencing results are shown until an input is actually processed. Selecting a workflow never starts an instrument run.
+            <div className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/50 p-3 text-xs text-[var(--text-secondary)]" data-testid="ngs-how-to-use">
+                <strong className="text-[var(--text-primary)]">How to use this page</strong>
+                <ol className="mt-1 list-decimal space-y-0.5 pl-5">
+                    <li>Choose a task above.</li>
+                    <li>Choose your reads: POD5 or BLOW5 raw signal, an existing BAM, or FASTQ.</li>
+                    <li>If the task needs a reference sequence, paste or upload it, or pick one already saved in this Project or in Molecular Tools.</li>
+                    <li>Optional: pick modified bases and turn on methylation tables (POD5, BLOW5 or tagged BAM only).</li>
+                    <li>Name the job and submit.</li>
+                </ol>
+                <p className="mt-1">Progress and results appear under <strong className="text-[var(--text-primary)]">Runs</strong>. Nothing here starts the sequencer.</p>
             </div>
         </section>
     );

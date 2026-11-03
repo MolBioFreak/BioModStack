@@ -109,7 +109,80 @@ export function nullLabel(key: string, settings: Record<string, unknown> = {}): 
     if (settings.engine === 'mafft' && strategyControlled.has(key)) {
         const strategy = String(settings.strategy ?? 'fft_ns_2')
         const resolved = key === 'retree' ? strategyRetree[strategy] : key === 'maxiterate' ? strategyMaxiterate[strategy] : key === 'pair_method' ? strategyPair[strategy] : undefined
-        return resolved ? `Strategy default (${resolved})` : 'Strategy default (not passed)'
+        return resolved ? `Default (${resolved})` : 'Default'
     }
-    return 'Engine default (not passed)'
+    return 'Default'
 }
+
+
+/** One-line, plain explainers for each engine, shown in the engine picker. */
+export const engineHelp: Record<EngineId, string> = {
+    mafft: 'Good default for DNA, RNA and protein. Fast on large sets, accurate options for small ones.',
+    famsa: 'Protein only. Very fast for thousands of sequences.',
+    muscle: 'Protein or DNA. Accurate for small to medium sets; can build several alternative alignments to check confidence.',
+    twilight: 'DNA/RNA only. For large nucleotide sets; needs a guide tree (let MAFFT make one).',
+}
+
+// Plain explainers shown under each main setting. Keyed per engine because
+// some keys (e.g. guide_tree) mean different things in different engines.
+const help: Record<EngineId, Record<string, string>> = {
+    mafft: {
+        threads: 'CPU cores to use. More is faster.',
+        strategy: 'How hard MAFFT works. Auto picks for you. FFT-NS-2 is fast for many sequences. L-INS-i is most accurate for under ~200 sequences with one shared region. G-INS-i suits full-length sequences of similar length (e.g. plasmid variants). E-INS-i suits sequences with long unrelated stretches.',
+        maxiterate: 'Extra polishing passes after the first alignment. 0 is fastest; ~1000 is the accurate setting. Blank uses the strategy default.',
+        retree: 'How many times the guide tree is rebuilt. 2 is the usual value.',
+        op: 'Cost of starting a gap. Higher means fewer, longer gaps. Blank is MAFFT\'s default (1.53).',
+        ep: 'Small bonus that lets weakly similar regions line up. Usually leave blank (0.0).',
+        bl: 'Protein scoring table. 62 is the standard; 80 for close relatives, 30-45 for distant ones.',
+        kimura: 'DNA/RNA scoring. 1 for distant sequences, 2 (default) for close ones.',
+        randomseed: 'Fix this to get the same result when you rerun.',
+        reorder: 'Group similar sequences together in the output instead of keeping your order.',
+        treeout: 'Also save the guide tree MAFFT built.',
+    },
+    famsa: {
+        threads: 'CPU cores to use. More is faster.',
+        guide_tree: 'How sequences are grouped before aligning. Single linkage (default) is fastest; UPGMA or neighbour joining can be slightly more accurate. Import uses your own tree.',
+        guide_tree_newick: 'Your own guide tree, in Newick format. Only used when Guide tree is Import.',
+        leaf_mapping: 'Only needed if tree leaf names differ from your sequence names.',
+        refine_mode: 'Extra polishing after aligning. Auto turns it on for smaller sets.',
+        keep_duplicates: 'Keep identical sequences as separate rows instead of merging them.',
+        sm: 'Protein scoring table. Blank uses FAMSA\'s default (MIQS).',
+        go: 'Cost of starting a gap. Higher means fewer gaps.',
+        ge: 'Cost of making a gap longer.',
+    },
+    muscle: {
+        threads: 'CPU cores to use. More is faster.',
+        mode: 'Align is accurate and suits up to a few hundred sequences. Super5 is for thousands.',
+        ensemble: 'Build several alternative alignments to see which columns are reliable. None gives one alignment.',
+        replicates: 'How many alternative alignments to build when Ensemble is on.',
+        permutation: 'Variations of the guide tree used for an ensemble. Usually leave blank.',
+        perturb: 'Seed for small random changes used in an ensemble. Usually leave blank.',
+        randseed: 'Fix this to get the same result when you rerun.',
+        consiters: 'Consistency passes; more can improve accuracy and take longer.',
+        refineiters: 'Polishing passes after aligning.',
+        output_order: 'Keep your input order, or group similar sequences together.',
+    },
+    twilight: {
+        threads: 'CPU cores to use. More is faster.',
+        method: 'Pairwise is the normal method. TCS adds a consistency check and is slower.',
+        guide_source: 'TWILIGHT needs a guide tree. Choose "Generate with MAFFT" unless you have your own.',
+        guide_tree: 'Your own guide tree, in Newick format. Only used when the tree is supplied.',
+        leaf_mapping: 'Only needed if tree leaf names differ from your sequence names.',
+        acc_mode: 'Higher numbers are more accurate and slower. 0 is the default.',
+        match: 'Score for matching bases. Leave as is unless you know you need to change it.',
+        mismatch: 'Penalty for different bases.',
+        transition: 'Penalty for A↔G or C↔T changes, which are more common than other changes.',
+        gap_open: 'Cost of starting a gap.',
+        gap_extend: 'Cost of making a gap longer.',
+        consistency_weight: 'How much the TCS consistency check counts.',
+        remove_gappy: 'Columns that are at least this fraction gaps are removed from the output.',
+    },
+}
+
+export function fieldHelp(engine: EngineId, key: string): string | undefined {
+    return help[engine]?.[key]
+}
+
+/** Standard settings for a set of plasmid sequences: MAFFT chooses its own
+ *  strategy for the input size, and output keeps the order you picked. */
+export const plasmidPreset = { engine: 'mafft' as const, strategy: 'auto', reorder: false }

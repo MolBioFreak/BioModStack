@@ -649,6 +649,25 @@ def _first_value(objects: list[dict[str, Any]], *keys: str) -> Any:
     return None
 
 
+def _parse_receipt_time(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    # Core Job timestamps are naive UTC.
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _elapsed_from_receipts(started_at: Any, completed_at: Any) -> int | None:
+    started = _parse_receipt_time(started_at)
+    if started is None:
+        return None
+    ended = _parse_receipt_time(completed_at) or datetime.now(timezone.utc)
+    return max(0, int((ended - started).total_seconds()))
+
+
 def _public_receipt(value: Any) -> Any:
     if isinstance(value, dict):
         return {
@@ -714,6 +733,12 @@ def _run_item(
         progress = {"kind": progress_value["kind"], "value": progress_value.get("value")}
 
     elapsed_value = _first_value(source_objects, "elapsed_seconds")
+    if elapsed_value is None:
+        # Live runtime receipts carry started_at, not a stored counter.
+        elapsed_value = _elapsed_from_receipts(
+            _first_value(source_objects, "started_at"),
+            terminal.get("completed_at"),
+        )
     elapsed_seconds = (
         elapsed_value
         if isinstance(elapsed_value, (int, float)) and not isinstance(elapsed_value, bool) and elapsed_value >= 0

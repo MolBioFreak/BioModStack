@@ -6,7 +6,7 @@ import AlignmentEditor from '../../src/components/alignments/AlignmentEditor';
 const mocked = vi.hoisted(() => ({save:vi.fn(), start:vi.fn(), context:vi.fn(), submit:vi.fn(), post:vi.fn(), get:vi.fn(), datasets:vi.fn(), revisions:vi.fn(), active:true, setup:{project_id:'p',global_experiment_id:'g',domain_experiment_id:'d',setup_context_id:'s',draft:{molecule:'protein',engine:'muscle',fasta:'>one\nAA\n>two\nBB',drafts:{muscle:{engine:'muscle',threads:3,mode:'super5',permutation:'none',perturb:0,ensemble:'none',replicates:null}}}}}));
 vi.mock('../../src/components/project-manager/ProjectWorkflowSetup',()=>({useProjectWorkflowSetup:()=>({active:mocked.active,setup:mocked.setup,saveDraft:mocked.save,startRun:mocked.start})}));
 vi.mock('../../src/lib/api',()=>({submitJob:mocked.submit,api:{post:mocked.post,get:mocked.get}}));
-vi.mock('../../src/lib/projectManager',()=>({getLaunchContext:mocked.context,listDomainDatasets:mocked.datasets,listDomainDatasetRevisions:mocked.revisions}));
+vi.mock('../../src/lib/projectManager',async importOriginal=>({...await importOriginal<object>(),getLaunchContext:mocked.context,listDomainDatasets:mocked.datasets,listDomainDatasetRevisions:mocked.revisions}));
 mocked.datasets.mockResolvedValue({items:[],next_cursor:null});
 describe('Project alignment editor',()=>{
  it('reopens flattened state and submits the pinned Project scheduler',async()=>{
@@ -41,9 +41,9 @@ it('pages and freezes distinct Dataset occurrences into the saved roster', async
  const select=async(label:string,value:string)=>{const el=div.querySelector(`[aria-label="${label}"]`) as HTMLSelectElement; await act(async()=>{el.value=value;el.dispatchEvent(new Event('change',{bubbles:true}));});};
  await select('Dataset','ds'); await select('Dataset revision','rev');
  await act(async()=>{(div.querySelector('input[type=checkbox]') as HTMLInputElement).click()});
- await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Next resources')!.click()});
+ await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Next')!.click()});
  await act(async()=>{(div.querySelector('input[type=checkbox]') as HTMLInputElement).click()});
- await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Add selected resources')!.click()});
+ await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Add selected')!.click()});
  expect(mocked.post).toHaveBeenCalledWith(expect.stringContaining('/resources/freeze'),{ordinals:[0,50]});
  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click()});
  const draft=mocked.save.mock.calls[0][0];
@@ -65,17 +65,17 @@ describe('alignment handoff recovery', () => {
   const div=document.createElement('div'), root=createRoot(div);
   await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
   await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Start run')!.click()});
-  expect(div.textContent).toContain('Job submitted: job'); expect(div.textContent).toContain('Launch context: ctx');
+  expect(div.querySelector('a[href="/alignments/jobs/job"]')).not.toBeNull(); expect(div.querySelector('[title="Launch context ctx"]')).not.toBeNull();
   expect(div.textContent).toContain('response lost');
-  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Retry Project binding')!.click()});
+  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Link to project again')!.click()});
   expect(mocked.submit).toHaveBeenCalledTimes(1); expect(mocked.post).toHaveBeenCalledTimes(2);
   expect(div.textContent).toContain('Return to Project');
   await act(async()=>root.unmount());
   mocked.context.mockResolvedValue({canonical_job_id:'job'});
   const root2=createRoot(div);
   await act(async()=>root2.render(<MemoryRouter initialEntries={['/?launch_context_id=ctx']}><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
-  expect(div.textContent).toContain('Job submitted: job');
-  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Retry Project binding')!.click()});
+  expect(div.querySelector('a[href="/alignments/jobs/job"]')).not.toBeNull();
+  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Link to project again')!.click()});
   expect(mocked.submit).toHaveBeenCalledTimes(1);
   await act(async()=>root2.unmount());
  });
@@ -88,7 +88,7 @@ describe('alignment handoff recovery', () => {
   const div=document.createElement('div'), root=createRoot(div);
   await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
   await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Start run')!.click(); await Promise.resolve();});
-  expect(div.textContent).toContain('Job submitted: job'); expect(div.textContent).toContain('Launch context: ctx');
+  expect(div.querySelector('a[href="/alignments/jobs/job"]')).not.toBeNull(); expect(div.querySelector('[title="Launch context ctx"]')).not.toBeNull();
   await act(async()=>finish({data:{return_uri:'/projects/p'}}));
   await act(async()=>root.unmount());
  });
@@ -100,7 +100,7 @@ describe('alignment handoff recovery', () => {
   await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Start run')!.click()});
   expect(mocked.submit).toHaveBeenCalledWith(expect.objectContaining({launch_context_id:'direct'}));
   expect(mocked.post).toHaveBeenCalledWith('/api/launch-contexts/direct/bind',{job_id:'direct-job'});
-  expect(div.textContent).toContain('Launch context: direct');
+  expect(div.querySelector('[title="Launch context direct"]')).not.toBeNull();
   await act(async()=>root.unmount());
  });
 });
@@ -116,7 +116,7 @@ it('resets project draft and ignores a delayed dataset response from the previou
  mocked.setup={...original,project_id:'new',setup_context_id:'new',draft:{} as any};
  await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
  await act(async()=>finish({items:[{dataset_id:'old',name:'Old'}],next_cursor:null}));
- expect(div.textContent).not.toContain('gone'); expect(div.textContent).not.toContain('Old —'); expect(div.textContent).toContain('New —');
+ expect(div.textContent).not.toContain('gone'); expect(div.querySelector('option[value="old"]')).toBeNull(); expect(div.querySelector('option[value="new"]')).not.toBeNull();
  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click()});
  expect(mocked.save.mock.calls[0][0].editor_state.datasetRows).toEqual([]); expect(mocked.save.mock.calls[0][0].editor_state.fasta).toBe('');
  expect(mocked.save.mock.calls[0][0].editor_state.drafts.muscle.threads).not.toBe(3);
@@ -146,7 +146,7 @@ it('records excluded occurrences and identity discrepancies without excluding re
  const roster=mocked.save.mock.calls[0][0].native_job_request.params.roster;
  expect(roster.source_evidence.map((x:any)=>x.included)).toEqual([false,true]); expect(roster.source_evidence[0].selection).toEqual(selection);
  expect(roster.source_evidence[1].identity_mismatches).toEqual(expect.arrayContaining(['ordinal','source_identity','source_digest']));
- expect(roster.rows.at(-1).sequence).toBe('AA'); expect(div.textContent).toContain('identity evidence');
+ expect(roster.rows.at(-1).sequence).toBe('AA'); expect(div.textContent).toContain('changed since you picked them');
  await act(async()=>root.unmount()); mocked.setup=original;
 });
 
@@ -159,9 +159,9 @@ it('fences late revision and add responses after switching dataset',async()=>{
  const div=document.createElement('div'),root=createRoot(div); await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
  const select=async(label:string,value:string)=>{const el=div.querySelector(`[aria-label="${label}"]`) as HTMLSelectElement; await act(async()=>{el.value=value;el.dispatchEvent(new Event('change',{bubbles:true}));});};
  await select('Dataset','a'); await select('Dataset','b'); await act(async()=>revA({items:[{revision_id:'ar',revision_number:1}],next_cursor:null}));
- expect(div.textContent).not.toContain('Revision 1 — ar'); await select('Dataset revision','br');
+ expect(div.querySelector('option[value="ar"]')).toBeNull(); await select('Dataset revision','br');
  await act(async()=>{(div.querySelector('input[type=checkbox]') as HTMLInputElement).click()});
- await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Add selected resources')!.click()});
+ await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Add selected')!.click()});
  await select('Dataset','a'); await act(async()=>freeze({data:{project_id:'p',dataset_id:'b',revision_id:'br',revision_sha256:'h',members:[{ordinal:0}]}}));
  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click()});
  expect(mocked.save.mock.calls[0][0].editor_state.datasetRows).toEqual([]); await act(async()=>root.unmount());
@@ -182,7 +182,7 @@ it('selects a Design chain and retains its region and occurrence in the draft', 
  await select('Dataset','ds'); await select('Dataset revision','rev');
  await act(async()=>{(div.querySelector('input[type=checkbox]') as HTMLInputElement).click()});
  await select('Chain for occurrence 0','B');
- await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Add selected resources')!.click()});
+ await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Add selected')!.click()});
  await act(async()=>{[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click()});
  const row=mocked.save.mock.calls[0][0].native_job_request.params.roster.rows.at(-1);
  expect(row.sequence).toBe('Y'); expect(row.source_positions).toEqual([1]); expect(JSON.parse(row.transformation_provenance).chain).toBe('B');

@@ -3145,6 +3145,7 @@ class SchedulerGlobalConfig(BaseModel):
     enabled: bool = DEFAULT_SCHEDULER_CONFIG["global"]["enabled"]
     target_vram_fill: float = DEFAULT_SCHEDULER_CONFIG["global"]["target_vram_fill"]
     vram_safety_margin_mb: int = DEFAULT_SCHEDULER_CONFIG["global"]["vram_safety_margin_mb"]
+    nanopore_vram_fraction: float = DEFAULT_SCHEDULER_CONFIG["global"]["nanopore_vram_fraction"]
     capacity_weight: float = DEFAULT_SCHEDULER_CONFIG["global"]["capacity_weight"]
     emptiness_weight: float = DEFAULT_SCHEDULER_CONFIG["global"]["emptiness_weight"]
     max_launches_per_cycle: int = DEFAULT_SCHEDULER_CONFIG["global"]["max_launches_per_cycle"]
@@ -3202,6 +3203,7 @@ async def update_scheduler_config(global_config: SchedulerGlobalConfig):
         "enabled": global_config.enabled,
         "target_vram_fill": max(0.5, min(0.95, global_config.target_vram_fill)),
         "vram_safety_margin_mb": max(256, min(16384, global_config.vram_safety_margin_mb)),
+        "nanopore_vram_fraction": max(0.25, min(0.95, global_config.nanopore_vram_fraction)),
         "capacity_weight": max(0.0, min(10.0, global_config.capacity_weight)),
         "emptiness_weight": max(0.0, min(10.0, global_config.emptiness_weight)),
         "max_launches_per_cycle": max(1, min(20, global_config.max_launches_per_cycle)),
