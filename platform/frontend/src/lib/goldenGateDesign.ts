@@ -337,8 +337,8 @@ export type Primer = {
 };
 
 export type PrimerPairQcMetrics = {
-  heterodimer_complement: number;
-  three_prime_heterodimer: number;
+  heterodimer_complement: number | null;
+  three_prime_heterodimer: number | null;
   warnings: (string)[];
 };
 
@@ -347,9 +347,9 @@ export type PrimerQcMetrics = {
   sequence_type: "dna" | "rna";
   length: number;
   gc_percent: number;
-  max_self_complement: number;
-  three_prime_self_complement: number;
-  max_hairpin_stem: number;
+  max_self_complement: number | null;
+  three_prime_self_complement: number | null;
+  max_hairpin_stem: number | null;
   hairpin_loop_size: number | null;
   binding_site_count: number | null;
   off_target_site_count: number | null;

@@ -7,7 +7,6 @@ import { useInputOwnership } from './useInputOwnership';
 import { useLocation } from 'react-router-dom';
 import type { SequenceData, HighlightedRegion } from '../types';
 import {
-    calculatePrimerTm,
     fetchPcrExperimentRevision,
     fetchPcrExperimentSummaryPage,
     type PcrExperimentRevisionSummary,
@@ -103,6 +102,12 @@ export function PCRPanel(props: PCRPanelProps) {
     const [forwardPrimer, setForwardPrimer] = useState('');
     const [reversePrimer, setReversePrimer] = useState('');
     const [productName, setProductName] = useState('');
+    const [minAnnealLength, setMinAnnealLength] = useState(8);
+    const [forwardSite, setForwardSite] = useState('');
+    const [reverseSite, setReverseSite] = useState('');
+    const [preview, setPreview] = useState<PcrOperationResponse['product']>(null);
+    const [previewError, setPreviewError] = useState<string | null>(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
     const [persistImmutableRevision, setPersistImmutableRevision] = useState(Boolean(sequenceId));
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -126,16 +131,14 @@ export function PCRPanel(props: PCRPanelProps) {
     const historyOffset = historyPage.owner === historyOwner ? historyPage.offset : 0;
     const [authorityLoading, setAuthorityLoading] = useState(false);
     const [authorityError, setAuthorityError] = useState<string | null>(null);
-    const [tmLoading, setTmLoading] = useState(false);
-    const [tmResults, setTmResults] = useState<{ forward: PrimerTmResult | null; reverse: PrimerTmResult | null }>({
-        forward: null,
-        reverse: null,
-    });
+    const tmLoading = previewLoading;
+    const tmResults = { forward: preview?.forward_primer?.annealing_tm ?? null, reverse: preview?.reverse_primer?.annealing_tm ?? null };
 
     const sequenceType: 'dna' | 'rna' = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
     const unitLabel = sequenceUnitLabel(sequenceType);
-    const pcrOwner = useInputOwnership([sequenceId, sequenceData.sequence, sequenceData.name, sequenceData.circular, sequenceType, forwardPrimer, reversePrimer, tmSettings, productName, persistImmutableRevision]);
+    const pcrOwner = useInputOwnership([sequenceId, sequenceData.sequence, sequenceData.name, sequenceData.circular, sequenceType, forwardPrimer, reversePrimer, tmSettings, productName, persistImmutableRevision, minAnnealLength, forwardSite, reverseSite]);
     useEffect(() => { setResult(null); setPersistedResult(null); setLoading(false); }, [pcrOwner.token]);
+    useEffect(() => { setForwardSite(''); setReverseSite(''); }, [sequenceData.sequence, sequenceData.circular, forwardPrimer, reversePrimer, minAnnealLength]);
 
     useEffect(() => {
         setPersistImmutableRevision(Boolean(sequenceId));
@@ -214,103 +217,53 @@ export function PCRPanel(props: PCRPanelProps) {
     useEffect(() => () => previewController.current?.abort(), [pcrOwner.token]);
 
     const fwdBindings = useMemo(() => resolvePrimerBindings(sequenceData.sequence, forwardPrimer, {
-        reverse: false,
-        sequenceType,
-        circular: sequenceData.circular,
-    }), [forwardPrimer, sequenceData.sequence, sequenceData.circular, sequenceType]);
-
+        reverse: false, sequenceType, circular: sequenceData.circular, minAnnealLength,
+    }), [forwardPrimer, sequenceData.sequence, sequenceData.circular, sequenceType, minAnnealLength]);
     const revBindings = useMemo(() => resolvePrimerBindings(sequenceData.sequence, reversePrimer, {
-        reverse: true,
-        sequenceType,
-        circular: sequenceData.circular,
-    }), [reversePrimer, sequenceData.sequence, sequenceData.circular, sequenceType]);
+        reverse: true, sequenceType, circular: sequenceData.circular, minAnnealLength,
+    }), [reversePrimer, sequenceData.sequence, sequenceData.circular, sequenceType, minAnnealLength]);
+    const siteKey = (binding: (typeof fwdBindings)[number]) => `${binding.start}:${binding.annealLength}`;
+    const selectedSite = (value: string) => {
+        if (!value) return null;
+        const [start, anneal_length] = value.split(':').map(Number);
+        return { start, anneal_length };
+    };
+    const fwdBinding = fwdBindings.find(b => forwardSite ? siteKey(b) === forwardSite
+        : preview?.forward_primer ? b.start === preview.forward_primer.binding.start && b.annealLength === preview.forward_primer.binding.anneal_length
+            : fwdBindings.length === 1) ?? null;
+    const revBinding = revBindings.find(b => reverseSite ? siteKey(b) === reverseSite
+        : preview?.reverse_primer ? b.start === preview.reverse_primer.binding.start && b.annealLength === preview.reverse_primer.binding.anneal_length
+            : revBindings.length === 1) ?? null;
 
-    const fwdBinding = fwdBindings[0] ?? null;
-    const revBinding = revBindings[0] ?? null;
-
-    const forwardAnnealSequence = useMemo(() => {
-        if (!forwardPrimer) return '';
-        if (!fwdBinding) return forwardPrimer;
-        return forwardPrimer.slice(forwardPrimer.length - fwdBinding.annealLength);
-    }, [forwardPrimer, fwdBinding]);
-
-    const reverseAnnealSequence = useMemo(() => {
-        if (!reversePrimer) return '';
-        if (!revBinding) return reversePrimer;
-        return reversePrimer.slice(reversePrimer.length - revBinding.annealLength);
-    }, [reversePrimer, revBinding]);
-
+    // The API owns product geometry and thermodynamics for preview and saving.
     useEffect(() => {
-        if (!forwardPrimer && !reversePrimer) {
-            setTmResults({ forward: null, reverse: null });
-            setTmLoading(false);
-            return;
-        }
-        if ((forwardPrimer && !isValidNucleotideSequence(forwardPrimer)) || (reversePrimer && !isValidNucleotideSequence(reversePrimer))) {
-            setTmResults({ forward: null, reverse: null });
-            setTmLoading(false);
-            return;
-        }
-
-        let cancelled = false;
+        setPreview(null);
+        setPreviewError(null);
+        setPreviewLoading(false);
+        if (sequenceType !== 'dna' || !Number.isInteger(minAnnealLength) || minAnnealLength < 8 || minAnnealLength > 100
+            || forwardPrimer.replace(/\s/g, '').length < minAnnealLength || reversePrimer.replace(/\s/g, '').length < minAnnealLength
+            || !isValidNucleotideSequence(forwardPrimer) || !isValidNucleotideSequence(reversePrimer)) return;
         const controller = new AbortController();
-        setTmResults({ forward: null, reverse: null });
-        setTmLoading(true);
+        setPreviewLoading(true);
         const timer = window.setTimeout(async () => {
             try {
-                const response = await calculatePrimerTm({
-                    primers: [
-                        ...(forwardAnnealSequence ? [{ id: 'forward', sequence: forwardAnnealSequence, sequence_type: sequenceType }] : []),
-                        ...(reverseAnnealSequence ? [{ id: 'reverse', sequence: reverseAnnealSequence, sequence_type: sequenceType }] : []),
-                    ],
-                    settings: tmSettings,
+                const data = await runPcrOperation({
+                    schema_version: 'pcr-v2',
+                    sequence: sequenceData.sequence, name: sequenceData.name, sequence_type: 'dna', is_circular: sequenceData.circular,
+                    primer_fwd: forwardPrimer, primer_rev: reversePrimer, min_anneal_length: minAnnealLength,
+                    forward_binding: selectedSite(forwardSite), reverse_binding: selectedSite(reverseSite),
+                    save: false, persist_experiment: false, new_name: productName || `${sequenceData.name}_PCR`, tm_settings: tmSettings,
                 }, controller.signal);
-                if (cancelled) {
-                    return;
-                }
-                const forwardResult = response.data.find((entry) => entry.id === 'forward') ?? null;
-                const reverseResult = response.data.find((entry) => entry.id === 'reverse') ?? null;
-                setTmResults({ forward: forwardResult, reverse: reverseResult });
-            } catch (tmError) {
-                if (!controller.signal.aborted) console.error('Failed to calculate PCR primer Tm:', tmError);
-                if (!cancelled) {
-                    setTmResults({ forward: null, reverse: null });
-                }
+                if (pcrOwner.isCurrent() && !controller.signal.aborted) setPreview(data.product);
+            } catch (cause) {
+                if (pcrOwner.isCurrent() && !controller.signal.aborted) setPreviewError(cause instanceof Error ? cause.message : 'PCR preview failed');
             } finally {
-                if (!cancelled) {
-                    setTmLoading(false);
-                }
+                if (pcrOwner.isCurrent() && !controller.signal.aborted) setPreviewLoading(false);
             }
         }, 250);
-
-        return () => {
-            cancelled = true;
-            controller.abort();
-            window.clearTimeout(timer);
-        };
-    }, [forwardAnnealSequence, forwardPrimer, reverseAnnealSequence, reversePrimer, sequenceType, tmSettings]);
-
-    const predictedSize = useMemo(() => {
-        if (fwdBinding && revBinding) {
-            const templateLength = sequenceData.sequence.length;
-            const templateSpan = sequenceData.circular
-                ? (() => {
-                    let span = (revBinding.end - fwdBinding.start) % templateLength;
-                    if (span === 0) {
-                        span = templateLength;
-                    }
-                    return span;
-                })()
-                : revBinding.end > fwdBinding.start
-                    ? revBinding.end - fwdBinding.start
-                    : null;
-
-            if (templateSpan !== null) {
-                return templateSpan + fwdBinding.overhangLength + revBinding.overhangLength;
-            }
-        }
-        return null;
-    }, [fwdBinding, revBinding, sequenceData.circular, sequenceData.sequence.length]);
+        return () => { window.clearTimeout(timer); controller.abort(); };
+    }, [pcrOwner.token]);
+    const predictedSize = preview?.length ?? null;
 
     const buildBindingHighlights = useCallback(() => {
         const regions: HighlightedRegion[] = [];
@@ -375,8 +328,12 @@ export function PCRPanel(props: PCRPanelProps) {
         previewController.current = controller;
         try {
             const payload = {
+                schema_version: 'pcr-v2' as const,
                 primer_fwd: forwardPrimer,
                 primer_rev: reversePrimer,
+                min_anneal_length: minAnnealLength,
+                forward_binding: selectedSite(forwardSite),
+                reverse_binding: selectedSite(reverseSite),
                 is_circular: sequenceData.circular,
                 save: shouldPersist,
                 persist_experiment: shouldPersist,
@@ -401,6 +358,7 @@ export function PCRPanel(props: PCRPanelProps) {
                     start: responseProduct.start,
                     end: responseProduct.end,
                     wrapsOrigin: responseProduct.wraps_origin,
+                    templateSpan: responseProduct.template_span,
                 }
                 : persistedSequence
                     ? {
@@ -416,7 +374,9 @@ export function PCRPanel(props: PCRPanelProps) {
                 const regions: HighlightedRegion[] = [];
                 if (typeof product.start === 'number' && typeof product.end === 'number') {
                     const label = `PCR product (${product.length.toLocaleString()} ${unitLabel})`;
-                    if (product.wrapsOrigin) {
+                    if ('templateSpan' in product && product.templateSpan != null && product.templateSpan >= sequenceData.sequence.length) {
+                        regions.push({ start: 0, end: sequenceData.sequence.length, color: '#38bdf8', label });
+                    } else if (product.wrapsOrigin) {
                         regions.push({
                             start: product.start,
                             end: sequenceData.sequence.length,
@@ -471,14 +431,23 @@ export function PCRPanel(props: PCRPanelProps) {
         }
     };
 
-    const canRun = forwardPrimer.length >= 15 && reversePrimer.length >= 15 && Boolean(fwdBinding) && Boolean(revBinding);
+    const canRun = sequenceType === 'dna' && Boolean(preview) && !previewLoading && !previewError;
     const tmDiff = (tmResults.forward?.tm !== null && tmResults.forward?.tm !== undefined && tmResults.reverse?.tm !== null && tmResults.reverse?.tm !== undefined)
         ? Math.abs(tmResults.forward.tm - tmResults.reverse.tm)
         : 0;
 
     return (
         <div className="pcr-panel p-3 space-y-4">
-            <h4 className="font-semibold text-slate-200">PCR Amplification</h4>
+            <h4 className="font-semibold text-slate-200">PCR sequence prediction</h4>
+            <p className="text-xs text-slate-400">Predicts a product from exact 3′ matches. It does not predict laboratory yield or amplification success. Primer tails are included in the product.</p>
+            {sequenceType !== 'dna' && <p role="alert" className="text-sm text-amber-300">PCR requires a DNA template. Convert RNA to cDNA in a reverse-transcription workflow first.</p>}
+            <label className="block space-y-1 text-sm text-slate-300">
+                <span>Minimum matching 3′ bases</span>
+                <input aria-label="Minimum matching 3′ bases" type="number" min={8} max={100} step={1} value={minAnnealLength}
+                    onChange={event => setMinAnnealLength(Number(event.target.value))}
+                    className="block w-24 rounded border border-slate-600 bg-slate-800 px-2 py-1" />
+                <span className="block text-xs text-slate-400">8–100 nt. Search threshold; short matches may not amplify under your reaction conditions.</span>
+            </label>
 
             <section className="space-y-3 rounded-lg border border-slate-700 bg-slate-900/60 p-3" aria-label="Exact immutable PCR revision authority">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-300">
@@ -594,12 +563,19 @@ export function PCRPanel(props: PCRPanelProps) {
                     placeholder="ATGC..."
                     className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono focus:border-blue-500 focus:outline-none"
                 />
+                {fwdBindings.length > 1 && <label className="block text-xs text-slate-300">
+                    Forward binding site ({fwdBindings.length} candidates)
+                    <select aria-label="Forward binding site" value={forwardSite} onChange={event => setForwardSite(event.target.value)} className="mt-1 block w-full rounded border border-slate-600 bg-slate-800 p-2">
+                        <option value="">Automatic — only if the product is unique</option>
+                        {fwdBindings.map(binding => <option key={siteKey(binding)} value={siteKey(binding)}>Position {binding.start + 1} · {binding.annealLength} matching bases · {binding.overhangLength} tail bases</option>)}
+                    </select>
+                </label>}
                 {forwardPrimer && (
                     <div className="space-y-1 text-xs text-slate-400">
                         <div className="flex items-center gap-3 flex-wrap">
                             <span>{forwardPrimer.length} {unitLabel}</span>
                             <span className="text-emerald-300">
-                                {fwdBinding && fwdBinding.overhangLength > 0 ? 'Annealing Tm' : 'Tm'}: {tmLoading ? 'Calculating...' : formatTm(tmResults.forward)}
+                                Annealing Tm: {tmLoading ? 'Calculating...' : formatTm(tmResults.forward)}
                             </span>
                             <span>GC: {tmResults.forward?.gc_percent ?? 'n/a'}%</span>
                             {fwdBinding ? (
@@ -633,12 +609,19 @@ export function PCRPanel(props: PCRPanelProps) {
                     placeholder="ATGC..."
                     className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-sm font-mono focus:border-blue-500 focus:outline-none"
                 />
+                {revBindings.length > 1 && <label className="block text-xs text-slate-300">
+                    Reverse binding site ({revBindings.length} candidates)
+                    <select aria-label="Reverse binding site" value={reverseSite} onChange={event => setReverseSite(event.target.value)} className="mt-1 block w-full rounded border border-slate-600 bg-slate-800 p-2">
+                        <option value="">Automatic — only if the product is unique</option>
+                        {revBindings.map(binding => <option key={siteKey(binding)} value={siteKey(binding)}>Position {binding.start + 1} · {binding.annealLength} matching bases · {binding.overhangLength} tail bases</option>)}
+                    </select>
+                </label>}
                 {reversePrimer && (
                     <div className="space-y-1 text-xs text-slate-400">
                         <div className="flex items-center gap-3 flex-wrap">
                             <span>{reversePrimer.length} {unitLabel}</span>
                             <span className="text-emerald-300">
-                                {revBinding && revBinding.overhangLength > 0 ? 'Annealing Tm' : 'Tm'}: {tmLoading ? 'Calculating...' : formatTm(tmResults.reverse)}
+                                Annealing Tm: {tmLoading ? 'Calculating...' : formatTm(tmResults.reverse)}
                             </span>
                             <span>GC: {tmResults.reverse?.gc_percent ?? 'n/a'}%</span>
                             {revBinding ? (
@@ -665,7 +648,16 @@ export function PCRPanel(props: PCRPanelProps) {
                 </div>
             )}
 
-            {predictedSize && (
+            {previewLoading && <p className="text-xs text-slate-400">Calculating product and annealing temperatures…</p>}
+            {previewError && <p role="alert" className="text-sm text-amber-300">{previewError}</p>}
+            {preview?.warnings?.map(warning => <p key={warning} className="text-xs text-amber-200">{warning}</p>)}
+            {preview?.forward_primer && preview?.reverse_primer && (
+                <details className="text-xs text-slate-400"><summary>Primer temperature details</summary>
+                    <p>Forward full-oligo Tm: {formatTm(preview.forward_primer.full_oligo_tm)}; reverse full-oligo Tm: {formatTm(preview.reverse_primer.full_oligo_tm)}.</p>
+                    <p>Annealing Tm uses the selected template-matching suffix. Full-oligo Tm includes the tail and is recorded separately.</p>
+                </details>
+            )}
+            {predictedSize !== null && (
                 <div className="p-2 bg-slate-700/50 rounded text-sm text-slate-300">
                     <span className="text-slate-400">Predicted product:</span>{' '}
                     <span className="font-mono text-emerald-400">{predictedSize.toLocaleString()} {unitLabel}</span>
@@ -709,7 +701,7 @@ export function PCRPanel(props: PCRPanelProps) {
                 disabled={loading || !canRun}
                 className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
             >
-                {loading ? 'Running PCR...' : 'Run PCR'}
+                {loading ? 'Saving prediction...' : persistImmutableRevision && sequenceId ? 'Save PCR prediction' : 'Calculate PCR product'}
             </button>
 
             {error && (
@@ -729,7 +721,7 @@ export function PCRPanel(props: PCRPanelProps) {
             {result && (
                 <div className="p-3 bg-emerald-900/30 border border-emerald-800/50 rounded space-y-2">
                     <div className="flex items-center justify-between">
-                        <span className="text-sm text-emerald-300">PCR Product</span>
+                        <span className="text-sm text-emerald-300">Predicted PCR product</span>
                         <span className="font-mono text-emerald-400">{result.length.toLocaleString()} {unitLabel}</span>
                     </div>
                     {result.wrapsOrigin && (

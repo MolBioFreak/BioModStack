@@ -173,17 +173,19 @@ it('explicit primer design and vendor plan abort on changed inputs without autom
     expect(plan.signal?.aborted).toBe(true); await flush(30_000); expect(count('/gibson/dnaweaver/plan')).toHaveLength(1);
     await act(async () => complete.splice(0).forEach(resolve => resolve())); expect(host.textContent).not.toContain('Load product');
 });
-it('PCR keeps one batched debounced Tm request and cancels preview, never a persisted operation', async () => {
-    const pcr = (sequenceId?: string) => <PCRPanel sequenceData={seq} sequenceId={sequenceId} onHighlight={noop} tmOptions={null} tmSettings={settings} onTmSettingsChange={noop} />;
+it('PCR debounces authoritative product/Tm preview and cancels it, never a persisted operation', async () => {
+    const pcr = (sequenceId: string | null = null) => <PCRPanel sequenceData={seq} sequenceId={sequenceId} onHighlight={noop} tmOptions={null} tmSettings={settings} onTmSettingsChange={noop} />;
     await render(pcr()); let fields = host.querySelectorAll<HTMLInputElement>('input[placeholder="ATGC..."]');
-    await input(fields[0], 'ACGTACGTACGTACGT'); await input(fields[1], 'ACGTACGTACGTACGT'); held = '/primer-tm/calculate'; await flush(250);
-    expect(count('/primer-tm/calculate')).toHaveLength(1); const tm = count('/primer-tm/calculate')[0];
-    expect(JSON.parse(tm.data).primers.map((p: { id: string }) => p.id)).toEqual(['forward', 'reverse']);
-    await input(fields[0], 'ACGTACGTACGTACGTACGT'); expect(tm.signal?.aborted).toBe(true);
-    held = '/pcr'; await click('Run PCR'); const preview = count('/pcr')[0]; await render(null); expect(preview.signal?.aborted).toBe(true);
-    await act(async () => complete.splice(0).forEach(resolve => resolve()));
+    await input(fields[0], 'ACGTACGTACGTACGT'); await input(fields[1], 'ACGTACGTACGTACGT'); held = '/pcr'; await flush(250);
+    expect(count('/primer-tm/calculate')).toHaveLength(0);
+    expect(count('/pcr')).toHaveLength(1); const preview = count('/pcr')[0];
+    expect(JSON.parse(preview.data)).toMatchObject({ persist_experiment: false, save: false, min_anneal_length: 8 });
+    await input(fields[0], 'ACGTACGTACGTACGTACGT'); expect(preview.signal?.aborted).toBe(true);
+    await render(null); await act(async () => complete.splice(0).forEach(resolve => resolve()));
+    held = null;
     await render(pcr('stored')); fields = host.querySelectorAll<HTMLInputElement>('input[placeholder="ATGC..."]');
-    await input(fields[0], 'ACGTACGTACGTACGT'); await input(fields[1], 'ACGTACGTACGTACGT'); await click('Run PCR');
-    const saved = count('/pcr')[1]; expect(JSON.parse(saved.data).persist_experiment).toBe(true); expect(saved.signal).toBeUndefined();
+    await input(fields[0], 'ACGTACGTACGTACGT'); await input(fields[1], 'ACGTACGTACGTACGT'); await flush(250);
+    held = '/pcr'; await click('Save PCR prediction');
+    const saved = count('/pcr').at(-1)!; expect(JSON.parse(saved.data).persist_experiment).toBe(true); expect(saved.signal).toBeUndefined();
     await render(null); await act(async () => complete.splice(0).forEach(resolve => resolve()));
 });

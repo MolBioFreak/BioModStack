@@ -43,6 +43,9 @@ interface SelectionPrimerDraft {
     snapshot: SelectionSnapshot;
     direction: 'forward' | 'reverse';
     expectedSequence: string;
+    templateSequence: string;
+    templateCircular: boolean;
+    templateType: string;
 }
 
 interface PrimerPanelProps {
@@ -151,10 +154,17 @@ export function PrimerPanel({
     const [designState, setDesignState] = useState<{ token: object; value: PrimerDesignResponse } | null>(null);
     const [designLoading, setDesignLoading] = useState(false);
     const [draftQc, setDraftQc] = useState<PrimerQcResponse['primers'][number]['qc'] | null>(null);
-    const [sequenceQc, setSequenceQc] = useState<PrimerQcResponse | null>(null);
+    const [sequenceQcState, setSequenceQcState] = useState<{ token: object; value: PrimerQcResponse } | null>(null);
+    const [qcError, setQcError] = useState<string | null>(null);
     const [qcLoading, setQcLoading] = useState(false);
 
     const sequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
+    const qcOwner = useInputOwnership([sequenceData.sequence, sequenceData.circular, sequenceData.primers, sequenceType]);
+    const sequenceQc = sequenceQcState?.token === qcOwner.token ? sequenceQcState.value : null;
+    const setSequenceQc = (value: PrimerQcResponse) => setSequenceQcState({ token: qcOwner.token, value });
+    useEffect(() => {
+        setSelectionPrimerDraft(null);
+    }, [sequenceData.sequence, sequenceData.circular, sequenceType]);
     const designOwner = useInputOwnership([sequenceData.sequence, sequenceData.name, sequenceData.circular, sequenceType, designTargetStart, designTargetEnd, designPrimerMinLength, designPrimerMaxLength, designProductMinLength, designProductMaxLength, designFlankSearch, designGcMin, designGcMax, designTargetTm, designTmDelta, designGcClampMin, designMaxPolyX, designMaxPairs, designOverhangForward, designOverhangReverse, tmSettings]);
     const designResult = designState?.token === designOwner.token ? designState.value : null;
     const setDesignResult = (value: PrimerDesignResponse | null) => setDesignState(value ? { token: designOwner.token, value } : null);
@@ -329,12 +339,19 @@ export function PrimerPanel({
         let cancelled = false;
         const controller = new AbortController();
         setQcLoading(true);
+        setQcError(null);
+        setSequenceQcState(null);
         void calculatePrimerQc({
             primers: primers.map((primer) => ({
                 id: primer.id,
                 name: primer.name,
                 sequence: primer.sequence,
                 sequence_type: primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence),
+                ...(primer.binding_status !== 'needs_review' ? {
+                    intended_binding_start: primer.start,
+                    intended_binding_end: primer.end,
+                    intended_binding_strand: primer.strand,
+                } : {}),
             })),
             template_sequence: sequenceData.sequence,
             template_sequence_type: sequenceType,
@@ -345,7 +362,10 @@ export function PrimerPanel({
                 setSequenceQc(response.data);
             }
         }).catch((qcError) => {
-            if (!cancelled) console.error('Failed to calculate primer QC:', qcError);
+            if (!cancelled && qcOwner.isCurrent()) {
+                setSequenceQcState(null);
+                setQcError(qcError instanceof Error ? qcError.message : 'Primer QC failed. Retry to calculate current results.');
+            }
         }).finally(() => {
             if (!cancelled) {
                 setQcLoading(false);
@@ -369,6 +389,9 @@ export function PrimerPanel({
             snapshot: selectedRegion,
             direction,
             expectedSequence: prepared.sequence,
+            templateSequence: sequenceData.sequence,
+            templateCircular: sequenceData.circular,
+            templateType: sequenceType,
         });
         setNewPrimerName(`Primer_${reverse ? 'Rev' : 'Fwd'}_${selectedRegion.start + 1}`);
     };
@@ -392,6 +415,9 @@ export function PrimerPanel({
         const usePinnedPlacement = Boolean(
             selectionPrimerDraft
             && pinnedPrepared
+            && selectionPrimerDraft.templateSequence === sequenceData.sequence
+            && selectionPrimerDraft.templateCircular === sequenceData.circular
+            && selectionPrimerDraft.templateType === sequenceType
             && cleanedPrimer === cleanNucleotideSequence(selectionPrimerDraft.expectedSequence)
             && isReverse === (selectionPrimerDraft.direction === 'reverse'),
         );
@@ -451,8 +477,6 @@ export function PrimerPanel({
             ),
         };
 
-        onAddPrimer(primer);
-
         if (saveToLibrary) {
             try {
                 const libraryData: PrimerCreate = {
@@ -460,18 +484,19 @@ export function PrimerPanel({
                     sequence: primer.sequence,
                     sequence_type: sequenceTypeForPrimer,
                     primer_type: isReverse ? 'reverse' : 'forward',
-                    binding_start: primer.start,
-                    binding_end: primer.end,
+                    // A reusable library oligo is independent of the editable construct.
                     binding_strand: primer.strand,
                     tm_settings: tmSettings,
                 };
                 await createPrimer(libraryData);
             } catch (createError) {
-                console.error('Failed to save primer to library:', createError);
+                if (addOwner.isCurrent()) setError(`Primer was not added: library save failed. ${createError instanceof Error ? createError.message : 'Retry, or uncheck Save to library.'}`);
+                return;
             }
         }
 
         if (!addOwner.isCurrent()) return;
+        onAddPrimer(primer);
         setNewPrimerName('');
         setNewPrimerSeq('');
         setIsReverse(false);
@@ -788,7 +813,7 @@ export function PrimerPanel({
                                     <span className="text-emerald-300">
                                         {draftTmLabel}: {draftTmLoading ? 'Calculating...' : formatTm(draftTmResult)}
                                     </span>
-                                    <span>GC: {calculateGcPercent(cleanedDraftPrimer)}%</span>
+                                    <span>GC: {calculateGcPercent(cleanedDraftPrimer)}%{/[^ACGTU]/.test(cleanedDraftPrimer) ? ' (IUPAC estimate)' : ''}</span>
                                 </div>
                                 {selectionPrimerDraft ? (
                                     <div className="text-emerald-400">
@@ -811,7 +836,7 @@ export function PrimerPanel({
                                 ))}
                                 {draftQc && (
                                     <div className="border-t border-slate-800 pt-2 text-slate-400">
-                                        QC • self {draftQc.max_self_complement} • 3′ self {draftQc.three_prime_self_complement} • hairpin {draftQc.max_hairpin_stem}
+                                        Exact-match QC • self {draftQc.max_self_complement ?? 'unavailable'} • 3′ self {draftQc.three_prime_self_complement ?? 'unavailable'} • hairpin {draftQc.max_hairpin_stem ?? 'unavailable'}
                                         {draftQc.binding_site_count != null ? ` • sites ${draftQc.binding_site_count}` : ''}
                                     </div>
                                 )}
@@ -869,9 +894,10 @@ export function PrimerPanel({
                                                 <span className="text-sm text-slate-200 truncate">{primer.name}</span>
                                             </div>
                                             <div className="text-xs text-slate-400 mt-0.5">
-                                                {primer.sequence.length} {sequenceUnitLabel(primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence))} • Tm: {primer.tm?.toFixed(1) ?? 'n/a'}°C • GC: {primer.gc_percent ?? 'n/a'}%
+                                                {primer.sequence.length} {sequenceUnitLabel(primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence))} • Tm: {primer.binding_status === 'needs_review' ? 'n/a' : primer.tm?.toFixed(1) ?? 'n/a'}°C • GC: {primer.gc_percent ?? 'n/a'}%
                                             </div>
                                         </div>
+                                        {primer.binding_status === 'needs_review' && <div className="text-xs text-amber-300" role="status">{primer.binding_warning || 'Binding needs review after template changes. Rebind this oligo before using its placement.'}</div>}
                                         <button
                                             onClick={() => onRemovePrimer(primer.id)}
                                             className="p-1 hover:bg-slate-500 rounded ml-2"
@@ -911,6 +937,7 @@ export function PrimerPanel({
 
                     <div className="space-y-3 rounded border border-slate-700 bg-slate-800 p-3">
                         <div className="text-sm font-medium text-slate-300">Primer Pair Design</div>
+                        <p className="text-xs text-slate-400">Product sizes include both 5′ tails. Fixed search profile flanking_exact_v1 uses at most 48 candidates per strand and permits 4 bases of target overlap; origin-wrapping candidates are excluded. QC uses exact paired runs on this template, not thermodynamic or genome-wide specificity screening.</p>
                         <div className="grid grid-cols-2 gap-3">
                             <SliderField
                                 label="Target start"
@@ -1177,6 +1204,9 @@ export function PrimerPanel({
 
             {activeTab === 'qc' && (
                 <div className="space-y-3">
+                    <p className="text-xs text-slate-400">Exact-match screen on this construct only. Sites use a 12-base 3′ core (whole primer if shorter); mismatches and the wider genome are not searched. Dimer scores count paired bases, not binding energy; “3′” requires both ends paired. Hairpins search 3–12-base loops. Zero does not rule out secondary structure or mispriming.</p>
+                    {sequenceQc?.profile && <details className="text-xs text-slate-400"><summary>Fixed QC profile: {sequenceQc.profile.version}</summary><p>Binding core {sequenceQc.profile.binding_core_bases} bases; hairpin stems ≥{sequenceQc.profile.hairpin_min_stem}, loops {sequenceQc.profile.hairpin_min_loop}–{sequenceQc.profile.hairpin_max_loop}. Complementarity warnings: {sequenceQc.profile.moderate_complement_bases} moderate, {sequenceQc.profile.strong_complement_bases} strong; both-3′ ends {sequenceQc.profile.three_prime_warning_bases}; hairpin stem {sequenceQc.profile.hairpin_warning_stem_bases}. These are fixed exact-match thresholds.</p></details>}
+                    {qcError && <div role="alert" className="text-sm text-red-300">Current QC unavailable: {qcError}</div>}
                     {qcLoading ? (
                         <div className="rounded border border-slate-700 bg-slate-900/50 px-3 py-4 text-sm text-slate-400">
                             Calculating primer QC…
@@ -1184,7 +1214,7 @@ export function PrimerPanel({
                     ) : (
                         <>
                             <div className="space-y-2">
-                                {(sequenceQc?.primers || []).length === 0 ? (
+                                {!qcError && (sequenceQc?.primers || []).length === 0 ? (
                                     <div className="rounded border border-dashed border-slate-700 bg-slate-900/40 px-3 py-4 text-xs text-slate-500">
                                         Add primers to the construct to run QC.
                                     </div>
@@ -1194,12 +1224,12 @@ export function PrimerPanel({
                                             <div>
                                                 <div className="font-medium text-slate-100">{entry.name || 'Primer'}</div>
                                                 <div className="mt-1 text-xs text-slate-500">
-                                                    self {entry.qc.max_self_complement} • 3′ self {entry.qc.three_prime_self_complement} • hairpin {entry.qc.max_hairpin_stem}
+                                                    self {entry.qc.max_self_complement ?? 'unavailable'} • 3′ self {entry.qc.three_prime_self_complement ?? 'unavailable'} • hairpin {entry.qc.max_hairpin_stem ?? 'unavailable'}
                                                     {entry.qc.binding_site_count != null ? ` • sites ${entry.qc.binding_site_count}` : ''}
                                                 </div>
                                             </div>
                                             <div className="text-xs text-slate-400">
-                                                off-target {entry.qc.off_target_site_count ?? 0}
+                                                off-target {entry.qc.off_target_site_count ?? 'unknown (intended site unverified)'}
                                             </div>
                                         </div>
                                         <div className="mt-2 font-mono text-xs text-slate-300 break-all">{entry.qc.sequence}</div>
@@ -1222,7 +1252,7 @@ export function PrimerPanel({
                                                     {(pair.left_name || 'Primer A')} × {(pair.right_name || 'Primer B')}
                                                 </div>
                                                 <div className="mt-1 text-xs text-slate-500">
-                                                    heterodimer {pair.heterodimer_complement} • 3′ heterodimer {pair.three_prime_heterodimer}
+                                                    heterodimer {pair.heterodimer_complement ?? 'unavailable'} • 3′ heterodimer {pair.three_prime_heterodimer ?? 'unavailable'}
                                                 </div>
                                                 {pair.warnings.length > 0 && (
                                                     <div className="mt-2 text-xs text-amber-300">{pair.warnings.join(' • ')}</div>
@@ -1283,7 +1313,7 @@ export function PrimerPanel({
                                             {primer.sequence.slice(0, 30)}{primer.length > 30 ? '...' : ''}
                                         </div>
                                         <div className="text-xs text-slate-500 mt-0.5">
-                                            {primer.length} {sequenceUnitLabel(primer.sequence_type || inferSequenceTypeFromSequence(primer.sequence))} • Tm: {primer.tm?.toFixed(1) ?? 'n/a'}°C • GC: {primer.gc_percent?.toFixed(0) ?? 'n/a'}%
+                                            {primer.length} {sequenceUnitLabel(primer.sequence_type || inferSequenceTypeFromSequence(primer.sequence))} • Full-oligo Tm: {primer.tm?.toFixed(1) ?? 'n/a'}°C • GC: {primer.gc_percent?.toFixed(0) ?? 'n/a'}%
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-1 ml-2">

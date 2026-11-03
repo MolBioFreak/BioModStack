@@ -98,8 +98,8 @@ it('PCR uses editable inline bytes and topology even with a selected stored id',
  vi.mocked(api.runPcrOperation).mockResolvedValue({ product: { sequence: seq.sequence, length: seq.sequence.length }, experiment_id: 'e', experiment_revision_id: 'r' } as any);
  await render(<MemoryRouter><PCRPanel sequenceData={{ ...seq, circular: true }} sequenceId="stored-head" onHighlight={noop} tmOptions={null} tmSettings={settings} onTmSettingsChange={noop} /></MemoryRouter>);
  const inputs = host.querySelectorAll<HTMLInputElement>('input[placeholder="ATGC..."]');
- await input(inputs[0], 'ACGTACGTACGTACGT'); await input(inputs[1], 'ACGTACGTACGTACGT'); await click('Run PCR');
- expect(api.runPcrOperation).toHaveBeenCalledTimes(1);
+ await input(inputs[0], 'ACGTACGTACGTACGT'); await input(inputs[1], 'ACGTACGTACGTACGT'); await tick(); await click('Save PCR prediction');
+ expect(api.runPcrOperation).toHaveBeenCalledTimes(2);
  expect(api.runPcrOperation).toHaveBeenLastCalledWith(expect.objectContaining({ sequence: seq.sequence, name: 'editable', sequence_type: 'dna', is_circular: true, persist_experiment: true }));
  expect(vi.mocked(api.runPcrOperation).mock.calls[0][0]).not.toHaveProperty('sequence_id');
 });

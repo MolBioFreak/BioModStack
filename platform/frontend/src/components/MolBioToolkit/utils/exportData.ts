@@ -7,6 +7,8 @@ export interface ExportablePrimer {
     start: number;
     end: number;
     strand: 1 | -1;
+    binding_status?: 'needs_review';
+    binding_warning?: string;
     tm?: number;
     gc_percent?: number;
     sites?: Array<{
@@ -40,6 +42,7 @@ export function formatPrimerSites(
     sequenceLength?: number,
     circular = false,
 ): string {
+    if (primer.binding_status === 'needs_review') return '';
     const canonical = canonicalizeExportablePrimer(primer, sequenceLength, circular);
     const sites = canonical.sites && canonical.sites.length > 0
         ? canonical.sites
@@ -65,19 +68,24 @@ export function buildPrimersTsv(
         'Strand',
         'Tm',
         'GC%',
+        'Binding status',
+        'Binding warning',
     ];
     const rows = primers.map((primer) => {
         const canonical = canonicalizeExportablePrimer(primer, sequenceLength, circular);
+        const unplaced = canonical.binding_status === 'needs_review';
         return [
             canonical.name,
             canonical.sequence,
             canonical.sequenceType || defaultSequenceType,
-            canonical.start,
-            canonical.end,
+            unplaced ? '' : canonical.start,
+            unplaced ? '' : canonical.end,
             formatPrimerSites(canonical),
             canonical.strand === 1 ? '+' : '-',
-            canonical.tm ?? '',
+            unplaced ? '' : canonical.tm ?? '',
             canonical.gc_percent ?? '',
+            unplaced ? 'needs review' : 'placed',
+            canonical.binding_warning || '',
         ].map(escapeTsv).join('\t');
     });
     return [headers.join('\t'), ...rows].join('\n');

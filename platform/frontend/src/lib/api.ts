@@ -4087,6 +4087,7 @@ export interface PrimerDesignPair {
 }
 
 export interface PrimerDesignResponse {
+    search_profile?: { version: string; candidates_per_strand: number; target_overlap_bases: number; origin_wrapping_candidates: boolean; product_size_includes_tails: boolean; qc: PrimerQcProfile };
     sequence_name?: string | null;
     sequence_type: 'dna' | 'rna';
     target_start: number;
@@ -4111,9 +4112,9 @@ export interface PrimerQcMetrics {
     sequence_type: 'dna' | 'rna' | string;
     length: number;
     gc_percent: number;
-    max_self_complement: number;
-    three_prime_self_complement: number;
-    max_hairpin_stem: number;
+    max_self_complement: number | null;
+    three_prime_self_complement: number | null;
+    max_hairpin_stem: number | null;
     hairpin_loop_size?: number | null;
     binding_site_count?: number | null;
     off_target_site_count?: number | null;
@@ -4132,12 +4133,28 @@ export interface PrimerPairQcEntry {
     left_name?: string | null;
     right_id?: string | null;
     right_name?: string | null;
-    heterodimer_complement: number;
-    three_prime_heterodimer: number;
+    heterodimer_complement: number | null;
+    three_prime_heterodimer: number | null;
     warnings: string[];
 }
 
+export interface PrimerQcProfile {
+    version: 'exact_match_v1';
+    binding_core_bases: number;
+    shorter_primer_uses_whole_sequence: boolean;
+    hairpin_min_stem: number;
+    hairpin_min_loop: number;
+    hairpin_max_loop: number;
+    moderate_complement_bases: number;
+    strong_complement_bases: number;
+    three_prime_warning_bases: number;
+    hairpin_warning_stem_bases: number;
+    three_prime_requires_both_ends: boolean;
+    template_scope: 'provided_template_only';
+}
+
 export interface PrimerQcResponse {
+    profile?: PrimerQcProfile;
     primers: PrimerQcEntry[];
     pairwise: PrimerPairQcEntry[];
 }
@@ -4620,6 +4637,8 @@ export interface PrimerTmOption {
     description: string;
     sequence_types: Array<'dna' | 'rna'>;
     polymer_pairing?: string | null;
+    salt_corrections?: string[];
+    applicability?: string;
 }
 
 export interface PrimerTmSaltCorrectionOption {
@@ -4728,6 +4747,9 @@ export const calculatePrimerQc = (data: {
         name?: string;
         sequence: string;
         sequence_type?: 'dna' | 'rna';
+        intended_binding_start?: number;
+        intended_binding_end?: number;
+        intended_binding_strand?: number;
     }>;
     template_sequence?: string;
     template_sequence_type?: 'dna' | 'rna';
@@ -5567,12 +5589,26 @@ export interface PcrExperimentListItem {
     current_revision: Omit<PcrExperimentRevision, 'parent_revision_id' | 'relation' | 'reopen_destination'> | null;
 }
 
+export interface PcrBindingSelection { start: number; anneal_length: number; }
+export interface PcrPrimerResult {
+    sequence: string;
+    annealing_sequence: string;
+    tail_sequence: string;
+    binding: PcrBindingSelection & { end: number; overhang_length: number };
+    annealing_tm: PrimerTmResult;
+    full_oligo_tm: PrimerTmResult;
+}
+
 export interface PcrOperationRequest {
+    schema_version?: 'pcr-v2';
     sequence_id?: string;
     name?: string;
     sequence?: string;
     sequence_type?: 'dna' | 'rna';
     is_circular: boolean;
+    min_anneal_length?: number;
+    forward_binding?: PcrBindingSelection | null;
+    reverse_binding?: PcrBindingSelection | null;
     primer_fwd: string;
     primer_rev: string;
     new_name: string;
@@ -5589,6 +5625,12 @@ export interface PcrOperationResponse {
         end: number;
         length: number;
         wraps_origin: boolean;
+        template_span?: number | null;
+        min_anneal_length?: number | null;
+        method?: string | null;
+        forward_primer?: PcrPrimerResult | null;
+        reverse_primer?: PcrPrimerResult | null;
+        warnings?: string[];
     } | null;
     message: string;
     experiment_id: string | null;
