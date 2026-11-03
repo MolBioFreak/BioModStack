@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
+import { ExecutionPolicyControl } from '../../src/components/ExecutionPolicyControl';
 import { ProteinModificationTemplate } from '../../src/components/ProteinModificationTemplate';
 import { deNovoSavedValues } from '../../src/components/deNovoWorkflowRoute';
 import { deNovoAuthoringEnvelope } from '../../src/lib/deNovoAuthoring';
@@ -51,7 +52,7 @@ async function mount(values: Record<string, unknown>) {
     latest = undefined; prep = { current: null };
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     query = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
-    await act(async () => root!.render(<QueryClientProvider client={query}><MemoryRouter><DeNovoDraftPreparationContext.Provider value={prep}><ProteinModificationTemplate initialValues={values} onBack={() => {}} onDraftChange={draft => { latest = draft; }} /></DeNovoDraftPreparationContext.Provider></MemoryRouter></QueryClientProvider>)); await settle();
+    await act(async () => root!.render(<QueryClientProvider client={query}><MemoryRouter><DeNovoDraftPreparationContext.Provider value={prep}><ProteinModificationTemplate initialValues={values} runDetails={<ExecutionPolicyControl initialPolicy={values.execution_policy as any} />} onBack={() => {}} onDraftChange={draft => { latest = draft; }} /></DeNovoDraftPreparationContext.Provider></MemoryRouter></QueryClientProvider>)); await settle();
 }
 const loop = { modification_mode: 'resequence', suite_last_generation: { generator: 'disco', design_task: 'unconditional' } };
 it('retains the real suite loop draft, sparse per-designer and validator settings, and cold authoring envelope', async () => {
@@ -85,6 +86,11 @@ it('retains suite loop inputs across Generate and Resequence independently of ty
     expect(q('Resequence job name').value).toBe('saved-name'); expect(q('Resequence fixed positions').value).toBe('A1');
     expect(latest.modification_mode).toBe('resequence'); expect(latest.native_job_request).toBeNull();
 });
+it('receives the existing parent transfer-policy control and serializes its explicit edit', async () => {
+    await mount({ ...loop, execution_policy: { remote_result_policy: 'manual' } }); await click('Pick exact source');
+    await edit('Successful remote results', 'automatic'); await click('Run resequence and validate');
+    expect(calls.find(call => call.url === '/api/jobs/resequence/from-structures')!.body.execution_policy).toEqual({ remote_result_policy: 'automatic' });
+});
 it('authors the already-supported MSA provider on the real loop request', async () => {
     await mount(loop); await click('Pick exact source'); await edit('Resequence MSA provider', 'neurosnap_api');
     await click('Run resequence and validate');
@@ -107,6 +113,14 @@ it('reopens current loop clones in the loop owner, retaining source basket and s
     expect(latest.backbone_input_pdbs).toBe('retained/basket');
     await act(async () => { await prep.current(); });
     expect(calls.find(call => call.url.endsWith('/prepare'))!.body).toMatchObject({ backbone_input_pdbs: 'retained/basket', designer_settings: { fampnn_seed: 0, fampnn_seq_only: false } });
+});
+it('keeps a retained LigandMPNN native template authoritative instead of inventing a clone mode', async () => {
+    await mount(deNovoSavedValues('protein_modification_experimental', 'region_redesign', { backbone_input_pdbs: 'retained/basket', seq_method: 'ligandmpnn', designer_template: 'retained/metal-template.json', structure_validators: ['protenix_v2'] }));
+    expect(q('LigandMPNN mode').value).toBe('');
+    await act(async () => { await prep.current(); });
+    const body = calls.find(call => call.url.endsWith('/prepare'))!.body;
+    expect(body).not.toHaveProperty('designer_mode'); expect(body).not.toHaveProperty('designer_settings');
+    expect(body.retained_params.designer_template).toBe('retained/metal-template.json');
 });
 it('reuses its exact staged source on cancelled remote review and retains explicit Local/policy in envelopes', async () => {
     await mount({ ...loop, execution_policy: { remote_result_policy: 'manual' } }); await click('Pick exact source'); await click('Place worker');

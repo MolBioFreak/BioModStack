@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { DeNovoDraftPreparationContext } from '../lib/deNovoDocumentCapture';
 import { submissionExecutionPolicy, type ExecutionPolicy } from '../lib/executionPolicy';
 import { useNavigate } from 'react-router-dom';
@@ -14,7 +14,7 @@ const LIGAND_MODES = [['ligand_aware', 'Ligand-aware'], ['ntp_aware', 'NTP-aware
 const VALIDATORS = [['protenix_v2', 'Protenix v2'], ['esmfold2', 'ESMFold2 (optional)'], ['boltz2', 'Boltz-2']] as const;
 
 /** Resequence existing designs from any generator, then validate. Positions are caller-selected. */
-export function ResequencePanel({ initialValues = {}, onDraftChange }: { initialValues?: Record<string, unknown>; onDraftChange?: (draft: Record<string, unknown>) => void }) {
+export function ResequencePanel({ initialValues = {}, onDraftChange, runDetails }: { initialValues?: Record<string, unknown>; onDraftChange?: (draft: Record<string, unknown>) => void; runDetails?: ReactNode }) {
     const preparation = useContext(DeNovoDraftPreparationContext);
     const alive = useRef(true);
     useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -22,7 +22,7 @@ export function ResequencePanel({ initialValues = {}, onDraftChange }: { initial
     const navigate = useNavigate();
     const [bindings, setBindings] = useState<NativeGenerationSourceBindings | undefined>(saved.native_sources);
     const [engine, setEngine] = useState<string>(saved.seq_method ?? 'mpnn');
-    const [ligandMode, setLigandMode] = useState(saved.designer_mode ?? 'ligand_aware');
+    const [ligandMode, setLigandMode] = useState(saved.designer_mode ?? (saved.designer_template ? '' : 'ligand_aware'));
     const [designerSettings, setDesignerSettings] = useState<Record<string, DesignerSettingsDraft>>(saved.designer_drafts ?? {});
     const designerKey = `${engine}:${engine === 'ligandmpnn' ? ligandMode : ''}`;
     const designer = designerSettings[designerKey] ?? { values: Object.fromEntries((LOOP_SETTINGS[engine] ?? []).filter(key => Object.hasOwn(saved, key)).map(key => [key, saved[key]])), valid: true };
@@ -78,7 +78,7 @@ export function ResequencePanel({ initialValues = {}, onDraftChange }: { initial
     const placement = prepareJobSubmission({ execution_target_id: targetId, execution_policy: policy });
     const request = {
         sources: source ? [source] : saved.sources ?? [], seq_method: engine,
-        ...(engine === 'ligandmpnn' ? { designer_mode: ligandMode } : {}),
+        ...(engine === 'ligandmpnn' && ligandMode ? { designer_mode: ligandMode } : {}),
         ...(ownSettings && Object.keys(designer.values).length ? { designer_settings: designer.values } : {}),
         design_chains: chains.trim(), name: name.trim() || 'Resequence', structure_validators: validators,
         ...(Object.keys(sentValidatorSettings).length ? { validator_settings: sentValidatorSettings } : {}),
@@ -150,10 +150,12 @@ export function ResequencePanel({ initialValues = {}, onDraftChange }: { initial
         <label>Job name<input aria-label="Resequence job name" value={name} onChange={event => setName(event.target.value)} /></label>
         <p className="text-xs text-[var(--text-secondary)]">Run this round on this system or on any ready worker, whatever ran the earlier round.</p>
         <ExecutionTargetPicker value={targetId ?? ''} onChange={value => { setTargetId(value); if (value) sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, value); else sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY); window.dispatchEvent(new Event('bms:execution-target-change')); }} disabled={submit.isPending} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
+        {runDetails}
         {error && <p role="alert">{error}</p>}
         {engine === 'ligandmpnn' && <label>LigandMPNN mode<select aria-label="LigandMPNN mode" value={ligandMode} onChange={event => setLigandMode(event.target.value)}>
+            {saved.designer_template && <option value="">Retained native template mode</option>}
             {LIGAND_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
-        {ownSettings && <DesignerSettingsForm key={designerKey} engine={engine} mode={ligandMode} initialValues={designer} onChange={(values, valid, structuredText) => setDesignerSettings(previous => ({ ...previous, [designerKey]: { values, valid, structuredText } }))} />}
+        {ownSettings && (engine !== 'ligandmpnn' || ligandMode) && <DesignerSettingsForm key={designerKey} engine={engine} mode={ligandMode} initialValues={designer} onChange={(values, valid, structuredText) => setDesignerSettings(previous => ({ ...previous, [designerKey]: { values, valid, structuredText } }))} />}
         <button type="button" disabled={!ready || submit.isPending} onClick={() => { setError(null); submit.mutate(); }}>Run resequence and validate</button>
     </section>;
 }
