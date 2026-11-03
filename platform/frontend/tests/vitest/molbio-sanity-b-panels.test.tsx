@@ -1,3 +1,4 @@
+import { primerModelOptions } from '../fixtures/primerModelOptions';
 import React, { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
@@ -29,7 +30,7 @@ let root: Root, host: HTMLDivElement, client: QueryClient;
 const seq = { name: 'editable', sequence: 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT', circular: false, sequenceType: 'dna' as const, features: [], primers: [] };
 const settings: api.PrimerTmSettings = { algorithm: 'wallace', salt_correction: 'none', primer_concentration_nM: 250, template_concentration_nM: 0, na_mM: 50, k_mM: 0, tris_mM: 0, mg_mM: 0, dntps_mM: 0, dmso_percent: 0, formamide_percent: 0, self_complementary: false };
 const noop = () => {};
-const primerProps = { sequenceData: seq, selection: null, onHighlight: noop, onAddPrimer: vi.fn(), onRemovePrimer: noop, tmOptions: null, tmSettings: settings, onTmSettingsChange: noop };
+const primerProps = { sequenceData: seq, selection: null, onHighlight: noop, onAddPrimer: vi.fn(), onRemovePrimer: noop, tmOptions: primerModelOptions, tmSettings: settings, onTmSettingsChange: noop };
 const alignment = { query_name: 'OBSOLETE', reference_aligned: 'ACGTACGT', query_aligned: 'ACGTACGT', midline: '||||||||', reference_start: 0, reference_end: 8, query_start: 0, query_end: 8, identity_pct: 100, query_coverage: 100, reference_coverage: 20, score: 16, variants: [], mode: 'placement', strand: 'forward' };
 const assembly = { sequence: 'ACGT', length: 4, circular: false, mode: 'ligation', fragments: [], golden_gate_authority: null, validation_notes: [], warnings: [], junctions: [] };
 const metric = (tm: number) => ({ tm, gc_percent: 50, algorithm: 'wallace', salt_correction: 'none', warnings: [] });
@@ -98,8 +99,8 @@ it('PCR uses editable inline bytes and topology even with a selected stored id',
  vi.mocked(api.runPcrOperation).mockResolvedValue({ product: { sequence: seq.sequence, length: seq.sequence.length }, experiment_id: 'e', experiment_revision_id: 'r' } as any);
  await render(<MemoryRouter><PCRPanel sequenceData={{ ...seq, circular: true }} sequenceId="stored-head" onHighlight={noop} tmOptions={null} tmSettings={settings} onTmSettingsChange={noop} /></MemoryRouter>);
  const inputs = host.querySelectorAll<HTMLInputElement>('input[placeholder="ATGC..."]');
- await input(inputs[0], 'ACGTACGTACGTACGT'); await input(inputs[1], 'ACGTACGTACGTACGT'); await click('Run PCR');
- expect(api.runPcrOperation).toHaveBeenCalledTimes(1);
+ await input(inputs[0], 'ACGTACGTACGTACGT'); await input(inputs[1], 'ACGTACGTACGTACGT'); await tick(); await click('Save PCR prediction');
+ expect(api.runPcrOperation).toHaveBeenCalledTimes(2);
  expect(api.runPcrOperation).toHaveBeenLastCalledWith(expect.objectContaining({ sequence: seq.sequence, name: 'editable', sequence_type: 'dna', is_circular: true, persist_experiment: true }));
  expect(vi.mocked(api.runPcrOperation).mock.calls[0][0]).not.toHaveProperty('sequence_id');
 });

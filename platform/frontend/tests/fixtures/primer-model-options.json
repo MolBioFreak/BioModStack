@@ -1,0 +1,279 @@
+{
+  "schema_version": "primer-options-v1",
+  "qc_profile": {
+    "version": "exact_match_v1",
+    "binding_core_bases": 12,
+    "shorter_primer_uses_whole_sequence": true,
+    "hairpin_min_stem": 3,
+    "hairpin_min_loop": 3,
+    "hairpin_max_loop": 12,
+    "moderate_complement_bases": 6,
+    "strong_complement_bases": 8,
+    "three_prime_warning_bases": 4,
+    "hairpin_warning_stem_bases": 5,
+    "three_prime_requires_both_ends": true,
+    "template_scope": "provided_template_only"
+  },
+  "design_profile": {
+    "version": "flanking_exact_v1",
+    "candidates_per_strand": 48,
+    "target_overlap_bases": 4,
+    "origin_wrapping_candidates": false,
+    "product_size_includes_tails": true,
+    "overlapping_footprints": false,
+    "substrate": "dna_template",
+    "qc": {
+      "version": "exact_match_v1",
+      "binding_core_bases": 12,
+      "shorter_primer_uses_whole_sequence": true,
+      "hairpin_min_stem": 3,
+      "hairpin_min_loop": 3,
+      "hairpin_max_loop": 12,
+      "moderate_complement_bases": 6,
+      "strong_complement_bases": 8,
+      "three_prime_warning_bases": 4,
+      "hairpin_warning_stem_bases": 5,
+      "three_prime_requires_both_ends": true,
+      "template_scope": "provided_template_only"
+    }
+  },
+  "algorithms": [
+    {
+      "id": "wallace",
+      "label": "Wallace rule",
+      "description": "Rule-of-thumb 2/4 formula for short oligos.",
+      "sequence_types": [
+        "dna",
+        "rna"
+      ],
+      "polymer_pairing": null,
+      "salt_corrections": [
+        "none"
+      ],
+      "applicability": "Rough base-count estimate. Concentrations, salt and self-complementarity are not used."
+    },
+    {
+      "id": "gc_empirical",
+      "label": "GC empirical",
+      "description": "DNA GC formula; additive salt corrections only. Oligo concentration is not used.",
+      "sequence_types": [
+        "dna"
+      ],
+      "polymer_pairing": null,
+      "salt_corrections": [
+        "none",
+        "schildkraut_lifson_1965",
+        "wetmur_1991",
+        "santalucia_1996",
+        "santalucia_1998_tm"
+      ],
+      "applicability": "DNA empirical estimate. Oligo concentrations and self-complementarity are not used."
+    },
+    {
+      "id": "nn_breslauer_1986",
+      "label": "Nearest-neighbor: Breslauer 1986",
+      "description": "Legacy DNA/DNA nearest-neighbor thermodynamic table.",
+      "sequence_types": [
+        "dna"
+      ],
+      "polymer_pairing": "dna_dna",
+      "salt_corrections": [
+        "none",
+        "schildkraut_lifson_1965",
+        "wetmur_1991",
+        "santalucia_1996",
+        "santalucia_1998_tm",
+        "santalucia_1998_entropy",
+        "owczarzy_2004",
+        "owczarzy_2008"
+      ],
+      "applicability": "Perfect DNA duplex unless an explicit 3\u2032\u21925\u2032 complementary strand is supplied in Advanced duplex Tm."
+    },
+    {
+      "id": "nn_sugimoto_1996",
+      "label": "Nearest-neighbor: Sugimoto 1996",
+      "description": "DNA/DNA nearest-neighbor parameters from Sugimoto et al.",
+      "sequence_types": [
+        "dna"
+      ],
+      "polymer_pairing": "dna_dna",
+      "salt_corrections": [
+        "none",
+        "schildkraut_lifson_1965",
+        "wetmur_1991",
+        "santalucia_1996",
+        "santalucia_1998_tm",
+        "santalucia_1998_entropy",
+        "owczarzy_2004",
+        "owczarzy_2008"
+      ],
+      "applicability": "Perfect DNA duplex unless an explicit 3\u2032\u21925\u2032 complementary strand is supplied in Advanced duplex Tm."
+    },
+    {
+      "id": "nn_allawi_santalucia_1997",
+      "label": "Nearest-neighbor: Allawi & SantaLucia 1997",
+      "description": "DNA/DNA nearest-neighbor table used as Biopython's default NN parameter set.",
+      "sequence_types": [
+        "dna"
+      ],
+      "polymer_pairing": "dna_dna",
+      "salt_corrections": [
+        "none",
+        "schildkraut_lifson_1965",
+        "wetmur_1991",
+        "santalucia_1996",
+        "santalucia_1998_tm",
+        "santalucia_1998_entropy",
+        "owczarzy_2004",
+        "owczarzy_2008"
+      ],
+      "applicability": "Perfect DNA duplex unless an explicit 3\u2032\u21925\u2032 complementary strand is supplied in Advanced duplex Tm."
+    },
+    {
+      "id": "nn_santalucia_hicks_2004",
+      "label": "Nearest-neighbor: SantaLucia & Hicks 2004",
+      "description": "Modern DNA/DNA nearest-neighbor parameter refinement.",
+      "sequence_types": [
+        "dna"
+      ],
+      "polymer_pairing": "dna_dna",
+      "salt_corrections": [
+        "none",
+        "schildkraut_lifson_1965",
+        "wetmur_1991",
+        "santalucia_1996",
+        "santalucia_1998_tm",
+        "santalucia_1998_entropy",
+        "owczarzy_2004",
+        "owczarzy_2008"
+      ],
+      "applicability": "Perfect DNA duplex unless an explicit 3\u2032\u21925\u2032 complementary strand is supplied in Advanced duplex Tm."
+    },
+    {
+      "id": "rna_nn_freier_1986",
+      "label": "RNA/RNA NN: Freier 1986",
+      "description": "Legacy RNA/RNA nearest-neighbor thermodynamic table.",
+      "sequence_types": [
+        "rna"
+      ],
+      "polymer_pairing": "rna_rna",
+      "salt_corrections": [
+        "none"
+      ],
+      "applicability": "RNA reference condition: 1 M Na. Only perfectly paired overlap is supported; RNA/RNA dangling ends use RNA_DE1. No DNA salt extrapolation."
+    },
+    {
+      "id": "rna_nn_xia_1998",
+      "label": "RNA/RNA NN: Xia 1998",
+      "description": "RNA/RNA nearest-neighbor parameters from Xia et al.",
+      "sequence_types": [
+        "rna"
+      ],
+      "polymer_pairing": "rna_rna",
+      "salt_corrections": [
+        "none"
+      ],
+      "applicability": "RNA reference condition: 1 M Na. Only perfectly paired overlap is supported; RNA/RNA dangling ends use RNA_DE1. No DNA salt extrapolation."
+    },
+    {
+      "id": "rna_nn_chen_2012",
+      "label": "RNA/RNA NN: Chen 2012",
+      "description": "Modern RNA/RNA nearest-neighbor parameter set.",
+      "sequence_types": [
+        "rna"
+      ],
+      "polymer_pairing": "rna_rna",
+      "salt_corrections": [
+        "none"
+      ],
+      "applicability": "RNA reference condition: 1 M Na. Only perfectly paired overlap is supported; RNA/RNA dangling ends use RNA_DE1. No DNA salt extrapolation."
+    },
+    {
+      "id": "rna_dna_sugimoto_1995",
+      "label": "RNA/DNA hybrid NN: Sugimoto 1995",
+      "description": "RNA/DNA hybrid nearest-neighbor table. Sequence must be RNA.",
+      "sequence_types": [
+        "rna"
+      ],
+      "polymer_pairing": "rna_dna_hybrid",
+      "salt_corrections": [
+        "none"
+      ],
+      "applicability": "RNA reference condition: 1 M Na. Only perfectly paired overlap is supported; RNA/RNA dangling ends use RNA_DE1. No DNA salt extrapolation."
+    }
+  ],
+  "salt_corrections": [
+    {
+      "id": "none",
+      "label": "None",
+      "description": "No salt correction."
+    },
+    {
+      "id": "schildkraut_lifson_1965",
+      "label": "Schildkraut-Lifson 1965",
+      "description": "Legacy monovalent salt correction."
+    },
+    {
+      "id": "wetmur_1991",
+      "label": "Wetmur 1991",
+      "description": "Monovalent salt correction using the Wetmur formulation."
+    },
+    {
+      "id": "santalucia_1996",
+      "label": "SantaLucia 1996",
+      "description": "Monovalent salt correction from SantaLucia et al. 1996."
+    },
+    {
+      "id": "santalucia_1998_tm",
+      "label": "SantaLucia 1998 (Tm)",
+      "description": "SantaLucia 1998 salt correction applied directly to Tm."
+    },
+    {
+      "id": "santalucia_1998_entropy",
+      "label": "SantaLucia 1998 (entropy)",
+      "description": "SantaLucia 1998 entropy correction. Good general-purpose PCR default."
+    },
+    {
+      "id": "owczarzy_2004",
+      "label": "Owczarzy 2004",
+      "description": "GC-aware monovalent salt correction."
+    },
+    {
+      "id": "owczarzy_2008",
+      "label": "Owczarzy 2008",
+      "description": "Mg2+/dNTP-aware salt correction for mixed monovalent/divalent PCR conditions."
+    }
+  ],
+  "defaults": {
+    "dna": {
+      "schema_version": "primer-tm-settings-v1",
+      "algorithm": "nn_santalucia_hicks_2004",
+      "salt_correction": "owczarzy_2008",
+      "primer_concentration_nM": 250.0,
+      "template_concentration_nM": 0.0,
+      "na_mM": 50.0,
+      "k_mM": 0.0,
+      "tris_mM": 0.0,
+      "mg_mM": 1.5,
+      "dntps_mM": 0.6,
+      "dmso_percent": 0.0,
+      "formamide_percent": 0.0,
+      "self_complementary": false
+    },
+    "rna": {
+      "schema_version": "primer-tm-settings-v1",
+      "algorithm": "rna_nn_chen_2012",
+      "salt_correction": "none",
+      "primer_concentration_nM": 250.0,
+      "template_concentration_nM": 0.0,
+      "na_mM": 1000.0,
+      "k_mM": 0.0,
+      "tris_mM": 0.0,
+      "mg_mM": 0.0,
+      "dntps_mM": 0.0,
+      "dmso_percent": 0.0,
+      "formamide_percent": 0.0,
+      "self_complementary": false
+    }
+  }
+}

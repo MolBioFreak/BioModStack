@@ -4,6 +4,7 @@ import hashlib
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from collections import OrderedDict
 from collections.abc import Mapping
 
 from pydantic import BaseModel
@@ -510,9 +511,20 @@ def test_scanner_consumes_each_exact_admitted_job_once(monkeypatch) -> None:
     assert calls == ["GAGACC", "GGTCTC"]
 
 
-def test_resource_admission_rejects_before_scan_or_excess_models(monkeypatch) -> None:
+@pytest.mark.parametrize("warm_prior_result", [False, True])
+def test_resource_admission_rejects_before_scan_or_excess_models(monkeypatch, warm_prior_result) -> None:
     import services.restriction_analysis as module
 
+    if warm_prior_result:
+        # Reproduce suite-order state: these exact inputs may already be cached
+        # under the real, unchanged process resource policy.
+        assert _analyze("GATCGATCGATC", ["DpnI"]).counts.recognition_site_count_definite == 3
+        assert _analyze("A" * 12 + "CGAAAAAAATGC" + "A" * 30, ["BcgI"]).counts.double_strand_break_count == 2
+    # The assertions below instrument scanning/model allocation after replacing
+    # private process constants, not a supported runtime policy update. Use a
+    # test-local cache so prior valid results cannot bypass those instrumented
+    # paths, and restore other tests' cache on teardown.
+    monkeypatch.setattr(module, "_cache", OrderedDict())
     view = catalog_authority.require()
     scanned = 0
     original_scan = module._scan

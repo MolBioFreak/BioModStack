@@ -74,14 +74,16 @@ export function normalizePrimerRecord(
         start: placement.start,
         end: placement.end,
         strand: placement.strand,
-        tm: primer.tm,
+        tm: placement.binding_status === 'needs_review' ? undefined : primer.tm,
         gc_percent: primer.gc_percent,
-        tm_algorithm: primer.tm_algorithm,
-        tm_salt_correction: primer.tm_salt_correction,
-        tm_settings: primer.tm_settings,
+        tm_algorithm: placement.binding_status === 'needs_review' ? undefined : primer.tm_algorithm,
+        tm_salt_correction: placement.binding_status === 'needs_review' ? undefined : primer.tm_salt_correction,
+        tm_settings: placement.binding_status === 'needs_review' ? undefined : primer.tm_settings,
         notes: primer.notes,
         provenance: primer.provenance,
         sites: placement.sites,
+        binding_status: placement.binding_status,
+        binding_warning: placement.binding_warning,
     };
 }
 

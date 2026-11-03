@@ -4,6 +4,7 @@ import type { AssemblyFragmentInput } from '../../../lib/api';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { saveRestrictionDigest, restrictionRecognitionSite } from '../../../lib/restrictionAnalysis';
 import { restrictionSpecialCase } from '../../../lib/restrictionSpecialCases';
+import { hasStickyDigestEnds } from '../../../lib/retainedDigestFragment';
 import type { HighlightedRegion, SelectionInfo, SequenceData } from '../types';
 import type {
     RestrictionAnalysisBatch,
@@ -135,6 +136,10 @@ const GROUP_FILTERS: Array<[GroupFilter, string]> = [['all','All Types'],['diges
 const QUICK: Array<[QuickMapGroup, string]> = [['unique','Map all 1x'],['double','Map all 2x'],['three_plus','Map all 3x+'],['nicking','Map nicking'],['type_iis','Map Golden Gate']];
 
 export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, groupSameSiteLabels = true, onGroupSameSiteLabelsChange, catalog, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest, onAnalyzeAll, onReadEnzymeDetails, productEvidence, sequenceId, onUseInAssembly }: DigestPanelProps) {
+    const substrateError = sequenceData.moleculeStrandedness !== 'double'
+        ? 'Digest requires confirmed double-stranded DNA. Single-stranded or unknown substrates are unsupported.'
+        : hasStickyDigestEnds(sequenceData.digestFragment)
+            ? 'Redigestion of a retained sticky-ended fragment is unsupported. Preserve its exact duplex ends for assembly.' : null;
     const [assemblySelection, setAssemblySelection] = useState<{simulation: RestrictionDigestSimulation; indices: number[]} | null>(null);
     const assemblyIndices = assemblySelection?.simulation === digestSimulation ? assemblySelection.indices : [];
     const [digestEnzymes, setDigestEnzymes] = useState<string[]>([]);
@@ -382,16 +387,19 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
         </div>}
         </div>
         <div data-digest-mobile-footer={mobile ? 'true' : undefined} data-digest-compact-landscape={mobile && compactLandscape ? 'true' : undefined} className={`${mobile ? 'max-h-[40%] shrink-0 overflow-y-auto overscroll-contain' : ''} border-t border-slate-700 bg-slate-950 p-3`}>
+            <p className="mb-2 text-xs text-slate-300">Sequence-based cleavage geometry for fully double-stranded DNA. Methylation, buffer conditions and digestion efficiency are not modeled.</p>
+            {substrateError && <p role="alert" className="mb-2 text-xs text-amber-200">{substrateError}</p>}
+            {digestEnzymes.some(id => id === 'DpnI' || id === 'MalI') && <p className="mb-2 text-xs text-amber-200">DpnI/MalI require methylated adenine at GATC. Ordinary unmethylated PCR products are not substrates.</p>}
             <div className="mb-2 flex gap-1 overflow-x-auto">{digestEnzymes.map((id) => <button key={id} onClick={() => toggleDigest(id)} className="rounded border border-amber-500 px-2">{id} ×</button>)}</div>
             {digestEnzymes.some(id => restrictionSpecialCase(id)) && <p className="mb-2 text-xs text-amber-200">Special-case simulation shows motif-based geometry, not cleavage of unmodified DNA.</p>}
-            <button onClick={() => onSimulateDigest(digestEnzymes)} disabled={digestLoading || digestEnzymes.length === 0} data-digest-mobile-run={mobile ? 'true' : undefined} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded bg-cyan-600 py-2 disabled:bg-slate-600 ${mobile ? 'min-h-12 min-w-12' : ''}`}>{digestLoading ? 'Digesting…' : `Run Digest (${digestEnzymes.length} enzyme${digestEnzymes.length === 1 ? '' : 's'})`}</button>
+            <button onClick={() => onSimulateDigest(digestEnzymes)} disabled={digestLoading || digestEnzymes.length === 0 || Boolean(substrateError)} data-digest-mobile-run={mobile ? 'true' : undefined} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded bg-cyan-600 py-2 disabled:bg-slate-600 ${mobile ? 'min-h-12 min-w-12' : ''}`}>{digestLoading ? 'Digesting…' : `Run Digest (${digestEnzymes.length} enzyme${digestEnzymes.length === 1 ? '' : 's'})`}</button>
             {digestSimulation?.source?.kind === 'molecular_revision' && <div>
                 <button type="button" onClick={saveDigest} disabled={currentSave?.pending || !!currentSave?.operationId} className="rounded border px-3 py-2 disabled:opacity-40">{currentSave?.pending ? 'Saving…' : 'Save digest & fragments'}</button>
                 {onUseInAssembly && digestSimulation && <div><p>Select physical fragments for Assembly (order can be edited there):</p>{digestSimulation.fragments.map(f => <label key={f.fragment_index}><input type="checkbox" aria-label={`Use digest fragment ${f.fragment_index}`} checked={assemblyIndices.includes(f.fragment_index)} onChange={e => setAssemblySelection({simulation:digestSimulation,indices:e.target.checked ? [...assemblyIndices,f.fragment_index] : assemblyIndices.filter(i => i !== f.fragment_index)})}/>{f.fragment_index}: {f.top_strand_sequence.length} bp</label>)}<button disabled={!assemblyIndices.length} onClick={() => onUseInAssembly(digestFragmentsForAssembly(digestSimulation,assemblyIndices,sequenceId,sequenceData.name))}>Use selected fragments in assembly</button></div>}
                 {currentSave?.operationId && <a className="ml-2 underline" href={resolveApiResourceUrl(`/api/molbio/restriction/digests/${encodeURIComponent(currentSave.operationId)}`)} target="_blank" rel="noreferrer">Open saved digest</a>}
                 {currentSave?.error && <p role="alert">{currentSave.error}</p>}
             </div>}
-            {digestSimulation && <div data-digest-mobile-result={mobile ? 'true' : undefined} className="mt-2 space-y-1 rounded border border-cyan-700 p-2"><div>{digestSimulation.fragments.length} exact sequence fragments</div>{digestSimulation.fragments.map((fragment) => <div key={fragment.fragment_index} data-fragment-index={fragment.fragment_index} className="rounded bg-slate-800 p-2 text-xs"><strong>#{fragment.fragment_index + 1} · {fragment.reference_span_bp} bp</strong><div>Left: {endLabel(fragment.left_end)}</div><div>Right: {endLabel(fragment.right_end)}</div></div>)}</div>}
+            {digestSimulation && <div data-digest-mobile-result={mobile ? 'true' : undefined} className="mt-2 space-y-1 rounded border border-cyan-700 p-2"><div>{digestSimulation.fragments.length} predicted sequence fragments</div>{[...(digestSimulation.warnings ?? []), ...(digestSimulation.limitations ?? [])].map(note => <p key={note} className="text-amber-200">{note}</p>)}{digestSimulation.fragments.map((fragment) => <div key={fragment.fragment_index} data-fragment-index={fragment.fragment_index} className="rounded bg-slate-800 p-2 text-xs"><strong>#{fragment.fragment_index + 1} · {fragment.reference_span_bp} bp</strong><div>Left: {endLabel(fragment.left_end)}</div><div>Right: {endLabel(fragment.right_end)}</div></div>)}</div>}
         </div>
     </div>;
 }

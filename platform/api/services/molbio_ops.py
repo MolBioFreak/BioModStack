@@ -91,21 +91,25 @@ def _find_pattern_positions_canonical(seq: str, pat: str, circular: bool = False
     ]
 
 
+@dataclass(frozen=True)
+class PrimerBinding:
+    start: int
+    end: int
+    anneal_length: int
+    overhang_length: int
+
+
 @dataclass
 class PCRProductResult:
     sequence: str
     start: int
     end: int
     length: int
-    wraps_origin: bool = False
-
-
-@dataclass
-class PrimerBinding:
-    start: int
-    end: int
-    anneal_length: int
-    overhang_length: int
+    wraps_origin: bool
+    template_span: int
+    forward_binding: PrimerBinding
+    reverse_binding: PrimerBinding
+    min_anneal_length: int
 
 
 def resolve_primer_binding_sites(
@@ -126,26 +130,36 @@ def _resolve_primer_binding_sites_canonical(
     seq: str, primer_seq: str, reverse: bool = False, circular: bool = False,
     sequence_type: str = "dna", min_anneal_length: int = 8,
 ) -> List[PrimerBinding]:
-    if not seq or not primer_seq:
+    """Maximal exact IUPAC-compatible 3′ suffix at every distinct extension site.
+
+    A longer match at one site must not suppress a shorter qualifying match
+    elsewhere. A minimum-length seed is extended toward the primer 5′ end at each site.
+    """
+    if not seq or not primer_seq or min_anneal_length < 1:
         return []
-
-    minimum = max(1, min(len(primer_seq), min_anneal_length))
-    for anneal_length in range(len(primer_seq), minimum - 1, -1):
-        anneal_sequence = primer_seq[-anneal_length:]
-        query = reverse_complement(anneal_sequence, sequence_type) if reverse else anneal_sequence
-        positions = _find_pattern_positions_canonical(seq, query, circular=circular)
-        if positions:
-            return [
-                PrimerBinding(
-                    start=position,
-                    end=position + anneal_length,
-                    anneal_length=anneal_length,
-                    overhang_length=len(primer_seq) - anneal_length,
-                )
-                for position in positions
-            ]
-
-    return []
+    if min_anneal_length > min(len(primer_seq), len(seq)):
+        return []
+    query = reverse_complement(primer_seq, sequence_type) if reverse else primer_seq
+    seed = query[:min_anneal_length] if reverse else query[-min_anneal_length:]
+    matches = []
+    for seed_start in _find_pattern_positions_canonical(seq, seed, circular=circular):
+        anneal_length = min_anneal_length
+        while anneal_length < min(len(primer_seq), len(seq)):
+            template_index = seed_start + anneal_length if reverse else seed_start - (anneal_length - min_anneal_length) - 1
+            if not circular and not 0 <= template_index < len(seq):
+                break
+            query_index = anneal_length if reverse else len(query) - anneal_length - 1
+            if not _bases_overlap(seq[template_index % len(seq)], query[query_index]):
+                break
+            anneal_length += 1
+        start = seed_start if reverse else seed_start - (anneal_length - min_anneal_length)
+        if circular:
+            start %= len(seq)
+        matches.append(PrimerBinding(
+            start=start, end=start + anneal_length, anneal_length=anneal_length,
+            overhang_length=len(primer_seq) - anneal_length,
+        ))
+    return sorted(matches, key=lambda site: (-site.anneal_length, site.start))
 
 
 def pcr_product(
@@ -154,68 +168,74 @@ def pcr_product(
     primer_rev: str,
     circular: bool = False,
     sequence_type: str = "dna",
+    min_anneal_length: int = 8,
+    forward_binding: tuple[int, int] | None = None,
+    reverse_binding: tuple[int, int] | None = None,
 ) -> PCRProductResult:
-    seq = clean_sequence(template)
-    fwd = clean_sequence(primer_fwd)
-    rev = clean_sequence(primer_rev)
-    if not (seq and fwd and rev):
-        raise ValueError("Template and primers must be non-empty.")
+    """Predict a DNA sequence from exact 3′ matches; not amplification yield.
 
-    fwd_sites = _resolve_primer_binding_sites_canonical(
-        seq,
-        fwd,
-        reverse=False,
-        circular=circular,
-        sequence_type=sequence_type,
-    )
-    if not fwd_sites:
-        raise ValueError("Forward primer not found in template.")
+    The complete primers supply the ends. The template supplies only the
+    interval between their extension sites. Circular inverse-PCR products may
+    include more than one template length when primer footprints overlap.
+    """
+    if sequence_type != "dna":
+        raise ValueError("PCR prediction requires a DNA template. Convert RNA to cDNA in a reverse-transcription workflow first.")
+    seq = canonicalize_nucleotide_sequence(template, "dna", allow_empty=False)
+    fwd = canonicalize_nucleotide_sequence(primer_fwd, "dna", allow_empty=False)
+    rev = canonicalize_nucleotide_sequence(primer_rev, "dna", allow_empty=False)
+    if min_anneal_length < 1:
+        raise ValueError("Minimum annealing length must be positive.")
 
-    rev_sites = _resolve_primer_binding_sites_canonical(
-        seq,
-        rev,
-        reverse=True,
-        circular=circular,
-        sequence_type=sequence_type,
-    )
-    if not rev_sites:
-        raise ValueError("Reverse primer binding site not found in template.")
+    def bindings(primer: str, reverse: bool, selected: tuple[int, int] | None) -> list[PrimerBinding]:
+        matches = _resolve_primer_binding_sites_canonical(
+            seq, primer, reverse=reverse, circular=circular,
+            min_anneal_length=min_anneal_length,
+        )
+        label = "Reverse" if reverse else "Forward"
+        if selected is not None:
+            matches = [b for b in matches if (b.start, b.anneal_length) == selected]
+            if not matches:
+                raise ValueError(f"{label} binding selection is not a maximal qualifying 3′ match on this template.")
+        if not matches:
+            raise ValueError(f"{label} primer has no binding site with at least {min_anneal_length} matching 3′ bases.")
+        return matches
 
-    # Each resolver returns a single anneal length, hence constant overhangs.
-    # Start/end/wrap geometry therefore determines the exact product bytes.
-    # Reject on the second distinct geometry without allocating either amplicon.
-    geometry: tuple[int, int, bool, int] | None = None
-    template_length = len(seq)
-    for fwd_binding in fwd_sites:
-        for rev_binding in rev_sites:
-            start, end = fwd_binding.start, rev_binding.end
+    fwd_sites = bindings(fwd, False, forward_binding)
+    rev_sites = bindings(rev, True, reverse_binding)
+    candidate: tuple[PrimerBinding, PrimerBinding, int] | None = None
+    n = len(seq)
+    for fb in fwd_sites:
+        for rb in rev_sites:
+            internal_span = rb.start - fb.end
             if circular:
-                span = (end - start) % template_length or template_length
-                wraps = start + span > template_length
-                end = (start + span) % template_length
-            else:
-                if end <= start:
-                    continue
-                span, wraps = end - start, False
-            current = (start, end, wraps, span)
-            if geometry is not None and geometry != current:
+                internal_span %= n
+            elif internal_span < 0:
+                # Their 3′ ends extend away from one another; not a standard
+                # two-primer linear amplicon. Primer-dimer chemistry is separate.
+                continue
+            current = (fb, rb, internal_span)
+            if candidate is not None and candidate != current:
                 raise ValueError(
                     "Ambiguous PCR primer placement produced multiple distinct amplicons; "
-                    "explicit binding sites are required."
+                    "select explicit binding sites or increase the minimum annealing length."
                 )
-            geometry = current
+            candidate = current
+    if candidate is None:
+        raise ValueError("Primer 3′ ends do not face an intervening region on this linear template. Overlapping 3′ footprints and primer-dimer extension are outside this PCR sequence model.")
 
-    if geometry is None:
-        if circular:
-            raise ValueError("Unable to construct a circular-template PCR product from the primer pair.")
-        raise ValueError("Reverse primer site occurs before forward primer (linear PCR expected).")
-    start, end, wraps, span = geometry
-    segment = seq[start:] + seq[:end] if wraps else seq[start:start + span]
-    product_sequence = (
-        fwd[:fwd_sites[0].overhang_length] + segment
-        + reverse_complement(rev[:rev_sites[0].overhang_length], sequence_type)
+    fb, rb, internal_span = candidate
+    internal_start = fb.end % n if circular else fb.end
+    internal = (seq + seq)[internal_start:internal_start + internal_span] if circular else seq[internal_start:rb.start]
+    product_sequence = fwd + internal + reverse_complement(rev)
+    template_span = fb.anneal_length + internal_span + rb.anneal_length
+    unwrapped_end = fb.start + template_span
+    wraps = circular and unwrapped_end > n
+    # Keep an ordinary endpoint at n (not zero) when it does not wrap.
+    end = unwrapped_end % n if wraps else unwrapped_end
+    return PCRProductResult(
+        product_sequence, fb.start, end, len(product_sequence), wraps,
+        template_span, fb, rb, min_anneal_length,
     )
-    return PCRProductResult(product_sequence, start, end, len(product_sequence), wraps)
 
 
 
