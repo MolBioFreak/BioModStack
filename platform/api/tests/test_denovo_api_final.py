@@ -159,6 +159,38 @@ async def test_http_checkpoint_successor_persist_retry_and_native_conflict(api, 
     assert native.status_code == 409, native.text
     async with core() as verify:
         assert len((await verify.scalars(select(Job))).all()) == 2
+    if target is None:
+        # Permanent producer-row deletion is distinct from worker teardown.
+        # The ordinary successor's selected manifest keeps its bytes owned.
+        deletion = await client.delete('/api/jobs/source/permanent')
+        assert deletion.status_code == 200, deletion.text
+        from services.job_control import finalize_permanent_delete_cleanup
+        async with core() as session:
+            source = await session.get(Job, 'source')
+            source.remote_state = 'cancelled'
+            source.params = {**source.params, 'cancellation_receipt': {'state': 'completed', 'remote_stop_verified': True}}
+            await session.commit()
+            assert await finalize_permanent_delete_cleanup(session, 'source')
+        async with core() as verify:
+            assert await verify.get(Job, 'source') is None
+            successor = await verify.get(Job, new_id)
+            assert Path(successor.source_selection_manifest_path).is_file()
+            selected = Path(successor.params['plr_final_candidate_dir'])
+            assert list(selected.glob('*.pdb'))
+            # Exercise the existing final receiver against the artifact-only
+            # process's owned output layout after the producer row is gone.
+            import shutil
+            from services.result_ingester import ingest_loose_files
+            destination = Path(successor.output_dir) / 'final_candidates'
+            shutil.copytree(selected, destination)
+            assert await ingest_loose_files(successor.id, Path(successor.output_dir), verify, current_job=successor) == 1
+            await verify.commit()
+            final = (await verify.scalars(select(Design).where(Design.job_id == new_id))).one()
+            manifest = json.loads(Path(successor.source_selection_manifest_path).read_text())
+            assert final.parent_design_id == manifest['designs'][0]['design_id']
+            assert Path(final.pdb_path).is_relative_to(destination)
+        readback = await client.get('/api/jobs/' + new_id)
+        assert readback.status_code == 200 and readback.json()['design_count'] == 1
 
 
 @pytest.mark.asyncio

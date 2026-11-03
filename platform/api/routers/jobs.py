@@ -1036,18 +1036,21 @@ async def _load_remaining_output_dir_refs(
 ) -> Dict[str, List[Dict[str, str]]]:
     rows = (
         await session.execute(
-            select(Job.id, Job.name, Job.output_dir, Job.child_output_dir)
+            select(Job.id, Job.name, Job.output_dir, Job.child_output_dir, Job.source_selection_manifest_path)
         )
     ).all()
 
     refs: Dict[str, List[Dict[str, str]]] = {}
-    for job_id, job_name, output_dir, child_output_dir in rows:
+    for job_id, job_name, output_dir, child_output_dir, selection_manifest in rows:
         if str(job_id) in excluded_job_ids:
             continue
 
         for field_name, raw_path in (
             ("output_dir", output_dir),
             ("child_output_dir", child_output_dir),
+            # Ordinary successors own selected inputs even when those bytes
+            # are retained beneath the deleted producer's old output root.
+            ("source_selection_manifest_path", selection_manifest),
         ):
             normalized = _normalize_output_dir_reference(raw_path)
             if not normalized:
