@@ -23,8 +23,14 @@ HERE = Path(__file__).resolve().parent
 SPEC = re.compile(r"^([A-Za-z]+)(-?\d+)([A-Za-z]?)(?:-(-?\d+)([A-Za-z]?))?$")
 
 
-def expand(spec: str) -> list[str]:
-    """'A1-3,B5' -> ['A1','A2','A3','B5'] (author ids; insertion codes only on single residues)."""
+def expand(spec: str, pdb: Path | None = None) -> list[str]:
+    """Resolve author selectors against the input; without it only range endpoints are known for insertions."""
+    if pdb is not None:
+        from add_fixed_labels_from_spec import parse_position_spec, residue_token_from_line
+        domain = list(dict.fromkeys(r for line in pdb.read_text().splitlines()
+                                   if line.startswith("ATOM") and (r := residue_token_from_line(line))))
+        selected = parse_position_spec(spec, domain)
+        return [f"{c}{n}{i}" for c, n, i in domain if (c, n, i) in selected]
     out: list[str] = []
     for token in (t.strip() for t in spec.split(",")):
         if not token:
@@ -32,9 +38,11 @@ def expand(spec: str) -> list[str]:
         m = SPEC.match(token)
         if not m:
             raise ValueError(f"unreadable position {token!r}; use e.g. A1-20,B5")
-        chain, start, icode, end, _ = m.groups()
+        chain, start, icode, end, end_icode = m.groups()
         if end is None:
             out.append(f"{chain}{start}{icode}")
+        elif icode or end_icode:
+            out.extend(dict.fromkeys((f"{chain}{start}{icode}", f"{chain}{end}{end_icode}")))
         else:
             out.extend(f"{chain}{n}" for n in range(min(int(start), int(end)), max(int(start), int(end)) + 1))
     return out
@@ -65,15 +73,26 @@ def run(command: list[str]) -> None:
     subprocess.run(command, check=True)
 
 
+def fixed_scope(template: dict, pdb: Path, fixed: str, designable: str, args) -> list[str]:
+    """Compose selectors against this input, never another source's residue axis."""
+    chains = getattr(args, "design_chains", "") or template.get("loop_design_chains", "")
+    selected_chains = {c.strip() for c in chains.split(",") if c.strip()}
+    keep = set(expand(fixed, pdb))
+    change = set(expand(designable, pdb)) if designable else None
+    from add_fixed_labels_from_spec import residue_token_from_line
+    outside = {f"{r[0]}{r[1]}{r[2]}" for line in pdb.read_text().splitlines()
+               if (r := residue_token_from_line(line)) and selected_chains and r[0] not in selected_chains}
+    return [r for r in residues_of(pdb) if r in keep or r in outside or (change is not None and r not in change)]
+
+
 def ligandmpnn(template: dict, pdb: Path, work: Path, fixed: str, designable: str, args) -> Path:
     request = copy.deepcopy(template)
     options = request["options"]
     if fixed and designable:
         raise ValueError("choose fixed or designable positions, not both")
-    if fixed:
-        options["fixed_residues"] = expand(fixed)
-    if designable:
-        options["designed_residues"] = expand(designable)
+    request.pop("loop_design_chains", None)
+    options["fixed_residues"] = fixed_scope(template, pdb, fixed, designable, args) or None
+    options["designed_residues"] = None
     request["write_structures"] = True
     (work / "request.json").write_text(json.dumps(request))
     run([sys.executable, str(HERE / "run_ligandmpnn_design.py"), "--request", str(work / "request.json"),
@@ -87,11 +106,9 @@ def caliby(template: dict, pdb: Path, work: Path, fixed: str, designable: str, a
 
     state = {"state_id": "input", "path": str(pdb), "fixed_pos_seq": "", "fixed_pos_scn": "",
              "fixed_pos_override_seq": "", "pos_restrict_aatype": "", "symmetry_pos": ""}
-    if fixed:
-        state["fixed_pos_seq"] = spec_of(expand(fixed))
-    elif designable:
-        state["fixed_pos_seq"] = spec_of(complement(pdb, expand(designable)))
+    state["fixed_pos_seq"] = spec_of(fixed_scope(template, pdb, fixed, designable, args))
     request = copy.deepcopy(template)
+    request.pop("loop_design_chains", None)
     request["ensembles"] = [{"ensemble_id": pdb.stem, "states": [state]}]
     prepare_request(request, work / "request")
     run([sys.executable, str(HERE / "run_caliby_experimental.py"), "--request-dir", str(work / "request"),
@@ -119,6 +136,8 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--fixed-positions", default="")
     parser.add_argument("--designable-positions", default="")
+    parser.add_argument("--design-chains", default="")
+    parser.add_argument("--native-out-dir", type=Path, default=Path("native_results"))
     parser.add_argument("--n-jobs", type=int, default=1)
     parser.add_argument("--device", default="cpu")
     args = parser.parse_args()
@@ -144,8 +163,24 @@ def main() -> None:
             written = convert.caliby(native, staging)
         else:
             written = convert.protonpotts(native, pdb, staging)
+        retained = args.native_out_dir / pdb.stem
+        retained.mkdir(parents=True)
+        # Keep the native publisher's tree intact, including relative artifact paths.
+        shutil.copytree(native, retained / "native")
+        if (work / "request.json").exists():
+            shutil.copyfile(work / "request.json", retained / "request.json")
+        if (work / "request").exists():
+            shutil.copytree(work / "request", retained / "request")
+        carriers = []
         for produced in written:
-            shutil.copyfile(produced, args.out_dir / f"{pdb.stem}__{args.engine}__{produced.name}")
+            name = f"{pdb.stem}__{args.engine}__{produced.name}"
+            shutil.copyfile(produced, args.out_dir / name)
+            carriers.append({"native_converted_name": produced.name, "candidate": name})
+        (retained / "loop_conversion.json").write_text(json.dumps({
+            "source": {"name": pdb.name, "sha256": sha256(pdb)}, "engine": args.engine,
+            "requested_template": template, "carriers": carriers,
+            "carrier_export": "required by loop; native observations retained unchanged",
+        }, indent=2) + "\n")
     print(json.dumps({"engine": args.engine, "inputs": len(inputs), "designs": len(list(args.out_dir.glob('*.pdb')))}))
 
 

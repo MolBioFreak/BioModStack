@@ -347,14 +347,16 @@ process ExportProteinLocalBoltzPredictions {
     errorStrategy 'ignore'
 
     publishDir "${params.out_dir}/validation/boltz2", mode: "${proteinlocalredesignPublishMode(workflow.workDir, params.out_dir)}", pattern: 'published/*.pdb', saveAs: { fn -> fn.replace('published/', '') }
-    publishDir "${params.out_dir}/validation/boltz2", mode: 'copy', pattern: 'published/*.json', saveAs: { fn -> fn.replace('published/', '') }
+    publishDir "${params.out_dir}/validation/boltz2", mode: 'copy', pattern: 'published/*.{json,npz,manifest}', saveAs: { fn -> fn.replace('published/', '') }
 
     input:
-    tuple path(pdb_files), path(json_files)
+    tuple val(batch_id), path(sample_dir)
 
     output:
     path('published/*.pdb'), emit: pdbs
     path('published/*.json'), emit: jsons
+    path('published/*.npz'), emit: pae, optional: true
+    path('published/*.manifest'), emit: manifests
 
     script:
     """
@@ -372,14 +374,20 @@ process ExportProteinLocalBoltzPredictions {
             fi
         done
     }
-    publish_closed_structure ${pdb_files} published/
-    cp ${json_files} published/
+    publish_closed_structure ${sample_dir}/*.pdb published/
+    cp ${sample_dir}/*.json published/
+    for companion in ${sample_dir}/*.npz; do
+        [ ! -f "\$companion" ] || cp "\$companion" published/
+    done
+    cp ${sample_dir}/boltz_samples.manifest published/boltz_samples_${batch_id}.manifest
     """
 }
 
 // Sequence designers beyond ProteinMPNN/FAMPNN. One native run per input design; position
 // selection is explicit (plr_fixed_positions / plr_designable_positions); outputs are one PDB per design.
 process RunLigandMPNNResequence {
+    publishDir "${params.out_dir}/run/ligandmpnn", mode: 'copy', pattern: 'native_results'
+    publishDir "${params.out_dir}/run/ligandmpnn", mode: 'copy', pattern: 'designs/*.pdb', saveAs: { fn -> fn.replace('designs/', '') }
     label 'Foundry'
     stageInMode 'copy'
     label 'gpu'
@@ -389,6 +397,7 @@ process RunLigandMPNNResequence {
     val position_args
     output:
     path('designs/*.pdb'), emit: pdbs
+    path('native_results'), emit: native_results
     script:
     """
     export HOME=/tmp
@@ -400,6 +409,8 @@ process RunLigandMPNNResequence {
 // socket at TMPDIR/pymp-*/listener-*, and a rented worker's task directory pushes that past the 107-character
 // AF_UNIX limit. The data workers then die silently and the run waits forever.
 process RunCalibyResequence {
+    publishDir "${params.out_dir}/run/caliby", mode: 'copy', pattern: 'native_results'
+    publishDir "${params.out_dir}/run/caliby", mode: 'copy', pattern: 'designs/*.pdb', saveAs: { fn -> fn.replace('designs/', '') }
     label 'Caliby'
     stageInMode 'copy'
     label 'gpu'
@@ -409,6 +420,7 @@ process RunCalibyResequence {
     val position_args
     output:
     path('designs/*.pdb'), emit: pdbs
+    path('native_results'), emit: native_results
     script:
     """
     export TMPDIR=\$(mktemp -d /tmp/bms-caliby.XXXXXX)
@@ -418,6 +430,8 @@ process RunCalibyResequence {
 }
 
 process RunProtonPottsResequence {
+    publishDir "${params.out_dir}/run/protonpottsmpnn", mode: 'copy', pattern: 'native_results'
+    publishDir "${params.out_dir}/run/protonpottsmpnn", mode: 'copy', pattern: 'designs/*.pdb', saveAs: { fn -> fn.replace('designs/', '') }
     label 'cpu'
     stageInMode 'copy'
     input:
@@ -426,6 +440,7 @@ process RunProtonPottsResequence {
     val position_args
     output:
     path('designs/*.pdb'), emit: pdbs
+    path('native_results'), emit: native_results
     script:
     // The rented worker's selected scientific launcher (unset keeps apptainer).
     def launcher = System.getenv('BMS_CONTAINER_EXECUTABLE') ?: 'apptainer'
@@ -464,7 +479,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
     def designableArg = params.plr_designable_positions ? "--designable_positions ${shellQuote(params.plr_designable_positions)}" : ''
     def designChainsArg = params.plr_design_chains ? "--design_chains ${shellQuote(params.plr_design_chains)}" : ''
     def fampnnFixedArgs = Channel.value("${manifestArg} ${fixedArg} ${designableArg} ${designChainsArg}".trim())
-    def mpnnDesignableArgs = Channel.value("${manifestArg} ${designableArg}".trim())
+    def mpnnDesignableArgs = Channel.value("${manifestArg} ${fixedArg} ${designableArg} ${designChainsArg}".trim())
 
     if (resumeFromBackbones) {
         mergedBackboneArtifacts = loadProteinLocalDesignArtifacts(params.plr_backbone_input_pdbs)
@@ -509,7 +524,8 @@ workflow PROTEIN_LOCAL_REDESIGN {
         if (!params.plr_designer_template) error('plr_designer_template is required for ' + sequenceMethod)
         def designerPositionArgs = Channel.value([
             params.plr_fixed_positions ? "--fixed-positions ${shellQuote(params.plr_fixed_positions)}" : '',
-            params.plr_designable_positions ? "--designable-positions ${shellQuote(params.plr_designable_positions)}" : ''
+            params.plr_designable_positions ? "--designable-positions ${shellQuote(params.plr_designable_positions)}" : '',
+            params.plr_design_chains ? "--design-chains ${shellQuote(params.plr_design_chains)}" : ''
         ].findAll { it }.join(' '))
         def designerTemplate = Channel.value(file(params.plr_designer_template, checkIfExists: true))
         if (sequenceMethod == 'ligandmpnn') {
@@ -617,7 +633,7 @@ workflow PROTEIN_LOCAL_REDESIGN {
                 .groupTuple()
                 .set { boltzInput }
             RunBoltz(boltzInput)
-            ExportProteinLocalBoltzPredictions(RunBoltz.out.pdbs_jsons)
+            ExportProteinLocalBoltzPredictions(RunBoltz.out.sample_artifacts)
             validatorSummaryChannels << RunBoltz.out.completion
                 .map { completionReceipt ->
                     def payload = new groovy.json.JsonSlurper().parse(completionReceipt.toFile())

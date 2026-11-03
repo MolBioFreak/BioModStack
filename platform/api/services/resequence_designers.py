@@ -23,7 +23,9 @@ def build_template(engine: str, *, mode: str | None, design_chains: str, setting
         for owned in ("target_pdb", "ligand_pdb", "fixed_residues", "designed_residues", "fixed_chains", "designed_chains"):
             if owned in settings:
                 raise ValueError(f"{owned} is set by the loop's source and position selection")
-        return prepare_design_request(mode, {"target_pdb": "input.pdb", "write_fasta": True, "write_structures": True, **settings})
+        template = prepare_design_request(mode, {"target_pdb": "input.pdb", "write_fasta": True, "write_structures": True, **settings})
+        template["loop_design_chains"] = design_chains
+        return template
     if engine == "caliby":
         from services.caliby_native import EnsembleDesign
         if (mode or "ensemble_design") not in CALIBY_MODES:
@@ -34,6 +36,7 @@ def build_template(engine: str, *, mode: str | None, design_chains: str, setting
         probe = EnsembleDesign(ensembles=[{"ensemble_id": "x", "states": [{"state_id": "x", "path": "x"}]}], **settings)
         template = probe.model_dump(mode="json")
         template.pop("ensembles")
+        template["loop_design_chains"] = design_chains
         return template
     if engine == "protonpottsmpnn":
         import sys
