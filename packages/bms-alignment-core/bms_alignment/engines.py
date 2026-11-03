@@ -74,7 +74,20 @@ def compile_engine(request, executable, input_path, output_path, tree_path=None)
     raise ValueError('Unsupported engine')
 
 
+def assert_native_execution_supported(request):
+    """Production admission guard; raw adapters remain available for qualification.
+
+    Pinned MUSCLE 5.3 cmd_align ignores both -nt and -amino and guesses its
+    alphabet instead. Historical requests remain readable, but cannot be replayed
+    as though their declared molecule had been honored.
+    """
+    if request.settings.engine == 'muscle' and request.settings.mode == 'align':
+        raise ValueError('MUSCLE align is unavailable: the pinned runtime does not honor the declared molecule (-nt/-amino). Explicitly choose Super5 or another engine.')
+
+
 def run_engine(request: AlignmentRequest, workdir: Path, executable=None, mafft='mafft', env=None):
+    # Lists and nested values can be mutated after initial request validation.
+    request = AlignmentRequest.model_validate(request.model_dump())
     s = request.settings
     if s.engine == 'mafft': return run_mafft(request, workdir, executable or mafft, env)
     workdir = Path(workdir).resolve()
@@ -133,7 +146,7 @@ def run_engine(request: AlignmentRequest, workdir: Path, executable=None, mafft=
     with (workdir/'engine.log').open('wb') as log:
         p = subprocess.run(args, stdout=log, stderr=subprocess.STDOUT, cwd=workdir, env=env, check=False)
     files = sorted(workdir.glob('ensemble.*.fasta')) if ensemble else [output] if output.exists() else []
-    from .observations import observe_alignment
+    from .observations import observe_alignment, validate_alignment_output
     native_roster = request.roster.model_copy(deep=True)
     for row, ident in zip(native_roster.rows, ids):
         row.row_id = ident
@@ -149,6 +162,7 @@ def run_engine(request: AlignmentRequest, workdir: Path, executable=None, mafft=
         'effective_settings': s.model_dump(mode='json'), 'argv': args, 'wall_seconds': time.monotonic()-start,
         'artifacts': [p.name for p in workdir.iterdir() if p.is_file() and p.name != 'receipt.json'],
         'members': [p.name for p in files], 'observations': observations}
+    receipt['output_integrity'] = validate_alignment_output(request, observations)
     if s.engine == 'twilight': receipt.update(tree_mapping=report, preparation=prep)
     if s.engine == 'famsa': receipt['tree_mapping'] = report
     (workdir/'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')

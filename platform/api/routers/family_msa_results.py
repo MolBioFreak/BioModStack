@@ -315,7 +315,8 @@ async def document(entries, read, artifact_id):
         raise HTTPException(404, detail='Alignment document not found')
     try:
         receipt = json.loads(await read(receipts[0]['id']))
-        roster = receipt['requested']['roster']['rows']
+        requested = receipt['requested']
+        roster = requested['roster']['rows']
         fasta = (await read(artifact_id)).decode('utf-8')
         from pathlib import PurePosixPath
         parent = PurePosixPath(selected.get('logical_path') or '').parent
@@ -323,7 +324,34 @@ async def document(entries, read, artifact_id):
         if len(maps) > 1:
             raise ValueError('ambiguous row map')
         row_map = json.loads(await read(maps[0]['id'])) if maps else None
-        return alignment_document(result_id=artifact_id, fasta=fasta, roster=roster, row_map=row_map).model_dump()
+        settings = requested.get('settings', {})
+        if not isinstance(settings, dict):
+            raise ValueError('invalid native alignment settings')
+        if 'settings' in requested:
+            # Recheck historical native artifacts using the same integrity
+            # policy as new jobs. A valid checksum proves custody, not that
+            # an aligner retained every expected row and nucleotide/residue.
+            from bms_alignment.models import AlignmentRequest
+            from bms_alignment.observations import observe_alignment_text, validate_alignment_output
+            native_request = AlignmentRequest.model_validate(requested)
+            native_roster = native_request.roster.model_copy(deep=True)
+            if row_map is not None:
+                if (not isinstance(row_map, dict) or any(not isinstance(key, str) or not isinstance(value, str)
+                                                        for key, value in row_map.items())
+                        or len(set(row_map.values())) != len(row_map)
+                        or set(row_map.values()) != {row.row_id for row in native_roster.rows}):
+                    raise ValueError('native alignment row map does not identify the input roster')
+                by_source = {value: key for key, value in row_map.items()}
+                for row in native_roster.rows:
+                    row.row_id = by_source[row.row_id]
+            observations = observe_alignment_text(fasta, native_roster,
+                allow_reverse_complement=native_request.settings.engine == 'mafft' and native_request.settings.direction is not None)
+            integrity = validate_alignment_output(native_request, observations)
+            if integrity['status'] != 'valid':
+                raise ValueError('native alignment integrity check failed: ' + '; '.join(integrity['errors']))
+        direction = settings.get('direction') if settings.get('engine', 'mafft') == 'mafft' else None
+        return alignment_document(result_id=artifact_id, fasta=fasta, roster=roster, row_map=row_map,
+                                  molecule=requested['roster'].get('molecule'), mafft_direction=direction).model_dump()
     except (ValueError, KeyError, TypeError, UnicodeError) as exc:
         raise unavailable(exc) from exc
 
@@ -436,6 +464,22 @@ async def submit_operation(request: Request, project_id: str, payload: Operation
             receipt = await session.get(ExperimentExternalEntityReceipt, payload.inputs[key])
             if not receipt or receipt.workspace_id != project_id or receipt.entity_kind not in ('family_msa_import', 'family_msa_job_result'):
                 raise HTTPException(404, detail='Result not found')
+    if payload.operation == 'export':
+        # The source receipt owns molecule identity. Do not let a browser
+        # default relabel a DNA/RNA export as a protein job (or vice versa).
+        entries, read = await project_result_data(session, project_id, payload.inputs['receipt_id'])
+        receipts = [entry for entry in entries if entry['role'] == 'receipt']
+        try:
+            if len(receipts) != 1:
+                raise ValueError('missing source receipt')
+            source_receipt = json.loads(await read(receipts[0]['id']))
+            source_molecule = source_receipt['requested']['roster']['molecule']
+            if source_molecule not in ('protein', 'dna', 'rna'):
+                raise ValueError('source molecule unavailable')
+        except (ValueError, KeyError, TypeError, UnicodeError) as exc:
+            raise unavailable(exc) from exc
+        if payload.molecule != source_molecule:
+            raise HTTPException(422, detail='Export molecule must match the saved alignment molecule')
     job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms.family-msa.operation:' + uuid.uuid4().hex))
     try:
         from services.family_msa.operations import bind_request
@@ -534,20 +578,12 @@ async def comparison_roster(entries, read, artifact_id):
     rows = []
     for aligned in doc['rows']:
         source = original[aligned['row_id']]
-        # Case changes do not change residue positions; U/T and all other
-        # native transformations remain unknown unless explicitly mapped.
-        source_residues = ''.join(c for c in source['sequence'] if c not in '-.')
-        aligned_residues = ''.join(c for c in aligned['aligned'] if c not in '-.')
-        same = source_residues.upper() == aligned_residues.upper()
-        positions = source.get('source_positions')
-        if same and positions is not None and len(positions) == len(source['sequence']):
-            residues = iter([p for c, p in zip(source['sequence'], positions) if c not in '-.'])
-            positions = [None if c in '-.' else next(residues) for c in aligned['aligned']]
-        else:
-            positions = None
+        # Reuse the document's verified projection, including explicit native
+        # reverse-complement markers, rather than calculating a second map.
+        positions = aligned['source_positions']
         rows.append(Row(row_id=aligned['row_id'], header=aligned['label'], sequence=aligned['aligned'],
                         source_member_id=source.get('source_member_id'), occurrence_id=source.get('occurrence_id'),
-                        source_offset=source.get('source_offset') if same and source.get('source_positions') is None else None,
+                        source_offset=source.get('source_offset') if aligned['source_orientation'] == 'forward' and source.get('source_positions') is None else None,
                         source_positions=positions, transformation_provenance=source.get('transformation_provenance')))
     return SequenceSet(molecule=roster['molecule'], rows=rows)
 

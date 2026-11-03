@@ -2606,6 +2606,7 @@
       "option": "-nt",
       "field": "roster.molecule",
       "disposition": "implemented",
+      "qualification": "Honored by pinned MUSCLE 5.3 Super5. The align command ignores -nt and guesses the molecule; production align admission/execution is blocked.",
       "source": "muscle/src/myopts.h",
       "references": [
         "eacluster.cpp",
@@ -2621,6 +2622,7 @@
       "option": "-amino",
       "field": "roster.molecule",
       "disposition": "implemented",
+      "qualification": "Honored by pinned MUSCLE 5.3 Super5. The align command ignores -amino and guesses the molecule; production align admission/execution is blocked.",
       "source": "muscle/src/myopts.h",
       "references": [
         "eacluster.cpp",
