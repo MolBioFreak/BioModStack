@@ -27,7 +27,10 @@ Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: tr
 // Externally retained captured/producer-projected JSON; never copy large runs into source.
 const wireRoot = process.env.BMS_TEST_FRUSTRA_WIRE!;
 const load = (name: string) => JSON.parse(readFileSync(join(wireRoot, name), 'utf8'));
-const manifest = load('manifest.json') as { candidates: string[] };
+const manifest = load('manifest.json') as { candidates: string[]; evidence_kind?: string };
+// The native producer capture can use explicitly inert score leaves. This is
+// result-receiving acceptance, never five-candidate scientific inference.
+const inertPublisher = manifest.evidence_kind === 'inert-publisher-fixture-NOT-INFERENCE';
 beforeEach(() => vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }));
 afterEach(() => vi.unstubAllGlobals());
 const modes = ['populated', 'statistics-http-failure', 'statistics-malformed', 'inline-malformed'] as const;
@@ -36,6 +39,7 @@ describe('captured FrustraMPNN result-read mounted boundary acceptance', () => {
     it('contains exactly five distinct captured candidates', () => {
         expect(manifest.candidates).toHaveLength(5);
         expect(new Set(manifest.candidates).size).toBe(5);
+        if (inertPublisher) for (const candidate of manifest.candidates) expect(candidate).toMatch(/^NOT-INFERENCE-/);
     });
     for (const candidate of manifest.candidates) {
         it.each(modes)(`${candidate}: %s preserves populated core and exact mapped layers`, async (mode) => {
@@ -70,7 +74,7 @@ describe('captured FrustraMPNN result-read mounted boundary acceptance', () => {
             const root = createRoot(container);
             try {
                 await act(async () => root.render(<MemoryRouter><QueryClientProvider client={client}><Viewer
-                    job={{ id: detail.parent_job_id, name: 'Captured GFP', model_id: 'conformational_mapping', status: 'completed', params: {}, created_at: '', design_count: 5 } as never}
+                    job={{ id: detail.parent_job_id, name: inertPublisher ? 'NOT INFERENCE publisher fixtures' : 'Captured GFP', model_id: 'conformational_mapping', status: 'completed', params: {}, created_at: '', design_count: 5 } as never}
                     preferredInvocationId={detail.invocation_id} onBack={() => {}} onOpenJob={() => {}}
                 /></QueryClientProvider></MemoryRouter>));
                 for (let attempt = 0; attempt < 100 && !container.textContent?.includes('238 mapped residues'); attempt++) {
