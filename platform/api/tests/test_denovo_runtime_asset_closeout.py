@@ -70,7 +70,8 @@ def test_cold_selected_layout_and_helper_closure(tmp_path):
     weights = {row.relative_path for row in metadata.dependencies if row.kind == 'weights'}
     assert weights == {'complexa/complexa.ckpt', 'complexa/complexa_ae.ckpt', 'alphafold/params'}
     helpers = {row.relative_path for row in metadata.dependencies if row.kind == 'support_tool'}
-    required = {'scripts/lib/complexa_contract.py', 'scripts/bms_complexa/config.py', 'scripts/bms_complexa/profiles.json'}
+    required = {'scripts/lib/complexa_contract.py', 'scripts/bms_complexa/config.py', 'scripts/bms_complexa/profiles.json',
+                'scripts/bms_complexa/hf_cache.py', 'scripts/bms_complexa/assets.json'}
     assert required <= helpers
     cold = tmp_path / 'cold-source'
     for member in helpers:
