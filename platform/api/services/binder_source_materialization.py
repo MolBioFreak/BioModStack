@@ -4,6 +4,10 @@ No launch policy or display conversion lives here. Native bytes remain retained.
 """
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
+import fcntl
+import os
 import hashlib
 import io
 from pathlib import Path
@@ -399,19 +403,162 @@ async def prepare_resequence_sources(sources, session, selection_dir: Path,
     import shutil
     from routers.files import materialize_structure_source
 
-    roster = []
-    for index, request in enumerate(sources, start=1):
-        result = await materialize_structure_source(
-            request.model_copy(update={'output_format': 'pdb'}), session, governed_roots,
-            destination=selection_dir / '.sources' / f'{index:03d}')
-        source_name = Path(result['source_path']).name
-        suffix = structure_suffix(Path(source_name))
-        stem = source_name[:-len(suffix)] if suffix else source_name
-        consumed = selection_dir / f'{index:03d}_{stem}.pdb'
-        shutil.copyfile(resolve_allowed_path(result['path']), consumed)
-        roster.append({**result, 'path': to_allowed_relative(consumed),
-                       'source_request': request.model_dump(mode='json', exclude_none=True)})
-    return roster
+    sources = list(sources)
+    async with resequence_submission_guard(
+            [request.model_dump(mode='json', exclude_none=True) for request in sources], session):
+        roster = []
+        for index, request in enumerate(sources, start=1):
+            result = await materialize_structure_source(
+                request.model_copy(update={'output_format': 'pdb'}), session, governed_roots,
+                destination=selection_dir / '.sources' / f'{index:03d}')
+            source_name = Path(result['source_path']).name
+            suffix = structure_suffix(Path(source_name))
+            stem = source_name[:-len(suffix)] if suffix else source_name
+            consumed = selection_dir / f'{index:03d}_{stem}.pdb'
+            shutil.copyfile(resolve_allowed_path(result['path']), consumed)
+            entry = {**result, 'path': to_allowed_relative(consumed),
+                     'source_request': request.model_dump(mode='json', exclude_none=True)}
+            # The existing retained acquisition receipt owns the full author/atom
+            # ledger. Job params carry only byte identities and this exact binding,
+            # not several copies of a potentially enormous molecular graph.
+            import json
+            custody = selection_dir / '.sources' / f'{index:03d}' / '.source-custody.json'
+            payload = json.dumps(entry, sort_keys=True).encode()
+            custody.write_bytes(payload)
+            roster.append({key: value for key, value in entry.items()
+                           if key not in {'source_positions', 'author_residues', 'declared_chemistry', 'native_recipe'}})
+            roster[-1].update(source_custody_path=to_allowed_relative(custody),
+                              source_custody_sha256=hashlib.sha256(payload).hexdigest())
+        return roster
+
+
+async def prepare_resequence_existing_basket(backbone_input_pdbs: str, retained_params: dict,
+                                             session, selection_dir: Path,
+                                             governed_roots: tuple[Path, ...]) -> list[dict]:
+    """Acquire only sources from a clone; execution/settings params never cross here.
+
+    A retained roster is authoritative (including order and duplicate selections).
+    Older baskets without one use only their root-level PDBs, not recursive files.
+    Every source still passes the ordinary governed acquisition/digest boundary.
+    """
+    basket = (resolve_allowed_path(to_allowed_relative(Path(backbone_input_pdbs)))
+              if Path(backbone_input_pdbs).is_absolute() else resolve_allowed_path(backbone_input_pdbs))
+    retained = retained_params or {}
+    async with resequence_submission_guard({'basket': backbone_input_pdbs, 'retained': retained}, session):
+        roster = retained.get('resequence_sources')
+        if isinstance(roster, list):
+            requests = [StructureSourceRequest.model_validate(item['source_structure']) for item in roster]
+        elif isinstance(retained.get('source_structure'), dict):
+            requests = [StructureSourceRequest.model_validate(retained['source_structure'])]
+        else:
+            requests = [StructureSourceRequest(path=to_allowed_relative(path))
+                        for path in sorted(basket.glob('*.pdb')) if path.is_file()]
+        return await prepare_resequence_sources(requests, session, selection_dir, governed_roots)
+
+
+def _preparation_lock_path(directory: Path) -> Path:
+    # A sibling inode survives rmtree and all queued waiters. Never unlink it.
+    return directory.with_name('.' + directory.name + '.resequence.lock')
+
+
+def _source_paths(value):
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _source_paths(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _source_paths(item)
+    elif isinstance(value, str) and (value.startswith('inputs/') or value.startswith('/')):
+        try:
+            yield Path(value).resolve() if Path(value).is_absolute() else resolve_allowed_path(value).resolve()
+        except ValueError:
+            return
+
+
+def _preparation_directories(value):
+    root = resolve_allowed_path('inputs/design_selections/protein_local_redesign').resolve()
+    found = set()
+    for path in _source_paths(value):
+        if root not in path.parents:
+            continue
+        directory = root / path.relative_to(root).parts[0]
+        if directory.name.endswith('_designer.json'):
+            directory = directory.with_name(directory.name[:-len('_designer.json')])
+        if ((directory / '.resequence-preparation.json').is_file() or
+                _preparation_lock_path(directory).is_file()):
+            found.add(directory)
+    return sorted(found)
+
+
+async def _acquire_preparation_lock(directory):
+    path = _preparation_lock_path(directory)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fd
+            except BlockingIOError:
+                # No blocking flock in either the event loop or an orphaned worker.
+                await asyncio.sleep(0.01)
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+@asynccontextmanager
+async def resequence_submission_guard(value, session):
+    """Hold referenced preparations through the *outer database transaction*.
+
+    Canonical create must enter this before reading/copying any source, passing
+    the full incoming params/provenance. _commit=False retains locks after return;
+    commit, rollback and session close release them. No marker means legacy no-op.
+    Reentrant within one session for prepared-child batches. Callers must acquire
+    a batch's union before creating its children to keep cross-session ordering.
+    """
+    from sqlalchemy import event
+
+    sync = session.sync_session
+    key = '_resequence_source_locks'
+    directories = _preparation_directories(value)
+    if not directories and not sync.info.get(key):
+        yield
+        return
+    locks = sync.info.setdefault(key, {})
+    depth_key = '_resequence_source_guard_depth'
+
+    def release_locks(owner):
+        for fd in owner.info.pop(key, {}).values():
+            os.close(fd)
+
+    if not sync.info.get('_resequence_source_lock_listener'):
+        def release(owner, transaction):
+            # A create may commit before its last source read, or an outer
+            # prepared batch may start another transaction. Both the lexical
+            # scope AND the outer transaction must finish before custody ends.
+            if transaction.parent is None and not owner.info.get(depth_key):
+                release_locks(owner)
+        event.listen(sync, 'after_transaction_end', release)
+        sync.info['_resequence_source_lock_listener'] = True
+    sync.info[depth_key] = sync.info.get(depth_key, 0) + 1
+    try:
+        for directory in directories:
+            if directory not in locks:
+                locks[directory] = await _acquire_preparation_lock(directory)
+        if locks and not session.in_transaction():
+            await session.begin()
+        yield
+    except BaseException:
+        # A cancelled create must not leave a flushed, uncommitted claimant or a
+        # lock behind. Rollback also handles a cancellation while waiting.
+        await asyncio.shield(session.rollback())
+        raise
+    finally:
+        sync.info[depth_key] -= 1
+        if not sync.info[depth_key]:
+            sync.info.pop(depth_key)
+            if not session.in_transaction():
+                release_locks(sync)
 
 
 def begin_resequence_preparation(selection_dir: Path) -> dict:
@@ -429,16 +576,9 @@ def begin_resequence_preparation(selection_dir: Path) -> dict:
 
 
 async def cleanup_resequence_preparation(receipt: dict, session) -> bool:
-    """Remove only capability-bound, unsubmitted staging and its template sibling.
-
-    Call under the same submission lifecycle lock as Job creation. A submitted
-    request (including another run reusing this path) owns its inputs permanently.
-    Returning false is an idempotent no-op, not a scientific launch condition.
-    """
+    """Capability cleanup serialized with source acquisition/Job persistence."""
     import json
     import secrets
-    import shutil
-    from sqlalchemy import select
 
     root = resolve_allowed_path('inputs/design_selections/protein_local_redesign')
     directory = resolve_allowed_path(receipt['path'])
@@ -454,32 +594,43 @@ async def cleanup_resequence_preparation(receipt: dict, session) -> bool:
             not secrets.compare_digest(str(bound.get('token', '')), str(receipt.get('token', ''))) or
             not bound.get('token')):
         raise ValueError('Invalid preparation receipt')
+    # Never deadlock cleanup against this session's own prepared children.
+    if directory in session.sync_session.info.get('_resequence_source_locks', {}):
+        return False
+    fd = await _acquire_preparation_lock(directory)
+    try:
+        if not marker.exists():
+            return False
+        return await _cleanup_unclaimed_preparation(directory, session)
+    finally:
+        os.close(fd)
+
+
+async def _cleanup_unclaimed_preparation(directory, session):
+    import shutil
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from services.scientific_artifacts import resolve_json_value
 
     def references(value):
-        if isinstance(value, dict):
-            return any(references(item) for item in value.values())
-        if isinstance(value, list):
-            return any(references(item) for item in value)
-        if not isinstance(value, str):
-            return False
-        if value == str(directory.with_name(directory.name + '_designer.json')):
-            return True
-        if not (value.startswith('inputs/') or value.startswith('/')):
-            return False
-        try:
-            path = Path(value).resolve() if Path(value).is_absolute() else resolve_allowed_path(value)
-            return (path == directory or directory in path.parents or
-                    path == directory.with_name(directory.name + '_designer.json'))
-        except ValueError:
-            return False
+        return any(path == directory or directory in path.parents or
+                   path == directory.with_name(directory.name + '_designer.json')
+                   for path in _source_paths(value))
 
-    # Load through the ORM's scientific-artifact hydration owner; scalar JSON
-    # columns can be externalized references rather than the actual params.
-    for job in (await session.scalars(select(Job))).all():
-        if references(job.params) or references(job.provenance):
-            return False
+    # Project just ownership payloads, streaming bounded batches. Selecting typed
+    # columns preserves ScientificArtifactJSON result processors; Job JSON may
+    # also contain externalized top-level references. Never SQL-filter JSON text:
+    # that would miss paths stored in governed scientific artifacts.
+    # A fresh read transaction sees claims committed while cleanup waited.
+    async with AsyncSession(bind=session.bind) as reader:
+        rows = await reader.stream(select(Job.params, Job.provenance).execution_options(yield_per=64))
+        try:
+            async for params, provenance in rows:
+                if references(resolve_json_value(params)) or references(resolve_json_value(provenance)):
+                    return False
+        finally:
+            await rows.close()
     template = directory.with_name(directory.name + '_designer.json')
-    # unlink never follows a sibling symlink to someone else's file.
     template.unlink(missing_ok=True)
     shutil.rmtree(directory)
     return True
