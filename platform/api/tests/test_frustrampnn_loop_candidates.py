@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 import routers.frustrampnn as fr
 
@@ -33,19 +33,8 @@ class FakeSession:
     async def rollback(self): pass
 
 
-def test_selected_candidates_are_queued_with_hydrogens_stripped(tmp_path, monkeypatch):
-    job, review = _job(tmp_path)
-    seen = []
-    async def fake_create(session, **kw): seen.append(kw); return SimpleNamespace(id="child")
-    async def fake_receipt(session, child): return {"job_id": child.id}
-    monkeypatch.setattr(fr, "create_child_job", fake_create)
-    monkeypatch.setattr(fr, "_child_job_receipt", fake_receipt)
-    body = fr.AnalyzeLoopCandidatesRequest(names=["c0.pdb"])
-    result = asyncio.run(fr.analyze_loop_candidates("j", body, FakeSession(job)))
-    assert result["analyses"][0]["candidate"] == "c0.pdb"
-    assert seen[0]["trigger"] == "resequence_loop_candidate"
-    assert b" H  " not in seen[0]["selections"][0].source_bytes.replace(b"MET", b"")
-    assert (review / "c0.pdb").read_text() == PDB  # stored design untouched
+# Real creation, remote review fallback, and lineage are exercised through
+# HTTP/private SQLite in test_denovo_validator_closeout.py (no creator stub).
 
 
 def test_unknown_or_escaping_names_are_refused(tmp_path, monkeypatch):
@@ -53,21 +42,5 @@ def test_unknown_or_escaping_names_are_refused(tmp_path, monkeypatch):
     (tmp_path / "secret.pdb").write_text(PDB)
     for name in ("missing.pdb", "../../secret.pdb"):
         with pytest.raises(HTTPException) as exc:
-            asyncio.run(fr.analyze_loop_candidates("j", fr.AnalyzeLoopCandidatesRequest(names=[name]), FakeSession(job)))
+            asyncio.run(fr.analyze_loop_candidates("j", fr.AnalyzeLoopCandidatesRequest(names=[name]), BackgroundTasks(), FakeSession(job)))
         assert exc.value.status_code == 422
-
-
-def test_remote_gate_candidates_come_from_the_fetched_review_set(tmp_path, monkeypatch):
-    """A remote loop job has no validation/review_candidates; its gate payload names the fetched set."""
-    fetched = tmp_path / ".bms-review-import" / "abc" / ".bms-review" / "def" / "candidate"
-    fetched.mkdir(parents=True)
-    (fetched / "c0.pdb").write_text(PDB)
-    job = SimpleNamespace(output_dir=str(tmp_path), awaiting_payload={"candidate_dir": str(fetched)})
-    seen = []
-    async def fake_create(session, **kw): seen.append(kw); return SimpleNamespace(id="child")
-    async def fake_receipt(session, child): return {"job_id": child.id}
-    monkeypatch.setattr(fr, "create_child_job", fake_create)
-    monkeypatch.setattr(fr, "_child_job_receipt", fake_receipt)
-    result = asyncio.run(fr.analyze_loop_candidates("j", fr.AnalyzeLoopCandidatesRequest(names=["c0.pdb"]), FakeSession(job)))
-    assert result["analyses"][0]["candidate"] == "c0.pdb"
-    assert b" H  " not in seen[0]["selections"][0].source_bytes.replace(b"MET", b"")

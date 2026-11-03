@@ -88,7 +88,9 @@ def _protenix_v2(root: Path, name: str) -> tuple[dict[str, Any], dict[str, Any]]
     path, payload = max(samples, key=rank)
     clash = payload.get("full_has_clash") if payload.get("full_has_clash") is not None else payload.get("has_clash")
     columns = _drop_none({
-        "plddt_overall": _percent(payload.get("plddt")),
+        # Protenix summary_confidence declares atom-mean pLDDT in percent,
+        # including values <= 1; it is not a fraction-detection heuristic.
+        "plddt_overall": _number(payload.get("plddt")),
         "conf_score": _number(payload.get("ranking_score")),
         "ptm": _number(payload.get("ptm")),
         "iptm": _number(payload.get("iptm")),

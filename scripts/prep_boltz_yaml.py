@@ -50,6 +50,53 @@ def generate_yaml_config(chain_groups):
         sequences.append({kind: entity})
     return {'version': 1, 'sequences': sequences}
 
+def candidate_yaml_config(pdb_path):
+    """Serialize the existing chemistry-aware candidate recipe to native Boltz.
+
+    CCD owns intra-residue chemistry; the recipe owns explicit cross-residue
+    connectivity and source ordering. No distance-based bonds or protonation.
+    Protein MSA remains explicitly empty for this no-MSA prep process.
+    """
+    from pathlib import Path
+    from prepare_protein_local_validator_input import build_contract
+
+    try:
+        contract = build_contract(Path(pdb_path), [])
+    except ValueError as exc:
+        # This shared prep also has historical nucleic-only callers; the
+        # Resequence recipe requires protein. Keep their existing behavior.
+        if 'PDB contains no supported protein residues:' not in str(exc):
+            raise
+        return generate_yaml_config(extract_chain_groups(pdb_path))
+    sequences = []
+    labels = {}
+    for index, component in enumerate(contract['components'], 1):
+        kind = component['molecule_type']
+        labels[str(index)] = component['chain_id']
+        entity = {'id': [component['chain_id']]}
+        if kind in {'protein', 'dna', 'rna'}:
+            entity['sequence'] = component['sequence']
+            if kind == 'protein':
+                entity['msa'] = 'empty'
+            modifications = component.get('modifications', [])
+            if modifications:
+                entity['modifications'] = [
+                    {'position': mod['ptmPosition'] if kind == 'protein' else mod['basePosition'],
+                     'ccd': (mod['ptmType'] if kind == 'protein' else mod['modificationType']).removeprefix('CCD_')}
+                    for mod in modifications]
+        else:
+            kind = 'ligand'  # Boltz represents ions by their source CCD too.
+            entity['ccd'] = component['ccd']
+        sequences.append({kind: entity})
+    result = {'version': 1, 'sequences': sequences}
+    bonds = contract['protenix_input'][0].get('covalent_bonds', [])
+    if bonds:
+        result['constraints'] = [{'bond': {
+            f'atom{side}': [labels[bond[f'entity{side}']], int(bond[f'position{side}']), bond[f'atom{side}']]
+            for side in (1, 2)}} for bond in bonds]
+    return result
+
+
 def process_pdb_files(input_dir, output_dir):
     """Process PDB files with flexible chain handling"""
     os.makedirs(output_dir, exist_ok=True)
@@ -59,11 +106,7 @@ def process_pdb_files(input_dir, output_dir):
         if filename.endswith('.pdb'):
             pdb_path = os.path.join(input_dir, filename)
             
-            # Group chains by identical sequences
-            chain_groups = extract_chain_groups(pdb_path)
-            
-            # Generate YAML config
-            yaml_config = generate_yaml_config(chain_groups)
+            yaml_config = candidate_yaml_config(pdb_path)
             
             # Create output path
             yaml_filename = filename.replace('.pdb', '.yaml')

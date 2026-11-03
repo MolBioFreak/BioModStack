@@ -96,6 +96,7 @@ from services.frustrampnn.jobs import (
     create_reanalysis_child,
     submit_selected_analysis,
     design_selections,
+    loop_candidate_selection,
     discard_uncommitted_child_artifacts,
     handoff_selection,
     upload_selection,
@@ -3159,7 +3160,7 @@ async def handoff_external_candidate(
         raise HTTPException(422, str(exc)) from exc
 
 
-class AnalyzeLoopCandidatesRequest(BaseModel):
+class AnalyzeLoopCandidatesRequest(AnalysisPlacement):
     model_config = ConfigDict(extra="forbid")
     names: list[str] = Field(min_length=1, max_length=64)
     frustrampnn_settings: Optional[dict[str, Any]] = None
@@ -3182,7 +3183,9 @@ def _heavy_atoms_only(payload: bytes) -> bytes:
 async def analyze_loop_candidates(
     loop_job_id: str,
     body: AnalyzeLoopCandidatesRequest,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
 ):
     """Advisory FrustraMPNN on selected resequence-loop candidates (optional, caller-requested)."""
     from services.stage_review import resolve_output_dir
@@ -3208,19 +3211,38 @@ async def analyze_loop_candidates(
     except (RequestedSettingsPayloadError, ValidationError, TypeError, ValueError) as exc:
         raise HTTPException(422, f"invalid frustrampnn_settings: {exc}") from exc
     receipts = []
+    selections = []
     try:
         for name in body.names:
             path = (review / Path(name).name).resolve()
             if path.parent != review or not path.is_file() or path.suffix.lower() != ".pdb":
                 raise HTTPException(422, f"candidate not found: {Path(name).name}")
-            selection = upload_selection(
-                filename=path.name, payload=_heavy_atoms_only(path.read_bytes()), expected_sha256=None)
-            child = await create_child_job(
-                session, selections=[selection], source_parent=None,
+            selections.append(await loop_candidate_selection(
+                session, source_parent=job, path=path, normalize_copy=_heavy_atoms_only))
+        if "execution_target_id" in body.model_fields_set or body.launch_context_id:
+            responses = await submit_selected_analysis(
+                session, experiment_session, background_tasks,
+                selections=selections, source_parent=job, requested_settings=requested,
+                execution_target_id=body.execution_target_id,
+                execution_target_supplied="execution_target_id" in body.model_fields_set,
+                destination_launch_context_id=body.launch_context_id,
+                idempotency_key=body.idempotency_key,
+                response_context={"operation": "frustrampnn", "source_job_id": job.id,
+                                  "candidates": [item.producer_coordinates["candidate_filename"] for item in selections]},
+                trigger="resequence_loop_candidate",
+            )
+            children = [await session.get(Job, response.id) for response in responses]
+        else:
+            # Omitted placement retains independent local children, never the
+            # source loop's previous worker. Explicit placement uses approval.
+            children = [await create_child_job(
+                session, selections=[selection], source_parent=job,
                 trigger="resequence_loop_candidate", requested_settings=requested)
+                for selection in selections]
+        for child in children:
             receipt = await _child_job_receipt(session, child)
-            receipt["candidate"] = path.name
-            receipts.append(receipt)
+            for selected in child.params["_frustrampnn_child_v1"]["selection"]:
+                receipts.append({**receipt, "candidate": selected["producer_coordinates"]["candidate_filename"]})
     except FrustraMPNNChildError as exc:
         await session.rollback()
         raise HTTPException(422, str(exc)) from exc

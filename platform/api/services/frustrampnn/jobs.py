@@ -343,6 +343,49 @@ def handoff_selection(
     )
 
 
+async def loop_candidate_selection(
+    session: AsyncSession, *, source_parent: Job, path: Path, normalize_copy,
+) -> SourceSelection:
+    """Bind a review candidate to its Job and, when published, exact Design.
+
+    Review gates can precede Design ingestion. Absence of a Design is not a
+    refusal; retain the Job, filename and original digest rather than inventing
+    one. A published Design is linked only by exact path or name AND bytes.
+    """
+    payload = _read_owned_structure(path, label="loop review candidate")
+    original_sha256 = hashlib.sha256(payload).hexdigest()
+    result = await session.execute(select(Design).where(Design.job_id == source_parent.id))
+    matches = []
+    for design in result.scalars():
+        source = Path(design.pdb_path) if design.pdb_path else None
+        if source is None:
+            continue
+        if source.resolve() == path.resolve():
+            matches.append(design)
+        elif source.name == path.name or design.name == path.stem:
+            try:
+                if _read_owned_structure(source, label="loop Design") == payload:
+                    matches.append(design)
+            except FrustraMPNNChildError:
+                pass  # A missing historical Design is not an advisory gate.
+    design = matches[0] if len(matches) == 1 else None
+    normalized = normalize_copy(payload)
+    return SourceSelection(
+        design_id=str(design.id) if design is not None else None,
+        source_job_id=str(source_parent.id), source_path=str(path),
+        source_bytes=normalized, source_sha256=hashlib.sha256(normalized).hexdigest(),
+        media_type="chemical/x-pdb", source_format="pdb",
+        producer_stage="resequence_loop_candidate",
+        producer_coordinates={
+            "candidate_id": path.stem, "candidate_filename": path.name,
+            "source_job_id": str(source_parent.id),
+            "source_design_id": str(design.id) if design is not None else None,
+            "original_source_sha256": original_sha256,
+            "normalization": "heavy_atom_copy",
+        },
+    )
+
+
 async def create_child_job(
     session: AsyncSession,
     *,
