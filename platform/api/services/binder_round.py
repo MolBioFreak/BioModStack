@@ -251,7 +251,43 @@ async def _plan_invocations(session, root, progress, request):
     await selected.plan(session, root, progress)
 
 
-async def _plan(session, root, progress, request, *, retry=False):
+async def plan_authored_envelopes(session, root, progress, *, retry=False):
+    """Compile each enabled envelope from the original sources, never each other.
+
+    Steps remain in the existing round ledger/submission owner. Only compiler
+    observations are branch-local; the general branch retains historical IDs.
+    """
+    provenance = root.provenance or {}
+    enabled = [(key, cls, provenance.get(key)) for key, cls in
+               ((SEQUENCE_REQUEST, SequenceDesignRequest), (REQUEST, BinderRoundRequest))
+               if (provenance.get(key) or {}).get('enabled')]
+    if len(enabled) < 2:
+        for _, cls, envelope in enabled:
+            await _plan(session, root, progress, cls.model_validate(envelope), retry=retry)
+        return
+    branches = progress.setdefault('authored_branches', {})
+    for key, cls, envelope in enabled:
+        # Pre-composition retained work belongs to the formerly selected general
+        # envelope. Keep its IDs, snapshots, retries and publication observations.
+        local = branches.get(key)
+        if local is None:
+            local = ({k: deepcopy(v) for k, v in progress.items()
+                      if k not in {'steps', 'state', 'authored_branches', 'selected_rounds'}}
+                     if key == SEQUENCE_REQUEST else {'errors': {}, 'dependencies': {}})
+        local['steps'] = {sid: step for sid, step in progress['steps'].items()
+                          if step['metadata'].get('authored_envelope', SEQUENCE_REQUEST) == key}
+        await _plan(session, root, local, cls.model_validate(envelope), retry=retry,
+                    branch=key if key == REQUEST else None)
+        for step in local['steps'].values():
+            step['metadata']['authored_envelope'] = key
+        progress['steps'].update(local.pop('steps'))
+        branches[key] = local
+    for field in ('errors', 'dependencies'):
+        progress[field] = {key + ':' + item: value for key, branch in branches.items()
+                           for item, value in branch.get(field, {}).items()}
+
+
+async def _plan(session, root, progress, request, *, retry=False, branch=None):
     if isinstance(request, SequenceDesignRequest) and request.schema_version == 2:
         return await _plan_invocations(session, root, progress, request)
     from services.binder_diagnostic_selection import declared_targets
@@ -264,7 +300,7 @@ async def _plan(session, root, progress, request, *, retry=False):
             Job.provenance[STEP]['root_job_id'].as_string() == root.id,
             Job.provenance[STEP]['stage'].as_string() == 'sequence_design', Job.status == 'completed')):
         metadata = child.provenance[STEP]
-        if metadata.get('round_id'):
+        if metadata.get('round_id') or (branch and metadata.get('authored_envelope') != branch):
             continue
         for design in await session.scalars(select(Design).where(Design.job_id == child.id).order_by(Design.id)):
             sources.append((child, design, metadata['backbone_design_id'], metadata))
@@ -301,7 +337,8 @@ async def _plan(session, root, progress, request, *, retry=False):
                     base_request = None
                     binding = {}
                     for sample in range(samples):
-                        step_id = identity(root.id, stage, design.id, target_source, sample,
+                        step_id = identity(root.id if branch is None else root.id + ':' + branch,
+                                stage, design.id, target_source, sample,
                                 model_id=settings.model_id if multi else None)
                         error_key = step_id if multi else design.id
                         if error_key in progress['errors'] and not retry:
@@ -411,7 +448,7 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
         save(root, progress)
         await session.commit()
         return await read_round(session, root_id)
-    await _plan(session, root, progress, request_type.model_validate(envelope), retry=retry)
+    await plan_authored_envelopes(session, root, progress, retry=retry)
     save(root, progress)
     # Retained input snapshots and requested settings survive a failed submit or
     # cancellation. The existing submission owner is responsible for commits.
@@ -445,7 +482,7 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
     root = await lock_root(session, root_id)
     progress = progress_of(root)
     await refresh_children(session, root_id, progress)
-    await _plan(session, root, progress, request_type.model_validate(envelope), retry=retry)
+    await plan_authored_envelopes(session, root, progress, retry=retry)
     progress['state'] = round_state(progress)
     save(root, progress)
     await session.commit()
