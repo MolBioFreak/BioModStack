@@ -69,7 +69,8 @@ async def bounded(request: Request, call_next):
     if request.method not in {'GET','HEAD'}:
         allowed = ((request.method == 'POST' and (path == '/api/projects' or path.endswith('/workflow-setups')))
                    or (request.method == 'PUT' and '/workflow-setups/' in path and path.endswith('/draft'))
-                   or path.startswith('/api/user-templates') or path == '/api/files/materialize-structure')
+                   or path.startswith('/api/user-templates') or path == '/api/files/materialize-structure'
+                   or (os.environ.get('BMS_FINAL_ALLOW_RESEQUENCE_PREPARE') == '1' and request.method == 'POST' and path == '/api/jobs/resequence/from-structures/prepare'))
         if not allowed:
             return JSONResponse({'detail':'Inert browser qualification: execution is unperformed'},405)
     body = (await request.body()).decode('utf-8', errors='replace')

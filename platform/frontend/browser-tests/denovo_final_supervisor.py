@@ -22,8 +22,8 @@ server_log = (ROOT/('server-'+attempt+'.log')).open('w')
 chrome_log = (ROOT/('chrome-'+attempt+'.log')).open('w')
 processes=[]
 try:
-    processes.append(subprocess.Popen([python,str(Path(__file__).with_name('denovo_final_native_server.py'))], cwd=REPO/'platform/api',stdout=server_log,stderr=subprocess.STDOUT))
-    for _ in range(120):
+    processes.append(subprocess.Popen([python,str(Path(__file__).with_name(os.environ.get('BMS_FINAL_SERVER_SCRIPT', 'denovo_final_native_server.py')))], cwd=REPO/'platform/api',stdout=server_log,stderr=subprocess.STDOUT))
+    for _ in range(720):
         if processes[0].poll() is not None: raise RuntimeError('Server exited '+str(processes[0].returncode))
         try:
             health=json.load(urlopen('http://127.0.0.1:18871/acceptance-health',timeout=1)); break
