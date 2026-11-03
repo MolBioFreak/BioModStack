@@ -544,9 +544,9 @@ def compile_method(request):
                     intent['operation'] = 'load_tip'
                     intent.pop('channels', None)
                     if sorted(channels) != [0, 1, 2, 3]:
-                        # Keep these; the robot releases the rest back into the rack after a 5 mm lift.
+                        # Keep these; the robot releases the rest back into the rack after a 10 mm lift.
                         intent['keep_channels'] = sorted(channels)
-                        intent.setdefault('release_lift_mm', 5.0)
+                        intent.setdefault('release_lift_mm', 10.0)
                     else:
                         intent.pop('release_lift_mm', None)
                 elif occurrence['action'] in ('tip_eject', 'eject_tip'):

@@ -14629,7 +14629,7 @@
               "title": "Keep Channels"
             },
             "release_lift_mm": {
-              "default": 5.0,
+              "default": 10.0,
               "maximum": 10,
               "minimum": 0,
               "title": "Release Lift Mm",

@@ -139,11 +139,19 @@ def test_all_eight_bound_documents_exported_separately():
         Path(os.environ['BIOXP_BOUND_EXPORT']).write_text(json.dumps(documents))
 
 
-def test_partial_tip_pickup_sends_keep_channels_and_books_only_kept_tips():
+def test_partial_tip_pickup_sends_keep_channels_and_preserves_authored_lift():
     f, _ = class_transfer()
     f['method']['tip_policy'] = {'mode': 'per_transfer', 'tip_pickup': {'tray': 1, 'well': 'A1', 'overpress': False, 'lift_z': True, 'channels': [0]}, 'tip_eject': {'channels': [0, 1, 2, 3]}}
     emitted = actions(compile_method(f))
     pickup = emitted[0]['params']
-    assert pickup['operation'] == 'load_tip' and pickup['keep_channels'] == [0] and pickup['release_lift_mm'] == 5.0
+    assert pickup['operation'] == 'load_tip' and pickup['keep_channels'] == [0] and pickup['release_lift_mm'] == 10.0
+    for filename in ('bioxp_method_native.json', 'bioxp_workflow_native.json'):
+        exported = json.loads((Path(__file__).parents[1] / 'schemas' / filename).read_text())
+        request = exported['method_contract']['manual_pipetting_request'] if 'method_contract' in exported else exported['request']
+        assert request['$defs']['ManualLoadTip']['properties']['release_lift_mm']['default'] == 10.0
+    for lift in (5.0, 7.25):
+        f['method']['tip_policy']['tip_pickup']['release_lift_mm'] = lift
+        assert actions(compile_method(f))[0]['params']['release_lift_mm'] == lift
     f['method']['tip_policy']['tip_pickup']['channels'] = [0, 1, 2, 3]
-    assert 'keep_channels' not in actions(compile_method(f))[0]['params']
+    ordinary = actions(compile_method(f))[0]['params']
+    assert 'keep_channels' not in ordinary and 'release_lift_mm' not in ordinary
