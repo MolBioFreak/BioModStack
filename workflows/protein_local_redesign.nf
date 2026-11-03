@@ -215,6 +215,7 @@ process StageProteinLocalValidatedCandidates {
     publish_closed_structure ${candidate_pdbs} review_candidates/
     # Optional scores are received from closed producer channels, never publishDir.
     mkdir -p review_scores/boltz2 review_scores/esmfold2 review_scores/protenix_v2
+    cp -L ${suite_receipt} review_scores/validator_suite_receipt.json
     cp -L score_inputs/boltz2/*_boltzpred.json review_scores/boltz2/ 2>/dev/null || true
     cp -L score_inputs/esmfold2/*.metrics.json review_scores/esmfold2/ 2>/dev/null || true
     for source in score_inputs/protenix_v2*; do
