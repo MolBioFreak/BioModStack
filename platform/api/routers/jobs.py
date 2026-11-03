@@ -9088,7 +9088,12 @@ def _rfd3_generation_range(values: list[float]) -> dict[str, float | None]:
 
 
 @router.get("/{job_id}/rfd3-generation")
-async def get_rfd3_generation_result(job_id: str, session: AsyncSession = Depends(get_session)):
+async def get_rfd3_generation_result(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+    offset: int = 0,
+    limit: int | None = None,
+):
     job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
     if (
         job is None
@@ -9097,7 +9102,7 @@ async def get_rfd3_generation_result(job_id: str, session: AsyncSession = Depend
     ):
         raise HTTPException(status_code=404, detail="RFD3 generation job not found")
     from services.rfd3_generation_results import read_generation_results
-    return await read_generation_results(job, session)
+    return await read_generation_results(job, session, offset=offset, limit=limit)
 
 
 @router.get("/{job_id}/rfd3-generation/artifacts/{candidate_id}/{role}")
