@@ -190,7 +190,7 @@ it.each([
     const state = JSON.parse(retained.searchParams.get('rfd4_state')!);
     expect(state).toEqual({ path: 'outputs/states/B.pt', artifact_id: 'state-B', sha256: 'b'.repeat(64), seed: 0 });
     const prepared = await prepareDeNovoContinuation(JSON.parse(retained.searchParams.get('source_structure')!), 'rfd4_state', state);
-    expect(prepared).toMatchObject({ native_sources: { selected: { document: { artifact_id: 'alternate', target_state: 'B' } }, resume: { kind: 'file', path: state.path, expected_sha256: state.sha256 } }, rfd4_request: { resume_slot: 'resume', settings: { seed: 0 } } });
+    expect(prepared).toMatchObject({ native_sources: { selected: { document: { artifact_id: 'alternate', target_state: 'B' } }, resume: { kind: 'file', path: state.path, expected_sha256: state.sha256 } }, rfd4_request: { resume_slot: 'resume', settings: { search: { resume_seed: 0 } } } });
     expect(document.querySelector<HTMLInputElement>('[aria-label="Exact candidate identifier"]')?.value).toBe('native');
     expect(document.querySelector('h4')?.textContent).not.toBe('native');
     await close();
@@ -209,7 +209,7 @@ it.each([
         expect(emitted.params.native_sources.selected.model_number).toBe(expectedModel);
         if (route === retained) {
             expect(emitted.params.native_sources.resume).toEqual({ kind: 'file', path: state.path, expected_sha256: state.sha256 });
-            expect(emitted.params.rfd4_request).toMatchObject({ resume_slot: 'resume', settings: { seed: 0 } });
+            expect(emitted.params.rfd4_request).toMatchObject({ resume_slot: 'resume', settings: { search: { resume_seed: 0 } } });
         }
         await close();
     }
