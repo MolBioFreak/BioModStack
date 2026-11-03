@@ -2,7 +2,7 @@ const payload = JSON.parse(document.getElementById('payload').textContent)
 const { rows, token } = payload
 const channel = 'bms-biojs-inline-v1'
 const send = data => window.parent.postMessage({channel, token, ...data}, '*')
-const viewer = window.msa({ el: document.getElementById('viewer'), seqs: rows.map((row, index) => ({ id: String(index), name: row.label, seq: row.aligned })), bootstrapMenu: false, conf: { dropImport: false, registerMouseClicks: true }, vis: { metaLinks: false }, zoomer: { alignmentHeight: 320, autoResize: true } })
+const viewer = window.msa({ el: document.getElementById('viewer'), seqs: rows.map((row, index) => ({ id: String(index), name: row.label, seq: row.aligned })), bootstrapMenu: false, conf: { dropImport: false, registerMouseClicks: true }, vis: { metaLinks: false }, zoomer: { alignmentHeight: Math.max(320, (payload.viewerHeight ?? 420) - 100), autoResize: true, labelNameLength: 220 } })
 viewer.g.on('residue:click', data => send({index: Number(data.seqId), column: data.rowPos}))
 viewer.render()
 const canvas = document.querySelector('.biojs_msa_seqblock')
@@ -35,6 +35,7 @@ viewer.g.colorscheme.on('change', report)
 viewer.g.columns.on('change', report)
 // Small controls configure upstream models, not a replacement alignment matrix.
 const controls = document.createElement('div')
+controls.style.cssText = 'display:flex;gap:12px;align-items:center;padding:6px 8px;font-size:13px'
 controls.innerHTML = '<label>Colors <select><option>taylor</option><option>clustal</option><option>zappo</option><option>nucleotide</option></select></label> <button>Hide selected columns</button> <button>Show all columns</button>'
 document.body.insertBefore(controls, document.getElementById('viewer'))
 controls.querySelector('select').onchange = event => viewer.g.colorscheme.set('scheme', event.target.value)

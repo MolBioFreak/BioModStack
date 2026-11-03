@@ -9,7 +9,7 @@ const channel = 'bms-jbrowse-inline-v1'
 const send = data => window.parent.postMessage({channel, token, ...data}, '*')
 const display = value => JSON.stringify(value).slice(1, -1).replace(/[\u007f-\u009f\u2028\u2029]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
 const fasta = rows.map((r, i) => `>row_${i}\n${r.aligned}`).join('\n') + '\n'
-const rowData = Object.fromEntries(rows.map((r, i) => [`row_${i}`, { genome: `[${display(r.rowId)}] ${display(r.label)}` }]))
+const rowData = Object.fromEntries(rows.map((r, i) => [`row_${i}`, { genome: display(r.label || r.rowId) }]))
 let model, ready = false, applying = false, control = payload, lastState
 const snapshot = () => ({scrollX: model.scrollX, scrollY: model.scrollY, columnWidth: model.colWidth, rowHeight: model.rowHeight, colorScheme: model.colorSchemeName, hideGaps: model.hideGaps, allowedGappyness: model.allowedGappyness})
 function apply() {
@@ -38,7 +38,7 @@ window.addEventListener('message', event => {
   control = event.data; apply()
 })
 createRoot(document.getElementById('root')).render(
-  <MSAViewer msa={fasta} rowData={rowData} drawTree={false} treeAreaWidth={260} height={420} onModel={value => {
+  <MSAViewer msa={fasta} rowData={rowData} drawTree={false} treeAreaWidth={260} height={payload.viewerHeight ?? 420} onModel={value => {
     model = value
     when(() => model.viewInitialized && model.numColumns > 0, () => {
       ready = true; apply()

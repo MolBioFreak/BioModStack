@@ -7,6 +7,7 @@ import { useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup
 import ProjectDatasetPicker, { type DatasetRow } from './ProjectDatasetPicker';
 import { MOLECULAR_ALIGNMENT_PARAM, MolecularAlignmentSourceList, useMolecularAlignmentSources } from './MolecularAlignmentSources';
 import requestSchema from './alignment-request.schema.json';
+import { engineLabels, fieldLabel, nullLabel, optionLabel, primaryFieldsFor } from './alignmentFieldPresentation';
 
 type Engine = 'mafft' | 'famsa' | 'muscle' | 'twilight';
 type Molecule = 'protein' | 'dna' | 'rna';
@@ -26,7 +27,7 @@ export function settingsInventory(schema: SettingsSchema, engine: Engine): {fiel
         settings[key] = property.default ?? (key === 'leaf_mapping' ? {} : null);
         if (key === 'threads') continue;
         const kind: Field['kind'] = shape.enum ? 'select' : shape.type === 'boolean' ? 'boolean' : shape.type === 'integer' ? 'integer' : shape.type === 'number' ? 'number' : shape.type === 'object' ? 'mapping' : 'text';
-        result.push({key, label:key.replaceAll('_',' '), kind, options:shape.enum, min:shape.minimum, nullable:property.anyOf?.some(x=>x.type === 'null'), description:property.description, format:property.format ?? shape.format});
+        result.push({key, label:fieldLabel(key), kind, options:shape.enum, min:shape.minimum, nullable:property.anyOf?.some(x=>x.type === 'null'), description:property.description, format:property.format ?? shape.format});
     }
     return {fields:result,defaults:settings};
 }
@@ -47,13 +48,13 @@ function NativeFileInput({field, value, onChange}: {field: Field; value: Value; 
     useEffect(() => () => { generation.current++; }, []);
     return <span className="block">
         <span className="block text-sm">{field.description}</span>
-        <input type="file" aria-label={`Load ${field.label} file`} onChange={e=>{
+        <input type="file" aria-label={`Load ${field.key.replaceAll('_',' ')} file`} onChange={e=>{
             const file = e.target.files?.[0];
             const current = ++generation.current;
             if (file) void file.text().then(text=>{if (current === generation.current) { onChange(text); setError(''); }}).catch(reason=>{if (current === generation.current) setError(String(reason));});
             e.target.value = '';
         }}/>
-        <textarea aria-label={`${field.label} contents`} className={`${inputClass} block w-full font-mono`} rows={5} value={String(value ?? '')} onChange={e=>{generation.current++; onChange(e.target.value);}}/>
+        <textarea aria-label={`${field.key.replaceAll('_',' ')} contents`} className={`${inputClass} block w-full font-mono`} rows={5} value={String(value ?? '')} onChange={e=>{generation.current++; onChange(e.target.value);}}/>
         <button type="button" className={inputClass} onClick={()=>{generation.current++; onChange(null);}}>Omit supplied file (null)</button>
         <span className="block text-sm">{value === null ? 'No file supplied.' : 'Exact text supplied, including an empty file. No format conversion.'}</span>
         {error && <span role="alert">{error}</span>}
@@ -75,7 +76,7 @@ function requestIdentityWarning(rows: DatasetRow[]) {
         return Object.entries({project_id:s.project_id,dataset_id:s.dataset_id,revision_id:s.revision_id,revision_sha256:s.revision_sha256,ordinal:m.ordinal,member_identity:m.member_identity,member_sha256:m.member_sha256}).some(([k,v])=>r[k as keyof typeof r] !== v) || Boolean((m.receipt?.entity_id && r.source_identity && m.receipt.entity_id !== r.source_identity) || (m.receipt?.content_digest && r.source_digest && m.receipt.content_digest !== r.source_digest));
     });
 }
-export default function AlignmentEditor({ model, initialMolecule }: { model: string; initialMolecule?: Molecule }) {
+export default function AlignmentEditor({ model, initialMolecule, onModelChange }: { model: string; initialMolecule?: Molecule; onModelChange?: (model: string, molecule: Molecule) => void }) {
     const setup = useProjectWorkflowSetup();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
@@ -214,15 +215,40 @@ export default function AlignmentEditor({ model, initialMolecule }: { model: str
             }
         } catch (e) { setError(`Launch or Project handoff not confirmed: ${e instanceof Error ? e.message : String(e)}. Check the Job and launch context before starting another run.`); } finally { setBusy(false); }
     };
-    return <section aria-label="New family alignment" className="space-y-4 rounded border border-slate-600 p-4">
-        <h2 className="text-lg font-semibold">New family alignment</h2>
+    const moleculeOptions: Molecule[] = onModelChange ? ['protein','dna','rna'] : model === 'family_msa_nucleic' ? ['dna','rna'] : ['protein'];
+    const unavailable = (x: Engine) => (molecule === 'protein' && x === 'twilight') || (molecule !== 'protein' && x === 'famsa');
+    const chooseMolecule = (next: Molecule) => {
+        const nextModel = next === 'protein' ? 'family_msa_protein' : 'family_msa_nucleic';
+        if (onModelChange && nextModel !== model) { onModelChange(nextModel, next); return; }
+        setMolecule(next); if ((next === 'protein' && engine === 'twilight') || (next !== 'protein' && engine === 'famsa')) setEngine('mafft');
+    };
+    const primary = primaryFieldsFor(engine, molecule);
+    const fields = inventory[engine].fields;
+    const renderField = (field: Field) => {
+        const label = field.label;
+        const native = <code className="alignment-native-key">{field.key}</code>;
+        if (field.kind === 'boolean' && !field.format) return <label key={field.key} data-setting={field.key} className="alignment-setting alignment-setting-check" title={field.description}>
+            <span className="alignment-setting-name">{label}</span>{native}<input type="checkbox" checked={Boolean(settings[field.key])} onChange={e=>update(field.key,e.target.checked)}/></label>;
+        const control = field.format ? <NativeFileInput key={`${setup.setup?.project_id}:${setup.setup?.setup_context_id}:${engine}:${field.key}`} field={field} value={settings[field.key]} onChange={value=>update(field.key,value)}/>
+            : field.kind === 'select' ? <select className={inputClass} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value === '' && field.nullable ? null : field.options?.find(option => String(option) === e.target.value) ?? e.target.value)}>{field.nullable && <option value="">{nullLabel(field.key, settings)}</option>}{field.options?.map(x=><option key={x} value={x}>{optionLabel(field.key, x)}</option>)}</select>
+            : field.kind === 'mapping' ? <MappingInput value={(settings[field.key] || {}) as Record<string,string>} onChange={value=>update(field.key,value)}/>
+            : field.kind === 'text' ? <textarea className={`${inputClass} block w-full`} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value || null)}/>
+            : <input className={inputClass} type="number" step={field.kind === 'integer' ? 1 : 'any'} min={field.min} placeholder={field.nullable ? nullLabel(field.key, settings) : undefined} value={settings[field.key] == null ? '' : String(settings[field.key])} onChange={e=>update(field.key,e.target.value === '' ? null : Number(e.target.value))}/>;
+        const wide = Boolean(field.format) || field.kind === 'mapping' || field.kind === 'text';
+        return <label key={field.key} data-setting={field.key} className={`alignment-setting${wide ? ' alignment-setting-wide' : ''}`} title={field.description}>
+            <span className="alignment-setting-name">{label}</span>{native}{control}</label>;
+    };
+    return <section aria-label="New family alignment" className="alignment-editor">
         {schemaWarning && <p role="status">{schemaWarning}</p>}
         {setup.active && !setup.setup && <p role="status">Project setup must load before editing.</p>}
-        <fieldset disabled={busy || (setup.active && !setup.setup)} className="space-y-3">
-            <label className="block">Molecule <select aria-label="Molecule" className={inputClass} value={molecule} onChange={e=>{const next=e.target.value as Molecule; setMolecule(next); if ((next === 'protein' && engine === 'twilight') || (next !== 'protein' && engine === 'famsa')) setEngine('mafft');}}>{(model === 'family_msa_nucleic' ? ['dna','rna'] : ['protein']).map(x=><option key={x}>{x}</option>)}</select></label>
-            <label className="block">Engine <select aria-label="Engine" className={inputClass} value={engine} onChange={e=>setEngine(e.target.value as Engine)}>{(['mafft','famsa','muscle','twilight'] as Engine[]).map(x=><option key={x} value={x} disabled={(molecule === 'protein' && x === 'twilight') || (molecule !== 'protein' && x === 'famsa')}>{x}{(molecule === 'protein' && x === 'twilight') || (molecule !== 'protein' && x === 'famsa') ? ' — unavailable for molecule' : ''}</option>)}</select></label>
-            <label className="block">FASTA roster <textarea aria-label="FASTA roster" className={`${inputClass} block w-full font-mono`} rows={8} value={fasta} onChange={e=>setFasta(e.target.value)}/></label>
-            <p className="text-sm">FASTA headers and duplicate sequences are retained. Resolved Dataset occurrences are appended as separate rows; unavailable sources are shown but not added to the roster.</p>
+        <fieldset disabled={busy || (setup.active && !setup.setup)}>
+            <legend>Input</legend>
+            <div className="alignment-settings-grid">
+                <label data-setting="molecule" className="alignment-setting"><span className="alignment-setting-name">Molecule</span><select aria-label="Molecule" className={inputClass} value={molecule} onChange={e=>chooseMolecule(e.target.value as Molecule)}>{moleculeOptions.map(x=><option key={x} value={x}>{x === 'protein' ? 'Protein' : x.toUpperCase()}</option>)}</select></label>
+                <label data-setting="engine" className="alignment-setting"><span className="alignment-setting-name">Engine</span><select aria-label="Engine" className={inputClass} value={engine} onChange={e=>setEngine(e.target.value as Engine)}>{(['mafft','famsa','muscle','twilight'] as Engine[]).map(x=><option key={x} value={x} disabled={unavailable(x)}>{engineLabels[x]}{unavailable(x) ? ' — not for this molecule' : ''}</option>)}</select></label>
+            </div>
+            <label data-setting="fasta" className="alignment-setting alignment-setting-wide"><span className="alignment-setting-name">Sequences (FASTA)</span><textarea aria-label="FASTA roster" className={`${inputClass} block w-full font-mono`} rows={8} placeholder={'>sequence_1\nMKV...\n>sequence_2\nMKI...'} value={fasta} onChange={e=>setFasta(e.target.value)}/></label>
+            <p className="alignment-hint">Headers and duplicate sequences are kept as separate rows.</p>
             <MolecularAlignmentSourceList sources={molecularSources} query={molecularQuery}
                 onRemove={source => setMolecularSources(previous => previous.filter(value => value !== source))}
                 onClear={() => setMolecularSources([])} />
@@ -230,18 +256,27 @@ export default function AlignmentEditor({ model, initialMolecule }: { model: str
             {setup.active && setup.setup && <ProjectDatasetPicker key={`${setup.setup.project_id}:${setup.setup.setup_context_id}`} projectId={setup.setup.project_id} globalId={setup.setup.global_experiment_id} domainId={setup.setup.domain_experiment_id} rows={datasetRows} onChange={setDatasetRows}/>}
             {requestIdentityWarning(datasetRows) && <p role="status">Some source identity evidence is missing or differs from the frozen selection; review the saved request evidence.</p>}
             {datasetRows.some(x=>x.resolved.status === 'resolved' && x.resolved.molecule && x.resolved.molecule !== molecule) && <p role="status">Some resolved sources have a different molecule type from the selected roster. Review the source and molecule before running.</p>}
-            <div className="grid gap-3 sm:grid-cols-2"><label>Threads <input aria-label="Threads" className={inputClass} type="number" min={1} step={1} value={String(settings.threads)} onChange={e=>update('threads',e.target.value === '' ? null : Number(e.target.value))}/></label>
-            {inventory[engine].fields.map(field => <label key={field.key} className="block" title={field.description}>{field.label} {' '}{field.format ? <NativeFileInput key={`${setup.setup?.project_id}:${setup.setup?.setup_context_id}:${engine}:${field.key}`} field={field} value={settings[field.key]} onChange={value=>update(field.key,value)}/> : field.kind === 'boolean' ? <input type="checkbox" checked={Boolean(settings[field.key])} onChange={e=>update(field.key,e.target.checked)}/> : field.kind === 'select' ? <select className={inputClass} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value === '' && field.nullable ? null : field.options?.find(option => String(option) === e.target.value) ?? e.target.value)}>{field.nullable && <option value="">Native default</option>}{field.options?.map(x=><option key={x}>{x}</option>)}</select> : field.kind === 'mapping' ? <MappingInput value={(settings[field.key] || {}) as Record<string,string>} onChange={value=>update(field.key,value)}/> : field.kind === 'text' ? <textarea className={`${inputClass} block w-full`} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value || null)}/> : <input className={inputClass} type="number" step={field.kind === 'integer' ? 1 : 'any'} min={field.min} value={settings[field.key] == null ? '' : String(settings[field.key])} onChange={e=>update(field.key,e.target.value === '' ? null : Number(e.target.value))}/>}</label>)}
+        </fieldset>
+        <fieldset disabled={busy || (setup.active && !setup.setup)}>
+            <legend>{engineLabels[engine]} settings</legend>
+            <div className="alignment-settings-grid">
+                <label data-setting="threads" className="alignment-setting"><span className="alignment-setting-name">Threads</span><code className="alignment-native-key">threads</code><input aria-label="Threads" className={inputClass} type="number" min={1} step={1} value={String(settings.threads)} onChange={e=>update('threads',e.target.value === '' ? null : Number(e.target.value))}/></label>
+                {fields.filter(field => primary.has(field.key)).map(renderField)}
             </div>
-            {engine === 'mafft' && <p className="text-sm">MAFFT expert settings can be ignored by some strategies or molecule types. If multiple substitution models are supplied, the native wrapper uses the last one: BLOSUM, JTT, transmembrane, Kimura, then a supplied amino-acid matrix. Requested settings are not proof of the model actually used. Pair method overrides the selected strategy pair flag; tree method and refinement policy retain exact native spellings. Sparse pickup can omit rows; omitted-row artifacts are retained rather than silently restoring sequences. Native interactions are reported in the engine log, not repaired by the editor.</p>}
-            {engine === 'muscle' && <p className="text-sm">Native default (null) omits permutation and perturbation flags. Explicit none/zero is passed unchanged; MUSCLE rejects these flags together with stratified/diversified. The pinned align-to-Super5 minsuper switch has a native assertion failure; direct Super5 remains available. Guide output is a native diagnostic that writes a tree then exits zero BEFORE producing an alignment (also with ensembles); random-chain bypasses that writer. No second run is substituted. HMM output is available in Super5 and precedes command-line HMM overrides. Native log output is separate from the always-retained stdout/stderr log.</p>}
-            {setup.active && <button type="button" onClick={()=>void run('save')} className={inputClass}>Save Project draft</button>}{' '}
-            <button type="button" disabled={molecularBlocked} onClick={()=>void run('launch')} className={inputClass}>Start run</button>
+            <details className="alignment-expert">
+                <summary>Expert settings ({fields.filter(field => !primary.has(field.key)).length})</summary>
+                <p className="alignment-hint">Blank or “default” values are not passed to the engine. Hover a setting for its native behaviour.</p>
+                <div className="alignment-settings-grid">{fields.filter(field => !primary.has(field.key)).map(renderField)}</div>
+                {engine === 'mafft' && <p className="alignment-hint">MAFFT expert settings can be ignored by some strategies or molecule types. If multiple substitution models are supplied, the native wrapper uses the last one: BLOSUM, JTT, transmembrane, Kimura, then a supplied amino-acid matrix. Pair method overrides the selected strategy pair flag. Sparse pickup can omit rows; omitted-row artifacts are retained. Native interactions are reported in the engine log, not repaired by the editor.</p>}
+                {engine === 'muscle' && <p className="alignment-hint">Explicit permutation none/perturbation zero is passed unchanged; MUSCLE rejects these together with stratified/diversified ensembles. The pinned align-to-Super5 threshold has a native assertion failure; direct Super5 works. Guide output writes a tree then exits zero BEFORE producing an alignment; random-chain bypasses that writer. No second run is substituted.</p>}
+            </details>
+            <div className="alignment-actions">
+                <button type="button" disabled={molecularBlocked} onClick={()=>void run('launch')} className={`${inputClass} alignment-action`}>Start run</button>
+                {setup.active && <button type="button" onClick={()=>void run('save')} className={inputClass}>Save Project draft</button>}
+            </div>
         </fieldset>
         {error && <p role="alert">{error}</p>}{contextId && !job && <div><p>Launch context: {contextId}</p><button type="button" disabled={busy} onClick={()=>void recover()} className={inputClass}>Recover Project Job</button></div>}{job && <div role="status"><p>Job submitted: <Link to={`/alignments/jobs/${encodeURIComponent(job)}`}>{job}</Link></p>
             {contextId && <><p>Launch context: {contextId}</p><button type="button" disabled={busy} onClick={()=>void retryBinding()} className={inputClass}>Retry Project binding</button>{returnUri && <> <Link to={returnUri}>Return to Project</Link></>}</>}
         </div>}
-        <p className="text-sm">Scientific scope: MAFFT and MUSCLE support protein, DNA and RNA; FAMSA supports protein; TWILIGHT supports DNA and RNA. Direct API requests may specify other combinations; these descriptors do not validate them.</p>
-        <p className="text-sm">Execution availability depends on the installed Job dispatcher and native engines. No alternative engine is selected automatically.</p>
     </section>;
 }

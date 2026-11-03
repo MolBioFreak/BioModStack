@@ -23,7 +23,7 @@ describe('native alignment inventory',()=>{
   await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_protein"/></MemoryRouter>));
   const select=div.querySelector('[aria-label="Engine"]') as HTMLSelectElement;
   await act(async()=>{select.value='famsa';select.dispatchEvent(new Event('change',{bubbles:true}));});
-  const control=(label:string)=>[...div.querySelectorAll('label')].find(x=>x.textContent?.trim().startsWith(label))!.querySelector('input,select') as HTMLInputElement | HTMLSelectElement;
+  const control=(key:string)=>div.querySelector(`[data-setting="${key}"]`)!.querySelector('input,select') as HTMLInputElement | HTMLSelectElement;
   const matrix=control('sm') as HTMLSelectElement;
   await act(async()=>{matrix.value='MIQS';matrix.dispatchEvent(new Event('change',{bubbles:true}));});
   const gap=control('go') as HTMLInputElement;
