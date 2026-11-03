@@ -78,6 +78,7 @@ process RunBoltz {
 
     output:
     tuple path("predictions/*.pdb"), path("predictions/*.json"), emit: pdbs_jsons
+    tuple val(batch_id), path("predictions"), emit: sample_artifacts
     path "boltz_completion.json", emit: completion
     path ("predictions/*.npz"), emit: pae_npz, optional: true
     path ("*.log"), emit: logs
