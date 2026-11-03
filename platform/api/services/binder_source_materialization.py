@@ -476,7 +476,11 @@ def _source_paths(value):
 
 
 def _preparation_directories(value):
-    root = resolve_allowed_path('inputs/design_selections/protein_local_redesign').resolve()
+    try:
+        root = resolve_allowed_path('inputs/design_selections/protein_local_redesign').resolve()
+    except ValueError:
+        # No inputs root: no preparation can be referenced; legacy no-op.
+        return []
     found = set()
     for path in _source_paths(value):
         if root not in path.parents:
