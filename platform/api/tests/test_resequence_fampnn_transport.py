@@ -40,15 +40,21 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
 
     monkeypatch.setattr(paths, 'get_code_root', lambda: ROOT)
     monkeypatch.setenv('BMS_HOME', str(ROOT))
-    selected = tmp_path / 'selection'; selected.mkdir()
+    # Real allowed-roots seam: retained Resequence sources are written beneath the inputs root.
+    inputs = tmp_path / 'inputs'; inputs.mkdir()
+    (tmp_path / 'results').mkdir(exist_ok=True)
+    roots = {'inputs': inputs, 'bms_results': tmp_path / 'results'}
+    for module in (paths, files, jobs):
+        monkeypatch.setattr(module, 'get_allowed_roots', lambda: roots)
+    monkeypatch.setattr(jobs, 'get_inputs_dir', lambda: inputs)
+    selected = inputs / 'design_selections' / 'protein_local_redesign' / 'selection'; selected.mkdir(parents=True)
     sources = []
     domains = [[('A', 10, ''), ('A', 12, ''), ('B', 21, '')],
                [('A', 110, ''), ('A', 112, ''), ('B', 221, '')]]
     for i, domain in enumerate(domains):
-        source = tmp_path / f'source{i}.pdb'; source.write_text(pdb(domain)); sources.append(source)
+        source = inputs / f'source{i}.pdb'; source.write_text(pdb(domain)); sources.append(source)
     monkeypatch.setattr(jobs, '_create_generic_selection_dir', lambda *a: selected)
     monkeypatch.setattr(files, 'is_path_allowed', lambda p: True)
-    monkeypatch.setattr(files, 'resolve_allowed_path', lambda p: tmp_path if p == 'inputs' else Path(p))
     monkeypatch.setattr(jobs, 'resolve_allowed_path', lambda p: Path(p))
     async def resolve(request, session):
         return Path(request.path), {}
@@ -58,7 +64,8 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
         output = Path(dest) / 'materialized.pdb'
         output.write_bytes(raw)
         digest = __import__('hashlib').sha256(raw).hexdigest()
-        return {'path': str(output), 'original_path': str(output), 'original_sha256': digest}
+        relative = paths.to_allowed_relative(output)
+        return {'path': relative, 'original_path': relative, 'original_sha256': digest}
     monkeypatch.setattr(bsm, 'materialize_source_bytes', materialize)
     async def create(request, background, session):
         request.params['fix_fixed_sidechains'] = sidechains
