@@ -7644,6 +7644,11 @@ async def ingest_loose_files(
                     lineage.get("source_design"),
                     structure_path=Path(structure_path),
                 )
+                if plr_final_path is not None:
+                    # A Resequence final's structure carries no confidence of its own; its validators wrote real
+                    # scores beside the job. Read them into the existing columns (best effort, never a condition).
+                    from services.plr_validator_scores import apply_validator_scores
+                    apply_validator_scores(design, output_path, design_name, job_params.get("structure_validators") or ())
                 session.add(design)
                 designs_created += 1
                 ingested_names.add(design_name)
