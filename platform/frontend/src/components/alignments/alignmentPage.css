@@ -99,12 +99,12 @@
 .alignment-reference-list button { overflow-wrap: anywhere; text-align: left; }
 .alignment-reference-list button[aria-pressed="true"] { border-color: var(--text-primary); background: var(--bg-tertiary); font-weight: 700; outline: 1px solid currentColor; }
 .alignment-similarity h3 { margin: .75rem 0 .25rem; font-size: 1rem; }
-.alignment-similarity h4 { margin: .6rem 0 .25rem; overflow-wrap: anywhere; }
+.alignment-similarity h4 { font-size: .95rem; font-weight: 600; margin: .6rem 0 .25rem; overflow-wrap: anywhere; }
 .alignment-similarity p { margin: .35rem 0; }
 .alignment-comparison-scroll { overflow-x: auto; }
 .alignment-comparison-table { min-width: 720px; }
 .alignment-comparison-table td:first-child { width: 50%; min-width: 250px; }
-.alignment-sequence-link { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0; text-align: left; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.alignment-similarity .alignment-sequence-link { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0; text-align: left; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .alignment-comparison-map { display: block; width: 100%; height: 24px; margin-top: .4rem; border: 1px solid var(--border-primary); }
 .alignment-map-axis { display: flex; justify-content: space-between; font-size: .7rem; color: var(--text-secondary); }
 .alignment-map-legend { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: .5rem; }

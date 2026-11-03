@@ -5,7 +5,7 @@ const percent = (value: number | null | undefined) => value == null ? 'N/A' : `$
 const colors = ['#14b8a6', '#f59e0b', '#64748b']
 
 function ComparisonMap({bins, length, label}: {bins: [number, number, number][]; length: number; label: string}) {
-  if (!length || !bins.length) return <span>No residues to map</span>
+  if (!length || !bins.length) return <span>No sequence positions to map</span>
   let start = 0
   const blocks = bins.map(counts => {
     const size = counts.reduce((a, b) => a + b, 0)
@@ -64,12 +64,12 @@ export default memo(function AlignmentSimilaritySummary({document, selectedRowId
       <p>Identity = matches ÷ paired positions. Aligned % = paired positions ÷ that sequence’s length, counting both matches and mismatches.</p>
       {!!pairs.length && <>
         <div className="alignment-map-legend"><span><i style={{background: colors[0]}}/>Identical</span><span><i style={{background: colors[1]}}/>Mismatch</span><span><i style={{background: colors[2]}}/>Gap in other sequence</span></div>
-        <p className="alignment-map-note">Maps run from the start to the end of the selected sequence, with alignment gaps removed. Extra residues in the other sequence appear when you select it. These are views of the current alignment, not new pairwise alignments.</p>
+        <p className="alignment-map-note">Maps run from the start to the end of the selected sequence, with alignment gaps removed. Extra positions in the other sequence appear when you select it. These are views of the current alignment, not new pairwise alignments.</p>
         <div className="alignment-comparison-scroll"><table className="alignment-comparison-table"><thead><tr><th>Other sequence / map on reference</th><th>Identity</th><th>Reference aligned</th><th>Other aligned</th><th>Identical / paired</th></tr></thead><tbody>{pairs.map(pair => {
           const view = oriented(pair, selected.rowId)
           return <tr key={view.otherId}><td><button type="button" className="alignment-sequence-link" title="Use this sequence as the reference" onClick={() => select(view.otherId)}>{label(view.otherId)}</button>
-            {view.bins && view.length != null ? <><ComparisonMap bins={view.bins} length={view.length} label={`${label(selected.rowId)} against ${label(view.otherId)}`}/><div className="alignment-map-axis"><span>{view.length ? '1' : '0'}</span><span>{view.length.toLocaleString()} residues</span></div></> : <span>Map unavailable</span>}
-          </td><td>{percent(pair.identity_percent)}</td><td title={`${pair.compared.toLocaleString()} paired / ${view.length?.toLocaleString() ?? 'unknown'} reference residues`}>{percent(view.selectedCoverage)}</td><td title={`${pair.compared.toLocaleString()} paired / ${view.otherLength?.toLocaleString() ?? 'unknown'} other residues`}>{percent(view.otherCoverage)}</td><td>{pair.identical.toLocaleString()} / {pair.compared.toLocaleString()}{pair.compared === 0 ? ' (no comparable positions)' : ''}</td></tr>
+            {view.bins && view.length != null ? <><ComparisonMap bins={view.bins} length={view.length} label={`${label(selected.rowId)} against ${label(view.otherId)}`}/><div className="alignment-map-axis"><span>{view.length ? '1' : '0'}</span><span>{view.length.toLocaleString()} positions</span></div></> : <span>Map unavailable</span>}
+          </td><td>{percent(pair.identity_percent)}</td><td title={`${pair.compared.toLocaleString()} paired / ${view.length?.toLocaleString() ?? 'unknown'} reference positions`}>{percent(view.selectedCoverage)}</td><td title={`${pair.compared.toLocaleString()} paired / ${view.otherLength?.toLocaleString() ?? 'unknown'} other positions`}>{percent(view.otherCoverage)}</td><td>{pair.identical.toLocaleString()} / {pair.compared.toLocaleString()}{pair.compared === 0 ? ' (no comparable positions)' : ''}</td></tr>
         })}</tbody></table></div>
       </>}
     </>}
