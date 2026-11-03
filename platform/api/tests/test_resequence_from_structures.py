@@ -115,3 +115,60 @@ def test_staged_name_drops_every_structure_extension():
     assert jobs._structure_stem("/x/design.cif") == "design"
     assert jobs._structure_stem("/x/design.pdb") == "design"
     assert jobs._structure_stem("/x/my.design.v2.cif.gz") == "my.design.v2"
+
+
+def _stage_fakes(tmp_path, monkeypatch):
+    import routers.jobs as jobs
+    import routers.files as files
+    import services.binder_source_materialization as bsm
+    src = tmp_path / "d.pdb"; src.write_text(PDB)
+    sel = tmp_path / "sel"; sel.mkdir()
+    monkeypatch.setattr(jobs, "_create_generic_selection_dir", lambda ns, action: sel)
+    monkeypatch.setattr(files, "is_path_allowed", lambda p: True)
+
+    async def fake_resolve(request, session): return src, {}
+    monkeypatch.setattr(bsm, "resolve_structure_source", fake_resolve)
+    monkeypatch.setattr(bsm, "materialize_source_bytes", lambda raw, suffix, dest, **kw: {"path": str(src)})
+    monkeypatch.setattr(jobs, "resolve_allowed_path", lambda value: Path(value))
+    return jobs, sel
+
+
+def test_prepare_returns_the_staged_request_without_creating_a_job_or_choosing_a_worker(tmp_path, monkeypatch):
+    """A round launched on a worker is staged here and submitted by the launcher with the worker it picks, so the
+    prepared body carries no placement of its own and nothing is created yet."""
+    jobs, sel = _stage_fakes(tmp_path, monkeypatch)
+    created = []
+
+    async def fake_create(launch, background, session): created.append(launch); return {}
+    monkeypatch.setattr(jobs, "create_job", fake_create)
+    req = jobs.ResequenceLaunchRequest(sources=[{"path": "d.pdb"}], design_chains="A", fixed_positions="A1-2", seq_method="mpnn")
+    body = asyncio.run(jobs.prepare_resequence_from_structures(req, None))
+    assert created == []
+    assert (body["model_id"], body["mode"]) == ("protein_modification_experimental", "region_redesign")
+    assert body["params"]["backbone_input_pdbs"] == str(sel) and body["params"]["fixed_positions"] == "A1-2"
+    assert "execution_target_id" not in body and "execution_plan_approval" not in body
+    assert [p.name for p in sel.glob("*.pdb")] == ["001_d.pdb"]
+
+
+def test_the_local_launch_route_builds_the_same_request_the_prepare_route_returns(tmp_path, monkeypatch):
+    jobs, _sel = _stage_fakes(tmp_path, monkeypatch)
+    seen = []
+
+    async def fake_create(launch, background, session): seen.append(launch); return {}
+    monkeypatch.setattr(jobs, "create_job", fake_create)
+    req = jobs.ResequenceLaunchRequest(sources=[{"path": "d.pdb"}], design_chains="A", seq_method="mpnn")
+    asyncio.run(jobs.launch_resequence_from_structures(req, None, None))
+    prepared = asyncio.run(jobs.prepare_resequence_from_structures(req, None))
+    assert seen[0].model_dump(mode="json", exclude_unset=True) == prepared
+
+
+def test_prepare_removes_its_staging_when_a_source_cannot_be_read(tmp_path, monkeypatch):
+    import services.binder_source_materialization as bsm
+    jobs, sel = _stage_fakes(tmp_path, monkeypatch)
+
+    async def bad(request, session): raise ValueError("no such structure")
+    monkeypatch.setattr(bsm, "resolve_structure_source", bad)
+    req = jobs.ResequenceLaunchRequest(sources=[{"path": "x.pdb"}], design_chains="A")
+    with pytest.raises(HTTPException) as err:
+        asyncio.run(jobs.prepare_resequence_from_structures(req, None))
+    assert err.value.status_code == 422 and not sel.exists()

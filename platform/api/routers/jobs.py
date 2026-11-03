@@ -8916,17 +8916,11 @@ def _structure_stem(source) -> str:
         name = base
 
 
-@router.post("/resequence/from-structures", response_model=JobResponse, status_code=201)
-async def launch_resequence_from_structures(
-    request: ResequenceLaunchRequest,
-    background_tasks: BackgroundTasks,
-    session: AsyncSession = Depends(get_session),
-):
-    """Resequence and validate exact structures from any generator (RFD4, RFD3, DISCO, ...).
+async def _prepare_resequence_job(request: ResequenceLaunchRequest, session: AsyncSession) -> JobCreate:
+    """Stage the exact structures and build the loop's job request without creating it.
 
-    Sources are the same exact-structure references the continuation links use, so the source
-    job's model does not matter. Fixed or designable positions are caller-selected; with neither
-    given every residue of the design chains is designable.
+    Placement is not part of this request: a source that finished on one worker says nothing about where the next
+    round runs. The launcher chooses Local or any ready worker for each launch.
     """
     from services.binder_source_materialization import materialize_source_bytes, resolve_structure_source, structure_suffix
     selection_dir = _create_generic_selection_dir("protein_local_redesign", "resequence")
@@ -8982,13 +8976,40 @@ async def launch_resequence_from_structures(
         except ValueError as exc:
             shutil.rmtree(selection_dir, ignore_errors=True)
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-    launch_request = JobCreate(
+    return JobCreate(
         name=request.name,
         model_id="protein_modification_experimental",
         mode="region_redesign",
         params=params,
     )
-    return await create_job(launch_request, background_tasks, session)
+
+
+@router.post("/resequence/from-structures", response_model=JobResponse, status_code=201)
+async def launch_resequence_from_structures(
+    request: ResequenceLaunchRequest,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+):
+    """Resequence and validate exact structures from any generator (RFD4, RFD3, DISCO, ...) on this system.
+
+    Sources are the same exact-structure references the continuation links use, so the source
+    job's model does not matter. Fixed or designable positions are caller-selected; with neither
+    given every residue of the design chains is designable.
+    """
+    return await create_job(await _prepare_resequence_job(request, session), background_tasks, session)
+
+
+@router.post("/resequence/from-structures/prepare")
+async def prepare_resequence_from_structures(
+    request: ResequenceLaunchRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """The same staged request as the launch above, returned for the launcher to place and submit.
+
+    A worker launch needs the reviewed plan to cover the exact staged structures, so staging happens first and the
+    launcher then submits this body with the chosen execution target through the normal plan-approval flow.
+    """
+    return (await _prepare_resequence_job(request, session)).model_dump(mode="json", exclude_unset=True)
 
 
 def _rfd3_public_json(value: Any, *, field: str | None = None) -> Any:

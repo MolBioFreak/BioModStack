@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
-import { api, type NativeGenerationSourceBinding, type NativeGenerationSourceBindings, type StructureSourceSelection } from '../lib/api';
+import { api, submitJob, type Job, type NativeGenerationSourceBinding, type NativeGenerationSourceBindings, type StructureSourceSelection } from '../lib/api';
 import { NativeSourceInput } from './DeNovoNativeSources';
 import { DesignerSettingsForm } from './DesignerSettingsForm';
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
 
 const ENGINES = [['mpnn', 'ProteinMPNN'], ['fampnn', 'FAMPNN'], ['ligandmpnn', 'LigandMPNN'], ['caliby', 'Caliby'], ['protonpottsmpnn', 'ProtonPottsMPNN (pH-specific redesign)']] as const;
 const LIGAND_MODES = [['ligand_aware', 'Ligand-aware'], ['ntp_aware', 'NTP-aware'], ['metal_aware', 'Metal-aware'], ['dna_aware', 'DNA-aware']] as const;
@@ -22,19 +24,27 @@ export function ResequencePanel() {
     const [designable, setDesignable] = useState('');
     const [validators, setValidators] = useState<string[]>(['protenix_v2']);
     const [name, setName] = useState('Resequence');
+    // Each launch picks its own placement: Local, or any ready worker. A source that finished on one worker does not tie the next round to it.
+    const [targetId, setTargetId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const binding = bindings?.input;
     const source: StructureSourceSelection | null = binding && !('kind' in binding) ? binding : null;
     const submit = useMutation({
-        mutationFn: async () => (await api.post<{ id: string }>('/api/jobs/resequence/from-structures', {
-            sources: [source], seq_method: engine,
-            ...(engine === 'ligandmpnn' ? { designer_mode: ligandMode } : {}),
-            ...(ownSettings && Object.keys(designer.values).length ? { designer_settings: designer.values } : {}), design_chains: chains.trim(), name: name.trim() || 'Resequence',
-            structure_validators: validators,
-            ...(Object.keys(sentValidatorSettings).length ? { validator_settings: sentValidatorSettings } : {}),
-            ...(fixed.trim() ? { fixed_positions: fixed.trim() } : {}),
-            ...(designable.trim() ? { designable_positions: designable.trim() } : {}),
-        })).data,
+        mutationFn: async () => {
+            const request = {
+                sources: [source], seq_method: engine,
+                ...(engine === 'ligandmpnn' ? { designer_mode: ligandMode } : {}),
+                ...(ownSettings && Object.keys(designer.values).length ? { designer_settings: designer.values } : {}), design_chains: chains.trim(), name: name.trim() || 'Resequence',
+                structure_validators: validators,
+                ...(Object.keys(sentValidatorSettings).length ? { validator_settings: sentValidatorSettings } : {}),
+                ...(fixed.trim() ? { fixed_positions: fixed.trim() } : {}),
+                ...(designable.trim() ? { designable_positions: designable.trim() } : {}),
+            };
+            if (!targetId) return (await api.post<{ id: string }>('/api/jobs/resequence/from-structures', request)).data;
+            // A worker launch stages the structures here first, then goes through the usual reviewed execution plan with the chosen worker.
+            const staged = (await api.post<Partial<Job>>('/api/jobs/resequence/from-structures/prepare', request)).data;
+            return (await submitJob({ ...staged, execution_target_id: targetId }, { launchContext: false })).data as { id: string };
+        },
         onSuccess: () => navigate('/'),
         onError: (cause: Error) => setError(cause.message || 'Failed to start resequencing'),
     });
@@ -69,6 +79,8 @@ export function ResequencePanel() {
                 <DesignerSettingsForm engine={id} mode="" onChange={(values, valid) => setValidatorSettings(previous => ({ ...previous, [id]: { values, valid } }))} />
             </details>)}
         <label>Job name<input aria-label="Resequence job name" value={name} onChange={event => setName(event.target.value)} /></label>
+        <p className="text-xs text-[var(--text-secondary)]">Run this round on this system or on any ready worker, whatever ran the earlier round.</p>
+        <ExecutionTargetPicker value={targetId ?? ''} onChange={setTargetId} disabled={submit.isPending} preloadSelection={DE_NOVO_PRELOAD_SELECTION} />
         {error && <p role="alert">{error}</p>}
         {engine === 'ligandmpnn' && <label>LigandMPNN mode<select aria-label="LigandMPNN mode" value={ligandMode} onChange={event => setLigandMode(event.target.value)}>
             {LIGAND_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}

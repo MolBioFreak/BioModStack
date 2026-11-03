@@ -9,6 +9,15 @@ import models from './fixtures/resequenceDesignerModels.json';
 vi.mock('../../src/components/DeNovoNativeSources', () => ({
     NativeSourceInput: ({ onAcquire }: any) => <button onClick={() => onAcquire({ job_id: 'job-1', design_id: 'd-1', output_format: 'native' })}>pick source</button>,
 }));
+// The picker is a heavy leaf that fetches targets; a stub exposes its Local / worker choice. The approval dialog is auto-approved
+// after the real preview round trip, as the other launcher tests do.
+vi.mock('../../src/components/ExecutionTargetPicker', () => ({
+    ExecutionTargetPicker: ({ onChange }: any) => <div>
+        <button onClick={() => onChange(null)}>place Local</button>
+        <button onClick={() => onChange('vast:worker-b')}>place worker B</button>
+    </div>,
+}));
+vi.mock('../../src/components/ExecutionPlanApproval', () => ({ reviewExecutionPlan: vi.fn(async () => true) }));
 import { ResequencePanel } from '../../src/components/ResequencePanel';
 
 let root: Root; const posts: any[] = []; const previous = api.defaults.adapter;
@@ -17,7 +26,10 @@ async function mount() {
     api.defaults.adapter = async config => {
         const model = /^\/api\/models\/([^/]+)$/.exec(String(config.url));
         if (config.method === 'get' && model) return { data: (models as any)[model[1]], config, status: 200, statusText: 'OK', headers: {} } as any;
-        posts.push({ url: config.url, body: JSON.parse(String(config.data)) });
+        const body = JSON.parse(String(config.data));
+        posts.push({ url: config.url, body });
+        if (config.url === '/api/jobs/resequence/from-structures/prepare') return { data: { name: body.name, model_id: 'protein_modification_experimental', mode: 'region_redesign', params: { design_chains: body.design_chains, seq_method: body.seq_method } }, config, status: 200, statusText: 'OK', headers: {} } as any;
+        if (config.url === '/api/jobs/execution-plan/preview') return { data: { approval_digest: 'a'.repeat(64), admissible: true, request: { model_id: body.model_id, mode: body.mode, execution_target_id: body.execution_target_id } }, config, status: 200, statusText: 'OK', headers: {} } as any;
         return { data: { id: 'new-job' }, config, status: 201, statusText: 'Created', headers: {} } as any;
     };
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
@@ -171,4 +183,26 @@ it('each selected validator gets its own settings; defaults read as loop default
     await click(run());
     expect(posts[2].body.validator_settings).toEqual({ protenix_v2: { protenix_n_sample: 2 }, esmfold2: { num_loops: 4 } });
     expect(posts[2].body.structure_validators).toEqual(['protenix_v2', 'esmfold2']);
+});
+
+
+it('runs on this system by default, and any ready worker can be chosen for the next round whatever ran the last one', async () => {
+    await mount();
+    await click([...document.querySelectorAll('button')].find(b => b.textContent === 'pick source')!);
+    const place = (label: string) => [...document.querySelectorAll('button')].find(b => b.textContent === label)!;
+    await click(run());
+    expect(posts.map(post => post.url)).toEqual(['/api/jobs/resequence/from-structures']);
+    posts.length = 0;
+    await click(place('place worker B'));
+    await set('Resequence engine', 'fampnn'); await set('Resequence design chains', 'A,B');
+    await click(run());
+    // Staged first, then the normal reviewed plan for the chosen worker, then the job; the local launch route is not used.
+    expect(posts.map(post => post.url)).toEqual(['/api/jobs/resequence/from-structures/prepare', '/api/jobs/execution-plan/preview', '/api/jobs']);
+    expect(posts[0].body).toMatchObject({ seq_method: 'fampnn', design_chains: 'A,B', sources: [{ job_id: 'job-1', design_id: 'd-1' }] });
+    expect(posts[1].body).toMatchObject({ model_id: 'protein_modification_experimental', mode: 'region_redesign', execution_target_id: 'vast:worker-b' });
+    expect(posts[2].body).toMatchObject({ execution_target_id: 'vast:worker-b', execution_plan_approval: 'a'.repeat(64), params: { seq_method: 'fampnn' } });
+    posts.length = 0;
+    await click(place('place Local'));
+    await click(run());
+    expect(posts.map(post => post.url)).toEqual(['/api/jobs/resequence/from-structures']);
 });
