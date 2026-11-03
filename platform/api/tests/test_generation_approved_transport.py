@@ -132,10 +132,10 @@ async def test_approved_prepared_directory_reaches_real_bundle(
     inventory_checks = []
     verify_approved = bundle.verify_approved_native_inputs
 
-    def observe_verification(job, runtime_references, input_hashes=None):
+    def observe_verification(job, runtime_references, input_hashes=None, input_inventory=None):
         if input_hashes is not None:
             inventory_checks.append(dict(input_hashes))
-        return verify_approved(job, runtime_references, input_hashes)
+        return verify_approved(job, runtime_references, input_hashes, input_inventory)
 
     monkeypatch.setattr(bundle, 'verify_approved_native_inputs', observe_verification)
     dispatch = bundle.prepare_remote_bundle(job=job, target=selected_target,

@@ -192,6 +192,6 @@ def test_conflicting_identity_still_rejected_and_image_scope_unchanged(pack_asse
     image = ProvisionSelection(kind='image', model_id='boltz_cp_experimental')
     assert [e.remote_destination for e in cache.independent_plan(image)] == ['containers/fold-cp.sif']
     entries = cache.independent_plan(SELECTION)
-    monkeypatch.setattr(cache, 'independent_plan', lambda _: [*entries, replace(entries[0], sha256='0' * 64)])
+    monkeypatch.setattr(cache, 'independent_plan', lambda _, **__: [*entries, replace(entries[0], sha256='0' * 64)])
     with pytest.raises(ValueError, match='Conflicting managed dependency destinations'):
         cache.independent_preview(SELECTION, TARGET)
