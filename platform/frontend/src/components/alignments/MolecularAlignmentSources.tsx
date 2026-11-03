@@ -4,6 +4,17 @@ import type { NucleotideSequenceListItem } from '../MolBioToolkit/types';
 
 export const MOLECULAR_ALIGNMENT_PARAM = 'sequence_revision';
 
+/** The current revision is not always the newest one (e.g. after a revert), so page until found. */
+export async function currentRevisionId(sequenceId: string): Promise<string | undefined> {
+    for (let offset = 0; offset < 5000; offset += 50) {
+        const page = await fetchMolecularRevisionSummaries(sequenceId, 50, offset);
+        const current = page.find(row => row.is_current);
+        if (current) return current.revision_id;
+        if (page.length < 50) return undefined;
+    }
+    return undefined;
+}
+
 /** Pin saved records before leaving the shelf; URLs contain identities, never sequence bytes. */
 export async function molecularAlignmentHref(sequences: NucleotideSequenceListItem[]): Promise<string> {
     if (sequences.length < 2) throw new Error('Select at least two saved sequences.');
@@ -11,7 +22,7 @@ export async function molecularAlignmentHref(sequences: NucleotideSequenceListIt
     const molecule = sequences[0].sequence_type;
     if (sequences.some(sequence => sequence.sequence_type !== molecule)) throw new Error('Select DNA sequences together, or RNA sequences together.');
     const sources = await Promise.all(sequences.map(async sequence => {
-        const revisionId = sequence.revision_id ?? (await fetchMolecularRevisionSummaries(sequence.id, 1)).find(row => row.is_current)?.revision_id;
+        const revisionId = sequence.revision_id ?? await currentRevisionId(sequence.id);
         if (!revisionId) throw new Error(`No saved revision is available for ${sequence.name}. Save it and try again.`);
         return JSON.stringify([sequence.id, revisionId]);
     }));
