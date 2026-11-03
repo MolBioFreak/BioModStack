@@ -21,6 +21,22 @@ def test_optional_md_native_owner_queues_once_without_prediction(project_context
     monkeypatch.setattr(gpu_orchestrator, 'estimate_vram', lambda *_a, **_kw: 0)
     intent = deepcopy(store['native_intent'])
     async def exercise():
+        if project:
+            # Round context is a destination. Use its real current Plan/Domain
+            # owner, rather than the handcrafted standalone MD authority above.
+            from test_project_normalized_child_requests import destination
+            from experiment_models import ExperimentResourceAdmissionPolicy
+            from services.ngs_molbio_n5 import ADMISSION_POLICY_VERSION
+            from biomodstack_local_resources import applied_local_policy
+            async with store['experiment_sessions']() as experiments:
+                policy = applied_local_policy()
+                experiments.add(ExperimentResourceAdmissionPolicy(policy_id='managed-workflows',
+                    policy_version=ADMISSION_POLICY_VERSION, cpu_thread_limit=policy.cpu_threads,
+                    dram_byte_limit=policy.memory_bytes))
+                await experiments.flush()
+                dest = await destination(experiments)
+                await experiments.commit()
+                intent['launch_context_id'] = dest['launch_context_id']
         token = jobs.current_launch_context_id.set(intent['launch_context_id'] if project else None)
         try:
             await submit_twice()

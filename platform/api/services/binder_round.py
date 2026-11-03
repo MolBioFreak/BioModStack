@@ -93,7 +93,8 @@ async def submit_step(session, experiments, step, *, destination, context):
                     'code': 'md_native_preview_approval_required',
                     'preview_digest': launch.preview_digest}}, tasks
             child = await _launch_native_md_job(launch, session,
-                round_step=BinderRoundStepReference.model_validate(step['request']['binder_round_step']))
+                round_step=BinderRoundStepReference.model_validate(step['request']['binder_round_step']),
+                destination_launch_context_id=destination, experiment_session=experiments)
             return {'state': child.status, 'job_id': child.id}, tasks
         if step['metadata'].get('route') == 'boltz_api':
             from services.boltz_api_jobs import queue_boltz_api_job
@@ -133,13 +134,21 @@ async def submit_step(session, experiments, step, *, destination, context):
     return outcome, tasks
 
 
+def requested_envelope(provenance):
+    # Disabled editor companions do not override an enabled authored operation.
+    entries = [(SequenceDesignRequest, provenance.get(SEQUENCE_REQUEST)),
+               (BinderRoundRequest, provenance.get(REQUEST))]
+    return next((entry for entry in entries if entry[1] and entry[1].get('enabled')),
+                next((entry for entry in entries if entry[1] is not None), (None, None)))
+
+
 async def read_round(session, root_id, *, round_id=None):
     root = await session.get(Job, root_id)
     if root is None:
         raise HTTPException(404, 'Binder round Job not found')
     result = progress_of(root)
     provenance = root.provenance or {}
-    envelope = provenance.get(SEQUENCE_REQUEST) or provenance.get(REQUEST)
+    request_type, envelope = requested_envelope(provenance)
     if envelope is None:
         result['state'] = 'not_requested'
     elif not envelope['enabled']:
@@ -148,7 +157,7 @@ async def read_round(session, root_id, *, round_id=None):
         result.update(state=root.status, outcome='no_follow_on')
     result.update(job_id=root.id, binder_round=provenance.get(REQUEST),
                   sequence_design=provenance.get(SEQUENCE_REQUEST),
-                  kind='general_sequence_design' if SEQUENCE_REQUEST in provenance else 'binder')
+                  kind='general_sequence_design' if request_type is SequenceDesignRequest else 'binder')
     # Observational readback only, including cancellation/failure before a
     # scheduler tick. Never materialize, submit or compute in GET.
     children = await session.scalars(select(Job).where(Job.provenance[STEP]['root_job_id'].as_string() == root_id))
@@ -184,14 +193,6 @@ async def bind_step(session, request, preallocated_id=None, *, project_bound=Fal
         # binding. All retained scientific keys still have to agree here.
         expected.pop('launch_context_id', None)
         actual.pop('launch_context_id', None)
-        if step['metadata'].get('route') == 'md_native':
-            # The typed Project adapter materializes its validated scheduler
-            # authority beside canonical MD parameters. Compare added keys too.
-            expected['params'] = {
-                **{key: value for key, value in expected['params']['intent'].items()
-                   if key not in {'name', 'launch_context_id', 'execution_target_id', 'execution_policy'}},
-                **expected['params'],
-            }
         for key in ('workflow_adapter', '_global_resource_admission', '_global_dispatch_authority'):
             expected['params'].pop(key, None)
             actual['params'].pop(key, None)
@@ -347,10 +348,33 @@ async def _plan(session, root, progress, request, *, retry=False):
             progress['errors'][design.id] = str(exc.detail if isinstance(exc, HTTPException) else exc)
 
 
+async def refresh_md_retry(session, replacement):
+    if replacement['metadata'].get('route') != 'md_native':
+        return
+    from routers.molecular_dynamics import _compile_native_preview, _native_md_job_request
+    from services.md.starting_structures import MdLaunchRequest
+    launch = MdLaunchRequest.model_validate(replacement['metadata']['md_launch_request'])
+    launch.intent.name = replacement['request']['name']
+    launch.intent.launch_context_id = None
+    preview, resolved, resolver = await _compile_native_preview(launch.intent, session)
+    try:
+        launch.preview_digest = preview.preview_digest
+        request = _native_md_job_request(launch, preview, resolved, md_input_resolver=resolver)
+        request.binder_round_step = BinderRoundStepReference.model_validate(replacement['request']['binder_round_step'])
+        replacement['request'] = request.model_dump(mode='json')
+        replacement['metadata']['md_launch_request'] = launch.model_dump(mode='json')
+        replacement['metadata']['md_preview'] = preview.model_dump(mode='json')
+        # Existing remote review remains explicit; a replacement is a new attempt.
+        replacement['metadata'].pop('approved_md_preview_digest', None)
+    finally:
+        if resolved is not None:
+            resolved.close()
+
+
 async def reconcile_round(session, experiment_session, root_id, *, retry=False):
     """Recovery tick; generation completion and native result rows are immutable."""
     root = await lock_root(session, root_id)
-    envelope = (root.provenance or {}).get(SEQUENCE_REQUEST) or (root.provenance or {}).get(REQUEST)
+    request_type, envelope = requested_envelope(root.provenance or {})
     if envelope is None:
         await session.rollback()
         return await read_round(session, root_id)
@@ -378,6 +402,7 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
                 execution_plan_approval=None, binder_round_step={'root_job_id': root_id, 'step_id': new_id})
             for key in ('workflow_adapter', '_global_resource_admission', '_global_dispatch_authority'):
                 replacement['request']['params'].pop(key, None)
+            await refresh_md_retry(session, replacement)
             progress['steps'][new_id] = replacement
             old['superseded_by'] = new_id
     if not envelope['enabled'] or root.status != 'completed':
@@ -386,7 +411,6 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
         save(root, progress)
         await session.commit()
         return await read_round(session, root_id)
-    request_type = SequenceDesignRequest if SEQUENCE_REQUEST in (root.provenance or {}) else BinderRoundRequest
     await _plan(session, root, progress, request_type.model_validate(envelope), retry=retry)
     save(root, progress)
     # Retained input snapshots and requested settings survive a failed submit or
@@ -404,7 +428,7 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
             save(root, progress)
             await session.commit()
             continue
-        if root.status != 'completed' or step['state'] == 'review_required' or (step['state'] == 'error' and not retry):
+        if step.get('superseded_by') or root.status != 'completed' or step['state'] == 'review_required' or (step['state'] == 'error' and not retry):
             await session.rollback()
             continue
         outcome, tasks = await submit_step(session, experiment_session, step,
@@ -458,6 +482,7 @@ async def reconcile_selected(session, experiments, root_id, round_id, *, retry=F
                 execution_plan_approval=None, binder_round_step={'root_job_id': root_id, 'step_id': identity})
             for key in ('workflow_adapter', '_global_resource_admission', '_global_dispatch_authority'):
                 replacement['request']['params'].pop(key, None)
+            await refresh_md_retry(session, replacement)
             step['superseded_by'] = identity
             retained['steps'][identity] = replacement
     await plan(session, root, retained)

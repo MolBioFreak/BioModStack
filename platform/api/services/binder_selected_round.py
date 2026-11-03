@@ -720,7 +720,7 @@ async def md_request(session, root, row, params, placement, request, step_id):
         raise ValueError('MD operation requires its existing native launch intent')
     document = deepcopy(params['intent'])
     document.update(name=f'binder-round-{step_id}', execution_target_id=placement,
-                    launch_context_id=request.launch_context_id,
+                    launch_context_id=None,
                     execution_policy=request.execution_policy.model_dump(mode='json'))
     if not isinstance(document.get('input'), dict):
         raise ValueError('Native MD intent requires its typed input')
@@ -748,11 +748,11 @@ async def md_request(session, root, row, params, placement, request, step_id):
         if not same_design_source:
             document['input'].update(source_ref=source_ref.model_dump(mode='json'), expected_source_sha256=sha)
     intent = MdNativeLaunchIntent.model_validate(document)
-    preview, resolved, _ = await _compile_native_preview(intent, session)
+    preview, resolved, resolver = await _compile_native_preview(intent, session)
     try:
         launch = MdLaunchRequest(schema_version='bms.md.launch-request.v1', intent=intent,
                                 preview_digest=preview.preview_digest)
-        child = _native_md_job_request(launch, preview, resolved)
+        child = _native_md_job_request(launch, preview, resolved, md_input_resolver=resolver)
         return child, {'route': 'md_native', 'md_launch_request': launch.model_dump(mode='json'),
                        'md_preview': preview.model_dump(mode='json')}
     finally:

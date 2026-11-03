@@ -249,6 +249,7 @@ async def retain_job_artifact(
     core_session: AsyncSession, experiment_session: AsyncSession, *,
     job_id: str, artifact_id: str, workspace_id: str, lifecycle_owner_id: str,
     resource_id: str, logical_role: str, schema_name: str, schema_version: str,
+    native_publication: bool = False,
 ) -> ExperimentArtifact:
     """Copy an authorized JobArtifact into PM custody in the caller's transaction.
 
@@ -263,7 +264,13 @@ async def retain_job_artifact(
     source = await core_session.get(JobArtifact, artifact_id)
     if job is None or source is None or source.owner_job_id != job_id:
         raise CustodyError("JobArtifact is not owned by the selected Job")
-    root = resolve_persisted_job_result_root(job)
+    if native_publication:
+        # Native publishers also own authenticated diagnostic-return roots;
+        # these need not be the ordinary execution output directory.
+        from services.binder_publication_roots import publication_root
+        root = publication_root(job)
+    else:
+        root = resolve_persisted_job_result_root(job)
     installed = await asyncio.to_thread(
         _install_job_blob, source.storage_path, source.sha256, source.bytes, root,
     )

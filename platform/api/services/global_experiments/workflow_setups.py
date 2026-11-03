@@ -253,7 +253,7 @@ def _materialize_draft(schema: dict[str, Any], supplied: dict[str, Any]) -> tupl
                 SubmittedShapeRequest.model_validate(supplied["shape_submitted_request"])
             except ValueError as exc:
                 raise ValidationFailure(str(exc)) from exc
-        if "native_job_request" in supplied:
+        if supplied.get("native_job_request") is not None:
             from schemas import JobCreate
             try:
                 JobCreate.model_validate(supplied["native_job_request"])
@@ -281,7 +281,9 @@ def _materialize_draft(schema: dict[str, Any], supplied: dict[str, Any]) -> tupl
             raise ValidationFailure(f"workflow setup field {name} is server-owned")
         materialized[name] = copy.deepcopy(value)
     required = schema.get("required") or []
-    missing = [name for name in required if name not in materialized]
+    missing = [name for name in required if name not in materialized
+               or (schema.get("x-bms-native-editor-draft") and name == "native_job_request"
+                   and materialized[name] is None)]
     if missing:
         return materialized, "incomplete"
     try:

@@ -31,6 +31,7 @@ TYPED_CORE_JOB_MODELS = {
     "caliby_binder",
     "caliby_experimental",
     "proteinmpnn",
+    "protonpottsmpnn",
     "fampnn",
     "frustrampnn",
     "ligandmpnn",

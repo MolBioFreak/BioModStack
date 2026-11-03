@@ -785,7 +785,7 @@ async def _compile_native_preview(intent: MdNativeLaunchIntent, session: AsyncSe
         raise
 
 
-def _native_md_job_request(request, preview, resolved):
+def _native_md_job_request(request, preview, resolved, *, md_input_resolver=None):
     """One canonical request builder for standalone and retained round MD."""
     provenance: dict[str, Any] = {}
     if resolved is not None:
@@ -808,10 +808,14 @@ def _native_md_job_request(request, preview, resolved):
         execution_target_id=request.intent.execution_target_id,
         execution_policy=request.intent.execution_policy,
     )
+    if md_input_resolver is not None:
+        from routers.jobs import normalize_job_request
+        job_data = normalize_job_request(job_data, md_input_resolver=md_input_resolver)
     return job_data
 
 
-async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession, *, round_step=None):
+async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession, *, round_step=None,
+                                destination_launch_context_id=None, experiment_session=None):
     from routers.jobs import create_job, ApprovedExecutionPlan, TypedMdProjectLaunch
     from component_runtime import canonical_bytes
 
@@ -820,7 +824,8 @@ async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession,
     try:
         if preview.preview_digest != request.preview_digest:
             raise StartingStructureError("MD_LAUNCH_PREVIEW_STALE", "The native launch preview is stale.", status_code=409)
-        job_data = _native_md_job_request(request, preview, resolved)
+        job_data = _native_md_job_request(request, preview, resolved,
+            md_input_resolver=resolver if round_step is not None else None)
         params = job_data.params
         if round_step is not None:
             job_data.binder_round_step = round_step
@@ -831,6 +836,26 @@ async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession,
                 canonical_bytes({"approval_digest": preview.preview_digest, "plan": preview.execution_plan,
                                  "admissible": True, "deferred_preparation": [], "blockers": []}),
             )
+        if destination_launch_context_id is not None and round_step is not None:
+            # Native preview/source verification precedes the ordinary Project
+            # child handoff. The destination is never consumed as MD authority.
+            from services.global_experiments.launch_contexts import prepare_child_launch_contexts, resolve_launch_context_for_display
+            from routers.jobs import _create_prepared_child_batch, _reserve_selected_run_group
+            prepared = await prepare_child_launch_contexts(experiment_session,
+                destination_launch_context_id=destination_launch_context_id,
+                job_requests=[job_data],
+                native_entrypoints=["workflows/experimental/molecular_dynamics/orchestrator.nf"],
+                idempotency_key=round_step.step_id, core_session=session, md_input_resolver=resolver)
+            bound = JobCreate.model_validate(prepared['children'][0]['job_request'])
+            destination = await resolve_launch_context_for_display(experiment_session, destination_launch_context_id)
+            await _reserve_selected_run_group(experiment_session, group_id=prepared['run_group_id'],
+                                              domain_id=destination.domain_experiment_id)
+            if request.intent.execution_target_id:
+                kwargs['_approved_execution_plan'] = ApprovedExecutionPlan(
+                    canonical_bytes(bound.model_dump(mode='json')),
+                    kwargs['_approved_execution_plan'].preview_json)
+            return (await _create_prepared_child_batch([bound], BackgroundTasks(), session,
+                experiment_session, native_job_kwargs=kwargs))[0]
         if request.intent.launch_context_id is not None:
             adapter = TypedMdProjectLaunch(
                 request_schema_version=request.schema_version,

@@ -859,7 +859,7 @@ def protein_setup_parameter_schema(capability_id: str) -> dict[str, Any]:
     return schema
 
 
-def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | None = None, setup_capability_id: str | None = None) -> dict[str, Any]:
+def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | None = None, setup_capability_id: str | None = None, md_input_resolver=None) -> dict[str, Any]:
     """Pin the native normalizer's exact request, not a second settings schema.
 
     This server-only child seam does not advertise a Project authoring surface.
@@ -880,7 +880,7 @@ def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | N
         raise ProteinProjectCapabilityError("native child entrypoint does not match its exact registered route")
     if request.launch_context_id is not None:
         raise ProteinProjectCapabilityError("native child must not reuse a destination launch context")
-    request = normalize_job_request(request, native_entrypoint=native_entrypoint)
+    request = normalize_job_request(request, native_entrypoint=native_entrypoint, md_input_resolver=md_input_resolver)
     supplied_adapter = request.params.pop("workflow_adapter", None)
     if supplied_adapter not in (None, adapter_id):
         raise ProteinProjectCapabilityError("native child workflow adapter disagrees")
@@ -927,6 +927,12 @@ def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | N
         declared = family[0] if family is not None else None
     if declared is not None:
         capability["result_adapter_ids"] = copy.deepcopy(declared["result_adapter_ids"])
+    elif request.model_id == "molecular_dynamics":
+        capability["result_adapter_ids"] = ["bms.md.result-reference.adapter.v1"]
+        capability["result_contracts"] = ["md_result"]
+    elif request.model_id in {"proteinmpnn", "fampnn", "caliby_experimental", "ligandmpnn", "protonpottsmpnn"}:
+        capability["result_adapter_ids"] = [f"bms.native-binder.{request.model_id}.adapter.v1"]
+        capability["result_contracts"] = ["native_binder_job_result"]
     return {
         "schema": "bms.workflow-plan-capability-contract.v1",
         "capability": capability, "allowed_model_modes": [pair_document],

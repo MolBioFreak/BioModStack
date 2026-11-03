@@ -3195,9 +3195,17 @@ class NativeBinderJobResultAdapter:
     store_id = "core"
     adapter_version = 1
     entity_kind = "native_binder_job_result"
+    from scripts.sequence_design_results import MODES as _SEQUENCE_MODES
+    from services.caliby_native import SUPPORTED_MODES as _CALIBY_MODES
+    from services.ligandmpnn_design import MODES as _LIGAND_MODES
+    from services.protonpottsmpnn_design import MODES as _PROTON_MODES
+
     _MODES = {
+        **_SEQUENCE_MODES,
+        "caliby_experimental": _CALIBY_MODES,
+        "protonpottsmpnn": _PROTON_MODES,
         "bindcraft2": {"campaign", "resume", "score", "rank", "filter", "campaign_output", "archive", "unarchive"},
-        "ligandmpnn": {"interface_context"},
+        "ligandmpnn": {"interface_context", *_LIGAND_MODES},
         "laproteina": {"evaluate"},
         "rfd4_proteina": {"generate", "evaluate"},
         "complexa": {"generate", "evaluate"},
@@ -3263,6 +3271,21 @@ class NativeBinderJobResultAdapter:
                 else:
                     from services.boltzgen_candidate_publication import read_published_generation_results
                 publication = (await read_published_generation_results(job, core_session))["publication"]
+            elif self.model_id in self._SEQUENCE_MODES:
+                from services.binder_native_selection import read_native_sequence_candidates
+                artifact, records = await read_native_sequence_candidates(core_session, job, verify_bytes=True)
+                publication = {"artifact_id": artifact.id, "sha256": artifact.sha256}
+                record_count = len(records)
+            elif self.model_id == "protonpottsmpnn":
+                from services.binder_selected_round import native_sequences
+                artifact, records = await native_sequences(core_session, job)
+                publication = {"artifact_id": artifact.id, "sha256": artifact.sha256}
+                record_count = len(records)
+            elif self.model_id == "caliby_experimental" or (
+                    self.model_id == "ligandmpnn" and job.mode in self._LIGAND_MODES):
+                from services.binder_selected_round import native_operation_records
+                publication, _ = await native_operation_records(core_session, job)
+                record_count = len(publication["records"])
             elif self.model_id == "ligandmpnn":
                 from services.ligandmpnn_interface_publication import read_selected
                 publication = await read_selected(job, core_session)
@@ -3330,6 +3353,13 @@ for _model_id in sorted(_TYPED_CORE_RESULT_MODELS):
 
 for _model_id in sorted(NativeBinderJobResultAdapter._MODES):
     registry.register(NativeBinderJobResultAdapter(_model_id))
+
+# Historical normalized child Plans used the launch adapter ID as their result
+# adapter. Keep that exact identity readable, backed by native publications.
+for _model_id in ("proteinmpnn", "fampnn", "caliby_experimental", "ligandmpnn", "protonpottsmpnn"):
+    _adapter = NativeBinderJobResultAdapter(_model_id)
+    _adapter.adapter_id = f"bms.core-job.{_model_id}.adapter.v1"
+    registry.register(_adapter)
 
 from services.family_msa.project_adapters import FamilyMsaResultAdapter
 registry.register(FamilyMsaResultAdapter('family_msa_protein', 'protein_in_silico'))
