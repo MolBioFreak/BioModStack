@@ -1450,6 +1450,9 @@ async def request_remote_checkpoint_resume(session: AsyncSession, job: Job, chec
     while True:
         with _controller_attempt_guard(str(job.id)) as owned:
             if owned:
+                # The lock holder (reconcile) may have rewritten the job while we waited; the owned path's
+                # compare-and-swap must see the current row, not the snapshot the request loaded earlier.
+                await session.refresh(job)
                 return await _request_remote_checkpoint_resume_owned(session, job, checkpoint, decision)
         if loop.time() >= deadline:
             raise RemoteExecutionError('Checkpoint controller operation is already active')
