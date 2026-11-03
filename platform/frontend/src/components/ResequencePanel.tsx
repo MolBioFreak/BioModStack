@@ -107,6 +107,7 @@ export function ResequencePanel({ initialValues = {}, onDraftChange, runDetails 
         [...(saved.resequence_preparations ?? []), ...(saved.resequence_prepared ? [saved.resequence_prepared] : [])]
             .map((entry: Prepared) => [entry.signature, { ...entry, disposable: false }])));
     const preparing = useRef(new Map<string, Promise<Prepared>>());
+    const disposing = useRef(new Map<string, Promise<void>>());
     const draft = {
         ...saved, ...request, job_name: name, design_chains: chains, fixed_positions: fixed, designable_positions: designable,
         native_sources: bindings, designer_mode: ligandMode, msa_provider: msaProvider,
@@ -127,20 +128,26 @@ export function ResequencePanel({ initialValues = {}, onDraftChange, runDetails 
             resequence_preparations: [...preparations.current.values()],
             resequence_prepared: entry, native_job_request: entry ? { ...entry.job, ...snapshot.placement } : null });
     };
-    const disposePreparation = async (entry: Prepared) => {
+    const disposePreparation = (entry: Prepared): Promise<void> => {
+        const existing = disposing.current.get(entry.signature);
+        if (existing) return existing;
         const receipt = entry.job.params?.resequence_preparation;
-        if (!entry.disposable || entry.inUse || !receipt) return;
-        try {
-            const response = await api.post('/api/jobs/resequence/from-structures/cleanup', { preparation: receipt });
+        if (!entry.disposable || entry.inUse || !receipt) return Promise.resolve();
+        const pending = api.post('/api/jobs/resequence/from-structures/cleanup', { preparation: receipt }).then(response => {
             if (response.data.cleaned === true) {
                 preparations.current.delete(entry.signature);
                 if (prepared.current === entry) prepared.current = null;
             }
-        } catch { /* Keep the capability/request in the suite draft for a later retry. */ }
+        }).catch(() => { /* Keep the capability/request in the suite draft for a later retry. */ })
+            .finally(() => disposing.current.delete(entry.signature));
+        disposing.current.set(entry.signature, pending);
+        return pending;
     };
     prepareCurrent.current = async (forDraft = true) => {
         const snapshot = current.current;
         if (!ready) { snapshot.onDraftChange?.({ ...snapshot.draft, native_job_request: null }); return {}; }
+        const disposal = disposing.current.get(snapshot.signature);
+        if (disposal) await disposal; // Never reuse a capability whose cleanup is still in flight.
         let entry = preparations.current.get(snapshot.signature);
         if (!entry) {
             let pending = preparing.current.get(snapshot.signature);
@@ -150,7 +157,7 @@ export function ResequencePanel({ initialValues = {}, onDraftChange, runDetails 
                     ...(saved.backbone_input_pdbs && !source ? { backbone_input_pdbs: saved.backbone_input_pdbs, retained_params: saved.resequence_job_params ?? {} } : {}),
                     ...snapshot.placement,
                 }).then(response => {
-                    const next = { signature: snapshot.signature, job: response.data, disposable: true };
+                    const next = { signature: snapshot.signature, job: response.data, disposable: !forDraft, inUse: !forDraft };
                     preparations.current.set(snapshot.signature, next);
                     return next;
                 }).finally(() => preparing.current.delete(snapshot.signature));

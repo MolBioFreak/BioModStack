@@ -129,6 +129,21 @@ it('cleans explicit review cancellation, but retains a refused or failed cleanup
     expect(latest.resequence_prepared).toBeUndefined();
     await click('Run resequence and validate'); expect(posts('/prepare')).toHaveLength(2);
 });
+it('waits for delayed cleanup before a concurrent capture can reuse that signature', async () => {
+    const cleanup = deferred<any>();
+    handler = config => config.url.endsWith('/cleanup') ? cleanup.promise : undefined;
+    await mount(); await click('Place worker'); await click('Run resequence and validate');
+    expect(posts('/cleanup')).toHaveLength(1);
+    const oldReceipt = posts('/cleanup')[0].body.preparation;
+    let capture!: Promise<any>;
+    await act(async () => { capture = prep.current(); });
+    expect(posts('/prepare')).toHaveLength(1);
+    cleanup.resolve({ cleaned: true });
+    await act(async () => { await capture; }); await settle();
+    expect(posts('/prepare')).toHaveLength(2);
+    expect(latest.native_job_request.params.resequence_preparation).not.toEqual(oldReceipt);
+    expect(posts('/api/jobs')).toHaveLength(0);
+});
 it('disposes a superseded direct-run preparation after cancelled review cleanup can be retried', async () => {
     let failures = 1;
     handler = config => { if (config.url.endsWith('/cleanup') && failures-- > 0) throw new AxiosError('cleanup offline'); };
