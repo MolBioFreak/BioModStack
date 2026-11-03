@@ -15,6 +15,7 @@ process EvaluateLaProteina {
     """
     set -uo pipefail
     native_status=0
+    LAPROTEINA_PROTEINMPNN_WEIGHTS=${quote("${params.weights_root}/laproteina/ProteinMPNN/vanilla_model_weights")} \\
     DATA_PATH=${quote("${params.weights_root}/laproteina")} python3 ${quote("${params.code_root}/scripts/run_laproteina_inference.py")} \\
       --evaluate --request la_evaluation_closure/request.json \\
       --input-dir la_evaluation_closure --output-dir laproteina_evaluation || native_status=\$?

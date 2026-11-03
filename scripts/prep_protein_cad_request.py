@@ -107,7 +107,7 @@ def main() -> None:
     parser.add_argument("--backend", required=True, choices=["laproteina", "disco"])
     parser.add_argument("--task", required=True)
     parser.add_argument("--num-designs", type=int, required=True)
-    parser.add_argument("--target-lengths", required=True)
+    parser.add_argument("--target-lengths", default="")
     parser.add_argument("--laproteina-preset", default="ucond_tri")
     parser.add_argument("--laproteina-samples-per-length", type=int, default=8)
     parser.add_argument("--laproteina-num-steps", type=int, default=400)
@@ -140,7 +140,6 @@ def main() -> None:
     parser.add_argument("--input-dir", required=True)
     args = parser.parse_args()
 
-    target_lengths = _parse_lengths(args.target_lengths)
     input_dir = Path(args.input_dir).resolve()
     input_dir.mkdir(parents=True, exist_ok=True)
 
@@ -157,6 +156,7 @@ def main() -> None:
     explicit_jobs = args.disco_jobs_json is not None
     selected_file = args.backend == "disco" and not explicit_jobs and bool(args.disco_input_json_path)
     shorthand = args.backend == "disco" and not explicit_jobs and not selected_file
+    target_lengths = _parse_lengths(args.target_lengths) if args.backend == "laproteina" or shorthand else []
     copied_disco_json = _copy_optional(args.disco_input_json_path, input_dir) if selected_file else ""
     copied_ligand_sdf = (_copy_optional(args.disco_ligand_sdf, input_dir)
                          if shorthand and args.task == "ligand_conditioned" else "")
@@ -169,10 +169,10 @@ def main() -> None:
         copied_disco_json = str(execution_json)
 
     if args.backend == "laproteina":
-        if args.task == "motif_scaffolding" and not (effective_la["motif_task_name"] or (copied_motif_pdb and effective_la["contig_string"])):
+        if args.task == "motif_scaffolding" and not (effective_la["motif_task_name"] or (copied_motif_pdb and (effective_la["contig_string"] or effective_la.get("motif_atom_spec") is not None))):
             raise ValueError(
                 "La-Proteina motif_scaffolding requires either laproteina_motif_task_name "
-                "or a custom laproteina_motif_pdb + laproteina_contig_string"
+                "or a custom laproteina_motif_pdb + (laproteina_contig_string or motif_atom_spec)"
             )
         if args.task != "motif_scaffolding" and args.task != "unconditional":
             raise ValueError(

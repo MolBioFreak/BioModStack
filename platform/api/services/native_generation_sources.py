@@ -113,6 +113,9 @@ async def prepare_native_sources(job, session):
     try:
         slots = owner.source_slots_for_params(mode, job.params)
         if not slots and model != 'rfd4_proteina':
+            if model == 'complexa':
+                # Inactive author drafts remain; only derived runtime custody expires.
+                job.params = {k: v for k, v in job.params.items() if k != 'complexa_request_dir'}
             return
         bindings = TypeAdapter(NativeSources).validate_python(job.params.get('native_sources', {}))
         missing = set(slots) - bindings.keys()
@@ -153,7 +156,14 @@ async def prepare_native_sources(job, session):
                 digest = (hashlib.sha256(json.dumps(ledger).encode()).hexdigest() if path.is_dir() else ledger[0][1])
                 if binding.expected_sha256 is not None and binding.expected_sha256 != digest:
                     raise ValueError('Selected source bytes changed')
-                target = inputs / 'files' / digest / path.name
+                target_key = digest
+                if model == 'laproteina' and slot == job.params[owner.REQUEST_FIELD]['config_slot']:
+                    from scripts.lib.laproteina_motif_custody import motif_references
+                    companions = {task: _sha256_regular_file_nofollow(_contained(member, roots))[0]
+                        for task, member in motif_references(path).items()}
+                    if companions:
+                        target_key = hashlib.sha256(json.dumps([digest, companions], sort_keys=True).encode()).hexdigest()
+                target = inputs / 'files' / target_key / path.name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if path != target:
                     if path.is_dir():
@@ -166,6 +176,9 @@ async def prepare_native_sources(job, session):
                         shutil.copyfile(path, target)
                 resolved[slot] = str(target)
                 identities[slot] = {'kind': 'file', 'sha256': digest, 'members': ledger}
+                if model == 'laproteina' and slot == job.params[owner.REQUEST_FIELD]['config_slot']:
+                    from scripts.lib.laproteina_motif_custody import retain_motif_references
+                    identities[slot]['motif_references'] = retain_motif_references(path, target, allowed_roots=roots)
                 retained[slot] = binding.model_copy(update={'path': to_allowed_relative(target),
                     'expected_sha256': digest}).model_dump(mode='json', exclude_none=True)
             else:

@@ -126,7 +126,7 @@ def compose_request(request: Request, upstream: Path, directory: Path, weights: 
                   "ligand": ligand["ligand"], "ligand_only": s.ligand_only, "SMILES": s.SMILES,
                   "use_bonds_from_file": s.use_bonds_from_file, "contig_atoms": spec}
         if request.task.startswith("monomer_motif"):
-            target = {"motif_pdb_path": path, "contig_string": s.contig_string,
+            target = {"motif_pdb_path": path, "contig_string": prepared_source.get("evaluation_contig_string", s.contig_string),
                       "motif_min_length": request.min_length, "motif_max_length": request.max_length,
                       "motif_only": s.motif_only, "atom_selection_mode": s.atom_selection_mode,
                       "segment_order": s.segment_order}

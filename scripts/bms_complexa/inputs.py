@@ -74,6 +74,7 @@ def prepare_source(source: Source, source_path: Path, directory: Path, *, ame: b
             if row["role"] == "motif":
                 specs.setdefault(row["native"]["residue"], []).append(row["native"]["atom"])
         manifest["motif_atom_spec"] = "; ".join(f"B{r}: [{', '.join(dict.fromkeys(atoms))}]" for r, atoms in specs.items())
+        manifest["evaluation_contig_string"] = "/".join(f"B{r}" for r in specs)
         manifest["ligand"] = "L:0"
     (directory / "source-map.json").write_text(json.dumps(manifest, indent=2))
     return manifest

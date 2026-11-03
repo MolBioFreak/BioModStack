@@ -24,10 +24,10 @@ def bind_for_job(mode: str, params: dict, directory):
     from component_runtime import GeneratedInput
     request = normalize_job_request(mode, params['complexa_request'])
     result = {**params, 'complexa_request': request}
-    if params.get('native_sources') and params.get('complexa_request_dir'):
+    if source_slots_for_params(mode, result) and params.get('complexa_request_dir'):
         return result, ()
     relative = Path('complexa') / 'request.json'
-    result.setdefault('complexa_request_dir', str(Path(directory) / relative.parent))
+    result['complexa_request_dir'] = str(Path(directory) / relative.parent)
     return result, (GeneratedInput(relative.as_posix(), (json.dumps(request, indent=2) + '\n').encode()),)
 
 

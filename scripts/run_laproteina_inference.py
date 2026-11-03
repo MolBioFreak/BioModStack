@@ -73,6 +73,8 @@ def _configure_laproteina(request: dict, output_dir: Path) -> dict:
     # therefore win over profile values rather than being shadowed by _self_.
     config_name = "inference_bms"
     OmegaConf.save(cfg, config_root / (config_name + ".yaml"))
+    from lib.laproteina_motif_custody import retain_motif_references
+    retain_motif_references(config_root / (config_name + ".yaml"), config_root / (config_name + ".yaml"))
     env = os.environ.copy()
     env["PYTHONPATH"] = str(upstream) + os.pathsep + env.get("PYTHONPATH", "")
     env["LAPROTEINA_MOTIF_FEATURE"] = profile["feature_mode"]
@@ -163,6 +165,10 @@ def evaluate_native(request: dict, output_dir: Path, *, prepare_only=False):
     shutil.copytree(source, samples)
     shutil.copy2(config_path, attempt / 'original_config.yaml')
     cfg = OmegaConf.load(config_path)
+    from lib.laproteina_motif_custody import retain_motif_references
+    retained = retain_motif_references(config_path, attempt / 'original_config.yaml')
+    for task, binding in retained.items():
+        cfg.generation.dataset.motif_dict_cfg[task].motif_pdb_path = str(attempt / binding['path'])
     for key, value in request.get('metrics', {}).items():
         if key not in EVALUATION_CONTROLS:
             raise ValueError(f'Unsupported native evaluation control: {key}')
@@ -181,7 +187,21 @@ def evaluate_native(request: dict, output_dir: Path, *, prepare_only=False):
     # dispatch (which leaves df undefined for codesignability-only requests).
     upstream = Path(os.environ.get('LAPROTEINA_REPO', '/opt/laproteina')).resolve()
     sys.path.insert(0, str(upstream))
+    # Native ProteinMPNN uses a cwd-relative executable and script-relative weights.
+    # Bind the existing selected checkpoint layout without changing its CLI defaults.
+    previous_cwd = Path.cwd()
     try:
+        metric = cfg.generation.metric
+        if metric.get('compute_designability') or metric.get('compute_co_sequence_recovery'):
+            mpnn = attempt / 'ProteinMPNN'
+            mpnn.mkdir()
+            for name in ('protein_mpnn_run.py', 'protein_mpnn_utils.py'):
+                shutil.copyfile(upstream / 'ProteinMPNN' / name, mpnn / name)
+            weights = Path(os.environ.get('LAPROTEINA_PROTEINMPNN_WEIGHTS',
+                str(upstream / 'ProteinMPNN/vanilla_model_weights'))).resolve()
+            (mpnn / 'vanilla_model_weights').symlink_to(weights, target_is_directory=True)
+            receipt['proteinmpnn_weights'] = str(weights)
+        os.chdir(attempt)
         from proteinfoundation import evaluate
         evaluate.cfg = cfg
         evaluate.root_path = str(samples)
@@ -195,9 +215,31 @@ def evaluate_native(request: dict, output_dir: Path, *, prepare_only=False):
         receipt['execution_status'] = 'failed'
         raise
     finally:
+        os.chdir(previous_cwd)
+        # Runtime weights are mounted dependencies, never publication artifacts.
+        (attempt / 'ProteinMPNN/vanilla_model_weights').unlink(missing_ok=True)
         receipt_path.write_text(json.dumps(receipt, indent=2))
         publish_evaluation(output_dir, attempt, receipt)
     return receipt
+
+
+def evaluation_metric_descriptors(row):
+    """Scalar columns emitted by pinned compute_traditional_metrics, not CSV guesses."""
+    modes = ('ca', 'bb3o', 'all_atom')
+    rmsd_columns = {f'_res_{prefix}scRMSD_{mode}_esmfold'
+        for prefix in ('', 'co_', 'des_motif_', 'co_motif_') for mode in modes}
+    rmsd_columns.update(f'_res_motif_rmsd_{mode}' for mode in modes)
+    recovery_columns = {'_res_co_seq_rec', '_res_motif_seq_rec',
+        '_res_des_motif_seq_rec_esmfold', '_res_co_motif_seq_rec_esmfold'}
+    result = {}
+    for column in row:
+        rmsd = column in rmsd_columns
+        if rmsd or column in recovery_columns:
+            result[column] = {'value_type': 'number', 'unit': 'angstrom' if rmsd else 'fraction',
+                'source': 'proteinfoundation.evaluate.compute_traditional_metrics:' + column,
+                'source_revision': SOURCE_REVISION,
+                'description': 'Native La-Proteina scalar CSV column ' + column}
+    return result
 
 
 def publish_evaluation(output_dir, attempt, receipt):
@@ -210,7 +252,7 @@ def publish_evaluation(output_dir, attempt, receipt):
             for index, row in enumerate(csv.DictReader(stream)):
                 # CSV values stay native strings; blanks are not zero scores.
                 records.append({'population': 'observation', 'native_row_index': index,
-                    'metrics': row, 'native_record': row,
+                    'metrics': row, 'native_record': row, 'metric_descriptors': evaluation_metric_descriptors(row),
                     'result_table': result.relative_to(output_dir).as_posix()})
     manifest = {'contract': 'laproteina_evaluation_v1', 'model_id': 'laproteina',
         'records': records, 'execution_status': receipt['execution_status'],

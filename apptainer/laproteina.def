@@ -6,7 +6,7 @@ From: python@sha256:65a93d69fa75478d554f4ad27c85c1e69fa184956261b4301ebaf6dbb0a3
     Version laproteina-bms-3
     NumericalBackend torch-2.7.0-cu128-pyg-pt27cu128
     SourceRevision cde5de3ead6e4d76f367da6dc5174be9913ef6ca
-    Description Pinned La-Proteina sampling runtime; no oracle or training payloads
+    Description Pinned La-Proteina sampling and native evaluation callables; selected checkpoints mounted externally
 
 %files
     scripts/lib/laproteina_contract.py /opt/bms/laproteina_contract.py
@@ -80,6 +80,10 @@ PY
 import json, sys
 import torch, hydra, lightning, torch_scatter, torch_sparse, torch_cluster
 from proteinfoundation.generate import parse_args_and_cfg
+from proteinfoundation.evaluate import compute_traditional_metrics
+from proteinfoundation.metrics.folding_models import run_esmfold
+from transformers import AutoTokenizer, EsmForProteinFolding
+assert callable(compute_traditional_metrics) and callable(run_esmfold)
 sys.path.insert(0, '/opt/bms')
 from laproteina_contract import PROFILES, resolve_profile
 rows = []

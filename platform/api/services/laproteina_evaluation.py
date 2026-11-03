@@ -39,7 +39,10 @@ def source_slots_for_params(mode, params):
 def prepare_for_job(mode, params, directory, *, resolved_sources, allowed_roots, source_identities=None):
     from scripts.lib.portable_inputs import _contained
     request = normalize_job_request(mode, params[REQUEST_FIELD])
-    identity = hashlib.sha256(json.dumps({'request': request, 'sources': source_identities}, sort_keys=True).encode()).hexdigest()
+    from scripts.lib.laproteina_motif_custody import motif_references, retain_motif_references
+    motif_digests = {task: hashlib.sha256(_contained(path, [Path(p).resolve() for p in allowed_roots]).read_bytes()).hexdigest()
+        for task, path in motif_references(resolved_sources[request['config_slot']]).items()}
+    identity = hashlib.sha256(json.dumps({'request': request, 'sources': source_identities, 'motifs': motif_digests}, sort_keys=True).encode()).hexdigest()
     dest = Path(directory) / DIRECTORY / identity
     dest.mkdir(parents=True, exist_ok=True)
     bindings = {}
@@ -54,6 +57,8 @@ def prepare_for_job(mode, params, directory, *, resolved_sources, allowed_roots,
             shutil.copytree(source, target, dirs_exist_ok=True)
         else:
             shutil.copyfile(source, target)
+        if slot == request['config_slot']:
+            retain_motif_references(source, target, allowed_roots=roots)
         bindings[slot] = target.relative_to(dest).as_posix()
     execution = {'schema': 'laproteina_evaluation_request_v1',
         'source_directory': bindings[request['samples_slot']], 'config_path': bindings[request['config_slot']],
