@@ -179,9 +179,9 @@ async def test_delete_handoff_keeps_existing_claim_discoverable(store, tmp_path,
     await scheduler.check_job_completions()
     await asyncio.gather(*scheduler._remote_reconciliation_tasks.values())
     async with store() as cold:
-        job = await cold.get(Job, 'gate-job')
-        assert job.params['permanent_delete_cleanup'] is True
-        assert job.remote_state == 'cancelled'
+        # 11c5599: the same existing reconciler finalizes drained hidden custody,
+        # so the hidden Job row is removed after the verified stop (it is no longer retained).
+        assert await cold.get(Job, 'gate-job') is None
         assert not (await cold.scalars(select(Job.id).where(outstanding_claim_clause()))).all()
         assert (await cold.scalars(select(ExecutionTarget.id).where(target_idle_clause()))).all() == ['vast:1']
 
@@ -212,8 +212,9 @@ async def test_deleted_return_owner_survives_busy_controller_guard(store, tmp_pa
     await scheduler.check_job_completions()
     await asyncio.gather(*scheduler._remote_reconciliation_tasks.values())
     async with store() as verify:
-        job = await verify.get(Job, 'gate-job')
-        assert job.remote_state == 'cancelled' and job.params['permanent_delete_cleanup']
+        # 11c5599: once the busy guard releases, reconciliation drains and finalizes the hidden owner.
+        assert await verify.get(Job, 'gate-job') is None
+        assert not (await verify.scalars(select(Job.id).where(outstanding_claim_clause()))).all()
 
 
 @pytest.mark.asyncio
