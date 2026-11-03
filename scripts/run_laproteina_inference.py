@@ -190,8 +190,21 @@ def evaluate_native(request: dict, output_dir: Path, *, prepare_only=False):
     # Native ProteinMPNN uses a cwd-relative executable and script-relative weights.
     # Bind the existing selected checkpoint layout without changing its CLI defaults.
     previous_cwd = Path.cwd()
+    cache_keys = ('CACHE_DIR', 'HF_HUB_CACHE', 'TRANSFORMERS_CACHE')
+    previous_cache = {key: os.environ.get(key) for key in cache_keys}
+    hf_view = attempt / '.cache' / 'hf-evaluators'
     try:
         metric = cfg.generation.metric
+        folding_models = set()
+        if metric.get('compute_designability'):
+            folding_models.update(metric.get('designability_folding_models', ['esmfold']))
+        if metric.get('compute_codesignability'):
+            folding_models.update(metric.get('codesignability_folding_models', ['esmfold']))
+        from bms_complexa.hf_cache import prepare_hf_view
+        cache = prepare_hf_view(hf_view, previous_cache['CACHE_DIR'] or previous_cache['HF_HUB_CACHE'],
+                                ['facebook/esmfold_v1'] if 'esmfold' in folding_models else [])
+        if cache is not None:
+            os.environ.update({key: str(cache) for key in cache_keys})
         if metric.get('compute_designability') or metric.get('compute_co_sequence_recovery'):
             mpnn = attempt / 'ProteinMPNN'
             mpnn.mkdir()
@@ -216,6 +229,13 @@ def evaluate_native(request: dict, output_dir: Path, *, prepare_only=False):
         raise
     finally:
         os.chdir(previous_cwd)
+        for key, value in previous_cache.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        if hf_view.exists():
+            shutil.rmtree(hf_view)
         # Runtime weights are mounted dependencies, never publication artifacts.
         (attempt / 'ProteinMPNN/vanilla_model_weights').unlink(missing_ok=True)
         receipt_path.write_text(json.dumps(receipt, indent=2))

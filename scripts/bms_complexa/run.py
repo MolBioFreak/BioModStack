@@ -11,6 +11,7 @@ from scripts.lib.complexa_contract import Request, PROFILES, SOURCE_REVISION
 from scripts.bms_complexa.config import compose_request, selected_dependencies
 from scripts.bms_complexa.inputs import prepare_source
 from scripts.bms_complexa.publication import publish
+from scripts.bms_complexa.hf_cache import prepare_hf_view
 
 
 def prepare_community_models(native: Path, upstream: Path, dependencies: list[str]) -> Path:
@@ -100,7 +101,14 @@ def run(request: Request, *, upstream: Path, weights: Path, output: Path,
     env.setdefault("XDG_CACHE_HOME", str(native / ".cache"))
     env.setdefault("MPLCONFIGDIR", str(native / ".cache" / "matplotlib"))
     receipt["execution"] = "running"
+    hf_view = native / ".cache" / "hf-evaluators"
     try:
+        repositories = [repo for dependency, repo in (
+            ("esmfold", "facebook/esmfold_v1"), ("esm", "facebook/esm2_t33_650M_UR50D"))
+            if dependency in receipt["selected_dependencies"]]
+        cache = prepare_hf_view(hf_view, env.get("CACHE_DIR") or env.get("HF_HUB_CACHE"), repositories)
+        if cache is not None:
+            env.update({key: str(cache) for key in ("CACHE_DIR", "HF_HUB_CACHE", "TRANSFORMERS_CACHE")})
         with (native / "complexa.log").open("w") as log:
             for command in commands:
                 completed = subprocess.run(command, cwd=native, env=env, stdout=log, stderr=subprocess.STDOUT, check=False)
@@ -120,6 +128,8 @@ def run(request: Request, *, upstream: Path, weights: Path, output: Path,
         receipt["error"] = str(exc)
         raise
     finally:
+        if hf_view.exists():
+            shutil.rmtree(hf_view)
         if community.exists():
             shutil.rmtree(community)
         if assets.is_symlink():
