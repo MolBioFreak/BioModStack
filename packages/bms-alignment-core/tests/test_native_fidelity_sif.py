@@ -41,6 +41,7 @@ def test_native_fidelity(tmp_path):
         request = AlignmentRequest(roster=parse(text, 'fasta', molecule), settings={'engine': engine, **settings})
         result = run_engine(request, tmp_path / str(number), prefix + [engine], prefix + ['mafft'])
         attempt = Path(result['attempt_dir'])
+        assert result['output_integrity']['status'] == 'valid', result['output_integrity']
         assert result['returncode'] == 0, (engine, molecule, result, (attempt/'engine.log').read_text() if (attempt/'engine.log').exists() else '')
         raw = read_fasta(attempt / 'alignment.fasta')
         ids = [r.row_id for r in request.roster.rows] if engine == 'mafft' else [f'bmsrow{i:08d}' for i in range(1, 4)]
@@ -74,6 +75,7 @@ def test_twilight_default_ambiguity_is_observed_not_a_gate(tmp_path):
     request = AlignmentRequest(roster=roster, settings={'engine': 'twilight', 'guide_source': 'mafft'})
     result = run_engine(request, tmp_path, prefix + ['twilight'], prefix + ['mafft'])
     assert result['returncode'] == 0
+    assert result['output_integrity']['status'] == 'invalid'
     assert len(result['observations'][0]['missing_ids']) == 3
     assert (Path(result['attempt_dir']) / 'alignment.fasta').read_text() == ''
 
@@ -100,3 +102,33 @@ def test_alternative_alignment_coordinate_oracle():
     for row in result['rows']:
         assert [(p['source'], p['left_column'], p['right_column']) for p in row['positions']] == expected[row['source_member_id']]
     assert result['left_excluded'] == result['right_excluded'] == 0
+
+
+@pytest.mark.parametrize('molecule', ['dna', 'rna'])
+def test_native_direction_change_preserves_sequence_and_records_orientation(tmp_path, molecule):
+    sequence = 'ACGTTAGCATCGATCGTACGACTGAATCCTAGCAGTTGACCGTAC'
+    reverse = sequence.translate(str.maketrans('ACGT', 'TGCA'))[::-1]
+    if molecule == 'rna':
+        sequence, reverse = sequence.replace('T', 'U'), reverse.replace('T', 'U')
+    roster = parse(f'>forward\n{sequence}\n>reverse\n{reverse}\n>other\n{sequence[:-1]}A\n', 'fasta', molecule)
+    request = AlignmentRequest(roster=roster, settings={'engine': 'mafft', 'direction': 'adjustdirectionaccurately'})
+    result = run_engine(request, tmp_path, ['apptainer', 'exec', SIF, 'mafft'])
+    assert result['returncode'] == 0
+    observation = result['observations']
+    assert observation['reverse_complemented_ids'] == [roster.rows[1].row_id]
+    assert not observation['missing_ids'] and not observation['unexpected_ids']
+    assert not observation['changed_residue_ids']
+    output = read_fasta(Path(result['attempt_dir']) / 'alignment.fasta')
+    assert output['_R_' + roster.rows[1].row_id].replace('-', '').upper() == sequence
+
+
+def test_native_famsa_explicit_column_trimming_is_recorded(tmp_path):
+    request = AlignmentRequest(roster={'molecule': 'protein', 'rows': [
+        {'row_id': name, 'header': name, 'sequence': seq}
+        for name, seq in [('a', 'ACDEFGHIKLMN'), ('b', 'ACDEFGHIKLMN'), ('c', 'ACDEAAAAAAFGHIKLMN')]
+    ]}, settings={'engine': 'famsa', 'trim_columns': 0.8})
+    result = run_engine(request, tmp_path, ['apptainer', 'exec', '--cleanenv', SIF, 'famsa'])
+    assert result['returncode'] == 0
+    assert result['output_integrity']['status'] == 'valid'
+    assert result['output_integrity']['trimmed_row_ids'] == ['bmsrow00000003']
+    assert result['observations'][0]['removed_residue_counts'] == {'bmsrow00000003': 6}

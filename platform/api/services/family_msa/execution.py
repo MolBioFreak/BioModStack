@@ -11,7 +11,8 @@ from datetime import datetime
 from pathlib import Path
 
 from bms_alignment import AlignmentRequest
-from bms_alignment.native import compile_mafft
+from bms_alignment.engines import assert_native_execution_supported
+from bms_alignment.native import compile_mafft, prepare_mafft_inputs
 
 
 def compile_command(payload: dict, executable: str, input_path: str) -> list[str]:
@@ -54,6 +55,8 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
     error = None
     argv = []
     runtime = None
+    native_roster = None
+    focus_report = None
     try:
         managed = payload.get('managed_operation')
         if managed:
@@ -62,7 +65,11 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
             runtime = {'kind': 'owned-python-operation'}
         else:
             request = AlignmentRequest.model_validate({key: payload[key] for key in ('roster', 'settings')})
-            input_file.write_text(''.join(f'>{r.row_id}\n{r.sequence}\n' for r in request.roster.rows), encoding='utf8')
+            assert_native_execution_supported(request)
+            if request.settings.engine == 'mafft':
+                input_file, native_roster, focus_report = prepare_mafft_inputs(request, work)
+            else:
+                input_file.write_text(''.join(f'>{r.row_id}\n{r.sequence}\n' for r in request.roster.rows), encoding='utf8')
             from services.family_msa.runtime import select_runtime
             image, selection = select_runtime()
             if image:
@@ -110,12 +117,30 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
         with log.open('a', encoding='utf8') as stream:
             stream.write(error + '\n')
     observations = None
+    output_integrity = None
     if 'request' in locals() and request.settings.engine == 'mafft':
-        from bms_alignment.observations import observe_alignment
-        observations = observe_alignment(output, request.roster)
+        from bms_alignment.observations import observe_alignment, validate_alignment_output
+        observations = observe_alignment(output, native_roster or request.roster,
+            allow_reverse_complement=request.settings.direction is not None)
+        output_integrity = validate_alignment_output(request, observations)
+    elif 'request' in locals():
+        worker_receipt = work / 'worker-result.json'
+        try:
+            if worker_receipt.is_file():
+                output_integrity = json.loads(worker_receipt.read_text()).get('output_integrity')
+        except (OSError, ValueError, AttributeError):
+            output_integrity = None
+        if (not isinstance(output_integrity, dict)
+                or output_integrity.get('status') not in {'valid', 'invalid', 'not_alignment'}
+                or not isinstance(output_integrity.get('errors'), list)
+                or not all(isinstance(item, str) for item in output_integrity['errors'])):
+            output_integrity = {'status': 'invalid', 'errors': ['Native output integrity receipt is unavailable or invalid']}
+    if output_integrity and output_integrity['status'] == 'invalid' and not error:
+        error = 'Alignment output failed integrity checks: ' + '; '.join(output_integrity['errors'])
     receipt_path.write_text(json.dumps({'requested': payload.get('_family_msa_requested', payload), 'argv': argv, 'returncode': code,
         'effective_settings': request.settings.model_dump(mode='json') if 'request' in locals() else payload.get('settings'), 'runtime': runtime, 'error': error,
-        'observations': observations}, indent=2) + '\n', encoding='utf8')
+        'observations': observations, 'output_integrity': output_integrity,
+        **({'focus_mapping': focus_report} if focus_report is not None else {})}, indent=2) + '\n', encoding='utf8')
     files = [(input_file, 'input', 'text/x-fasta'),
              (log, 'engine_log', 'text/plain'), (receipt_path, 'receipt', 'application/json')]
     publication = {}
@@ -129,6 +154,12 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
     elif payload.get('settings', {}).get('engine', 'mafft') == 'mafft':
         files += [(output, 'alignment', 'text/x-fasta'),
                   (Path(str(input_file) + '.tree'), 'guide_tree', 'text/plain')]
+        registered = {path for path, _, _ in files}
+        for path in sorted(work.iterdir()):
+            if path.is_file() and path not in registered:
+                role = 'row_map' if path.name == 'row-map.json' else 'native_artifact'
+                media = 'application/json' if path.suffix == '.json' else 'text/plain'
+                files.append((path, role, media))
     else:
         files.extend([(work / 'request.json', 'native_request', 'application/json'),
                       (output, 'engine_stdout', 'text/plain'),

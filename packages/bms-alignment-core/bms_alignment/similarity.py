@@ -18,8 +18,19 @@ POLICY = ('Exact symbol identity, ignoring case. Columns with a gap (- or .) in 
 
 
 def alignment_similarity(rows: Sequence[tuple[str, str]]) -> dict:
-    if not rows or len({len(sequence) for _, sequence in rows}) != 1:
+    if (not rows or any(not isinstance(sequence, str) for _, sequence in rows)
+            or len({len(sequence) for _, sequence in rows}) != 1 or not rows[0][1]):
         raise ValueError('a nonempty rectangular alignment is required')
+    identifiers = [ident for ident, _ in rows]
+    if (any(not isinstance(ident, str) or not ident for ident in identifiers)
+            or len(set(identifiers)) != len(identifiers)):
+        raise ValueError('alignment row IDs must be nonempty and unique')
+    # Native sequence symbols are printable ASCII (including --anysymbol input).
+    # Unicode uppercasing can expand one input character into several columns,
+    # invalidating both rectangularity and ungapped coordinate maps. Whitespace
+    # is layout, never a residue; callers must parse it before this calculation.
+    if any(any(not '!' <= c <= '~' for c in sequence) for _, sequence in rows):
+        raise ValueError('alignment sequences must contain printable ASCII symbols without whitespace')
     normalized = [(ident, sequence.upper()) for ident, sequence in rows]
     columns = len(normalized[0][1])
     comparable = identical = 0

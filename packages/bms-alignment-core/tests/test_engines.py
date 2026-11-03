@@ -53,7 +53,8 @@ def test_implicit_and_explicit_engine_discriminators():
     assert AlignmentRequest(roster=roster, settings={}).settings.engine == 'mafft'
     assert AlignmentRequest(roster=roster, settings={'strategy': 'auto'}).settings.engine == 'mafft'
     for engine in ('mafft', 'famsa', 'muscle', 'twilight'):
-        assert AlignmentRequest(roster=roster, settings={'engine': engine}).settings.engine == engine
+        selected_roster = req(engine, 'dna' if engine == 'twilight' else 'protein').roster
+        assert AlignmentRequest(roster=selected_roster, settings={'engine': engine}).settings.engine == engine
     with pytest.raises(ValueError):
         AlignmentRequest(roster=roster, settings={'engine': 'unknown'})
 
@@ -99,3 +100,31 @@ def test_failed_guide_does_not_reuse_prior_tree(tmp_path):
     result = run_engine(request, tmp_path, '/bin/true', '/bin/false')
     assert result['returncode'] != 0
     assert result['error'] == 'MAFFT guide tree unavailable'
+
+
+@pytest.mark.parametrize('engine', ['mafft', 'famsa', 'muscle', 'twilight'])
+def test_mutated_duplicate_roster_rejected_before_native_execution(tmp_path, engine):
+    request = req(engine, 'dna' if engine == 'twilight' else 'protein')
+    request.roster.rows.append(request.roster.rows[0].model_copy())
+    with pytest.raises(ValueError, match='row IDs must be unique'):
+        run_engine(request, tmp_path, '/does-not-exist')
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('engine,molecule,settings', [
+    ('famsa', 'dna', {}), ('famsa', 'rna', {}), ('twilight', 'protein', {}),
+    ('mafft', 'protein', {'direction': 'adjustdirectionaccurately'}),
+])
+def test_unsupported_molecule_scoring_rejected(engine, molecule, settings):
+    with pytest.raises(ValueError):
+        req(engine, molecule, **settings)
+
+
+def test_production_capability_guard_does_not_rewrite_historical_mode():
+    from bms_alignment.engines import assert_native_execution_supported
+    request = req('muscle', 'dna')
+    with pytest.raises(ValueError, match='does not honor the declared molecule'):
+        assert_native_execution_supported(request)
+    assert request.settings.mode == 'align'
+    request.settings.mode = 'super5'
+    assert_native_execution_supported(request)

@@ -49,3 +49,15 @@ def test_source_evidence_survives_request_projection():
     assert effective['roster']['source_evidence'] == evidence
     assert effective['_family_msa_requested']['roster']['source_evidence'] == evidence
     assert prepare_request(effective)[1] == effective
+
+
+def test_muscle_align_rejected_for_execution_but_historical_request_remains_readable():
+    from bms_alignment import AlignmentRequest
+    payload = {'roster': {'molecule': 'dna', 'rows': [
+        {'row_id': 'r1', 'header': 'toy', 'sequence': 'ACGT'}]},
+        'settings': {'engine': 'muscle', 'mode': 'align'}}
+    assert AlignmentRequest.model_validate(payload).settings.mode == 'align'
+    with pytest.raises(ValueError, match='does not honor the declared molecule'):
+        prepare_request(payload)
+    payload['settings']['mode'] = 'super5'
+    assert prepare_request(payload)[1]['settings']['mode'] == 'super5'
