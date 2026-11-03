@@ -32,7 +32,7 @@ export function BioXpMethodPreparation({ name, station, additions, selected, onS
     return <section className="bioxp-prepare-sheet" aria-label="Plate preparation">
         <div>
             <h3>{name || 'Reaction plate'}</h3>
-            <div className="bioxp-prepare-plate"><div className="bioxp-prepare-wells" style={{ gridTemplateColumns: `18px repeat(${columns.length || 12}, minmax(0,1fr))` }} role="group" aria-label="Preparation destination wells">
+            <div className="bioxp-prepare-plate"><div className="bioxp-prepare-wells" style={{ gridTemplateColumns: `18px repeat(${columns.length || 12}, ${columns.length === 1 ? '28px' : 'minmax(0,1fr)'})` }} role="group" aria-label="Preparation destination wells">
                 <span />{columns.map(c => <span key={c}>{c}</span>)}
                 {rows.map(row => <Fragment key={row}><span>{row}</span>{columns.map(c => {
                     const well = row + c;

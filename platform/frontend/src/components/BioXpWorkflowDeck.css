@@ -43,6 +43,7 @@
 .bwd-tip { fill: var(--bwd-muted); }
 .bwd-tip.is-recorded { fill: var(--bwd-text); }
 .bwd-hit { fill: transparent; stroke: transparent; stroke-width: 2; }
+.bwd-well.has-contents .bwd-core { fill: color-mix(in srgb, var(--bwd-accent) 45%, var(--bwd-inset)); }
 .bwd-well.is-selected .bwd-core { fill: var(--bwd-accent); }
 .bwd-well.is-selected .bwd-ring { stroke: var(--bwd-accent); stroke-width: 2; }
 .bwd-well:hover .bwd-hit, .bwd-well:focus .bwd-hit { stroke: var(--bwd-text); }

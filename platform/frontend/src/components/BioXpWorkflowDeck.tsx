@@ -19,12 +19,14 @@ export type BioXpWorkflowDeckProps = {
     compact?: boolean; canvas?: boolean;
     /** Robot-recorded tip occupancy by tray (1-4), 96 row-major booleans. Shading only. */
     tipOccupancy?: Record<number, boolean[]>;
+    /** Planned starting contents by station and well (label shown on hover). Shading only. */
+    contents?: Record<string, Record<string, string>>;
 };
 const fullView: DeckBounds = { x: 0, y: 0, ...deckSize };
 const modes: DeckSelectionMode[] = ['well', 'range', 'row', 'column'];
 
 /** Shared presentation. Authoring defaults remain selection-only; live intents are explicit callbacks. */
-export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, compact = false, canvas = false, tipOccupancy }: BioXpWorkflowDeckProps) {
+export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, compact = false, canvas = false, tipOccupancy, contents }: BioXpWorkflowDeckProps) {
     const id = useId();
     const svg = useRef<SVGSVGElement>(null);
     const anchor = useRef<{ station: string; well: string } | null>(null);
@@ -196,12 +198,12 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                         {resource.points.map(well => <g key={well.well} role={readOnly ? 'img' : 'button'} tabIndex={readOnly ? undefined : tabWell === well.well ? 0 : -1}
                             aria-label={`${resource.label} ${well.well}`} aria-pressed={selection.station === resource.id && selected.has(well.well)}
                             data-station={resource.id} data-well={well.well}
-                            className={`bwd-well${selection.station === resource.id && selected.has(well.well) ? ' is-selected' : ''}`}
+                            className={`bwd-well${selection.station === resource.id && selected.has(well.well) ? ' is-selected' : ''}${contents?.[resource.id]?.[well.well] ? ' has-contents' : ''}`}
                             aria-disabled={live ? !!live.wellDisabledReason : undefined}
                             onClick={e => activate(e, () => chooseWell(resource, well, e))} onKeyDown={e => keyboardWell(e, resource, well)}
                             onPointerDown={e => wellPointerDown(e, resource, well)} onPointerEnter={() => wellPointerEnter(resource, well)}
                             onFocus={() => setHover(`${resource.label} · ${well.well}`)} onMouseEnter={() => setHover(`${resource.label} · ${well.well}`)}>
-                            <title>{resource.label} · {well.well}{live?.wellDisabledReason ? ` · ${live.wellDisabledReason}` : ''}</title>
+                            <title>{resource.label} · {well.well}{contents?.[resource.id]?.[well.well] ? ` · ${contents[resource.id][well.well]}` : ''}{live?.wellDisabledReason ? ` · ${live.wellDisabledReason}` : ''}</title>
                             <circle className="bwd-ring" cx={well.x} cy={well.y} r="5.4" />
                             <circle className="bwd-core" cx={well.x} cy={well.y} r="3.8" />
                             {resource.kind === 'rack' && (() => {

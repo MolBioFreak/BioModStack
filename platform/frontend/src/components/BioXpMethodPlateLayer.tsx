@@ -50,7 +50,10 @@ export function BioXpMethodPlateLayer({ plan, stations, selectedPlate, selectedP
             const station = stations[plate.id], r = bounds(station);
             if (!r) return null;
             const atStation = plan.labware.slice(0, index).filter(p => stations[p.id] === station).length;
-            const y = r.y + r.height + 47 + atStation * 34;
+            // Adjacent strip holders are narrower than their labels: stack them under the holder.
+            const strip = deckResources.filter(s => s.kind === 'strip').findIndex(s => s.id === station);
+            const y = r.y + r.height + 47 + (strip >= 0 ? strip : atStation) * 34;
+            const left = strip >= 0 ? deckResources.find(s => s.kind === 'strip')!.bounds.x : r.x;
             const prepare = () => onPrepare(plate.id, station);
             return <g key={plate.id} role="button" tabIndex={0} aria-label={`Prepare ${plate.name || 'unnamed labware'}`} aria-pressed={selectedPlate === plate.id} data-labware={plate.id} className="bioxp-method-plate"
                 onPointerDown={e => { if (e.button !== 0) return; e.stopPropagation(); suppressClick.current = false; drag.current = { id: plate.id, x: e.clientX, y: e.clientY, moved: false, svg: e.currentTarget.ownerSVGElement }; e.currentTarget.setPointerCapture?.(e.pointerId); }}
@@ -58,8 +61,8 @@ export function BioXpMethodPlateLayer({ plan, stations, selectedPlate, selectedP
                 onClick={e => { e.stopPropagation(); if (suppressClick.current) { suppressClick.current = false; return; } prepare(); }}
                 onContextMenu={e => { e.preventDefault(); e.stopPropagation(); prepare(); }}
                 onKeyDown={e => { if (e.key === 'Escape') { drag.current = null; suppressClick.current = true; } if (['Enter', ' ', 'ContextMenu'].includes(e.key) || e.shiftKey && e.key === 'F10') { e.preventDefault(); e.stopPropagation(); prepare(); } }}>
-                <rect x={r.x - 10} y={y - 25} width={Math.max(r.width + 20, 150)} height="32" rx="6" />
-                <text className="bioxp-method-plate-label" x={r.x} y={y}>{plate.name || 'Unnamed labware'}</text>
+                <rect x={left - 10} y={y - 25} width={Math.max(r.width + 20, 150)} height="32" rx="6" />
+                <text className="bioxp-method-plate-label" x={left} y={y}>{plate.name || 'Unnamed labware'}</text>
                 <title>Prepare {plate.name || 'unnamed labware'}. Drag to a destination to add a carry step, or open Move plate. Authoring only.</title>
             </g>;
         })}

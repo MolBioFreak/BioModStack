@@ -130,3 +130,11 @@ it('selects a rectangle by pressing on one well and dragging across others', asy
     await act(async () => { document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true })); });
     expect(latest.wells).toEqual(['B2', 'B3', 'B4', 'C2', 'C3', 'C4', 'D2', 'D3', 'D4']);
 });
+
+it('shades planned starting contents and names them on hover', async () => {
+    await act(async () => root.render(<BioXpWorkflowDeck selection={{ station: '', wells: [] }} onChange={() => undefined} contents={{ LOC_STRIP1: { A1: 'S1 · 9 µL' } }} />));
+    const filled = host.querySelector('[data-station="LOC_STRIP1"][data-well="A1"]')!;
+    expect(filled.classList.contains('has-contents')).toBe(true);
+    expect(filled.querySelector('title')?.textContent).toContain('S1 · 9 µL');
+    expect(host.querySelector('[data-station="LOC_STRIP1"][data-well="B1"]')!.classList.contains('has-contents')).toBe(false);
+});
