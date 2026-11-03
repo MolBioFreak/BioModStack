@@ -52,7 +52,8 @@ export function BioXpMethodPlateLayer({ plan, stations, selectedPlate, selectedP
             const atStation = plan.labware.slice(0, index).filter(p => stations[p.id] === station).length;
             // Adjacent strip holders are narrower than their labels: stack them under the holder.
             const strip = deckResources.filter(s => s.kind === 'strip').findIndex(s => s.id === station);
-            const y = r.y + r.height + 47 + (strip >= 0 ? strip : atStation) * 34;
+            // Strips: start below the holder outline and its 1-4 numbers.
+            const y = r.y + r.height + (strip >= 0 ? 67 + strip * 34 : 47 + atStation * 34);
             const left = strip >= 0 ? deckResources.find(s => s.kind === 'strip')!.bounds.x : r.x;
             const prepare = () => onPrepare(plate.id, station);
             return <g key={plate.id} role="button" tabIndex={0} aria-label={`Prepare ${plate.name || 'unnamed labware'}`} aria-pressed={selectedPlate === plate.id} data-labware={plate.id} className="bioxp-method-plate"
