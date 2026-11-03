@@ -55,7 +55,8 @@ async function mount(entry: string) {
     </Routes></MemoryRouter></QueryClientProvider>)); await settle();
 }
 async function click(text: string) { const node = [...document.querySelectorAll('button')].find(node => node.textContent === text); expect(node, text).toBeTruthy(); await act(async () => node!.click()); await settle(); }
-it('opens failed/partial retained Project inventory and structure/document through real existing Project routing, then cold-reopens without producer requests', async () => {
+it.each(['ready', 'failed'])('opens %s retained Project inventory and structure/document through real existing Project routing, then cold-reopens without producer requests', async readiness => {
+    fixture.surface.readiness = readiness;
     await mount(returnUri); await click('Open canonical result');
     const destination = document.querySelector('[data-location]')!.getAttribute('data-location')!;
     expect(destination).toContain('/projects/p?native_receipt=receipt'); expect(destination).not.toContain('/designs/deleted-job');

@@ -122,6 +122,7 @@ it('cleans explicit review cancellation, but retains a refused or failed cleanup
     handler = config => config.url.endsWith('/cleanup') ? { cleaned } : undefined;
     await mount(); await click('Place worker'); await click('Run resequence and validate');
     expect(posts('/api/jobs')).toHaveLength(0); expect(posts('/cleanup')).toHaveLength(1);
+    expect(latest.resequence_prepared).toBeDefined();
     expect(latest.resequence_prepared.job.params.resequence_preparation).toBeTruthy();
     cleaned = true; await click('Run resequence and validate');
     expect(posts('/prepare')).toHaveLength(1); expect(posts('/cleanup')).toHaveLength(2);
