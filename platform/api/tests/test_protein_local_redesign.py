@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import gzip
 import hashlib
 import io
 import json
@@ -28,7 +27,7 @@ from services.nextflow import (
     resolve_nextflow_executable,
 )
 import routers.files as files_router
-from scripts.rfd3_local_redesign.contract import ContractError, build_request, request_sha256, write_request
+from scripts.rfd3_local_redesign.contract import ContractError, build_request
 
 
 SOURCE_IDENTITIES = [
@@ -159,44 +158,22 @@ def test_normalize_plr_input_pdb_path_ignores_missing_empty_and_non_string() -> 
 
 
 
-def test_all_protein_local_ingress_bypasses_antibody_defaults_before_contract_validation() -> None:
-    jobs_source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
-    import ast
-    from types import SimpleNamespace
+@pytest.mark.parametrize(("model", "mode", "params", "expected"), [
+    ("protein_local_redesign", "local_redesign", {}, False),
+    ("protein_modification_experimental", "region_redesign", {}, False),
+    ("protein_modification_experimental", "de_novo_design", {"generator": "rfd3"}, False),
+    ("protein_modification_experimental", "de_novo_design", {}, False),
+    ("rfantibody", "antibody_denovo", {}, True),
+    ("protein_modification_experimental", "de_novo_design", {"generator": "disco"}, True),
+])
+def test_ingress_normalization_policy_preserves_native_requests(model, mode, params, expected) -> None:
     from routers.jobs import _should_normalize_antibody_job_params
 
-    # Execute the actual ingress guard with its real policy, rather than demand
-    # the old inline spelling. Keep ordering and call-site coverage explicit.
-    tree = ast.parse(jobs_source)
-    guards = [node for node in ast.walk(tree) if isinstance(node, ast.If)
-        and isinstance(node.test, ast.Call) and isinstance(node.test.func, ast.Name)
-        and node.test.func.id == '_should_normalize_antibody_job_params']
-    assert len(guards) == 1
-    guard = guards[0]
-    calls = [node for node in ast.walk(guard) if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name) and node.func.id == '_normalize_antibody_job_params']
-    assert len(calls) == 1
-    validations = [node.lineno for node in ast.walk(tree) if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name) and node.func.id == 'prepare_local_redesign_scheduler_params'
-        and node.lineno > guard.lineno]
-    assert validations and guard.end_lineno < min(validations)
-    code = compile(ast.Module(body=[guard], type_ignores=[]), '<actual ingress guard>', 'exec')
-    for model, mode, params, expected in [
-        ('protein_local_redesign', 'local_redesign', {}, False),
-        ('protein_modification_experimental', 'region_redesign', {}, False),
-        ('protein_modification_experimental', 'de_novo_design', {'generator': 'rfd3'}, False),
-        ('rfantibody', 'antibody_denovo', {}, True),
-    ]:
-        observed = []
-        data = SimpleNamespace(params=params.copy())
-        def normalize(value):
-            observed.append(value.copy())
-            return {**value, 'antibody_default_applied': True}
-        exec(code, {'normalized_model_id': model, 'normalized_mode': mode, 'job_data': data,
-            '_should_normalize_antibody_job_params': _should_normalize_antibody_job_params,
-            '_normalize_antibody_job_params': normalize})
-        assert bool(observed) is expected
-        assert ('antibody_default_applied' in data.params) is expected
+    original = params.copy()
+    # The shared helper owns create/resume normalization policy, not the number
+    # or AST spelling of its callers. Include non-RFD3 controls for specificity.
+    assert _should_normalize_antibody_job_params(model, mode, params) is expected
+    assert params == original
 
 
 
@@ -276,90 +253,53 @@ def test_minimal_insertion_contig_is_source_derived_and_claim_bound() -> None:
 
 
 
-def test_protein_local_redesign_is_first_class_native_model() -> None:
-    frontend_text = (REPO_ROOT / "platform" / "frontend" / "src" / "components" / "JobSubmission.tsx").read_text(encoding="utf-8")
-    launcher_text = (REPO_ROOT / "platform" / "frontend" / "src" / "lib" / "launcherCatalog.ts").read_text(encoding="utf-8")
-    modification_modes_text = (REPO_ROOT / "platform" / "frontend" / "src" / "components" / "proteinModificationModes.ts").read_text(encoding="utf-8")
-    results_text = (REPO_ROOT / "platform" / "frontend" / "src" / "components" / "ResultsViewer.tsx").read_text(encoding="utf-8")
-    workflow_text = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
-    model_text = (REPO_ROOT / "platform" / "api" / "config" / "models" / "protein_local_redesign.yaml").read_text(encoding="utf-8")
+def test_retired_local_redesign_catalog_preserves_active_region_loop() -> None:
+    from services.nextflow import resolve_nextflow_entrypoint
 
-    assert "id: 'protein_modification_experimental'" in launcher_text
-    assert "template_model_id: 'protein_local_redesign'" in frontend_text
-    assert "label: 'RFD3 Iteration Workbench'" in modification_modes_text
-    assert "ProteinLocalRedesignResultsPane" in results_text
-    assert "isProteinLocalRedesignResultJob" in results_text
-    assert "id: protein_local_redesign" in model_text
-    assert "workflow PROTEIN_LOCAL_REDESIGN" in workflow_text
-    assert "workflow {" in workflow_text
-    assert "PROTEIN_LOCAL_REDESIGN()" in workflow_text
+    retired = yaml.safe_load((API_ROOT / "config/models/protein_local_redesign.yaml").read_text())
+    assert retired["id"] == "protein_local_redesign"
+    assert retired["public_launch"] is False
+    assert retired["enabled"] is False
+    active = yaml.safe_load((API_ROOT / "config/models/protein_modification_experimental.yaml").read_text())
+    assert "region_redesign" in {mode["id"] for mode in active["modes"]}
+    assert resolve_nextflow_entrypoint(
+        effective_profile="protein_local_redesign",
+        model_id="protein_modification_experimental", mode="region_redesign", params={},
+    ) == "workflows/protein_local_redesign.nf"
+    workflow = (REPO_ROOT / "workflows/protein_local_redesign.nf").read_text()
+    assert "workflow PROTEIN_LOCAL_REDESIGN" in workflow
+    assert "PROTEIN_LOCAL_REDESIGN()" in workflow
 
 
-def test_build_nextflow_command_maps_protein_local_redesign_params() -> None:
-    cmd = build_nextflow_command(
-        "protein_local_redesign",
-        "local_redesign",
-        {
-            "input_pdb": "/tmp/input.pdb",
-            "design_chains": "A",
-            "context_chains": "B",
-            "region_mode": "manual_ranges",
-            "redesign_ranges": "45-58,83-91",
-            "interface_cutoff": 6.5,
-            "region_padding": 3,
-            "num_designs": 12,
-            "seed": 23,
-            "dump_trajectories": True,
-            "write_full_json": False,
-            "rfd3_batches_per_design": 99,
-            "seq_method": "fampnn",
-            "seqs_per_design": 6,
-            "fix_fixed_sidechains": True,
-            "run_boltz_validation": True,
-            "boltz_sampling_steps": 150,
-            "boltz_recycling_steps": 4,
-            "interactive_gating": True,
-            "interactive_gate_stage": "post_fampnn",
-            "backbone_input_pdbs": "/tmp/plr_backbones",
-            "region_manifest": "/tmp/region_manifest.json",
-            "final_candidate_dir": "/tmp/final_candidates",
-        },
-        "/tmp/out",
-        job_id="job-123",
-    )
-
-    joined = " ".join(cmd)
-
+@pytest.mark.parametrize("padding", [0, 3])
+def test_build_nextflow_command_maps_active_region_loop_params(padding) -> None:
+    params = {
+        "input_pdb": "/source/input.pdb", "design_chains": "A", "context_chains": "B",
+        "region_padding": padding, "seq_method": "fampnn", "seqs_per_design": 6,
+        "fix_fixed_sidechains": False, "interactive_gating": True,
+        "interactive_gate_stage": "post_fampnn", "backbone_input_pdbs": "/source/backbones",
+        "region_manifest": "/source/manifest.json", "fixed_positions": "A1,A3",
+        "designable_positions": "A2", "resequence_sources": [{"private": "custody"}],
+        "resequence_preparation": {"private": "custody"},
+    }
+    cmd = build_nextflow_command("protein_modification_experimental", "region_redesign",
+                                 params, "/output", job_id="region-loop")
     assert cmd[1:4] == ["run", "workflows/protein_local_redesign.nf", "-profile"]
     assert "protein_local_redesign,workstation_ryzen7960x" in cmd
-    assert "--plr_input_pdb /tmp/input.pdb" in joined
-    assert "--plr_design_chains A" in joined
-    assert "--plr_context_chains B" in joined
-    assert "--plr_region_mode manual_ranges" in joined
-    assert "--plr_redesign_ranges 45-58,83-91" in joined
-    assert "--plr_interface_cutoff 6.5" in joined
-    assert "--plr_region_padding 3" in joined
-    assert "--plr_num_designs 12" in joined
-    assert "--plr_seed 23" in joined
-    assert "--plr_dump_trajectories true" in joined
-    assert "--plr_write_full_json true" in joined
-    assert "--rfd3_batches_per_design 12" in joined
-    assert "--rfd3_batches_per_design 99" not in joined
-    assert "--plr_seq_method skip" in joined
-    assert "--plr_fix_fixed_sidechains" not in joined
-    assert "--plr_run_boltz_validation false" in joined
-    assert "--interactive_gating false" in joined
-    assert "--interactive_gate_stage" not in joined
-    assert "--plr_backbone_input_pdbs" not in joined
-    assert "--plr_region_manifest" not in joined
-    assert "--plr_final_candidate_dir" not in joined
-    assert "--rfd_num_designs 12" in joined
-    assert "--rfd_mode protein_local_redesign" in joined
-    assert "--seqs_per_design" not in joined
-    assert "--boltz_sampling_steps" not in joined
-    assert "--boltz_recycling_steps" not in joined
-    assert "--input_pdb /tmp/input.pdb" not in joined
-    assert "--design_chains A" not in joined
+    expected = {
+        "plr_input_pdb": "/source/input.pdb", "plr_design_chains": "A", "plr_context_chains": "B",
+        "plr_region_padding": str(padding), "plr_seq_method": "fampnn", "seqs_per_design": "6",
+        "plr_fix_fixed_sidechains": "false", "interactive_gating": "true",
+        "interactive_gate_stage": "post_fampnn", "plr_backbone_input_pdbs": "/source/backbones",
+        "plr_region_manifest": "/source/manifest.json", "plr_fixed_positions": "A1,A3",
+        "plr_designable_positions": "A2", "modification_mode": "region_redesign",
+    }
+    for key, value in expected.items():
+        assert cmd.count("--" + key) == 1
+        assert cmd[cmd.index("--" + key) + 1] == value
+    for key in ("input_pdb", "design_chains", "context_chains", "region_padding",
+                "fixed_positions", "designable_positions", "resequence_sources", "resequence_preparation"):
+        assert "--" + key not in cmd
 
 
 def test_experimental_protein_local_redesign_maps_validator_suite() -> None:
@@ -449,150 +389,36 @@ def test_protein_local_validator_selection_rejects_unavailable_models() -> None:
         _validate_plr_validator_availability(Registry(), {"structure_validators": ["boltz2"]})
 
 
-def test_native_rfd3_command_uses_exact_canonical_execution_controls() -> None:
-    module_text = (REPO_ROOT / "modules" / "rfd3.nf").read_text(encoding="utf-8")
+@pytest.mark.parametrize(("total", "batch_size", "batches"), [
+    (3, 1, [(3, 1)]), (6, 3, [(2, 3)]), (7, 3, [(2, 3), (1, 1)]),
+])
+def test_native_rfd3_command_uses_exact_canonical_execution_controls(total, batch_size, batches) -> None:
+    from scripts.rfd3_generation.run_native import commands
 
-    assert "n_batches=${num_designs}" in module_text
-    assert "diffusion_batch_size=1" in module_text
-    assert "seed=${seed}" in module_text
-    assert "dump_trajectories=${dumpTrajectories}" in module_text
-    assert "output_full_json=${writeFullJson}" in module_text
-    assert (
-        "publishDir \"${params.out_dir}/run/rfd3\", mode: 'copy', "
-        "pattern: \"rfd3_trajectories\", saveAs: { ignored -> 'trajectories' }"
-    ) in module_text
-    assert 'pattern: "rfd3_trajectories/*.cif.gz"' not in module_text
-    assert "trajectory_inventory.json" not in module_text
+    execution = {"diffusion_batch_size": batch_size, "seed": 0, "dump_trajectories": False,
+                 "write_full_json": True}
+    actual = commands({"generation": {"num_designs": total}, "execution": execution},
+                      "input with spaces.json", "output dir")
+    expected = []
+    for index, (count, size) in enumerate(batches):
+        command = ["rfd3", "inputs=input with spaces.json", "out_dir=output dir",
+                   f"n_batches={count}", f"diffusion_batch_size={size}",
+                   "dump_trajectories=false", "output_full_json=true", "seed=0"]
+        if len(batches) > 1:
+            command.append(f"global_prefix=bms_part{index}_")
+        expected.append(command)
+    assert actual == expected
+    module = (REPO_ROOT / "modules/rfd3.nf").read_text()
+    assert "def nativeRequest = localRedesignRequest || generalGenerationRequest" in module
+    assert "python3 /scripts/rfd3_generation/run_native.py --request" in module
+    assert """pattern: "rfd3_trajectories", saveAs: { ignored -> 'trajectories' }""" in module
+    assert 'pattern: "rfd3_trajectories/*.cif.gz"' not in module
+    assert "trajectory_inventory.json" not in module
 
 
-def test_native_manifest_separates_candidates_trajectories_and_runtime_evidence(tmp_path: Path) -> None:
-    source = tmp_path / "source.pdb"
-    source.write_text(
-        "ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 10.00           C\nEND\n",
-        encoding="utf-8",
-    )
-    request = build_request(
-        {
-            "input_structure": str(source),
-            "redesign_mode": "partial_diffusion",
-            "design_chains": ["A"],
-            "redesign_ranges": "A1",
-            "source_residue_identities": SOURCE_IDENTITIES[:1],
-            "num_designs": 1,
-            "sequence_policy": "skip",
-            "dump_trajectories": True,
-            "write_full_json": True,
-        },
-        source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
-    )
-    request_path = tmp_path / "request.json"
-    write_request(request_path, request)
-
-    candidate = tmp_path / "protein_local_redesign_0_0_model_0.cif.gz"
-    metadata = tmp_path / "protein_local_redesign_0_0_model_0.json"
-    denoised = tmp_path / "protein_local_redesign_0_0_denoised_model_0.cif.gz"
-    noisy = tmp_path / "protein_local_redesign_0_0_noisy_model_0.cif.gz"
-    candidate.write_bytes(b"candidate")
-    metadata.write_text(json.dumps({"producer_metric": 0.75}), encoding="utf-8")
-    denoised.write_bytes(b"denoised")
-    noisy.write_bytes(b"noisy")
-    receipt = tmp_path / "rfd3_preparation_receipt.json"
-    design_id = "protein_local_redesign_0"
-    runtime_native = dict(request["rfd3"])
-    runtime_native["input"] = source.name
-    native_json = json.dumps({design_id: runtime_native}, sort_keys=True, separators=(",", ":"))
-    native_input = tmp_path / "rfd3_input_protein_local_redesign_0.json"
-    native_input.write_text(native_json + "\n", encoding="utf-8")
-    receipt.write_text(
-        json.dumps(
-            {
-                "schema": "bms.rfd3.local-redesign.preparation-receipt.v1",
-                "request_sha256": request_sha256(request),
-                "native_input_sha256": hashlib.sha256(native_json.encode("utf-8")).hexdigest(),
-                "runtime_input": {
-                    "path": source.name,
-                    "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-                },
-                "design_id": design_id,
-                "redesign_mode": request["redesign_mode"],
-                "sequence_policy": request["sequence_policy"],
-                "sequence_design": {"state": "not_requested"},
-                "native_rfd3": runtime_native,
-            }
-        ),
-        encoding="utf-8",
-    )
-    log = tmp_path / "rfd3_protein_local_redesign_0.log"
-    log.write_text("producer log\n", encoding="utf-8")
-    metadata_jsonl = tmp_path / "rfd3_metadata_protein_local_redesign_0.jsonl"
-    metadata_jsonl.write_text("{}\n", encoding="utf-8")
-
-    storage_root = tmp_path / "job" / "run" / "rfd3"
-    trajectory_storage = storage_root / "trajectories"
-    trajectory_storage.mkdir(parents=True)
-    for artifact in (candidate, metadata, log, metadata_jsonl):
-        (storage_root / artifact.name).write_bytes(artifact.read_bytes())
-    for artifact in (denoised, noisy):
-        (trajectory_storage / artifact.name).write_bytes(artifact.read_bytes())
-    stored_request = tmp_path / "job" / "requests" / request_path.name
-    stored_request.parent.mkdir(parents=True)
-    stored_request.write_bytes(request_path.read_bytes())
-    stored_source = tmp_path / "job" / "external_inputs" / source.name
-    stored_source.parent.mkdir(parents=True)
-    stored_source.write_bytes(source.read_bytes())
-    stored_receipt = tmp_path / "job" / "collected" / "protein_local_redesign" / receipt.name
-    stored_receipt.parent.mkdir(parents=True)
-    stored_receipt.write_bytes(receipt.read_bytes())
-    stored_native_input = stored_receipt.parent / native_input.name
-    stored_native_input.write_bytes(native_input.read_bytes())
-    output = tmp_path / "manifest.json"
-
-    subprocess.run(
-        [
-            sys.executable,
-            str(REPO_ROOT / "scripts" / "rfd3_local_redesign" / "build_result_manifest.py"),
-            "--request", str(request_path),
-            "--cif-file", str(candidate),
-            "--json-file", str(metadata),
-            "--native-input", str(native_input),
-            "--native-input-storage-path", str(stored_native_input),
-            "--trajectory-file", str(denoised),
-            "--trajectory-file", str(noisy),
-            "--preparation-receipt", str(receipt),
-            "--log-file", str(log),
-            "--metadata-jsonl", str(metadata_jsonl),
-            "--output", str(output),
-            "--storage-root", str(storage_root),
-            "--request-storage-path", str(stored_request),
-            "--source-file", str(source),
-            "--source-storage-path", str(stored_source),
-            "--preparation-receipt-storage-path", str(stored_receipt),
-        ],
-        check=True,
-    )
-
-    manifest = json.loads(output.read_text(encoding="utf-8"))
-    assert len(manifest["candidates"]) == 1
-    candidate_roles = {artifact["role"] for artifact in manifest["candidates"][0]["artifacts"]}
-    assert candidate_roles == {
-        "structure",
-        "native_prediction_metadata",
-        "denoised_trajectory",
-        "noisy_trajectory",
-    }
-    assert manifest["execution_evidence"] == {
-        "requested_num_designs": 1,
-        "observed_num_designs": 1,
-        "candidate_count_integrity": "exact",
-        "trajectories": "produced",
-        "sequence_design": "not_requested",
-    }
-    assert {artifact["role"] for artifact in manifest["artifacts"]} >= {
-        "preparation_receipt",
-        "native_producer_input",
-        "producer_log",
-        "producer_metadata_index",
-    }
+# The retired local-redesign manifest producer was deleted intentionally.
+# Current generation custody is exercised by test_rfd3_generation_contract.py
+# (hash-bound manifest, tamper rejection, ingestion and typed reopening).
 
 
 def test_resolve_redesign_regions_accepts_plain_manual_ranges(tmp_path: Path) -> None:
@@ -680,7 +506,22 @@ def test_resolve_redesign_regions_accepts_plain_manual_ranges(tmp_path: Path) ->
         if not line.startswith(("ATOM", "HETATM")):
             continue
         labels_by_residue.setdefault(int(line[22:26]), set()).add(float(line[60:66]))
-    assert labels_by_residue == {1: {0.0}, 2: {1.0}, 3: {0.0}}
+    assert labels_by_residue == {1: {10.0}, 2: {10.0}, 3: {10.0}}
+    from scripts.proteinmpnn_native_binding import ROLE_REMARK
+
+    output_text = (mpnn_output / "candidate.pdb").read_text()
+    role_lines = [line[len(ROLE_REMARK):] for line in output_text.splitlines()
+                  if line.startswith(ROLE_REMARK)]
+    assert len(role_lines) == 1
+    roles = json.loads(role_lines[0])
+    assert roles["designed_chains"] == ["A"]
+    assert roles["fixed_chains"] == []
+    assert roles["source_residues"] == [["A", 1, ""], ["A", 2, ""], ["A", 3, ""]]
+    assert roles["fixed_positions"] == [["A", 1, ""], ["A", 3, ""]]
+    assert roles["source_pdb_sha256"] == hashlib.sha256(seed_text.encode()).hexdigest()
+    assert [line for line in output_text.splitlines() if line.startswith(("ATOM", "HETATM"))] == [
+        line for line in seed_text.splitlines() if line.startswith(("ATOM", "HETATM"))
+    ]
 
 
 
