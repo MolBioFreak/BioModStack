@@ -17,6 +17,21 @@ def artifact_root(monkeypatch, tmp_path):
     monkeypatch.setenv('BMS_SCIENTIFIC_ARTIFACT_ROOT', str(tmp_path / 'artifacts'))
 
 
+@pytest.mark.parametrize('continuation', [
+    'plr_final_candidate_dir', 'plr_sequence_input_pdbs', 'plr_validation_input_pdbs',
+])
+def test_local_continuation_does_not_reopen_inactive_backbones(tmp_path, continuation):
+    from services.fampnn_policy_admission import compile_declaration
+    params = {'seq_method': 'fampnn', 'backbone_input_pdbs': str(tmp_path / 'retired'),
+              continuation: str(tmp_path / 'selected'), 'design_chains': 'A'}
+    assert compile_declaration('protein_modification_experimental', 'region_redesign', params) is None
+    # Ordinary design still reads its real source; the continuation fix must
+    # not disable admission for an actual FAMPNN execution.
+    params.pop(continuation)
+    with pytest.raises(FileNotFoundError):
+        compile_declaration('protein_modification_experimental', 'region_redesign', params)
+
+
 def payload(tmp_path, overrides):
     pdb = tmp_path / 'input.pdb'
     pdb.write_text('ATOM      1  CA  ALA A   1      10.000  10.000  10.000  1.00 20.00           C\n'
