@@ -259,7 +259,16 @@ async def project_result_data(session, project_id, receipt_id):
         ack = _acknowledgement(receipt)
         _validate_persisted_authority(receipt, ack)
         metadata = ack['metadata']
-        entries = metadata['retained_artifacts']
+        entries = metadata.get('retained_artifacts')
+        if not entries:
+            # Manual Save retains resources beside the immutable source receipt.
+            # Derive only the canonical custody identities, never source paths.
+            from services.family_msa.publication import manual_result_inventory
+            entries = manual_result_inventory(receipt.id, project_id, metadata)
+            for entry in entries:
+                resource = await session.get(ExperimentResource, entry['resource_id'])
+                if not resource or resource.workspace_id != project_id or resource.lifecycle_owner_id != receipt.id:
+                    raise ValueError('manual result custody unavailable')
         if not isinstance(entries, list) or not entries or len({x['resource_id'] for x in entries}) != len(entries):
             raise ValueError('invalid retained inventory')
         source = {x['id']: x for x in metadata['artifacts']}

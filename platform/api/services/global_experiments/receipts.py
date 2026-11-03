@@ -266,37 +266,33 @@ async def _domain_payload(
     return project, domain, json.loads(revision.canonical_payload)
 
 
-async def _retain_manual_alignment(experiment_session, core_session, external, source_receipt):
-    """Add Project custody to a manually saved alignment without changing identity.
+async def _retain_manual_alignment(experiment_session, core_session, external):
+    """Retain copies beside an immutable reference, including historical saves.
 
-    Registration can reuse an older reference-only receipt. Its immutable source
-    identity/digest stays intact; the audited addition records verified copies.
+    The receipt is never rewritten. Custody uses deterministic resource identities
+    and an append-only audit event, with every artifact checked against its digest.
     """
     if external.entity_kind != 'family_msa_job_result':
         return
     acknowledgement = json.loads(external.acknowledgement_json)
     if acknowledgement['metadata'].get('retained_artifacts'):
         return
-    import uuid
-    from services.family_msa.publication import retain_job_artifact
-    metadata = source_receipt['metadata']
-    entries = [(metadata['manifest_artifact_id'], 'result_manifest')]
-    entries += [(item['id'], item['role']) for item in metadata['artifacts']]
-    retained = []
-    for artifact_id, role in entries:
-        resource_id = str(uuid.uuid5(uuid.NAMESPACE_URL,
-            f'bms:family-msa:manual:{external.workspace_id}:{external.id}:{artifact_id}'))
-        artifact = await retain_job_artifact(core_session, experiment_session,
-            job_id=external.entity_id, artifact_id=artifact_id,
+    from experiment_models import ExperimentArtifact
+    from services.family_msa.publication import retain_job_artifact, manual_result_inventory
+    retained = manual_result_inventory(external.id, external.workspace_id, acknowledgement['metadata'])
+    added = False
+    for entry in retained:
+        if await experiment_session.get(ExperimentArtifact, entry['resource_id']) is None:
+            added = True
+        await retain_job_artifact(core_session, experiment_session,
+            job_id=external.entity_id, artifact_id=entry['source_artifact_id'],
             workspace_id=external.workspace_id, lifecycle_owner_id=external.id,
-            resource_id=resource_id, logical_role=role,
+            resource_id=entry['resource_id'], logical_role=entry['role'],
             schema_name='bms.family-msa.native-artifact', schema_version='1')
-        retained.append({'source_artifact_id': artifact_id, 'resource_id': artifact.resource_id, 'role': role})
-    acknowledgement['metadata']['retained_artifacts'] = retained
-    external.acknowledgement_json = canonical_json(acknowledgement)
-    add_audit_event(experiment_session, workspace_id=external.workspace_id,
-        resource_id=external.id, event_type='family_msa_artifacts_retained', generation=0,
-        payload={'source_digest': external.content_digest, 'retained_artifacts': retained})
+    if added:
+        add_audit_event(experiment_session, workspace_id=external.workspace_id,
+            resource_id=external.id, event_type='family_msa_artifacts_retained', generation=0,
+            payload={'source_digest': external.content_digest, 'retained_artifacts': retained})
     await experiment_session.flush()
 
 
@@ -360,7 +356,7 @@ async def attach_verified_entity(
         acknowledgement=source_receipt,
         verification_authority=adapter.adapter_id,
     )
-    await _retain_manual_alignment(experiment_session, core_session, external, source_receipt)
+    await _retain_manual_alignment(experiment_session, core_session, external)
     normalized_request = {
         "schema": "bms.global.attachment-request.v1",
         "project_id": project_id,

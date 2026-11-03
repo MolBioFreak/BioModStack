@@ -139,12 +139,16 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
             store_id=verified['store_id'], entity_kind=verified['entity_kind'], entity_id=verified['entity_id'],
             generation_or_revision=verified['entity_revision_id'], content_digest=verified['content_digest'],
             availability='available', acknowledgement=verified, verification_authority=adapter.adapter_id)
+        # Exercise the deployed immutable-receipt rule (the lightweight store
+        # fixture does not otherwise install migration triggers).
+        from sqlalchemy import text
+        await pm.execute(text("CREATE TRIGGER IF NOT EXISTS test_receipt_immutable BEFORE UPDATE ON external_entity_receipts BEGIN SELECT RAISE(ABORT, 'external entity receipt is immutable'); END"))
         attachment = await attach_verified_entity(pm, core, project_id=manual_project.id,
             global_experiment_id=manual_global.id, domain_experiment_id=manual_domain.id,
             adapter_id=adapter.adapter_id, entity_id='canonical-job-completed',
             operation='link_output', role='produced', note=None, expected_head_generation=manual_project.head_generation)
         assert attachment['source_receipt_id'] == reference.id
-        assert len(json.loads(reference.acknowledgement_json)['metadata']['retained_artifacts']) == len(artifacts)
+        assert 'retained_artifacts' not in json.loads(reference.acknowledgement_json)['metadata']
         manual_project_id, manual_receipt_id = manual_project.id, reference.id
         await pm.commit()
     import httpx
