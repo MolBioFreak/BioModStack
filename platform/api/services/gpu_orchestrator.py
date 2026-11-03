@@ -3458,9 +3458,16 @@ class GPUOrchestrator:
                 # index answers the first, so the large provenance column is read only for the
                 # few jobs that have a remote execution target.
                 by_queue_status = select(Job.id).where(Job.queue_status.in_(("running", "cancelling", "preparing")))
+                by_review_gate = select(Job.id).where(
+                    Job.status == "awaiting_input", Job.awaiting_input.is_(True),
+                    Job.queue_status != "cancelling",
+                    Job.awaiting_payload["component_checkpoint"].as_string().is_not(None),
+                )
                 by_remote_owner = select(Job.id).where(
                     Job.execution_target_id.is_not(None),
                     leased_owner
+                    | ((Job.params["permanent_delete_cleanup"].as_boolean().is_(True))
+                       & (func.coalesce(Job.remote_state, "") != "cancelled"))
                     | (Job.remote_state == "results_available")
                     | (
                         Job.status.in_(("failed", "cancelled"))
@@ -3468,7 +3475,7 @@ class GPUOrchestrator:
                     ),
                 )
                 result = await session.execute(
-                    select(Job).where(Job.id.in_(by_queue_status.union(by_remote_owner)))
+                    select(Job).where(Job.id.in_(by_queue_status.union(by_remote_owner, by_review_gate)))
                 )
                 running_jobs = result.scalars().all()
 
@@ -3483,6 +3490,25 @@ class GPUOrchestrator:
                     if task.done():
                         del self._remote_reconciliation_tasks[remote_id]
 
+                local_gates = [job for job in running_jobs if job.status == "awaiting_input"
+                               and (job.awaiting_payload or {}).get("component_checkpoint")]
+                running_jobs = [job for job in running_jobs if job not in local_gates]
+                from services.stage_review import publish_local_checkpoint_review_rows
+                for gate in local_gates:
+                    gate_id = str(gate.id)
+                    attempts = getattr(self, "_local_review_row_attempts", {})
+                    self._local_review_row_attempts = attempts
+                    now = time.monotonic()
+                    if now - attempts.get(gate_id, -60.0) < 60.0:
+                        continue
+                    attempts[gate_id] = now
+                    # Separate session: rollback of this optional projection must
+                    # not expire unrelated scheduler snapshots.
+                    try:
+                        async with self.db_session_factory() as review_session:
+                            await publish_local_checkpoint_review_rows(review_session, gate_id)
+                    except Exception:
+                        logger.exception("Job %s: review projection remains pending", gate_id)
                 if not running_jobs:
                     return
 

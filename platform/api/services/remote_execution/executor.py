@@ -1453,7 +1453,12 @@ async def request_remote_checkpoint_resume(session: AsyncSession, job: Job, chec
                 # The lock holder (reconcile) may have rewritten the job while we waited; the owned path's
                 # compare-and-swap must see the current row, not the snapshot the request loaded earlier.
                 await session.refresh(job)
-                return await _request_remote_checkpoint_resume_owned(session, job, checkpoint, decision)
+                from .targets import ExecutionTargetError
+                try:
+                    return await _request_remote_checkpoint_resume_owned(session, job, checkpoint, decision)
+                except ExecutionTargetError as exc:
+                    await session.rollback()
+                    raise RemoteExecutionError(str(exc)) from exc
         if loop.time() >= deadline:
             raise RemoteExecutionError('Checkpoint controller operation is already active')
         await asyncio.sleep(0.25)
@@ -1669,11 +1674,7 @@ async def publish_remote_review_rows(session: AsyncSession, job: Job) -> int:
                           if item.get('schema') == 'bms.stage-review.candidate.v1'})
         if len(folders) != 1:
             return 0
-        payload = dict(job.awaiting_payload or {})
-        payload['candidate_dir'] = str(folders[0])
-        job.awaiting_payload = payload
-        await session.commit()
-        return await ensure_stage_review_rows(session, job)
+        return await ensure_stage_review_rows(session, job, candidate_dir=folders[0])
     except Exception:
         log.exception("Job %s: remote review rows for gate '%s' were not published; the gate stays open",
                       job.id, job.awaiting_stage)
@@ -2395,11 +2396,10 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
                 raise RemoteExecutionError("Remote review checkpoint identity is incomplete or foreign")
         if job.remote_state == "awaiting_input" and job.awaiting_input:
             # Rows missing (first attempt failed or predates this publisher): retry, at most once a minute.
-            if 'candidate_dir' not in (job.awaiting_payload or {}):
-                now = time.monotonic()
-                if now - _review_row_attempts.get(str(job.id), -60.0) >= 60.0:
-                    _review_row_attempts[str(job.id)] = now
-                    await publish_remote_review_rows(session, job)
+            now = time.monotonic()
+            if now - _review_row_attempts.get(str(job.id), -60.0) >= 60.0:
+                _review_row_attempts[str(job.id)] = now
+                await publish_remote_review_rows(session, job)
             return False
         receipt = dict((job.provenance or {}).get('remote_execution_receipt') or {})
         receipt.update(boot_id=status.boot_id, generation=status.generation,

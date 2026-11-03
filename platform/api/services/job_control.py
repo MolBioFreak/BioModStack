@@ -28,6 +28,51 @@ _ACTIVE_JOB_STATUSES = {
 }
 
 
+def checkpoint_continuation_predicates(job: Job) -> tuple:
+    """Use in the local Continue UPDATE, after native checkpoint validation.
+
+    Match both the captured queue/params and absence of current cancel intent;
+    a fresh read of a cancelling row must not authorize continuation either.
+    """
+    from sqlalchemy import func
+    return (
+        Job.id == job.id, Job.status == "awaiting_input", Job.awaiting_input.is_(True),
+        Job.queue_status == job.queue_status, Job.queue_status != "cancelling",
+        Job.params == job.params,
+        func.coalesce(Job.params["cancellation_receipt"]["state"].as_string(), "").notin_(("requested", "completed")),
+        Job.awaiting_payload == job.awaiting_payload, Job.provenance == job.provenance,
+    )
+
+
+async def retain_permanent_delete_cleanup(session: AsyncSession, job: Job) -> bool:
+    """Retain the SAME cancelled Job as hidden cleanup custody, not new work.
+
+    The delete route removes user records but must exclude this row and its
+    output paths from physical deletion when True. List/detail routes hide the
+    params marker. The existing reconciler drains this owner; the hidden row
+    remains a cleanup receipt (and keeps retained output-directory custody).
+    """
+    from services.remote_execution.claims import outstanding_claim_clause
+    await session.refresh(job)
+    if not job.execution_target_id:
+        return False
+    outstanding = await session.scalar(select(Job.id).where(Job.id == job.id, outstanding_claim_clause()))
+    receipt = (job.params or {}).get("cancellation_receipt") or {}
+    if not outstanding and receipt.get("remote_stop_verified") is True:
+        return False
+    params = dict(job.params or {})
+    params["permanent_delete_cleanup"] = True
+    changed = await session.execute(update(Job).where(
+        Job.id == job.id, Job.status == job.status, Job.params == job.params,
+        Job.provenance == job.provenance, Job.remote_attempt_id == job.remote_attempt_id,
+    ).values(params=params, parent_job_id=None, status="cancelled", queue_status="cancelled",
+             awaiting_input=False, awaiting_stage=None, awaiting_payload={}).execution_options(synchronize_session=False))
+    if changed.rowcount != 1:
+        raise HTTPException(status_code=409, detail="Deletion owner changed during cleanup handoff")
+    await session.refresh(job)
+    return True
+
+
 async def get_md_owned_job_ids(session: AsyncSession) -> set[str]:
     roots = set((await session.scalars(select(MdRun.job_id))).all())
     if not roots:
