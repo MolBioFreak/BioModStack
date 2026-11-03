@@ -395,6 +395,18 @@ async def materialize_structure(
     session: AsyncSession = Depends(get_session),
     governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
 ):
+    return await materialize_structure_source(payload, session, governed_roots)
+
+
+async def materialize_structure_source(
+    payload: StructureSourceRequest, session: AsyncSession,
+    governed_roots: tuple[Path, ...], *, destination: Path | None = None,
+):
+    """Shared exact acquisition for files and Resequence; destination is caller-owned.
+
+    A supplied destination must not exist. Failure removes only the directory
+    created by this acquisition, never a source or a prior preparation.
+    """
     from services.binder_source_materialization import resolve_structure_source, materialize_source_bytes, structure_suffix
     directory = None
     try:
@@ -417,14 +429,26 @@ async def materialize_structure(
             raise ValueError("Selected source bytes changed")
         parent = resolve_allowed_path("inputs")
         parent.mkdir(parents=True, exist_ok=True)
-        directory = Path(tempfile.mkdtemp(prefix="structure-", dir=parent))
+        if destination is None:
+            directory = Path(tempfile.mkdtemp(prefix="structure-", dir=parent))
+        else:
+            destination.resolve().relative_to(parent.resolve())
+            destination.mkdir(parents=True, exist_ok=False)
+            directory = destination
         result = materialize_source_bytes(raw, structure_suffix(source), directory,
             output_format=payload.output_format, model_number=payload.model_number,
             verified_original_sha256=digest)
         retained = payload.model_copy(update={"path": result["original_path"],
                                               "expected_sha256": result["original_sha256"]})
-        return {**result, "source_identity": identity, "source_path": to_allowed_relative(source),
-                "source_structure": retained.model_dump(mode="json", exclude_none=True)}
+        result = {**result, "source_identity": identity, "source_path": to_allowed_relative(source),
+                  "source_structure": retained.model_dump(mode="json", exclude_none=True)}
+        # Keep the already governed acquisition's ancestry beside its retained
+        # bytes. Replay access is still governed by the inputs path and digest,
+        # not by the continued existence of a historical producer row.
+        import json
+        (directory / '.source-custody.json').write_text(json.dumps({
+            'source_structure': result['source_structure'], 'source_identity': identity}, sort_keys=True))
+        return result
     except HTTPException:
         if directory is not None:
             shutil.rmtree(directory)

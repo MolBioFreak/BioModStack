@@ -137,11 +137,76 @@ def structure_suffix(path: Path) -> str:
     return path.suffix.lower()
 
 
+def _select_pdb_model(raw: bytes, number: int) -> bytes:
+    """Project supplied records, not rewritten coordinates or inferred chemistry.
+
+    Keep atom serials/altlocs and declarations verbatim when their endpoints
+    survive. CONECT multiplicity is significant (e.g. explicit double bonds).
+    Global headers describe the deposited source; MODEL-local records belonging
+    to other frames are never borrowed, even when atom serials overlap.
+    """
+    lines = raw.splitlines(keepends=True)
+    scoped = []
+    current = None
+    explicit = any(line[:6].strip() == b'MODEL' for line in lines)
+    for line in lines:
+        record = line[:6].strip()
+        if record == b'MODEL':
+            current = int(line[10:14])
+        if current is None or current == number:
+            scoped.append(line)
+        if record == b'ENDMDL':
+            current = None
+    # Implicit PDB MODEL identity is zero at the existing Bio.PDB owner.
+    if not explicit and number != 0:
+        raise ValueError('Requested model is not present in this exact document')
+    atoms = [line for line in scoped if line[:6].strip() in {b'ATOM', b'HETATM'}]
+    serials = {line[6:11].strip() for line in atoms}
+    identities = {(line[12:16], line[16:17], line[17:20], line[21:22],
+                   line[22:26], line[26:27]) for line in atoms}
+
+    def endpoint(atom, alt, residue, chain, seq, insertion):
+        return any(a == atom and (not alt.strip() or b == alt) and
+                   (c, d, e, f) == (residue, chain, seq, insertion)
+                   for a, b, c, d, e, f in identities)
+
+    kept = []
+    for line in scoped:
+        record = line[:6].strip()
+        if record == b'CONECT':
+            body = line.rstrip(b'\r\n')
+            fields = [body[i:i + 5] for i in range(6, len(body), 5)]
+            if not fields or fields[0].strip() not in serials:
+                continue
+            valid = [field for field in fields[1:] if field.strip() in serials]
+            if not valid:
+                continue
+            # An unchanged record, including padding/newline, stays byte exact.
+            if any(field.strip() and field.strip() not in serials for field in fields[1:]):
+                ending = line[len(body):]
+                line = body[:6] + fields[0] + b''.join(valid) + ending
+        elif record == b'LINK':
+            if not (endpoint(line[12:16], line[16:17], line[17:20], line[21:22], line[22:26], line[26:27])
+                    and endpoint(line[42:46], line[46:47], line[47:50], line[51:52], line[52:56], line[56:57])):
+                continue
+        elif record == b'SSBOND':
+            if not (endpoint(b' SG ', b' ', line[11:14], line[15:16], line[17:21], line[21:22])
+                    and endpoint(b' SG ', b' ', line[25:28], line[29:30], line[31:35], line[35:36])):
+                continue
+        elif record == b'NUMMDL':
+            line = line[:10] + b'   1' + line[14:]
+        elif record == b'MASTER':
+            # Deposited record counts no longer describe this projection.
+            continue
+        kept.append(line)
+    return b''.join(kept)
+
+
 def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, output_format: str,
                              model_number: int | None = None,
                              verified_original_sha256: str | None = None) -> dict:
     """Retain stored/native bytes and expose explicitly identified derivatives."""
-    from Bio.PDB import MMCIFIO, PDBParser, PDBIO, Select
+    from Bio.PDB import MMCIFIO, PDBParser
     from Bio.PDB.MMCIF2Dict import MMCIF2Dict
     from Bio.PDB.PDBExceptions import PDBConstructionException, PDBIOException
     from biotite import InvalidFileError
@@ -231,13 +296,9 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
             if model_number is not None:
                 if model_number not in numbers:
                     raise ValueError('Requested model is not present in this exact document')
-                class ExactModel(Select):
-                    def accept_model(self, model):
-                        return int(model.serial_num) == model_number
                 consumed = destination / f'model-{model_number}.pdb'
-                writer = PDBIO(); writer.set_structure(structure)
-                out = io.StringIO(); writer.save(out, select=ExactModel(), preserve_atom_numbering=True)
-                consumed_bytes = out.getvalue().encode(); consumed.write_bytes(consumed_bytes)
+                consumed_bytes = _select_pdb_model(raw, model_number)
+                consumed.write_bytes(consumed_bytes)
             identity = [{'model_number': int(m.serial_num), 'auth_asym_id': c.id,
                          'auth_seq_id': r.id[1], 'insertion_code': r.id[2].strip(), 'residue_name': r.resname}
                         for m in structure if model_number is None or int(m.serial_num) == model_number
@@ -327,9 +388,131 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
             'author_residues': identity, 'inspection_error': inspection_error, **ledger}
 
 
-async def resolve_structure_source(request: StructureSourceRequest, session):
+async def prepare_resequence_sources(sources, session, selection_dir: Path,
+                                     governed_roots: tuple[Path, ...]) -> list[dict]:
+    """Use the files acquisition contract, retaining each byte domain and selector.
+
+    The existing selection directory is the lifecycle owner. Its caller cleans
+    the entire preparation on any failure, including later settings validation.
+    Only root-level PDBs enter the existing loop input glob.
+    """
+    import shutil
+    from routers.files import materialize_structure_source
+
+    roster = []
+    for index, request in enumerate(sources, start=1):
+        result = await materialize_structure_source(
+            request.model_copy(update={'output_format': 'pdb'}), session, governed_roots,
+            destination=selection_dir / '.sources' / f'{index:03d}')
+        source_name = Path(result['source_path']).name
+        suffix = structure_suffix(Path(source_name))
+        stem = source_name[:-len(suffix)] if suffix else source_name
+        consumed = selection_dir / f'{index:03d}_{stem}.pdb'
+        shutil.copyfile(resolve_allowed_path(result['path']), consumed)
+        roster.append({**result, 'path': to_allowed_relative(consumed),
+                       'source_request': request.model_dump(mode='json', exclude_none=True)})
+    return roster
+
+
+def begin_resequence_preparation(selection_dir: Path) -> dict:
+    """Issue a cleanup capability for this newly allocated staging directory."""
+    import json
+    import secrets
+
+    root = resolve_allowed_path('inputs/design_selections/protein_local_redesign')
+    if selection_dir.resolve().parent != root.resolve() or selection_dir.is_symlink():
+        raise ValueError('Not a Resequence preparation directory')
+    receipt = {'path': to_allowed_relative(selection_dir), 'token': secrets.token_hex(32)}
+    with (selection_dir / '.resequence-preparation.json').open('x') as handle:
+        json.dump(receipt, handle)
+    return receipt
+
+
+async def cleanup_resequence_preparation(receipt: dict, session) -> bool:
+    """Remove only capability-bound, unsubmitted staging and its template sibling.
+
+    Call under the same submission lifecycle lock as Job creation. A submitted
+    request (including another run reusing this path) owns its inputs permanently.
+    Returning false is an idempotent no-op, not a scientific launch condition.
+    """
+    import json
+    import secrets
+    import shutil
     from sqlalchemy import select
-    from services.binder_diagnostic_selection import root_id
+
+    root = resolve_allowed_path('inputs/design_selections/protein_local_redesign')
+    directory = resolve_allowed_path(receipt['path'])
+    if directory.parent != root.resolve() or directory.is_symlink():
+        raise ValueError('Not a Resequence preparation directory')
+    marker = directory / '.resequence-preparation.json'
+    if not marker.exists():
+        return False
+    if marker.is_symlink():
+        raise ValueError('Invalid preparation receipt')
+    bound = json.loads(marker.read_text())
+    if (bound.get('path') != to_allowed_relative(directory) or
+            not secrets.compare_digest(str(bound.get('token', '')), str(receipt.get('token', ''))) or
+            not bound.get('token')):
+        raise ValueError('Invalid preparation receipt')
+
+    def references(value):
+        if isinstance(value, dict):
+            return any(references(item) for item in value.values())
+        if isinstance(value, list):
+            return any(references(item) for item in value)
+        if not isinstance(value, str):
+            return False
+        if value == str(directory.with_name(directory.name + '_designer.json')):
+            return True
+        if not (value.startswith('inputs/') or value.startswith('/')):
+            return False
+        try:
+            path = Path(value).resolve() if Path(value).is_absolute() else resolve_allowed_path(value)
+            return (path == directory or directory in path.parents or
+                    path == directory.with_name(directory.name + '_designer.json'))
+        except ValueError:
+            return False
+
+    # Load through the ORM's scientific-artifact hydration owner; scalar JSON
+    # columns can be externalized references rather than the actual params.
+    for job in (await session.scalars(select(Job))).all():
+        if references(job.params) or references(job.provenance):
+            return False
+    template = directory.with_name(directory.name + '_designer.json')
+    # unlink never follows a sibling symlink to someone else's file.
+    template.unlink(missing_ok=True)
+    shutil.rmtree(directory)
+    return True
+
+
+async def resolve_structure_source(request: StructureSourceRequest, session):
+    import json
+
+    # A frozen input is an allowed-path resource; producer identity is ancestry,
+    # not an authorization dependency. Only an exact saved acquisition binding
+    # takes this path. Unretained artifact selectors keep their registry checks.
+    if request.path and request.expected_sha256:
+        retained_path = resolve_allowed_path(request.path)
+        inputs = resolve_allowed_path('inputs')
+        if inputs in retained_path.parents:
+            receipt_path = retained_path.parent / '.source-custody.json'
+            if receipt_path.is_file() and not receipt_path.is_symlink():
+                try:
+                    receipt = json.loads(receipt_path.read_text())
+                except (OSError, ValueError):
+                    receipt = {}
+                if not isinstance(receipt, dict):
+                    receipt = {}
+                saved = receipt.get('source_structure') or {}
+                if not isinstance(saved, dict):
+                    saved = {}
+                supplied = request.model_dump(mode='json', exclude_none=True)
+                # Output representation may change on reopening; original
+                # selector, digest and MODEL must remain the saved binding.
+                def binding(value):
+                    return {k: v for k, v in value.items() if k != 'output_format'}
+                if binding(saved) == binding(supplied):
+                    return retained_path, receipt.get('source_identity') or {}
     identity = {}
     if request.candidate is not None:
         ref = request.candidate
