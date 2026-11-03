@@ -73,7 +73,7 @@ async def test_loop_route_real_child_lineage_placement_and_copy(child_db, monkey
     review = source_root / '.bms-review-import/test/candidate'
     review.mkdir(parents=True)
     original = _pdb().replace(b'END\n', atom(5, 'H', 'GLY', 'A', 1, 'H').encode() + b'END\n')
-    candidate = review / 'candidate.pdb'
+    candidate = review / ('candidate.pdb' if published else 'candidate with spaces.pdb')
     candidate.write_bytes(original)
     async with sessions() as session:
         source = Job(id='loop', name='loop', params={}, model_id='protein_local_redesign', mode='design',
@@ -94,7 +94,7 @@ async def test_loop_route_real_child_lineage_placement_and_copy(child_db, monkey
             yield session
         app.dependency_overrides[get_session] = dependency
         app.dependency_overrides[get_experiment_session] = dependency
-        body = {'names': ['candidate.pdb']}
+        body = {'names': [candidate.name]}
         if placement != 'omitted':
             body['execution_target_id'] = 'vast:fixture' if placement == 'worker' else None
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:

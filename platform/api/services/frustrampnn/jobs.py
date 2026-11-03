@@ -377,7 +377,7 @@ async def loop_candidate_selection(
         media_type="chemical/x-pdb", source_format="pdb",
         producer_stage="resequence_loop_candidate",
         producer_coordinates={
-            "candidate_id": path.stem, "candidate_filename": path.name,
+            "candidate_filename": path.name,
             "source_job_id": str(source_parent.id),
             "source_design_id": str(design.id) if design is not None else None,
             "original_source_sha256": original_sha256,
