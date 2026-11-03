@@ -155,6 +155,10 @@ async def test_retained_review_reopens_after_original_worker_removed(store, tmp_
 @pytest.mark.parametrize('target', [None, 'new-worker'])
 async def test_successor_is_selected_native_job_not_old_runtime(store, tmp_path, monkeypatch, target):
     job, retained = retained_job(tmp_path)
+    # Persisted FAMPNN authority belongs to the original attempt, not the
+    # public JobCreate request for an ordinary checkpoint successor.
+    job.params = {**job.params, 'fampnn_analysis_declaration': {'retained': True},
+                  'fampnn_analysis_policy': {'retained': True}}
     monkeypatch.setattr(executor, 'run_remote', no_transport)
     async with store() as session:
         session.add(job)
@@ -170,6 +174,7 @@ async def test_successor_is_selected_native_job_not_old_runtime(store, tmp_path,
             {'selected_artifacts': selected}, target)
         assert request.execution_target_id == target
         assert request.execution_plan_approval is None
+        assert not {'fampnn_analysis_declaration', 'fampnn_analysis_policy'} & request.params.keys()
         assert request.params['seed'] == 0 and request.params['interactive_gating'] is False
         assert request.params['custom_native_setting'] == job.params['custom_native_setting']
         assert 'resume_source_dir' not in request.params and 'resume_work_dir' not in request.params

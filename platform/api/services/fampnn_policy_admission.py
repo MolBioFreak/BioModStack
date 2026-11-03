@@ -291,6 +291,12 @@ def compile_declaration(model_id, mode, params, overrides=None, *, parent=None):
         if overrides.summary is not None or overrides.mutation is not None:
             raise ValueError('FA-MPNN declaration owner unresolved for this caller')
         return None
+    if local and any(params.get(key) for key in (
+            'plr_final_candidate_dir', 'plr_sequence_input_pdbs', 'plr_validation_input_pdbs')):
+        # These native continuation branches publish retained candidates or run
+        # validators only. Do not reopen the original backbone collection to
+        # mint analysis authority for a FAMPNN stage that will not execute.
+        return None
     if local and not (params.get('input_pdb') or params.get('plr_input_pdb')):
         if params.get('backbone_input_pdbs') or params.get('plr_backbone_input_pdbs'):
             return _local_collection(params, overrides)

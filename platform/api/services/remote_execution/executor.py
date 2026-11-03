@@ -1771,7 +1771,8 @@ async def prepare_checkpoint_successor(session: AsyncSession, job: Job, checkpoi
             if key.startswith('resume_') or key in {'out_dir', 'output_dir', 'work_dir', 'stage_work_dir',
                     'batch_name', 'job_name', 'gpu_id', 'gpu_ids', 'pinned_gpus', 'execution_target_id',
                     'remote_result_policy', 'execution_policy', 'core_protein_scientific_contract',
-                    'core_protein_requested_params', 'checkpoint_successor'}:
+                    'core_protein_requested_params', 'checkpoint_successor',
+                    'fampnn_analysis_declaration', 'fampnn_analysis_policy'}:
                 params.pop(key, None)
         params.update(resume_requested_stage=hint, reorchestrated_from_job_id=job.id,
             lineage_root_job_id=job.lineage_root_job_id or job.id,
