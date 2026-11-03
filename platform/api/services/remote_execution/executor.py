@@ -1614,15 +1614,13 @@ async def retrieve_remote_checkpoint_review(session: AsyncSession, job: Job, che
     """Explicit selected-file transfer only; no terminal result import or release."""
     import tempfile
     from component_runtime import ResultReference
-    observed = await remote_status(session, job)
-    if (observed.state != 'awaiting_input' or not observed.quiescent
-            or checkpoint not in observed.checkpoints):
-        raise RemoteExecutionError('Review checkpoint is no longer the quiescent owned observation')
     refs = [ResultReference(**item) for item in checkpoint['artifacts']]
-    if not refs or sum(ref.size_bytes for ref in refs) > 64 * 1024 * 1024:
+    optional = [ref for ref in refs if ref.schema == 'bms.stage-review.validator-scores.v1']
+    required = [ref for ref in refs if ref.schema != 'bms.stage-review.validator-scores.v1']
+    if not required or sum(ref.size_bytes for ref in required) > 64 * 1024 * 1024:
         raise RemoteExecutionError('Declared review set is empty or exceeds the bounded 64 MiB review transfer')
-    target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
-    connection, attempt_dir = _connection_for_attempt(target, job)
+    if sum(ref.size_bytes for ref in refs) > 64 * 1024 * 1024:
+        optional = []  # oversized advisory scores do not prevent stage pickup
     output = Path(job.output_dir)
     if not output.is_absolute():
         output = get_data_root() / output
@@ -1630,26 +1628,205 @@ async def retrieve_remote_checkpoint_review(session: AsyncSession, job: Job, che
     review_root.mkdir(parents=True, exist_ok=True)
     destination = review_root / checkpoint['checkpoint_sha256']
     if destination.exists():
-        for ref in refs:
+        if json.loads((destination / 'checkpoint-review.json').read_text()) != checkpoint:
+            raise RemoteExecutionError('Retained review checkpoint identity conflicts')
+        for ref in required:
             ref.resolve(destination)
         return destination
+    observed = await remote_status(session, job)
+    if (observed.state != 'awaiting_input' or not observed.quiescent
+            or checkpoint not in observed.checkpoints):
+        raise RemoteExecutionError('Review checkpoint is no longer the quiescent owned observation')
+    target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
+    connection, attempt_dir = _connection_for_attempt(target, job)
     with tempfile.TemporaryDirectory(prefix='.incoming-', dir=review_root) as temporary:
         incoming = Path(temporary)
         await rsync_selected_from_remote(connection, attempt_dir + '/results', incoming,
-            [ref.relative_path for ref in refs], max_file_bytes=64 * 1024 * 1024, timeout=300)
-        for ref in refs:
+            [ref.relative_path for ref in required], max_file_bytes=64 * 1024 * 1024, timeout=300)
+        for ref in required:
             ref.resolve(incoming)
+        if optional:
+            try:
+                await rsync_selected_from_remote(connection, attempt_dir + '/results', incoming,
+                    [ref.relative_path for ref in optional], max_file_bytes=64 * 1024 * 1024, timeout=300)
+            except (RemoteTransportError, OSError, ValueError):
+                import logging
+                logging.getLogger(__name__).warning('Optional validator score transfer failed for Job %s', job.id, exc_info=True)
         current = await remote_status(session, job)
         if current.attempt_id != observed.attempt_id or current.boot_id != observed.boot_id or checkpoint not in current.checkpoints:
             raise RemoteExecutionError('Checkpoint changed during explicit review transfer')
         # Registration is an immutable native artifact projection, not scientific completion.
         (incoming / 'checkpoint-review.json').write_text(json.dumps(checkpoint, sort_keys=True))
         if destination.exists():
-            for ref in refs:
+            for ref in required:
                 ref.resolve(destination)
         else:
             os.rename(incoming, destination)
     return destination
+
+
+async def prepare_checkpoint_successor(session: AsyncSession, job: Job, checkpoint: dict,
+                                       decision: dict, execution_target_id: str | None,
+                                       name_suffix: str = '_continued'):
+    """Prepare an ordinary JobCreate from a completed native review boundary.
+
+    This does not move an attempt, acquire a lease, approve a plan, or enqueue.
+    The caller submits through create_job, with claim_checkpoint_successor in
+    that same transaction. The retained checkpoint is the scientific source.
+    """
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from component_runtime import ResultReference, canonical_bytes, digest, durable_write
+    from database import Design
+    from schemas import JobCreate
+    from routers.jobs import (_native_gate_resume_params, _native_checkpoint_domain_follow_on,
+        _derive_source_stage_payload, _build_selection_manifest_item, _selection_manifest_path)
+    from services.stage_review import ensure_stage_review_rows
+
+    if (not job.awaiting_input or job.status != 'awaiting_input'
+            or job.queue_status == 'cancelling'
+            or (job.params or {}).get('cancellation_receipt', {}).get('state') in {'requested', 'completed'}
+            or (job.awaiting_payload or {}).get('component_checkpoint') != checkpoint):
+        raise RemoteExecutionError('Checkpoint owner changed or was cancelled')
+    if execution_target_id is not None:
+        from services.remote_execution.targets import target_eligible
+        target = await session.get(ExecutionTarget, execution_target_id, populate_existing=True)
+        if target is None or not target_eligible(target):
+            raise RemoteExecutionError('execution_target_id is not an active ready execution target')
+    if set(decision) != {'selected_artifacts'}:
+        raise RemoteExecutionError('Checkpoint decision requires only selected_artifacts')
+    selected = decision['selected_artifacts']
+    if (not isinstance(selected, list) or not selected
+            or any(not isinstance(p, str) for p in selected) or len(set(selected)) != len(selected)):
+        raise RemoteExecutionError('Explicit nonempty unique review selection required')
+    root = (await retrieve_remote_checkpoint_review(session, job, checkpoint) if job.execution_target_id
+            else Path(job.output_dir) if Path(job.output_dir).is_absolute() else get_data_root() / job.output_dir)
+    refs = {r['relative_path']: ResultReference(**r) for r in checkpoint['artifacts']}
+    controls = [r for r in refs.values() if r.schema == 'bms.stage-review.control.v1']
+    if len(controls) != 1:
+        raise RemoteExecutionError('Native gate control artifact required')
+    control = json.loads(controls[0].resolve(root).read_text())
+    stage = control['stage']
+    if stage != checkpoint['stage'] or stage != job.awaiting_stage:
+        raise RemoteExecutionError('Checkpoint stage identity conflicts')
+    chosen = []
+    for relative in selected:
+        ref = refs.get(relative)
+        if (ref is None or ref.schema not in {'bms.stage-review.candidate.v1',
+                'bms.stage-review.raw.v1', 'bms.stage-review.filtered.v1'}
+                or Path(relative).suffix.lower() not in {'.pdb', '.cif'}):
+            raise RemoteExecutionError('Selection contains a foreign or nonstructure review artifact')
+        ref.resolve(root)
+        chosen.append(ref)
+    if len({Path(r.relative_path).name for r in chosen}) != len(chosen):
+        raise RemoteExecutionError('Selected native candidate filenames collide')
+    parent = dict(id=job.id, name=job.name, model_id=job.model_id, mode=job.mode,
+                  params=deepcopy(job.params or {}), output_dir=str(root), pinned_gpu=None)
+    if control.get('generation') and not control.get('continuation'):
+        raise RemoteExecutionError('Retained generation is missing its native continuation authority')
+    if control.get('continuation'):
+        previous = control['continuation']
+        parent.update(model_id=previous['model_id'], mode=previous['mode'], params=deepcopy(previous['native_parameters']))
+    binding = dict(source_job_id=job.id, checkpoint_id=checkpoint['checkpoint_id'],
+                   checkpoint_sha256=checkpoint['checkpoint_sha256'], decision=deepcopy(decision),
+                   execution_target_id=execution_target_id, name_suffix=name_suffix)
+    selection = root / '.bms-review' / 'successor-selections' / digest(binding)
+    for ref in chosen:
+        destination = selection / Path(ref.relative_path).name
+        body = ref.resolve(root).read_bytes()
+        if destination.exists() and destination.read_bytes() != body:
+            raise RemoteExecutionError('Immutable selected artifact conflicts')
+        durable_write(destination, body)
+    source = SimpleNamespace(**parent, awaiting_input=True, awaiting_stage=stage,
+                             awaiting_payload={'candidate_dir': str(selection)})
+    if stage in {'post_boltzgen', 'post_ppiflow_generator'}:
+        request, manifest_path, manifest = _native_checkpoint_domain_follow_on(parent, stage, selection, chosen)
+    else:
+        if stage not in {'post_rfantibody', 'post_fampnn', 'post_caliby', 'post_structure_validation'}:
+            raise RemoteExecutionError('This native gate has no supported continuation policy')
+        # Publish exact local document identities through the existing stage owner.
+        folders = {ref.resolve(root).parent for ref in chosen}
+        if len(folders) == 1:
+            await ensure_stage_review_rows(session, job, candidate_dir=next(iter(folders)))
+        rows = (await session.scalars(select(Design).where(Design.job_id == job.id,
+                                                         Design.source_stage == stage))).all()
+        by_path = {Path(row.pdb_path).resolve(): row for row in rows if row.pdb_path}
+        designs = [by_path.get(ref.resolve(root)) for ref in chosen]
+        if any(row is None for row in designs):
+            raise RemoteExecutionError('Selected review document identity is no longer available')
+        metadata = _derive_source_stage_payload(job, designs, selection)
+        overrides, hint = _native_gate_resume_params(source, {})
+        params = {**parent['params'], **overrides, **metadata}
+        # A successor has fresh runtime authority and never carries old cache/GPU bindings.
+        for key in list(params):
+            if key.startswith('resume_') or key in {'out_dir', 'output_dir', 'work_dir', 'stage_work_dir',
+                    'batch_name', 'job_name', 'gpu_id', 'gpu_ids', 'pinned_gpus', 'execution_target_id',
+                    'remote_result_policy', 'execution_policy', 'core_protein_scientific_contract',
+                    'core_protein_requested_params', 'checkpoint_successor'}:
+                params.pop(key, None)
+        params.update(resume_requested_stage=hint, reorchestrated_from_job_id=job.id,
+            lineage_root_job_id=job.lineage_root_job_id or job.id,
+            selection_source_type='review_gate', selection_source_job_id=job.id,
+            interactive_gate_continue=True)
+        manifest_path = _selection_manifest_path(selection)
+        manifest = dict(action='continue_review', root_job_id=job.lineage_root_job_id or job.id,
+            source_job_id=job.id, design_count=len(designs), **metadata,
+            designs=[_build_selection_manifest_item(row, source_path=ref.resolve(root),
+                selection_path=selection / Path(ref.relative_path).name, selection_entry_mode='copy',
+                extra={'checkpoint_artifact_sha256': ref.sha256, 'checkpoint_artifact_path': ref.relative_path})
+                for row, ref in zip(designs, chosen)])
+        request = JobCreate(name=job.name + name_suffix, model_id=parent['model_id'], mode=parent['mode'],
+                            params=params, execution_target_id=execution_target_id)
+    body = canonical_bytes(manifest)
+    if manifest_path.exists() and manifest_path.read_bytes() != body:
+        raise RemoteExecutionError('Immutable selected lineage conflicts')
+    durable_write(manifest_path, body)
+    request.execution_target_id = execution_target_id
+    request.pinned_gpu = None
+    request.execution_plan_approval = None
+    request.params['checkpoint_successor'] = binding
+    return request
+
+
+def checkpoint_successor_id(job: Job, binding: dict) -> str | None:
+    """One successor per exact checkpoint; retry returns the existing Job."""
+    for entry in job.decision_history or []:
+        prior = entry.get('checkpoint_successor')
+        if prior and prior.get('checkpoint_sha256') == binding.get('checkpoint_sha256'):
+            if prior != binding:
+                raise RemoteExecutionError('Checkpoint already continued with a different selection or target')
+            return entry['new_job_id']
+    return None
+
+
+async def claim_checkpoint_successor(session: AsyncSession, source: Job, successor: Job, binding: dict) -> None:
+    """CAS the existing decision history in the successor insertion transaction.
+
+    Call before any ORM flush, after ordinary admission. Never commit here.
+    Do not change source completion, stop custody, claims, or native settings.
+    """
+    from sqlalchemy import update
+    from services.job_control import checkpoint_continuation_predicates
+    checkpoint = (source.awaiting_payload or {}).get('component_checkpoint') or {}
+    if (binding.get('source_job_id') != source.id
+            or binding.get('checkpoint_id') != checkpoint.get('checkpoint_id')
+            or binding.get('checkpoint_sha256') != checkpoint.get('checkpoint_sha256')
+            or binding.get('execution_target_id') != successor.execution_target_id):
+        raise RemoteExecutionError('Successor checkpoint binding conflicts')
+    existing = checkpoint_successor_id(source, binding)
+    if existing:
+        if existing == successor.id:
+            return
+        raise RemoteExecutionError('Checkpoint already continued as ' + existing)
+    history = [*(source.decision_history or []), dict(stage=source.awaiting_stage,
+        new_job_id=successor.id, resume_mode='checkpoint_successor', checkpoint_successor=binding)]
+    with session.no_autoflush:
+        changed = await session.execute(update(Job).where(*checkpoint_continuation_predicates(source),
+            Job.decision_history == source.decision_history).values(decision_history=history)
+            .execution_options(synchronize_session=False))
+    if changed.rowcount != 1:
+        raise RemoteExecutionError('Checkpoint owner changed while queueing successor')
+    await session.refresh(source)
 
 
 _review_row_attempts: dict[str, float] = {}
@@ -1674,7 +1851,18 @@ async def publish_remote_review_rows(session: AsyncSession, job: Job) -> int:
                           if item.get('schema') == 'bms.stage-review.candidate.v1'})
         if len(folders) != 1:
             return 0
-        return await ensure_stage_review_rows(session, job, candidate_dir=folders[0])
+        from component_runtime import ResultReference
+        score_roots = set()
+        try:
+            for item in checkpoint['artifacts']:
+                if item.get('schema') == 'bms.stage-review.validator-scores.v1':
+                    ResultReference(**item).resolve(root)
+                    if '/validator-scores/' in item['relative_path']:
+                        score_roots.add(root / item['relative_path'].split('/validator-scores/', 1)[0])
+        except (OSError, ValueError, RuntimeError):
+            score_roots.clear()  # optional, never block candidate receiving
+        return await ensure_stage_review_rows(session, job, candidate_dir=folders[0],
+            validation_root=next(iter(score_roots)) if len(score_roots) == 1 else '')
     except Exception:
         log.exception("Job %s: remote review rows for gate '%s' were not published; the gate stays open",
                       job.id, job.awaiting_stage)

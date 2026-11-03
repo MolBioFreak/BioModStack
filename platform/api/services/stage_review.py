@@ -1040,7 +1040,8 @@ def _resequence_gate_score_root(job: Job, stage: str, payload: Optional[dict] = 
     """Result root holding validation/<validator>/ output when this gate is a Resequence structure-validation gate."""
     if stage != "post_structure_validation" or not _is_protein_local_redesign_job(job, payload):
         return None
-    return resolve_output_dir(job_result_output_dir(job))
+    retained = (payload or job.awaiting_payload or {}).get("validation_root")
+    return resolve_review_path(retained, job.output_dir) if retained else resolve_output_dir(job_result_output_dir(job))
 
 
 def _apply_resequence_gate_scores(row: Design, job: Job, root: Optional[Path]) -> bool:
@@ -1053,7 +1054,7 @@ def _apply_resequence_gate_scores(row: Design, job: Job, root: Optional[Path]) -
         validators if isinstance(validators, (list, tuple)) else ())
 
 
-async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool = False, *, candidate_dir=None) -> int:
+async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool = False, *, candidate_dir=None, validation_root=None) -> int:
     """Project a component gate only while its exact persisted owner still exists.
 
     The first DML is a CAS, not an ORM payload flush. Its writer lock covers
@@ -1071,6 +1072,8 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
         repaired = dict(payload)
         if candidate_dir is not None:
             repaired["candidate_dir"] = str(candidate_dir)
+        if validation_root is not None:
+            repaired["validation_root"] = str(validation_root)
         with session.no_autoflush:
             claimed = await session.execute(update(Job).where(
                 Job.id == job.id, Job.status == "awaiting_input",

@@ -46,7 +46,7 @@ def _drop_none(values: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _boltz2(root: Path, name: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    folder = root / "validation" / "boltz2"
+    folder = (root / "validator-scores" if (root / "validator-scores").is_dir() else root / "validation") / "boltz2"
     for candidate in (folder / f"{name}_model_0_boltzpred.json", folder / f"{name}_boltzpred.json"):
         payload = _read(candidate)
         if payload is None:
@@ -70,7 +70,7 @@ def _boltz2(root: Path, name: str) -> tuple[dict[str, Any], dict[str, Any]] | No
 
 
 def _protenix_v2(root: Path, name: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    folder = root / "validation" / "protenix_v2" / name
+    folder = (root / "validator-scores" if (root / "validator-scores").is_dir() else root / "validation") / "protenix_v2" / name
     if not folder.is_dir():
         return None
     samples = []
@@ -106,7 +106,7 @@ def _protenix_v2(root: Path, name: str) -> tuple[dict[str, Any], dict[str, Any]]
 
 
 def _esmfold2(root: Path, name: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    folder = root / "validation" / "esmfold2" / name
+    folder = (root / "validator-scores" if (root / "validator-scores").is_dir() else root / "validation") / "esmfold2" / name
     if not folder.is_dir():
         return None
     for path in sorted(folder.rglob("*.metrics.json")):
