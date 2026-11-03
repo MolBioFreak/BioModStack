@@ -7,6 +7,8 @@ import {
 import type { Feature, HighlightedRegion, SelectionInfo, SequenceData } from '../types';
 import {
     getAlignmentDisplayName,
+    circularAlignmentDisplayEnd,
+    formatAlignmentSpan as formatHalfOpenSpan,
     resolveSubmittedQueryName,
 } from '../utils/alignmentLabels';
 import { parseSequenceInput } from '../utils/nucleotides';
@@ -36,12 +38,6 @@ type DisplayRegion = {
     label: string;
 };
 
-function formatHalfOpenSpan(start: number, end: number, wrapsOrigin = false) {
-    const displayStart = start + 1;
-    const displayEnd = Math.max(end, wrapsOrigin ? end : displayStart);
-    return wrapsOrigin ? `${displayStart}->${displayEnd}` : `${displayStart}-${displayEnd}`;
-}
-
 function buildHighlightRegions(
     start: number,
     end: number,
@@ -50,6 +46,10 @@ function buildHighlightRegions(
     color: string,
     label: string,
 ): DisplayRegion[] {
+    if (start === end && !wrapsOrigin) {
+        // A between-base insertion has no reference residue to highlight.
+        return [];
+    }
     if (!wrapsOrigin || end >= start) {
         return [{
             start,
@@ -106,7 +106,7 @@ function alignmentBlocks(
         let referenceEnd = referencePosition + referenceAdvance;
         if (circularLength) {
             referencePosition %= circularLength;
-            referenceEnd %= circularLength;
+            referenceEnd = circularAlignmentDisplayEnd(referencePosition, referenceAdvance, circularLength);
         }
         const queryEnd = queryPosition + queryAdvance;
 
@@ -203,12 +203,13 @@ export function AlignmentPanel({
     const referenceOffset = referenceScope === 'selection' && selectionRange ? selectionRange.start : 0;
     const parsedQuery = useMemo(() => parseSequenceInput(queryRaw), [queryRaw]);
     const submittedQueryName = resolveSubmittedQueryName(queryName, parsedQuery.name);
-    const owner = useInputOwnership([sequenceData.sequence, sequenceData.name, sequenceData.circular, referenceSequence, referenceOffset, referenceScope, circularReference, parsedQuery.sequence, submittedQueryName, mode, strand, matchScore, mismatchScore, gapOpenScore, gapExtendScore]);
+    const owner = useInputOwnership([sequenceData.sequence, sequenceData.name, sequenceData.circular, referenceSequence, referenceOffset, referenceScope, circularReference, queryRaw, parsedQuery.sequence, submittedQueryName, mode, strand, matchScore, mismatchScore, gapOpenScore, gapExtendScore]);
     const result = resultState?.token === owner.token ? resultState.value : null;
     const alignmentDisplayName = getAlignmentDisplayName(result?.query_name ?? submittedQueryName);
     useEffect(() => { setLoading(false); setError(null); }, [owner.token]);
     const invalidQuery = parsedQuery.invalidCharacters.length > 0;
-    const effectiveCircularReference = referenceScope === 'full' && circularReference && sequenceData.circular;
+    const multipleQueryRecords = queryRaw.split(/\r?\n/).filter(line => line.trimStart().startsWith('>')).length > 1;
+    const effectiveCircularReference = mode !== 'global' && referenceScope === 'full' && circularReference && sequenceData.circular;
     const blocks = useMemo(
         () => (result ? alignmentBlocks(result, 70, referenceScope === 'full' ? sequenceData.sequence.length : undefined) : []),
         [referenceScope, result, sequenceData.sequence.length],
@@ -237,7 +238,7 @@ export function AlignmentPanel({
         return undefined;
     }, [baseHighlights, onHighlight]);
 
-    const canRun = Boolean(referenceSequence) && Boolean(parsedQuery.sequence) && !invalidQuery;
+    const canRun = Boolean(referenceSequence) && Boolean(parsedQuery.sequence) && !invalidQuery && !multipleQueryRecords;
 
     const runAlignment = async () => {
         if (!referenceSequence || !parsedQuery.sequence) {
@@ -292,7 +293,9 @@ export function AlignmentPanel({
                 type: 'misc_difference' as const,
                 strand: 1 as const,
                 color,
-                description: `Alignment-derived ${variant.type} against ${alignmentDisplayName}`,
+                description: variant.type === 'insertion'
+                    ? `Insertion anchor ${formatHalfOpenSpan(absoluteStart, absoluteEnd, false, sequenceData.sequence.length, effectiveCircularReference)}; the highlighted base is adjacent to the insertion, not an inserted reference base.`
+                    : `Alignment-derived ${variant.type} against ${alignmentDisplayName}`,
                 notes: {
                     source: 'alignment',
                     query_name: alignmentDisplayName,
@@ -301,6 +304,10 @@ export function AlignmentPanel({
                     query: variant.query,
                     query_start: variant.query_start,
                     query_end: variant.query_end,
+                    query_coordinate_system: result.strand === 'reverse' ? 'reverse_complement' : 'input',
+                    reference_start: absoluteStart,
+                    reference_end: absoluteEnd,
+                    between_bases: variant.type === 'insertion',
                     alignment_mode: result.mode,
                     alignment_strand: result.strand,
                     reference_wraps_origin: Boolean(variant.reference_wraps_origin),
@@ -454,10 +461,10 @@ export function AlignmentPanel({
                             type="checkbox"
                             className="rounded border-slate-600 bg-slate-800"
                             checked={effectiveCircularReference}
-                            disabled={referenceScope !== 'full' || !sequenceData.circular}
+                            disabled={mode === 'global' || referenceScope !== 'full' || !sequenceData.circular}
                             onChange={(event) => setCircularReference(event.target.checked)}
                         />
-                        Treat reference as circular
+                        {mode === 'global' ? 'Global mode uses a linear reference' : 'Treat reference as circular'}
                     </label>
                 </div>
 
@@ -541,6 +548,7 @@ export function AlignmentPanel({
                     />
                 </label>
 
+                {multipleQueryRecords && <p role="alert">This panel compares one query with the reference. Use Alignments for multiple FASTA records; they will not be joined into one sequence here.</p>}
                 <div className={`rounded border px-3 py-2 text-xs ${invalidQuery ? 'border-red-800 bg-red-900/20 text-red-300' : 'border-slate-800 bg-slate-950/70 text-slate-400'}`}>
                     Parsed query: {parsedQuery.sequence.length.toLocaleString()} nt
                     {invalidQuery
@@ -572,6 +580,10 @@ export function AlignmentPanel({
                             {result.mode} • {result.strand} strand • Ref {formatHalfOpenSpan(referenceOffset + result.reference_start, referenceOffset + result.reference_end, Boolean(result.reference_wraps_origin))}
                             {' '}• Query {formatHalfOpenSpan(result.query_start, result.query_end)}
                         </div>
+                        {result.strand === 'reverse' && <p className="mt-2 text-xs text-slate-400">
+                            Query positions refer to its reverse complement, including the difference events below.
+                            {result.query_input_start != null && result.query_input_end != null && <> Original query interval: {formatHalfOpenSpan(result.query_input_start, result.query_input_end)}.</>}
+                        </p>}
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
@@ -581,10 +593,10 @@ export function AlignmentPanel({
                             <div className="mt-1 text-xs text-slate-400">{result.matches} matches • {result.mismatches} mismatches</div>
                         </div>
                         <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3">
-                            <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Query Covered</div>
+                            <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Query Span</div>
                             <div className="mt-2 text-xl font-semibold text-slate-100">{result.query_coverage.toFixed(1)}%</div>
                             <div className="mt-1 text-xs text-slate-400">
-                                {result.query_aligned_bases ?? (result.query_end - result.query_start)} aligned bases
+                                {result.query_aligned_bases ?? (result.query_end - result.query_start)} bases in the aligned span, including insertions
                             </div>
                         </div>
                     </div>
@@ -652,8 +664,8 @@ export function AlignmentPanel({
                                         <span className="text-xs uppercase text-slate-500">{variant.type}</span>
                                     </div>
                                     <div className="mt-1 text-xs text-slate-400">
-                                        Ref {formatHalfOpenSpan(referenceOffset + variant.start, referenceOffset + variant.end, Boolean(variant.reference_wraps_origin))}
-                                        {' '}• Query {formatHalfOpenSpan(variant.query_start, variant.query_end)}
+                                        Ref {formatHalfOpenSpan(referenceOffset + variant.start, referenceOffset + variant.end, Boolean(variant.reference_wraps_origin), sequenceData.sequence.length, effectiveCircularReference)}
+                                        {' '}• Query {formatHalfOpenSpan(variant.query_start, variant.query_end, false, parsedQuery.sequence.length)}
                                     </div>
                                 </button>
                             ))}
@@ -666,18 +678,18 @@ export function AlignmentPanel({
                             {blocks.map((block) => (
                                 <div key={`${block.referenceStart}:${block.queryStart}`} className="space-y-1 rounded border border-slate-800 bg-slate-900/60 p-2">
                                     <div className="text-slate-300">
-                                        <span className="mr-3 inline-block w-20 text-slate-500">Ref {block.referenceStart + referenceOffset + 1}</span>
+                                        <span className="mr-3 inline-block w-20 text-slate-500">Ref {block.reference.replace(/-/g, '').length ? block.referenceStart + referenceOffset + 1 : '—'}</span>
                                         {block.reference}
-                                        <span className="ml-3 text-slate-500">{block.referenceEnd + referenceOffset}</span>
+                                        <span className="ml-3 text-slate-500">{block.reference.replace(/-/g, '').length ? block.referenceEnd + referenceOffset : '—'}</span>
                                     </div>
                                     <div>
                                         <span className="mr-3 inline-block w-20 text-slate-600"> </span>
                                         <span className="text-emerald-300">{block.midline}</span>
                                     </div>
                                     <div className="text-cyan-200">
-                                        <span className="mr-3 inline-block w-20 text-slate-500">Qry {block.queryStart + 1}</span>
+                                        <span className="mr-3 inline-block w-20 text-slate-500">Qry {block.query.replace(/-/g, '').length ? block.queryStart + 1 : '—'}</span>
                                         {block.query}
-                                        <span className="ml-3 text-slate-500">{block.queryEnd}</span>
+                                        <span className="ml-3 text-slate-500">{block.query.replace(/-/g, '').length ? block.queryEnd : '—'}</span>
                                     </div>
                                 </div>
                             ))}

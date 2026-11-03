@@ -1,16 +1,16 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../lib/api'
 import { errorText, statusText } from './alignmentText'
+import type { AlignmentMolecule } from '../../lib/alignmentCoordinates'
 
 type Operation = {job_id: string; operation: string; status: string; queue_status: string | null; artifact_url: string | null; error_message: string | null}
 
 /** Explicit metadata refresh: reopening never starts a polling loop or rebuilds the ZIP. */
-export default function AlignmentExport({projectId, receiptId, sharedStateId, domain}: {projectId: string; receiptId: string; sharedStateId: string; domain: string}) {
+export default function AlignmentExport({projectId, receiptId, sharedStateId, domain, molecule}: {projectId: string; receiptId: string; sharedStateId: string; domain: string; molecule?: AlignmentMolecule}) {
   const base = `/api/family-msa/projects/${encodeURIComponent(projectId)}`
   const storageKey = `bms.alignment.export:${JSON.stringify([projectId, receiptId])}`
   const [jobId, setJobId] = useState('')
   const [operation, setOperation] = useState<Operation>()
-  const [molecule, setMolecule] = useState<'protein' | 'dna' | 'rna'>('protein')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => {
@@ -35,8 +35,8 @@ export default function AlignmentExport({projectId, receiptId, sharedStateId, do
     try { await action() } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
   return <section aria-label="Alignment export">
-    <label>Export molecule <select value={molecule} onChange={e => setMolecule(e.target.value as typeof molecule)}><option value="protein">Protein</option><option value="dna">DNA</option><option value="rna">RNA</option></select></label>{' '}
-    <button disabled={busy || !domain} onClick={() => void run(async () => received((await api.post<Operation>(`${base}/operations`, {
+    {molecule ? <p>Export molecule: {molecule === 'protein' ? 'Protein' : molecule.toUpperCase()} · from the saved alignment</p> : <p role="alert">The saved alignment's molecule is unavailable. Reload the alignment before exporting.</p>}
+    <button disabled={busy || !domain || !molecule} onClick={() => void run(async () => received((await api.post<Operation>(`${base}/operations`, {
       operation: 'export', molecule, domain_experiment_id: domain, name: 'Alignment project bundle', inputs: {receipt_id: receiptId, shared_state_ids: [sharedStateId]},
     })).data))}>Export ZIP</button>
     <p>Exports the last saved version. Choose an experiment above first.</p>

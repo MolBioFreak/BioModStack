@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { jobPollingInterval } from '../../lib/queryPolling';
 import { api } from '../../lib/api';
-import type { AlignmentDocument, AlignmentSimilarity } from '../../lib/alignmentCoordinates';
+import type { AlignmentDocument, AlignmentMolecule, AlignmentSimilarity } from '../../lib/alignmentCoordinates';
 import { ProjectWorkflowSetupBanner, useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup';
 import { projectManagerErrorMessage, listGlobalExperiments, listDomainExperiments } from '../../lib/projectManager';
 import { downloadLabel, errorText, statusText } from './alignmentText';
@@ -98,8 +98,8 @@ export default function AlignmentPage() {
     const documentQuery = useQuery({
         queryKey: ['alignment-result-document', base, member],
         queryFn: async ({ signal }) => {
-            const { data } = await api.get<{result_id: string; similarity?: AlignmentSimilarity; rows: {row_id: string; label: string; aligned: string; source_member_id?: string | null; occurrence_id?: string | null; source_positions?: (number | null)[] | null}[]}>(`${base}/documents/${encodeURIComponent(member)}`, { signal });
-            return {resultId: data.result_id, similarity: data.similarity, rows: data.rows.map(row => ({rowId: row.row_id, label: row.label, aligned: row.aligned, sourceMemberId: row.source_member_id ?? undefined, occurrenceId: row.occurrence_id ?? undefined, sourcePositions: row.source_positions ?? undefined}))} satisfies AlignmentDocument;
+            const { data } = await api.get<{result_id: string; molecule?: AlignmentMolecule | null; similarity?: AlignmentSimilarity; rows: {row_id: string; label: string; aligned: string; source_member_id?: string | null; occurrence_id?: string | null; source_positions?: (number | null)[] | null; source_orientation?: 'forward' | 'reverse_complement' | null}[]}>(`${base}/documents/${encodeURIComponent(member)}`, { signal });
+            return {resultId: data.result_id, molecule: data.molecule ?? undefined, similarity: data.similarity, rows: data.rows.map(row => ({rowId: row.row_id, label: row.label, aligned: row.aligned, sourceMemberId: row.source_member_id ?? undefined, occurrenceId: row.occurrence_id ?? undefined, sourcePositions: row.source_positions ?? undefined, sourceOrientation: row.source_orientation ?? undefined}))} satisfies AlignmentDocument;
         },
         enabled: Boolean(base && member), retry: false,
     });

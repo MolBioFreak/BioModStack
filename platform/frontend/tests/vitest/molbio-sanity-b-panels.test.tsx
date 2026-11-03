@@ -209,3 +209,28 @@ it('assembly ignores late simulation after switching modes', async () => {
  await click('Golden Gate'); await act(async () => pending.resolve({ data: { product: assembly } }));
  expect(host.textContent).not.toContain('Load product');
 });
+
+it('pairwise alignment blocks multiple FASTA records and invalid Unicode before submission', async () => {
+ await render(<AlignmentPanel sequenceData={seq} selection={null} onHighlight={noop} onAddFeatures={noop} />);
+ const query = host.querySelector('textarea')!;
+ await input(query, '>first\nACGT\n>second\nACGT');
+ expect(host.textContent).toContain('they will not be joined into one sequence');
+ expect(([...host.querySelectorAll('button')].find(b => b.textContent === 'Run Alignment') as HTMLButtonElement).disabled).toBe(true);
+ await input(query, 'AßC');
+ expect(host.textContent).toContain('invalid characters present: ß');
+ expect(([...host.querySelectorAll('button')].find(b => b.textContent === 'Run Alignment') as HTMLButtonElement).disabled).toBe(true);
+ expect(api.alignMolBioSequences).not.toHaveBeenCalled();
+});
+
+it('global mode explicitly uses a linear reference and reverse query coordinates are identified', async () => {
+ vi.mocked(api.alignMolBioSequences).mockResolvedValue({data: {...alignment, strand: 'reverse', query_input_start: 2, query_input_end: 10}} as any);
+ await render(<AlignmentPanel sequenceData={{...seq, circular: true}} selection={null} onHighlight={noop} onAddFeatures={noop} />);
+ const mode = [...host.querySelectorAll('select')].find(el => [...el.options].some(o => o.value === 'global'))!;
+ await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(mode, 'global'); mode.dispatchEvent(new Event('change', {bubbles: true})); });
+ expect(host.textContent).toContain('Global mode uses a linear reference');
+ await input(host.querySelector('textarea')!, 'ACGTACGT');
+ await click('Run Alignment');
+ expect(api.alignMolBioSequences).toHaveBeenCalledWith(expect.objectContaining({settings: expect.objectContaining({mode: 'global', reference_is_circular: false})}));
+ expect(host.textContent).toContain('Query positions refer to its reverse complement');
+ expect(host.textContent).toContain('Original query interval: 3-10');
+});

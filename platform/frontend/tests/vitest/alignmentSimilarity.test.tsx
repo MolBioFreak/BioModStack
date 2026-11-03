@@ -14,6 +14,9 @@ it('shows precise pair identity and undefined denominators without interpreting 
   expect(rootElement.textContent).toContain('Identity at nongap positions: N/A')
   expect(rootElement.textContent).toContain('First ↔ Second')
   expect(rootElement.textContent).toContain('no comparable positions')
+  expect(rootElement.textContent).toContain('100% identity here does not mean the full sequences are identical')
+  expect(rootElement.textContent).toContain('Matching ambiguity symbols, such as N, do not confirm a known base')
+  expect(rootElement.textContent).not.toContain('above 95%')
   await act(async () => root.unmount())
 })
 

@@ -4,7 +4,7 @@ import AlignmentExport from './AlignmentExport'
 import { listGlobalExperiments, listDomainExperiments } from '../../lib/projectManager'
 import type { RendererState } from './viewerState'
 import { errorText } from './alignmentText'
-import type { ResidueAnchor } from '../../lib/alignmentCoordinates'
+import type { AlignmentMolecule, ResidueAnchor } from '../../lib/alignmentCoordinates'
 
 type Coordinate = {scope: 'artifact_columns'; artifact_id: string; start: number; end: number} | {scope: 'source_positions'; source_member_id: string; occurrence_id: string; start: number; end: number}
 export type Mark = {id: string; label: string; coordinate: Coordinate; note: string; provenance: Record<string, unknown>}
@@ -17,7 +17,7 @@ type Revision = {id: string; head_generation: number; revision_id: string; state
 const empty = (): State => ({schema: 'bms.family-msa.shared-state.v1', marks: [], views: [], comparisons: []})
 const id = () => crypto.randomUUID()
 
-export default function AlignmentShared({projectId, receiptId, artifactId, selection, viewer, applyViewer, rowOrder = [], hiddenRowIds = [], selectedRowId, applyView, importedStateIds = [], rendererState, onMarksChange, selectedMarks = [], onSelectedMarksChange}: {projectId: string; receiptId: string; artifactId: string; selection?: ResidueAnchor; viewer: string; applyViewer: (viewer: string) => void; rowOrder?: string[]; hiddenRowIds?: string[]; selectedRowId?: string; applyView?: (view: View) => void; importedStateIds?: string[]; rendererState?: RendererState; onMarksChange?: (marks: Mark[]) => void; selectedMarks?: string[]; onSelectedMarksChange?: (ids: string[]) => void}) {
+export default function AlignmentShared({molecule, projectId, receiptId, artifactId, selection, viewer, applyViewer, rowOrder = [], hiddenRowIds = [], selectedRowId, applyView, importedStateIds = [], rendererState, onMarksChange, selectedMarks = [], onSelectedMarksChange}: {molecule?: AlignmentMolecule; projectId: string; receiptId: string; artifactId: string; selection?: ResidueAnchor; viewer: string; applyViewer: (viewer: string) => void; rowOrder?: string[]; hiddenRowIds?: string[]; selectedRowId?: string; applyView?: (view: View) => void; importedStateIds?: string[]; rendererState?: RendererState; onMarksChange?: (marks: Mark[]) => void; selectedMarks?: string[]; onSelectedMarksChange?: (ids: string[]) => void}) {
   const base = `/api/family-msa/projects/${encodeURIComponent(projectId)}`
   const [dataset, setDataset] = useState('')
   const [domain, setDomain] = useState('')
@@ -69,7 +69,7 @@ export default function AlignmentShared({projectId, receiptId, artifactId, selec
     <button disabled={busy || !domain} onClick={() => void run(async () => received((await api.post<Revision>(`${base}/shared-state`, {name: name || 'Alignment shared state', domain_experiment_id: domain, state: empty()})).data))}>Create notes</button>
     {revision && <>
       <p title={`Dataset ${revision.id} · revision ${revision.revision_id}`}>Saved version {revision.head_generation}</p>
-      <AlignmentExport key={`${projectId}:${receiptId}`} projectId={projectId} receiptId={receiptId} sharedStateId={revision.id} domain={domain}/>
+      <AlignmentExport molecule={molecule} key={`${projectId}:${receiptId}`} projectId={projectId} receiptId={receiptId} sharedStateId={revision.id} domain={domain}/>
       <label>Name <input value={name} onChange={e => setName(e.target.value)}/></label>{' '}
       <button disabled={!selection || selection.resultId !== artifactId} onClick={() => { if (selection) edit(current => ({...current, marks: [...current.marks, {id: id(), label: name, coordinate: {scope: 'artifact_columns', artifact_id: artifactId, start: selection.column, end: selection.column}, note: '', provenance: {}}]})) }}>Mark selected column</button>{' '}
       <button disabled={!selection || selection.resultId !== artifactId || selection.sourcePosition === undefined || !selection.sourceMemberId || !selection.occurrenceId} onClick={() => { if (selection?.sourcePosition !== undefined && selection.sourceMemberId && selection.occurrenceId) edit(current => ({...current, marks: [...current.marks, {id: id(), label: name, coordinate: {scope: 'source_positions', source_member_id: selection.sourceMemberId!, occurrence_id: selection.occurrenceId!, start: selection.sourcePosition!, end: selection.sourcePosition!}, note: '', provenance: {}}]})) }}>Mark selected sequence position</button>{' '}
