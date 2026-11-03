@@ -352,25 +352,21 @@ export function AlignmentPanel({
             <div>
                 <h4 className="font-semibold text-slate-200">Alignment</h4>
                 <p className="mt-1 text-xs leading-5 text-slate-500">
-                    Use `placement` to map a fragment onto a construct, `local` for best internal hits, and `global` only for true end-to-end comparisons.
+                    Compare a query sequence with the current construct.
                 </p>
             </div>
 
             <details className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-xs leading-5 text-slate-400">
-                <summary className="cursor-pointer font-semibold text-slate-300">Methods and documentation</summary>
+                <summary className="cursor-pointer font-semibold text-slate-300">Alignment help</summary>
                 <div className="mt-3 space-y-2">
                     <p>
-                        BMS computes pairwise sequence alignments with Biopython <code>Bio.Align.PairwiseAligner</code>.
-                        Local uses PairwiseAligner local mode for the best internal span. Global uses PairwiseAligner global mode for an end-to-end comparison.
+                        <strong>Mode:</strong> Placement maps a fragment onto the reference. Local finds the best matching region. Global compares both sequences end to end.
                     </p>
                     <p>
-                        Placement is a BMS configuration, not a named Biopython algorithm: it uses global mode with terminal gap-open and gap-extension scores set to zero so a query can float within the reference.
+                        <strong>Strand:</strong> Auto checks both strands and picks the higher score. Forward uses the query as entered; reverse uses its reverse complement.
                     </p>
                     <p>
-                        Forward aligns the query as entered; reverse aligns its reverse complement. Auto compares the forward query and its reverse complement and returns the better-scoring candidate. Circular local and placement searches can cross the reference origin; global alignment remains end-to-end.
-                    </p>
-                    <p>
-                        The score controls set PairwiseAligner match, mismatch, gap-open, and gap-extension values. Defaults are Match 2.0, mismatch -1.0, gap open -6.0, and gap extend -1.0. Origin-spanning selections cannot be used as a scalar-offset selection reference; align the whole circular construct or rotate its origin first.
+                        <strong>Circular sequences:</strong> Placement and local can cross the origin. For a selection that crosses the origin, use the whole construct or move the origin first.
                     </p>
                     <p className="flex flex-wrap gap-x-3 gap-y-1">
                         <a
@@ -379,7 +375,7 @@ export function AlignmentPanel({
                             rel="noreferrer"
                             className="text-cyan-300 underline decoration-cyan-700 underline-offset-2 hover:text-cyan-200"
                         >
-                            Biopython PairwiseAligner API
+                            Biopython reference
                         </a>
                         <a
                             href="https://biopython.org/docs/latest/Tutorial/chapter_pairwise.html"
@@ -387,7 +383,7 @@ export function AlignmentPanel({
                             rel="noreferrer"
                             className="text-cyan-300 underline decoration-cyan-700 underline-offset-2 hover:text-cyan-200"
                         >
-                            Biopython pairwise alignment tutorial
+                            Alignment tutorial
                         </a>
                     </p>
                 </div>
@@ -421,7 +417,7 @@ export function AlignmentPanel({
                 </div>
                 {wrappingSelection && (
                     <p className="rounded border border-amber-700/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-200">
-                        Origin-spanning selections cannot use scalar-offset selection alignment. Align the whole circular construct or rotate its origin first.
+                        This selection crosses the origin. Use the whole construct or move the origin first.
                     </p>
                 )}
 

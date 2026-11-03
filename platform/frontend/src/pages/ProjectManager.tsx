@@ -1,3 +1,4 @@
+import ProjectAlignments from '../components/alignments/ProjectAlignments';
 import { isAxiosError } from 'axios';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
@@ -894,6 +895,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 {projectTreeVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
                 <main className="flex min-h-0 min-w-0 flex-col md:overflow-y-auto">
                     <NativeProjectTools key={projectId} projectId={projectId} projectName={summary.project.name} context={nativeProjectContext(summary)} disabled={!selectionReady} />
+                    <ProjectAlignments key={projectId} projectId={projectId}/>
                     <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} onCreateExperiment={() => setDialogMode('create_global')} onCreateWorkspace={() => setDialogMode('create_domain')} onSelectNode={setSelection} actionsDisabled={!selectionReady} />
                     {!showCandidates && !loadingCandidateOverview && (
                         <details className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-3"><summary className="cursor-pointer text-sm text-content-secondary">Relationships and workflow details</summary>

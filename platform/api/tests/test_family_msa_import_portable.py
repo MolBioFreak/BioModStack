@@ -113,7 +113,14 @@ def test_real_portable_import_export_roundtrip(tmp_path, monkeypatch):
                 missing = await c.post(f'/api/family-msa/projects/{project}/receipts/{first.receipt_id}/bundle', json={'shared_state_ids': ['missing']})
                 assert missing.status_code == 404
         page = client._request('GET', f'/api/family-msa/projects/{project}/receipts')
-        assert page['items'] == [{'receipt_id': first.receipt_id, 'entity_kind': 'family_msa_import', 'availability': 'available'}]
+        assert len(page['items']) == 1
+        summary = page['items'][0]
+        assert summary['receipt_id'] == first.receipt_id
+        assert summary['entity_kind'] == 'family_msa_import'
+        assert summary['availability'] == 'available'
+        assert summary['row_count'] == 2
+        assert summary['label']
+        assert 'summary_unavailable' not in summary
         assert page['next_cursor'] is None
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()

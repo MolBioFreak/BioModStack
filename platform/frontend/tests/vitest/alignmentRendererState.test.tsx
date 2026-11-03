@@ -30,6 +30,9 @@ it('sends restored selection, marks and renderer state to the authenticated fram
   const message = (data: any, source: Window | null = frame.contentWindow) => window.dispatchEvent(new MessageEvent('message', {source, data: {channel: 'test', token: payload.token, ...data}}))
   await act(async () => {message({type: 'ready'}); message({type: 'state', state: {scrollX: 99}})})
   expect(onRendererStateChange).toHaveBeenCalledWith({scrollX: 99})
+  const sentBeforeEcho = post.mock.calls.length
+  await act(async () => render({scrollX: 99}))
+  expect(post).toHaveBeenCalledTimes(sentBeforeEcho)
   await act(async () => render({scrollX: 55, hiddenColumns: [1]}))
   expect(el.querySelector('iframe')).toBe(frame)
   expect(frame.srcdoc).toContain('"scrollX":30')
