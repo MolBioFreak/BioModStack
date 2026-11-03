@@ -52,7 +52,7 @@ def offline_bundle(tmp_path, monkeypatch):
     monkeypatch.setattr(bundle, '_git', lambda *_: 'b'*40)
     from component_runtime import SourceIdentity
     monkeypatch.setattr(SourceIdentity, 'from_checkout', lambda *_: SourceIdentity('a'*40, 'b'*40))
-    monkeypatch.setattr(bundle, '_runtime_assets', lambda *_, include_support=False, native_invocation=None: [])
+    monkeypatch.setattr(bundle, '_runtime_assets', lambda *_, include_support=False, native_invocation=None, **__: [])
     monkeypatch.setattr(bundle, 'resolve_job_result_contract', lambda *_: {})
     run = subprocess.run
     def archive(argv, **kwargs):

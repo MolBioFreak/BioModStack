@@ -57,7 +57,8 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
     def materialize(raw, suffix, dest, **kwargs):
         output = Path(dest) / 'materialized.pdb'
         output.write_bytes(raw)
-        return {'path': str(output)}
+        digest = __import__('hashlib').sha256(raw).hexdigest()
+        return {'path': str(output), 'original_path': str(output), 'original_sha256': digest}
     monkeypatch.setattr(bsm, 'materialize_source_bytes', materialize)
     async def create(request, background, session):
         request.params['fix_fixed_sidechains'] = sidechains
