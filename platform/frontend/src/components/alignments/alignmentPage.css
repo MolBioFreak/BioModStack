@@ -92,5 +92,5 @@
 .alignment-similarity summary { cursor: pointer; }
 .alignment-similarity table { width: 100%; text-align: left; border-collapse: collapse; }
 .alignment-similarity :is(th, td) { padding: .3rem .5rem; border-bottom: 1px solid var(--border-primary); overflow-wrap: anywhere; }
-.alignment-similarity td:not(:first-child) { white-space: nowrap; }
+.alignment-similarity :is(th, td):not(:first-child) { white-space: nowrap; }
 .alignment-save-status { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; font-size: .85rem; }
