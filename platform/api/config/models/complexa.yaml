@@ -135,3 +135,16 @@ acquisition:
     kind: weights
     relative_path: complexa
   member_path: complexa_ligand_ae.ckpt
+# Existing ligand-binder RF3 dependency; user-authorized acquisition, not activation.
+- artifact_id: evaluator-rf3_foundry_01_24_latest_remapped.ckpt
+  url: https://files.ipd.uw.edu/pub/rf3/rf3_foundry_01_24_latest_remapped.ckpt
+  sha256: 364ef592fd8042a9cf4176d045015190f8322f961ccca38d891b20ca578d3bb0
+  size_bytes: 3038876446
+  source_authority: files.ipd.uw.edu
+  approval_ref: user-authorized-de-novo-closeout-20261103/evaluator-assets
+  license_id: BSD-3-Clause
+  redirect_policy: null
+  dependency:
+    kind: weights
+    relative_path: foundry
+  member_path: checkpoints/rf3_foundry_01_24_latest_remapped.ckpt
