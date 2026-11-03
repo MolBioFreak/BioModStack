@@ -15,6 +15,7 @@ import { api } from '../../lib/api';
 import type { AlignmentDocument, AlignmentSimilarity } from '../../lib/alignmentCoordinates';
 import { ProjectWorkflowSetupBanner, useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup';
 import { projectManagerErrorMessage, listGlobalExperiments, listDomainExperiments } from '../../lib/projectManager';
+import { downloadLabel, errorText, statusText } from './alignmentText';
 
 type SupportSample = {artifact_id: string; logical_path: string | null; numerator: number; denominator: number; fraction: number | null; matched_rows: number; rows_with_unknown_mapping: number};
 type Support = {receipt_id: string; reference_artifact_id: string; report: {method: string; interpretation: string; denominator_policy: string; sample_count: number; numerator: number; denominator: number; fraction: number | null; samples: SupportSample[]}};
@@ -31,19 +32,21 @@ export function EnsembleSupport({projectId, receiptId, reference, artifacts}: {p
     const result = report.data;
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
-    const fraction = (x: number | null) => x === null ? 'undefined' : x.toFixed(3);
+    const fraction = (x: number | null | undefined) => x == null ? '—' : x.toFixed(3);
+    const nameOf = (id: string) => { const index = artifacts.findIndex(a => a.id === id); return artifacts[index]?.logical_path || `Alignment ${index + 1}`; };
     return <section aria-label="Ensemble support"><h2>Ensemble support</h2>
-        <p>Reference: {reference}. Select retained samples explicitly; including the reference counts it as a sample. Observed agreement is not probability of alignment truth.</p>
+        <p title={reference}>Reference: {nameOf(reference)}. Pick alignments to check against the reference.</p>
+        <p className="alignment-hint">Ensemble support checks how often the reference's lined-up pairs also appear in the other alignments (for example a MUSCLE ensemble). Values near 1 mean the alignment is stable; low values flag regions you shouldn't trust.</p>
         <label>Molecule <select value={molecule} onChange={e => setMolecule(e.target.value)}><option value="protein">Protein</option><option value="dna">DNA</option><option value="rna">RNA</option></select></label>
-        <label>Destination domain <select value={domain} onChange={e => setDomain(e.target.value)}><option value="">Choose a domain</option>{domains.data?.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></label>
-        {artifacts.map(a => <label key={a.id}><input type="checkbox" checked={selected.includes(a.id)} onChange={e => setSelected(old => e.target.checked ? [...old, a.id] : old.filter(id => id !== a.id))}/>{a.logical_path || a.id} ({a.id}) </label>)}
+        <label>Save to experiment <select value={domain} onChange={e => setDomain(e.target.value)}><option value="">Choose experiment</option>{domains.data?.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></label>
+        {artifacts.map(a => <label key={a.id}><input type="checkbox" checked={selected.includes(a.id)} onChange={e => setSelected(old => e.target.checked ? [...old, a.id] : old.filter(id => id !== a.id))}/><span title={a.id}>{nameOf(a.id)}</span> </label>)}
         <button disabled={busy || !domain || !selected.length || Boolean(jobId && (!operation.data || ['queued', 'running', 'pending'].includes(operation.data.status)))} onClick={async () => { setBusy(true); setError(''); setJobId(''); try {
             setJobId((await api.post<{job_id: string}>(`${prefix}/operations`, {operation: 'ensemble-support', molecule, domain_experiment_id: domain, name: 'Ensemble support', inputs: {receipt_id: receiptId, reference_artifact_id: reference, member_artifact_ids: selected}})).data.job_id);
-        } catch (e) { setError(String(e)); } finally { setBusy(false); } }}>Compute ensemble support</button>
-        {jobId && <p role="status">Managed ensemble Job {jobId}: {operation.data?.status || 'submitted'}</p>}
-        {(error || domains.error || operation.error || report.error || operation.data?.error_message) && <p role="alert">Ensemble support failed: {error || String(domains.error || operation.error || report.error || operation.data?.error_message)}</p>}
-        {result && <div><p>Method: {result.report.method}; samples: {result.report.sample_count}; pooled retention: {result.report.numerator} / {result.report.denominator} = {fraction(result.report.fraction)}. {result.report.denominator_policy}. {result.report.interpretation}.</p>
-            <ul>{result.report.samples.map((s, i) => <li key={`${s.artifact_id}:${i}`}>{s.logical_path || s.artifact_id} ({s.artifact_id}): {s.numerator} / {s.denominator} = {fraction(s.fraction)}; matched rows {s.matched_rows}; unknown mapping rows {s.rows_with_unknown_mapping}</li>)}</ul></div>}
+        } catch (e) { setError(errorText(e)); } finally { setBusy(false); } }}>Compute ensemble support</button>
+        {jobId && <p role="status">Ensemble support: {statusText(operation.data?.status)}. <a href={`/jobs/${encodeURIComponent(jobId)}`} title={jobId}>Open job</a></p>}
+        {(error || domains.error || operation.error || report.error || operation.data?.error_message) && <p role="alert">Ensemble support failed: {error || (domains.error || operation.error || report.error ? errorText(domains.error || operation.error || report.error) : operation.data?.error_message)}</p>}
+        {result && <div><p title={[result.report.method, result.report.denominator_policy, result.report.interpretation].filter(Boolean).join(' · ')}>Support: {fraction(result.report.fraction)} ({result.report.numerator} of {result.report.denominator} pairs) across {result.report.sample_count} samples.</p>
+            <ul>{result.report.samples.map((s, i) => <li key={`${s.artifact_id}:${i}`} title={s.artifact_id}>{s.logical_path || nameOf(s.artifact_id)}: {fraction(s.fraction)} ({s.numerator} of {s.denominator} pairs); {s.matched_rows} rows matched; {s.rows_with_unknown_mapping} rows not fully matched</li>)}</ul></div>}
     </section>;
 }
 
@@ -117,7 +120,7 @@ export default function AlignmentPage() {
         {setup.active && setup.isLoading && <p role="status">Loading Project workflow setup…</p>}
         {setup.active && setup.error && <p role="alert">Project workflow setup unavailable: {projectManagerErrorMessage(setup.error)}</p>}
         {setup.setup && <ProjectWorkflowSetupBanner setup={setup.setup} />}
-        <header className="alignment-page-header"><div><h1>Alignments</h1><p>Build, inspect and compare sequence alignments.</p></div>
+        <header className="alignment-page-header"><div><h1>Alignments</h1><p>Build, inspect and compare sequence alignments. <strong>Library</strong> lists saved alignments, <strong>New</strong> runs one, <strong>Compare</strong> checks two against each other.</p></div>
         <nav aria-label="Alignment sections" className="alignment-page-nav">
             {(['Library', 'New', 'Compare'] as const).map(name => <Link key={name} aria-current={section === name ? 'page' : undefined} to={{ pathname: `/alignments/${name.toLowerCase()}`, search: setup.active ? location.search : projectId ? `?project_id=${encodeURIComponent(projectId)}` : '' }}>{name}</Link>)}
         </nav></header>
@@ -128,15 +131,15 @@ export default function AlignmentPage() {
             if (savedReceipt && destination) { setSaveOpen(false); navigate(`/alignments/results/${encodeURIComponent(savedReceipt)}?project_id=${encodeURIComponent(destination.projectId)}`); }
         }}/>}
         {base && !manifest.data && !error && <p role="status">Waiting for alignment result{job.data?.status ? ` (Job ${job.data.status})` : ''}…</p>}
-        {base && manifest.data && !alignments.length && <p role="status">No alignment artifact is available in this result. <button onClick={() => void manifest.refetch()}>Retry</button></p>}
-        {error && <div role="alert">Alignment result unavailable: {String(error)} <button onClick={() => { if (job.error) void job.refetch(); if (manifest.error) void manifest.refetch(); if (documentQuery.error) void documentQuery.refetch(); }}>Retry</button></div>}
-        {observations.error && <p role="status">Source format observations unavailable; the original file remains downloadable.</p>}
-        {Boolean(observations.data?.length) && <section aria-label="Source format observations"><h2>Source format observations</h2><ul>{observations.data?.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
-        {base && alignments.length > 1 && <label>Alignment member <select value={selected} onChange={e => setSelection({base, id: e.target.value})}><option value="">Choose a member</option>{alignments.map((x, index) => <option key={x.id} value={x.id}>{x.logical_path || `Alignment ${index + 1}`}</option>)}</select></label>}
+        {base && manifest.data && !alignments.length && <p role="status">This result has no alignment file. <button onClick={() => void manifest.refetch()}>Retry</button></p>}
+        {error && <div role="alert">Alignment result unavailable: {errorText(error)} <button onClick={() => { if (job.error) void job.refetch(); if (manifest.error) void manifest.refetch(); if (documentQuery.error) void documentQuery.refetch(); }}>Retry</button></div>}
+        {observations.error && <p role="status">File notes unavailable; the original file can still be downloaded.</p>}
+        {Boolean(observations.data?.length) && <section aria-label="File notes"><h2>File notes</h2><ul>{observations.data?.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
+        {base && alignments.length > 1 && <label>Alignment <select value={selected} onChange={e => setSelection({base, id: e.target.value})}><option value="">Choose an alignment</option>{alignments.map((x, index) => <option key={x.id} value={x.id}>{x.logical_path || `Alignment ${index + 1}`}</option>)}</select></label>}
         {projectId && receiptId && member && alignments.length > 1 && <EnsembleSupport key={`${projectId}:${receiptId}:${member}`} projectId={projectId} receiptId={receiptId} reference={member} artifacts={alignments}/>}
         {!base && !resultId && section === 'New' && <AlignmentEditor key={`${model}:${JSON.stringify(query.getAll(MOLECULAR_ALIGNMENT_PARAM))}`} model={model} initialMolecule={queryModel === 'family_msa_nucleic' ? (query.get('molecule') === 'rna' ? 'rna' : 'dna') : queryModel ? undefined : selectedMolecule} onModelChange={queryModel ? undefined : (next, molecule) => { setSelectedMolecule(molecule); setSelectedModel(next); }}/>}
         {!base && !resultId && section === 'Library' && <AlignmentLibrary initialProject={projectId}/>}
         {!base && !resultId && section === 'Compare' && <AlignmentComparison key={projectId || ''} initialProject={projectId} savedState={query.get('shared_state_id')} operationJob={query.get('operation_job_id')}/> }
-        {base && <AlignmentWorkspace importedStateIds={(manifest.data?.import_provenance?.shared_states ?? []).flatMap(item => item.dataset_id ? [item.dataset_id] : [])} viewers={alignmentViewers} projectLabel={setup.setup?.project_label || projectId || undefined} projectId={projectId || undefined} receiptId={projectId ? receiptId || undefined : undefined} document={document} downloads={base ? artifacts.map(x => ({label: x.role === 'source' ? `Original file (${x.logical_path || 'source'})` : `${x.role}${x.logical_path ? ` (${x.logical_path})` : ''}`, href: `${base}/artifacts/${encodeURIComponent(x.id)}`})) : []} /> }
+        {base && <AlignmentWorkspace importedStateIds={(manifest.data?.import_provenance?.shared_states ?? []).flatMap(item => item.dataset_id ? [item.dataset_id] : [])} viewers={alignmentViewers} projectLabel={setup.setup?.project_label || projectId || undefined} projectId={projectId || undefined} receiptId={projectId ? receiptId || undefined : undefined} document={document} downloads={base ? artifacts.map(x => ({label: downloadLabel(x.role, x.logical_path), href: `${base}/artifacts/${encodeURIComponent(x.id)}`})) : []} /> }
     </div>;
 }

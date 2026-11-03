@@ -1059,7 +1059,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         selectedReferenceIsExactStateMember,
         usesMolBioReceiptLane,
     ]);
-    const canRunModkit = ['modified', 'plasmidQc', 'dna'].includes(selectedWorkflow);
+    const canRunModkit = ['modified', 'plasmidQc', 'dna', 'clone', 'constructScreening'].includes(selectedWorkflow);
     const fastqQcSettingAvailable = selectedWorkflow === 'dna' || selectedWorkflow === 'plasmidQc'
         || selectedWorkflow === 'fastqQc'
         || ((selectedWorkflow === 'clone' || selectedWorkflow === 'constructScreening') && inputSource === 'fastq');
@@ -1764,7 +1764,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
             {/* Shared MolBio and NGS reference library */}
             <section className={TASK_FLOW_PANEL} data-testid="immutable-molbio-reference-panel" data-ngs-section="reference" aria-labelledby="ngs-reference-heading">
-                <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>Expected sequence</h2>
+                <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>Reference sequence</h2>
                 {!requiresReference && !showOptionalReference && !selectedMolbioSequenceId && !selectedMolbioRevisionId && !selectedManagedReferenceRevisionId ? (
                     <div className="space-y-3 text-sm text-[var(--text-secondary)]">
                         <p>No reference needed for basecalling.</p>
@@ -1777,10 +1777,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         setShowOptionalReference(false);
                     }}>No reference — basecalling only</button>}
                     <div className="mb-3">
-                        <h3 className="text-sm font-semibold text-[var(--text-primary)]">Expected sequence for this analysis</h3>
-                        <p className="mt-1 text-xs text-[var(--text-secondary)]">{requiresReference ? 'Choose a Project sequence below, or add expected sequences by pasting, browsing files, or selecting saved MolBio sequences.' : 'Reference-free basecalling is supported. Optionally choose an attached reference for alignment; Experiment and state grouping are retained.'}</p>
+                        <h3 className="text-sm font-semibold text-[var(--text-primary)]">{requiresReference ? 'This analysis needs a reference sequence' : 'Optional reference sequence'}</h3>
+                        <p className="mt-1 text-xs text-[var(--text-secondary)]">{requiresReference ? 'Pick a sequence already in this Project, or add one below: paste it, upload FASTA/GenBank/CSV files, or choose saved sequences from Molecular Tools.' : 'Basecalling works without a reference. Add one if you also want reads aligned and checked against it.'}</p>
                         {requiresReference && exactDomainExperimentId && molbioSequences.length === 0 && !molbioSequencesQuery.isLoading && !exactStateRevisionQuery.isLoading && (
-                            <p role="alert" className="mt-2 rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-2 text-xs text-[var(--warning)]">This Project has no expected sequences yet. Add one or several below.</p>
+                            <p role="alert" className="mt-2 rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-2 text-xs text-[var(--warning)]">This Project has no reference sequences yet. Add one or several below.</p>
                         )}
                     </div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -1799,7 +1799,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 {molbioSequences.map((sequence) => <option key={sequence.id} value={sequence.id}>{sequence.name}</option>)}
                             </select>
                         </label>
-                        <label className="text-xs text-[var(--text-secondary)]">Saved revision
+                        <label className="text-xs text-[var(--text-secondary)]">Version
                             <select
                                 value={selectedMolbioRevisionId}
                                 onChange={(event) => setSelectedMolbioRevisionId(event.target.value)}
@@ -1807,7 +1807,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-2 text-sm text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
                                 data-testid="molbio-revision-selector"
                             >
-                                <option value="">Select exact revision…</option>
+                                <option value="">Select a version…</option>
                                 {molbioRevisions.map((revision) => <option key={revision.id} value={revision.id}>{revisionLabel(revision)}</option>)}
                             </select>
                         </label>
@@ -1972,7 +1972,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             {inputSource === 'pod5' && (
                 <div className={TASK_FLOW_CARD}>
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-3">Modification calling</label>
-                    <p className="mb-3 text-xs text-[var(--text-secondary)]">{selectedWorkflow === 'modified' ? 'Choose which modifications to call before analysis.' : 'Optional per-read modification calls (MM/ML tags) in the BAM. Select any combination; enable Generate methylation tables for per-site analysis.'}</p>
+                    <p className="mb-3 text-xs text-[var(--text-secondary)]">{selectedWorkflow === 'modified' ? 'Choose which modifications to call before analysis.' : 'Optional. Call modified bases while basecalling; turn on Generate methylation tables below for per-site results.'}</p>
                     {modificationOptions.length === 0 ? (
                         <p className="text-xs text-[var(--text-secondary)]">No modification models exist for {doradoMolecule.toUpperCase()} {DORADO_MODELS[doradoModel].label} basecalling. Choose High Accuracy or Super Accurate.</p>
                     ) : (
@@ -2003,6 +2003,84 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                         </div>
                     )}
                     <p className="mt-3 text-xs text-[var(--text-secondary)]">Dorado runs one modification model per canonical base; choosing another model for the same base replaces it. Modification calling requires one-strand calling and no inline barcoding.</p>
+                </div>
+            )}
+
+            {/* Methylation tables (modkit) — every DNA and plasmid method, from POD5/BLOW5 or tagged BAM */}
+            {canRunModkit && (
+                <div className={`${TASK_FLOW_CARD} space-y-3`} data-testid="ngs-methylation-card">
+                    <div className="text-sm font-semibold text-[var(--text-primary)]">Methylation</div>
+                            <label className="flex items-center gap-3 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={runModkit}
+                                    onChange={(e) => setRunModkit(e.target.checked)}
+                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
+                                />
+                                <div>
+                                    <span className="text-sm text-[var(--text-primary)]">Generate methylation tables</span>
+                                    <p className="text-xs text-[var(--text-secondary)]">
+                                        {inputSource === 'fastq' ? 'FASTQ cannot supply modification probabilities; use tagged BAM or POD5, or disable this stage.' : inputSource === 'bam' ? 'Summarize the existing modification calls.' : 'Align and summarize the newly called modifications.'}
+                                    </p>
+                                </div>
+                            </label>
+
+                        {runModkit && (
+                            <div className="space-y-2">
+                                <label className="text-xs text-[var(--text-secondary)] mb-1 block">
+                                    modkit filter threshold ({modkitFilterThreshold != null ? modkitFilterThreshold.toFixed(2) : 'auto'})
+                                </label>
+                                <div className="flex flex-wrap gap-2">
+                                    {[
+                                        { key: 'auto', label: 'Auto (Recommended)', value: null },
+                                        { key: 'balanced', label: 'Balanced 0.50', value: 0.5 },
+                                        { key: 'strict', label: 'Strict 0.70', value: 0.7 },
+                                        { key: 'very-strict', label: 'Very strict 0.85', value: 0.85 },
+                                    ].map((opt) => (
+                                        <button
+                                            key={opt.key}
+                                            type="button"
+                                            onClick={() => setModkitFilterThreshold(opt.value)}
+                                            className={`px-2 py-1 rounded border text-xs transition-colors ${modkitFilterThreshold === opt.value
+                                                ? 'text-[var(--text-primary)]'
+                                                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                                                }`}
+                                            style={{
+                                                borderColor: 'var(--border-primary)',
+                                                backgroundColor: modkitFilterThreshold === opt.value ? 'var(--bg-secondary)' : 'transparent',
+                                            }}
+                                        >
+                                            {opt.label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <label className="text-[10px] text-[var(--text-secondary)]">Custom:</label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="1"
+                                        step="0.01"
+                                        value={modkitFilterThreshold ?? ''}
+                                        onChange={(e) => {
+                                            if (e.target.value === '') {
+                                                setModkitFilterThreshold(null);
+                                                return;
+                                            }
+                                            const value = Number.parseFloat(e.target.value);
+                                            if (Number.isFinite(value)) {
+                                                setModkitFilterThreshold(Math.max(0, Math.min(1, value)));
+                                            }
+                                        }}
+                                        placeholder="auto"
+                                        className="w-24 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1 text-[var(--text-primary)] text-xs"
+                                    />
+                                </div>
+                                <div className="text-[10px] text-[var(--text-secondary)]">
+                                    Auto threshold; strict lowers false positives.
+                                </div>
+                            </div>
+                        )}
                 </div>
             )}
 
@@ -2300,80 +2378,6 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 />
                                 <span className="text-sm text-[var(--text-primary)]">Emit move tags for aligned signal views</span>
                             </label>
-                        )}
-                        {/* Modkit — POD5 or BAM */}
-                        {canRunModkit && (
-                            <label className="flex items-center gap-3 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={runModkit}
-                                    onChange={(e) => setRunModkit(e.target.checked)}
-                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
-                                />
-                                <div>
-                                    <span className="text-sm text-[var(--text-primary)]">Generate methylation tables</span>
-                                    <p className="text-xs text-[var(--text-secondary)]">
-                                        {inputSource === 'fastq' ? 'FASTQ cannot supply modification probabilities; use tagged BAM or POD5, or disable this stage.' : inputSource === 'bam' ? 'Summarize the existing modification calls.' : 'Align and summarize the newly called modifications.'}
-                                    </p>
-                                </div>
-                            </label>
-                        )}
-
-                        {runModkit && canRunModkit && (
-                            <div className="space-y-2">
-                                <label className="text-xs text-[var(--text-secondary)] mb-1 block">
-                                    modkit filter threshold ({modkitFilterThreshold != null ? modkitFilterThreshold.toFixed(2) : 'auto'})
-                                </label>
-                                <div className="flex flex-wrap gap-2">
-                                    {[
-                                        { key: 'auto', label: 'Auto (Recommended)', value: null },
-                                        { key: 'balanced', label: 'Balanced 0.50', value: 0.5 },
-                                        { key: 'strict', label: 'Strict 0.70', value: 0.7 },
-                                        { key: 'very-strict', label: 'Very strict 0.85', value: 0.85 },
-                                    ].map((opt) => (
-                                        <button
-                                            key={opt.key}
-                                            type="button"
-                                            onClick={() => setModkitFilterThreshold(opt.value)}
-                                            className={`px-2 py-1 rounded border text-xs transition-colors ${modkitFilterThreshold === opt.value
-                                                ? 'text-[var(--text-primary)]'
-                                                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                                }`}
-                                            style={{
-                                                borderColor: 'var(--border-primary)',
-                                                backgroundColor: modkitFilterThreshold === opt.value ? 'var(--bg-secondary)' : 'transparent',
-                                            }}
-                                        >
-                                            {opt.label}
-                                        </button>
-                                    ))}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <label className="text-[10px] text-[var(--text-secondary)]">Custom:</label>
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        max="1"
-                                        step="0.01"
-                                        value={modkitFilterThreshold ?? ''}
-                                        onChange={(e) => {
-                                            if (e.target.value === '') {
-                                                setModkitFilterThreshold(null);
-                                                return;
-                                            }
-                                            const value = Number.parseFloat(e.target.value);
-                                            if (Number.isFinite(value)) {
-                                                setModkitFilterThreshold(Math.max(0, Math.min(1, value)));
-                                            }
-                                        }}
-                                        placeholder="auto"
-                                        className="w-24 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1 text-[var(--text-primary)] text-xs"
-                                    />
-                                </div>
-                                <div className="text-[10px] text-[var(--text-secondary)]">
-                                    Auto threshold; strict lowers false positives.
-                                </div>
-                            </div>
                         )}
                         {inputSource === 'fastq' && runFastqQc && (
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">

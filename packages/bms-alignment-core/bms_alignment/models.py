@@ -51,52 +51,52 @@ class MafftSettings(Closed):
     strategy: Literal['fft_ns_2', 'linsi', 'ginsi', 'einsi', 'auto'] = 'fft_ns_2'
     threads: int = Field(default=1, ge=1)
     treeout: bool = False
-    pair_method: Literal['6merpair', '10merpair', 'hybridpair', 'localgenafpair', 'oldgenafpair', 'shortlongpair', 'longshortpair'] | None = Field(default=None, description='Explicit native pair method, compiled after strategy; null preserves the original strategy. Native aliases retain their exact spelling. 10mer requires nucleotide input. Hybridpair faults in the pinned synthetic protein probe; no fallback is substituted.')
-    tree_method: Literal['large', 'memsavetree', 'memsavetreex', 'stepadd', 'youngestlinkage', 'pileup', 'randomchain'] | None = Field(default=None, description='Native tree construction override; native restrictions and failures remain visible, without switching algorithms.')
-    refinement_policy: Literal['bestfirst', 'adhoc0', 'adhoc1', 'adhoc2', 'simplehillclimbing'] | None = Field(default=None, description='Native iterative parallelization policy; aliases are not normalized.')
+    pair_method: Literal['6merpair', '10merpair', 'hybridpair', 'localgenafpair', 'oldgenafpair', 'shortlongpair', 'longshortpair'] | None = Field(default=None, description='Pair method. Overrides the strategy pair method; blank keeps the strategy setting. 10merpair needs DNA/RNA. hybridpair can fail on protein input.')
+    tree_method: Literal['large', 'memsavetree', 'memsavetreex', 'stepadd', 'youngestlinkage', 'pileup', 'randomchain'] | None = Field(default=None, description='Guide-tree method. Blank uses the strategy setting.')
+    refinement_policy: Literal['bestfirst', 'adhoc0', 'adhoc1', 'adhoc2', 'simplehillclimbing'] | None = Field(default=None, description='Parallel refinement method.')
     alga: bool = False
-    allowshift: bool = Field(default=False, description='Native shift-aware scoring; requires globalpair in the pinned engine.')
-    anchors: str | None = Field(default=None, description='Exact native external anchor table text: seven integers per line, i j starti endi startj endj score. Sequence and position indices are 1-based; i must precede j. Uses roster order, not display labels; retained verbatim.', json_schema_extra={'format': 'mafft-anchors'})
+    allowshift: bool = Field(default=False, description='Shift-aware scoring. Needs the G-INS-i (globalpair) strategy.')
+    anchors: str | None = Field(default=None, description='Anchor table: 7 numbers per line (i j start_i end_i start_j end_j score), 1-based. i and j are sequence numbers in input order; i comes before j.', json_schema_extra={'format': 'mafft-anchors'})
     bunkatsunashi: bool = False
-    focus: bool = Field(default=False, description='Native target-focused consistency. Native row names must carry _focus_; use focus_rows to explicitly mark selected roster row IDs.')
-    focus_rows: str | None = Field(default=None, description='One exact roster row ID per line to mark with the native _focus_ prefix. Explicit reversible native row-map is retained. Unknown IDs are observations, not an admission gate; null leaves native identifiers unchanged.')
-    gep: float | None = Field(default=None, description='Native global pairwise offset (--gep), distinct from --ep and --lep.')
-    gexp: float | None = Field(default=None, description='Native global pairwise extension (--gexp), distinct from --exp and --lexp.')
-    gop: float | None = Field(default=None, description='Native global pairwise opening (--gop), distinct from --op and --lop.')
+    focus: bool = Field(default=False, description='Focus the alignment on marked sequences. Use Focus rows to mark them.')
+    focus_rows: str | None = Field(default=None, description='Row IDs to focus on, one per line. Unknown IDs are ignored.')
+    gep: float | None = Field(default=None, description='Global pairwise offset (--gep).')
+    gexp: float | None = Field(default=None, description='Global pairwise gap extension (--gexp).')
+    gop: float | None = Field(default=None, description='Global pairwise gap opening (--gop).')
     kappa: float | None = None
-    leavegappyregion: bool = Field(default=False, description='Exact native alias of legacygappenalty, preserved in requested settings.')
-    lhlimit: float | None = Field(default=None, description='Native nodepair local-homology limit; consumed by memory-saving pairwise tree paths.')
+    leavegappyregion: bool = Field(default=False, description='Same as legacygappenalty.')
+    lhlimit: float | None = Field(default=None, description='Local-homology limit for memory-saving tree methods.')
     minimumweight: float | None = None
     noscore: bool = False
     oneiteration: bool = False
     shiftpenalty: float | None = None
     similaritylevel: float | None = None
     skipiterate: float | None = None
-    sp: bool = Field(default=False, description='Rigorous sum-of-pairs scoring; native refinement requires threadit=0.')
-    sparsepickup: int | None = Field(default=None, description='Native sparse pickup. Can omit rows; actual output and notused artifact are retained, never silently replenished.')
+    sp: bool = Field(default=False, description='Rigorous sum-of-pairs scoring. Refinement needs Iteration threads = 0.')
+    sparsepickup: int | None = Field(default=None, description='Sparse pickup. Some rows may be left out; those are listed in a separate file.')
     terminalmargin: int | None = None
     unalignlevel: float | None = None
     nodeout: bool = False
     distance_output: Literal['distout', 'distoutclustalo'] | None = None
-    scoreout: bool = Field(default=False, description='Request native score diagnostics; engine.log retains emitted diagnostics. Pinned L-INS-i synthetic probe faults in tbfast with this option; failure is retained without substitution.')
+    scoreout: bool = Field(default=False, description='Write alignment scores to the engine log. Can fail with L-INS-i.')
     op: float | None = None
     ep: float | None = None
     weighti: float | None = Field(default=None, description='Pairwise consistency weight; applies to iterative pairwise strategies.')
     lop: float | None = Field(default=None, description='Local pairwise gap opening penalty.')
     lep: float | None = Field(default=None, description='Local pairwise offset.')
     lexp: float | None = Field(default=None, description='Local pairwise gap extension penalty.')
-    long_gap_open: float | None = Field(default=None, description='E-INS-i skip penalty (native --LOP).')
-    long_gap_extend: float | None = Field(default=None, description='E-INS-i skip extension penalty (native --LEXP).')
+    long_gap_open: float | None = Field(default=None, description='E-INS-i skip penalty (--LOP).')
+    long_gap_extend: float | None = Field(default=None, description='E-INS-i skip extension penalty (--LEXP).')
     bl: Literal[30, 45, 62, 80] | None = Field(default=None, description='Protein BLOSUM matrix number.')
     jtt: int | None = Field(default=None, description='Protein JTT PAM distance.')
     tm: int | None = Field(default=None, description='Protein transmembrane PAM distance.')
     kimura: int | None = Field(default=None, description='Nucleotide transition/transversion parameter.')
-    randomseed: int | None = Field(default=None, description='Native random seed where used by MAFFT.')
+    randomseed: int | None = Field(default=None, description='Random seed, where MAFFT uses one.')
     nofft: bool = False
     fft: bool = Field(default=False, description='Force FFT; compiled before nofft if both are selected.')
-    threadit: int | None = Field(default=None, description='Native iterative-step threads; 0 disables threaded refinement, -1 selects automatic.')
-    threadtb: int | None = Field(default=None, description='Native progressive-step threads; -1 selects automatic.')
-    parttree: Literal['parttree', 'dpparttree'] | None = Field(default=None, description='PartTree distance mode; native interactions with pairwise strategies are retained.')
+    threadit: int | None = Field(default=None, description='Threads for refinement. 0 turns off threaded refinement; -1 is automatic.')
+    threadtb: int | None = Field(default=None, description='Threads for the progressive step. -1 is automatic.')
+    parttree: Literal['parttree', 'dpparttree'] | None = Field(default=None, description='PartTree distance mode.')
     partsize: int | None = None
     groupsize: int | None = None
     linkage: Literal['minimumlinkage', 'averagelinkage'] | None = None
@@ -106,14 +106,14 @@ class MafftSettings(Closed):
     legacygappenalty: bool = False
     anysymbol: bool = False
     preservecase: bool = False
-    direction: Literal['adjustdirection', 'adjustdirectionaccurately'] | None = Field(default=None, description='Native nucleotide direction adjustment. Raw input and native output remain retained; no inferred coordinate remap.')
+    direction: Literal['adjustdirection', 'adjustdirectionaccurately'] | None = Field(default=None, description='Reverse-complement sequences when needed (DNA/RNA).')
     memsave: Literal['memsave', 'nomemsave'] | None = None
     fmodel: bool = False
     nucleotide_scoring: Literal['nwildcard', 'nzero'] | None = None
     opdist: float | None = None
     exp: float | None = None
-    treein: str | None = Field(default=None, description='Exact MAFFT merge-table file text (not Newick): one merge per line, 1-based roster indices and branch lengths. Retained verbatim as treein.txt.', json_schema_extra={'format': 'mafft-merge-table'})
-    aamatrix: str | None = Field(default=None, description='Exact native protein matrix file text: amino-acid header, lower triangular scores, optional frequency/norescale record. Retained verbatim as aamatrix.txt; compiled after named substitution models.', json_schema_extra={'format': 'mafft-amino-matrix'})
+    treein: str | None = Field(default=None, description='MAFFT merge table (not Newick): one merge per line, 1-based sequence numbers and branch lengths.', json_schema_extra={'format': 'mafft-merge-table'})
+    aamatrix: str | None = Field(default=None, description='Custom amino-acid scoring matrix. Overrides BLOSUM, JTT and transmembrane settings.', json_schema_extra={'format': 'mafft-amino-matrix'})
     retree: int | None = Field(default=None, ge=0, description='Override the strategy guide-tree rebuild count.')
     maxiterate: int | None = Field(default=None, ge=0, description='Override the strategy refinement iteration count.')
     reorder: bool = False
@@ -123,8 +123,8 @@ class FamsaSettings(Closed):
     engine: Literal['famsa'] = 'famsa'
     threads: int = Field(default=1, ge=1)
     guide_tree: Literal['sl', 'upgma', 'nj', 'import'] = 'sl'
-    guide_tree_newick: str | None = Field(default=None, description='Supplied Newick file text used with guide_tree=import. Leaves are native bmsrow00000001 identifiers unless explicitly mapped; original and submitted trees are retained.', json_schema_extra={'format': 'newick'})
-    leaf_mapping: dict[str, str] = Field(default_factory=dict, description='Explicit supplied tree leaf → roster row ID mapping. Unmapped leaves are retained and reported, never guessed.')
+    guide_tree_newick: str | None = Field(default=None, description='Newick guide tree, used when Guide tree is set to import. Use Leaf mapping to match leaves to rows.', json_schema_extra={'format': 'newick'})
+    leaf_mapping: dict[str, str] = Field(default_factory=dict, description='Matches tree leaf names to row IDs. Unmatched leaves are reported, not guessed.')
     refine_mode: Literal['auto', 'on', 'off'] = 'auto'
     keep_duplicates: bool = False
     medoidtree: bool = False
@@ -148,31 +148,31 @@ class FamsaSettings(Closed):
 class MuscleSettings(Closed):
     engine: Literal['muscle'] = 'muscle'
     mode: Literal['align', 'super5'] = 'align'
-    guidetreeout: bool = Field(default=False, description='Native guide-tree diagnostic: MPC writes guide.native.nwk then exits zero BEFORE alignment, including in ensembles. This is not an alignment-plus-tree option. Random-chain bypasses the writer. No automatic rerun or algorithm replacement.')
-    hmmin: str | None = Field(default=None, description='Exact MUSCLE HMM parameter file text, retained verbatim as hmmin.txt. Consumed by align and Super5; no parameter conversion.', json_schema_extra={'format': 'muscle-hmm'})
-    hmmout: bool = Field(default=False, description='Native InitProbcons parameter dump (Super5); align initializes its HMM directly and does not write this file. Dump precedes CmdLineUpdate; not a complete effective-parameter receipt.')
-    anchor_letter: str | None = Field(default=None, min_length=1, max_length=1, description='Native one-character HMM anchor override; no case normalization.')
-    randseed: int | None = Field(default=None, description='Native RNG seed; zero explicitly selects time/process-based seeding. Perturbation may reset the RNG afterwards.')
-    accs: bool = Field(default=False, description='Native accession label parsing. The adapter still supplies opaque row IDs and retains the original row mapping.')
-    randomchaintree: bool = Field(default=False, description='MPC random-chain guide tree; native tree writer is bypassed in this branch.')
-    native_log: bool = Field(default=False, description='Retain MUSCLE internal -log output separately as muscle.native.log; engine.log always retains stdout/stderr.')
+    guidetreeout: bool = Field(default=False, description='Write the guide tree only. MUSCLE stops before aligning, so no alignment is produced. Ignored with Random-chain tree.')
+    hmmin: str | None = Field(default=None, description='MUSCLE HMM parameter file.', json_schema_extra={'format': 'muscle-hmm'})
+    hmmout: bool = Field(default=False, description='Write the HMM parameters to a file (Super5 only).')
+    anchor_letter: str | None = Field(default=None, min_length=1, max_length=1, description='One-character HMM anchor (case-sensitive).')
+    randseed: int | None = Field(default=None, description='Random seed. 0 picks a seed from the clock.')
+    accs: bool = Field(default=False, description='Parse accession labels from headers.')
+    randomchaintree: bool = Field(default=False, description='Use a random-chain guide tree.')
+    native_log: bool = Field(default=False, description='Also save the MUSCLE log file.')
     threads: int = Field(default=1, ge=1)
-    permutation: Literal['none', 'abc', 'acb', 'bca', 'all'] | None = Field(default=None, description='Null omits -perm (native single-run default none). Explicit none is passed even with an ensemble; native incompatibilities are not silently repaired.')
-    perturb: int | None = Field(default=None, ge=0, description='Null omits -perturb (native single-run default 0). Explicit zero is passed even with an ensemble.')
+    permutation: Literal['none', 'abc', 'acb', 'bca', 'all'] | None = Field(default=None, description='Guide-tree permutation. Blank uses the MUSCLE default. "none" cannot be combined with ensembles.')
+    perturb: int | None = Field(default=None, ge=0, description='Perturbation seed. Blank uses the MUSCLE default. 0 cannot be combined with ensembles.')
     ensemble: Literal['none', 'stratified', 'diversified'] = 'none'
     replicates: int | None = Field(default=None, ge=1)
-    consiters: int | None = Field(default=None, ge=0, description='Native align consistency iterations; not consumed by Super5.')
-    refineiters: int | None = Field(default=None, ge=0, description='Native align refinement iterations; not consumed by Super5.')
-    minsuper: int | None = Field(default=None, ge=0, description='Explicit native align-to-Super5 sequence-count threshold; null keeps the requested align algorithm.')
-    output_order: Literal['input_order', 'tree_order'] | None = Field(default=None, description='Native output row order.')
+    consiters: int | None = Field(default=None, ge=0, description='Consistency iterations (not used by Super5).')
+    refineiters: int | None = Field(default=None, ge=0, description='Refinement iterations (not used by Super5).')
+    minsuper: int | None = Field(default=None, ge=0, description='Switch to Super5 above this many sequences. Blank keeps the chosen algorithm.')
+    output_order: Literal['input_order', 'tree_order'] | None = Field(default=None, description='Output row order.')
     quiet: bool = False
     verbose: bool = False
-    m_is: float | None = Field(default=None, description='Pair-HMM match to short insertion transition; native normalization applies.')
-    m_il: float | None = Field(default=None, description='Pair-HMM match to long insertion transition; native normalization applies.')
-    is_is: float | None = Field(default=None, description='Pair-HMM short insertion self-transition; native normalization applies.')
-    il_il: float | None = Field(default=None, description='Pair-HMM long insertion self-transition; native normalization applies.')
-    s_is: float | None = Field(default=None, description='Pair-HMM start to short insertion transition; native normalization applies.')
-    s_il: float | None = Field(default=None, description='Pair-HMM start to long insertion transition; native normalization applies.')
+    m_is: float | None = Field(default=None, description='Pair-HMM match to short insertion transition.')
+    m_il: float | None = Field(default=None, description='Pair-HMM match to long insertion transition.')
+    is_is: float | None = Field(default=None, description='Pair-HMM short insertion self-transition.')
+    il_il: float | None = Field(default=None, description='Pair-HMM long insertion self-transition.')
+    s_is: float | None = Field(default=None, description='Pair-HMM start to short insertion transition.')
+    s_il: float | None = Field(default=None, description='Pair-HMM start to long insertion transition.')
 
 class TwilightSettings(Closed):
     engine: Literal['twilight'] = 'twilight'
@@ -205,7 +205,7 @@ class TwilightSettings(Closed):
     gap_ends: float | None = None
     scale: float | None = None
     xdrop: float = 600
-    matrix: str | None = Field(default=None, description='Exact TWILIGHT nucleotide matrix text: A C G T header and 4x4 scores (optional N header and 5x5 scores). Native values are not rescaled. Retained as matrix.txt.', json_schema_extra={'format': 'twilight-nucleotide-matrix'})
+    matrix: str | None = Field(default=None, description='Nucleotide score matrix: A C G T header with 4×4 scores (or 5×5 with N).', json_schema_extra={'format': 'twilight-nucleotide-matrix'})
     guide_source: Literal['supplied', 'mafft'] = 'supplied'
     guide_tree: str | None = None
     leaf_mapping: dict[str, str] = Field(default_factory=dict)

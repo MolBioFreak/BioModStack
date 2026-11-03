@@ -105,3 +105,25 @@ it('blocks submission until all sources load, exposes retry, and rejects an iden
         expect(button(host, 'Start run').disabled).toBe(false);
     } finally { await close(); }
 });
+
+it('pins the current revision even when it is not the newest one', async () => {
+    const page = Array.from({length: 50}, (_, i) => ({revision_id: `a-new${i}`, is_current: false}));
+    mocks.summaries.mockImplementation(async (_id: string, _limit: number, offset = 0) => offset === 0 ? page : [{revision_id: 'a-r1', is_current: true}]);
+    const href = await molecularAlignmentHref(records);
+    expect(new URLSearchParams(href.split('?')[1]).getAll('sequence_revision')).toEqual([JSON.stringify(['a', 'a-r1']), JSON.stringify(['b', 'a-r1'])]);
+});
+
+it('applies the standard plasmid settings to DNA sent from the shelf and can revert them', async () => {
+    const href = await molecularAlignmentHref(records);
+    const {host, close} = await mounted(href);
+    try {
+        await vi.waitFor(() => expect(host.textContent).toContain('Selected sequences (2)'));
+        expect(host.textContent).toContain('Plasmid settings applied');
+        await act(async () => button(host, 'Start run').click());
+        expect(mocks.submit.mock.calls[0][0].params.settings).toMatchObject({engine: 'mafft', strategy: 'auto', reorder: false});
+        await act(async () => button(host, 'Use plain MAFFT defaults instead').click());
+        expect(host.textContent).not.toContain('Plasmid settings applied');
+        await act(async () => button(host, 'Start run').click());
+        expect(mocks.submit.mock.calls[1][0].params.settings).toMatchObject({engine: 'mafft', strategy: 'fft_ns_2'});
+    } finally { await close(); }
+});

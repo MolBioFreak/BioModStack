@@ -51,7 +51,7 @@ describe('expected-sequence entry',()=>{
         await input('Paste expected sequences','>A\nACGT');await click('Check sequences');await until(()=>expect(button('Save and add to Project').disabled).toBe(false));await input('Paste expected sequences','>Other\nTGCA');expect(button('Save and add to Project').disabled).toBe(true);
     });
     it('adds selected saved sequences with exact current or historical versions',async()=>{
-        await click('Saved MolBio sequences');await until(()=>expect(host.querySelector('[aria-label="Select A"]')).not.toBeNull());
+        await click('From Molecular Tools');await until(()=>expect(host.querySelector('[aria-label="Select A"]')).not.toBeNull());
         await act(async()=>{host.querySelector<HTMLInputElement>('[aria-label="Select A"]')!.click();host.querySelector<HTMLInputElement>('[aria-label="Select B"]')!.click();});
         await until(()=>expect(host.querySelector<HTMLSelectElement>('[aria-label="Version for B"]')!.options.length).toBe(3));await input('Version for B','old-b');await click('Add 2 saved sequences to Project');
         await until(()=>expect(added).toHaveBeenCalled());expect(mocks.member.mock.calls.map(call=>call[3])).toEqual(['sequence_id=a&revision_id=ra','sequence_id=b&revision_id=old-b']);expect(mocks.commit).not.toHaveBeenCalled();

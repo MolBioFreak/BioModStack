@@ -17,6 +17,7 @@ include { FastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
 include { ConstructVerify } from '../../modules/ngs/construct_verify.nf'
 include { RunCloneValidation; CloneValidationAdapter; ComparePlasmidConsensus } from '../../modules/ngs/clone_validation.nf'
+include { ModkitAnalysis } from '../../modules/ngs/modkit_analysis.nf'
 
 include { reportStage } from '../../modules/ngs/stage_reporting.nf'
 
@@ -205,6 +206,11 @@ workflow WF_CLONE_VALIDATION {
         FastqPlasmidQC(analysis_bam, Channel.value(reference_file), qcReads)
         ComparePlasmidConsensus(CloneValidationAdapter.out.verification_input, FastqPlasmidQC.out.consensus)
         verificationInput = ComparePlasmidConsensus.out.verification_input
+    }
+    // Optional tandem methylation tables from the same aligned reads.
+    // FASTQ carries no MM/ML tags, so there is nothing for modkit to read.
+    if (params.run_modkit == true && !has_fastq) {
+        ModkitAnalysis(analysis_bam, Channel.value(reference_file))
     }
     // Always verify the assembled sequence in this workflow. Read-guided QC is
     // a separate observation, not a replacement for the assembly verdict.

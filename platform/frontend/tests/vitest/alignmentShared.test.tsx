@@ -14,12 +14,12 @@ it('keeps the draft on a revision conflict and saves a selected artifact column'
   const button = (text: string) => [...div.querySelectorAll('button')].find(b => b.textContent === text)!
   const labels = [...div.querySelectorAll('label')]
   const input = (text: string) => labels.find(x => x.textContent?.includes(text))!.querySelector('input, select') as HTMLInputElement
-  await act(async () => {set(input('Shared Dataset ID'), 'dataset'); set(input('Row'), 'r')})
-  await act(async () => {button('Open shared state').click(); button('Inspect').click()})
-  await act(async () => {button('Add selected column mark').click()})
-  await act(async () => {button('Save shared revision').click()})
+  await act(async () => {set(input('Notes ID'), 'dataset'); set(input('Row'), 'r')})
+  await act(async () => {button('Open notes').click(); button('Inspect').click()})
+  await act(async () => {button('Mark selected column').click()})
+  await act(async () => {button('Save notes').click()})
   expect(put).toHaveBeenCalledWith('/api/family-msa/projects/p/shared-state/dataset', expect.objectContaining({expected_head_generation:2, state: expect.objectContaining({marks:[expect.objectContaining({coordinate:{scope:'artifact_columns',artifact_id:'artifact',start:0,end:0}})]})}))
   expect(div.textContent).toContain('409 conflict')
-  expect(div.textContent).toContain('artifact columns 0–0')
+  expect(div.textContent).toContain('columns 1–1')
   await act(async () => root.unmount()); div.remove(); get.mockRestore(); put.mockRestore()
 })

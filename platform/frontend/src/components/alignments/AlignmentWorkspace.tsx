@@ -59,13 +59,12 @@ export default function AlignmentWorkspace({ projectLabel, projectId, receiptId,
     onSelectionChange?.(anchor)
   }
   const columns = document ? Math.max(0, ...document.rows.map(row => row.aligned.length)) : 0
-  const shortId = (id: string) => id.length > 28 ? `${id.slice(0, 24)}…` : id
   return <section aria-label="Alignments workspace" className="alignment-workspace">
-    {!document ? <><p>Project: {projectLabel || 'No project selected'}</p><p>No alignment result selected. Connect a retained result to view it.</p></> : <>
+    {!document ? <><p>Project: {projectLabel || 'No project selected'}</p><p>No alignment open.</p></> : <>
       <div className="alignment-result-bar">
         <div className="alignment-result-title">
-          <h2>{document.rows.length} sequences × {columns} columns</h2>
-          <p><span>Project: {projectLabel || 'No project selected'}</span> · <span title={document.resultId}>Result: {shortId(document.resultId)}</span></p>
+          <h2 title={document.resultId}>{document.rows.length} sequences × {columns} columns</h2>
+          <p><span>Project: {projectLabel || 'No project selected'}</span></p>
         </div>
         <label htmlFor="alignment-renderer" className="alignment-viewer-pick">Viewer{' '}
           <select id="alignment-renderer" value={viewerId} onChange={event => setViewerId(event.target.value as AlignmentViewerId)}>
@@ -73,16 +72,17 @@ export default function AlignmentWorkspace({ projectLabel, projectId, receiptId,
           </select>
         </label>
       </div>
+      <p className="alignment-hint">Each row is a sequence and each column a position. Dashes are gaps. Click a residue to see its position in the original sequence.</p>
       <AlignmentSimilaritySummary document={document} selectedRowId={currentSelection?.rowId ?? rowId} onSelectRow={selectRow}/>
       <div className="alignment-viewer-slot">
-        {Viewer ? <ViewerBoundary key={viewerId} name={viewerNames[viewerId]}><Suspense fallback={<p role="status">Loading {viewerNames[viewerId]}…</p>}><Viewer document={displayed!} selection={currentSelection} onSelect={select} marks={marks.filter(mark => selectedMarks.includes(mark.id))} rendererState={rendererState} onRendererStateChange={updateRendererState} /></Suspense></ViewerBoundary> : <p role="status">{viewerNames[viewerId]} is not connected. This result remains available for download.</p>}
+        {Viewer ? <ViewerBoundary key={viewerId} name={viewerNames[viewerId]}><Suspense fallback={<p role="status">Loading {viewerNames[viewerId]}…</p>}><Viewer document={displayed!} selection={currentSelection} onSelect={select} marks={marks.filter(mark => selectedMarks.includes(mark.id))} rendererState={rendererState} onRendererStateChange={updateRendererState} /></Suspense></ViewerBoundary> : <p role="status">{viewerNames[viewerId]} is not available; try another viewer. The files can still be downloaded below.</p>}
       </div>
-      {currentSelection && <p className="alignment-selection">Row {currentSelection.rowId}, column {currentSelection.column + 1}, {currentSelection.residue === null ? 'gap' : `residue ${currentSelection.residue + 1}`}{currentSelection.sourcePosition === undefined ? '; source coordinate unknown' : `; source coordinate ${currentSelection.sourcePosition + 1}`}</p>}
+      {currentSelection && <p className="alignment-selection" title={currentSelection.rowId}>Row {document.rows.find(row => row.rowId === currentSelection.rowId)?.label ?? currentSelection.rowId}, column {currentSelection.column + 1}, {currentSelection.residue === null ? 'gap' : `residue ${currentSelection.residue + 1}`}{currentSelection.sourcePosition === undefined ? '; sequence position unknown' : `; sequence position ${currentSelection.sourcePosition + 1}`}</p>}
       <div className="alignment-tools">
         <details className="alignment-panel">
           <summary>Rows ({order.length - hidden.length} of {order.length} shown)</summary>
           <fieldset><legend>Row order and visibility</legend>
-            <ol className="alignment-row-list">{order.map((id, index) => <li key={id} className={hidden.includes(id) ? 'is-hidden' : undefined}><span title={id}>{document.rows.find(row => row.rowId === id)?.label} ({id})</span>
+            <ol className="alignment-row-list">{order.map((id, index) => <li key={id} className={hidden.includes(id) ? 'is-hidden' : undefined}><span title={id}>{document.rows.find(row => row.rowId === id)?.label ?? id}</span>
               <span className="alignment-row-actions"><button type="button" onClick={() => updateLayout(order, hidden.includes(id) ? hidden.filter(x => x !== id) : [...hidden, id])}>{hidden.includes(id) ? 'Show' : 'Hide'}</button>
               <button type="button" disabled={index === 0} onClick={() => { const next = [...order]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateLayout(next, hidden) }}>Move up</button></span>
             </li>)}</ol>
@@ -93,7 +93,7 @@ export default function AlignmentWorkspace({ projectLabel, projectId, receiptId,
           <fieldset>
             <legend>Inspect a position</legend>
             <label>Row <select value={rowId} onChange={event => { setRowId(event.target.value); setSelection(undefined) }}>
-              <option value="">Choose a row</option>{document.rows.map(row => <option key={row.rowId} value={row.rowId}>{row.label} ({row.rowId})</option>)}
+              <option value="">Choose a row</option>{document.rows.map(row => <option key={row.rowId} value={row.rowId} title={row.rowId}>{row.label}</option>)}
             </select></label>{' '}
             <label>Alignment column (1-based) <input type="number" min="1" value={column} onChange={event => setColumn(event.target.value)} /></label>{' '}
             <button type="button" onClick={() => { const anchor = anchorAt(document, rowId, Number(column) - 1); if (anchor) select(anchor) }}>Inspect</button>

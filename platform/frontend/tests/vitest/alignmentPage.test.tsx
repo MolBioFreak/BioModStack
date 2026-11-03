@@ -22,10 +22,10 @@ describe('alignment route receiver', () => {
         try {
             await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/alignments/jobs/op']}><Routes><Route path="/alignments/jobs/:jobId" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>));
             for (let i = 0; i < 5; i++) await act(async () => { await new Promise(r => setTimeout(r, 30)); });
-            expect(div.querySelector('section[aria-label="Managed alignment operation result"]')).not.toBeNull();
+            expect(div.querySelector('section[aria-label="Alignment job"]')).not.toBeNull();
             expect(div.querySelector('a[href="/api/family-msa/projects/p/operations/op/artifact"]')).not.toBeNull();
             expect(div.textContent).not.toContain('Alignment result unavailable');
-            expect(div.textContent).not.toContain('No alignment artifact');
+            expect(div.textContent).not.toContain('has no alignment file');
         } finally { await act(async () => root.unmount()); client.clear(); get.mockRestore(); }
     });
     it('polls a running Job through publication and opens its document', async () => {
@@ -44,7 +44,7 @@ describe('alignment route receiver', () => {
         published = true;
         await act(async () => { await new Promise(r => setTimeout(r, 6200)); });
         await act(async () => { await new Promise(r => setTimeout(r, 100)); });
-        expect(div.textContent).toContain('Result: a');
+        expect(div.querySelector('h2[title="a"]')).not.toBeNull();
         expect(div.textContent).not.toContain('manifest pending');
         await act(async () => root.unmount()); client.clear(); get.mockRestore();
     }, 10000);
@@ -68,7 +68,7 @@ describe('alignment route receiver', () => {
         available = true;
         await act(async () => { div.querySelector('button')!.click(); await new Promise(r => setTimeout(r, 60)); });
         await act(async () => { await new Promise(r => setTimeout(r, 60)); });
-        expect(div.textContent).toContain('Result: b');
+        expect(div.querySelector('h2[title="b"]')).not.toBeNull();
         await act(async () => root.unmount()); client.clear(); get.mockRestore();
     });
     it('parses both server capability domains and rejects mismatched routes', () => {
@@ -94,7 +94,7 @@ describe('alignment route receiver', () => {
         await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/alignments?project_id=p&receipt_id=r']}><Routes><Route path="/alignments" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>));
         for (let i = 0; i < 5; i++) await act(async () => { await new Promise(r => setTimeout(r, 30)); });
         expect(div.textContent).toContain('only the first is displayed');
-        expect(div.textContent).toContain('Result: a');
+        expect(div.querySelector('h2[title="a"]')).not.toBeNull();
         expect(div.querySelector('a[href="/api/family-msa/projects/p/receipts/r/artifacts/raw"]')).not.toBeNull();
         await act(async () => root.unmount()); client.clear(); get.mockRestore();
     });
@@ -103,11 +103,11 @@ describe('alignment route receiver', () => {
         const div = document.createElement('div'); const root = createRoot(div); const client = new QueryClient();
         await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/alignments?project_id=p&receipt_id=r']}><Routes><Route path="/alignments" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>); });
         await act(async () => { await new Promise(r => setTimeout(r, 20)); });
-        expect(div.textContent).toContain('Result: a');
+        expect(div.querySelector('h2[title="a"]')).not.toBeNull();
         expect(div.textContent).toContain('Project: p');
         expect(div.textContent).not.toContain('No project selected');
         expect(div.querySelector('iframe[title="JBrowseMSA"]')?.getAttribute('sandbox')).toBe('allow-scripts');
-        expect(div.textContent).not.toContain('JBrowseMSA is not connected');
+        expect(div.textContent).not.toContain('JBrowseMSA is not available');
         expect(div.querySelector('a[href="/api/family-msa/projects/p/receipts/r/artifacts/a"]')).not.toBeNull();
         expect(get).toHaveBeenCalledWith('/api/family-msa/projects/p/receipts/r/documents/a', expect.anything());
         await act(async () => root.unmount()); client.clear(); get.mockRestore();
@@ -117,7 +117,7 @@ describe('alignment route receiver', () => {
         const div = document.createElement('div'); const root = createRoot(div); const client = new QueryClient();
         await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/alignments?workspace_id=p&receipt_id=r']}><Routes><Route path="/alignments" element={<AlignmentPage/>}/></Routes></MemoryRouter></QueryClientProvider>); });
         await act(async () => { await new Promise(r => setTimeout(r, 30)); });
-        expect(div.textContent).toContain('Result: a');
+        expect(div.querySelector('h2[title="a"]')).not.toBeNull();
         expect(get).toHaveBeenCalledWith('/api/family-msa/projects/p/receipts/r/documents/a', expect.anything());
         await act(async () => root.unmount()); client.clear(); get.mockRestore();
     });

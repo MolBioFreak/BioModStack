@@ -7,7 +7,7 @@ import schema from '../../src/components/alignments/alignment-request.schema.jso
 const mocks = vi.hoisted(() => ({get:vi.fn(),submit:vi.fn()}));
 vi.mock('../../src/components/project-manager/ProjectWorkflowSetup',()=>({useProjectWorkflowSetup:()=>({active:false})}));
 vi.mock('../../src/lib/api',()=>({submitJob:mocks.submit,api:{get:mocks.get}}));
-vi.mock('../../src/lib/projectManager',()=>({getLaunchContext:vi.fn()}));
+vi.mock('../../src/lib/projectManager',async importOriginal=>({...await importOriginal<object>(),getLaunchContext:vi.fn()}));
 
 it('renders every new scalar/file control and submits exact aliases, file text, zero and false', async()=>{
     mocks.get.mockResolvedValue({data:schema}); mocks.submit.mockResolvedValue({data:{id:'job'}});
@@ -40,6 +40,6 @@ it('renders every new scalar/file control and submits exact aliases, file text, 
     await act(async()=>{setting('native_log').querySelector<HTMLInputElement>('input')!.click();});
     await act(async()=>[...div.querySelectorAll('button')].find(x=>x.textContent==='Start run')!.click());
     expect(mocks.submit.mock.lastCall![0].params.settings).toMatchObject({hmmin:'',randseed:0,native_log:true,guidetreeout:false,randomchaintree:false});
-    expect(div.textContent).toContain('BEFORE producing an alignment');
+    expect(div.textContent).toContain("Some MUSCLE settings can't be combined");
     await act(async()=>root.unmount());
 });

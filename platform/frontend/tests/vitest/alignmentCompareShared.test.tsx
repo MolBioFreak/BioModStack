@@ -4,7 +4,7 @@ import {expect, it, vi} from 'vitest'
 import AlignmentShared from '../../src/components/alignments/AlignmentShared'
 import {api} from '../../src/lib/api'
 
-vi.mock('../../src/lib/projectManager', () => ({
+vi.mock('../../src/lib/projectManager', async importOriginal => ({...await importOriginal<object>(),
   listGlobalExperiments: vi.fn().mockResolvedValue([{id:'experiment', name:'Experiment'}]),
   listDomainExperiments: vi.fn().mockResolvedValue([{id:'domain', name:'Domain'}]),
 }))
@@ -22,14 +22,14 @@ it('links to managed Compare and preserves old reports while serializing the com
   await act(async () => root.render(<AlignmentShared projectId="p" receiptId="l" artifactId="a" viewer="jbrowse" applyViewer={() => {}} rendererState={rendererState} applyView={applyView}/>))
   const set = (label: string, value: string) => { const el = [...div.querySelectorAll('label')].find(x => x.textContent?.includes(label))!.querySelector('input')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event('input',{bubbles:true})) }
   const button = (text: string) => [...div.querySelectorAll('button')].find(b => b.textContent === text)!
-  await act(async () => set('Shared Dataset ID','dataset'))
-  await act(async () => button('Open shared state').click())
+  await act(async () => set('Notes ID','dataset'))
+  await act(async () => button('Open notes').click())
   expect(div.querySelector('a[href*="/alignments/compare"]')?.getAttribute('href')).toBe('/alignments/compare?project_id=p&shared_state_id=dataset')
   expect(div.textContent).toContain('Prior comparison')
   expect(div.textContent).not.toContain('Right receipt ID')
   await act(async () => set('Name','Full view'))
-  await act(async () => button('Save current viewer as view').click())
-  await act(async () => button('Save shared revision').click())
+  await act(async () => button('Save current view').click())
+  await act(async () => button('Save notes').click())
   expect(put).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({expected_head_generation:2, state:expect.objectContaining({comparisons:[comparison], views:[expect.objectContaining({renderer_state:rendererState})]})}))
   await act(async () => button('Apply viewer').click())
   expect(applyView).toHaveBeenCalledWith(expect.objectContaining({renderer_state:rendererState}))
@@ -51,39 +51,39 @@ it('retains edits made during a save, switches datasets, and restores the draft 
   const set = (label: string, value: string) => { const el = [...div.querySelectorAll('label')].find(x => x.textContent?.includes(label))!.querySelector('input')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new Event('input',{bubbles:true})) }
   const button = (text: string) => [...div.querySelectorAll('button')].find(b => b.textContent === text)!
   await act(async () => render('a'))
-  await act(async () => set('Shared Dataset ID', 'one'))
-  await act(async () => button('Open shared state').click())
+  await act(async () => set('Notes ID', 'one'))
+  await act(async () => button('Open notes').click())
   await act(async () => set('Name', 'first'))
-  await act(async () => button('Save current viewer as view').click())
-  await act(async () => button('Save shared revision').click())
+  await act(async () => button('Save current view').click())
+  await act(async () => button('Save notes').click())
   await act(async () => {set('Name', 'second'); render('b')})
-  await act(async () => button('Save current viewer as view').click())
+  await act(async () => button('Save current view').click())
   const submitted = (put.mock.calls[0][1] as {state: unknown}).state
   await act(async () => finish({data:{id:'one', head_generation:3, revision_id:'new', state:submitted}}))
-  expect(div.textContent).toContain('second (b)')
-  await act(async () => {set('Shared Dataset ID', 'two')})
-  await act(async () => button('Open shared state').click())
-  expect(div.textContent).not.toContain('second (b)')
-  await act(async () => {set('Shared Dataset ID', 'one')})
-  await act(async () => button('Open shared state').click())
-  expect(div.textContent).toContain('second (b)')
-  expect(div.textContent).toContain('generation 3')
+  expect(div.textContent).toContain('second')
+  await act(async () => {set('Notes ID', 'two')})
+  await act(async () => button('Open notes').click())
+  expect(div.textContent).not.toContain('second')
+  await act(async () => {set('Notes ID', 'one')})
+  await act(async () => button('Open notes').click())
+  expect(div.textContent).toContain('second')
+  expect(div.textContent).toContain('Saved version 3')
   await act(async () => {
-    const select = [...div.querySelectorAll('label')].find(x => x.textContent?.includes('Destination domain'))!.querySelector('select')!
+    const select = [...div.querySelectorAll('label')].find(x => x.textContent?.includes('Save to experiment'))!.querySelector('select')!
     select.value = 'domain'; select.dispatchEvent(new Event('change', {bubbles:true}))
   })
-  await act(async () => button('Create shared state').click())
-  expect(div.textContent).toContain('Dataset created')
-  await act(async () => set('Shared Dataset ID', 'one'))
-  await act(async () => button('Open shared state').click())
-  expect(div.textContent).toContain('second (b)')
+  await act(async () => button('Create notes').click())
+  expect(div.querySelector('[title^="Dataset created "]')).not.toBeNull()
+  await act(async () => set('Notes ID', 'one'))
+  await act(async () => button('Open notes').click())
+  expect(div.textContent).toContain('second')
   await act(async () => root.unmount())
   const again = createRoot(div)
   await act(async () => again.render(<AlignmentShared projectId="p" receiptId="l" artifactId="b" viewer="jbrowse" applyViewer={() => {}}/>))
-  await act(async () => set('Shared Dataset ID', 'one'))
-  await act(async () => button('Open shared state').click())
-  expect(div.textContent).toContain('second (b)')
-  await act(async () => button('Save shared revision').click())
+  await act(async () => set('Notes ID', 'one'))
+  await act(async () => button('Open notes').click())
+  expect(div.textContent).toContain('second')
+  await act(async () => button('Save notes').click())
   expect(put.mock.calls[1][1]).toEqual(expect.objectContaining({expected_head_generation:3, state:expect.objectContaining({views:[expect.objectContaining({name:'first'}), expect.objectContaining({name:'second'})]})}))
   await act(async () => again.unmount()); div.remove(); get.mockRestore(); put.mockRestore(); post.mockRestore(); sessionStorage.clear()
 })
