@@ -3,8 +3,9 @@ import { DeNovoDraftPreparationContext } from '../lib/deNovoDocumentCapture';
 import { submissionExecutionPolicy, type ExecutionPolicy } from '../lib/executionPolicy';
 import { useNavigate } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
-import { api, submitJob, prepareJobSubmission, completeCurrentLaunchContext, EXECUTION_TARGET_STORAGE_KEY, type Job, type NativeGenerationSourceBinding, type NativeGenerationSourceBindings, type StructureSourceSelection } from '../lib/api';
+import { api, submitJob, ExecutionPlanCancelled, prepareJobSubmission, completeCurrentLaunchContext, EXECUTION_TARGET_STORAGE_KEY, type Job, type NativeGenerationSourceBinding, type NativeGenerationSourceBindings, type StructureSourceSelection } from '../lib/api';
 import { NativeSourceInput } from './DeNovoNativeSources';
+import validatorNames from '../lib/resequenceValidatorNames.json';
 import { DesignerSettingsForm, type DesignerSettingsDraft, LOOP_SETTINGS } from './DesignerSettingsForm';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { DE_NOVO_PRELOAD_SELECTION } from './dashboard/IndependentProvisionPanel';
@@ -23,10 +24,24 @@ export function ResequencePanel({ initialValues = {}, onDraftChange, runDetails 
     const [bindings, setBindings] = useState<NativeGenerationSourceBindings | undefined>(saved.native_sources);
     const [engine, setEngine] = useState<string>(saved.seq_method ?? 'mpnn');
     const [ligandMode, setLigandMode] = useState(saved.designer_mode ?? (saved.designer_template ? '' : 'ligand_aware'));
+    const [authoredDesigners, setAuthoredDesigners] = useState<Record<string, boolean>>(saved.designer_settings_authored ?? {});
     const [designerSettings, setDesignerSettings] = useState<Record<string, DesignerSettingsDraft>>(saved.designer_drafts ?? {});
     const designerKey = `${engine}:${engine === 'ligandmpnn' ? ligandMode : ''}`;
     const designer = designerSettings[designerKey] ?? { values: Object.fromEntries((LOOP_SETTINGS[engine] ?? []).filter(key => Object.hasOwn(saved, key)).map(key => [key, saved[key]])), valid: true };
-    const [validatorSettings, setValidatorSettings] = useState<Record<string, DesignerSettingsDraft>>(saved.validator_drafts ?? Object.fromEntries(VALIDATORS.map(([id]) => [id, { values: Object.fromEntries((LOOP_SETTINGS[id] ?? []).filter(key => Object.hasOwn(saved, key)).map(key => [key, saved[key]])), valid: true }])));
+    // Generated from services/resequence_settings.py VALIDATORS; the mounted contract test
+    // compares this projection with the Python owner. Draft overrides (including {}) win.
+    const [validatorSettings, setValidatorSettings] = useState<Record<string, DesignerSettingsDraft>>(saved.validator_drafts ?? Object.fromEntries(VALIDATORS.map(([id]) => [id, {
+        values: saved.validator_settings !== undefined ? saved.validator_settings[id] ?? {} : Object.fromEntries(
+            Object.entries(validatorNames.names[id]).flatMap(([publicKey, workflowKey]) => {
+                const aliases = (validatorNames.aliases as Record<string, Record<string, string[]>>)[id]?.[publicKey] ?? [];
+                const canonical = Object.hasOwn(saved, workflowKey) ? workflowKey : publicKey;
+                // Native Boltz fallback treats null like omission; preserve explicit null for
+                // settings without a fallback, and preserve zero/false everywhere.
+                const key = aliases.length && saved[canonical] == null
+                    ? aliases.find(alias => saved[alias] != null) ?? canonical : canonical;
+                return Object.hasOwn(saved, key) ? [[publicKey, saved[key]]] : [];
+            })), valid: true,
+    }])));
     const [chains, setChains] = useState(saved.design_chains ?? 'A');
     const [fixed, setFixed] = useState(saved.fixed_positions ?? '');
     const [designable, setDesignable] = useState(saved.designable_positions ?? '');
@@ -43,23 +58,21 @@ export function ResequencePanel({ initialValues = {}, onDraftChange, runDetails 
     const submit = useMutation({
         mutationFn: async () => {
             if (!targetId && !saved.backbone_input_pdbs && !prepared.current) return (await api.post<Job>('/api/jobs/resequence/from-structures', { ...request, ...placement })).data;
-            let staged: typeof prepared.current = null;
-            let owned = false;
+            const signature = current.current.signature;
+            const job = await prepareCurrent.current(false);
+            const staged = preparations.current.get(signature);
+            const owned = staged?.disposable === true;
+            // From this point the server may create a Job. Transport errors are not proof it did not.
+            if (staged) staged.disposable = false;
+            publishPreparations();
             try {
-                const job = await prepareCurrent.current(false);
-                staged = prepared.current; owned = ownedPreparation.current;
                 return (await submitJob(job)).data as Job;
             } catch (cause) {
-                const receipt = staged?.job.params?.resequence_preparation;
-                if (owned && receipt) {
-                    // The server capability owner refuses cleanup of Job-owned inputs.
-                    // Draft/Project-prepared receipts are not this launch attempt's disposal authority.
-                    await api.post('/api/jobs/resequence/from-structures/cleanup', { preparation: receipt });
-                    if (prepared.current === staged) {
-                        prepared.current = null; ownedPreparation.current = false;
-                        if (alive.current) current.current.onDraftChange?.({ ...current.current.draft, resequence_prepared: undefined, native_job_request: null });
-                    }
+                if (cause instanceof ExecutionPlanCancelled && owned && staged) {
+                    staged.disposable = true; staged.inUse = false;
+                    await disposePreparation(staged);
                 }
+                publishPreparations();
                 throw cause;
             }
         },
@@ -79,20 +92,26 @@ export function ResequencePanel({ initialValues = {}, onDraftChange, runDetails 
     const request = {
         sources: source ? [source] : saved.sources ?? [], seq_method: engine,
         ...(engine === 'ligandmpnn' && ligandMode ? { designer_mode: ligandMode } : {}),
-        ...(ownSettings && Object.keys(designer.values).length ? { designer_settings: designer.values } : {}),
+        ...(ownSettings && (authoredDesigners[designerKey] || Object.keys(designer.values).length) ? { designer_settings: designer.values } : {}),
         design_chains: chains.trim(), name: name.trim() || 'Resequence', structure_validators: validators,
-        ...(Object.keys(sentValidatorSettings).length ? { validator_settings: sentValidatorSettings } : {}),
+        ...(saved.backbone_input_pdbs || saved.validator_settings !== undefined || Object.keys(sentValidatorSettings).length ? { validator_settings: sentValidatorSettings } : {}),
         ...(msaProvider ? { msa_provider: msaProvider } : {}),
         ...(fixed.trim() ? { fixed_positions: fixed.trim() } : {}),
         ...(designable.trim() ? { designable_positions: designable.trim() } : {}),
     };
     const signature = JSON.stringify(request);
-    const prepared = useRef<{ signature: string; job: Partial<Job> } | null>(saved.resequence_prepared ?? null);
-    const ownedPreparation = useRef(false);
+    type Prepared = { signature: string; job: Partial<Job>; disposable?: boolean; inUse?: boolean };
+    const prepared = useRef<Prepared | null>(saved.resequence_prepared ?? null);
+    // Existing suite draft owns cold receipts; only allocations from this mount are disposable.
+    const preparations = useRef(new Map<string, Prepared>(
+        [...(saved.resequence_preparations ?? []), ...(saved.resequence_prepared ? [saved.resequence_prepared] : [])]
+            .map((entry: Prepared) => [entry.signature, { ...entry, disposable: false }])));
+    const preparing = useRef(new Map<string, Promise<Prepared>>());
     const draft = {
         ...saved, ...request, job_name: name, design_chains: chains, fixed_positions: fixed, designable_positions: designable,
         native_sources: bindings, designer_mode: ligandMode, msa_provider: msaProvider,
-        designer_drafts: designerSettings, validator_drafts: validatorSettings, ...placement,
+        designer_settings_authored: authoredDesigners, designer_drafts: designerSettings, validator_drafts: validatorSettings, ...placement,
+        resequence_preparations: [...preparations.current.values()],
         resequence_prepared: prepared.current?.signature === signature ? prepared.current : undefined,
         native_job_request: ready && prepared.current?.signature === signature ? { ...prepared.current.job, ...placement } : null,
     };
@@ -101,23 +120,54 @@ export function ResequencePanel({ initialValues = {}, onDraftChange, runDetails 
     const draftJson = JSON.stringify(draft);
     useEffect(() => { onDraftChange?.(JSON.parse(draftJson)); }, [draftJson, onDraftChange]);
     const prepareCurrent = useRef<(forDraft?: boolean) => Promise<Partial<Job>>>(async () => ({}));
+    const publishPreparations = () => {
+        const snapshot = current.current;
+        const entry = preparations.current.get(snapshot.signature);
+        if (alive.current) snapshot.onDraftChange?.({ ...snapshot.draft,
+            resequence_preparations: [...preparations.current.values()],
+            resequence_prepared: entry, native_job_request: entry ? { ...entry.job, ...snapshot.placement } : null });
+    };
+    const disposePreparation = async (entry: Prepared) => {
+        const receipt = entry.job.params?.resequence_preparation;
+        if (!entry.disposable || entry.inUse || !receipt) return;
+        try {
+            const response = await api.post('/api/jobs/resequence/from-structures/cleanup', { preparation: receipt });
+            if (response.data.cleaned === true) {
+                preparations.current.delete(entry.signature);
+                if (prepared.current === entry) prepared.current = null;
+            }
+        } catch { /* Keep the capability/request in the suite draft for a later retry. */ }
+    };
     prepareCurrent.current = async (forDraft = true) => {
         const snapshot = current.current;
         if (!ready) { snapshot.onDraftChange?.({ ...snapshot.draft, native_job_request: null }); return {}; }
-        if (prepared.current?.signature !== snapshot.signature) {
-            const job = (await api.post<Partial<Job>>('/api/jobs/resequence/from-structures/prepare', {
-                ...snapshot.request,
-                ...(saved.backbone_input_pdbs && !source ? { backbone_input_pdbs: saved.backbone_input_pdbs, retained_params: saved.resequence_job_params ?? {} } : {}),
-                ...snapshot.placement,
-            })).data;
-            prepared.current = { signature: snapshot.signature, job };
-            ownedPreparation.current = !forDraft;
+        let entry = preparations.current.get(snapshot.signature);
+        if (!entry) {
+            let pending = preparing.current.get(snapshot.signature);
+            if (!pending) {
+                pending = api.post<Partial<Job>>('/api/jobs/resequence/from-structures/prepare', {
+                    ...snapshot.request,
+                    ...(saved.backbone_input_pdbs && !source ? { backbone_input_pdbs: saved.backbone_input_pdbs, retained_params: saved.resequence_job_params ?? {} } : {}),
+                    ...snapshot.placement,
+                }).then(response => {
+                    const next = { signature: snapshot.signature, job: response.data, disposable: true };
+                    preparations.current.set(snapshot.signature, next);
+                    return next;
+                }).finally(() => preparing.current.delete(snapshot.signature));
+                preparing.current.set(snapshot.signature, pending);
+            }
+            entry = await pending;
         }
-        if (forDraft) ownedPreparation.current = false;
-        const job = { ...prepared.current.job, ...snapshot.placement };
-        // Publish only to the same current document; an in-flight capture must not overwrite a newer draft.
-        if (alive.current && current.current.signature === snapshot.signature) snapshot.onDraftChange?.({ ...snapshot.draft, resequence_prepared: prepared.current, native_job_request: job });
-        return job;
+        if (forDraft) entry.disposable = false;
+        else entry.inUse = true;
+        // A late response cannot replace the current authored request. Retain every still-owned
+        // request in the existing draft; dispose only known-unsubmitted superseded allocations.
+        if (current.current.signature === snapshot.signature) prepared.current = entry;
+        for (const previous of preparations.current.values()) {
+            if (previous.signature !== current.current.signature) await disposePreparation(previous);
+        }
+        publishPreparations();
+        return { ...entry.job, ...snapshot.placement };
     };
     useEffect(() => {
         if (!preparation) return;
@@ -155,7 +205,7 @@ export function ResequencePanel({ initialValues = {}, onDraftChange, runDetails 
         {engine === 'ligandmpnn' && <label>LigandMPNN mode<select aria-label="LigandMPNN mode" value={ligandMode} onChange={event => setLigandMode(event.target.value)}>
             {saved.designer_template && <option value="">Retained native template mode</option>}
             {LIGAND_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
-        {ownSettings && (engine !== 'ligandmpnn' || ligandMode) && <DesignerSettingsForm key={designerKey} engine={engine} mode={ligandMode} initialValues={designer} onChange={(values, valid, structuredText) => setDesignerSettings(previous => ({ ...previous, [designerKey]: { values, valid, structuredText } }))} />}
+        {ownSettings && (engine !== 'ligandmpnn' || ligandMode) && <DesignerSettingsForm key={designerKey} engine={engine} mode={ligandMode} initialValues={designer} onEdit={() => setAuthoredDesigners(previous => ({ ...previous, [designerKey]: true }))} onChange={(values, valid, structuredText) => setDesignerSettings(previous => ({ ...previous, [designerKey]: { values, valid, structuredText } }))} />}
         <button type="button" disabled={!ready || submit.isPending} onClick={() => { setError(null); submit.mutate(); }}>Run resequence and validate</button>
     </section>;
 }

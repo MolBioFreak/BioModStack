@@ -289,6 +289,10 @@ export function Dashboard() {
 
     const handleResume = async (job: Job) => {
         const detailedJob = await hydrateJobForDetail(job);
+        if (detailedJob.status === 'awaiting_input' && detailedJob.awaiting_payload?.component_checkpoint) {
+            navigate(`/designs/${encodeURIComponent(detailedJob.id)}`);
+            return;
+        }
         if (detailedJob.status === 'awaiting_input' && detailedJob.awaiting_payload?.resume_direct) {
             setResumeDialogMode('resume');
             resumeMutation.mutate({ jobId: detailedJob.id });
@@ -317,6 +321,10 @@ export function Dashboard() {
             return;
         }
 
+        if (detailedJob.status === 'awaiting_input' && detailedJob.awaiting_payload?.component_checkpoint) {
+            navigate(`/designs/${encodeURIComponent(detailedJob.id)}`);
+            return;
+        }
         if (isLegacyRf3StructureJob(detailedJob)) {
             alert('RF3 is available for historical result review only. New Structure submissions and retries use current predictors.');
             return;

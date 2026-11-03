@@ -2133,7 +2133,17 @@ export async function getProjectResultContext(projectId: string, globalExperimen
     return context;
 }
 
-export function projectResultHref(route: NonNullable<ResultSurface['route']>, context: ProjectResultContext): string {
+export function hasRetainedNativeResult(surface: ResultSurface): boolean {
+    const retained = surface.native_summary?.payload?.retained_artifacts;
+    return surface.entity_kind === 'native_binder_job_result' && Array.isArray(retained) && retained.length > 0;
+}
+
+export function projectResultHref(route: NonNullable<ResultSurface['route']>, context: ProjectResultContext, surface?: ResultSurface): string {
+    if (surface && hasRetainedNativeResult(surface)) {
+        const returnUri = verifiedProjectReturnUri(context);
+        if (!returnUri) throw new Error('The Project result return destination is invalid.');
+        return `/projects/${encodeURIComponent(context.project_id)}?${new URLSearchParams({ native_receipt: surface.receipt_id, return_uri: returnUri })}`;
+    }
     const destination = new URL(internalRouteHref(route), window.location.origin);
     if (destination.origin !== window.location.origin) throw new Error('The canonical result route is not local to BioModStack.');
     destination.searchParams.delete('project_id');

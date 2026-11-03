@@ -97,7 +97,7 @@ function Scalar({ param, value, onChange, prefix = 'Designer setting', showDefau
 
 /** Settings for a loop designer, built from that designer's own served parameter inventory. */
 export type DesignerSettingsDraft = { values: Values; valid: boolean; structuredText?: string };
-export function DesignerSettingsForm({ engine, mode, initialValues, onChange }: { engine: string; mode: string; initialValues?: DesignerSettingsDraft; onChange: (values: Values, valid: boolean, structuredText?: string) => void }) {
+export function DesignerSettingsForm({ engine, mode, initialValues, onChange, onEdit }: { engine: string; mode: string; initialValues?: DesignerSettingsDraft; onEdit?: () => void; onChange: (values: Values, valid: boolean, structuredText?: string) => void }) {
     const modelId = MODEL_ID[engine];
     const modeId = modeFor(engine, mode);
     const isValidator = LOOP_FALLBACK.has(engine);
@@ -115,8 +115,8 @@ export function DesignerSettingsForm({ engine, mode, initialValues, onChange }: 
         const allowed = modeDoc?.params?.length ? new Set<string>(modeDoc.params) : null;
         const listed = LOOP_SETTINGS[engine];
         return (doc.params ?? []).filter((param: UntypedApiValue) =>
-            !param.hidden && (!allowed || allowed.has(param.name))
-            && (listed ? listed.includes(param.name) : !LOOP_OWNED[engine].includes(param.name)));
+            !param.hidden && (listed ? listed.includes(param.name)
+                : (!allowed || allowed.has(param.name)) && !LOOP_OWNED[engine].includes(param.name)));
     }, [model.data, modeId, engine]);
     const scalars = fields.filter(param => param.type !== 'object' && param.type !== 'array');
     const structured = fields.filter(param => param.type === 'object' || param.type === 'array');
@@ -133,11 +133,11 @@ export function DesignerSettingsForm({ engine, mode, initialValues, onChange }: 
     const structuredKey = JSON.stringify([...structuredNames]);
     const merged = useMemo(() => ({ ...Object.fromEntries(Object.entries(values).filter(([name]) => !structuredNames.has(name))), ...(parsed ?? {}) }), [values, parsed, structuredKey]); // eslint-disable-line react-hooks/exhaustive-deps
     useEffect(() => { onChange(merged, parsed !== null, structuredText); }, [merged, parsed, structuredText]); // eslint-disable-line react-hooks/exhaustive-deps
-    const set = (name: string, value: unknown) => setValues(previous => {
+    const set = (name: string, value: unknown) => { onEdit?.(); setValues(previous => {
         const next = { ...previous };
         if (value === undefined) delete next[name]; else next[name] = value;
         return next;
-    });
+    }); };
     if (model.isError) return <p role="alert">Could not load this designer's settings from the server.</p>;
     if (!model.data) return <p className="text-xs">Loading designer settings…</p>;
     return <div className="space-y-3" data-designer-settings={engine}>
@@ -154,7 +154,7 @@ export function DesignerSettingsForm({ engine, mode, initialValues, onChange }: 
             <summary className="cursor-pointer text-sm font-medium">Structured native settings (JSON)</summary>
             <p className="text-xs text-[var(--text-secondary)]">Tables and lists: {structured.map(param => param.name).join(', ')}.</p>
             <textarea aria-label="Structured designer settings" className={inputClass} rows={4} placeholder="{}" value={structuredText}
-                onChange={event => setStructuredText(event.target.value)} />
+                onChange={event => { onEdit?.(); setStructuredText(event.target.value); }} />
             {parsed === null && <span role="alert">Enter a JSON object using only the names listed above.</span>}
         </details>}
     </div>;

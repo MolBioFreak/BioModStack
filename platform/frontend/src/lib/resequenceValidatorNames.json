@@ -1,0 +1,34 @@
+{
+  "names": {
+    "protenix_v2": {
+      "protenix_n_sample": "protenix_n_sample",
+      "protenix_n_step": "protenix_n_step",
+      "protenix_n_cycle": "protenix_n_cycle",
+      "protenix_seeds": "protenix_seeds",
+      "protenix_use_msa": "protenix_use_msa"
+    },
+    "boltz2": {
+      "boltz_recycling_steps": "boltz_recycling_steps",
+      "boltz_sampling_steps": "boltz_sampling_steps",
+      "boltz_diffusion_samples": "boltz_diffusion_samples",
+      "boltz_max_parallel_samples": "boltz_max_parallel_samples",
+      "boltz_seed": "boltz_seed",
+      "boltz_use_potentials": "boltz_use_potentials",
+      "boltz_method": "boltz_method"
+    },
+    "esmfold2": {
+      "model_variant": "esmf_model_variant",
+      "num_loops": "esmf_num_loops",
+      "num_sampling_steps": "esmf_num_sampling_steps",
+      "num_diffusion_samples": "esmf_num_diffusion_samples",
+      "seed": "esmf_seed"
+    }
+  },
+  "aliases": {
+    "boltz2": {
+      "boltz_diffusion_samples": [
+        "boltz_num_samples"
+      ]
+    }
+  }
+}

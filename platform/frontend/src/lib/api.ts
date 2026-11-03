@@ -1404,6 +1404,11 @@ export const previewJobExecutionPlan = (jobData: Partial<Job>, options: { launch
     api.post<import('../components/ExecutionPlanApproval').ExecutionPlanPreview>(
         '/api/jobs/execution-plan/preview', jobData, jobLaunchContextConfig(jobData, options));
 
+// Distinguish an explicit pre-create cancellation from an uncertain transport failure.
+export class ExecutionPlanCancelled extends Error {
+    constructor() { super('Execution-plan approval cancelled'); }
+}
+
 async function approveJobExecutionPlan(payload: Partial<Job>, options: { launchContext?: boolean } = {}): Promise<Partial<Job>> {
     if (payload.execution_target_id && !payload.execution_plan_approval) {
         const preview = (await previewJobExecutionPlan(payload, options)).data;
@@ -1413,7 +1418,7 @@ async function approveJobExecutionPlan(payload: Partial<Job>, options: { launchC
             throw new Error('Execution-plan preview does not bind this request; refresh the preview and review it again.');
         }
         const { reviewExecutionPlan } = await import('../components/ExecutionPlanApproval');
-        if (!await reviewExecutionPlan(preview)) throw new Error('Execution-plan approval cancelled');
+        if (!await reviewExecutionPlan(preview)) throw new ExecutionPlanCancelled();
         // Selected-source preview retains the input. Submit that exact request,
         // not the original source reference that would acquire it a second time.
         return { ...payload, ...(payload.source_structure ? preview.request : {}),
@@ -2257,6 +2262,19 @@ export const fetchJobStages = (jobId: string) => {
         can_resume: boolean;
     }>(`/api/jobs/${jobId}/stages`);
 };
+
+export interface ComponentCheckpointDecision {
+    checkpoint_id: string;
+    checkpoint_sha256: string;
+    checkpoint_decision: { selected_artifacts: string[] };
+    execution_target_id?: string | null;
+    execution_policy?: import('./executionPolicy').ExecutionPolicy;
+    launch_context_id?: string | null;
+}
+
+export const continueComponentCheckpoint = (jobId: string, request: ComponentCheckpointDecision) =>
+    submitPreparedJobAction(() => api.post<{ job_id?: string; new_job_id?: string; state?: string; message?: string }>(
+        `/api/jobs/${encodeURIComponent(jobId)}/resume`, structuredClone(request)));
 
 // Resume a failed job from checkpoint
 export const resumeJob = (

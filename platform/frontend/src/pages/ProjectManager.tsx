@@ -39,6 +39,7 @@ import { RunPanel } from '../components/project-manager/RunPanel';
 import { VirtualFolderPanel, type FolderKind } from '../components/project-manager/VirtualFolderPanel';
 import { focusIdFromReadModel, globalExperimentForNode } from '../components/project-manager/projectManagerState';
 import { NativeProjectTools } from '../components/project-manager/NativeProjectTools';
+import { RetainedNativeResult } from '../components/project-manager/RetainedNativeResult';
 import { ProteinProjectWorkspace } from '../components/project-manager/protein/ProteinProjectWorkspace';
 import { NewProjectExperimentDialog } from '../components/project-manager/ProjectWorkflowSetup';
 
@@ -534,7 +535,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             returnQuery.set('selected', summary.selection.node_key);
             const returnUri = `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`;
             const context = await getProjectResultContext(projectId, globalExperimentId, domainExperimentId, returnUri);
-            return projectResultHref(surface.route, context);
+            return projectResultHref(surface.route, context, surface);
         },
         onSuccess: (route) => navigate(route),
     });
@@ -774,7 +775,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 });
                 const context = await getProjectResultContext(projectId, globalExperimentId, domainExperimentId,
                     `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`);
-                return { kind: 'route' as const, route: projectResultHref(surface.route, context) };
+                return { kind: 'route' as const, route: projectResultHref(surface.route, context, surface) };
             }
             throw new Error(`Unsupported server-issued run action: ${action}`);
         },
@@ -1026,6 +1027,8 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
 export function ProjectManager() {
     const { projectId, experimentId, domainId } = useParams<{ projectId?: string; experimentId?: string; domainId?: string }>();
     const [searchParams] = useSearchParams();
+    const retainedReceipt = searchParams.get('native_receipt');
+    if (projectId && retainedReceipt) return <RetainedNativeResult key={`${projectId}:${retainedReceipt}`} projectId={projectId} receiptId={retainedReceipt} returnUri={searchParams.get('return_uri')} />;
     if (projectId && experimentId && domainId && searchParams.get('workspace') === 'protein') {
         return <ProteinProjectWorkspace projectId={projectId} globalExperimentId={experimentId} domainExperimentId={domainId} />;
     }

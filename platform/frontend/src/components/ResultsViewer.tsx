@@ -9,6 +9,7 @@ import { parseScientificPae } from '../lib/scientificViewerIdentity';
 import { hashKey, useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
 
+import { CheckpointReview } from './CheckpointReview';
 import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, exportNativeResults, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, analyzeLoopCandidates, fetchChainPairIptm } from '../lib/api';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { isNgsJob, ngsResultHref } from '../lib/ngsResultRouting';
@@ -5371,7 +5372,9 @@ function ResultsViewerContent() {
     const viewerShellClassName = showDataHubLanding
         ? 'mx-auto w-full max-w-[1180px]'
         : 'w-full';
-    const resultModelSelector = activeJob && resultModelHierarchy.length > 1 ? (
+    const resultModelSelector = <>
+        {activeJob?.status === 'awaiting_input' && activeJob.awaiting_payload?.component_checkpoint && <CheckpointReview key={`${activeJob.id}:${activeJob.awaiting_payload.component_checkpoint.checkpoint_sha256}`} job={activeJob} launchContextId={destinationLaunchContextId} />}
+        {activeJob && resultModelHierarchy.length > 1 ? (
         <nav aria-label="Workflow model results" className="flex flex-wrap gap-2 text-xs">
             {resultModelHierarchy.map((item) => <button
                 key={item.modelId}
@@ -5381,7 +5384,7 @@ function ResultsViewerContent() {
                 className={`rounded-lg border px-3 py-1.5 font-semibold ${resultSurface === item.modelId ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300 hover:border-slate-500'}`}
             >{item.label}</button>)}
         </nav>
-    ) : null;
+    ) : null}</>;
 
     if (activeJob && !['conformational_mapping', 'confornets_experimental'].includes(activeJob.model_id)
         && !designsLoading && new URLSearchParams(location.search).has('result_model')

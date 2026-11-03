@@ -4,6 +4,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
     getProjectResultContext,
+    hasRetainedNativeResult,
     deleteProjectWorkflowSetup,
     getDomainExperiment,
     getGlobalExperiment,
@@ -92,7 +93,7 @@ function RunSection({ summary }: { summary: ProjectManagerReadModel }) {
 }
 
 function ResultCard({ surface, onOpen, opening }: { surface: ResultSurface; onOpen: (receiptId: string) => void; opening: boolean }) {
-    const blocker = !surface.route ? 'The backend did not issue a canonical reopen route.' : surface.readiness !== 'ready' ? `Result readiness is ${surface.readiness}.` : null;
+    const blocker = !surface.route ? 'The backend did not issue a canonical reopen route.' : surface.readiness !== 'ready' && !hasRetainedNativeResult(surface) ? `Result readiness is ${surface.readiness}.` : null;
     return <article className="rounded-xl border border-border-primary bg-surface-secondary p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold text-content">{surface.surface_kind.replaceAll('_', ' ')}</h3><p className="mt-1 break-all font-mono text-xs text-content-muted">{surface.receipt_id}</p></div><span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-secondary">{surface.readiness}</span></div><dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2"><div><dt className="text-content-muted">Contract</dt><dd className="break-all text-content-secondary">{surface.contract_id}</dd></div><div><dt className="text-content-muted">Scientific review</dt><dd className="text-content-secondary">{surface.scientific_acceptance.state}</dd></div></dl><button type="button" className={`${BUTTON} mt-3`} disabled={Boolean(blocker) || opening} onClick={() => onOpen(surface.receipt_id)}>Open canonical result</button>{blocker && <p className="mt-2 text-xs text-warning">{blocker}</p>}</article>;
 }
 
@@ -145,7 +146,7 @@ export function ProteinProjectWorkspace({ projectId, globalExperimentId, domainE
             if (!hierarchyValid || !globalExperimentData?.current_revision_id || !authority?.domain_revision_id) throw new Error('Exact hierarchy revision is unavailable.');
             const context = await getProjectResultContext(projectId, globalExperimentId, domainExperimentId,
                 proteinWorkspaceHref(projectId, globalExperimentId, domainExperimentId, 'results'));
-            return projectResultHref(surface.route, context);
+            return projectResultHref(surface.route, context, surface);
         },
         onSuccess: (destination) => navigate(destination),
     });
