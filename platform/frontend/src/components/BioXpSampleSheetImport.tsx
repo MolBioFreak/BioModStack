@@ -38,7 +38,7 @@ export function BioXpSampleSheetImport({ plan, onChange, selection }: { plan: Wo
         }
         const result = placeSampleSheet(next, sheet, mapping, targets);
         onChange(result.plan);
-        setNotice(`Placed ${result.placed} of ${sheet.rows.length} rows.${result.unplaced.length ? ` Not placed (no well left): ${result.unplaced.join(', ')}.` : ''}`);
+        setNotice(`Assigned ${result.placed} of ${sheet.rows.length} rows (${result.added} new, ${result.reused} already assigned).${result.unplaced.length ? ` No well left for: ${result.unplaced.join(', ')}.` : ''}${result.conflicts.length ? ` Existing contents kept; not placed: ${result.conflicts.map(c => `${c.name} at ${next.labware.find(l => l.id === c.labware_id)?.name || c.labware_id} ${c.well}`).join(', ')}. These samples remain available for manual assignment.` : ''}`);
     };
     return <fieldset aria-label="Import sample sheet"><legend>Import samples from CSV</legend>
         <label>Sample sheet (CSV or TSV)<input aria-label="Sample sheet file" type="file" accept=".csv,.tsv,.txt,text/csv" onChange={e => { const f = e.target.files?.[0]; if (f) void load(f); }} /></label>

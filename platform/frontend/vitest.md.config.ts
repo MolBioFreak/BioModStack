@@ -209,6 +209,7 @@ export default defineConfig({
             './tests/vitest/bioxpWorkflowRouteMounted.test.tsx',
             './tests/vitest/bioxpWorkflowDeckMounted.test.tsx',
             './tests/vitest/bioxpWorkflowMaterialsMounted.test.tsx',
+            './tests/vitest/bioxpSampleSheet.test.tsx',
             './tests/vitest/bioxpPipetteRealProducerMounted.test.tsx',
             './tests/vitest/bioxpCalibrationSettingsMounted.test.tsx',
             './tests/vitest/bioxpCalibrationRunMounted.test.tsx',

@@ -1,4 +1,4 @@
-import type { WorkflowAssignment, WorkflowDeckPlan, WorkflowLabware, WorkflowMaterial } from './bioxpWorkflowPlan';
+import type { WorkflowDeckPlan, WorkflowLabware, WorkflowMaterial } from './bioxpWorkflowPlan';
 
 /** Parse CSV/TSV text (quoted fields, CRLF) into a header row and data rows. */
 export function parseSampleSheet(text: string): { headers: string[]; rows: string[][] } {
@@ -30,11 +30,19 @@ export type SampleSheetMapping = { name: number; barcode?: number; concentration
 /** Best-guess column roles from header names; the operator can change any of them. */
 export function guessMapping(headers: string[]): SampleSheetMapping {
     const find = (re: RegExp) => { const i = headers.findIndex(h => re.test(h)); return i < 0 ? undefined : i; };
+    const volume = headers.findIndex(header => {
+        const h = header.replace(/[_-]/g, ' ').trim();
+        // A denominator such as ng/uL is not a sample volume. Do not silently
+        // convert other volume units either; explicit column selection remains available.
+        if (/concentration|\bconc\b|[/⁄]|\b(?:ml|nl|pl)\b/i.test(h)) return false;
+        return /\bvol(?:ume)?\b/i.test(h) || /^(?:[uµμ]l|microlit(?:er|re)s?)$/i.test(h)
+            || /\bamount\b/i.test(h) && /(?:^|[^a-z])[uµμ]l(?:$|[^a-z])/i.test(h);
+    });
     return {
         name: find(/^(sample|name|sample[ _]?(id|name)|id)$/i) ?? find(/sample|name/i) ?? 0,
         barcode: find(/barcode|^rb\d*$/i),
         concentration: find(/working.*conc|^conc/i) ?? find(/conc/i),
-        volume: find(/volume|µl|ul\b/i),
+        volume: volume < 0 ? undefined : volume,
     };
 }
 
@@ -48,29 +56,46 @@ export function wellOrder(columns: number): string[] {
 export type SampleTarget = { labware_id: string; wells: string[] };
 
 /**
- * Place sheet rows in order across the given targets (e.g. strips 1-3 or a selected
- * block of wells). Returns new materials and assignments; existing ones are kept.
+ * Place rows without replaying existing associations or overwriting occupied wells.
+ * Matching materials keep their stable IDs across save/reopen and re-import.
+ * Conflicts remain ordinary unplaced authoring data, never a Run prerequisite.
  */
 export function placeSampleSheet(plan: WorkflowDeckPlan, sheet: { headers: string[]; rows: string[][] }, mapping: SampleSheetMapping,
-    targets: SampleTarget[], newId: () => string = () => crypto.randomUUID()): { plan: WorkflowDeckPlan; placed: number; unplaced: string[] } {
+    targets: SampleTarget[], newId: () => string = () => crypto.randomUUID()): {
+        plan: WorkflowDeckPlan; placed: number; added: number; reused: number; unplaced: string[];
+        conflicts: { name: string; labware_id: string; well: string }[];
+    } {
     const slots = targets.flatMap(t => t.wells.map(well => ({ labware_id: t.labware_id, well })));
-    const materials: WorkflowMaterial[] = []; const assignments: WorkflowAssignment[] = []; const unplaced: string[] = [];
+    const materials = [...plan.materials]; const assignments = [...plan.assignments]; const unplaced: string[] = [];
+    const conflicts: { name: string; labware_id: string; well: string }[] = [];
+    const fields = ['name', 'kind', 'description', 'concentration', 'concentration_unit', 'barcode'] as const;
+    let added = 0; let reused = 0;
     sheet.rows.forEach((row, index) => {
         const name = row[mapping.name] || `Row ${index + 1}`;
         const roles = new Set([mapping.name, mapping.concentration, mapping.volume].filter((v): v is number => v !== undefined));
         const barcode = mapping.barcode !== undefined ? row[mapping.barcode] : '';
         const description = sheet.headers.map((h, i) => roles.has(i) || !row[i] ? '' : `${h}: ${row[i]}`).filter(Boolean).join('; ');
         const conc = mapping.concentration !== undefined ? row[mapping.concentration] : '';
-        const material: WorkflowMaterial = { id: newId(), name, kind: mapping.kind ?? 'sample', description,
+        const values: Omit<WorkflowMaterial, 'id'> = { name, kind: mapping.kind ?? 'sample', description,
             ...(conc ? { concentration: conc, concentration_unit: /ng\/?u?l/i.test(sheet.headers[mapping.concentration!]) ? 'ng/µL' : '' } : {}),
-            ...(barcode ? { barcode } : {}) } as WorkflowMaterial;
-        materials.push(material);
+            ...(barcode ? { barcode } : {}) };
+        const matching = materials.filter(m => fields.every(key => m[key] === values[key]));
         const slot = slots[index];
-        if (!slot) { unplaced.push(name); return; }
         const volume = mapping.volume !== undefined ? row[mapping.volume] : '';
-        assignments.push({ id: newId(), labware_id: slot.labware_id, well: slot.well, material_id: material.id, volume_ul: volume || null });
+        const amount = volume || null;
+        const occupied = slot ? assignments.filter(a => a.labware_id === slot.labware_id && a.well === slot.well) : [];
+        if (occupied.some(a => matching.some(m => m.id === a.material_id) && a.volume_ul === amount)) {
+            reused++; return;
+        }
+        // Keep an unplaced row available for ordinary manual assignment, too.
+        let material = matching[0];
+        if (!material) { material = { id: newId(), ...values }; materials.push(material); }
+        if (!slot) { unplaced.push(name); return; }
+        if (occupied.length) { conflicts.push({ name, ...slot }); return; }
+        assignments.push({ id: newId(), ...slot, material_id: material.id, volume_ul: amount });
+        added++;
     });
-    return { plan: { ...plan, materials: [...plan.materials, ...materials], assignments: [...plan.assignments, ...assignments] }, placed: assignments.length, unplaced };
+    return { plan: { ...plan, materials, assignments }, placed: added + reused, added, reused, unplaced, conflicts };
 }
 
 /** Labware for each named station, creating it when the plan has none there. */
