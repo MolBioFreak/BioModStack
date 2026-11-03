@@ -10,6 +10,21 @@ export interface AlignmentRow {
   sourceOffset?: number
 }
 
+export interface AlignmentPairSimilarity {
+  left_row_id: string
+  right_row_id: string
+  identical: number
+  compared: number
+  identity_percent: number | null
+  left_length?: number
+  right_length?: number
+  left_aligned_percent?: number | null
+  right_aligned_percent?: number | null
+  // Exact counts per bounded bin: identical, mismatched, other-sequence gap.
+  left_map?: [number, number, number][]
+  right_map?: [number, number, number][]
+}
+
 export interface AlignmentSimilarity {
   policy: string
   pairs_complete: boolean
@@ -20,7 +35,7 @@ export interface AlignmentSimilarity {
   identical_columns: number
   compared_columns: number
   conserved_column_percent: number | null
-  pairs: {left_row_id: string; right_row_id: string; identical: number; compared: number; identity_percent: number | null}[]
+  pairs: AlignmentPairSimilarity[]
 }
 
 export interface AlignmentDocument {

@@ -1,4 +1,4 @@
-import { Suspense, useMemo, useState, type ComponentType } from 'react'
+import { Suspense, useCallback, useMemo, useState, type ComponentType } from 'react'
 import { anchorAt, type AlignmentDocument, type ResidueAnchor } from '../../lib/alignmentCoordinates'
 import type { RendererState } from './viewerState'
 import AlignmentShared, { type Mark, type View } from './AlignmentShared'
@@ -51,7 +51,10 @@ export default function AlignmentWorkspace({ projectLabel, projectId, receiptId,
   const Viewer = viewers[viewerId]
   const localDownloads = downloads.filter(item => item.href.startsWith('/') && !item.href.startsWith('//') && !item.href.includes('\\'))
   const currentSelection = selection?.resultId === document?.resultId ? selection : undefined
+  const selectRow = useCallback((id: string) => { setRowId(id); setSelection(undefined) }, [])
   function select(anchor: ResidueAnchor) {
+    setRowId(anchor.rowId)
+    setColumn(String(anchor.column + 1))
     setSelection(anchor)
     onSelectionChange?.(anchor)
   }
@@ -70,7 +73,7 @@ export default function AlignmentWorkspace({ projectLabel, projectId, receiptId,
           </select>
         </label>
       </div>
-      <AlignmentSimilaritySummary document={document}/>
+      <AlignmentSimilaritySummary document={document} selectedRowId={currentSelection?.rowId ?? rowId} onSelectRow={selectRow}/>
       <div className="alignment-viewer-slot">
         {Viewer ? <ViewerBoundary key={viewerId} name={viewerNames[viewerId]}><Suspense fallback={<p role="status">Loading {viewerNames[viewerId]}…</p>}><Viewer document={displayed!} selection={currentSelection} onSelect={select} marks={marks.filter(mark => selectedMarks.includes(mark.id))} rendererState={rendererState} onRendererStateChange={updateRendererState} /></Suspense></ViewerBoundary> : <p role="status">{viewerNames[viewerId]} is not connected. This result remains available for download.</p>}
       </div>
