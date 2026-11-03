@@ -62,7 +62,7 @@ def offline_bundle(tmp_path, monkeypatch):
                 for name in ('biomodstack_msa_handoff.py', 'biomodstack_msa_controller.py',
                              'biomodstack_msa_policy.py', 'scripts/prepare_protenix_msa.py',
                              'scripts/lib/local_msa', 'schemas/msa_search_policy.json',
-                             'scripts/local_msa_runtime.py', 'modules/protenix.nf'):
+                             'scripts/local_msa_runtime.py', 'scripts/run_protenix_inference.py', 'modules/protenix.nf'):
                     stream.add(ROOT/name, arcname=name)
             return SimpleNamespace(returncode=0)
         return run(argv, **kwargs)
@@ -127,6 +127,13 @@ def test_bundle_relocated_real_consumer_without_public_outbound(offline_bundle, 
     attempt = Path(prepared.remote_attempt_dir)
     shutil.copytree(prepared.local_attempt_dir, attempt, dirs_exist_ok=True)
     (attempt/'bundle/source').symlink_to(prepared.remote_source_dir, target_is_directory=True)
+    # 8114d89: the envelope inventories every archive member under source/, and the
+    # remote worker extracts the staged archive before verify_bundle; do the same here.
+    with tarfile.open(Path(prepared.remote_source_dir)/'.bms-source.tar.gz', 'r:*') as archive:
+        archive.extractall(prepared.remote_source_dir, filter='fully_trusted')
+        for member in archive.getmembers():  # inventory modes are member.mode & 0o555
+            if member.isfile():
+                (Path(prepared.remote_source_dir)/member.name).chmod(member.mode & 0o555)
     shutil.rmtree(tmp_path/'controller')
     worker.verify_bundle(attempt)
     # MSA-only prediction has no dynamic children; consume its native argv.
@@ -373,7 +380,8 @@ def test_real_nextflow_stages_handoff_with_science_stub(offline_bundle, tmp_path
     """
     # Declared science placeholders satisfy unchanged mandatory process outputs.
     # They are not valid structures or scientific acceptance evidence.
-    mkdir -p producer_publication/fixture predictions/fixture
+    mkdir -p producer_publication/fixture predictions/fixture structure_publication/fixture
+    printf 'SCIENCE_STUB_FINAL_PDB' > structure_publication/fixture/model.${protenixComplexFinalizesGeometry(params) ? 'pdb' : 'cif'}
     printf '{"fixture":"science-stub"}' > producer_publication/fixture/receipt.json
     printf '{"fixture":"science-stub"}' > producer_candidates.json
     printf 'SCIENCE_STUB_RAW_CIF' > predictions/fixture/model.cif
@@ -417,6 +425,7 @@ workflow {
     deny.mkdir()
     (deny/'sitecustomize.py').write_text("import socket\ndef denied(*a,**k): raise RuntimeError('OUTBOUND_DENIED')\nsocket.socket.connect=denied\nsocket.socket.connect_ex=denied\nsocket.create_connection=denied\n")
     parameters = {'fixture_input': str(input_json), 'fixture_python': sys.executable,
+                  'api_python': sys.executable,  # b352b1d: PrepProtenixComplex shebang is the managed support Python
                   'code_root': str(ROOT), 'out_dir': str(tmp_path/'out'), 'deny_dir': str(deny),
                   'protenix_prepared_msa_dir': str(msa), 'protenix_prepared_msa_sha256': sha,
                   'sequence_input': SEQUENCE, 'msa_cache_dir': str(tmp_path/'unused-cache'),
@@ -445,12 +454,14 @@ workflow {
     assert list((tmp_path/'work').rglob('prepared-msa/msa-inputs.json'))
     finalized = native_mode == 'complex' and geometry_mode != 'flexible'
     canonical = tmp_path/'out/pdb_files/predictions'
-    assert sorted(p.name for p in canonical.iterdir()) == ['model.pdb' if finalized else 'model.cif']
+    # 72e29bb publishes the declared structure_publication tree (one directory per sample).
+    assert sorted(str(p.relative_to(canonical)) for p in canonical.rglob('*') if p.is_file()) == [
+        'fixture/model.pdb' if finalized else 'fixture/model.cif']
     raw = tmp_path/'out/run/protenix_complex/raw/predictions/fixture/model.cif'
     assert raw.exists() == finalized
     if finalized:
         assert raw.read_text() == 'SCIENCE_STUB_RAW_CIF'
-        assert (canonical/'model.pdb').read_text() == 'SCIENCE_STUB_FINAL_PDB'
+        assert (canonical/'fixture/model.pdb').read_text() == 'SCIENCE_STUB_FINAL_PDB'
 
 
 def test_nextflow_stages_declared_handoff_as_process_path():

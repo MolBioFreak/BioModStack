@@ -105,7 +105,8 @@ def test_validated_redesign_keeps_selected_designer_and_validator(designer, vali
     params = {'plr_seq_method': designer, 'plr_structure_validators': [validator]}
     selected = plan(params, mode='region_redesign', entrypoint='protein_local_redesign')
     images = {d.relative_path for d in selected.dependencies if d.kind == 'image'}
-    assert images == {'foundry.sif', 'pyrosetta_tools.sif',
+    # No foundry.sif: the RFD3 region/prep stages were removed from Redesign (58af06d).
+    assert images == {'pyrosetta_tools.sif',
         'fampnn.sif' if designer == 'fampnn' else 'dl_binder_design.sif',
         {'boltz2': 'boltz2.sif', 'esmfold2': 'esmfold2.sif', 'protenix_v2': 'protenix.sif'}[validator]}
     family = {(d.kind, d.relative_path) for d in model_runtime_dependencies(MODEL)}
@@ -134,6 +135,18 @@ def test_shape_skip_excludes_all_downstream_engines():
     assert {d.relative_path for d in selected.dependencies if d.kind == 'image'} == {'shape_rfd3.sif'}
     assert {d.relative_path for d in selected.dependencies if d.kind == 'weights'} == {
         'foundry/checkpoints/rfd3_latest.ckpt'}
+
+
+def test_native_redesign_ignores_stray_rfd3_request_and_selects_no_generator():
+    # 58af06d removed the RFD3 region/prep stages from Redesign, so a leftover
+    # rfd3_request_path selects only the default FAMPNN designer + Boltz validator closure.
+    selected = plan({'rfd3_request_path': '/not-materialized/request.json'},
+                    model='protein_local_redesign', mode='local_redesign', entrypoint='protein_local_redesign')
+    assert {d.relative_path for d in selected.dependencies if d.kind == 'image'} == {
+        'pyrosetta_tools.sif', 'fampnn.sif', 'boltz2.sif'}
+    weights = {d.relative_path for d in selected.dependencies if d.kind == 'weights'}
+    assert weights == {'boltz/boltz2_aff.ckpt', 'boltz/boltz2_conf.ckpt', 'boltz/mols'}
+    assert not any('foundry' in path or 'rfd3' in path for path in weights)
 
 
 @pytest.mark.parametrize('backend,override', [
@@ -265,10 +278,8 @@ def test_laproteina_override_retains_existing_containment_owner(assets, tmp_path
 @pytest.mark.parametrize('model,mode,entrypoint,params,images', [
     (MODEL, 'de_novo_design', 'protein_design',
      {'run_rfd_only': True, 'run_frustrampnn': False}, {'foundry.sif', 'pyrosetta_tools.sif'}),
-    ('protein_local_redesign', 'local_redesign', 'protein_local_redesign',
-     {'rfd3_request_path': '/not-materialized/request.json'}, {'foundry.sif', 'pyrosetta_tools.sif'}),
 ])
-def test_selected_rfd3_generation_and_native_redesign_remain_narrow(model, mode, entrypoint, params, images):
+def test_selected_rfd3_generation_remains_narrow(model, mode, entrypoint, params, images):
     selected = plan(params, model=model, mode=mode, entrypoint=entrypoint)
     assert {d.relative_path for d in selected.dependencies if d.kind == 'image'} == images
     assert {d.relative_path for d in selected.dependencies if d.kind == 'weights'} == {
