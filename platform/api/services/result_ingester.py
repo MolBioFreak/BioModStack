@@ -6598,7 +6598,11 @@ async def ingest_loose_files(
             )
         )
     ):
-        raw_final_path = str(plr_final_candidate_dir or "").strip()
+        # A completed-stage successor owns its published selected results. Prefer
+        # those retained bytes over the predecessor/input staging directory.
+        published_final = output_path / "final_candidates"
+        raw_final_path = str(published_final if published_final.is_dir()
+                             else plr_final_candidate_dir or "").strip()
         if raw_final_path:
             candidate = Path(raw_final_path).expanduser()
             if not candidate.is_absolute():

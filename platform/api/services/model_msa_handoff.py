@@ -65,15 +65,24 @@ from biomodstack_msa_handoff import validate_a3m
 def generated_msa_service_supported(service) -> bool:
     """Read-only resolver for the generated native consumer actually connected."""
     get = service.get if isinstance(service, dict) else lambda key: getattr(service, key, None)
-    return (get('logical_id') == 'protenix:generated_msa'
-            and get('state') == 'planned_from_generated_candidates'
+    consumers = {
+        'protenix:generated_msa': {
+            'modules/antibody_batch.nf:BatchProtenixValidation',
+            'modules/protenix.nf:ProtenixFromComplex',
+            'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble',
+            'modules/confornets_experimental.nf:RunConforNets',
+            'modules/conformational_mapping_confornets.nf:RunCanonicalConforNets'},
+        'shape:boltz2:generated_msa': {'modules/shape_blueprint.nf:RunShapeBoltzValidator'},
+        'shape:protenix_v2:generated_msa': {'modules/shape_blueprint.nf:RunShapeProtenixValidator'},
+    }
+    return (get('state') == 'planned_from_generated_candidates'
             and get('provider') in {'colabfold_api', 'neurosnap_api'}
-            and bool({'modules/antibody_batch.nf:BatchProtenixValidation',
-                      'modules/protenix.nf:ProtenixFromComplex',
-                      'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble',
-                      'modules/confornets_experimental.nf:RunConforNets',
-                      'modules/conformational_mapping_confornets.nf:RunCanonicalConforNets'}
-                     .intersection((get('authority') or '').split('; '))))
+            and bool(consumers.get(get('logical_id') or '', set()).intersection(
+                (get('authority') or '').split('; '))))
+
+
+def _generated_policy_model(service):
+    return 'boltz2' if service['logical_id'] == 'shape:boltz2:generated_msa' else 'protenix'
 
 
 def generated_protenix_request(payload: list) -> list:
@@ -113,7 +122,8 @@ def prepare_generated_msa(request: dict, destination: Path) -> str:
     with tempfile.TemporaryDirectory(dir=destination.parent, prefix='.generated-roster-') as scratch:
         input_json = Path(scratch) / 'input.json'
         input_json.write_bytes(canonical_bytes(payload))
-        manifest = prepare_protenix_inputs(None, input_json, destination, service['settings_json'])
+        manifest = prepare_protenix_inputs(None, input_json, destination, service['settings_json'],
+                                           policy_model=_generated_policy_model(service))
     manifest['external_service_request_id'] = identity
     path = destination / 'msa-inputs.json'
     path.write_text(json.dumps(manifest, sort_keys=True, indent=2))
@@ -133,7 +143,7 @@ def accept_generated_msa(runtime, request_id: str, manifest_sha256: str) -> dict
     manifest_path = source / 'msa-inputs.json'
     manifest = json.loads(manifest_path.read_bytes())
     if (manifest.get('external_service_request_id') != request_id
-            or manifest.get('settings') != apply_msa_policy('protenix', request['service']['settings_json'])
+            or manifest.get('settings') != apply_msa_policy(_generated_policy_model(request['service']), request['service']['settings_json'])
             or manifest.get('model_input') != request['native_input']):
         raise ValueError('Generated MSA roster/settings/request binding conflicts')
     hydrate_prepared_protenix_task(request['native_input'], source, manifest_sha256)

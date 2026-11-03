@@ -142,7 +142,7 @@ def _protenix_paired_headers(data: bytes) -> bytes:
     return ('\n'.join(lines) + '\n').encode('ascii')
 
 
-def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destination: Path, settings: dict) -> dict:
+def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destination: Path, settings: dict, *, policy_model: str = 'protenix') -> dict:
     """Package supplied inputs or cached API alignments; no inference install.
 
     The legacy positional config_path is retained for caller compatibility, not
@@ -150,7 +150,7 @@ def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destinat
     deployment-owned via the shared setup boundary.
     """
     from prepare_protenix_msa import load_json, all_protein_chains_have_msa, iter_protein_chains
-    effective = apply_msa_policy('protenix', settings)
+    effective = apply_msa_policy(policy_model, settings)
     payload = load_json(input_json)
     if all_protein_chains_have_msa(payload):
         return export_protenix_inputs(payload, destination, effective, {'backend': 'supplied'})

@@ -187,9 +187,13 @@ process StageProteinLocalValidatedCandidates {
     path candidate_pdbs
     path suite_receipt
     path validator_suite_complete
+    path boltz_scores, stageAs: 'score_inputs/boltz2/*'
+    path esm_scores, stageAs: 'score_inputs/esmfold2/*'
+    path protenix_scores, stageAs: 'score_inputs/protenix_v2??/*'
 
     output:
     path 'review_candidates/*.pdb', emit: candidates
+    path 'review_scores', emit: scores
 
     script:
     """
@@ -209,6 +213,32 @@ process StageProteinLocalValidatedCandidates {
     test -s ${suite_receipt}
     mkdir -p review_candidates
     publish_closed_structure ${candidate_pdbs} review_candidates/
+    # Optional scores are received from closed producer channels, never publishDir.
+    mkdir -p review_scores/boltz2 review_scores/esmfold2 review_scores/protenix_v2
+    cp -L score_inputs/boltz2/*_boltzpred.json review_scores/boltz2/ 2>/dev/null || true
+    cp -L score_inputs/esmfold2/*.metrics.json review_scores/esmfold2/ 2>/dev/null || true
+    for source in score_inputs/protenix_v2*; do
+        [ -d "\$source" ] || continue
+        mkdir -p "review_scores/protenix_v2/\$(basename "\$source")"
+        cp -L "\$source"/*_summary_confidence_sample_*.json "review_scores/protenix_v2/\$(basename "\$source")/" 2>/dev/null || true
+    done
+    """
+}
+
+// Completed-stage continuation publishes selected artifacts; no inference rerun.
+process FinalizeProteinLocalSelectedResults {
+    label 'process_low'
+    publishDir "${params.out_dir}/final_candidates", mode: 'copy', pattern: '*.pdb'
+
+    input:
+    path candidate_pdbs, stageAs: 'selected/*'
+
+    output:
+    path '*.pdb', emit: candidates
+
+    script:
+    """
+    cp -L selected/*.pdb .
     """
 }
 
@@ -618,6 +648,11 @@ workflow PROTEIN_LOCAL_REDESIGN {
         return
     }
 
+    if (resumeFromValidation) {
+        FinalizeProteinLocalSelectedResults(finalDesignPdbs)
+        return
+    }
+
     def selectedValidators = parseProteinLocalValidators(params.plr_structure_validators)
 
     if (!resumeFromValidation) {
@@ -702,7 +737,10 @@ workflow PROTEIN_LOCAL_REDESIGN {
         StageProteinLocalValidatedCandidates(
             finalDesignPdbs,
             FinalizeProteinLocalValidatorSuite.out.receipt,
-            EnforceProteinLocalValidatorSuite.out.complete
+            EnforceProteinLocalValidatorSuite.out.complete,
+            selectedValidators.contains('boltz2') ? ExportProteinLocalBoltzPredictions.out.jsons.collect() : Channel.value([]),
+            selectedValidators.contains('esmfold2') ? ESMFold2FromPdb.out.typed_results.map { meta, validator, cifs, metrics -> metrics }.flatten().collect() : Channel.value([]),
+            selectedValidators.contains('protenix_v2') ? ProtenixFromComplex.out.confidence.flatten().collect() : Channel.value([])
         )
 
         def shouldPauseAfterValidation = interactiveGateEnabled &&
@@ -710,14 +748,12 @@ workflow PROTEIN_LOCAL_REDESIGN {
             params.interactive_gate_continue != true
 
         if (shouldPauseAfterValidation) {
-            def validationGateDir = params.out_dir ? "${params.out_dir}/validation" : null
-            def validationReviewDir = params.out_dir ? "${params.out_dir}/validation/review_candidates" : null
             OpenInteractiveGate(
                 params.job_id ?: "unknown",
                 "post_structure_validation",
                 StageProteinLocalValidatedCandidates.out.candidates.map { 1 },
-                validationReviewDir ?: "",
-                validationGateDir ?: "",
+                StageProteinLocalValidatedCandidates.out.candidates.map { files -> (files instanceof Collection ? files[0] : files).parent.toString() },
+                StageProteinLocalValidatedCandidates.out.scores.map { it.toString() },
                 "",
                 "protein_local_redesign",
                 params.plr_design_chains ?: "",
