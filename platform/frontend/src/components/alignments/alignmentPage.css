@@ -63,7 +63,6 @@
 .alignment-page label.alignment-setting-check { grid-template-columns: auto minmax(0, 1fr) auto; }
 .alignment-setting-check > input { order: -1; }
 .alignment-setting-name { font-size: .9rem; color: var(--text-primary); }
-.alignment-native-key { justify-self: end; font-size: .72rem; color: var(--text-muted); }
 .alignment-expert { margin-top: 1rem; padding-top: .75rem; border-top: 1px solid var(--border-primary); }
 .alignment-expert[open] > summary { margin-bottom: .5rem; }
 .alignment-hint { font-size: .85rem; }

@@ -23,8 +23,8 @@ it('queues selected samples only on request and displays managed report identiti
     await act(async () => {const domain = div.querySelectorAll('select')[1]; domain.value = 'd'; domain.dispatchEvent(new Event('change', {bubbles: true})); (div.querySelectorAll('input')[1] as HTMLInputElement).click();});
     await act(async () => [...div.querySelectorAll('button')].find(x => x.textContent === 'Compute ensemble support')!.click()); await settle(); await settle();
     expect(post).toHaveBeenCalledWith('/api/family-msa/projects/p/operations', {operation: 'ensemble-support', molecule: 'protein', domain_experiment_id: 'd', name: 'Ensemble support', inputs: {receipt_id:'r', reference_artifact_id:'a', member_artifact_ids:['b']}});
-    expect(div.textContent).toContain('ensemble.b.fasta (b): 2 / 3');
-    expect(div.textContent).toContain('samples: 1');
-    expect(div.textContent).toContain('not probability of alignment truth');
+    expect(div.textContent).toContain('ensemble.b.fasta: 0.667 (2 of 3 pairs)');
+    expect(div.textContent).toContain('Support: 0.667 (2 of 3 pairs) across 1 samples');
+    expect(div.querySelector('[title*="not probability of alignment truth"]')).not.toBeNull(); expect(div.textContent).not.toContain('undefined');
   } finally {await act(async () => root.unmount()); cache.clear(); div.remove(); post.mockRestore(); get.mockRestore();}
 });
