@@ -2932,7 +2932,8 @@ async def _ingest_shape_result_manifest(
             name=name,
             pdb_path=str(structure),
             source_pdb_path=str(source_backbone),
-            producer_model_id="rfd3" if request_spec["sequence_policy"] == "skip" else "esmfold2",
+            producer_model_id=("esmfold2" if request_spec["sequence_policy"] != "skip"
+                               and request_spec["sequences_per_backbone"] > 0 else "rfd3"),
             json_path=str(metrics_path),
             lineage_root_job_id=str(job.id),
             stage_family="shape_blueprint",

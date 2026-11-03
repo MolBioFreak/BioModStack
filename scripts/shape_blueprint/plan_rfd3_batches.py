@@ -87,10 +87,19 @@ def _lengths(request: dict[str, Any], policy: dict[str, Any]) -> list[int]:
     ]
 
 
-def _resource_admit(lengths: list[int], gpu_memory_gib: int) -> dict[str, Any]:
+def _resource_admit(lengths: list[int], gpu_memory_gib: float | None) -> dict[str, Any]:
     registry = _load_registry()
     resource = registry["resource_profiles"]["rfd3_shape_runtime_v1"]
     classes = resource["gpu_memory_classes_gib"]
+    if gpu_memory_gib is None:
+        return {"status": "unknown", "profile_id": resource["id"],
+                "gpu_memory_gib": None, "memory_class_gib": None,
+                "max_admitted_residue_length": None,
+                "observed_boundary": resource["observed_boundary"]}
+    # Keep canonical receipts compatible with integer capacities supplied by
+    # existing callers; a CLI float must not change the plan hash for 32 GiB.
+    if float(gpu_memory_gib).is_integer():
+        gpu_memory_gib = int(gpu_memory_gib)
     if gpu_memory_gib >= 32:
         memory_class = 32
     elif gpu_memory_gib >= 16:
@@ -119,7 +128,7 @@ def _candidate_id(request_sha256: str, batch_index: int, local_index: int, effec
     return hashlib.sha256(material).hexdigest()
 
 
-def plan_batches(request: dict[str, Any], *, gpu_memory_gib: int) -> dict[str, Any]:
+def plan_batches(request: dict[str, Any], *, gpu_memory_gib: float | None) -> dict[str, Any]:
     if request.get("schema") not in {"bms_shape_design_request_v2", "bms_shape_design_request_v3"}:
         raise ValueError("RFD3 batch planner requires request schema v2")
     _validate_request_hash(request)
@@ -223,7 +232,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--gpu-memory-gib", required=True, type=int)
+    parser.add_argument("--gpu-memory-gib", type=float)
     args = parser.parse_args()
     request = json.loads(args.request.read_text(encoding="utf-8"))
     try:

@@ -133,6 +133,7 @@ def run_sequence_lane(
     request: dict[str, Any],
     runner: str | None = None,
     environment: dict[str, str] | None = None,
+    request_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     if not re.fullmatch(r"[0-9a-f]{64}", candidate_id):
         raise ValueError("sequence lane requires the immutable RFD3 candidate ID")
@@ -151,6 +152,12 @@ def run_sequence_lane(
     settings_identity = request.get("sequence_settings_identity")
     if not isinstance(settings, dict) or not isinstance(settings_identity, dict) or settings_identity.get("engine") != engine:
         raise ValueError("canonical request lacks resolved global sequence settings; resubmit for explicit normalization")
+    settings = dict(settings)
+    if settings.get("mpnn_bias_AA_jsonl"):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from lib.portable_inputs import resolve_input_path
+        settings["mpnn_bias_AA_jsonl"] = str(resolve_input_path(
+            settings["mpnn_bias_AA_jsonl"], owner=request_path.resolve() if request_path else None))
     backbone_path = _regular(backbone_path, "backbone")
     if output_dir.exists():
         raise ValueError("sequence output directory must be new")
@@ -469,6 +476,7 @@ def main() -> int:
         seed=args.seed,
         request=json.loads(args.request.read_text(encoding="utf-8")),
         runner=args.runner,
+        request_path=args.request,
     )
     return 0
 

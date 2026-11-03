@@ -490,6 +490,19 @@ def _historical_v2_replay(row: ShapeDesignRequest, current: dict) -> bool:
     return all(current.get(key) == value for key, value in old.items() if key not in derived)
 
 
+def selected_gpu_memory_gib(observation: dict | None, gpu_ids: list[int]) -> float | None:
+    """Project selected physical-device observations, never a capacity default.
+
+    A Shape task uses one GPU; for a selected pool preserve its smallest device
+    capacity rather than summing VRAM. Missing telemetry remains unknown.
+    """
+    devices = {row.get("index"): row for row in (observation or {}).get("gpus", [])}
+    values = [devices.get(index, {}).get("memory_total_mb") for index in gpu_ids]
+    if not values or any(type(value) not in (int, float) or value <= 0 for value in values):
+        return None
+    return min(values) / 1024
+
+
 def _staged(row: ShapeDesignRequest, *, data_root: Path, name: str) -> StagedShapeRequest:
     stage = (data_root / "shape_blueprint" / row.stage_relative_path).resolve()
     for source in row.request_spec.get("native_input_sources", []):

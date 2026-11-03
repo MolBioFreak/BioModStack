@@ -46,7 +46,8 @@ def inputs(root):
     (candidate / "source.pdb").write_text("REMARK EXPLICITLY_INERT\n")
     request = dict(request_id="request", request_sha256="a" * 64, geometry_id="geometry",
                    geometry_sha256="b" * 64, point_pool_sha256="c" * 64,
-                   sdf_sha256="d" * 64, sdf_sign="positive_inside", validator_suite=["esmfold2"])
+                   sdf_sha256="d" * 64, sdf_sign="positive_inside", validator_suite=["esmfold2"],
+                   sequence_policy="auto", sequences_per_backbone=1)
     document(root / "request.json", request)
     metrics = {"schema": "bms_shape_candidate_metrics_v1", "candidate_id": "candidate",
                **{k: request[k] for k in ("geometry_sha256", "point_pool_sha256", "sdf_sha256")},

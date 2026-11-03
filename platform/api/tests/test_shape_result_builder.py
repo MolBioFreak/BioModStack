@@ -93,6 +93,7 @@ def _request(path: Path) -> dict:
         "sdf_sha256": "5" * 64,
         "sdf_sign": "positive_inside",
         "validator_suite": ["esmfold2"],
+        "sequence_policy": "auto", "sequences_per_backbone": 1,
     }
     path.write_text(json.dumps(payload))
     aggregate = {"schema": "bms_rfd3_aggregate_manifest_v1", "request_sha256": payload["request_sha256"], "status": "complete"}

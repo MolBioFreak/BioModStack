@@ -103,7 +103,7 @@ def test_caliby_real_nextflow_leaf_and_installed_api(tmp_path):
     shim.write_text('#!/bin/sh\nexec apptainer exec --cleanenv --bind ' + shlex.quote(binds) + ' --env ' + shlex.quote('PYTHONPATH=' + str(fixture)) + ' ' + str(IMAGES / 'caliby.sif') + ' python "$@"\n')
     shim.chmod(0o755)
     workflow = tmp_path / 'transport.nf'
-    workflow.write_text(f"include {{ RunShapeCaliby }} from '{ROOT}/modules/shape_blueprint'\nworkflow {{ RunShapeCaliby(Channel.of(tuple('{'a' * 64}', file('{source_pdb}'))), 1, 19, file('{request_file}')) }}\n")
+    workflow.write_text(f"include {{ RunShapeCaliby }} from '{ROOT}/modules/shape_blueprint'\nworkflow {{ RunShapeCaliby(Channel.of(tuple('{'a' * 64}', file('{source_pdb}'))), 1, 19, file('{request_file.parent}')) }}\n")
     config = tmp_path / 'fixture.config'
     config.write_text("process.executor='local'\napptainer.enabled=false\ndocker.enabled=false\n")
     jars = sorted((Path.home() / '.nextflow/framework').glob('*/nextflow-*-one.jar'))
