@@ -79,7 +79,7 @@
     "status": "rebuilt for sm_120; published to the development lane; GPU-qualified on one 16 GB sm_120 card only",
     "unresolved": [
       "JAX/JAXlib 0.4.38 (with the ColabDesign tree_util shim in apptainer/complexa-colabdesign-tree-compat.py) replaced 0.4.29, which could not target sm_120. On an RTX 5060 Ti (sm_120) the AF2 reward then computed real values (job a9254d51, 2 rewards, no ptxas error), but only with XLA_PYTHON_CLIENT_PREALLOCATE=false; with JAX's default preallocation the 16 GB card ran out of memory. The default-preallocation run has not been repeated on a larger GPU.",
-      "SC/DSSP/HBPLUS binaries are not distributed by upstream. Foldseek/MMseqs are not installed by its public builder.",
+      "SC/DSSP/HBPLUS binaries are not distributed by upstream. Foldseek 10-941cd33 and MMseqs2 18-8cc5c are installed by this recipe at pinned release hashes.",
       "Optional AF2/RF3/ESM/MPNN checkpoint identities are acquired only for selected native operations; none acquired by this packaging continuation.",
       "No checkpoint-backed inference, native oracle scoring or remote scientific acceptance has been run."
     ],
@@ -87,10 +87,10 @@
     "jaxlib": "0.4.38",
     "uv": "0.11.26",
     "inputs": {
-      "apptainer/complexa.def": "96c6052fb60efb16bf49ca40c247f5a3580505b2d6130708c0eab3322245bf3f",
-      "apptainer/locks/complexa-NOTICES.md": "a1ffc15c678c8501ff054088467141866795c3397b1969f4784e1505eb8d67e0",
+      "apptainer/complexa.def": "b48adb9dda7fd5f6c5e794b6dd34a2bf20755d41e709900ec70b093b7cb8f841",
+      "apptainer/locks/complexa-NOTICES.md": "65e83b6772066e2015b199bd3481e11fe79593d9a6d136f666a23bf924b3180f",
       "apptainer/locks/complexa-build.txt": "463df3594dc482c49381e9c950f11d1b76d31a9154441fb03b3572e9bd8a492f",
-      "apptainer/locks/complexa-requirements.txt": "1c68fe8252d6941a95c5857c5bcc82cb037e510d52256b7dcf1fcaa4e74f596d"
+      "apptainer/locks/complexa-requirements.txt": "35412651a2b3cc26e1f221c399109f2ea05ccc7ff425fc39bc899e5c7d77fa67"
     },
     "dependency_metadata_conflicts": [
       {
@@ -115,10 +115,10 @@
       }
     ],
     "image": {
-      "sha256": "06c5aac43db0c58a7637fb7820d11f690045d3802910d406e73551d2f53ecb3b",
-      "bytes": 10809212928,
+      "sha256": "26e8f0ca0325d95c78a68453bfe99ed68ac666d97535f4c72a4681678494c7fa",
+      "bytes": 11110977536,
       "filesystem": "squashfs-zstd",
-      "activation": "development lane (local image store); not uploaded to Hugging Face"
+      "activation": "candidate built 2026-11-03 by updating the retained sandbox (embedded header is localimage/root, not this recipe); in-image lock, wrapper, novelty-edit and upstream-file hashes verified; not yet published to the development lane"
     },
     "installed_inventory_sha256": {
       "installed-packages.txt": "366ad384ba5b8f98f3421fc65e299b2822c2a9e1b108ec9d5bddab469efff7de",
