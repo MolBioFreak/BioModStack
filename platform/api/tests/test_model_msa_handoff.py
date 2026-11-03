@@ -392,7 +392,7 @@ def test_real_native_csv_parser_contract(tmp_path, parser_name):
 
 def test_controller_prepares_before_all_launch_lanes():
     source = (ROOT / 'platform/api/services/nextflow.py').read_text()
-    start = source.index('prepared_params = launch_params if checkpoint_resume else await _prepare_launch_msa_on_controller(')
+    start = source.index('prepared_params = launch_params if checkpoint_resume or model_id in {\'family_msa_protein\', \'family_msa_nucleic\'} else await _prepare_launch_msa_on_controller(')
     compiled = source.index('prepared_invocation = compile_job_nextflow_invocation(')
     assert compiled < source.index('prepared_invocation.materialize_inputs(', compiled) < start
     assert start < source.index('if job.execution_target_id:', start)

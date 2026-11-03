@@ -189,6 +189,9 @@ async def test_failed_cm_nextflow_run_terminalizes_linked_request_with_immutable
             NativeInvocation.capture(model_id="conformational_mapping", mode="map",
                 command=("nextflow",), requested={}, effective={}, native_parameters={},
                 entrypoint="workflows/conformational_mapping.nf"))
+        # This deliberately plan-free compiler double exercises spawn/terminalization,
+        # not the separately tested component runtime wrapper.
+        monkeypatch.setattr(nextflow, "needs_component_runtime", lambda invocation: False)
         monkeypatch.setattr(nextflow, "transient_workflow_runner_mode", lambda: spawn_route == "direct")
         monkeypatch.setenv("BMS_TRANSIENT_WORKFLOW_UNIT_NAME", "biomodstack-development-job-cm-job-failed-attempt-1.service")
         monkeypatch.setenv("BMS_TRANSIENT_WORKFLOW_OWNER_NONCE", "test-owner")

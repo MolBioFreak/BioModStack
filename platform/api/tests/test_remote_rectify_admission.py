@@ -3,6 +3,7 @@ from copy import deepcopy
 from datetime import datetime
 
 import pytest
+from types import SimpleNamespace
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -30,7 +31,7 @@ def remote_project_store(monkeypatch, tmp_path):
         'catalog_digest': view.catalog_digest})
     # Existing real Project DB producer, now with its full catalog rather than
     # the old preview-only profile double (which lacks native preparation).
-    for store in typed.project_context_preview_store.__wrapped__(monkeypatch, tmp_path):
+    for store in typed.project_context_preview_store.__wrapped__(monkeypatch, tmp_path, SimpleNamespace(param=None)):
         import asyncio, json, hashlib
         from experiment_models import (ExperimentRevision, ExperimentWorkflowPreparation,
             ExperimentValidation, ExperimentLaunchContext, ExperimentRunGroup)

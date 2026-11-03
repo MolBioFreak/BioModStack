@@ -717,13 +717,13 @@ def test_launch_callers_structurally_share_helper_and_forward_command():
 
 
 @pytest.mark.parametrize('model,mode,entrypoint,params,expected', [
-    ('protein_cad_experimental', 'design', 'protein_cad_experimental', {'pcad_backend': 'disco'}, {'PrepProteinCadRequest', 'RunDISCO', 'FinalizeProteinCadOutputs'}),
-    ('protein_cad_experimental', 'design', 'protein_cad_experimental', {'pcad_backend': 'laproteina'}, {'PrepProteinCadRequest', 'RunLaProteina', 'FinalizeProteinCadOutputs'}),
+    ('protein_cad_experimental', 'design', 'protein_cad_experimental', {'pcad_backend': 'disco'}, {'PrepProteinCadRequest', 'RunDISCO'}),
+    ('protein_cad_experimental', 'design', 'protein_cad_experimental', {'pcad_backend': 'laproteina'}, {'PrepProteinCadRequest', 'RunLaProteina'}),
     ('confornets_experimental', 'design', 'confornets_experimental', {'cn_skip_msa': True}, {'PrepConforNetsRequest', 'RunConforNets', 'FinalizeConforNetsOutputs'}),
     ('boltz_cp_experimental', 'design', 'boltz_cp_experimental', {'run_frustrampnn': False}, {'RunBoltzCPExperimental', 'FinalizeBoltzCPExperimental'}),
     ('oligo_design', 'oligo_design', 'oligo_design', {'oligo_validate_boltz': False}, {'RFDPolyDesign', 'NAMPNNDesign', 'PyRosettaRebuild'}),
     ('antibody_child', 'validation_batch', 'antibody_child', {'structure_validator': 'boltz2'}, {'BatchBoltzValidation', 'AlignBoltzValidation'}),
-    ('protein_local_redesign', 'local_redesign', 'protein_local_redesign', {'rfd3_request_path': '/logical/request.json'}, {'PrepareProteinLocalNativeRFD3Input', 'RunRFD3', 'BuildProteinLocalRFD3ResultManifest'}),
+    ('protein_local_redesign', 'local_redesign', 'protein_local_redesign', {'plr_seq_method': 'mpnn'}, {'PrepProteinLocalMPNN', 'RunMPNN', 'ExportProteinLocalMPNNResults'}),
     ('nanopore', 'fastq_qc', 'ngs/ont_fastq_qc', {'fastq_path': '/logical/reads.fastq', 'reference_fasta': '/logical/ref.fasta'}, {'FastqAlign', 'FastqDimerAnalysis', 'BuildDimerCanonicalOutputs', 'FastqPlasmidQC', 'ConstructVerify'}),
 ])
 def test_selected_native_family_graphs_are_typed_not_placeholders(model, mode, entrypoint, params, expected):
@@ -732,6 +732,12 @@ def test_selected_native_family_graphs_are_typed_not_placeholders(model, mode, e
     nodes = (*metadata.static_components, *metadata.dynamic_templates)
     assert expected <= {row.component_key for row in nodes}
     assert 'native_workflow' not in {row.component_key for row in nodes}
+    if model == 'protein_local_redesign':
+        assert not {'PrepareProteinLocalNativeRFD3Input', 'RunRFD3', 'BuildProteinLocalRFD3ResultManifest'} & {row.component_key for row in nodes}
+        assert not any(row.relative_path == 'foundry.sif' for row in metadata.dependencies)
+    if model == 'protein_cad_experimental':
+        assert {row.component_key for row in nodes} == expected
+        assert 'FinalizeProteinCadOutputs' not in (Path(__file__).resolve().parents[3] / 'workflows/protein_cad_experimental.nf').read_text()
     dependencies = {row.logical_id for row in metadata.dependencies}
     roles = {row.role_id for row in metadata.artifact_roles}
     keys = {row.component_key for row in nodes}
@@ -748,10 +754,16 @@ def test_selected_native_family_graphs_are_typed_not_placeholders(model, mode, e
     ('gromacs', 'MD_GROMACS_REPLICA', 'gromacs-md-2025.3.sif', 8),
     ('openmm', 'MD_OPENMM_REPLICA', 'openmm-md-8.5.2.sif', 4),
 ])
-def test_selected_md_replicas_require_analysis_and_preserve_engine(engine, process, image, cpus):
+@pytest.mark.parametrize('preparation,extra', [
+    ('prepared', {}),
+    ('gromacs', {'schema': 'bms.md.job.v1', 'input': {'structure': '/logical/source.pdb'}}),
+    ('amber', {'schema': 'bms.md.job.v2', 'input': {'structure': '/logical/source.pdb'},
+               'chemistry': {'profile_id': 'amber_ff19sb_opc_protein_v1'}}),
+])
+def test_selected_md_replicas_require_analysis_and_preserve_engine(engine, process, image, cpus, preparation, extra):
     from model_registry import selected_execution_metadata
     metadata = selected_execution_metadata('molecular_dynamics', 'simulate',
-        {'md_config': {'engine': engine, 'replicas': 3}},
+        {'md_config': {'engine': engine, 'replicas': 3, **extra}},
         'workflows/experimental/molecular_dynamics/orchestrator.nf')
     dynamic = {row.component_key: row for row in metadata.dynamic_templates}
     assert {process, 'MD_ANALYZE_REPLICA'} <= dynamic.keys()
@@ -763,7 +775,9 @@ def test_selected_md_replicas_require_analysis_and_preserve_engine(engine, proce
     assert dynamic['MD_ANALYZE_REPLICA'].requiredness == 'required'
     assert json.loads(dynamic['MD_ANALYZE_REPLICA'].lifecycle_json)['max_retries'] == 2
     images = {row.relative_path for row in metadata.dependencies if row.kind == 'image'}
-    assert {image, 'md-preparation-v1.sif', 'md-analysis-1.0.0.sif'} <= images
+    preparation_image = 'md-preparation-v1.sif' if preparation == 'amber' else 'gromacs-md-2025.3.sif'
+    assert images == {image, preparation_image, 'md-analysis-1.0.0.sif'}
+    assert ('md-preparation-v1.sif' in images) == (preparation == 'amber')
     assert not any(row.field == 'computational_closure' for row in metadata.blockers)
     assert any(row.kind == 'support_tool' and row.relative_path == 'scripts/lib/component_adapter.py'
                for row in metadata.dependencies)
@@ -945,10 +959,12 @@ def test_installed_checkpoint_consumer_bindings_and_generated_cache_policy():
     from model_registry import native_checkpoint_dependencies
     root = Path(__file__).resolve().parents[3]
     config = (root / 'nextflow.config').read_text()
-    assert '${params.weights_root}/foundry/checkpoints:/foundry/checkpoints:ro' in config
+    assert 'weightBind("${params.weights_root}/foundry/checkpoints", "/foundry/checkpoints")' in config
+    assert 'def bindings = ["${concrete}:${guest}:ro"]' in config
+    assert 'bindings.add("${concrete}:${source}:ro")' in config
     assert '--env FOUNDRY_CHECKPOINT_DIRS=/foundry/checkpoints' in config
     assert "task.process.tokenize(':').last() in ['RunRF3', 'RunRFD3']" in config
-    assert '${params.weights_root}/boltzgen:/weights/boltzgen:ro' in config
+    assert 'weightBind("${params.weights_root}/boltzgen", "/weights/boltzgen")' in config
     module = (root / 'modules/boltzgen.nf').read_text()
     for flag, member in [('inverse_fold_checkpoint', 'boltzgen1_ifold.ckpt'),
                          ('folding_checkpoint', 'boltz2_conf_final.ckpt'),
@@ -956,8 +972,8 @@ def test_installed_checkpoint_consumer_bindings_and_generated_cache_policy():
         assert f'--{flag} /weights/boltzgen/{member}' in module
     assert '--design_checkpoints ${checkpointPaths}' in module
     assert '--checkpoint_mode ${checkpointMode}' not in module
-    assert '${params.weights_root}/diffdock/workdir:/cache/workdir:ro' in config
-    assert '${params.weights_root}/diffdock/torch/hub/checkpoints:/cache/torch/hub/checkpoints:ro' in config
+    assert 'weightBind("${params.weights_root}/diffdock/workdir", "/cache/workdir")' in config
+    assert 'weightBind("${params.weights_root}/diffdock/torch/hub/checkpoints", "/cache/torch/hub/checkpoints")' in config
     assert '--env TORCH_HOME=/cache/torch' in config and '--pwd /cache' in config
     deps, blockers = native_checkpoint_dependencies('RunDiffDock', {})
     assert len(deps) == 6
