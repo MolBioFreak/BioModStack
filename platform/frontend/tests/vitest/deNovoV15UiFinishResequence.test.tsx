@@ -99,6 +99,19 @@ it('deduplicates concurrent delayed captures and never replaces newer authored s
     expect(latest.resequence_preparations.map((entry: any) => entry.job.name).sort()).toEqual(['Resequence', 'replacement']);
     expect(posts('/prepare')).toHaveLength(2);
 });
+it('does not publish a late ready launch over the current invalid structured draft', async () => {
+    const pending = deferred<any>();
+    handler = config => config.url.endsWith('/prepare') ? pending.promise : undefined;
+    await mount({ ...loop, seq_method: 'ligandmpnn', designer_mode: 'ligand_aware' });
+    await edit('Structured designer settings', '{}');
+    let capture!: Promise<any>;
+    await act(async () => { capture = prep.current(); });
+    await edit('Structured designer settings', '{invalid');
+    pending.resolve({ name: 'old-valid', params: { resequence_preparation: { path: 'owned', token: 'token' } } });
+    await act(async () => { await capture; });
+    expect(latest.native_job_request).toBeNull();
+    expect(latest.designer_drafts['ligandmpnn:ligand_aware'].structuredText).toBe('{invalid');
+});
 it('retains uncertain creation staging during concurrent replacement and cold retry', async () => {
     const created = deferred<any>(); let rejectCreate = true;
     handler = async config => {

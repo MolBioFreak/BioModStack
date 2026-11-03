@@ -116,8 +116,8 @@ export function ResequencePanel({ initialValues = {}, onDraftChange, runDetails 
         resequence_prepared: prepared.current?.signature === signature ? prepared.current : undefined,
         native_job_request: ready && prepared.current?.signature === signature ? { ...prepared.current.job, ...placement } : null,
     };
-    const current = useRef({ draft, signature, request, placement, onDraftChange });
-    current.current = { draft, signature, request, placement, onDraftChange };
+    const current = useRef({ draft, signature, request, placement, onDraftChange, ready });
+    current.current = { draft, signature, request, placement, onDraftChange, ready };
     const draftJson = JSON.stringify(draft);
     useEffect(() => { onDraftChange?.(JSON.parse(draftJson)); }, [draftJson, onDraftChange]);
     const prepareCurrent = useRef<(forDraft?: boolean) => Promise<Partial<Job>>>(async () => ({}));
@@ -126,7 +126,7 @@ export function ResequencePanel({ initialValues = {}, onDraftChange, runDetails 
         const entry = preparations.current.get(snapshot.signature);
         if (alive.current) snapshot.onDraftChange?.({ ...snapshot.draft,
             resequence_preparations: [...preparations.current.values()],
-            resequence_prepared: entry, native_job_request: entry ? { ...entry.job, ...snapshot.placement } : null });
+            resequence_prepared: entry, native_job_request: snapshot.ready && entry ? { ...entry.job, ...snapshot.placement } : null });
     };
     const disposePreparation = (entry: Prepared): Promise<void> => {
         const existing = disposing.current.get(entry.signature);
