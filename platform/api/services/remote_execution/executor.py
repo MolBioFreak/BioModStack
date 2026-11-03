@@ -434,8 +434,12 @@ def _attempt_lease_predicates(job: Job) -> list:
     return [ExecutionTarget.lease_acquired_at == epoch]
 
 
+_UNSET_CHECKPOINT_HISTORY = object()
+
+
 async def _publish_remote_transition(
     session: AsyncSession, job: Job, values: dict[str, Any], *, release_lease: bool = False, require_lease: bool = True,
+    checkpoint_history: Any = _UNSET_CHECKPOINT_HISTORY,
 ) -> bool:
     """CAS the complete attempt/claim snapshot; never autoflush a stale owner."""
     lease_authority = [job_claim_authority(job)]
@@ -445,6 +449,7 @@ async def _publish_remote_transition(
         result = await session.execute(
             update(Job).where(
                 *lease_authority,
+                *([Job.decision_history == checkpoint_history] if checkpoint_history is not _UNSET_CHECKPOINT_HISTORY else []),
                 Job.id == str(job.id),
                 Job.status == job.status,
                 Job.queue_status == job.queue_status,
@@ -1466,6 +1471,10 @@ async def request_remote_checkpoint_resume(session: AsyncSession, job: Job, chec
 
 async def _request_remote_checkpoint_resume_owned(session: AsyncSession, job: Job, checkpoint: dict, decision: dict) -> dict:
     """Commit the explicit operation before transport; acceptance owns generation."""
+    checkpoint_history = job.decision_history
+    if any((entry.get('checkpoint_successor') or {}).get('checkpoint_sha256') == checkpoint.get('checkpoint_sha256')
+           for entry in checkpoint_history or []):
+        raise RemoteExecutionError('Checkpoint already continued as a successor')
     if (job.provenance or {}).get('remote_checkpoint_operation', {}).get('state') in {'requested', 'uncertain'}:
         raise RemoteExecutionError('Checkpoint decision is unresolved; reconcile the original operation')
     if not job.awaiting_input or job.status != 'awaiting_input' or job.queue_status == 'cancelling':
@@ -1511,7 +1520,7 @@ async def _request_remote_checkpoint_resume_owned(session: AsyncSession, job: Jo
     if not await _publish_remote_transition(session, job, {
         "status": "running", "queue_status": "running", "remote_state": "checkpoint_resume_requested",
         "awaiting_input": False, "provenance": provenance,
-    }, require_lease=False):
+    }, require_lease=False, checkpoint_history=checkpoint_history):
         raise RemoteExecutionError("Checkpoint owner changed during resource reacquisition")
     await _recover_remote_checkpoint(session, job)
     intent = (job.provenance or {}).get('remote_checkpoint_operation') or {}
