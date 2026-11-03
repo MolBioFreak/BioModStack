@@ -11,12 +11,16 @@ import sqlite3
 
 p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);a=p.parse_args()
 assert a.root.resolve().is_relative_to(Path('/home/dalab/.hermes/profiles/fresh/cache/scratch'))
-base=Path('/home/dalab/.hermes/profiles/fresh/cache/scratch/denovo-complete-parent/phase2/api-receiving/basetemp')
+import os
+base=Path(os.environ.get('BMS_FINAL_RETAINED_BASE','/home/dalab/.hermes/profiles/fresh/cache/scratch/denovo-complete-parent/phase2/api-receiving/basetemp'))
 sources=[(base/'test_complete_receiving_real_e1/state.sqlite', ['jobs','job_artifacts']),
          (base/'test_partial_zero_unexpected_a2/test.db', ['jobs','rfd3_local_redesign_requests','rfd3_local_redesign_candidates','rfd3_local_redesign_artifacts'])]
 manifest=[]
 with sqlite3.connect(a.root/'core.db') as target:
     for source,tables in sources:
+        if (not source.exists() and source.parent.name == 'test_partial_zero_unexpected_a2'
+                and os.environ.get('BMS_FINAL_REDESIGN_UNEXECUTABLE') == '1'):
+            manifest.append({'source':str(source),'missing':True,'reason':'producer test deleted (1da53bf); NOT regenerated'});continue
         assert source.resolve().is_relative_to(base)
         source_manifest={'source':str(source),'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'tables':{},'files':[]}
         with sqlite3.connect('file:'+str(source)+'?mode=ro',uri=True) as origin:
@@ -41,4 +45,4 @@ with sqlite3.connect(a.root/'core.db') as target:
                             source_manifest['files'].append({'path':str(f),'sha256':hashlib.sha256(f.read_bytes()).hexdigest(),'bytes':f.stat().st_size})
         manifest.append(source_manifest)
 (a.root/'retained-import.json').write_text(json.dumps({'scope':'Existing inert native writer captures; NOT inference; byte-unchanged read-only artifact roots','sources':manifest},indent=2))
-print(json.dumps([{ 'source':x['source'],'tables':x['tables']} for x in manifest],indent=2))
+print(json.dumps([{ 'source':x['source'],'tables':x.get('tables','MISSING')} for x in manifest],indent=2))

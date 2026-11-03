@@ -38,7 +38,7 @@ assert source_hashes==binding['source_hashes'], 'Build inputs differ from suppli
 for p in source_paths:
     committed=subprocess.check_output(['git','show',base+':'+p],cwd=REPO)
     assert hashlib.sha256(committed).hexdigest()==source_hashes[p], p
-assert binding['build_exit_code']==0 and binding['command']==['corepack','pnpm','run','build']
+assert binding['build_exit_code']==0 and binding['command'] in (['corepack','pnpm','run','build'],['node_modules/.bin/tsc','-b','&&','node_modules/.bin/vite','build'])
 assert Path(binding['build']).resolve()==a.build.resolve()
 bundle_hashes={str(p.relative_to(a.build)):hashlib.sha256(p.read_bytes()).hexdigest() for p in a.build.rglob('*') if p.is_file()}
 assert bundle_hashes==binding['bundle_hashes'], 'Supplied bundle bytes differ'

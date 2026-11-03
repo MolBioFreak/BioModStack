@@ -4,7 +4,7 @@ Run inside supervisor namespace with Hermes Python (websockets installed).
 Native HTTP seeds are explicit preparation, never counted as browser actions.
 """
 import argparse
-import json
+import json,os
 import time
 from pathlib import Path
 from urllib.request import urlopen
@@ -38,6 +38,12 @@ with connect(page['webSocketDebuggerUrl'],origin=None,max_size=64*1024*1024) as 
     def click(text):
         js("(()=>{const e=[...document.querySelectorAll('button,summary,a')].find(e=>e.checkVisibility()&&e.textContent.trim()==="+json.dumps(text)+");if(!e)throw Error('No visible control '+"+json.dumps(text)+");e.click()})()")
         time.sleep(.25)
+    def click_last(text):
+        js("(()=>{const m=[...document.querySelectorAll('button,summary,a')].filter(e=>e.checkVisibility()&&e.textContent.trim()==="+json.dumps(text)+");if(!m.length)throw Error('No visible control '+"+json.dumps(text)+");m[m.length-1].click()})()")
+        time.sleep(.25)
+    def open_details(text):
+        js("(()=>{const s=[...document.querySelectorAll('summary')].find(e=>e.checkVisibility()&&e.textContent.trim()==="+json.dumps(text)+");if(!s)throw Error('No visible summary '+"+json.dumps(text)+");if(!s.parentElement.open)s.click()})()")
+        time.sleep(.25)
     def edit(label,value):
         js("(()=>{const e=[...document.querySelectorAll('[aria-label]')].find(e=>e.checkVisibility()&&e.getAttribute('aria-label')==="+json.dumps(label)+");if(!e)throw Error('No visible field '+"+json.dumps(label)+");Object.getOwnPropertyDescriptor(Object.getPrototypeOf(e),'value').set.call(e,"+json.dumps(value)+");e.dispatchEvent(new Event(e.tagName==='SELECT'?'change':'input',{bubbles:true}))})()")
         time.sleep(.2)
@@ -58,7 +64,7 @@ with connect(page['webSocketDebuggerUrl'],origin=None,max_size=64*1024*1024) as 
         seed=json.loads((a.root/'seed.json').read_text());pid=seed['project_id'];sid=seed['setup']['setup_context_id']
         url='http://127.0.0.1:18871/bms/submit?model=rfd4_proteina&mode=generate&project_id='+pid+'&setup_context_id='+sid
         if a.phase=='authoring':
-            navigate(url);click('Sequence Design')
+            navigate(url);click('Optional operations')
             wait("!!document.querySelector('input[aria-label=\"Enable sequence design\"]')")
             check('retained-v1 generated sequence OFF',"!document.querySelector('[aria-label=\"Enable sequence design\"]').checked")
             click('Save draft');time.sleep(.5);click('Save draft');time.sleep(.5)
@@ -67,20 +73,20 @@ with connect(page['webSocketDebuggerUrl'],origin=None,max_size=64*1024*1024) as 
             # New setup created by real native HTTP preparation before this phase.
             seed=json.loads((a.root/'fresh.json').read_text());sid=seed['setup_context_id']
             url='http://127.0.0.1:18871/bms/submit?model=rfd4_proteina&mode=generate&project_id='+pid+'&setup_context_id='+sid
-            navigate(url);click('Sequence Design')
+            navigate(url);click('Optional operations')
             wait("!!document.querySelector('[aria-label=\"Enable optional operations\"]')")
             check('fresh optional operations OFF',"!document.querySelector('[aria-label=\"Enable optional operations\"]').checked")
             checkbox('Enable optional operations')
-            click('Add Sequence design');click('Add proteinmpnn call')
-            click('Add Blind prediction');click('Add boltz2 call')
-            click('Add Molecular dynamics');click('Add molecular_dynamics call')
+            click('Add Sequence design');click_last('Add ProteinMPNN')
+            click('Add Blind prediction');click_last('Add Boltz-2')
+            click('Add Molecular dynamics');click_last('Add Molecular dynamics')
             snapshot('fresh-three-independent-stages')
             # Native prediction fields arrive from the actual model router.
             for section in js("[...document.querySelectorAll('section[aria-label^=\"Invocation \" ]')].map(e=>e.getAttribute('aria-label'))"):
-                js("(()=>{const e=[...document.querySelectorAll('section[aria-label]')].find(e=>e.getAttribute('aria-label')==="+json.dumps(section)+");const d=e.querySelector('details');if(d&&!d.open)d.querySelector('summary').click()})()")
+                js("(()=>{const e=[...document.querySelectorAll('section[aria-label]')].find(e=>e.getAttribute('aria-label')==="+json.dumps(section)+");e.querySelectorAll('details').forEach(d=>{if(!d.open)d.querySelector(':scope>summary').click()})})()")
             wait("!!document.querySelector('[aria-label=\"mpnn_temperature\"]')")
             edit('mpnn_temperature','0.27')
-            click('molecular_dynamics settings')
+            click('Molecular dynamics settings')
             edit('MD invocation input kind','compiled');edit('MD invocation name','INERT independent MD draft');edit('tpr','inputs/retained-unexecuted.tpr')
             edit('Replicas per window','2');edit('Orchestration seed (not native stochastic seed)','0')
             click('Back to round')
@@ -89,11 +95,11 @@ with connect(page['webSocketDebuggerUrl'],origin=None,max_size=64*1024*1024) as 
             check('optional operations switched OFF',"!document.querySelector('[aria-label=\"Enable optional operations\"]').checked")
             click('Save draft');time.sleep(.5)
             snapshot('fresh-off-saved')
-            call('Page.reload',ignoreCache=True);time.sleep(1);wait("!!document.querySelector('[data-native-de-novo]')");click('Sequence Design')
+            call('Page.reload',ignoreCache=True);time.sleep(1);wait("!!document.querySelector('[data-native-de-novo]')");click('Optional operations')
             check('cold Project reopen remains OFF',"!document.querySelector('[aria-label=\"Enable optional operations\"]').checked")
             click('Retained operation settings')
             check('cold Project retains all three call identities',"document.querySelectorAll('section[aria-label^=\"Invocation \" ]').length===3")
-            checkbox('Enable optional operations');click('molecular_dynamics settings')
+            checkbox('Enable optional operations');click('Molecular dynamics settings')
             check('cold MD draft exact name',"document.querySelector('[aria-label=\"MD invocation name\"]').value==='INERT independent MD draft'")
             check('cold MD compiled source draft exact',"document.querySelector('[aria-label=\"tpr\"]').value==='inputs/retained-unexecuted.tpr'")
             click('Back to round');snapshot('fresh-restored-cold')
@@ -102,18 +108,18 @@ with connect(page['webSocketDebuggerUrl'],origin=None,max_size=64*1024*1024) as 
         elif a.phase=='packing':
             seed=json.loads((a.root/'fresh.json').read_text());sid=seed['setup_context_id']
             url='http://127.0.0.1:18871/bms/submit?model=rfd4_proteina&mode=generate&project_id='+pid+'&setup_context_id='+sid
-            navigate(url);click('Sequence Design')
-            click('Add caliby_experimental call')
-            wait("[...document.querySelectorAll('section[aria-label^=\"Invocation \" ]')].some(e=>e.textContent.includes('caliby_experimental'))")
-            cid=js("[...document.querySelectorAll('section[aria-label^=\"Invocation \" ]')].find(e=>e.textContent.includes('caliby_experimental')).getAttribute('aria-label').slice(11)")
+            navigate(url);click('Optional operations');open_details('Retained operation settings')
+            click_last('Add Caliby experimental')
+            wait("[...document.querySelectorAll('section[aria-label^=\"Invocation \" ]')].some(e=>e.textContent.includes('Caliby experimental'))")
+            cid=js("[...document.querySelectorAll('section[aria-label^=\"Invocation \" ]')].find(e=>e.textContent.includes('Caliby experimental')).getAttribute('aria-label').slice(11)")
             edit('Mode '+cid,'sidechain_pack')
-            click('Add boltz2 call')
-            prediction=js("[...document.querySelectorAll('section[aria-label^=\"Invocation \" ]')].filter(e=>e.textContent.includes('boltz2')).map(e=>e.getAttribute('aria-label').slice(11))")
+            click_last('Add Boltz-2')
+            prediction=js("[...document.querySelectorAll('section[aria-label^=\"Invocation \" ]')].filter(e=>e.textContent.includes('Boltz-2')).map(e=>e.getAttribute('aria-label').slice(11))")
             check('independent same-predictor calls have distinct identities',json.dumps(len(prediction)==2 and len(set(prediction))==2))
             edit('Mode '+prediction[1],'predict')
             checkbox('Enable invocation '+cid)
             click('Save draft');time.sleep(.5)
-            call('Page.reload',ignoreCache=True);time.sleep(1);wait("!!document.querySelector('[data-native-de-novo]')");click('Sequence Design')
+            call('Page.reload',ignoreCache=True);time.sleep(1);wait("!!document.querySelector('[data-native-de-novo]')");click('Optional operations')
             check('packing invocation OFF retained after cold reopen',"!document.querySelector('[aria-label='+"+json.dumps(json.dumps('Enable invocation '+cid))+"+']').checked")
             check('packing mode retained after cold reopen',"document.querySelector('[aria-label='+"+json.dumps(json.dumps('Mode '+cid))+"+']').value==='sidechain_pack'")
             checkbox('Enable invocation '+cid)
@@ -123,7 +129,7 @@ with connect(page['webSocketDebuggerUrl'],origin=None,max_size=64*1024*1024) as 
         elif a.phase=='sources':
             seed=json.loads((a.root/'fresh.json').read_text());sid=seed['setup_context_id']
             url='http://127.0.0.1:18871/bms/submit?model=rfd4_proteina&mode=generate&project_id='+pid+'&setup_context_id='+sid
-            navigate(url);click('Native sources')
+            navigate(url);click('Input structures');click('Advanced source bindings')
             edit('Native source name','exact-returned');click('Add native source')
             click('Choose native result for exact-returned')
             snapshot('native-job-picker')
@@ -137,7 +143,7 @@ with connect(page['webSocketDebuggerUrl'],origin=None,max_size=64*1024*1024) as 
             wait("document.querySelector('[aria-label=\"Source MODEL for exact-returned\"]')?.value==='2'")
             snapshot('exact-model-two-received')
             click('Save draft');time.sleep(.5)
-            call('Page.reload',ignoreCache=True);time.sleep(1);wait("!!document.querySelector('[data-native-de-novo]')");click('Native sources')
+            call('Page.reload',ignoreCache=True);time.sleep(1);wait("!!document.querySelector('[data-native-de-novo]')");click('Input structures');click('Advanced source bindings')
             check('cold native source slot retained',"document.body.innerText.includes('exact-returned')")
             click('Inspect retained exact-returned')
             wait("document.querySelector('[aria-label=\"Source MODEL for exact-returned\"]')?.value==='2'")
@@ -146,11 +152,11 @@ with connect(page['webSocketDebuggerUrl'],origin=None,max_size=64*1024*1024) as 
         elif a.phase=='cold':
             seed=json.loads((a.root/'fresh.json').read_text());sid=seed['setup_context_id']
             url='http://127.0.0.1:18871/bms/submit?model=rfd4_proteina&mode=generate&project_id='+pid+'&setup_context_id='+sid
-            navigate(url);click('Sequence Design')
+            navigate(url);click('Optional operations')
             check('full process cold reopen retains five invocation identities',"document.querySelectorAll('section[aria-label^=\"Invocation \" ]').length===5")
-            click('molecular_dynamics settings')
+            click('Molecular dynamics settings')
             check('full process cold reopen retains native MD draft',"document.querySelector('[aria-label=\"MD invocation name\"]').value==='INERT independent MD draft'&&document.querySelector('[aria-label=\"tpr\"]').value==='inputs/retained-unexecuted.tpr'")
-            click('Back to round');click('Design');click('Native sources');click('Inspect retained exact-returned')
+            click('Back to round');click('Design');click('Input structures');click('Inspect retained exact-returned')
             wait("document.querySelector('[aria-label=\"Source MODEL for exact-returned\"]')?.value==='2'")
             check('full process cold reopen preserves exact MODEL 2',"document.querySelector('[aria-label=\"Source MODEL for exact-returned\"]').value==='2'")
             snapshot('full-process-cold-reopen')
@@ -164,10 +170,13 @@ with connect(page['webSocketDebuggerUrl'],origin=None,max_size=64*1024*1024) as 
             (a.evidence/'native-download.json').write_text(json.dumps(download,indent=2))
             check('native download byte-identical to retained capture',json.dumps(download['status']==200 and download['sha256']=='a1916e81afe2cb0511e68fc3af3c39a8801a665f14fa11ae4fe176a2dfebc5d5'))
             snapshot('generation-returned-results')
-            call('Page.navigate',url='http://127.0.0.1:18871/bms/designs/rfd')
-            wait("document.body.innerText.includes('1 published candidates')")
-            check('retained redesign preserves cancelled execution and one native candidate',"document.body.innerText.includes('Execution: cancelled')&&document.body.innerText.includes('Generated: 1')")
-            snapshot('redesign-returned-results')
+            if os.environ.get('BMS_FINAL_REDESIGN_UNEXECUTABLE')=='1':
+                (a.evidence/'redesign-unexecuted.json').write_text(json.dumps({'unexecuted':'retained cancelled RFD3 redesign results (/bms/designs/rfd)','reason':'real producer (RFD3 local-redesign service, rfd3_local_redesign_* tables) deleted in 1da53bf; no real fixture can be written; not fabricated'},indent=2))
+            else:
+                call('Page.navigate',url='http://127.0.0.1:18871/bms/designs/rfd')
+                wait("document.body.innerText.includes('1 published candidates')")
+                check('retained redesign preserves cancelled execution and one native candidate',"document.body.innerText.includes('Execution: cancelled')&&document.body.innerText.includes('Generated: 1')")
+                snapshot('redesign-returned-results')
             call('Page.navigate',url='http://127.0.0.1:18871/bms/designs/job')
             wait("document.body.innerText.includes('3 in view')")
             wait("[...document.querySelectorAll('a')].some(e=>e.checkVisibility()&&e.textContent.trim()==='Redesign exact structure')")

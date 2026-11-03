@@ -40,7 +40,7 @@ from test_denovo_project_http import app_for
 # This avoids treating a missing harness binding as a product download failure.
 import paths
 native_roots = paths.get_allowed_roots
-retained = Path('/home/dalab/.hermes/profiles/fresh/cache/scratch/denovo-complete-parent/phase2/api-receiving/basetemp')
+retained = Path(os.environ.get('BMS_FINAL_RETAINED_BASE','/home/dalab/.hermes/profiles/fresh/cache/scratch/denovo-complete-parent/phase2/api-receiving/basetemp'))
 def read_roots():
     return {**native_roots(),
         'retained_generation': retained / 'test_complete_receiving_real_e1/output',

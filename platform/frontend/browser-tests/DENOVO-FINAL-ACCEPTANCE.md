@@ -1,6 +1,25 @@
 # Final de-novo browser receiving roster
 
 Standalone browser-harness registration; not a Vitest callback/mounted surrogate.
+
+## Current bounded rerun (2026-11-03)
+
+The c53683c product bundle passes the 20 runnable assertions (six browser phases)
+with current visible control labels. The historical cancelled local-redesign
+fixture producer was retired in 1da53bf. Set `BMS_FINAL_REDESIGN_UNEXECUTABLE=1`
+explicitly to record that one journey as unexecuted in `redesign-unexecuted.json`,
+not passed. Missing generation fixtures still fail; do not fabricate the retired
+producer. `BMS_FINAL_RETAINED_BASE` supplies a durable real writer-test fixture
+root. These fixture atoms are NOT inference.
+
+The build binding also accepts direct `node_modules/.bin/tsc -b &&
+node_modules/.bin/vite build` execution with recorded exit zero and the same
+source/bundle hash verification. Dependency reuse is not a clean installation.
+Run9 and the tightened importer rerun10 artifacts are under
+`~/.local/state/biomodstack/task-evidence/denovo-closeout-20261102/r2-browser/`.
+The continuation assertion proves actual anchor navigation and receiving-editor
+mount, not launch, return-button navigation, target-selection or comparison.
+Historical failure descriptions below refer only to their named revisions.
 Run from the isolated checkout root with Hermes Python (`websockets` installed):
 
 ```sh
