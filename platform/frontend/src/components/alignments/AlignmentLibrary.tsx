@@ -88,7 +88,7 @@ export default function AlignmentLibrary({ initialProject }: {initialProject?: s
       {receiptsError && <p role="alert">Alignment library unavailable: {receiptsError} <button onClick={() => setReload(n => n + 1)}>Retry results</button></p>}
       {!receiptsLoading && !receiptsError && !rows.length && <p>No alignments yet. Import one below or use New to build one.</p>}
       <AlignmentResultList rows={rows} projectId={project}/>{cursor && <button onClick={more}>Load more results</button>}</div><div className="alignment-imports">
-      <fieldset><legend>Import an alignment file</legend><p>The original file is kept. A3M insertions and Stockholm annotations aren't shown.</p>
+      <fieldset><legend>Import an alignment file</legend><p>Bring in an alignment made elsewhere. Aligned FASTA is the most common; Stockholm and Clustal come from tools like Pfam or Clustal Omega; A3M comes from structure tools like ColabFold. The original file is kept. A3M insertions and Stockholm annotations aren't shown.</p>
         <label>Format <select value={format} onChange={e => {setFormat(e.target.value); setAlignmentKey(crypto.randomUUID());}}><option value="fasta">Aligned FASTA</option><option value="stockholm">Stockholm</option><option value="clustal">Clustal</option><option value="a3m">A3M</option></select></label>
         <label>Molecule <select value={molecule} onChange={e => {setMolecule(e.target.value); setAlignmentKey(crypto.randomUUID());}}><option value="protein">Protein</option><option value="dna">DNA</option><option value="rna">RNA</option></select></label>
         <input aria-label="Alignment file" type="file" onChange={e => {setAlignment(e.target.files?.[0] || null); setAlignmentKey(crypto.randomUUID());}} />
