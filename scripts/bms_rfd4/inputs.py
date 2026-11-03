@@ -71,8 +71,19 @@ def prepare_inputs(request, bindings, destination, *, sentinel=None):
         mapping.append({'native':str(target.resolve()),'representation':'official_unconditional_sentinel','template':str(sentinel)})
     else:
         from rfproteina.inference_utils.condition_spec import build_annotated_atom_array_from_condition_spec
-        for example in inp['examples']:
+        # Native directory loading keys samples by file stem. Keep every accepted
+        # example, using explicit input IDs only where original names collide.
+        from collections import Counter
+        counts = Counter(example['name'] for example in inp['examples'])
+        used = set(counts)
+        for ordinal, example in enumerate(inp['examples']):
             validate_design_id(example['name'])
+            input_id = example['name']
+            if counts[input_id] > 1:
+                input_id = f'{example["name"]}_input_{ordinal:04d}'
+                while input_id in used:
+                    input_id += '_'
+                used.add(input_id)
             spec=condition_example_spec(inp, example, paths)
             a=build_annotated_atom_array_from_condition_spec(spec,spec_dir=originals,example_id=example['name'],validate=False)['atom_array']
             if example.get('pair_conditions'):
@@ -87,12 +98,13 @@ def prepare_inputs(request, bindings, destination, *, sentinel=None):
                     pair=(int(left[0]),int(right[0]));value=BasePairEnum[row['value']].value
                     entries[pair]=value;entries[pair[::-1]]=value
                 C_BP.set_annotation(a,pairs=np.asarray(list(entries),dtype=np.int32).reshape(-1,2),values=np.asarray(list(entries.values()),dtype=np.int64))
-            target=native/(example['name']+'.cif')
+            target=native/(input_id+'.cif')
             to_cif_file(a,target,save_standard_annotations=True,chain_disambiguation='chain_iid')
             # Native source/copy annotations remain authoritative; retain their exact values.
             ids={k:a.get_annotation(k).tolist() for k in a.get_annotation_categories()
                  if k in ('chain_id','res_id','ins_code','atom_name','res_name','chain_iid','molecule_iid','transformation_id') or k.startswith(('auth_','label_')) or 'source' in k.lower() or 'src' in k.lower()}
-            mapping.append({'example_id':example['name'],'sources':[s['slot'] for s in example['sources']],
+            mapping.append({'example_id':example['name'],'input_id':input_id,'example_index':ordinal,
+                'sources':[s['slot'] for s in example['sources']],
                 'native':str(target.resolve()),'representation':'annotated_derivative' if spec['input_as_annotated_cif'] else 'fresh_cleaned_derivative',
                 'native_atom_identity':ids})
     (dest/'input_identity.json').write_text(json.dumps(mapping,indent=2)+'\n')

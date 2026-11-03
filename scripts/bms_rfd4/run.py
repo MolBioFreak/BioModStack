@@ -134,7 +134,9 @@ def _run(request,bindings,output,*,bundle=None,runtime_identity=None,prepared_in
             receipt['input_identity']=identity
         else:
             inputs=Path(prepared_inputs).resolve()
-            identity=json.loads((inputs.parent/'input_identity.json').read_text()) if 'evaluation_tasks' in request else []
+            identity_path = inputs.parent / 'input_identity.json'
+            identity = json.loads(identity_path.read_text()) if identity_path.is_file() or 'evaluation_tasks' in request else []
+            receipt['input_identity'] = identity
         if config_dir is None:
             import rootutils
             config_dir=rootutils.find_root(rfproteina.__file__,indicator='.project-root')/'configs'

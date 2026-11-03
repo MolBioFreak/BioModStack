@@ -33,10 +33,13 @@ process RunRFD4Proteina {
     def runtimeImage = new File(image.toString()).canonicalPath
     def cacheAvailable = cacheRoot && new File(cacheRoot.toString()).isDirectory()
     def cacheBind = cacheAvailable ? '--bind ' + quote(cacheRoot.toString() + ':/cache') : ''
+    def executable = System.getenv('BMS_CONTAINER_EXECUTABLE') ?: 'apptainer'
+    def destination = quote("${params.out_dir}/collected/rfd4_proteina")
     """
     set -euo pipefail
     mkdir -p .tmp .cache/matplotlib
-    apptainer exec --no-home --nv \
+    native_status=0
+    ${quote(executable)} exec --no-home --nv \
       --env BMS_RFD4_COMPILE_CACHE_ROOT=${quote(cacheAvailable ? '/cache' : '')} --env BMS_RFD4_RUNTIME_IMAGE=${quote(runtimeImage)} \
       ${cacheBind} \
       --env TMPDIR="\$PWD/.tmp" --env MPLCONFIGDIR="\$PWD/.cache/matplotlib" \
@@ -48,6 +51,13 @@ process RunRFD4Proteina {
       ${oracleBinds} \
       '${image}' python -m bms_rfd4.run \
       --request rfd4_closure/request.json --bindings rfd4_closure/bindings.json \
-      --bundle '${bundle}' --output rfd4_proteina
+      --bundle '${bundle}' --output rfd4_proteina || native_status=\$?
+    if [ "\$native_status" -ne 0 ]; then
+      # publishDir skips failed tasks. Retain the producer's own partial/zero
+      # publication, without making a failed scientific process successful.
+      mkdir -p ${destination} || true
+      [ ! -d rfd4_proteina ] || cp -a rfd4_proteina/. ${destination}/ || true
+    fi
+    exit "\$native_status"
     """
 }
