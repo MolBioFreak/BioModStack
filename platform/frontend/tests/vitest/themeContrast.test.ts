@@ -113,6 +113,28 @@ describe('theme contrast', () => {
 
 
 describe('native MolBio and Project readability', () => {
+    it('themes translucent Alignment panel surfaces with readable text in every scheme', () => {
+        const panel = readFileSync(resolve(__dirname, '../../src/components/MolBioToolkit/panels/AlignmentPanel.tsx'), 'utf8');
+        const classes = [...new Set(panel.match(/bg-slate-950\/\d+/g))];
+        expect(classes.length).toBeGreaterThan(0);
+        for (const className of classes) {
+            const selector = `[class~="${className}"]`;
+            const start = css.indexOf(selector);
+            expect(start, className).toBeGreaterThanOrEqual(0);
+            const declaration = css.slice(start, css.indexOf('}', start));
+            const remap = declaration.match(/color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, transparent\) !important/);
+            expect(remap, className).not.toBeNull();
+            for (const block of blocks) {
+                const tokens = themeTokens(block);
+                for (const parent of SURFACES) {
+                    const composite = mix(tokens[remap![1]], tokens[parent], Number(remap![2]) / 100);
+                    for (const foreground of ['--text-primary', '--text-secondary', '--text-muted']) {
+                        expect(contrastRatio(tokens[foreground], composite), `${block.name} ${className} ${foreground}`).toBeGreaterThanOrEqual(4.5);
+                    }
+                }
+            }
+        }
+    });
     it('keeps real Project card links readable against the global link rules in all themes and action states', async () => {
         const cardCss = readFileSync(resolve(__dirname, '../../src/components/project-manager/DNASequenceProjectWorkspace.css'), 'utf8');
         const globalLinks = css.match(/\/\* Ensure links are visible \*\/[\s\S]*?(?=\/\* Smooth transitions)/)?.[0];

@@ -706,6 +706,14 @@ html.bms-cordova-shell.bms-molbio-mobile-active [data-molbio-mobile-toolbar="tru
 }
 
 /* Background with opacity - use color-mix for transparency */
+[class~="bg-slate-950/30"] { background-color: color-mix(in srgb, var(--bg-primary) 30%, transparent) !important; }
+[class~="bg-slate-950/40"] { background-color: color-mix(in srgb, var(--bg-primary) 40%, transparent) !important; }
+[class~="bg-slate-950/50"] { background-color: color-mix(in srgb, var(--bg-primary) 50%, transparent) !important; }
+[class~="bg-slate-950/60"] { background-color: color-mix(in srgb, var(--bg-primary) 60%, transparent) !important; }
+[class~="bg-slate-950/70"] { background-color: color-mix(in srgb, var(--bg-primary) 70%, transparent) !important; }
+[class~="bg-slate-950/80"] { background-color: color-mix(in srgb, var(--bg-primary) 80%, transparent) !important; }
+[class~="bg-slate-950/90"] { background-color: color-mix(in srgb, var(--bg-primary) 90%, transparent) !important; }
+
 [class*="bg-slate-900/"] {
   background-color: color-mix(in srgb, var(--bg-secondary) 50%, transparent) !important;
 }
