@@ -3203,9 +3203,10 @@ async def get_native_comparison_document(job_id: str, artifact_id: str,
 
 @router.get("/native/{job_id}/{artifact_id}/residue-metrics", response_model=Union[ScientificViewerMetric, ScientificResidueMetric])
 async def get_native_residue_metrics(job_id: str, artifact_id: str,
-        session: AsyncSession = Depends(get_session), target_state: Optional[str] = None):
+        session: AsyncSession = Depends(get_session), target_state: Optional[str] = None,
+        model_number: Optional[int] = None):
     from services.bindcraft2_scientific_consumer import native_artifact_metric
-    return await native_artifact_metric(session, job_id, artifact_id, 'residue_plddt', target_state=target_state)
+    return await native_artifact_metric(session, job_id, artifact_id, 'residue_plddt', target_state=target_state, model_number=model_number)
 
 
 @router.get("/native/{job_id}/{artifact_id}/chain-metrics", response_model=ScientificViewerMetric)

@@ -5425,6 +5425,7 @@ function ResultsViewerContent() {
     const showResultFamily = !!activeJob && (
         ['bindcraft2', 'boltzgen', 'ppiflow', 'rfantibody', 'template_antibody_denovo', 'binder_refinement'].includes(activeJob.model_id)
         || !!nativeSequenceResultKind(activeJob) || isRFD3GenerationResultJob(activeJob)
+        || isNativeBinderGeneration(activeJob)
         || !!(activeJob.lineage_root_job_id || activeJob.selection_source_job_id || activeJob.source_stage_job_id
             || activeJob.params?.lineage_root_job_id || activeJob.params?.iteration_source_root_job_id));
     const selectedCandidateDocuments = activeJob ? { ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}), ...(returnParams.get('model_number') !== null ? { model: Number(returnParams.get('model_number')) } : {}) } } : {}) } : {};

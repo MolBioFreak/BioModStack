@@ -237,7 +237,7 @@ def unavailable(design, metric, reason):
     return ScientificViewerMetric.model_validate(unavailable_scientific_identity(design, metric, reason))
 
 
-async def native_artifact_metric(session, job_id, artifact_id, metric, *, target_state=None):
+async def native_artifact_metric(session, job_id, artifact_id, metric, *, target_state=None, model_number=None):
     # This is a source display context, NOT an ORM Design or a fabricated Design ID.
     context = SimpleNamespace(id=None, name=artifact_id)
     reason = 'native_chain_metrics_not_published' if metric == 'chain_metrics' else 'native_local_qa_not_published'
@@ -245,6 +245,12 @@ async def native_artifact_metric(session, job_id, artifact_id, metric, *, target
         path, identity, raw = await native_document_snapshot(session, job_id, artifact_id, target_state=target_state)
         context.name = path.name
         qa = local_qa(raw) if metric == 'residue_plddt' and path.suffix.lower() in ('.cif', '.mmcif') else None
+        if qa is not None and model_number is not None:
+            # The selector is a display scope, not permission to borrow another MODEL's QA.
+            pairs = [(residue, value) for residue, value in zip(*qa)
+                     if residue.get('selected_model') == model_number]
+            qa = ([dict(residue, index=index) for index, (residue, _) in enumerate(pairs)],
+                  [value for _, value in pairs]) if pairs else None
         if qa is not None:
             # Artifact identity needs no new candidate/metadata qualification gate.
             producer = dict(candidate_id=artifact_id, document_id=identity['producer_document'].get('path') or artifact_id)
