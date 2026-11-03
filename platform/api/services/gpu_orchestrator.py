@@ -3394,6 +3394,9 @@ class GPUOrchestrator:
                 job = await session.get(Job, remote_id)
                 if job is not None:
                     await reconcile_remote_job(session, job)
+                    if (job.params or {}).get("permanent_delete_cleanup") is True:
+                        from services.job_control import finalize_permanent_delete_cleanup
+                        await finalize_permanent_delete_cleanup(session, remote_id)
         except Exception as exc:
             logger.warning("[REMOTE COMPLETION] Job %s remains pending reconciliation: %s", remote_id, exc)
 
@@ -3466,8 +3469,7 @@ class GPUOrchestrator:
                 by_remote_owner = select(Job.id).where(
                     Job.execution_target_id.is_not(None),
                     leased_owner
-                    | ((Job.params["permanent_delete_cleanup"].as_boolean().is_(True))
-                       & (func.coalesce(Job.remote_state, "") != "cancelled"))
+                    | Job.params["permanent_delete_cleanup"].as_boolean().is_(True)
                     | (Job.remote_state == "results_available")
                     | (
                         Job.status.in_(("failed", "cancelled"))

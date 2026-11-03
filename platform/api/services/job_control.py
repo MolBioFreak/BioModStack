@@ -49,8 +49,8 @@ async def retain_permanent_delete_cleanup(session: AsyncSession, job: Job) -> bo
 
     The delete route removes user records but must exclude this row and its
     output paths from physical deletion when True. List/detail routes hide the
-    params marker. The existing reconciler drains this owner; the hidden row
-    remains a cleanup receipt (and keeps retained output-directory custody).
+    params marker. The existing reconciler drains this owner, then removes
+    its unused output paths and the hidden row.
     """
     from services.remote_execution.claims import outstanding_claim_clause
     await session.refresh(job)
@@ -71,6 +71,66 @@ async def retain_permanent_delete_cleanup(session: AsyncSession, job: Job) -> bo
         raise HTTPException(status_code=409, detail="Deletion owner changed during cleanup handoff")
     await session.refresh(job)
     return True
+
+
+async def cleanup_permanent_delete_outputs(session: AsyncSession, job: Job) -> None:
+    """Reuse the permanent route's directory planner, protecting overlapping custody.
+
+    Leave this Job in the transaction until filesystem cleanup succeeds so a
+    controller interruption or filesystem error is retried by reconciliation.
+    Project artifact custody is independent and is never part of Job deletion.
+    """
+    from pathlib import Path
+    import shutil
+    from routers.jobs import _load_remaining_output_dir_refs, _plan_output_dir_cleanup
+    from experiment_operations import _controlled_root
+    from services.scientific_artifacts.writer import artifact_root
+
+    refs = await _load_remaining_output_dir_refs(session, {str(job.id)})
+    candidates, _ = _plan_output_dir_cleanup([job.output_dir, job.child_output_dir], refs)
+    protected = [Path(path) for path in refs]
+    protected.extend((_controlled_root("BMS_EXPERIMENT_ARTIFACT_ROOT", "experiment-artifacts").resolve(),
+                      artifact_root().resolve()))
+    for raw in candidates:
+        path = Path(raw)
+        if any(path == other or path in other.parents or other in path.parents for other in protected):
+            continue
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            pass
+
+
+async def finalize_permanent_delete_cleanup(session: AsyncSession, job_id: str) -> bool:
+    """Finish requested deletion only after the existing cancellation owner drains.
+
+    The existing attempt guard excludes concurrent local transfers; the writer
+    transaction keeps output references stable through cleanup and row removal.
+    No new stop proof or user-facing admission condition is introduced.
+    """
+    from database import Design
+    from services.remote_execution.claims import outstanding_claim_clause
+    from services.remote_execution.executor import _controller_attempt_guard
+
+    with _controller_attempt_guard(job_id) as owned:
+        if not owned:
+            return False
+        # Acquire SQLite's writer fence before loading references or touching bytes.
+        result = await session.execute(update(Job).where(
+            Job.id == job_id, Job.params["permanent_delete_cleanup"].as_boolean().is_(True),
+            Job.status == "cancelled", Job.remote_state == "cancelled",
+            Job.params["cancellation_receipt"]["state"].as_string() == "completed",
+            ~outstanding_claim_clause(),
+        ).values(queue_status="cancelled").execution_options(synchronize_session=False))
+        if result.rowcount != 1:
+            await session.rollback()
+            return False
+        job = await session.get(Job, job_id, populate_existing=True)
+        await cleanup_permanent_delete_outputs(session, job)
+        await session.execute(Design.__table__.delete().where(Design.job_id == job_id))
+        await session.delete(job)
+        await session.commit()
+        return True
 
 
 async def get_md_owned_job_ids(session: AsyncSession) -> set[str]:
