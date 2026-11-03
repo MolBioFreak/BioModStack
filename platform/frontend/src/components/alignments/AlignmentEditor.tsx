@@ -306,9 +306,10 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
                 <p className="alignment-hint">Only change these if you know you need to. Blank means the engine's own default. Hover a setting for a short description.</p>
                 <div className="alignment-settings-grid">{fields.filter(field => !primary.has(field.key)).map(renderField)}</div>
                 {engine === 'mafft' && <p className="alignment-hint">Some settings only apply to certain strategies. Conflicts are reported in the engine log.</p>}
-                {unsupportedMuscleMode && <p role="alert">The installed MUSCLE Align mode ignores the requested molecule type. Runs are blocked in this mode. Choose Super5 explicitly or another engine; saved settings have not been changed.</p>}
-                {engine === 'muscle' && molecule !== 'protein' && <p role="alert">MUSCLE did not recover a known one-base deletion correctly in the pUC19 accuracy benchmark. Its nucleotide results are not qualified for sequence identity confirmation.</p>}
+                {engine === 'muscle' && <p className="alignment-hint">Some MUSCLE settings can't be combined. Conflicts are reported in the engine log.</p>}
             </details>
+            {unsupportedMuscleMode && <p role="alert">The installed MUSCLE Align mode ignores the requested molecule type. Runs are blocked in this mode. Choose Super5 explicitly or another engine; saved settings have not been changed.</p>}
+            {engine === 'muscle' && molecule !== 'protein' && <p role="alert">MUSCLE did not recover a known one-base deletion correctly in the pUC19 accuracy benchmark. Its nucleotide results are not qualified for sequence identity confirmation.</p>}
             <div className="alignment-actions">
                 <button type="button" disabled={molecularBlocked || unsupportedMuscleMode} onClick={()=>void run('launch')} className={`${inputClass} alignment-action`}>Start run</button>
                 {setup.active && <button type="button" onClick={()=>void run('save')} className={inputClass}>Save Project draft</button>}

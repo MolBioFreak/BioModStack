@@ -79,6 +79,16 @@ native outputs remain outside the source repository.
 - Frontend: mounted authoring, coordinate, renderer, shared-state, export, and
   handoff tests; direct formatting/input tests and TypeScript validation.
 
+After reconciliation with the current BNS molecular-tool changes, the focused
+API integration slice passed 49 tests and the mounted alignment/pairwise slice
+passed 82 tests, with no skips. Direct formatting/nucleotide tests passed 17
+checks; TypeScript and the production frontend build passed. Final native
+capability/integrity checks passed 39 tests and the managed execution regression
+slice passed seven. The six-case native pUC19 suite has four passes and the two
+precisely bounded MUSCLE expected failures described below; expected failures
+are not counted as scientific passes. These counts cover overlapping suites
+and must not be summed into a unique-test total.
+
 ## Remaining scientific qualification failures
 
 The five-row pUC19 known-edit control contains the original, identical copy, and

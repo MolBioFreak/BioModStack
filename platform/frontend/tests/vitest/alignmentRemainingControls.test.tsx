@@ -34,12 +34,15 @@ it('renders every new scalar/file control and submits exact aliases, file text, 
     expect(mocks.submit.mock.lastCall![0].params.settings).toMatchObject({pair_method:'oldgenafpair',tree_method:'large',refinement_policy:'simplehillclimbing',gop:0,anchors,focus:false,focus_rows:'row_00000001\nrow_00000002'});
     await change(div.querySelector('[aria-label="Engine"]')!,'muscle');
     for(const field of settingsInventory(schema as Parameters<typeof settingsInventory>[0],'muscle').fields) expect(label(field.label)).toBeTruthy();
+    // Align is blocked by the native molecule-type capability guard; explicitly
+    // select the supported mode before checking settings submission.
+    await change(setting('mode').querySelector('select')!,'super5');
     await change(setting('randseed').querySelector('input')!,'0');
     await change(div.querySelector('[aria-label="hmmin contents"]')!,'temporary exact text\n');
     await change(div.querySelector('[aria-label="hmmin contents"]')!,'');
     await act(async()=>{setting('native_log').querySelector<HTMLInputElement>('input')!.click();});
     await act(async()=>[...div.querySelectorAll('button')].find(x=>x.textContent==='Start run')!.click());
-    expect(mocks.submit.mock.lastCall![0].params.settings).toMatchObject({hmmin:'',randseed:0,native_log:true,guidetreeout:false,randomchaintree:false});
+    expect(mocks.submit.mock.lastCall![0].params.settings).toMatchObject({mode:'super5',hmmin:'',randseed:0,native_log:true,guidetreeout:false,randomchaintree:false});
     expect(div.textContent).toContain("Some MUSCLE settings can't be combined");
     await act(async()=>root.unmount());
 });
