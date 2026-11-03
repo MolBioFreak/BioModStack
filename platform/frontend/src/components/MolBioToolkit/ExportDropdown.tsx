@@ -5,6 +5,8 @@
 import { useState, useRef, useEffect, useLayoutEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
 import type { HistoryEntry } from './hooks/useSequenceHistory';
+import { hasStickyDigestEnds } from '../../lib/retainedDigestFragment';
+import type { RestrictionDigestFragment } from '../../lib/restrictionAnalysis';
 import {
     buildPrimersTsv,
     canonicalizeExportablePrimer,
@@ -15,6 +17,7 @@ interface ExportDropdownProps {
         name: string;
         description?: string;
         sequence: string;
+        digestFragment?: RestrictionDigestFragment;
         features?: Array<{
             name: string;
             type: string;
@@ -37,6 +40,8 @@ interface ExportDropdownProps {
             strand: 1 | -1;
             tm?: number;
             gc_percent?: number;
+            binding_status?: 'needs_review';
+            binding_warning?: string;
             sites?: Array<{
                 start: number;
                 end: number;
@@ -125,6 +130,12 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className, o
     const exportAs = async (format: 'genbank' | 'fasta' | 'json' | 'features_tsv' | 'primers_tsv' | 'history_txt') => {
         setExportError(null);
         try {
+            if ((format === 'fasta' || format === 'genbank') && hasStickyDigestEnds(sequenceData.digestFragment)) {
+                throw new Error('This fragment has physical sticky ends. FASTA and this GenBank exporter cannot preserve both strands and end chemistry. Export Toolkit JSON or reopen the saved digest instead.');
+            }
+            if (format === 'genbank' && sequenceData.primers?.some(primer => primer.binding_status === 'needs_review')) {
+                throw new Error('Review primer bindings before GenBank export, or export JSON/primer TSV to retain unplaced oligos.');
+            }
             let content: string;
             let extension: string;
 

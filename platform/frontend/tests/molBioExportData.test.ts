@@ -27,9 +27,10 @@ test('primer TSV exports explicit coordinate convention and ordered sites', () =
     assert.match(header, /Start \(0-based\)/);
     assert.match(header, /End \(half-open\)/);
     assert.match(header, /Ordered Sites/);
+    assert.match(header, /Binding status\tBinding warning/);
     assert.equal(
         row,
-        'origin-primer\tACGTACGT\tdna\t12\t4\t12-16:1;0-4:1\t+\t61.2\t50',
+        'origin-primer\tACGTACGT\tdna\t12\t4\t12-16:1;0-4:1\t+\t61.2\t50\tplaced\t',
     );
 });
 
@@ -43,6 +44,6 @@ test('primer TSV canonicalizes an origin-crossing unsplit library placement', ()
     }], 'dna', 16, true);
     assert.equal(
         tsv.split('\n')[1],
-        'library-wrap\tAACCGG\tdna\t14\t4\t14-16:1;0-4:1\t+\t\t',
+        'library-wrap\tAACCGG\tdna\t14\t4\t14-16:1;0-4:1\t+\t\t\tplaced\t',
     );
 });

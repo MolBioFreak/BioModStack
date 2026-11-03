@@ -11,6 +11,7 @@ const GoldenGateRetainedWorkspace = lazy(() => import('./panels/golden-gate/Gold
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ngsResultHref } from '../../lib/ngsResultRouting';
 import { createLatestAsyncResourceController } from '../../lib/latestAsyncResource';
+import { retainedDigestFragment, requireSupportedDigestImport, DUPLEX_EDIT_REASON } from '../../lib/retainedDigestFragment';
 import {
     fetchRestrictionAnalysisBatch,
     fetchRestrictionCatalogBrowse,
@@ -475,14 +476,16 @@ function normalizePrimerRecord(
         start: placement.start,
         end: placement.end,
         strand: placement.strand,
-        tm: primer.tm,
+        tm: placement.binding_status === 'needs_review' ? undefined : primer.tm,
         gc_percent: primer.gc_percent,
-        tm_algorithm: primer.tm_algorithm,
-        tm_salt_correction: primer.tm_salt_correction,
-        tm_settings: primer.tm_settings,
+        tm_algorithm: placement.binding_status === 'needs_review' ? undefined : primer.tm_algorithm,
+        tm_salt_correction: placement.binding_status === 'needs_review' ? undefined : primer.tm_salt_correction,
+        tm_settings: placement.binding_status === 'needs_review' ? undefined : primer.tm_settings,
         notes: primer.notes,
         provenance: primer.provenance,
         sites: placement.sites,
+        binding_status: placement.binding_status,
+        binding_warning: placement.binding_warning,
     };
 }
 
@@ -548,7 +551,7 @@ function sequenceDataFromMolecularRevision(revision: MolecularRevision): Sequenc
         ? moleculeOrientation
         : (sequenceType === 'rna' ? 'unknown' : 'not_applicable');
 
-    return sequenceDataFromApiRecord({
+    const data = sequenceDataFromApiRecord({
         id: revision.sequence_id,
         name: typeof snapshot.name === 'string' ? snapshot.name : revision.document_name,
         description: typeof snapshot.description === 'string' ? snapshot.description : null,
@@ -577,6 +580,7 @@ function sequenceDataFromMolecularRevision(revision: MolecularRevision): Sequenc
         created_at: typeof snapshot.created_at === 'string' ? snapshot.created_at : revision.created_at,
         updated_at: typeof snapshot.updated_at === 'string' ? snapshot.updated_at : null,
     });
+    return { ...data, digestFragment: retainedDigestFragment(revision.provenance, sequence) };
 }
 
 function trackFromApi(track: SequenceAnalysisTrack): AnalysisTrack {
@@ -969,8 +973,9 @@ export function MolBioToolkitV2() {
             name: sequenceData.name,
             dna: sequenceData.sequence,
             topology: sequenceData.circular ? 'circular' : 'linear',
+            molecule_strandedness: sequenceData.moleculeStrandedness ?? 'unknown',
         };
-    }, [selectedExactMolecularRevision, sequenceData.circular, sequenceData.name, sequenceData.sequence, sequenceData.sequenceType]);
+    }, [selectedExactMolecularRevision, sequenceData.circular, sequenceData.name, sequenceData.sequence, sequenceData.sequenceType, sequenceData.moleculeStrandedness]);
 
     // Fence callbacks during render as well as effect cleanup: a previous source
     // can finish between a construct/catalog render and its passive effects.
@@ -1667,10 +1672,11 @@ export function MolBioToolkitV2() {
         sequence: string;
         sequenceType: 'dna' | 'rna';
         circular: boolean;
+        moleculeStrandedness?: 'single' | 'double' | 'unknown';
         description?: string;
     }) => {
         if (exactMolecularAuthorityRef.current) return;
-        const moleculeStrandedness = data.sequenceType === 'rna' ? 'single' : 'double';
+        const moleculeStrandedness = data.moleculeStrandedness ?? (data.sequenceType === 'rna' ? 'single' : 'double');
         const moleculeOrientation = moleculeStrandedness === 'double' ? 'not_applicable' : 'unknown';
         const newSequence: SequenceData = {
             name: data.name,
@@ -1697,14 +1703,16 @@ export function MolBioToolkitV2() {
     const handleOpenPrimerAsConstruct = useCallback((data: {
         name: string;
         sequence: string;
+        sequenceType?: 'dna' | 'rna';
         description?: string;
     }) => {
         handlePasteSequence({
             name: data.name,
             description: data.description,
             sequence: data.sequence.toUpperCase(),
-            sequenceType: inferSequenceTypeFromSequence(data.sequence),
+            sequenceType: data.sequenceType || inferSequenceTypeFromSequence(data.sequence),
             circular: false,
+            moleculeStrandedness: 'single',
         });
     }, [handlePasteSequence]);
 
@@ -1713,6 +1721,7 @@ export function MolBioToolkitV2() {
         const ownsCompletion = captureEditableOwner();
         if (exactMolecularAuthorityRef.current) return;
         try {
+            if (/\.json$/i.test(file.name)) requireSupportedDigestImport(JSON.parse(await file.text()));
             const { anyToJson } = await import('@teselagen/bio-parsers');
             const result = await anyToJson(file, {
                 fileName: file.name,
@@ -1792,6 +1801,7 @@ export function MolBioToolkitV2() {
         const targetHistory = targetIsActive ? historyState : target.historyState;
         const targetData = targetIsActive ? sequenceData : targetHistory.present;
         if (!targetData.sequence.trim()) return false;
+        if (targetData.digestFragment) { alert(DUPLEX_EDIT_REASON); return false; }
 
         const payload = sequencePayloadFromData(targetData);
         const savedRecord = target.sequenceId
@@ -3892,6 +3902,7 @@ export function MolBioToolkitV2() {
                             />
                         )}
                         {!isExactMolecularAuthority && activePanel === 'edit' && (
+                            sequenceData.digestFragment ? <p role="alert">{DUPLEX_EDIT_REASON}</p> :
                             <EditPanel
                                 sequenceData={sequenceData}
                                 selection={selection}

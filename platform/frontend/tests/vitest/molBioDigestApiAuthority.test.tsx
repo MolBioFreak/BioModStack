@@ -6,7 +6,7 @@ import { DigestPanel } from '../../src/components/MolBioToolkit/panels/DigestPan
 import type { RestrictionAnalysisBatch, RestrictionCatalogReceipt, RestrictionDigestSimulation, RestrictionProductReleaseReceipt, RestrictionRecord } from '../../src/lib/restrictionAnalysis';
 import type { SequenceData } from '../../src/components/MolBioToolkit/types';
 
-const sequence: SequenceData = { name: 'API fixture', sequence: 'TTGAATTCAA', circular: false, sequenceType: 'dna', features: [] };
+const sequence: SequenceData = { name: 'API fixture', sequence: 'TTGAATTCAA', circular: false, sequenceType: 'dna', moleculeStrandedness: 'double', features: [] };
 const catalog = { catalog_id: 'catalog-v1', catalog_sha256: 'a'.repeat(64), source_release: 'REBASE 404', counts: { total: 1, geometry_ready: 1, commercial_geometry_ready: 1, unknown_geometry: 0, nicking: 0, two_event_double_strand: 0 } } as RestrictionCatalogReceipt;
 const products = { release_id: 'bms-restriction-products-permission-pending-v1', release_version: '1.0.0', content_sha256: 'c'.repeat(64), raw_sha256: 'd'.repeat(64), schema_raw_sha256: 'e'.repeat(64), created_at: null, created_at_policy: 'omitted_until_permissioned_evidence_release', source_policy: 'no_runtime_scraping_written_redistribution_permission_required', redistribution_permission_state: 'unavailable', permission_receipt: null, product_evidence_available: false, record_count: 0, active_claim_count: 0, core_catalog_digest_binding: 'independent_no_binding' } as RestrictionProductReleaseReceipt;
 const record = { enzyme_id: 'EcoRI', canonical_name: 'EcoRI', aliases: [], recognition: { site_iupac: 'GAATTC', site_alternatives_iupac: ['GAATTC'], palindromic: true }, cleavage: { status: 'known_double_strand', events: [{ top_offset: 1, bottom_offset: 5, overhang_kind: 'five_prime' }], nick: null }, enzyme_kind: 'double_strand_endonuclease', analysis_capability: 'digest_simulation', supplier_provenance: { reported_commercial: true, historical_supplier_codes: [] } } as unknown as RestrictionRecord;
@@ -24,6 +24,22 @@ const simulation = { fragments: [
 const ack = (operation_id: string) => ({ schema: 'bms.molbio.restriction-digest-saved-ack.v1', operation_id, source_revision_id: 'revision', catalog_id: 'catalog-v1', catalog_sha256: 'a'.repeat(64), request_sha256: 'b'.repeat(64), result_sha256: 'c'.repeat(64), outputs: [] });
 
 describe('DigestPanel backend authority', () => {
+    it.each(['single', 'unknown', 'double'] as const)('requires a declared duplex substrate (%s)', async moleculeStrandedness => {
+        container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+        const simulate = vi.fn();
+        await act(async () => root?.render(<DigestPanel sequenceData={{ ...sequence, moleculeStrandedness }} sequenceId={null}
+            onHighlight={vi.fn()} catalog={catalog} catalogRecords={[record]} analysis={analysis}
+            authorityLoading={false} authorityError={null} digestSimulation={null} digestLoading={false}
+            digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={simulate} />));
+        await act(async () => (container!.querySelector('[data-enzyme-name="EcoRI"] button:last-child') as HTMLButtonElement).click());
+        const run = [...container.querySelectorAll('button')].find(b => b.textContent?.startsWith('Run Digest'))!;
+        expect(run.disabled).toBe(moleculeStrandedness !== 'double');
+        if (moleculeStrandedness !== 'double') expect(container.textContent).toContain('confirmed double-stranded DNA');
+        await act(async () => run.click());
+        expect(simulate).toHaveBeenCalledTimes(moleculeStrandedness === 'double' ? 1 : 0);
+        expect(container.textContent).toContain('Methylation');
+    });
+
     it.each([false, true])('changes label grouping without changing mapped or digest enzymes (mobile=%s)', async mobile => {
         container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
         const mapChange = vi.fn(), digestChange = vi.fn(), simulate = vi.fn(), analyzeAll = vi.fn();

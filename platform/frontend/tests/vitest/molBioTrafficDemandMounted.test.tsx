@@ -1,3 +1,4 @@
+import { primerModelOptions } from '../fixtures/primerModelOptions';
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -18,7 +19,7 @@ const options = { catalog: { catalog_id: 'test-catalog', catalog_sha256: 'a'.rep
 const product = { sequence: 'ACGT', length: 4, circular: false, mode: 'ligation', fragments: [], golden_gate_authority: null, validation_notes: [], warnings: [], junctions: [] };
 const library = Array.from({ length: 101 }, (_, i) => ({ id: `w-${i}`, name: `Workup ${i}`, length: 42, topology: 'linear', fragment_count: 2, primer_count: 4 }));
 const assemblyProps = { sequenceData: seq, selection: null, selectedSequenceId: null, onLoadProduct: vi.fn(), onLoadSavedWorkup: vi.fn() };
-const primerProps = { sequenceData: seq, selection: null, onHighlight: noop, onAddPrimer: vi.fn(), onRemovePrimer: noop, tmOptions: null, tmSettings: settings, onTmSettingsChange: noop };
+const primerProps = { sequenceData: seq, selection: null, onHighlight: noop, onAddPrimer: vi.fn(), onRemovePrimer: noop, tmOptions: primerModelOptions, tmSettings: settings, onTmSettingsChange: noop };
 let root: Root, host: HTMLDivElement, client: QueryClient;
 let requests: InternalAxiosRequestConfig[];
 let held: string | string[] | null;
@@ -144,8 +145,8 @@ it('Primer debounce sends final draft only, aborts superseded Tm/QC and keeps in
     held = ['/primer-tm/calculate', '/primer-qc']; await flush(250);
     const first = count('/primer-tm/calculate')[0], firstQc = count('/primer-qc')[0];
     const assertDraft = (tm: InternalAxiosRequestConfig, qc: InternalAxiosRequestConfig, sequence: string) => {
-        expect(JSON.parse(tm.data)).toEqual({ primers: [{ sequence, sequence_type: 'dna' }], settings });
-        expect(JSON.parse(qc.data)).toEqual({ primers: [{ sequence, sequence_type: 'dna' }], template_sequence: seq.sequence, template_sequence_type: 'dna', template_is_circular: false, include_pairwise: false });
+        expect(JSON.parse(tm.data)).toEqual({ schema_version: 'primer-tm-batch-v1', primers: [{ schema_version: 'primer-tm-input-v1', sequence, sequence_type: 'dna' }], settings: { schema_version: 'primer-tm-settings-v1', ...settings } });
+        expect(JSON.parse(qc.data)).toEqual({ schema_version: 'primer-qc-v1', profile: primerModelOptions.qc_profile, primers: [{ sequence, sequence_type: 'dna' }], template_sequence: seq.sequence, template_sequence_type: 'dna', template_is_circular: false, include_pairwise: false });
     };
     assertDraft(first, firstQc, 'ACGTACGTACGTACGT');
     await input(field, 'ACGTACGTACGTACGTACGT');
@@ -173,17 +174,57 @@ it('explicit primer design and vendor plan abort on changed inputs without autom
     expect(plan.signal?.aborted).toBe(true); await flush(30_000); expect(count('/gibson/dnaweaver/plan')).toHaveLength(1);
     await act(async () => complete.splice(0).forEach(resolve => resolve())); expect(host.textContent).not.toContain('Load product');
 });
-it('PCR keeps one batched debounced Tm request and cancels preview, never a persisted operation', async () => {
-    const pcr = (sequenceId?: string) => <PCRPanel sequenceData={seq} sequenceId={sequenceId} onHighlight={noop} tmOptions={null} tmSettings={settings} onTmSettingsChange={noop} />;
+it('PCR debounces authoritative product/Tm preview and cancels it, never a persisted operation', async () => {
+    const pcr = (sequenceId: string | null = null) => <PCRPanel sequenceData={seq} sequenceId={sequenceId} onHighlight={noop} tmOptions={null} tmSettings={settings} onTmSettingsChange={noop} />;
     await render(pcr()); let fields = host.querySelectorAll<HTMLInputElement>('input[placeholder="ATGC..."]');
-    await input(fields[0], 'ACGTACGTACGTACGT'); await input(fields[1], 'ACGTACGTACGTACGT'); held = '/primer-tm/calculate'; await flush(250);
-    expect(count('/primer-tm/calculate')).toHaveLength(1); const tm = count('/primer-tm/calculate')[0];
-    expect(JSON.parse(tm.data).primers.map((p: { id: string }) => p.id)).toEqual(['forward', 'reverse']);
-    await input(fields[0], 'ACGTACGTACGTACGTACGT'); expect(tm.signal?.aborted).toBe(true);
-    held = '/pcr'; await click('Run PCR'); const preview = count('/pcr')[0]; await render(null); expect(preview.signal?.aborted).toBe(true);
-    await act(async () => complete.splice(0).forEach(resolve => resolve()));
-    await render(pcr('stored')); fields = host.querySelectorAll<HTMLInputElement>('input[placeholder="ATGC..."]');
-    await input(fields[0], 'ACGTACGTACGTACGT'); await input(fields[1], 'ACGTACGTACGTACGT'); await click('Run PCR');
-    const saved = count('/pcr')[1]; expect(JSON.parse(saved.data).persist_experiment).toBe(true); expect(saved.signal).toBeUndefined();
+    await input(fields[0], 'ACGTACGTACGTACGT'); await input(fields[1], 'ACGTACGTACGTACGT'); held = '/pcr'; await flush(250);
+    expect(count('/primer-tm/calculate')).toHaveLength(0);
+    expect(count('/pcr')).toHaveLength(1); const preview = count('/pcr')[0];
+    expect(JSON.parse(preview.data)).toMatchObject({ persist_experiment: false, save: false, min_anneal_length: 8 });
+    await input(fields[0], 'ACGTACGTACGTACGTACGT'); expect(preview.signal?.aborted).toBe(true);
     await render(null); await act(async () => complete.splice(0).forEach(resolve => resolve()));
+    held = null;
+    await render(pcr('stored')); fields = host.querySelectorAll<HTMLInputElement>('input[placeholder="ATGC..."]');
+    await input(fields[0], 'ACGTACGTACGTACGT'); await input(fields[1], 'ACGTACGTACGTACGT'); await flush(250);
+    held = '/pcr'; await click('Save PCR prediction');
+    const saved = count('/pcr').at(-1)!; expect(JSON.parse(saved.data).persist_experiment).toBe(true); expect(saved.signal).toBeUndefined();
+    await render(null); await act(async () => complete.splice(0).forEach(resolve => resolve()));
+});
+
+
+it('draft QC waits for discovery and submits its complete canonical profile on arrival', async () => {
+    await render(<PrimerPanel {...primerProps} tmOptions={null} />);
+    await input(host.querySelector('input[placeholder="Sequence (5\'→3\')"]')!, 'ACGTACGTACGTACGT');
+    await flush(250); expect(count('/primer-qc')).toHaveLength(0);
+    expect(host.textContent).toContain('waiting for model settings');
+    held='/primer-qc'; await render(<PrimerPanel {...primerProps} />); await flush(250);
+    const request=count('/primer-qc')[0]; expect(JSON.parse(request.data).profile).toEqual(primerModelOptions.qc_profile);
+    await render(<PrimerPanel {...primerProps} tmOptions={null} />);
+    expect(request.signal?.aborted).toBe(true); expect(host.textContent).toContain('waiting for model settings');
+    await act(async () => complete.splice(0).forEach(resolve=>resolve()));
+});
+
+it('saved-primer QC waits for discovery and cancels when profile authority disappears', async () => {
+    const data={...seq,primers:[{id:'p',name:'known',sequence:'ACGTACGTACGTACGT',start:0,end:16,strand:1 as const}]};
+    await render(<PrimerPanel {...primerProps} sequenceData={data} tmOptions={null} />); await click('QC');
+    expect(count('/primer-qc')).toHaveLength(0); expect(host.textContent).toContain('waiting for model settings');
+    held='/primer-qc'; await render(<PrimerPanel {...primerProps} sequenceData={data} />);
+    const request=count('/primer-qc')[0]; expect(JSON.parse(request.data).profile).toEqual(primerModelOptions.qc_profile);
+    await render(<PrimerPanel {...primerProps} sequenceData={data} tmOptions={null} />);
+    expect(request.signal?.aborted).toBe(true); expect(host.textContent).not.toContain('Calculating primer QC');
+    await act(async () => complete.splice(0).forEach(resolve=>resolve()));
+});
+
+it('design requires discovery and sends the complete nested profile before execution', async () => {
+    await render(<PrimerPanel {...primerProps} tmOptions={null} />); await click('Design');
+    const button=()=>[...host.querySelectorAll('button')].find(button=>button.textContent?.trim()==='Design Primer Pairs')!;
+    expect(button().disabled).toBe(true); expect(count('/primer-design')).toHaveLength(0);
+    expect(host.textContent).toContain('unavailable until model settings arrive');
+    await render(<PrimerPanel {...primerProps} />); expect(button().disabled).toBe(false);
+    held='/primer-design'; await click('Design Primer Pairs');
+    const request=count('/primer-design')[0]; expect(JSON.parse(request.data).search_profile).toEqual(primerModelOptions.design_profile);
+    expect(JSON.parse(request.data).schema_version).toBe('primer-design-v1');
+    await render(<PrimerPanel {...primerProps} tmOptions={null} />);
+    expect(request.signal?.aborted).toBe(true); expect(button().disabled).toBe(true);
+    await act(async () => complete.splice(0).forEach(resolve=>resolve()));
 });
