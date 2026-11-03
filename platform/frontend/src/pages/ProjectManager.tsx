@@ -126,9 +126,15 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExper
 }) {
     const context = useMemo(() => nativeProjectContext(summary), [summary]);
     const selectedPayload = summary.selection.summary?.domain_payload;
-    const nonNativeDomain = summary.selection.node_type === 'domain_experiment'
+    // Only alignment workflow domains skip the DNA workspace. Older v1 NGS/MolBio
+    // domains are still DNA workspaces; an alignment one is recognised by its
+    // Project setup task, which reopens under /alignments.
+    const alignmentSetupDomain = summary.selection.node_type === 'domain_experiment'
         && selectedPayload !== null && typeof selectedPayload === 'object' && !Array.isArray(selectedPayload)
-        && selectedPayload.schema === 'bms.ngs-molbio-experiment.v1';
+        && selectedPayload.schema === 'bms.ngs-molbio-experiment.v1'
+        && (summary.tasks ?? []).some(task => task.global_experiment_id === context?.globalExperimentId && task.reopen_route.startsWith('/alignments'));
+    const nonNativeDomain = alignmentSetupDomain
+        || ['bms.family-msa.family_msa_protein.adapter.v1', 'bms.family-msa.family_msa_nucleic.adapter.v1'].includes(String(summary.selection.summary?.adapter_id));
     const isNativeProject = summary.project.project_scope === 'ngs_molbio_local' || context !== null;
     const stateQuery = useQuery({
         queryKey: ['project-manager', 'native-domain-state', context?.domainExperimentId ?? null],
@@ -152,7 +158,7 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExper
     });
 
     if (!isNativeProject) return null;
-    if (nonNativeDomain) return <section aria-label="Workflow results" className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-5"><h2 className="font-semibold text-content">Workflow results</h2><p className="mt-2 text-sm text-content-secondary">This workflow does not use a Molecular Tools DNA workspace. Open its retained evidence under Relationships and workflow details below.</p></section>;
+    if (nonNativeDomain) return <section aria-label="Workflow results" className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-5"><h2 className="font-semibold text-content">Workflow results</h2><p className="mt-2 text-sm text-content-secondary">Alignment results are listed below.</p></section>;
     if (!context) {
         const experiments = summary.tree.nodes.filter((node) => node.node_type === 'global_experiment');
         const workspaces = summary.tree.nodes.filter((node) => node.node_type === 'domain_experiment');

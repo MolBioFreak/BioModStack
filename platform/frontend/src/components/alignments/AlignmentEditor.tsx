@@ -79,7 +79,7 @@ function requestIdentityWarning(rows: DatasetRow[]) {
 export default function AlignmentEditor({ model, initialMolecule, onModelChange }: { model: string; initialMolecule?: Molecule; onModelChange?: (model: string, molecule: Molecule) => void }) {
     const setup = useProjectWorkflowSetup();
     const navigate = useNavigate();
-    const [searchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSearchParams();
     const urlContext = searchParams.get('launch_context_id');
     const urlJob = searchParams.get('alignment_job_id');
     const [molecule,setMolecule] = useState<Molecule>(initialMolecule ?? (model === 'family_msa_nucleic' ? 'dna' : 'protein'));
@@ -101,6 +101,14 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
     const [datasetRows,setDatasetRows] = useState<DatasetRow[]>([]);
     const [molecularSources, setMolecularSources] = useState<string[]>(() => searchParams.getAll(MOLECULAR_ALIGNMENT_PARAM));
     const molecularQuery = useMolecularAlignmentSources(molecularSources);
+    // Removals must survive a reload, so drop them from the URL too.
+    const dropMolecularParam = (source?: string) => setSearchParams(previous => {
+        const next = new URLSearchParams(previous);
+        const kept = source === undefined ? [] : next.getAll(MOLECULAR_ALIGNMENT_PARAM).filter(value => value !== source);
+        next.delete(MOLECULAR_ALIGNMENT_PARAM);
+        kept.forEach(value => next.append(MOLECULAR_ALIGNMENT_PARAM, value));
+        return next;
+    }, {replace: true});
     const molecularRows = molecularSources.length ? molecularQuery.data ?? [] : [];
     const molecularMismatch = molecularRows.some(row => row.molecule !== molecule);
     const molecularBlocked = molecularSources.length > 0 && (molecularQuery.isPending || Boolean(molecularQuery.error) || molecularMismatch);
@@ -126,7 +134,8 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
         setMolecule(editor?.molecule ?? (model === 'family_msa_nucleic' ? 'dna' : 'protein')); setEngine(editor?.engine && defaults[editor.engine] ? editor.engine : 'mafft');
         setDrafts(Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(name => [name,{...structuredClone(defaults[name]),...editor?.drafts?.[name]}])) as Record<Engine,Settings>); setFasta(typeof editor?.fasta === 'string' ? editor.fasta : '');
         setDatasetRows(Array.isArray(editor?.datasetRows) ? editor.datasetRows : []);
-        setMolecularSources(Array.isArray(editor?.molecularSources) ? editor.molecularSources : searchParams.getAll(MOLECULAR_ALIGNMENT_PARAM));
+        // Keep sequences sent from the shelf alongside any saved in the draft.
+        setMolecularSources([...new Set([...(Array.isArray(editor?.molecularSources) ? editor.molecularSources : []), ...searchParams.getAll(MOLECULAR_ALIGNMENT_PARAM)])]);
     }, [setup.setup]);
     const settings = drafts[engine];
     const update = (key:string,value:Value) => setDrafts(previous=>({...previous,[engine]:{...previous[engine],[key]:value}}));
@@ -250,8 +259,8 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
             <label data-setting="fasta" className="alignment-setting alignment-setting-wide"><span className="alignment-setting-name">Sequences (FASTA)</span><textarea aria-label="FASTA roster" className={`${inputClass} block w-full font-mono`} rows={8} placeholder={'>sequence_1\nMKV...\n>sequence_2\nMKI...'} value={fasta} onChange={e=>setFasta(e.target.value)}/></label>
             <p className="alignment-hint">Headers and duplicate sequences are kept as separate rows.</p>
             <MolecularAlignmentSourceList sources={molecularSources} query={molecularQuery}
-                onRemove={source => setMolecularSources(previous => previous.filter(value => value !== source))}
-                onClear={() => setMolecularSources([])} />
+                onRemove={source => { setMolecularSources(previous => previous.filter(value => value !== source)); dropMolecularParam(source); }}
+                onClear={() => { setMolecularSources([]); dropMolecularParam(); }} />
             {molecularMismatch && <p role="alert">The selected saved sequences do not match the molecule setting. Choose the matching molecule or remove those sequences.</p>}
             {setup.active && setup.setup && <ProjectDatasetPicker key={`${setup.setup.project_id}:${setup.setup.setup_context_id}`} projectId={setup.setup.project_id} globalId={setup.setup.global_experiment_id} domainId={setup.setup.domain_experiment_id} rows={datasetRows} onChange={setDatasetRows}/>}
             {requestIdentityWarning(datasetRows) && <p role="status">Some source identity evidence is missing or differs from the frozen selection; review the saved request evidence.</p>}

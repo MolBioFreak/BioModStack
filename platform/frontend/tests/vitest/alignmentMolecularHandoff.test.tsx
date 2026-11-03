@@ -105,3 +105,10 @@ it('blocks submission until all sources load, exposes retry, and rejects an iden
         expect(button(host, 'Start run').disabled).toBe(false);
     } finally { await close(); }
 });
+
+it('pins the current revision even when it is not the newest one', async () => {
+    const page = Array.from({length: 50}, (_, i) => ({revision_id: `a-new${i}`, is_current: false}));
+    mocks.summaries.mockImplementation(async (_id: string, _limit: number, offset = 0) => offset === 0 ? page : [{revision_id: 'a-r1', is_current: true}]);
+    const href = await molecularAlignmentHref(records);
+    expect(new URLSearchParams(href.split('?')[1]).getAll('sequence_revision')).toEqual([JSON.stringify(['a', 'a-r1']), JSON.stringify(['b', 'a-r1'])]);
+});

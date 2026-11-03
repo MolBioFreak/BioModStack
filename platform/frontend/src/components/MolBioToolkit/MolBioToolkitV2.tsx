@@ -1713,9 +1713,16 @@ export function MolBioToolkitV2() {
         const requestId = ++projectAttachmentRequestRef.current;
         try {
             const pinned = selectedExactMolecularRevision;
-            const revisions = pinned ? [] : await fetchMolecularRevisionSummaries(sequenceId, 1);
+            // The current revision is not always the newest one (e.g. after a revert).
+            let revision: { revision_id: string; content_sha256: string } | null | undefined = pinned;
+            if (!revision) {
+                for (let offset = 0; offset < 5000 && !revision; offset += 50) {
+                    const page = await fetchMolecularRevisionSummaries(sequenceId, 50, offset);
+                    revision = page.find((item) => item.is_current);
+                    if (page.length < 50) break;
+                }
+            }
             if (requestId !== projectAttachmentRequestRef.current) return;
-            const revision = pinned ?? revisions.find((item) => item.is_current);
             if (!revision) throw new Error('The saved molecular revision is unavailable.');
             setProjectAttachmentSource({
                 adapterId: MOLECULAR_MEMBER_ADAPTER,
