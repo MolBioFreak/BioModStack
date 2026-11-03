@@ -5,6 +5,7 @@ import { getLaunchContext } from '../../lib/projectManager';
 import type { JsonObject } from '../../lib/projectManager';
 import { useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup';
 import ProjectDatasetPicker, { type DatasetRow } from './ProjectDatasetPicker';
+import { MOLECULAR_ALIGNMENT_PARAM, MolecularAlignmentSourceList, useMolecularAlignmentSources } from './MolecularAlignmentSources';
 import requestSchema from './alignment-request.schema.json';
 import { engineLabels, fieldLabel, nullLabel, optionLabel, primaryFieldsFor } from './alignmentFieldPresentation';
 
@@ -98,6 +99,11 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
     }, []);
     const [fasta,setFasta] = useState(''); const [busy,setBusy] = useState(false); const [error,setError] = useState(''); const [job,setJob] = useState(urlJob ?? '');
     const [datasetRows,setDatasetRows] = useState<DatasetRow[]>([]);
+    const [molecularSources, setMolecularSources] = useState<string[]>(() => searchParams.getAll(MOLECULAR_ALIGNMENT_PARAM));
+    const molecularQuery = useMolecularAlignmentSources(molecularSources);
+    const molecularRows = molecularSources.length ? molecularQuery.data ?? [] : [];
+    const molecularMismatch = molecularRows.some(row => row.molecule !== molecule);
+    const molecularBlocked = molecularSources.length > 0 && (molecularQuery.isPending || Boolean(molecularQuery.error) || molecularMismatch);
     const [contextId,setContextId] = useState(urlContext ?? '');
     const [returnUri,setReturnUri] = useState('');
     useEffect(() => {
@@ -116,14 +122,16 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
         const id = `${setup.setup.project_id}:${setup.setup.setup_context_id}`;
         if (hydrated.current === id) return;
         hydrated.current = id;
-        const editor = (setup.setup.draft?.editor_state ?? setup.setup.draft) as {molecule?:Molecule;engine?:Engine;drafts?:Record<Engine,Settings>;fasta?:string;datasetRows?:DatasetRow[]} | undefined;
+        const editor = (setup.setup.draft?.editor_state ?? setup.setup.draft) as {molecule?:Molecule;engine?:Engine;drafts?:Record<Engine,Settings>;fasta?:string;datasetRows?:DatasetRow[];molecularSources?:string[]} | undefined;
         setMolecule(editor?.molecule ?? (model === 'family_msa_nucleic' ? 'dna' : 'protein')); setEngine(editor?.engine && defaults[editor.engine] ? editor.engine : 'mafft');
         setDrafts(Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(name => [name,{...structuredClone(defaults[name]),...editor?.drafts?.[name]}])) as Record<Engine,Settings>); setFasta(typeof editor?.fasta === 'string' ? editor.fasta : '');
         setDatasetRows(Array.isArray(editor?.datasetRows) ? editor.datasetRows : []);
+        setMolecularSources(Array.isArray(editor?.molecularSources) ? editor.molecularSources : searchParams.getAll(MOLECULAR_ALIGNMENT_PARAM));
     }, [setup.setup]);
     const settings = drafts[engine];
     const update = (key:string,value:Value) => setDrafts(previous=>({...previous,[engine]:{...previous[engine],[key]:value}}));
     const request = () => {
+        if (molecularBlocked) throw new Error('Selected saved sequences must load and match the selected molecule before starting.');
         const roster = fastaRoster(fasta,molecule);
         const source_evidence = datasetRows.map(x => {
             const member=x.selection.members[0]; const expected={project_id:x.selection.project_id,dataset_id:x.selection.dataset_id,revision_id:x.selection.revision_id,revision_sha256:x.selection.revision_sha256,ordinal:member.ordinal,member_identity:member.member_identity,member_sha256:member.member_sha256};
@@ -144,10 +152,11 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
             source_offset:x.resolved.start, source_positions:x.resolved.source_positions ?? null,
             transformation_provenance:JSON.stringify({source_identity:x.resolved.source_identity,source_digest:x.resolved.source_digest,chain:x.resolved.chain,start:x.resolved.start,end:x.resolved.end,structure_residue_map:x.resolved.structure_residue_map ?? null,operation:'forward_slice'})
         }))];
-        return {name:'Family alignment',model_id:model,mode:'family_msa',params:{roster:{...roster,rows,source_evidence,source_text:rows.length === roster.rows.length ? roster.source_text : null},settings}};
+        rows.push(...molecularRows.map(item => item.row));
+        return {name:'Family alignment',model_id:model,mode:'family_msa',params:{roster:{...roster,rows,source_evidence:[...source_evidence,...molecularRows.map(item => item.evidence)],source_text:rows.length === roster.rows.length ? roster.source_text : null},settings}};
     };
     const draft = (allowIncomplete = false) => {
-        const editor_state = {molecule,engine,drafts,fasta,datasetRows};
+        const editor_state = {molecule,engine,drafts,fasta,datasetRows,molecularSources};
         try { return {native_job_request:request(),editor_state} as unknown as JsonObject; }
         catch (error) { if (!allowIncomplete) throw error; return {editor_state} as unknown as JsonObject; }
     };
@@ -240,6 +249,10 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
             </div>
             <label data-setting="fasta" className="alignment-setting alignment-setting-wide"><span className="alignment-setting-name">Sequences (FASTA)</span><textarea aria-label="FASTA roster" className={`${inputClass} block w-full font-mono`} rows={8} placeholder={'>sequence_1\nMKV...\n>sequence_2\nMKI...'} value={fasta} onChange={e=>setFasta(e.target.value)}/></label>
             <p className="alignment-hint">Headers and duplicate sequences are kept as separate rows.</p>
+            <MolecularAlignmentSourceList sources={molecularSources} query={molecularQuery}
+                onRemove={source => setMolecularSources(previous => previous.filter(value => value !== source))}
+                onClear={() => setMolecularSources([])} />
+            {molecularMismatch && <p role="alert">The selected saved sequences do not match the molecule setting. Choose the matching molecule or remove those sequences.</p>}
             {setup.active && setup.setup && <ProjectDatasetPicker key={`${setup.setup.project_id}:${setup.setup.setup_context_id}`} projectId={setup.setup.project_id} globalId={setup.setup.global_experiment_id} domainId={setup.setup.domain_experiment_id} rows={datasetRows} onChange={setDatasetRows}/>}
             {requestIdentityWarning(datasetRows) && <p role="status">Some source identity evidence is missing or differs from the frozen selection; review the saved request evidence.</p>}
             {datasetRows.some(x=>x.resolved.status === 'resolved' && x.resolved.molecule && x.resolved.molecule !== molecule) && <p role="status">Some resolved sources have a different molecule type from the selected roster. Review the source and molecule before running.</p>}
@@ -258,7 +271,7 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
                 {engine === 'muscle' && <p className="alignment-hint">Explicit permutation none/perturbation zero is passed unchanged; MUSCLE rejects these together with stratified/diversified ensembles. The pinned align-to-Super5 threshold has a native assertion failure; direct Super5 works. Guide output writes a tree then exits zero BEFORE producing an alignment; random-chain bypasses that writer. No second run is substituted.</p>}
             </details>
             <div className="alignment-actions">
-                <button type="button" onClick={()=>void run('launch')} className={`${inputClass} alignment-action`}>Start run</button>
+                <button type="button" disabled={molecularBlocked} onClick={()=>void run('launch')} className={`${inputClass} alignment-action`}>Start run</button>
                 {setup.active && <button type="button" onClick={()=>void run('save')} className={inputClass}>Save Project draft</button>}
             </div>
         </fieldset>

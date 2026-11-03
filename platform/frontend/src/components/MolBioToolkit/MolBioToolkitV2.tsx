@@ -5,7 +5,8 @@
  */
 
 import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { molecularAlignmentHref } from '../alignments/MolecularAlignmentSources';
 const GoldenGateRetainedWorkspace = lazy(() => import('./panels/golden-gate/GoldenGateWorkflowWorkspace'));
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ngsResultHref } from '../../lib/ngsResultRouting';
@@ -184,6 +185,9 @@ interface SequenceLibraryProps {
     showAllConstructs: boolean;
     onToggleAllConstructs: () => void;
     onDeleted?: (sequenceId: string) => void;
+    onAlign?: (sequences: NucleotideSequenceListItem[]) => void;
+    alignmentBusy?: boolean;
+    alignmentError?: string;
 }
 
 export function SequenceLibrary({
@@ -202,8 +206,19 @@ export function SequenceLibrary({
     showAllConstructs,
     onToggleAllConstructs,
     onDeleted,
+    onAlign,
+    alignmentBusy = false,
+    alignmentError,
 }: SequenceLibraryProps) {
     const [showDemos, setShowDemos] = useState(false);
+    const [alignmentSelection, setAlignmentSelection] = useState<string[]>([]);
+    const alignmentKey = (sequence: NucleotideSequenceListItem) => JSON.stringify([sequence.id, sequence.revision_id ?? null]);
+    const alignmentSequences = sequences.filter(sequence => alignmentSelection.includes(alignmentKey(sequence)));
+    const mixedMolecules = new Set(alignmentSequences.map(sequence => sequence.sequence_type)).size > 1;
+    useEffect(() => {
+        const available = new Set(sequences.map(alignmentKey));
+        setAlignmentSelection(previous => previous.filter(key => available.has(key)));
+    }, [sequences]);
 
     return (
         <div
@@ -233,6 +248,14 @@ export function SequenceLibrary({
                 </button>
             </div>
             {projectScoped && <button type="button" onClick={onToggleAllConstructs} className="border-b border-slate-700 px-3 py-2 text-left text-xs font-semibold text-cyan-300 hover:bg-slate-800">{showAllConstructs ? 'Show Project DNA sequences' : 'All DNA sequences'}</button>}
+            {onAlign && <div className="border-b border-[var(--border-primary)] p-3 text-xs text-[var(--text-secondary)]">
+                <button type="button" disabled={alignmentBusy || alignmentSequences.length < 2 || mixedMolecules}
+                    className="w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 font-semibold text-[var(--text-primary)] disabled:opacity-50"
+                    onClick={() => onAlign(alignmentSequences)}>{alignmentBusy ? 'Preparing alignment…' : `Align selected (${alignmentSequences.length})`}</button>
+                <p className="mt-1">Select two or more saved sequences.</p>
+                {mixedMolecules && <p role="alert">Select DNA together, or RNA together.</p>}
+                {alignmentError && <p role="alert">{alignmentError}</p>}
+            </div>}
 
             <div
                 data-molbio-scroll-region="construct-shelf"
@@ -280,10 +303,16 @@ export function SequenceLibrary({
                 ) : (
                     sequences.map((seq) => (
                         <div key={seq.id} className="border-b border-[var(--border-primary)]">
+                        <div className="flex items-start">
+                        {onAlign && <label className={`flex shrink-0 items-center justify-center ${mobile ? 'min-h-12 min-w-12' : 'px-2 py-4'}`}>
+                            <input type="checkbox" aria-label={`Select ${seq.name} for alignment`} disabled={alignmentBusy}
+                                checked={alignmentSelection.includes(alignmentKey(seq))}
+                                onChange={event => { const key = alignmentKey(seq); setAlignmentSelection(previous => event.target.checked ? [...previous.filter(value => value !== key), key] : previous.filter(value => value !== key)); }} />
+                        </label>}
                         <button
                             onClick={() => onSelect(seq)}
                             data-molbio-mobile-touch-target={mobile ? 'true' : undefined}
-                            className={`w-full border-b border-slate-800 p-3 text-left transition-colors hover:bg-slate-800 ${mobile ? 'min-h-12' : ''} ${selectedId === seq.id ? 'bg-slate-700' : ''}`}
+                            className={`min-w-0 flex-1 border-b border-slate-800 p-3 text-left transition-colors hover:bg-slate-800 ${mobile ? 'min-h-12' : ''} ${selectedId === seq.id ? 'bg-slate-700' : ''}`}
                         >
                             <div className="font-medium text-slate-200 truncate">{seq.name}</div>
                             <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
@@ -301,6 +330,7 @@ export function SequenceLibrary({
                                 {seq.feature_count} features{seq.updated_at ? ` • ${new Date(seq.updated_at).toLocaleDateString()}` : ''}
                             </div>
                         </button>
+                        </div>
                         {seq.entity_kind !== 'molecular_revision' && <div className="px-3 pb-2"><DeleteSequenceAction mobile={mobile} sequenceId={seq.id} name={seq.name} onDeleted={() => { onDeleted?.(seq.id); onRefresh(); }} /></div>}
                         </div>
                     ))
@@ -746,7 +776,15 @@ function assertExactMolecularRevisionIdentity(
 
 export function MolBioToolkitV2() {
     const location = useLocation();
+    const navigate = useNavigate();
     const { workspaceId, globalExperimentId, domainExperimentId, stateRevisionId, updateQueryParams, contextHref } = useGlobalExperimentContext();
+    const [alignmentBusy, setAlignmentBusy] = useState(false);
+    const [alignmentError, setAlignmentError] = useState('');
+    const alignmentTransferGeneration = useRef(0);
+    useEffect(() => {
+        setAlignmentBusy(false); setAlignmentError('');
+        return () => { alignmentTransferGeneration.current++; };
+    }, [workspaceId, globalExperimentId, domainExperimentId]);
     const [projectAttachmentSource, setProjectAttachmentSource] = useState<ProjectAttachmentSource | null>(null);
     const [projectAttachmentError, setProjectAttachmentError] = useState<string | null>(null);
     const projectAttachmentRequestRef = useRef(0);
@@ -1846,6 +1884,20 @@ export function MolBioToolkitV2() {
             discard: options?.discard,
         });
     }, [activeWorkspaceId, isDirty]);
+
+    const handleAlignSequences = (selected: NucleotideSequenceListItem[]) => {
+        requestWorkspaceTransition('open Alignments', () => {
+            const generation = ++alignmentTransferGeneration.current;
+            setAlignmentBusy(true); setAlignmentError('');
+            void molecularAlignmentHref(selected).then(href => {
+                if (generation === alignmentTransferGeneration.current) navigate(href);
+            }).catch(error => {
+                if (generation === alignmentTransferGeneration.current) setAlignmentError(error instanceof Error ? error.message : 'Could not prepare the selected sequences.');
+            }).finally(() => {
+                if (generation === alignmentTransferGeneration.current) setAlignmentBusy(false);
+            });
+        });
+    };
 
     const completeWorkspaceTransition = useCallback(async (choice: DirtyWorkspaceChoice) => {
         if (!pendingWorkspaceTransition) return;
@@ -3284,6 +3336,9 @@ export function MolBioToolkitV2() {
                             demos={demoPlasmids}
                             demoLoading={demoLoading}
                             onDemoIntent={requestDemos}
+                            onAlign={handleAlignSequences}
+                            alignmentBusy={alignmentBusy}
+                            alignmentError={alignmentError}
                             selectedId={selectedSequenceId}
                             onSelect={(sequence) => handleMobileSelectSequence(sequence.id)}
                             onRefresh={loadLibrary}
@@ -3399,6 +3454,9 @@ export function MolBioToolkitV2() {
                             demos={demoPlasmids}
                             demoLoading={demoLoading}
                             onDemoIntent={requestDemos}
+                            onAlign={handleAlignSequences}
+                            alignmentBusy={alignmentBusy}
+                            alignmentError={alignmentError}
                             selectedId={selectedSequenceId}
                             onSelect={(sequence) => {
                                 if (sequence.revision_id) {
