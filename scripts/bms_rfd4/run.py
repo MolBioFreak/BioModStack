@@ -135,7 +135,15 @@ def _run(request,bindings,output,*,bundle=None,runtime_identity=None,prepared_in
         else:
             inputs=Path(prepared_inputs).resolve()
             identity_path = inputs.parent / 'input_identity.json'
-            identity = json.loads(identity_path.read_text()) if identity_path.is_file() or 'evaluation_tasks' in request else []
+            if 'evaluation_tasks' in request:
+                identity = json.loads(identity_path.read_text())  # Existing required task mapping.
+            else:
+                identity = []
+                try:
+                    if identity_path.is_file():
+                        identity = json.loads(identity_path.read_text())
+                except (OSError, ValueError) as exc:
+                    receipt['input_identity_error'] = str(exc)  # Observation, not an execution gate.
             receipt['input_identity'] = identity
         if config_dir is None:
             import rootutils

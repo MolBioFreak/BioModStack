@@ -80,9 +80,11 @@ def prepare_inputs(request, bindings, destination, *, sentinel=None):
             validate_design_id(example['name'])
             input_id = example['name']
             if counts[input_id] > 1:
-                input_id = f'{example["name"]}_input_{ordinal:04d}'
+                input_index = ordinal
+                input_id = f'input_{input_index:04d}'
                 while input_id in used:
-                    input_id += '_'
+                    input_index += 1
+                    input_id = f'input_{input_index:04d}'
                 used.add(input_id)
             spec=condition_example_spec(inp, example, paths)
             a=build_annotated_atom_array_from_condition_spec(spec,spec_dir=originals,example_id=example['name'],validate=False)['atom_array']

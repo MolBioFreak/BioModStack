@@ -23,7 +23,10 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def failing_task(tmp_path, *, population, selected=False, success=False):
-    jar = Path(os.environ['BMS_TEST_NEXTFLOW_JAR'])
+    jar_setting = os.environ.get('BMS_TEST_NEXTFLOW_JAR')
+    if not jar_setting:
+        pytest.skip('Requires an explicit existing offline Nextflow one-JAR')
+    jar = Path(jar_setting)
     run = tmp_path / 'task'
     run.mkdir()
     closure = run / 'closure'
@@ -218,7 +221,7 @@ def test_duplicate_condition_examples_preserve_every_input(tmp_path, monkeypatch
         monkeypatch.setitem(sys.modules, name, module)
     from bms_rfd4.inputs import prepare_inputs
     bindings = {}
-    names = ['same', 'same', 'same_input_0000', 'unique']
+    names = ['same', 'same', 'input_0000', 'unique', 'x' * 251, 'x' * 251]
     for index in range(len(names)):
         path = tmp_path / f'source{index}.cif'
         path.write_text(f'original input {index}')
@@ -232,7 +235,7 @@ def test_duplicate_condition_examples_preserve_every_input(tmp_path, monkeypatch
     assert [row['example_id'] for row in mapping] == names
     assert len({row['input_id'] for row in mapping}) == len(names)
     assert [row['example_index'] for row in mapping] == list(range(len(names)))
-    assert [row['input_id'] for row in mapping][2:] == names[2:]
+    assert [row['input_id'] for row in mapping][2:4] == names[2:4]
     for index, row in enumerate(mapping):
         assert Path(row['native']).stem == row['input_id']
         assert json.loads(Path(row['native']).read_text()) == {
@@ -241,7 +244,8 @@ def test_duplicate_condition_examples_preserve_every_input(tmp_path, monkeypatch
     assert json.loads((native.parent / 'input_identity.json').read_text()) == mapping
 
 
-def test_prepared_input_identity_survives_failed_runner(tmp_path, monkeypatch):
+@pytest.mark.parametrize('malformed', [False, True])
+def test_prepared_input_identity_survives_failed_runner(tmp_path, monkeypatch, malformed):
     from bms_rfd4 import run as runner
     monkeypatch.setitem(sys.modules, 'rfproteina', types.ModuleType('rfproteina'))
     omega = types.ModuleType('omegaconf')
@@ -255,13 +259,14 @@ def test_prepared_input_identity_survives_failed_runner(tmp_path, monkeypatch):
     inputs.mkdir(parents=True)
     identity = [{'example_id': 'same', 'input_id': f'same_input_{i:04d}', 'example_index': i}
                 for i in range(2)]
-    (inputs.parent / 'input_identity.json').write_text(json.dumps(identity))
+    (inputs.parent / 'input_identity.json').write_text('not json' if malformed else json.dumps(identity))
     request = {'input': {'kind': 'unconditional', 'name': 'fixture',
                         'chains': [{'chain_id': 'A', 'min_length': 1, 'max_length': 1}]}}
     with pytest.raises(RuntimeError, match='inert config failure'):
         runner._run(request, {}, tmp_path / 'output', prepared_inputs=inputs, config_dir=tmp_path)
     manifest = json.loads((tmp_path / 'output/manifest.json').read_text())
-    assert manifest['receipt']['input_identity'] == identity
+    assert manifest['receipt']['input_identity'] == ([] if malformed else identity)
+    assert bool(manifest['receipt'].get('input_identity_error')) == malformed
     assert manifest['execution_status'] == 'failed'
     assert manifest['records'] == []
 
