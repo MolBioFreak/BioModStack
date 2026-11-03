@@ -19,6 +19,8 @@ export default defineConfig({
             './tests/vitest/alignmentLibrary.test.tsx',
             './tests/vitest/alignmentInventoryMounted.test.tsx',
             './tests/vitest/alignmentEditorProject.test.tsx',
+            './tests/vitest/alignmentEditor.test.tsx',
+            './tests/vitest/alignmentMolecularHandoff.test.tsx',
             './tests/vitest/alignmentWorkspace.test.tsx',
             './tests/vitest/alignmentShared.test.tsx',
             './tests/vitest/alignmentCompareShared.test.tsx',

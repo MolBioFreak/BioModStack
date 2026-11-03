@@ -5,6 +5,7 @@ import { getLaunchContext } from '../../lib/projectManager';
 import type { JsonObject } from '../../lib/projectManager';
 import { useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup';
 import ProjectDatasetPicker, { type DatasetRow } from './ProjectDatasetPicker';
+import { MOLECULAR_ALIGNMENT_PARAM, MolecularAlignmentSourceList, useMolecularAlignmentSources } from './MolecularAlignmentSources';
 import requestSchema from './alignment-request.schema.json';
 
 type Engine = 'mafft' | 'famsa' | 'muscle' | 'twilight';
@@ -74,13 +75,13 @@ function requestIdentityWarning(rows: DatasetRow[]) {
         return Object.entries({project_id:s.project_id,dataset_id:s.dataset_id,revision_id:s.revision_id,revision_sha256:s.revision_sha256,ordinal:m.ordinal,member_identity:m.member_identity,member_sha256:m.member_sha256}).some(([k,v])=>r[k as keyof typeof r] !== v) || Boolean((m.receipt?.entity_id && r.source_identity && m.receipt.entity_id !== r.source_identity) || (m.receipt?.content_digest && r.source_digest && m.receipt.content_digest !== r.source_digest));
     });
 }
-export default function AlignmentEditor({ model }: { model: string }) {
+export default function AlignmentEditor({ model, initialMolecule }: { model: string; initialMolecule?: Molecule }) {
     const setup = useProjectWorkflowSetup();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const urlContext = searchParams.get('launch_context_id');
     const urlJob = searchParams.get('alignment_job_id');
-    const [molecule,setMolecule] = useState<Molecule>(model === 'family_msa_nucleic' ? 'dna' : 'protein');
+    const [molecule,setMolecule] = useState<Molecule>(initialMolecule ?? (model === 'family_msa_nucleic' ? 'dna' : 'protein'));
     const [engine,setEngine] = useState<Engine>('mafft');
     const [drafts,setDrafts] = useState<Record<Engine,Settings>>(() => structuredClone(defaults));
     const [schemaWarning,setSchemaWarning] = useState('');
@@ -97,6 +98,11 @@ export default function AlignmentEditor({ model }: { model: string }) {
     }, []);
     const [fasta,setFasta] = useState(''); const [busy,setBusy] = useState(false); const [error,setError] = useState(''); const [job,setJob] = useState(urlJob ?? '');
     const [datasetRows,setDatasetRows] = useState<DatasetRow[]>([]);
+    const [molecularSources, setMolecularSources] = useState<string[]>(() => searchParams.getAll(MOLECULAR_ALIGNMENT_PARAM));
+    const molecularQuery = useMolecularAlignmentSources(molecularSources);
+    const molecularRows = molecularSources.length ? molecularQuery.data ?? [] : [];
+    const molecularMismatch = molecularRows.some(row => row.molecule !== molecule);
+    const molecularBlocked = molecularSources.length > 0 && (molecularQuery.isPending || Boolean(molecularQuery.error) || molecularMismatch);
     const [contextId,setContextId] = useState(urlContext ?? '');
     const [returnUri,setReturnUri] = useState('');
     useEffect(() => {
@@ -115,14 +121,16 @@ export default function AlignmentEditor({ model }: { model: string }) {
         const id = `${setup.setup.project_id}:${setup.setup.setup_context_id}`;
         if (hydrated.current === id) return;
         hydrated.current = id;
-        const editor = (setup.setup.draft?.editor_state ?? setup.setup.draft) as {molecule?:Molecule;engine?:Engine;drafts?:Record<Engine,Settings>;fasta?:string;datasetRows?:DatasetRow[]} | undefined;
+        const editor = (setup.setup.draft?.editor_state ?? setup.setup.draft) as {molecule?:Molecule;engine?:Engine;drafts?:Record<Engine,Settings>;fasta?:string;datasetRows?:DatasetRow[];molecularSources?:string[]} | undefined;
         setMolecule(editor?.molecule ?? (model === 'family_msa_nucleic' ? 'dna' : 'protein')); setEngine(editor?.engine && defaults[editor.engine] ? editor.engine : 'mafft');
         setDrafts(Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(name => [name,{...structuredClone(defaults[name]),...editor?.drafts?.[name]}])) as Record<Engine,Settings>); setFasta(typeof editor?.fasta === 'string' ? editor.fasta : '');
         setDatasetRows(Array.isArray(editor?.datasetRows) ? editor.datasetRows : []);
+        setMolecularSources(Array.isArray(editor?.molecularSources) ? editor.molecularSources : searchParams.getAll(MOLECULAR_ALIGNMENT_PARAM));
     }, [setup.setup]);
     const settings = drafts[engine];
     const update = (key:string,value:Value) => setDrafts(previous=>({...previous,[engine]:{...previous[engine],[key]:value}}));
     const request = () => {
+        if (molecularBlocked) throw new Error('Selected saved sequences must load and match the selected molecule before starting.');
         const roster = fastaRoster(fasta,molecule);
         const source_evidence = datasetRows.map(x => {
             const member=x.selection.members[0]; const expected={project_id:x.selection.project_id,dataset_id:x.selection.dataset_id,revision_id:x.selection.revision_id,revision_sha256:x.selection.revision_sha256,ordinal:member.ordinal,member_identity:member.member_identity,member_sha256:member.member_sha256};
@@ -143,10 +151,11 @@ export default function AlignmentEditor({ model }: { model: string }) {
             source_offset:x.resolved.start, source_positions:x.resolved.source_positions ?? null,
             transformation_provenance:JSON.stringify({source_identity:x.resolved.source_identity,source_digest:x.resolved.source_digest,chain:x.resolved.chain,start:x.resolved.start,end:x.resolved.end,structure_residue_map:x.resolved.structure_residue_map ?? null,operation:'forward_slice'})
         }))];
-        return {name:'Family alignment',model_id:model,mode:'family_msa',params:{roster:{...roster,rows,source_evidence,source_text:rows.length === roster.rows.length ? roster.source_text : null},settings}};
+        rows.push(...molecularRows.map(item => item.row));
+        return {name:'Family alignment',model_id:model,mode:'family_msa',params:{roster:{...roster,rows,source_evidence:[...source_evidence,...molecularRows.map(item => item.evidence)],source_text:rows.length === roster.rows.length ? roster.source_text : null},settings}};
     };
     const draft = (allowIncomplete = false) => {
-        const editor_state = {molecule,engine,drafts,fasta,datasetRows};
+        const editor_state = {molecule,engine,drafts,fasta,datasetRows,molecularSources};
         try { return {native_job_request:request(),editor_state} as unknown as JsonObject; }
         catch (error) { if (!allowIncomplete) throw error; return {editor_state} as unknown as JsonObject; }
     };
@@ -214,6 +223,10 @@ export default function AlignmentEditor({ model }: { model: string }) {
             <label className="block">Engine <select aria-label="Engine" className={inputClass} value={engine} onChange={e=>setEngine(e.target.value as Engine)}>{(['mafft','famsa','muscle','twilight'] as Engine[]).map(x=><option key={x} value={x} disabled={(molecule === 'protein' && x === 'twilight') || (molecule !== 'protein' && x === 'famsa')}>{x}{(molecule === 'protein' && x === 'twilight') || (molecule !== 'protein' && x === 'famsa') ? ' — unavailable for molecule' : ''}</option>)}</select></label>
             <label className="block">FASTA roster <textarea aria-label="FASTA roster" className={`${inputClass} block w-full font-mono`} rows={8} value={fasta} onChange={e=>setFasta(e.target.value)}/></label>
             <p className="text-sm">FASTA headers and duplicate sequences are retained. Resolved Dataset occurrences are appended as separate rows; unavailable sources are shown but not added to the roster.</p>
+            <MolecularAlignmentSourceList sources={molecularSources} query={molecularQuery}
+                onRemove={source => setMolecularSources(previous => previous.filter(value => value !== source))}
+                onClear={() => setMolecularSources([])} />
+            {molecularMismatch && <p role="alert">The selected saved sequences do not match the molecule setting. Choose the matching molecule or remove those sequences.</p>}
             {setup.active && setup.setup && <ProjectDatasetPicker key={`${setup.setup.project_id}:${setup.setup.setup_context_id}`} projectId={setup.setup.project_id} globalId={setup.setup.global_experiment_id} domainId={setup.setup.domain_experiment_id} rows={datasetRows} onChange={setDatasetRows}/>}
             {requestIdentityWarning(datasetRows) && <p role="status">Some source identity evidence is missing or differs from the frozen selection; review the saved request evidence.</p>}
             {datasetRows.some(x=>x.resolved.status === 'resolved' && x.resolved.molecule && x.resolved.molecule !== molecule) && <p role="status">Some resolved sources have a different molecule type from the selected roster. Review the source and molecule before running.</p>}
@@ -223,7 +236,7 @@ export default function AlignmentEditor({ model }: { model: string }) {
             {engine === 'mafft' && <p className="text-sm">MAFFT expert settings can be ignored by some strategies or molecule types. If multiple substitution models are supplied, the native wrapper uses the last one: BLOSUM, JTT, transmembrane, Kimura, then a supplied amino-acid matrix. Requested settings are not proof of the model actually used. Pair method overrides the selected strategy pair flag; tree method and refinement policy retain exact native spellings. Sparse pickup can omit rows; omitted-row artifacts are retained rather than silently restoring sequences. Native interactions are reported in the engine log, not repaired by the editor.</p>}
             {engine === 'muscle' && <p className="text-sm">Native default (null) omits permutation and perturbation flags. Explicit none/zero is passed unchanged; MUSCLE rejects these flags together with stratified/diversified. The pinned align-to-Super5 minsuper switch has a native assertion failure; direct Super5 remains available. Guide output is a native diagnostic that writes a tree then exits zero BEFORE producing an alignment (also with ensembles); random-chain bypasses that writer. No second run is substituted. HMM output is available in Super5 and precedes command-line HMM overrides. Native log output is separate from the always-retained stdout/stderr log.</p>}
             {setup.active && <button type="button" onClick={()=>void run('save')} className={inputClass}>Save Project draft</button>}{' '}
-            <button type="button" onClick={()=>void run('launch')} className={inputClass}>Start run</button>
+            <button type="button" disabled={molecularBlocked} onClick={()=>void run('launch')} className={inputClass}>Start run</button>
         </fieldset>
         {error && <p role="alert">{error}</p>}{contextId && !job && <div><p>Launch context: {contextId}</p><button type="button" disabled={busy} onClick={()=>void recover()} className={inputClass}>Recover Project Job</button></div>}{job && <div role="status"><p>Job submitted: <Link to={`/alignments/jobs/${encodeURIComponent(job)}`}>{job}</Link></p>
             {contextId && <><p>Launch context: {contextId}</p><button type="button" disabled={busy} onClick={()=>void retryBinding()} className={inputClass}>Retry Project binding</button>{returnUri && <> <Link to={returnUri}>Return to Project</Link></>}</>}

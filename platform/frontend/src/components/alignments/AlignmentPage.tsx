@@ -3,6 +3,7 @@ import './alignmentPage.css';
 import AlignmentWorkspace from './AlignmentWorkspace';
 import { alignmentViewers } from './lazyViewers';
 import AlignmentEditor from './AlignmentEditor';
+import { MOLECULAR_ALIGNMENT_PARAM } from './MolecularAlignmentSources';
 import AlignmentLibrary from './AlignmentLibrary';
 import AlignmentComparison from './AlignmentComparison';
 import AlignmentOperationResult from './AlignmentOperationResult';
@@ -118,7 +119,7 @@ export default function AlignmentPage() {
         {Boolean(observations.data?.length) && <section aria-label="Source format observations"><h2>Source format observations</h2><ul>{observations.data?.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
         {base && alignments.length > 1 && <label>Alignment member <select value={selected} onChange={e => setSelection({base, id: e.target.value})}><option value="">Choose a member</option>{alignments.map((x, index) => <option key={x.id} value={x.id}>{x.logical_path || `Alignment ${index + 1}`}</option>)}</select></label>}
         {projectId && receiptId && member && alignments.length > 1 && <EnsembleSupport key={`${projectId}:${receiptId}:${member}`} projectId={projectId} receiptId={receiptId} reference={member} artifacts={alignments}/>}
-        {!base && !resultId && section === 'New' && <>{!queryModel && <label>Alignment family <select aria-label="Alignment family" value={model} onChange={e => setSelectedModel(e.target.value)}><option value="family_msa_protein">Protein</option><option value="family_msa_nucleic">Nucleic acid</option></select></label>}<AlignmentEditor key={model} model={model}/></>}
+        {!base && !resultId && section === 'New' && <>{!queryModel && <label>Alignment family <select aria-label="Alignment family" value={model} onChange={e => setSelectedModel(e.target.value)}><option value="family_msa_protein">Protein</option><option value="family_msa_nucleic">Nucleic acid</option></select></label>}<AlignmentEditor key={`${model}:${JSON.stringify(query.getAll(MOLECULAR_ALIGNMENT_PARAM))}`} model={model} initialMolecule={queryModel === 'family_msa_nucleic' ? (query.get('molecule') === 'rna' ? 'rna' : 'dna') : undefined}/></>}
         {!base && !resultId && section === 'Library' && <AlignmentLibrary initialProject={projectId}/>}
         {!base && !resultId && section === 'Compare' && <AlignmentComparison key={projectId || ''} initialProject={projectId} savedState={query.get('shared_state_id')} operationJob={query.get('operation_job_id')}/> }
         {base && <AlignmentWorkspace importedStateIds={(manifest.data?.import_provenance?.shared_states ?? []).flatMap(item => item.dataset_id ? [item.dataset_id] : [])} viewers={alignmentViewers} projectLabel={setup.setup?.project_label || projectId || undefined} projectId={projectId || undefined} receiptId={projectId ? receiptId || undefined : undefined} document={document} downloads={base ? artifacts.map(x => ({label: x.role === 'source' ? `Original file (${x.logical_path || 'source'})` : `${x.role}${x.logical_path ? ` (${x.logical_path})` : ''}`, href: `${base}/artifacts/${encodeURIComponent(x.id)}`})) : []} /> }
