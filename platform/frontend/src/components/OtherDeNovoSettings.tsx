@@ -15,7 +15,19 @@ export function retainedRfd3Settings(value: Record<string, unknown> = {}) {
 // flat redesign conditions. Keep this finite projection separate from execution.
 export function retainedRfd3Draft(value: Record<string, unknown> = {}) {
     const keys = ['conditioning', 'input_structure', 'source_mapping', 'source_model', 'generation_mode', 'generation_task', 'redesign'];
-    return { ...retainedRfd3Settings(value), ...Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])) };
+    const retained = { ...retainedRfd3Settings(value), ...Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])) };
+    // Historical region drafts enter this same editor, never the retired page.
+    // Explicit current nested values win over their legacy flat equivalents.
+    const task = value.redesign_mode;
+    if (task === 'partial_diffusion' || task === 'minimal_insertion' || task === 'native_recall') {
+        if (!Object.hasOwn(retained, 'generation_task')) retained.generation_task = task;
+        if (!Object.hasOwn(retained, 'source_model') && Object.hasOwn(value, 'model_number')) retained.source_model = value.model_number;
+        const regionKeys = ['design_chains', 'context_chains', 'redesign_ranges', 'insertion_anchor', 'insertion_min_length', 'insertion_max_length'];
+        if (task !== 'native_recall' && !Object.hasOwn(retained, 'redesign')) retained.redesign = Object.fromEntries(regionKeys.filter(key => Object.hasOwn(value, key)).map(key => [key, ['design_chains', 'context_chains'].includes(key) && typeof value[key] === 'string' ? value[key].split(/[,\s]+/).filter(Boolean) : value[key]]));
+        const conditionKeys = ['partial_t', 'select_unfixed_sequence', 'ligand', 'select_buried', 'select_exposed', 'select_partially_buried', 'ori_token', 'unindex', 'select_hotspots', 'select_hbond_donor', 'select_hbond_acceptor', 'symmetry', 'infer_ori_strategy', 'plddt_enhanced', 'is_non_loopy', 'redesign_motif_sidechains', 'extra', 'dialect', 'length', ...(task === 'native_recall' ? ['contig', 'select_fixed_atoms'] : [])];
+        retained.conditioning = { ...Object.fromEntries(conditionKeys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])), ...(retained.conditioning as Record<string, unknown> ?? {}) };
+    }
+    return retained;
 }
 export function useRfd3GenerationBounds(enabled: boolean) {
     return useQuery({ queryKey: ['other-denovo-settings', 'rfd3', 'unconditional_monomer'], enabled,

@@ -56,9 +56,12 @@ export function NativeBinderComparison({ jobIds, selectedDesignIds, selectedNati
         const explicit = selectedNativeSources?.find(source => source.job_id === set.job.id && documents.some(document => document.artifact_id === source.artifact_id));
         const document = (explicit && documents.find(document => document.artifact_id === explicit.artifact_id)) ?? documents.find(item => item.primary) ?? documents[0];
         const query = new URLSearchParams();
+        query.set('native_candidate', row.candidate_key ?? row.design_id ?? `record:${set.records.indexOf(row)}`);
         if (row.design_id) query.set('design_id', row.design_id);
         if (document) {
             query.set('artifact_id', document.artifact_id);
+            const model = explicit?.document?.model ?? document.model;
+            if (model != null) query.set('model_number', String(model));
             if (document.target_state != null) query.set('target_state', document.target_state);
         }
         if (set.job.model_id === 'bindcraft2' && row.candidate_key) {

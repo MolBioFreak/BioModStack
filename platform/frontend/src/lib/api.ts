@@ -2290,9 +2290,25 @@ export const resumeJob = (
 };
 
 /** Advisory FrustraMPNN on selected resequence-loop candidates (hydrogens dropped from a copy server-side). */
-export const analyzeLoopCandidates = (jobId: string, names: string[]) =>
-    api.post<{ loop_job_id: string; analyses: Array<{ job_id: string; candidate: string }> }>(
-        `/api/frustrampnn/jobs/${encodeURIComponent(jobId)}/analyze-loop-candidates`, { names });
+export const analyzeLoopCandidates = async (jobId: string, names: string[], options: {
+    execution_target_id?: string | null; launch_context_id?: string | null;
+    frustrampnn_settings?: import('../components/frustrampnn/frustraMpnnSettingsState').FrustraMpnnRequestedSettings;
+} = {}) => {
+    const { submitPreparedSelectedMutation } = await import('./binderContinuation');
+    type Receipt = { loop_job_id: string; analyses: Array<{ job_id: string; candidate: string }> };
+    const result = await submitPreparedSelectedMutation(async () => ({
+        ...(await api.post<Receipt>(`/api/frustrampnn/jobs/${encodeURIComponent(jobId)}/analyze-loop-candidates`, { names, ...options })).data,
+        launched_jobs: [] as Job[],
+    }));
+    if (result.analyses) return { data: result };
+    // Reviewed Jobs retain the same per-candidate selection roster as Local.
+    const analyses = result.launched_jobs.flatMap(job => {
+        const owner = job.params?._frustrampnn_child_v1 as { selection?: Array<{ producer_coordinates?: { candidate_filename?: string } }> } | undefined;
+        return (owner?.selection ?? []).flatMap(selection => selection.producer_coordinates?.candidate_filename
+            ? [{ job_id: job.id, candidate: selection.producer_coordinates.candidate_filename }] : []);
+    });
+    return { data: { loop_job_id: jobId, analyses } };
+};
 
 export const continueProteinLocalReview = (
     jobId: string,

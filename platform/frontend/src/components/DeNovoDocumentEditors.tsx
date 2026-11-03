@@ -40,7 +40,7 @@ const studioImportOptions = { parse_preset: 'minimal', assembly: 'asym', model: 
 export function DeNovoDocumentEditors({ registry, sources, molecularDocuments, onAdopt, children }: {
     registry: DocumentCaptureRegistry; sources: NativeGenerationSourceBindings | undefined;
     molecularDocuments?: Record<string, CapturedAnnotatedDocument>;
-    onAdopt: (slot: string, document: CapturedAnnotatedDocument) => void;
+    onAdopt: (slot: string, document: CapturedAnnotatedDocument, assertCurrent: () => void) => void | Promise<unknown>;
     children: ReactNode;
 }) {
     const [editors, setEditors] = useState<Editor[]>([]);
@@ -117,13 +117,13 @@ export function DeNovoDocumentEditors({ registry, sources, molecularDocuments, o
             <p className="mt-2">Choose a structure or task in the settings beside this canvas, then open it here to edit.</p>
         </div>}
         {editors.map(editor => <DocumentEditor key={editor.id} editor={editor} source={sources?.[editor.slot]} selected={active[editor.slot] === editor.id}
-            registry={registry} onAdopt={document => { setActive(previous => ({ ...previous, [editor.slot]: editor.id })); onAdopt(editor.slot, document); }} onClose={() => close(editor.id)} />)}
+            registry={registry} onAdopt={async (document, assertCurrent) => { await onAdopt(editor.slot, document, assertCurrent); setActive(previous => ({ ...previous, [editor.slot]: editor.id })); }} onClose={() => close(editor.id)} />)}
     </div> }}>{children}</EditorsContext.Provider>;
 }
 
 function DocumentEditor({ editor, source, selected, registry, onAdopt, onClose }: {
     editor: Editor; source: NativeGenerationSourceBindings[string] | undefined; selected: boolean; registry: DocumentCaptureRegistry;
-    onAdopt: (document: CapturedAnnotatedDocument) => void; onClose: () => void;
+    onAdopt: (document: CapturedAnnotatedDocument, assertCurrent: () => void) => void | Promise<unknown>; onClose: () => void;
 }) {
     const host = useRef<StudioCapture>(null);
     const accepted = useRef(editor.acceptedBindings);
@@ -182,7 +182,15 @@ function DocumentEditor({ editor, source, selected, registry, onAdopt, onClose }
     }, [attached, editor.slot, registry]);
     const useEdited = async () => {
         setBusy(true); setError('');
-        try { onAdopt(await capture.current()); }
+        const handle = host.current;
+        const token = lifetime.current;
+        const generation = handle?.generation();
+        const sourceGeneration = binding.current.generation;
+        const assertCurrent = () => {
+            if (lifetime.current !== token || host.current !== handle || handle?.generation() !== generation || binding.current.generation !== sourceGeneration)
+                throw new Error('The molecular document changed during adoption. Capture the current edits again.');
+        };
+        try { const document = await capture.current(); assertCurrent(); await onAdopt(document, assertCurrent); }
         catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
         finally { setBusy(false); }
     };

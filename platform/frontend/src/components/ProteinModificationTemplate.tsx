@@ -96,7 +96,7 @@ const initialNumber = (values: Record<string, unknown> | undefined, key: string,
 const editedNumber = (value: string): number | '' => value === '' ? '' : Number(value);
 
 const resolveNavigation = (values?: Record<string, unknown>): DeNovoNavigationState => {
-    const rawMode = values?.modification_mode;
+    const rawMode = values?.backbone_input_pdbs && values?.seq_method ? 'resequence' : values?.modification_mode;
     const modification_mode = rawMode === 'rfd3_local_redesign'
         ? 'rfd3_iteration'
         : rawMode === 'rfd3_iteration' || rawMode === 'region_redesign' || rawMode === 'resequence' || rawMode === 'shape_blueprint' ? rawMode : 'de_novo_design';
@@ -287,8 +287,8 @@ export function ProteinModificationTemplate({
                     initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} />
                     : ['rfd3', 'disco', 'laproteina'].includes(generator) ? <GenerationEditor key={activeKey} initialValues={childValues.current.values} generator={generator}
                     designTask={task} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} /> : <p role="alert">No native editor registered for {generator}. Retained settings have not been translated to another engine.</p>}
-            </> : mode === 'resequence' ? <ResequencePanel />
-            : mode === 'rfd3_iteration' ? <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} /> : <GenerationEditor key={activeKey} initialValues={childValues.current.values.input_structure ? { generation_task: 'partial_diffusion', ...childValues.current.values } : childValues.current.values} generator="rfd3"
+            </> : mode === 'resequence' ? <ResequencePanel key={activeKey} initialValues={childValues.current.values} onDraftChange={reportDraft} />
+            : mode === 'rfd3_iteration' ? <><div className="grid grid-cols-2 gap-3">{nativeModeControl}<label className={labelClass}>Engine<select className={fieldClass} value={generator === 'rfd4_proteina' ? generator : 'rfd3'} onChange={event => changeNavigation({ modification_mode: savedMode, generator: event.target.value })}><option value="rfd3">RFD3</option><option value="rfd4_proteina">RFD4-Proteina</option></select></label></div>{generator === 'rfd4_proteina' ? <DeNovoNativeGenerationSettings key={activeKey} model="rfd4_proteina" mode={navigation.native_mode ?? 'generate'} initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} /> : <GenerationEditor key={activeKey} initialValues={childValues.current.values.input_structure && !childValues.current.values.redesign_mode ? { generation_task: 'partial_diffusion', ...childValues.current.values } : childValues.current.values} generator="rfd3"
                 designTask="unconditional" runDetails={runDetails} onDraftChange={reportDraft} suiteView={suiteView} onSuiteViewChange={setSuiteView} />}</>
                 : <ShapeBlueprintTemplate launchContextId={launchContextId} key={activeKey} embedded initialValues={childValues.current.values} runDetails={runDetails} onDraftChange={reportDraft} />}
             {onOpenTemplateManager && <button type="button" className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-sm"
@@ -438,9 +438,9 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             const bound = rfd3Bounds?.[index === 0 ? 'min_length' : 'max_length'];
             return (bound?.minimum != null && Number(value) < bound.minimum) || (bound?.maximum != null && Number(value) > bound.maximum);
         });
-    const hasNativeJobs = Object.hasOwn(nativeControls, 'pcad_disco_jobs_json');
-    const effectiveLaMotif = { motif_task_name: motifTaskName, motif_pdb: motifPdb, contig_string: motifContig, ...nativeOverrides };
-    const hasEffectiveLaMotif = Boolean(effectiveLaMotif.motif_task_name || (effectiveLaMotif.motif_pdb && effectiveLaMotif.contig_string));
+    const hasNativeJobs = Object.hasOwn(nativeControls, 'pcad_disco_jobs_json') || Boolean(discoInputJson.trim());
+    const effectiveLaMotif = { motif_task_name: motifTaskName, motif_pdb: motifPdb, contig_string: motifContig, motif_atom_spec: motifAtomSpec, ...nativeOverrides };
+    const hasEffectiveLaMotif = Boolean(effectiveLaMotif.motif_task_name || (effectiveLaMotif.motif_pdb && (effectiveLaMotif.contig_string || effectiveLaMotif.motif_atom_spec != null)));
     const authorLaMotif = (key: string, value: unknown) => setNativeControls(current => ({ ...current, pcad_laproteina_settings_json: { ...(current.pcad_laproteina_settings_json && typeof current.pcad_laproteina_settings_json === 'object' && !Array.isArray(current.pcad_laproteina_settings_json) ? current.pcad_laproteina_settings_json as Record<string, unknown> : {}), [key]: value } }));
     const retainedAlternativeParams = Object.fromEntries(Object.entries(initialValues).filter(([key]) =>
         (key.startsWith(`${backend}_`) || key.startsWith(`pcad_${backend}_`)) && !['laproteina_settings', 'disco_settings', 'pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json', 'pcad_disco_jobs_source_path'].includes(key) && key !== 'laproteina_motif_inspection'));
@@ -568,7 +568,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             setError('Job name is required.');
             return;
         }
-        if (Number(numDesigns) < 1 || !targetLengths.trim()) {
+        if (Number(numDesigns) < 1 || (!(backend === 'disco' && hasNativeJobs) && !targetLengths.trim())) {
             setError('Provide at least one design and one target length.');
             return;
         }
@@ -577,7 +577,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             return;
         }
         if (backend === 'laproteina' && designTask === 'motif_scaffolding' && !hasEffectiveLaMotif) {
-            setError('La-Proteina motif scaffolding requires an upstream motif task or a motif PDB with a contig string.');
+            setError('La-Proteina motif scaffolding requires an upstream motif task or a motif PDB with a contig string or atom specification.');
             return;
         }
         if (backend === 'disco' && !hasNativeJobs && designTask === 'custom_json' && !discoInputJson.trim()) {
@@ -640,7 +640,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
 
     const workflowRequest = generator === 'rfd3'
         ? (jobName.trim() && !rfd3LengthsInvalid && Number.isInteger(numDesigns) && Number(numDesigns) >= 1 && Number.isInteger(seed) && Number(seed) >= 0 ? buildDeNovoWorkflowRequest() : null)
-        : (jobName.trim() && Number(numDesigns) >= 1 && targetLengths.trim() && DE_NOVO_TASK_OPTIONS[backend].some(option => option.value === designTask) && (backend !== 'laproteina' || designTask !== 'motif_scaffolding' || hasEffectiveLaMotif) && (backend !== 'disco' || hasNativeJobs || (designTask !== 'custom_json' || discoInputJson.trim()) && (designTask !== 'ligand_conditioned' || ligandSdf.trim()) && (!['dna_conditioned', 'rna_conditioned'].includes(designTask) || nucleicSequence.trim())) ? buildAlternativeWorkflowRequest() : null);
+        : (jobName.trim() && Number(numDesigns) >= 1 && (backend === 'disco' && hasNativeJobs || targetLengths.trim()) && DE_NOVO_TASK_OPTIONS[backend].some(option => option.value === designTask) && (backend !== 'laproteina' || designTask !== 'motif_scaffolding' || hasEffectiveLaMotif) && (backend !== 'disco' || hasNativeJobs || (designTask !== 'custom_json' || discoInputJson.trim()) && (designTask !== 'ligand_conditioned' || ligandSdf.trim()) && (!['dna_conditioned', 'rna_conditioned'].includes(designTask) || nucleicSequence.trim())) ? buildAlternativeWorkflowRequest() : null);
     const workflowRequestJson = JSON.stringify(workflowRequest);
     useEffect(() => {
         const values = JSON.parse(draftJson) as Record<string, unknown>;
@@ -657,7 +657,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     const captureLifetime = useRef(0);
     useEffect(() => () => { captureLifetime.current++; }, []);
     const prepareCurrent = useRef<() => Promise<Partial<Job>>>(async () => ({}));
-    const receiveCaptured = async (captured: Record<string, CapturedAnnotatedDocument>) => {
+    const receiveCaptured = async (captured: Record<string, CapturedAnnotatedDocument>, assertCurrent?: () => void) => {
         const snapshot = currentCaptureDraft.current;
         const lifetime = captureLifetime.current;
         const documentGeneration = documentCaptures.getSnapshot();
@@ -669,6 +669,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
             const contig = Object.hasOwn(overrides, 'contig_string') ? overrides.contig_string : exact.laproteina_contig_string;
             motifPath = await materializeLaProteinaStudioCapture(captured.motif, String(contig ?? ''));
         }
+        assertCurrent?.();
         if (lifetime !== captureLifetime.current || snapshot.generation !== currentCaptureDraft.current.generation || documentGeneration !== documentCaptures.getSnapshot()) {
             throw new Error('The source or native settings changed during capture. Your editor is retained; capture the current draft again.');
         }
@@ -783,7 +784,7 @@ function GenerationEditor({ initialValues, generator, designTask, onDraftChange,
     </div>;
     return (
         <DocumentCaptureContext.Provider value={documentCaptures}><DeNovoDocumentEditors registry={documentCaptures} sources={studioSources} molecularDocuments={molecularDocuments}
-            onAdopt={(slot, document) => { void receiveCurrent.current({ [slot]: document }).catch(cause => setError(cause instanceof Error ? cause.message : String(cause))); }}>
+            onAdopt={(slot, document, assertCurrent) => receiveCurrent.current({ [slot]: document }, assertCurrent)}>
         <div className="w-full space-y-5 text-[var(--text-primary)]" data-bms-protein-generation-workflow={generator}>
             <DeNovoEditorLayout><div className="min-w-0 space-y-5">
             <ProteinDesignSections label="Generation sections" sections={[inputSection, 'Sampling', 'Sequence Design']} active={section} onChange={next => { setSection(next); const view = next === 'Sampling' ? 'advanced' : 'simple'; manualSection.current = suiteView !== view; onSuiteViewChange(view); }} />

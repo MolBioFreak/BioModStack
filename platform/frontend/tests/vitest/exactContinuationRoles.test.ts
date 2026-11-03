@@ -4,15 +4,16 @@ import { sourceResultReturn } from '../../src/lib/sourceResultReturn';
 import { materializeExactStructure, type StructureMaterialization } from '../../src/lib/api';
 vi.mock('../../src/lib/api', () => ({ materializeExactStructure: vi.fn() }));
 const materialized = (roles?: Record<string, unknown>) => ({ path: 'exact.cif', format: 'cif', sha256: 'hash', native_path: 'exact.cif', native_format: 'cif', native_sha256: 'hash', source_path: 'exact.cif', model_numbers: [2], model_number: 2, author_residues: [], source_identity: { artifact_id: 'alternate', target_state: 'state2', ...(roles ? { producer_document: roles } : {}) } }) as StructureMaterialization;
-it('receives only the selected complex roles and leaves identity untouched through PDB conversion', async () => {
+it('receives only the selected complex roles and leaves native CIF identity untouched', async () => {
     const native = materialized({ binder_chains: 'B', target_chains: 'A' });
     const source = { job_id: 'producer', document: { artifact_id: 'alternate', target_state: 'state2' }, model_number: 2 };
     native.source_structure = source;
-    vi.mocked(materializeExactStructure).mockResolvedValueOnce(native).mockResolvedValueOnce({ ...native, path: 'derived.pdb', format: 'pdb', source_identity: {} });
+    vi.mocked(materializeExactStructure).mockReset().mockResolvedValueOnce(native);
     const result = await prepareDeNovoContinuation(source, 'redesign');
     expect(result).toMatchObject({ design_chains: 'B', context_chains: ['A'], source_structure: source, model_number: 2 });
     expect(result._source_native_prepared).toBe(native);
-    expect(materializeExactStructure).toHaveBeenLastCalledWith({ path: 'exact.cif', expected_sha256: 'hash', output_format: 'pdb', model_number: 2 });
+    expect(materializeExactStructure).toHaveBeenCalledExactlyOnceWith({ ...source, output_format: 'native' });
+    expect(result._source_prepared).toBe(native);
     expect(source.document).toEqual({ artifact_id: 'alternate', target_state: 'state2' });
 });
 it('receives an unselected multi-MODEL CIF without attempting a PDB derivative or inventing a MODEL', async () => {
@@ -36,12 +37,12 @@ it.each(['sequence', 'prediction'] as const)('does not prepare a redesign deriva
     expect(materializeExactStructure).toHaveBeenCalledExactlyOnceWith({ path: 'exact.cif', output_format: 'native' });
     expect(result._source_prepared).toBe(native);
 });
-it('preserves the existing single-model CIF derivative and direct PDB receiving paths', async () => {
+it('preserves single-model native CIF and direct PDB receiving paths', async () => {
     const native = { ...materialized(), model_number: null, model_numbers: [1] };
     const pdb = { ...native, path: 'derived.pdb', format: 'pdb' as const };
-    vi.mocked(materializeExactStructure).mockReset().mockResolvedValueOnce(native).mockResolvedValueOnce(pdb);
-    expect(await prepareDeNovoContinuation({ path: 'exact.cif' }, 'redesign')).toMatchObject({ input_structure: 'derived.pdb', _source_prepared: pdb });
-    expect(materializeExactStructure).toHaveBeenLastCalledWith({ path: 'exact.cif', expected_sha256: 'hash', output_format: 'pdb' });
+    vi.mocked(materializeExactStructure).mockReset().mockResolvedValueOnce(native);
+    expect(await prepareDeNovoContinuation({ path: 'exact.cif' }, 'redesign')).toMatchObject({ input_structure: 'exact.cif', _source_prepared: native });
+    expect(materializeExactStructure).toHaveBeenCalledExactlyOnceWith({ path: 'exact.cif', output_format: 'native' });
     vi.mocked(materializeExactStructure).mockReset().mockResolvedValueOnce(pdb);
     await prepareDeNovoContinuation({ path: 'derived.pdb' }, 'redesign');
     expect(materializeExactStructure).toHaveBeenCalledTimes(1);

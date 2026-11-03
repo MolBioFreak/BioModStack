@@ -17,7 +17,7 @@ export function deNovoSavedValues(
 ): Record<string, unknown> {
     // Preserve the validated-pipeline identity; it is not interchangeable with
     // the native iteration route even though both share a visual workspace.
-    const modificationMode = values.modification_mode ?? (
+    const modificationMode = mode === 'region_redesign' && values.backbone_input_pdbs && values.seq_method ? 'resequence' : values.modification_mode ?? (
         mode === 'shape_blueprint' ? 'shape_blueprint'
             : mode === 'region_redesign' ? 'region_redesign'
                 : model === 'protein_local_redesign' || values.template_model_id === 'protein_local_redesign'
@@ -25,6 +25,7 @@ export function deNovoSavedValues(
     );
     return {
         ...values,
+        ...(modificationMode === 'resequence' && values.backbone_input_pdbs ? { resequence_job_params: values.resequence_job_params ?? values } : {}),
         ...(model === 'rfd4_proteina' || model === 'complexa' || model === 'laproteina' ? { generator: model, native_mode: mode ?? 'generate' } : {}),
         modification_mode: modificationMode,
         ...(model !== 'rfd4_proteina' && model !== 'complexa' && model !== 'laproteina' && values.generator === undefined && typeof values.backend === 'string' ? { generator: values.backend } : {}),

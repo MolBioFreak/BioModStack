@@ -10,6 +10,7 @@ import { hashKey, useMutation, useQuery, useQueryClient, useInfiniteQuery } from
 import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
 
 import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, exportNativeResults, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, analyzeLoopCandidates, fetchChainPairIptm } from '../lib/api';
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { isNgsJob, ngsResultHref } from '../lib/ngsResultRouting';
 import { jobCategory, isCategoryVisible } from '../lib/jobCategories';
 import { useJobCategoryVisibility } from '../lib/useJobCategoryVisibility';
@@ -5341,6 +5342,7 @@ function ResultsViewerContent() {
         },
     });
 
+    const [frustraLoopTarget, setFrustraLoopTarget] = useState<string | null>(null);
     const frustraLoopMutation = useMutation({
         mutationFn: async () => {
             if (!selectedJobId) throw new Error('Select a resequence job first.');
@@ -5348,7 +5350,7 @@ function ResultsViewerContent() {
             const names = designs.filter(design => chosen.has(design.id) && design.pdb_path)
                 .map(design => String(design.pdb_path).split('/').pop() as string);
             if (!names.length) throw new Error('Select at least one design to analyze.');
-            return analyzeLoopCandidates(selectedJobId, names);
+            return analyzeLoopCandidates(selectedJobId, names, { execution_target_id: frustraLoopTarget, launch_context_id: destinationLaunchContextId, frustrampnn_settings: frustrampnnSettings });
         },
         onSuccess: (response) => {
             setIterationMessage({ kind: 'success', text: `FrustraMPNN analysis queued for ${response.data.analyses.length} design(s).` });
@@ -6160,6 +6162,7 @@ function ResultsViewerContent() {
                                             </button>
                                         )}
                                         {!isAntibodyContext && activeJob?.awaiting_stage === 'post_structure_validation' && (
+                                            <><ExecutionTargetPicker value={frustraLoopTarget ?? ''} onChange={setFrustraLoopTarget} disabled={frustraLoopMutation.isPending} />
                                             <button
                                                 type="button"
                                                 onClick={() => frustraLoopMutation.mutate()}
@@ -6168,7 +6171,7 @@ function ResultsViewerContent() {
                                                 title="Optional: run FrustraMPNN on the highlighted designs for guidance. Does not change this workflow."
                                             >
                                                 Analyze with FrustraMPNN
-                                            </button>
+                                            </button></>
                                         )}
                                         {!workflowOnlyRefinement && isAntibodyContext && (
                                             <>

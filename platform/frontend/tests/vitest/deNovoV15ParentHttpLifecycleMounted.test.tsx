@@ -114,7 +114,8 @@ for (const destination of ['rfd4_partial','rfd4_inverse','rfd4_evaluate','rfd4_s
         if (destination === 'rfd4_inverse') expect(request.params.rfd4_request.groups).toEqual({generation:'inverse_folding'});
         if (destination === 'rfd4_state') {
             expect(request.params.rfd4_request.resume_slot).toBe('resume');
-            expect(request.params.rfd4_request.settings.seed).toBe(0);
+            expect(request.params.rfd4_request.settings.search.resume_seed).toBe(0);
+            expect(request.params.rfd4_request.settings).not.toHaveProperty('seed');
             expect(request.params.native_sources.resume).toEqual({kind:'file',path:fixture.state.path,expected_sha256:fixture.state.sha256});
         }
         expect(request.params).not.toHaveProperty('native_recipe');

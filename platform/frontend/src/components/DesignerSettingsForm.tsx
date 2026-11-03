@@ -96,7 +96,8 @@ function Scalar({ param, value, onChange, prefix = 'Designer setting', showDefau
 }
 
 /** Settings for a loop designer, built from that designer's own served parameter inventory. */
-export function DesignerSettingsForm({ engine, mode, onChange }: { engine: string; mode: string; onChange: (values: Values, valid: boolean) => void }) {
+export type DesignerSettingsDraft = { values: Values; valid: boolean; structuredText?: string };
+export function DesignerSettingsForm({ engine, mode, initialValues, onChange }: { engine: string; mode: string; initialValues?: DesignerSettingsDraft; onChange: (values: Values, valid: boolean, structuredText?: string) => void }) {
     const modelId = MODEL_ID[engine];
     const modeId = modeFor(engine, mode);
     const isValidator = LOOP_FALLBACK.has(engine);
@@ -105,8 +106,8 @@ export function DesignerSettingsForm({ engine, mode, onChange }: { engine: strin
         queryFn: async ({ signal }) => (await fetchModelById(modelId, signal)).data as UntypedApiValue,
         staleTime: Infinity,
     });
-    const [values, setValues] = useState<Values>({});
-    const [structuredText, setStructuredText] = useState('');
+    const [values, setValues] = useState<Values>(initialValues?.values ?? {});
+    const [structuredText, setStructuredText] = useState(initialValues?.structuredText ?? '');
     const fields: UntypedApiValue[] = useMemo(() => {
         const doc = model.data;
         if (!doc) return [];
@@ -129,8 +130,9 @@ export function DesignerSettingsForm({ engine, mode, onChange }: { engine: strin
         } catch { return null; }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [structuredText, structured.length]);
-    const merged = useMemo(() => ({ ...values, ...(parsed ?? {}) }), [values, parsed]);
-    useEffect(() => { onChange(merged, parsed !== null); }, [merged, parsed]); // eslint-disable-line react-hooks/exhaustive-deps
+    const structuredKey = JSON.stringify([...structuredNames]);
+    const merged = useMemo(() => ({ ...Object.fromEntries(Object.entries(values).filter(([name]) => !structuredNames.has(name))), ...(parsed ?? {}) }), [values, parsed, structuredKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => { onChange(merged, parsed !== null, structuredText); }, [merged, parsed, structuredText]); // eslint-disable-line react-hooks/exhaustive-deps
     const set = (name: string, value: unknown) => setValues(previous => {
         const next = { ...previous };
         if (value === undefined) delete next[name]; else next[name] = value;
