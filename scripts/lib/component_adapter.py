@@ -216,7 +216,7 @@ def native_resource_config(plan: dict, resources: dict, lock_path: str, source_r
                    if key in dependency_map and dependency_map[key]['kind'] == 'weights']
         selection = (sorted({row['relative_path'] for row in weights})
                      if 'dependencies' in plan['metadata'] and all(row.get('relative_path') for row in weights) else None)
-        placement = ("printf '%s\\n' " + shlex.quote(json.dumps(selection)) + " > .bms-task-weights.json\n"
+        placement = ("printf '%s\\n' " + shlex.quote(json.dumps(selection)) + " > .bms-task-weights\n"
                      if 'dependencies' in plan['metadata'] else '')
         cpu = component['resources_json'].get('cpus', {})
         lines += [f'  withName: {groovy(name)} {{']

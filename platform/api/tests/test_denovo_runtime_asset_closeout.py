@@ -173,7 +173,7 @@ def test_real_resource_setup_scopes_broad_weight_bind_and_reports_fallback(tmp_p
                                     str(tmp_path / 'lock'), ROOT)
     setup = ast.literal_eval(re.search(r'return (.+?) \+ \(nativeSetup', config)[1])
     subprocess.run(['bash', '-euc', setup], cwd=tmp_path, check=True)
-    assert json.loads((tmp_path / '.bms-task-weights.json').read_text()) == ['selected']
+    assert json.loads((tmp_path / '.bms-task-weights').read_text()) == ['selected']
     inputs = tmp_path / 'inputs'
     inputs.mkdir()
     allocation = {}
@@ -231,7 +231,7 @@ workflow { EvaluateLaProteina() }
 import json, os, pathlib, sys
 if '--version' in sys.argv:
  print('apptainer version 1.4.2'); raise SystemExit(0)
-selection = pathlib.Path('.bms-task-weights.json').read_text()
+selection = pathlib.Path('.bms-task-weights').read_text()
 pathlib.Path(OUTPUT_PATH).write_text(selection)
 index = sys.argv.index('/bin/bash')
 os.execv('/bin/bash', sys.argv[index:])

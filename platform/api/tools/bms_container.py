@@ -568,7 +568,7 @@ def run_owned(command, environment, pass_fds, identity):
 def task_weight_paths(directory):
     """Optional compiler placement hint; old/opaque callers retain bind scope."""
     try:
-        value = json.loads((directory / '.bms-task-weights.json').read_text())
+        value = json.loads((directory / '.bms-task-weights').read_text())
         if isinstance(value, list) and all(isinstance(p, str) and p and
                 not PurePosixPath(p).is_absolute() and '..' not in PurePosixPath(p).parts for p in value):
             return value
