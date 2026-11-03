@@ -56,6 +56,8 @@ const checks = () => requests.filter(r => r.method === 'post' && r.url.endsWith(
 const reads = () => requests.filter(r => r.method === 'get' && /\/runs\/protocol-live-/.test(r.url) && !r.url.endsWith('/report'));
 beforeEach(() => {
     vi.stubGlobal('crypto', webcrypto); localStorage.clear(); oldAdapter = api.defaults.adapter;
+    // jsdom has no scrolling implementation; keep the real browser editor focus path.
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     generation = 9; visible = true; failure = 'none'; phase = 'executing'; terminal = false; readFailure = false; saveReadFailure = false; deferSave = null; requests = []; records = {};
     db = { m1: { id: 'm1', revision: 1, name: sourceMethod.name, method: structuredClone(sourceMethod) } };
     const adapter: AxiosAdapter = async config => {
@@ -94,7 +96,7 @@ beforeEach(() => {
     host = document.createElement('div'); document.body.append(host);
 });
 afterAll(() => { if (process.env.BIOXP_METHOD_UI_EXPORT) writeFileSync(process.env.BIOXP_METHOD_UI_EXPORT, JSON.stringify({ transport_fixture_only: true, requests: exportedRequests }, null, 2)); });
-afterEach(async () => { exportedRequests.push(...requests); await act(async () => root?.unmount()); client.clear(); host.remove(); api.defaults.adapter = oldAdapter; vi.unstubAllGlobals(); });
+afterEach(async () => { exportedRequests.push(...requests); await act(async () => root?.unmount()); client.clear(); host.remove(); api.defaults.adapter = oldAdapter; vi.unstubAllGlobals(); Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView'); });
 
 it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('mounts committed discovery and all scientific skeletons through real Axios', async () => {
     const contracts = JSON.parse(readFileSync(process.env.BIOXP_METHOD_MODEL_CONTRACT!, 'utf8'));
@@ -132,8 +134,8 @@ it.runIf(!!process.env.BIOXP_METHOD_MODEL_CONTRACT)('loads actual bound companio
     for (const [index, example] of contracts.examples.entries()) {
         expect(example.bound_fixture).toBeTruthy();
         await input('Bound software fixture', String(index)); await checked();
-        expect(requests.at(-1)?.body).toMatchObject({ method: example.bound_fixture.method, bindings: example.bound_fixture.bindings, dependencies: example.bound_fixture.dependencies });
-        expect(host.textContent).toContain(example.bound_fixture.fixture_provenance);
+        expect(requests.at(-1)?.body).toMatchObject({ method: example.bound_fixture.method, bindings: example.bound_fixture.bindings, dependencies: example.bound_fixture.dependencies ?? {} });
+        expect(host.textContent).toContain(example.bound_fixture.fixture_provenance ?? 'Software fixture only; not scientific or physical qualification.');
     }
     expect(submits()).toHaveLength(0);
 }, 30000);

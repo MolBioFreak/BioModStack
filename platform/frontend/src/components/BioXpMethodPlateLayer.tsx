@@ -60,7 +60,7 @@ export function BioXpMethodPlateLayer({ plan, stations, selectedPlate, selectedP
             const holderW = Math.max(...strips.map(s => s.bounds.x + s.bounds.width)) + 18 - holderX;
             const boxX = strip >= 0 ? holderX : r.x - 10, boxW = strip >= 0 ? holderW : Math.max(r.width + 20, 150);
             const prepare = () => onPrepare(plate.id, station);
-            return <g key={plate.id} role="button" tabIndex={0} aria-label={`Prepare ${plate.name || 'unnamed labware'}`} aria-pressed={selectedPlate === plate.id} data-labware={plate.id} className="bioxp-method-plate"
+            return <g key={plate.id} role="button" tabIndex={0} aria-label={`Prepare ${plate.name || 'unnamed labware'}`} aria-pressed={selectedPlate === plate.id} data-labware={plate.id} data-display-station={station} className="bioxp-method-plate"
                 onPointerDown={e => { if (e.button !== 0) return; e.stopPropagation(); suppressClick.current = false; drag.current = { id: plate.id, x: e.clientX, y: e.clientY, moved: false, svg: e.currentTarget.ownerSVGElement }; e.currentTarget.setPointerCapture?.(e.pointerId); }}
                 onPointerCancel={e => { e.stopPropagation(); drag.current = null; suppressClick.current = true; }}
                 onClick={e => { e.stopPropagation(); if (suppressClick.current) { suppressClick.current = false; return; } prepare(); }}

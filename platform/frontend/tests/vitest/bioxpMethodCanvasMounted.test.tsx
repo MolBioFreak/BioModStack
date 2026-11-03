@@ -99,6 +99,7 @@ it('keeps all planned barcodes and samples above connection strokes without chan
         expect(connection.compareDocumentPosition(resource) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
     expect(host.querySelectorAll('g.bioxp-method-plate')).toHaveLength(5);
+    await click('Next stage');
     await click('Edit connection Add barcode');
     expect(host.querySelector('[aria-label="On-deck editor"]')?.hasAttribute('hidden')).toBe(false);
     expect(current).toEqual(initial);
@@ -107,7 +108,7 @@ it('keeps all planned barcodes and samples above connection strokes without chan
 it('on-edge edits retain parameter references and independent duplicate bindings through cold serialized reopen', async () => {
     const reference = { expr: { version: 1, op: 'param', id: 'addition', extension: null } };
     await mount({ parameters: [{ id: 'addition', type: 'object' }], deck_plan: plan, steps: [{ step_id: 'add', type: 'action', action: 'transfer', inputs: reference }] }, undefined, { addition: transfer });
-    await click('Edit connection add'); await input('Volume per channel (µL)', '003.7500'); await click('Duplicate step'); await input('Volume per channel (µL)', '004.1250');
+    await click('Next stage'); await click('Edit connection add'); await input('Volume per channel (µL)', '003.7500'); await click('Duplicate step'); await input('Volume per channel (µL)', '004.1250');
     expect(values.addition).toEqual({ ...transfer, volume_ul: '003.7500' });
     const copy = (current.steps as MethodValue[])[1]; expect((copy.inputs as any).expr.id).not.toBe('addition'); expect(values[(copy.inputs as any).expr.id]).toEqual({ ...transfer, volume_ul: '004.1250' });
     expect((current.steps as MethodValue[])[0].inputs).toEqual(reference);
@@ -160,7 +161,7 @@ it.runIf(!!discovery && !!process.env.BMS_TEST_PYTHON)('uses actual compiled occ
     const nativeTransfer = structuredClone(transfer); delete (nativeTransfer.destination as Partial<typeof transfer.destination>).retained;
     const original = { schema: 'bms.bioxp-method.v1', name: 'Software-only receiving', deck_plan: plan, steps: [{ step_id: 'carry', type: 'action', action: 'plate_move', inputs: { labware_id: 'plate', plate_id: 'PL_POOL', target_location: 'LOC_TC' } }, { step_id: 'add', type: 'action', action: 'transfer', inputs: nativeTransfer }] };
     const before = compile(original); expect(before.document, JSON.stringify(before.issues)).toBeTruthy();
-    await mount(original, before); await click('Edit connection add');
+    await mount(original, before); await click('Next stage'); await click('Next stage'); await click('Edit connection add');
     const occurrence = before.provenance!.find(p => p.step_id === 'carry')!;
     await input('Endpoint placement context', String(occurrence.occurrence_id));
     expect((current.steps as any[])[1].inputs.destination.location_id).toBe(0);
@@ -211,11 +212,15 @@ it('projects distinct outgoing and return carry links without asserting conditio
     const links = methodCarryLinks(method, {}, plan, actualCatalog);
     expect(links.map(l => [l.source, l.destination])).toEqual([['LOC_MS', 'LOC_TC'], ['LOC_TC', 'LOC_MS']]);
     expect(methodCarryLinks({ steps: [{ step_id: 'scope', type: 'if', condition: {}, then: method.steps }, make('later', 'LOC_TC')] }, {}, plan, actualCatalog).every(l => l.source === undefined)).toBe(true);
-    await mount(method); await click('Edit plate carry Reaction plate');
+    await mount(method); await click('Next stage'); await click('Edit plate carry Reaction plate');
     expect(host.querySelector('[aria-label="On-deck editor"] [aria-label="Plate to carry"]')).toBeTruthy();
     expect(current).toEqual(method);
     expect(host.querySelectorAll('[data-carry-from="LOC_MS"][data-carry-to="LOC_TC"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-carry-from="LOC_TC"][data-carry-to="LOC_MS"]')).toHaveLength(0);
+    await click('Next stage');
+    expect(host.querySelectorAll('[data-carry-from="LOC_MS"][data-carry-to="LOC_TC"]')).toHaveLength(0);
     expect(host.querySelectorAll('[data-carry-from="LOC_TC"][data-carry-to="LOC_MS"]')).toHaveLength(1);
+    expect(current).toEqual(method);
 });
 
 it('adds a carry through pointer drag without panning, retargeting or adding on cancellation', async () => {
@@ -270,6 +275,47 @@ it.runIf(!!discovery && !!process.env.BMS_TEST_PYTHON)('compiles UI-created repe
     const cold = JSON.parse(JSON.stringify(current)); await act(async () => root.unmount()); await mount(cold);
     await click('Select step 2'); expect((host.querySelector('[aria-label="Repeat count"]') as HTMLInputElement).value).toBe('02');
     await input('Repeat count', '0'); expect(compile().provenance.map((p: any) => p.step_id)).toEqual(['before', 'after']);
+});
+
+it.runIf(!!discovery && !!process.env.BMS_TEST_PYTHON)('pages all 24 transfers together and shows outgoing/return plate placement without changing the draft', async () => {
+    const nativeTransfer = structuredClone(transfer); delete (nativeTransfer.destination as Partial<typeof transfer.destination>).retained;
+    const localPlan = { ...plan, labware: [{ ...plan.labware[0], station: 'LOC_OC' }] };
+    const additions = [1, 2, 3].map(column => ({ step_id: `barcode-${column}`, type: 'action', action: 'transfer', label: `Barcode column ${column}`, inputs: {
+        ...nativeTransfer, source: { station: 'LOC_RC', location_id: 3, wells: [...'ABCDEFGH'].map(r => `${r}${column}`) },
+        destination: { station: 'LOC_OC', location_id: 1, labware_id: 'plate', wells: [...'ABCDEFGH'].map(r => `${r}${column}`) },
+    } }));
+    const original = { schema: 'bms.bioxp-method.v1', name: 'Stage display receiving', deck_plan: localPlan, editor_state: { workflow_pages: [
+        { id: 'barcodes', label: 'Add 24 barcodes', step_ids: additions.map(s => s.step_id) },
+    ] }, steps: [...additions,
+        { step_id: 'carry', type: 'action', action: 'plate_move', inputs: { labware_id: 'plate', plate_id: 'PL_POOL', target_location: 'LOC_TC' } },
+        { step_id: 'return', type: 'action', action: 'plate_move', inputs: { labware_id: 'plate', plate_id: 'PL_POOL', target_location: 'LOC_OC' } },
+    ] };
+    const wire = spawnSync(process.env.BMS_TEST_PYTHON!, ['-c', 'import json,sys;from bioxp_method_compiler import compile_method;print(json.dumps(compile_method(json.load(sys.stdin))))'], { cwd: '../api', encoding: 'utf8', input: JSON.stringify({ method: original }) });
+    expect(wire.status, wire.stderr).toBe(0);
+    const compiled: MethodCompile = JSON.parse(wire.stdout); expect(compiled.document, JSON.stringify(compiled.issues)).toBeTruthy();
+    await mount(original, compiled);
+    const stage = () => host.querySelector<HTMLSelectElement>('[aria-label="Workflow stage"]')!;
+    expect(stage().options).toHaveLength(4);
+    expect(host.querySelectorAll('.bioxp-method-link')).toHaveLength(0);
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Previous stage"]')!.disabled).toBe(true);
+    await click('Next stage');
+    expect(stage().value).toBe('barcodes');
+    expect(host.querySelectorAll('.bioxp-method-link')).toHaveLength(24);
+    expect(host.querySelector('[aria-label="Stage summary"]')!.textContent).toContain('24 transfers');
+    expect(host.querySelectorAll('.bwd-well.is-stage-active[data-station="LOC_RC"]')).toHaveLength(24);
+    expect(host.querySelector('[data-labware="plate"]')!.getAttribute('data-display-station')).toBe('LOC_OC');
+    const optional = [...host.querySelectorAll('details')].find(d => d.querySelector(':scope > summary')?.textContent === 'Execution text (optional)')!;
+    expect(optional).toBeTruthy(); expect(optional.open).toBe(false);
+    await click('Next stage');
+    expect(host.querySelectorAll('.bioxp-method-link')).toHaveLength(0);
+    expect(host.querySelectorAll('[data-carry-from="LOC_OC"][data-carry-to="LOC_TC"]')).toHaveLength(1);
+    expect(host.querySelector('[data-labware="plate"]')!.getAttribute('data-display-station')).toBe('LOC_TC');
+    await click('Next stage');
+    expect(host.querySelector('[data-labware="plate"]')!.getAttribute('data-display-station')).toBe('LOC_OC');
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Next stage"]')!.disabled).toBe(true);
+    await click('Previous stage');
+    expect(host.querySelector('[data-labware="plate"]')!.getAttribute('data-display-station')).toBe('LOC_TC');
+    expect(current).toEqual(original);
 });
 
 it('copies only the explicitly authored native plate association into a newly requested carry', async () => {

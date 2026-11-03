@@ -245,3 +245,19 @@
 .bioxp-method-library, .bioxp-method-start, .bioxp-method-fixtures { display:inline-block; margin-right:14px; vertical-align:top; }
 .bioxp-method-map .bwd-canvas-presentation .bwd-map { height:clamp(560px, calc(100dvh - 160px), 980px); }
 .bioxp-method-canvas { min-height:clamp(600px, calc(100dvh - 120px), 1020px); }
+.bioxp-page-navigation { scroll-margin-top:54px; display:flex; align-items:center; gap:16px; padding:14px 20px; border-left:5px solid var(--bwd-stage-color); background:color-mix(in srgb,var(--bwd-stage-color) 9%,var(--bg-primary)); }
+.bioxp-page-navigation label { flex:1; min-width:0; display:grid; gap:5px; font-size:12px; color:var(--text-secondary); }
+.bioxp-page-navigation select { width:100%; font-size:16px; color:var(--text-primary); }
+.bioxp-page-summary { padding:0 20px; }
+.bioxp-page-summary p,.bioxp-page-summary ul { margin:10px 0; font-size:13px; line-height:1.6; }
+.bioxp-page-summary ul { padding-left:18px; }
+.bioxp-page-summary details { margin:10px 0; }
+.bioxp-page-summary details ol { max-height:22rem; overflow:auto; }
+.bioxp-page-summary details button { text-align:left; font-size:12px; }
+.bioxp-method-map .bioxp-method-link path { stroke:var(--bwd-stage-color); }
+.bioxp-method-map .bioxp-method-carry-line { stroke:var(--bwd-stage-color); }
+.bioxp-method-map .bwd-well.is-stage-active { stroke:var(--bwd-stage-color); stroke-opacity:1; stroke-width:3; }
+.bioxp-method-execution-text { margin:12px 20px; min-width:0; }
+.bioxp-method-execution-text textarea { width:100%; box-sizing:border-box; min-height:24rem; max-height:none; resize:vertical; white-space:pre; overflow:auto; font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; }
+.bioxp-method-execution-text p { font-size:12px; line-height:1.5; }
+@media(max-width:640px) { .bioxp-page-navigation { gap:8px; padding:10px; flex-wrap:wrap; } .bioxp-page-navigation label { order:-1; flex-basis:100%; } .bioxp-page-navigation button { flex:1; } .bioxp-page-summary { padding:0 10px; } .bioxp-method-execution-text { margin:10px; } }

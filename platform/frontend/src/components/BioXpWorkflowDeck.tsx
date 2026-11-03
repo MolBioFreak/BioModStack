@@ -21,12 +21,14 @@ export type BioXpWorkflowDeckProps = {
     tipOccupancy?: Record<number, boolean[]>;
     /** Planned starting contents by station and well (label shown on hover). Shading only. */
     contents?: Record<string, Record<string, string>>;
+    /** Selected stage head-reference wells; presentation only. */
+    activity?: Record<string, string[]>;
 };
 const fullView: DeckBounds = { x: 0, y: 0, ...deckSize };
 const modes: DeckSelectionMode[] = ['well', 'range', 'row', 'column'];
 
 /** Shared presentation. Authoring defaults remain selection-only; live intents are explicit callbacks. */
-export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, connections, compact = false, canvas = false, tipOccupancy, contents }: BioXpWorkflowDeckProps) {
+export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, connections, compact = false, canvas = false, tipOccupancy, contents, activity }: BioXpWorkflowDeckProps) {
     const id = useId();
     const svg = useRef<SVGSVGElement>(null);
     const anchor = useRef<{ station: string; well: string } | null>(null);
@@ -199,7 +201,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                         {resource.points.map(well => <g key={well.well} role={readOnly ? 'img' : 'button'} tabIndex={readOnly ? undefined : tabWell === well.well ? 0 : -1}
                             aria-label={`${resource.label} ${well.well}`} aria-pressed={selection.station === resource.id && selected.has(well.well)}
                             data-station={resource.id} data-well={well.well}
-                            className={`bwd-well${selection.station === resource.id && selected.has(well.well) ? ' is-selected' : ''}${contents?.[resource.id]?.[well.well] ? ' has-contents' : ''}`}
+                            className={`bwd-well${selection.station === resource.id && selected.has(well.well) ? ' is-selected' : ''}${contents?.[resource.id]?.[well.well] ? ' has-contents' : ''}${activity?.[resource.id]?.includes(well.well) ? ' is-stage-active' : ''}`}
                             aria-disabled={live ? !!live.wellDisabledReason : undefined}
                             onClick={e => activate(e, () => chooseWell(resource, well, e))} onKeyDown={e => keyboardWell(e, resource, well)}
                             onPointerDown={e => wellPointerDown(e, resource, well)} onPointerEnter={() => wellPointerEnter(resource, well)}
