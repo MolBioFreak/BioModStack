@@ -11,12 +11,10 @@ import {
     shouldCollapseMolBioPanelsForViewport,
 } from '../src/components/MolBioToolkit/utils/viewerLayout.js';
 
-test('tool panel defaults stay tuned per workflow', () => {
-    assert.equal(getDefaultMolBioToolPanelWidth('view'), 288);
-    assert.equal(getDefaultMolBioToolPanelWidth('align'), 416);
-    assert.equal(getDefaultMolBioToolPanelWidth('history'), 416);
-    assert.equal(getDefaultMolBioToolPanelWidth('assembly'), 544);
-    assert.equal(getDefaultMolBioToolPanelWidth('primers'), 480);
+test('all tool panels start at the same Primers-sized width', () => {
+    for (const panel of ['view', 'align', 'history', 'assembly', 'primers', 'digest', 'pcr', 'rna', 'features', 'edit', 'search', null] as const) {
+        assert.equal(getDefaultMolBioToolPanelWidth(panel), 480);
+    }
 });
 
 test('side panel widths clamp to safe bounds', () => {
@@ -25,7 +23,7 @@ test('side panel widths clamp to safe bounds', () => {
     assert.equal(clampMolBioPanelWidth(640, { min: 224, max: 480 }), 480);
 });
 
-test('fullscreen viewer layout collapses side menus while preserving tuned widths', () => {
+test('fullscreen viewer layout collapses side menus with the shared default width', () => {
     const focused = resolveMolBioViewerLayout({
         activePanel: 'align',
         viewportWidth: 1440,
@@ -49,7 +47,7 @@ test('fullscreen viewer layout collapses side menus while preserving tuned width
     assert.equal(focused.showToolPanel, false);
     assert.equal(focused.showLibraryResizeHandle, false);
     assert.equal(focused.showToolResizeHandle, false);
-    assert.equal(focused.rightPanelWidth, 416);
+    assert.equal(focused.rightPanelWidth, 480);
 
     assert.equal(normal.showLibraryPanel, true);
     assert.equal(normal.showToolPanel, true);

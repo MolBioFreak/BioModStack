@@ -50,11 +50,8 @@ export function shouldCollapseMolBioPanelsForViewport(viewportWidth: number): bo
     return Math.round(viewportWidth) < MOLBIO_MIN_VIEWPORT_FOR_OPEN_SIDE_PANELS;
 }
 
-export function getDefaultMolBioToolPanelWidth(activePanel: MolBioActivePanel): number {
-    if (activePanel === 'primers') return 480;
-    if (activePanel === 'assembly') return 544;
-    if (activePanel === 'align' || activePanel === 'rna' || activePanel === 'history') return 416;
-    return 288;
+export function getDefaultMolBioToolPanelWidth(_activePanel: MolBioActivePanel): number {
+    return 480;
 }
 
 export function clampMolBioPanelWidth(width: number, bounds: MolBioPanelWidthBounds): number {
