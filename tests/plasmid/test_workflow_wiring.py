@@ -31,3 +31,12 @@ def test_construct_screening_verifies_assembly_and_normalizes_all_inputs():
 def test_model_guard_precedes_upstream_override():
     text=(ROOT/'modules/ngs/clone_validation.nf').read_text()
     assert text.index('${apiPython} ${modelValidator}')<text.index('--override_basecaller_cfg')
+
+
+def test_every_plasmid_method_runs_tandem_modkit_from_aligned_reads():
+    for name in ('wf_clone_validation.nf', 'ont_construct_screening.nf', 'ont_plasmid_qc.nf'):
+        text=(ROOT/'workflows/ngs'/name).read_text()
+        assert "include { ModkitAnalysis } from '../../modules/ngs/modkit_analysis.nf'" in text, name
+        assert 'ModkitAnalysis(' in text, name
+        if name != 'ont_plasmid_qc.nf':
+            assert 'if (params.run_modkit == true && !has_fastq) {' in text, name
