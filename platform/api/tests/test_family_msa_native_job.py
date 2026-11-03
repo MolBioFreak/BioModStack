@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -57,6 +57,13 @@ async def test_scheduler_adapter_to_native_owned_runner(admission, monkeypatch, 
         {'row_id': 'r1', 'header': 'one', 'sequence': seq},
         {'row_id': 'r2', 'header': 'two', 'sequence': seq},
         {'row_id': 'r3', 'header': 'three', 'sequence': seq[:-1] + 'A'}]}, 'settings': settings}
+    if settings['engine'] == 'muscle' and settings.get('mode', 'align') == 'align':
+        with pytest.raises(HTTPException) as rejected:
+            await jobs._create_job(JobCreate(name='native scratch', model_id=model,
+                mode='family_msa', params=payload), BackgroundTasks(), admission)
+        assert rejected.value.status_code == 422
+        assert 'does not honor the declared molecule' in str(rejected.value.detail)
+        return
     created = await jobs._create_job(JobCreate(name='native scratch', model_id=model,
         mode='family_msa', params=payload), BackgroundTasks(), admission)
     factory = async_sessionmaker(admission.bind, expire_on_commit=False)
@@ -268,3 +275,101 @@ async def test_terminal_publication_fenced_by_live_authority(admission, monkeypa
     await admission.refresh(job)
     assert job.status == 'running'
     assert not (await admission.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))).all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('settings', [
+    {'engine': 'mafft', 'treein': '1 2 0.1 0.1\n1 3 0.2 0.2\n'},
+    {'engine': 'mafft', 'focus': True, 'focus_rows': 'r1\nr3'},
+])
+async def test_owned_mafft_materializes_scientific_inputs(admission, monkeypatch, tmp_path, settings):
+    """The managed runner must execute the same inputs as the standalone adapter."""
+    from bms_alignment import AlignmentRequest
+    from services.family_msa.execution import run_owned_job
+    image = os.environ.get('BMS_TEST_FAMILY_MSA_SIF')
+    if not image:
+        pytest.skip('set BMS_TEST_FAMILY_MSA_SIF to the isolated native image')
+    monkeypatch.delenv('INVOCATION_ID', raising=False)
+    monkeypatch.setenv('BMS_FAMILY_MSA_SIF', image)
+    payload = {'roster': {'molecule': 'dna', 'rows': [
+        {'row_id': 'r1', 'header': 'first toy', 'sequence': 'ACGTTAGCATCGATCGTACG'},
+        {'row_id': 'r2', 'header': 'second toy', 'sequence': 'ACGTTAGCATCGATCGTACA'},
+        {'row_id': 'r3', 'header': 'third toy', 'sequence': 'ACGTTAGCATCGATCGTACC'}]}, 'settings': settings}
+    job = Job(id='scientific-inputs', name='synthetic input parity', model_id='family_msa_nucleic',
+        mode='family_msa', params=payload, status='running', queue_status='running')
+    admission.add(job)
+    await admission.commit()
+    await run_owned_job(job.id, payload, str(tmp_path / 'output'),
+                        async_sessionmaker(admission.bind, expire_on_commit=False))
+    await admission.refresh(job)
+    assert job.status == 'completed', job.error_message
+    artifacts = (await admission.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))).all()
+    by_name = {Path(a.storage_path).name: a for a in artifacts}
+    receipt = json.loads(Path(by_name['receipt.json'].storage_path).read_text())
+    assert receipt['effective_settings'] == AlignmentRequest.model_validate(payload).settings.model_dump(mode='json')
+    assert not receipt['observations']['missing_ids']
+    assert not receipt['observations']['changed_residue_ids']
+    if 'treein' in settings:
+        assert Path(by_name['treein.txt'].storage_path).read_text() == settings['treein']
+        assert by_name['treein.txt'].provenance['role'] == 'native_artifact'
+    else:
+        mapping = json.loads(Path(by_name['row-map.json'].storage_path).read_text())
+        assert mapping == {'_focus_bmsrow00000001': 'r1', 'bmsrow00000002': 'r2', '_focus_bmsrow00000003': 'r3'}
+        assert by_name['row-map.json'].provenance['role'] == 'row_map'
+        assert receipt['focus_mapping']['requested_row_ids'] == ['r1', 'r3']
+        assert set(receipt['observations']['output_headers']) == set(mapping)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('engine', ['mafft', 'muscle'])
+async def test_owned_runner_rejects_changed_output_despite_native_success(admission, monkeypatch, tmp_path, engine):
+    from services.family_msa.execution import run_owned_job
+    from services.family_msa import runtime
+    monkeypatch.delenv('INVOCATION_ID', raising=False)
+    monkeypatch.setattr(runtime, 'select_runtime', lambda: ('', {'selection': 'synthetic-host'}))
+    executable = tmp_path / engine
+    if engine == 'mafft':
+        executable.write_text('#!/bin/sh\nprintf ">r1\\nACGA\\n>r2\\nAAAA\\n"\n')
+    else:
+        executable.write_text('#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\nPath(sys.argv[sys.argv.index("-output")+1]).write_text(">bmsrow00000001\\nACGA\\n>bmsrow00000002\\nAAAA\\n")\n')
+    executable.chmod(0o755)
+    monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
+    payload = {'roster': {'molecule': 'dna', 'rows': [
+        {'row_id': 'r1', 'header': 'first toy', 'sequence': 'ACGT'},
+        {'row_id': 'r2', 'header': 'second toy', 'sequence': 'AAAA'}]}, 'settings': {'engine': engine, **({'mode': 'super5'} if engine == 'muscle' else {})}}
+    job = Job(id='invalid-output-' + engine, name='synthetic integrity failure', model_id='family_msa_nucleic',
+        mode='family_msa', params=payload, status='running', queue_status='running')
+    admission.add(job)
+    await admission.commit()
+    await run_owned_job(job.id, payload, str(tmp_path / 'output'),
+                        async_sessionmaker(admission.bind, expire_on_commit=False))
+    await admission.refresh(job)
+    assert job.status == 'failed'
+    assert 'failed integrity checks' in job.error_message
+    artifacts = (await admission.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id))).all()
+    receipt = next(a for a in artifacts if a.provenance['role'] == 'receipt')
+    recorded = json.loads(Path(receipt.storage_path).read_text())
+    assert recorded['returncode'] == 0
+    assert recorded['output_integrity']['status'] == 'invalid'
+    assert any('changed sequence residues' in error for error in recorded['output_integrity']['errors'])
+
+
+@pytest.mark.asyncio
+async def test_existing_unqualified_muscle_job_fails_before_native_spawn(admission, monkeypatch, tmp_path):
+    from services.family_msa.execution import run_owned_job
+    monkeypatch.delenv('INVOCATION_ID', raising=False)
+    async def must_not_spawn(*args, **kwargs):
+        raise AssertionError('Unqualified MUSCLE align must not start')
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', must_not_spawn)
+    payload = {'roster': {'molecule': 'dna', 'rows': [
+        {'row_id': 'r1', 'header': 'toy', 'sequence': 'ACGT'}]},
+        'settings': {'engine': 'muscle', 'mode': 'align'}}
+    job = Job(id='blocked-muscle', name='historical unsupported mode', model_id='family_msa_nucleic',
+        mode='family_msa', params=payload, status='running', queue_status='running')
+    admission.add(job)
+    await admission.commit()
+    await run_owned_job(job.id, payload, str(tmp_path / 'output'),
+                        async_sessionmaker(admission.bind, expire_on_commit=False))
+    await admission.refresh(job)
+    assert job.status == 'failed'
+    assert 'does not honor the declared molecule' in job.error_message

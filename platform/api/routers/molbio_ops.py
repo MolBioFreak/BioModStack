@@ -1141,6 +1141,9 @@ class SequenceAlignmentResponse(BaseModel):
     reference_wraps_origin: bool
     query_start: int
     query_end: int
+    query_coordinate_system: Literal["input", "reverse_complement"]
+    query_input_start: int
+    query_input_end: int
     query_soft_clip_left: int = 0
     query_soft_clip_right: int = 0
     reference_flank_left: int = 0

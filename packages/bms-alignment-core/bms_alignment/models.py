@@ -221,3 +221,14 @@ class AlignmentRequest(Closed):
         if isinstance(value, dict) and isinstance(value.get('settings'), dict) and 'engine' not in value['settings']:
             value = {**value, 'settings': {'engine': 'mafft', **value['settings']}}
         return value
+
+    @model_validator(mode='after')
+    def engine_matches_molecule(self):
+        if self.settings.engine == 'famsa' and self.roster.molecule != 'protein':
+            raise ValueError('FAMSA supports protein alignments only')
+        if self.settings.engine == 'twilight' and self.roster.molecule == 'protein':
+            raise ValueError('TWILIGHT supports DNA/RNA alignments only')
+        if (self.settings.engine == 'mafft' and self.settings.direction is not None
+                and self.roster.molecule == 'protein'):
+            raise ValueError('MAFFT reverse-complement direction adjustment requires DNA/RNA')
+        return self

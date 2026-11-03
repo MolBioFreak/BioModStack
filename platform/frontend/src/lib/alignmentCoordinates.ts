@@ -8,6 +8,7 @@ export interface AlignmentRow {
   occurrenceId?: string
   sourcePositions?: (number | null)[]
   sourceOffset?: number
+  sourceOrientation?: 'forward' | 'reverse_complement'
 }
 
 export interface AlignmentPairSimilarity {
@@ -38,7 +39,10 @@ export interface AlignmentSimilarity {
   pairs: AlignmentPairSimilarity[]
 }
 
+export type AlignmentMolecule = 'protein' | 'dna' | 'rna'
+
 export interface AlignmentDocument {
+  molecule?: AlignmentMolecule
   similarity?: AlignmentSimilarity
   resultId: string
   rows: AlignmentRow[]

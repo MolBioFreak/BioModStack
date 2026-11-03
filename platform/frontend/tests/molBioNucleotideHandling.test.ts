@@ -193,3 +193,13 @@ test('RNA ORF discovery treats U codons as coding-sequence T equivalents', () =>
     assert.equal(orfs[0].strand, 1);
     assert.equal(orfs[0].frame, 1);
 });
+
+test('Unicode case folding cannot manufacture valid residues before paste validation', () => {
+    for (const symbol of ['ß', 'ſ', 'K']) {
+        const parsed = parseSequenceInput(`>toy\na${symbol}c`);
+        assert.deepEqual(parsed.invalidCharacters, [symbol]);
+        assert.equal(parsed.sequence, 'AC');
+        assert.equal(normalizeSequenceForType(`a${symbol}c`, 'dna'), 'AC');
+    }
+    assert.equal(parseSequenceInput('>toy\nacgtry').sequence, 'ACGTRY');
+});

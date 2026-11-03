@@ -55,14 +55,14 @@ export default memo(function AlignmentSimilaritySummary({document, selectedRowId
     <div><strong>Identity at nongap positions: {percent(stats.mean_pairwise_identity_percent)}</strong>{' '}
       <span>{stats.pairs_complete ? '(mean across all comparable pairs)' : '(pairwise calculation exceeds quick-summary limits)'}</span>
     </div>
-    <p className="alignment-hint">Identity is the share of paired positions where two sequences have the same base or residue. 100% means identical; plasmid variants usually sit above 95%.</p>
+    <p className="alignment-hint">Identity counts matching symbols where neither sequence has a gap. Read it alongside both aligned percentages: 100% identity here does not mean the full sequences are identical. Matching ambiguity symbols, such as N, do not confirm a known base.</p>
     <h3>Compare one sequence against the others</h3>
     <p>{document.rows.length} sequences · {stats.pair_count} unique sequence pairs</p>
     <p>Click a sequence name below or a base in the viewer to use that sequence as the reference.</p>
     <div className="alignment-reference-list" aria-label="Comparison reference">{document.rows.map(row => <button type="button" key={row.rowId} aria-pressed={selected?.rowId === row.rowId} onClick={() => select(row.rowId)}>{label(row.rowId)}</button>)}</div>
     {selected && <>
       <h4>Reference: {label(selected.rowId)} · {document.rows.length - 1} comparisons</h4>
-      <p>Identity = matches ÷ paired positions. Aligned % = paired positions ÷ that sequence’s length, counting both matches and mismatches.</p>
+      <p>Identity = matches ÷ paired positions. Aligned % = paired positions ÷ the displayed sequence’s length after any trimming, counting both matches and mismatches. It is not full-source coverage when an input was trimmed.</p>
       {!!pairs.length && <>
         <div className="alignment-map-legend"><span><i style={{background: colors[0]}}/>Identical</span><span><i style={{background: colors[1]}}/>Mismatch</span><span><i style={{background: colors[2]}}/>Gap in other sequence</span></div>
         <p className="alignment-map-note">Maps run from the start to the end of the selected sequence, with alignment gaps removed. Extra positions in the other sequence appear when you select it. These are views of the current alignment, not new pairwise alignments.</p>
@@ -79,7 +79,7 @@ export default memo(function AlignmentSimilaritySummary({document, selectedRowId
     <details><summary>All {stats.pair_count} unique pairs and calculation details</summary>
       <p>Each row compares two sequences, not a separate region. Each pair appears once; sequence names repeat because each sequence has several partners.</p>
       <p>{stats.policy} All rows are included, even when hidden in the viewer. Identity does not establish biological function or alignment quality.</p>
-      <p>Conserved among columns with no gaps in any row: {percent(stats.conserved_column_percent)} ({stats.identical_columns.toLocaleString()} / {stats.compared_columns.toLocaleString()}).</p>
+      <p>Same symbol in columns with no gaps in any row: {percent(stats.conserved_column_percent)} ({stats.identical_columns.toLocaleString()} / {stats.compared_columns.toLocaleString()}).</p>
       {!!stats.pairs.length && <div className="alignment-comparison-scroll"><table><thead><tr><th>Sequence pair (A ↔ B)</th><th>Identity</th><th>A aligned</th><th>B aligned</th><th>Identical / paired</th></tr></thead><tbody>{stats.pairs.map(pair => <tr key={JSON.stringify([pair.left_row_id, pair.right_row_id])}><td>{label(pair.left_row_id)} ↔ {label(pair.right_row_id)}</td><td>{percent(pair.identity_percent)}</td><td>{percent(pair.left_aligned_percent)}</td><td>{percent(pair.right_aligned_percent)}</td><td>{pair.identical.toLocaleString()} / {pair.compared.toLocaleString()}</td></tr>)}</tbody></table></div>}
     </details>
   </section>

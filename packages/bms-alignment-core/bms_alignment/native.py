@@ -38,13 +38,8 @@ def compile_mafft(request: AlignmentRequest, executable: str, input_path: str) -
     return args + [input_path]
 
 
-def run_mafft(request: AlignmentRequest, workdir: Path, executable: str = 'mafft', env=None) -> dict:
-    """Run without a shell; retain inputs, raw outputs and native exit status."""
-    # Revalidate mutable rosters before emitting native identifiers.
-    request = AlignmentRequest.model_validate(request.model_dump())
-    workdir = Path(workdir).resolve()
-    workdir.mkdir(parents=True, exist_ok=True)
-    workdir = Path(tempfile.mkdtemp(prefix='attempt-', dir=workdir))
+def prepare_mafft_inputs(request: AlignmentRequest, workdir: Path):
+    """Materialize the same scientific inputs for CLI and managed execution."""
     input_file = workdir / 'input.fasta'
     native_roster = request.roster.model_copy(deep=True)
     focus_report = None
@@ -61,6 +56,17 @@ def run_mafft(request: AlignmentRequest, workdir: Path, executable: str = 'mafft
     for name in ('treein', 'aamatrix', 'anchors'):
         value = getattr(request.settings, name)
         if value is not None: (workdir / (name + '.txt')).write_bytes(value.encode('utf8'))
+    return input_file, native_roster, focus_report
+
+
+def run_mafft(request: AlignmentRequest, workdir: Path, executable: str = 'mafft', env=None) -> dict:
+    """Run without a shell; retain inputs, raw outputs and native exit status."""
+    # Revalidate mutable rosters before emitting native identifiers.
+    request = AlignmentRequest.model_validate(request.model_dump())
+    workdir = Path(workdir).resolve()
+    workdir.mkdir(parents=True, exist_ok=True)
+    workdir = Path(tempfile.mkdtemp(prefix='attempt-', dir=workdir))
+    input_file, native_roster, focus_report = prepare_mafft_inputs(request, workdir)
     args = compile_mafft(request, executable, str(input_file.resolve()))
     with (workdir/'alignment.fasta').open('wb') as out, (workdir/'engine.log').open('wb') as err:
         p = subprocess.run(args, stdout=out, stderr=err, cwd=workdir, env=env, check=False)
@@ -68,8 +74,10 @@ def run_mafft(request: AlignmentRequest, workdir: Path, executable: str = 'mafft
                'effective_settings': request.settings.model_dump(mode='json'),
                'argv': [Path(args[0]).name, *args[1:-1], input_file.name],
                'artifacts': sorted(p.name for p in workdir.iterdir() if p.is_file())}
-    from .observations import observe_alignment
-    receipt['observations'] = observe_alignment(workdir/'alignment.fasta', native_roster)
+    from .observations import observe_alignment, validate_alignment_output
+    receipt['observations'] = observe_alignment(workdir/'alignment.fasta', native_roster,
+        allow_reverse_complement=request.settings.direction is not None)
+    receipt['output_integrity'] = validate_alignment_output(request, receipt['observations'])
     if focus_report is not None: receipt['focus_mapping'] = focus_report
     if 'output_headers' in receipt['observations']:
         receipt['output_headers'] = receipt['observations']['output_headers']

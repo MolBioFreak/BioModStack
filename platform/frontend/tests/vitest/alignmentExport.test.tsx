@@ -2,6 +2,7 @@ import React, {act} from 'react'
 import {createRoot} from 'react-dom/client'
 import {afterEach, expect, it, vi} from 'vitest'
 import AlignmentShared from '../../src/components/alignments/AlignmentShared'
+import AlignmentExport from '../../src/components/alignments/AlignmentExport'
 import {api} from '../../src/lib/api'
 
 vi.mock('../../src/lib/projectManager', async importOriginal => ({...await importOriginal<object>(),
@@ -18,14 +19,13 @@ it('submits a managed export with Project selection, resumes once, refreshes man
   const post = vi.spyOn(api, 'post').mockResolvedValue({data:operation})
   const div = document.createElement('div'); document.body.appendChild(div)
   let root = createRoot(div)
-  const render = () => root.render(<AlignmentShared projectId="p" receiptId="receipt" artifactId="a" viewer="jbrowse" applyViewer={() => {}} importedStateIds={['saved']}/> )
+  const render = () => root.render(<AlignmentShared molecule="rna" projectId="p" receiptId="receipt" artifactId="a" viewer="jbrowse" applyViewer={() => {}} importedStateIds={['saved']}/> )
   const button = (text: string) => [...div.querySelectorAll('button')].find(b => b.textContent === text)!
   await act(async () => render())
   await act(async () => button('Open imported notes 1').click())
   await act(async () => {
     const selects = div.querySelectorAll('select')
     selects[0].value = 'domain'; selects[0].dispatchEvent(new Event('change', {bubbles:true}))
-    selects[1].value = 'rna'; selects[1].dispatchEvent(new Event('change', {bubbles:true}))
   })
   await act(async () => button('Export ZIP').click())
   expect(post).toHaveBeenCalledExactlyOnceWith('/api/family-msa/projects/p/operations', {operation:'export', molecule:'rna', domain_experiment_id:'domain', name:'Alignment project bundle', inputs:{receipt_id:'receipt', shared_state_ids:['saved']}})
@@ -48,4 +48,29 @@ it('submits a managed export with Project selection, resumes once, refreshes man
   expect(div.querySelector('a[download]')).toBeNull()
   expect(post).toHaveBeenCalledTimes(1)
   await act(async () => root.unmount()); div.remove()
+})
+
+it.each(['dna', 'rna', 'protein'] as const)('exports the saved %s molecule without an editable guess', async molecule => {
+  const post = vi.spyOn(api, 'post').mockResolvedValue({data: {job_id: 'export', operation: 'export', status: 'queued'}})
+  const div = document.createElement('div'); const root = createRoot(div)
+  try {
+    await act(async () => root.render(<AlignmentExport molecule={molecule} projectId="p" receiptId="r" sharedStateId="s" domain="d"/>))
+    expect(div.querySelector('select')).toBeNull()
+    expect(div.textContent).toContain(`Export molecule: ${molecule === 'protein' ? 'Protein' : molecule.toUpperCase()}`)
+    await act(async () => [...div.querySelectorAll('button')].find(button => button.textContent === 'Export ZIP')!.click())
+    expect(post).toHaveBeenCalledWith('/api/family-msa/projects/p/operations', expect.objectContaining({molecule}))
+  } finally { await act(async () => root.unmount()); div.remove() }
+})
+
+it('blocks export when the source molecule is unavailable instead of defaulting to protein', async () => {
+  const post = vi.spyOn(api, 'post')
+  const div = document.createElement('div'); const root = createRoot(div)
+  try {
+    await act(async () => root.render(<AlignmentExport projectId="p" receiptId="r" sharedStateId="s" domain="d"/>))
+    const button = [...div.querySelectorAll('button')].find(button => button.textContent === 'Export ZIP')!
+    expect(button.disabled).toBe(true)
+    expect(div.querySelector('[role="alert"]')?.textContent).toContain('molecule is unavailable')
+    await act(async () => button.click())
+    expect(post).not.toHaveBeenCalled()
+  } finally { await act(async () => root.unmount()); div.remove() }
 })

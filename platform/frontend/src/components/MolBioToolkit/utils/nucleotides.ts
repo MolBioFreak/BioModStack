@@ -592,7 +592,9 @@ export function inferSequenceTypeFromParsedRecord(parsed: ParsedSequenceMetadata
 }
 
 function canonicalizeAlphabetForType(sequence: string, sequenceType: SequenceType): string {
-    const compact = sequence.toUpperCase().replace(/\s+/g, '');
+    // Only ASCII letters are nucleotide symbols. Unicode case folding can
+    // invent residues (e.g. ß -> SS) before validation gets to see the input.
+    const compact = sequence.replace(/[a-z]/g, char => char.toUpperCase()).replace(/\s+/g, '');
     return sequenceType === 'rna'
         ? compact.replace(/T/g, 'U')
         : compact.replace(/U/g, 'T');
@@ -619,7 +621,7 @@ export function stripFastaHeaders(raw: string): { name: string; sequenceText: st
 
 export function parseSequenceInput(raw: string, preferredType?: SequenceType): ParsedSequenceInput {
     const { name, sequenceText } = stripFastaHeaders(raw);
-    const compact = sequenceText.replace(/\s+/g, '').toUpperCase();
+    const compact = sequenceText.replace(/\s+/g, '').replace(/[a-z]/g, char => char.toUpperCase());
     const sequenceType = preferredType || inferSequenceTypeFromSequence(compact);
     const canonical = canonicalizeAlphabetForType(compact, sequenceType);
     const valid = sequenceType === 'rna' ? RNA_VALID : DNA_VALID;

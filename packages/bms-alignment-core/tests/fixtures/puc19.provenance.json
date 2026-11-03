@@ -1,0 +1,11 @@
+{
+  "name": "pUC19",
+  "molecule": "dna",
+  "length_bp": 2686,
+  "sequence_sha256": "7c1183b16368b1435452d99152d7c95aa04fc4a5412e563a5ef1d0fbf0cf873b",
+  "hash_normalization": "Uppercase sequence bases concatenated without headers or whitespace",
+  "source": "NCBI GenBank M77789.2",
+  "source_url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=M77789.2&rettype=fasta&retmode=text",
+  "use": "Public nonviral full-length alignment integrity fixture. Test variants are computational QA inputs, not biological designs.",
+  "independent_copy": "Identical uppercase sequence SHA-256 in pLannotate bundled data/fastas/pUC19.fa"
+}
