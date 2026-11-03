@@ -32,6 +32,8 @@ async def api(stores, monkeypatch):
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: root / 'results')
     app = FastAPI()
     app.include_router(jobs.router, prefix='/api/jobs')
+    from routers import queue
+    app.include_router(queue.router, prefix='/api')
     async def core_dep():
         async with core() as session:
             yield session
@@ -112,13 +114,6 @@ async def test_http_checkpoint_successor_persist_retry_and_native_conflict(api, 
     client, core, root = api
     job, retained = retained_job(root)
     monkeypatch.setattr(executor, 'run_remote', no_transport)
-    # No bundle is dispatched. Other owners' uncommitted overlays are qualified
-    # here; source identity capture is the sole packaging-boundary substitute.
-    from services.remote_execution import bundle
-    import subprocess
-    source_identity = tuple(subprocess.check_output(['git', 'rev-parse', ref], text=True).strip()
-                            for ref in ('HEAD', 'HEAD^{tree}'))
-    monkeypatch.setattr(bundle, 'current_source_identity', lambda: source_identity)
     async with core() as session:
         session.add(job)
         session.add(ExecutionTarget(id='new-worker', provider='vast', provider_instance_id='new', active=True,
@@ -184,6 +179,13 @@ async def test_http_deleted_cleanup_owner_invisible_but_referenced(api, monkeypa
     assert response.status_code == 200, response.text
     assert (await client.get('/api/jobs/deleting')).status_code == 404
     assert (await client.get('/api/jobs/deleting/stages')).status_code == 404
+    async with core() as session:
+        hidden = await session.get(Job, 'deleting')
+        assert hidden is not None, 'permanent deletion erased outstanding stop custody'
+        hidden.error_message = 'cancelled before permanent deletion'
+        await session.commit()
+    assert (await client.get('/api/queue/cancelled')).json() == []
+    assert (await client.post('/api/queue/deleting/retry')).status_code == 404
     listing = await client.get('/api/jobs', params={'include_children': True})
     assert listing.status_code == 200, listing.text
     assert listing.json()['total'] == 0
@@ -244,6 +246,7 @@ async def test_canonical_uncommitted_submission_holds_source_until_transaction_e
     from schemas import JobCreate
     client, core, root = api
     prepared = await prepare_plain(client, core, root)
+    assert 'resequence_preparation' in prepared['params'], 'preparation has no cleanup custody capability'
     async with core() as session:
         response = await jobs.create_job(JobCreate.model_validate(prepared), BackgroundTasks(), session, _commit=False)
         cleanup = asyncio.create_task(client.post('/api/jobs/resequence/from-structures/cleanup',
@@ -266,11 +269,6 @@ async def test_http_checkpoint_successor_rejects_stale_request_or_cancel(api, mo
     client, core, root = api
     job, _ = retained_job(root)
     monkeypatch.setattr(executor, 'run_remote', no_transport)
-    from services.remote_execution import bundle
-    import subprocess
-    identity = tuple(subprocess.check_output(['git', 'rev-parse', ref], text=True).strip()
-                     for ref in ('HEAD', 'HEAD^{tree}'))
-    monkeypatch.setattr(bundle, 'current_source_identity', lambda: identity)
     async with core() as session:
         session.add(job)
         session.add(ExecutionTarget(id='new-worker', provider='vast', provider_instance_id='new', active=True,

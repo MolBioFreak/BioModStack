@@ -4295,6 +4295,33 @@ pickle.dump(invocation, sys.stdout.buffer)
     return _bind_ont_runtime(invocation, params)
 
 
+def _shape_selected_gpu_memory_gib(job):
+    """Project this placement's observation; never observe the host for a worker."""
+    from services.shape_requests import selected_gpu_memory_gib
+    assigned = getattr(job, 'assigned_gpu', None)
+    selected = [] if assigned is None else [assigned]
+    if job.execution_target_id:
+        assignment = (job.provenance or {}).get('remote_execution_assignment') or {}
+        if assignment.get('execution_target_id') != job.execution_target_id:
+            return None
+        selected = assignment.get('gpu_indices') or selected
+        snapshot = assignment.get('admission_snapshot') or {}
+        observation = snapshot.get('telemetry') or {'gpus': [
+            {'index': item.get('gpu_index'), 'memory_total_mb': item.get('memory_total_mb')}
+            for item in snapshot.get('devices', [])]}
+    else:
+        if not selected:
+            return None
+        from routers.gpu import get_gpu_stats
+        try:
+            observation = {'gpus': [{'index': gpu.index, 'memory_total_mb': gpu.memory_total_mb}
+                                    for gpu in get_gpu_stats()]}
+        except Exception:
+            logger.warning('Shape selected-GPU observation unavailable', exc_info=True)
+            return None
+    return selected_gpu_memory_gib(observation, selected)
+
+
 @overload
 def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: Literal[True]) -> 'NativeInvocationPreview': ...
 
@@ -4327,6 +4354,11 @@ def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: b
     # would change its legacy scientific transport flags.
     requested_json = canonical_bytes(dict(job.params or {}) if requested is None else requested)
     prepared = workflow_params(job, params)
+    if (job.model_id, job.mode) == ('protein_modification_experimental', 'shape_blueprint'):
+        if prepared.get('shape_gpu_memory_gib') is None:
+            capacity = _shape_selected_gpu_memory_gib(job)
+            if capacity is not None:
+                prepared['shape_gpu_memory_gib'] = capacity
     if job.model_id == 'nanopore':
         from services.ont_ngs_contract import replay_expected_plasmid_size
         prepared = replay_expected_plasmid_size(prepared, job.provenance, mode=job.mode)

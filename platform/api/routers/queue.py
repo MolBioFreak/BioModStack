@@ -27,6 +27,7 @@ from services.job_control import (
     force_launch_job as force_launch_job_service,
     get_md_owned_job_ids,
     reject_generic_md_lifecycle_control,
+    visible_job_clause,
 )
 from services.workflow_adapter import WorkflowAdapterRequestError, request_via_workflow_adapter, workflow_adapter_enabled
 import logging
@@ -509,7 +510,7 @@ async def list_queue(
     if status:
         query = query.where(Job.queue_status == status)
     
-    result = await session.execute(query)
+    result = await session.execute(query.where(visible_job_clause()))
     jobs = result.scalars().all()
     enrichment = _get_queue_enrichment(jobs)
     live_vram_by_job = enrichment.get("live_vram_by_job", {})
@@ -590,7 +591,7 @@ async def get_queue_stats(session: AsyncSession = Depends(get_session)):
 async def pause_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Pause a queued job (won't be scheduled until resumed)."""
     await reject_generic_md_lifecycle_control(job_id, session)
-    result = await session.execute(select(Job).where(Job.id == job_id))
+    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
     job = result.scalar_one_or_none()
     
     if not job:
@@ -615,7 +616,7 @@ async def pause_job(job_id: str, session: AsyncSession = Depends(get_session)):
 async def resume_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Resume a paused job."""
     await reject_generic_md_lifecycle_control(job_id, session)
-    result = await session.execute(select(Job).where(Job.id == job_id))
+    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
     job = result.scalar_one_or_none()
     
     if not job:
@@ -634,7 +635,7 @@ async def resume_job(job_id: str, session: AsyncSession = Depends(get_session)):
 @router.post("/{job_id}/release-gpu")
 async def release_job_gpu(job_id: str, session: AsyncSession = Depends(get_session)):
     await reject_generic_md_lifecycle_control(job_id, session)
-    result = await session.execute(select(Job).where(Job.id == job_id))
+    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
     job = result.scalar_one_or_none()
 
     if not job:
@@ -678,7 +679,7 @@ async def pin_job_to_gpu(
 ):
     """Pin a job to a specific GPU (or set to None for auto-assign)."""
     await reject_generic_md_lifecycle_control(job_id, session)
-    result = await session.execute(select(Job).where(Job.id == job_id))
+    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
     job = result.scalar_one_or_none()
     
     if not job:
@@ -712,7 +713,7 @@ async def set_job_priority(
 ):
     """Set job priority (higher = runs first)."""
     await reject_generic_md_lifecycle_control(job_id, session)
-    result = await session.execute(select(Job).where(Job.id == job_id))
+    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
     job = result.scalar_one_or_none()
     
     if not job:
@@ -731,7 +732,7 @@ async def set_job_priority(
 async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Retry a failed job (resets to queued)."""
     await reject_generic_md_lifecycle_control(job_id, session)
-    result = await session.execute(select(Job).where(Job.id == job_id))
+    result = await session.execute(select(Job).where(Job.id == job_id, visible_job_clause()))
     job = result.scalar_one_or_none()
     
     if not job:
@@ -838,7 +839,8 @@ async def list_cancelled_jobs(
     result = await session.execute(
         select(Job).where(
             ~Job.id.in_(md_owned),
-            Job.error_message.like('%cancelled%')
+            Job.error_message.like('%cancelled%'),
+            visible_job_clause(),
         ).order_by(Job.created_at.desc()).limit(limit)
     )
     return result.scalars().all()
@@ -910,7 +912,7 @@ async def force_launch_job(
     the job; all VRAM, concurrency, and disabled-GPU checks still apply.
     """
     await reject_generic_md_lifecycle_control(job_id, session)
-    target_job = await session.get(Job, job_id)
+    target_job = await session.scalar(select(Job).where(Job.id == job_id, visible_job_clause()))
     if target_job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if target_job.execution_target_id:

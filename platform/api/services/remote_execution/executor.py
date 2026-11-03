@@ -1854,7 +1854,34 @@ async def publish_remote_review_rows(session: AsyncSession, job: Job) -> int:
     if not checkpoint:
         return 0
     try:
+        from database import Design
+        from services.job_control import checkpoint_continuation_predicates
         from services.stage_review import ensure_stage_review_rows
+        owner = (*checkpoint_continuation_predicates(job),
+                 Job.awaiting_stage == checkpoint.get('stage'),
+                 Job.remote_attempt_id == job.remote_attempt_id,
+                 Job.execution_target_id == job.execution_target_id)
+        if not await session.scalar(select(Job.id).where(*owner)):
+            return 0
+        # A completed frozen projection is already durable evidence. Poll only
+        # its document identities, not every artifact byte or the retired host.
+        # Explicit source pickup/Continue still validates the retained files.
+        output = Path(job.output_dir)
+        if not output.is_absolute():
+            output = get_data_root() / output
+        retained = output / '.bms-review-import' / checkpoint['checkpoint_sha256']
+        artifacts = checkpoint.get('artifacts') or []
+        expected = {('candidate', str(retained / item['relative_path'])) for item in artifacts
+                    if item.get('schema') == 'bms.stage-review.candidate.v1'}
+        candidate_dirs = {str(Path(path).parent) for _, path in expected}
+        mixed_groups = any(item.get('schema') in {'bms.stage-review.raw.v1', 'bms.stage-review.filtered.v1'}
+                           for item in artifacts)
+        if (expected and not mixed_groups and len(candidate_dirs) == 1
+                and (job.awaiting_payload or {}).get('candidate_dir') in candidate_dirs):
+            rows = (await session.execute(select(Design.artifact_group, Design.pdb_path)
+                .join(Job, Job.id == Design.job_id).where(*owner, Design.source_stage == job.awaiting_stage))).all()
+            if len(rows) == len(expected) and set(rows) == expected:
+                return len(rows)
         root = await retrieve_remote_checkpoint_review(session, job, checkpoint)
         folders = sorted({(root / item['relative_path']).parent for item in checkpoint['artifacts']
                           if item.get('schema') == 'bms.stage-review.candidate.v1'})
