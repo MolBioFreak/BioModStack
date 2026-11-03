@@ -222,6 +222,7 @@ export default defineConfig({
             './tests/vitest/ontFastqQcResultPanel.test.tsx',
             './tests/vitest/ontReadReportPanel.test.tsx',
             './tests/vitest/molbio-sanity-*.test.tsx',
+            './tests/vitest/molbio-primer-scientific.test.tsx',
             './tests/vitest/restrictionAnalysis.test.ts',
             './tests/vitest/molBioMobileToolbar.test.tsx',
             './tests/vitest/molBioDigestMobile.test.tsx',

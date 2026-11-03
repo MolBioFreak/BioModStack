@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+from pydantic import BaseModel, ConfigDict
+
+from Bio.SeqUtils import gc_fraction
 
 from services.molbio_ops import (
     PrimerBinding,
@@ -13,15 +16,35 @@ from services.molbio_ops import (
 )
 
 
+class PrimerQcProfile(BaseModel):
+    """Closed, versioned fixed search profile; not thermodynamic predictions."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    version: Literal["exact_match_v1"] = "exact_match_v1"
+    binding_core_bases: Literal[12] = 12
+    shorter_primer_uses_whole_sequence: Literal[True] = True
+    hairpin_min_stem: Literal[3] = 3
+    hairpin_min_loop: Literal[3] = 3
+    hairpin_max_loop: Literal[12] = 12
+    moderate_complement_bases: Literal[6] = 6
+    strong_complement_bases: Literal[8] = 8
+    three_prime_warning_bases: Literal[4] = 4
+    hairpin_warning_stem_bases: Literal[5] = 5
+    three_prime_requires_both_ends: Literal[True] = True
+    template_scope: Literal["provided_template_only"] = "provided_template_only"
+
+
+PRIMER_QC_PROFILE = PrimerQcProfile()
+
+
 @dataclass(slots=True)
 class PrimerQcMetrics:
     sequence: str
     sequence_type: Literal["dna", "rna"]
     length: int
     gc_percent: float
-    max_self_complement: int
-    three_prime_self_complement: int
-    max_hairpin_stem: int
+    max_self_complement: int | None
+    three_prime_self_complement: int | None
+    max_hairpin_stem: int | None
     hairpin_loop_size: int | None
     binding_site_count: int | None
     off_target_site_count: int | None
@@ -31,16 +54,15 @@ class PrimerQcMetrics:
 
 @dataclass(slots=True)
 class PrimerPairQcMetrics:
-    heterodimer_complement: int
-    three_prime_heterodimer: int
+    heterodimer_complement: int | None
+    three_prime_heterodimer: int | None
     warnings: list[str]
 
 
 def _calculate_gc_percent(sequence: str) -> float:
     if not sequence:
         return 0.0
-    gc = sequence.count("G") + sequence.count("C")
-    return round((gc / len(sequence)) * 100.0, 2)
+    return round(gc_fraction(sequence, ambiguous="weighted") * 100.0, 2)
 
 
 def _dna_alphabet(sequence: str) -> str:
@@ -79,7 +101,7 @@ def _three_prime_dimer_length(left: str, right: str) -> int:
     return 0
 
 
-def _find_hairpin(sequence: str, *, min_stem: int = 3, min_loop: int = 3, max_loop: int = 12) -> tuple[int, int | None]:
+def _find_hairpin(sequence: str, *, min_stem: int = PRIMER_QC_PROFILE.hairpin_min_stem, min_loop: int = PRIMER_QC_PROFILE.hairpin_min_loop, max_loop: int = PRIMER_QC_PROFILE.hairpin_max_loop) -> tuple[int, int | None]:
     cleaned = _dna_alphabet(sequence)
     complemented = reverse_complement(cleaned)
     length = len(cleaned)
@@ -153,37 +175,43 @@ def evaluate_primer_qc(
     sequence_type: Literal["dna", "rna"] = "dna",
     template_sequence: str | None = None,
     circular_template: bool = False,
-    min_binding_anneal_length: int = 12,
+    min_binding_anneal_length: int = PRIMER_QC_PROFILE.binding_core_bases,
+    intended_binding: tuple[int, int, int] | None = None,
 ) -> PrimerQcMetrics:
     return _evaluate_primer_qc_canonical(
         clean_sequence(sequence), sequence_type=sequence_type,
         template_sequence=clean_sequence(template_sequence) if template_sequence else None,
         circular_template=circular_template, min_binding_anneal_length=min_binding_anneal_length,
+        intended_binding=intended_binding,
     )
 
 
 def _evaluate_primer_qc_canonical(
     cleaned: str, *, sequence_type: Literal["dna", "rna"] = "dna",
     template_sequence: str | None = None, circular_template: bool = False,
-    min_binding_anneal_length: int = 12,
+    min_binding_anneal_length: int = PRIMER_QC_PROFILE.binding_core_bases,
+    intended_binding: tuple[int, int, int] | None = None,
 ) -> PrimerQcMetrics:
     if not cleaned:
         raise ValueError("Primer sequence contains no valid nucleotide characters")
 
-    max_self = _longest_contiguous_complement(cleaned, cleaned)
-    three_prime_self = _three_prime_dimer_length(cleaned, cleaned)
-    hairpin_stem, hairpin_loop = _find_hairpin(cleaned)
+    ambiguous = any(base not in "ACGTU" for base in cleaned)
+    max_self = None if ambiguous else _longest_contiguous_complement(cleaned, cleaned)
+    three_prime_self = None if ambiguous else _three_prime_dimer_length(cleaned, cleaned)
+    hairpin_stem, hairpin_loop = (None, None) if ambiguous else _find_hairpin(cleaned)
     warnings: list[str] = []
+    if ambiguous:
+        warnings.append("Secondary-structure metrics are unavailable for ambiguous oligos; GC is IUPAC-weighted and binding sites are possible compatible matches.")
 
-    if max_self >= 8:
+    if max_self is not None and max_self >= PRIMER_QC_PROFILE.strong_complement_bases:
         warnings.append(f"Strong self-complementarity detected ({max_self} contiguous bases)")
-    elif max_self >= 6:
+    elif max_self is not None and max_self >= PRIMER_QC_PROFILE.moderate_complement_bases:
         warnings.append(f"Moderate self-complementarity detected ({max_self} contiguous bases)")
 
-    if three_prime_self >= 4:
+    if three_prime_self is not None and three_prime_self >= PRIMER_QC_PROFILE.three_prime_warning_bases:
         warnings.append(f"3' self-complementarity is elevated ({three_prime_self} contiguous bases)")
 
-    if hairpin_stem >= 5:
+    if hairpin_stem is not None and hairpin_stem >= PRIMER_QC_PROFILE.hairpin_warning_stem_bases:
         warnings.append(f"Hairpin stem detected ({hairpin_stem} bp stem, loop {hairpin_loop})")
 
     binding_positions: list[dict[str, int | bool]] = []
@@ -226,7 +254,19 @@ def _evaluate_primer_qc_canonical(
             })
         binding_positions.sort(key=lambda item: (int(item["start"]), int(item["strand"])))  # type: ignore[arg-type]
         binding_site_count = len(binding_positions)
-        off_target_site_count = max(binding_site_count - 1, 0)
+        if intended_binding is not None:
+            intended_start, intended_end, intended_strand = intended_binding
+            verified = any(
+                int(site["start"]) == intended_start
+                and (int(site["end"]) % len(template_sequence) if circular_template else int(site["end"]))
+                    == (intended_end % len(template_sequence) if circular_template else intended_end)
+                and int(site["strand"]) == intended_strand
+                for site in binding_positions
+            )
+            if verified:
+                off_target_site_count = max(binding_site_count - 1, 0)
+            else:
+                warnings.append("Intended binding site is not verified on this template; off-target count is unknown.")
         if binding_site_count == 0:
             warnings.append("No annealing site found on the current template")
         elif binding_site_count > 1:
@@ -252,14 +292,16 @@ def evaluate_primer_pair_qc(
     forward_primer: str,
     reverse_primer: str,
 ) -> PrimerPairQcMetrics:
+    if any(base not in "ACGTU" for base in clean_sequence(forward_primer) + clean_sequence(reverse_primer)):
+        return PrimerPairQcMetrics(None, None, ["Dimer metrics are unavailable for ambiguous oligos."])
     heterodimer = _longest_contiguous_complement(forward_primer, reverse_primer)
     three_prime_heterodimer = _three_prime_dimer_length(forward_primer, reverse_primer)
     warnings: list[str] = []
-    if heterodimer >= 8:
+    if heterodimer >= PRIMER_QC_PROFILE.strong_complement_bases:
         warnings.append(f"Strong heterodimer complementarity detected ({heterodimer} contiguous bases)")
-    elif heterodimer >= 6:
+    elif heterodimer >= PRIMER_QC_PROFILE.moderate_complement_bases:
         warnings.append(f"Moderate heterodimer complementarity detected ({heterodimer} contiguous bases)")
-    if three_prime_heterodimer >= 4:
+    if three_prime_heterodimer >= PRIMER_QC_PROFILE.three_prime_warning_bases:
         warnings.append(f"3' heterodimer complementarity is elevated ({three_prime_heterodimer} contiguous bases)")
 
     return PrimerPairQcMetrics(

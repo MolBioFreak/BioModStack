@@ -673,10 +673,13 @@ export function isValidNucleotideSequence(sequence: string): boolean {
 }
 
 export function calculateGcPercent(sequence: string): number {
-    if (!sequence) return 0;
-    const upper = sequence.toUpperCase();
-    const gc = (upper.match(/[GC]/g) || []).length;
-    return Math.round((gc / upper.length) * 100);
+    const compact = cleanNucleotideSequence(sequence);
+    if (!compact) return 0;
+    const weight: Record<string, number> = { A: 0, T: 0, U: 0, C: 1, G: 1, S: 1, W: 0,
+        R: 0.5, Y: 0.5, K: 0.5, M: 0.5, N: 0.5, B: 2 / 3, V: 2 / 3, D: 1 / 3, H: 1 / 3 };
+    const gc = [...compact].reduce((sum, base) => sum + (weight[base] ?? 0), 0);
+    return Math.round((gc / compact.length) * 100);
+
 }
 
 export function sequenceUnitLabel(sequenceType: SequenceType): 'bp' | 'nt' {
@@ -726,7 +729,8 @@ function normalizeForMatching(sequence: string): string {
 
 function baseMatches(sequenceBase: string, patternBase: string): boolean {
     const allowed = MATCH_BASES[patternBase] || patternBase;
-    return allowed.includes(sequenceBase);
+    const possible = MATCH_BASES[sequenceBase] || sequenceBase;
+    return [...possible].some(base => allowed.includes(base));
 }
 
 export function findPatternPositions(
@@ -783,27 +787,28 @@ export function resolvePrimerBindings(
 
     const circular = options.circular ?? false;
     const reverse = options.reverse ?? false;
-    const minAnnealLength = Math.max(
-        1,
-        Math.min(primerSequence.length, options.minAnnealLength ?? 8),
-    );
-
-    for (let annealLength = primerSequence.length; annealLength >= minAnnealLength; annealLength -= 1) {
-        const annealSequence = primerSequence.slice(primerSequence.length - annealLength);
-        const matchedSequence = reverse
-            ? reverseComplementSequence(annealSequence, sequenceType)
-            : annealSequence;
-        const positions = findPatternPositions(sequence, matchedSequence, { circular });
-        if (positions.length > 0) {
-            return positions.map((start) => ({
-                start,
-                end: start + annealLength,
-                annealLength,
-                overhangLength: primerSequence.length - annealLength,
-                matchedSequence,
-            }));
+    const minAnnealLength = Math.max(1, options.minAnnealLength ?? 8);
+    const templateLength = cleanNucleotideSequence(sequence).length;
+    if (minAnnealLength > Math.min(primerSequence.length, templateLength)) return [];
+    const template = cleanNucleotideSequence(sequence);
+    const query = reverse ? reverseComplementSequence(primerSequence, sequenceType) : primerSequence;
+    const seed = reverse ? query.slice(0, minAnnealLength) : query.slice(-minAnnealLength);
+    const matches: PrimerBindingMatch[] = [];
+    for (const seedStart of findPatternPositions(template, seed, { circular })) {
+        let annealLength = minAnnealLength;
+        while (annealLength < Math.min(primerSequence.length, templateLength)) {
+            const templateIndex = reverse ? seedStart + annealLength : seedStart - (annealLength - minAnnealLength) - 1;
+            if (!circular && (templateIndex < 0 || templateIndex >= templateLength)) break;
+            const queryIndex = reverse ? annealLength : query.length - annealLength - 1;
+            const position = ((templateIndex % templateLength) + templateLength) % templateLength;
+            if (!baseMatches(template[position], query[queryIndex])) break;
+            annealLength += 1;
         }
+        const rawStart = reverse ? seedStart : seedStart - (annealLength - minAnnealLength);
+        const start = circular ? ((rawStart % templateLength) + templateLength) % templateLength : rawStart;
+        matches.push({ start, end: start + annealLength, annealLength,
+            overhangLength: primerSequence.length - annealLength,
+            matchedSequence: reverse ? query.slice(0, annealLength) : query.slice(-annealLength) });
     }
-
-    return [];
+    return matches.sort((a, b) => b.annealLength - a.annealLength || a.start - b.start);
 }

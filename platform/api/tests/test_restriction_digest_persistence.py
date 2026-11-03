@@ -30,7 +30,7 @@ from molbio_models import (
 from routers import molbio_restriction
 from services.restriction_catalog import CatalogAuthority, catalog_authority
 from services.restriction_analysis import reverse_complement
-from services.restriction_digest import DigestGeometryError, simulate_digest
+from services.restriction_digest import DigestGeometryError, DigestSimulation, simulate_digest
 
 API_ROOT = Path(__file__).resolve().parents[1]
 CATALOG = API_ROOT / "config/molbio/restriction/restriction_enzyme_catalog_v1.json"
@@ -85,8 +85,10 @@ def test_no_cut_linear_and_circular_products_are_explicit_and_deterministic() ->
     fixture_bytes = UNCUT_LINEAR_CANONICAL_FIXTURE.read_bytes()
     assert fixture_bytes.endswith(b"\n")
     expected_canonical_bytes = fixture_bytes[:-1]
-    assert linear.canonical_unsigned_bytes() == expected_canonical_bytes
-    assert linear.simulation_sha256 == "71bcab3166ded84fed41fad39a4657f7e07aaf60f912d7ab7a11566285ad408f"
+    historical = DigestSimulation.model_validate_json(expected_canonical_bytes)
+    assert historical.canonical_unsigned_bytes() == expected_canonical_bytes
+    assert linear.digest_algorithm_version == "1.1.0"
+    assert linear.simulation_sha256 == hashlib.sha256(linear.canonical_unsigned_bytes()).hexdigest()
     assert hashlib.sha256(expected_canonical_bytes).hexdigest() == (
         "71bcab3166ded84fed41fad39a4657f7e07aaf60f912d7ab7a11566285ad408f"
     )
@@ -111,7 +113,7 @@ def test_one_circular_dsb_linearizes_full_length_without_losing_origin() -> None
     fragment = result.fragments[0]
     assert fragment.topology == "linear"
     assert len(fragment.top_strand_sequence) == 8
-    assert fragment.wraps_origin is True
+    assert fragment.wraps_origin is False
     assert fragment.source_segments == ((0, 8),)
     assert {fragment.left_end.protruding_strand, fragment.right_end.protruding_strand} == {"top", "bottom"}
 
@@ -122,6 +124,46 @@ def test_duplicate_physical_cut_contributors_are_deduplicated_with_evidence() ->
     assert result.cleavages[0].contributing_enzyme_ids == ("AanI", "PsiI")
     assert len(result.fragments) == 2
     assert {occurrence.enzyme_id for occurrence in result.occurrences} == {"AanI", "PsiI"}
+
+
+def test_single_circular_cut_has_unique_lineage_and_ordered_source_projection() -> None:
+    sequence = "TTGAATTCAA"
+    result = _simulate(sequence, ("EcoRI",), "circular")
+    fragment = result.fragments[0]
+    assert fragment.top_strand_sequence == "AATTCAATTG"
+    assert fragment.source_segments == ((3, 10), (0, 3))
+    assert fragment.wraps_origin is True
+    assert len(fragment.lineage_cleavage_group_ids) == 1
+    assert fragment.left_end.contributor_group_id == fragment.right_end.contributor_group_id
+    assert "".join(sequence[a:b] for a, b in fragment.source_segments) == fragment.top_strand_sequence
+    fixture = json.loads((API_ROOT / "tests/fixtures/restriction_digest/circular_single_ecori.json").read_text())
+    assert result.model_dump(mode="json")["fragments"] == fixture["fragments"]
+    assert result.model_dump(mode="json")["cleavages"] == fixture["cleavages"]
+
+
+def test_shared_circular_cuts_are_invariant_under_every_origin_rotation() -> None:
+    original = "AATT" + "C" * 12 + "G"
+    for origin in range(len(original)):
+        sequence = original[origin:] + original[:origin]
+        result = _simulate(sequence, ("EcoRI", "MluCI"), "circular")
+        assert len(result.cleavages) == len(result.fragments) == 1
+        assert result.cleavages[0].contributing_enzyme_ids == ("EcoRI", "MluCI")
+        assert result.fragments[0].top_strand_sequence == original
+
+
+def test_internal_circular_fragment_does_not_cross_origin() -> None:
+    result = _simulate("GAATTCAAAAGAATTC", ("EcoRI",), "circular")
+    assert [(f.source_segments, f.wraps_origin) for f in result.fragments] == [
+        (((1, 11),), False), (((11, 16), (0, 1)), True),
+    ]
+
+
+@pytest.mark.parametrize("enzyme", ["DpnI", "MalI"])
+def test_methyladenine_dependent_digests_record_substrate_condition(enzyme) -> None:
+    result = _simulate("TTTTTTGATCAAAAAA", (enzyme,))
+    assert any(enzyme in note and "methylated adenine" in note for note in result.warnings)
+    assert any("digestion efficiency" in note for note in result.limitations)
+    assert result.activity_assessment == "not_evaluated"
 
 
 @pytest.mark.parametrize(
@@ -184,7 +226,7 @@ def test_multiple_linear_and_circular_cuts_are_ordered_into_physical_fragments()
     ] == [
         (
             0, "AATTCAAAAG", 10, ((1, 11),),
-            (1, 11, 5, 15), (1, 11, 5, 15), (0, 0, 0, 0), True,
+            (1, 11, 5, 15), (1, 11, 5, 15), (0, 0, 0, 0), False,
         ),
         (
             1, "AATTCG", 6, ((11, 16), (0, 1)),
@@ -410,7 +452,7 @@ async def _store(
             snapshot=(
                 source_snapshot
                 if source_snapshot is not None
-                else {"sequence_type": "dna", "sequence": sequence, "is_circular": False}
+                else {"sequence_type": "dna", "sequence": sequence, "is_circular": False, "molecule_strandedness": "double"}
             ),
             provenance={}, operation_id=None, created_by="test",
         ))
@@ -2123,3 +2165,50 @@ def test_restriction_digest_snapshot_is_canonical_and_direct_sql_mutation_is_rej
                 ("result-mutant", "other-operation", source_id, CATALOG_ID, CATALOG_SHA,
                  simulation.request_sha256, mutant_sha, rfc8785.dumps(mutant).decode()),
             )
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('strandedness', ['single', 'unknown'])
+async def test_digest_rejects_declared_nonduplex_substrate_for_inline_and_revision(tmp_path, strandedness):
+    snapshot = {'sequence_type': 'dna', 'sequence': 'TTGAATTCAA', 'is_circular': False,
+                'molecule_strandedness': strandedness}
+    engine, sessions, digest = await _store(tmp_path, source_snapshot=snapshot)
+    try:
+        async with await _client(sessions) as client:
+            request = _preview_request(digest)
+            response = await client.post('/api/molbio/restriction/digests/simulate', json=request)
+            assert response.status_code == 422
+            assert response.json()['detail']['code'] == 'unsupported_digest_substrate'
+            request['source'] = {'kind': 'inline_dna', 'name': 'single oligo', 'dna': 'TTGAATTCAA',
+                                 'topology': 'linear', 'molecule_strandedness': strandedness}
+            response = await client.post('/api/molbio/restriction/digests/simulate', json=request)
+            assert response.status_code == 422
+            assert response.json()['detail']['code'] == 'unsupported_digest_substrate'
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_digest_source_resolver_retains_physical_substrate_without_database():
+    from types import SimpleNamespace
+    fragment = _simulate('TTGAATTCAA', ('EcoRI',)).fragments[0]
+    dna = fragment.top_strand_sequence
+    document = SimpleNamespace(id='duplex-doc', name='sticky fragment')
+    revision = SimpleNamespace(id='duplex-rev', document_id=document.id, revision_number=1,
+        content_sha256=hashlib.sha256(dna.encode()).hexdigest(), content_length=len(dna),
+        snapshot={'sequence_type': 'dna', 'sequence': dna, 'is_circular': False},
+        provenance={'schema': 'bms.molbio.restriction-digest-fragment-provenance.v1',
+                    'geometry': fragment.model_dump(mode='json')})
+    class Session:
+        async def get(self, model, key):
+            return document if model is MolecularDocument else revision if model is MolecularRevision else None
+    request = _preview_request(revision.content_sha256)
+    request['source']['sequence_id'] = document.id
+    request['source']['revision_id'] = revision.id
+    payload = molbio_restriction.DigestSimulationRequest.model_validate(request)
+    source = await molbio_restriction._resolve_revision_source(payload.source, Session())
+    assert source.molecule_strandedness == 'double'
+    assert source.has_staggered_ends is True
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as error:
+        molbio_restriction._complete_digest_pipeline(payload=payload, authority=catalog_authority, resolved_revision=source)
+    assert error.value.detail['code'] == 'unsupported_digest_substrate'

@@ -296,6 +296,8 @@ export interface NormalizedStoredPrimerPlacement {
     start: number;
     end: number;
     strand: 1 | -1;
+    binding_status?: 'needs_review';
+    binding_warning?: string;
     sites?: Array<{
         start: number;
         end: number;
@@ -310,6 +312,13 @@ export function normalizeStoredPrimerPlacement(
     sequenceLength?: number,
     circular = false,
 ): NormalizedStoredPrimerPlacement {
+    if (primer.binding_status === 'needs_review') {
+        return {
+            start: 0, end: 0, strand: primer.strand === -1 ? -1 : 1, sites: [],
+            binding_status: 'needs_review',
+            binding_warning: typeof primer.binding_warning === 'string' ? primer.binding_warning : 'Review this primer binding after template changes.',
+        };
+    }
     const rawSites = Array.isArray(primer.sites) ? primer.sites : [];
     const sites = rawSites.flatMap((rawSite) => {
         if (!rawSite || typeof rawSite !== 'object') return [];
@@ -369,6 +378,9 @@ export function canonicalizePrimerPlacement(
     sequenceLength: number,
     circular: boolean,
 ): NormalizedStoredPrimerPlacement {
+    if (primer.binding_status === 'needs_review') {
+        return { ...primer, start: 0, end: 0, sites: [] };
+    }
     if (!Number.isInteger(sequenceLength) || sequenceLength <= 0) {
         return { ...primer, sites: undefined };
     }
@@ -438,6 +450,7 @@ interface PrimerPlacementInput {
     end: number;
     strand: 1 | -1;
     tm?: number;
+    binding_status?: 'needs_review';
     sites?: Array<{
         start: number;
         end: number;
@@ -451,6 +464,7 @@ export function getPrimerRenderableSites(
     sequenceLength?: number,
     circular = false,
 ) {
+    if (primer.binding_status === 'needs_review') return [];
     if (sequenceLength !== undefined) {
         const canonical = canonicalizePrimerPlacement(primer, sequenceLength, circular);
         return canonical.sites && canonical.sites.length > 0

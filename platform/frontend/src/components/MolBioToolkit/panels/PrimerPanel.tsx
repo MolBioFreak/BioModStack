@@ -43,6 +43,9 @@ interface SelectionPrimerDraft {
     snapshot: SelectionSnapshot;
     direction: 'forward' | 'reverse';
     expectedSequence: string;
+    templateSequence: string;
+    templateCircular: boolean;
+    templateType: string;
 }
 
 interface PrimerPanelProps {
@@ -104,6 +107,52 @@ function SliderField({
     );
 }
 
+/** Direct duplex calculation is independent of template-derived annealing Tm. */
+function PrimerDuplexTm({ sequence, settings }: { sequence: string; settings: PrimerTmSettings }) {
+    const [complement, setComplement] = useState('');
+    const [shift, setShift] = useState(0);
+    const [sequenceType, setSequenceType] = useState<'dna' | 'rna'>(inferSequenceTypeFromSequence(sequence));
+    const [state, setState] = useState<{ token: object; value: PrimerTmResult } | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
+    const owner = useInputOwnership([sequence, complement, shift, sequenceType, settings]);
+    const result = state?.token === owner.token ? state.value : null;
+    useEffect(() => { setError(null); setLoading(false); }, [owner.token]);
+    const calculate = async () => {
+        setLoading(true); setError(null); setState(null);
+        try {
+            const response = await calculatePrimerTm({
+                primers: [{ sequence, sequence_type: sequenceType, complement_sequence: complement.trim() || undefined, shift }],
+                settings,
+            });
+            if (owner.isCurrent() && response.data[0]) setState({ token: owner.token, value: response.data[0] });
+        } catch (error) {
+            if (owner.isCurrent()) setError(error instanceof Error ? error.message : 'Duplex Tm calculation failed');
+        } finally { if (owner.isCurrent()) setLoading(false); }
+    };
+    return <details className="rounded border border-slate-700 p-2 text-xs text-slate-300">
+        <summary>Advanced duplex Tm</summary>
+        <p className="my-2">Compare the full oligo above with an explicit strand. This separate result does not change its template binding or saved primer Tm. DNA nearest-neighbor models support available mismatch and dangling-end tables; RNA supports perfectly paired overlap at its reference condition.</p>
+        <label className="block">Oligo molecule
+            <select aria-label="Duplex oligo molecule" value={sequenceType} onChange={e => setSequenceType(e.target.value as 'dna' | 'rna')} className="ml-2 bg-slate-700"><option value="dna">DNA</option><option value="rna">RNA</option></select>
+        </label>
+        <label className="mt-2 block">Complementary strand (3′→5′)
+            <input aria-label="Complementary strand (3′→5′)" value={complement} onChange={e => setComplement(e.target.value.toUpperCase())} placeholder="Blank: perfect complement" className="mt-1 w-full bg-slate-700 p-1 font-mono" />
+        </label>
+        <label className="mt-2 block">Strand shift (nt)
+            <input aria-label="Duplex strand shift" type="number" step={1} value={shift} onChange={e => setShift(Number(e.target.value))} className="ml-2 w-20 bg-slate-700 p-1" />
+        </label>
+        <p className="my-1 text-slate-400">Positive shift places the oligo to the right: +1 aligns its first base with the second complementary-strand base. Use negative values for the opposite offset.</p>
+        <button type="button" disabled={!sequence || !Number.isInteger(shift) || loading} onClick={() => void calculate()} className="my-2 rounded bg-violet-700 px-2 py-1 disabled:opacity-50">{loading ? 'Calculating duplex…' : 'Calculate duplex Tm'}</button>
+        {error && <p role="alert">{error}</p>}
+        {result && <div role="status">
+            <p>Duplex Tm: {formatTm(result)}</p>
+            {result.warnings.map(warning => <p className="text-amber-300" key={warning}>{warning}</p>)}
+            {result.effective_input && <p className="break-all text-slate-400">Calculated {result.effective_input.sequence} ({result.effective_input.sequence_type}); complement {result.effective_input.complement_sequence || 'perfect complement'}; shift {result.effective_input.shift ?? 0} nt. Model {result.algorithm_label}; salt {result.salt_correction_label}.</p>}
+        </div>}
+    </details>;
+}
+
 export function PrimerPanel({
     sequenceData,
     selection,
@@ -151,11 +200,21 @@ export function PrimerPanel({
     const [designState, setDesignState] = useState<{ token: object; value: PrimerDesignResponse } | null>(null);
     const [designLoading, setDesignLoading] = useState(false);
     const [draftQc, setDraftQc] = useState<PrimerQcResponse['primers'][number]['qc'] | null>(null);
-    const [sequenceQc, setSequenceQc] = useState<PrimerQcResponse | null>(null);
+    const [sequenceQcState, setSequenceQcState] = useState<{ token: object; value: PrimerQcResponse } | null>(null);
+    const [qcError, setQcError] = useState<string | null>(null);
     const [qcLoading, setQcLoading] = useState(false);
 
     const sequenceType = sequenceData.sequenceType === 'rna' ? 'rna' : 'dna';
-    const designOwner = useInputOwnership([sequenceData.sequence, sequenceData.name, sequenceData.circular, sequenceType, designTargetStart, designTargetEnd, designPrimerMinLength, designPrimerMaxLength, designProductMinLength, designProductMaxLength, designFlankSearch, designGcMin, designGcMax, designTargetTm, designTmDelta, designGcClampMin, designMaxPolyX, designMaxPairs, designOverhangForward, designOverhangReverse, tmSettings]);
+    const qcRequestProfile = tmOptions?.qc_profile;
+    const designRequestProfile = tmOptions?.design_profile;
+    const qcOwner = useInputOwnership([sequenceData.sequence, sequenceData.circular, sequenceData.primers, sequenceType, qcRequestProfile]);
+    const sequenceQc = sequenceQcState?.token === qcOwner.token ? sequenceQcState.value : null;
+    const qcProfile = qcRequestProfile;
+    const setSequenceQc = (value: PrimerQcResponse) => setSequenceQcState({ token: qcOwner.token, value });
+    useEffect(() => {
+        setSelectionPrimerDraft(null);
+    }, [sequenceData.sequence, sequenceData.circular, sequenceType]);
+    const designOwner = useInputOwnership([sequenceData.sequence, sequenceData.name, sequenceData.circular, sequenceType, designTargetStart, designTargetEnd, designPrimerMinLength, designPrimerMaxLength, designProductMinLength, designProductMaxLength, designFlankSearch, designGcMin, designGcMax, designTargetTm, designTmDelta, designGcClampMin, designMaxPolyX, designMaxPairs, designOverhangForward, designOverhangReverse, tmSettings, designRequestProfile]);
     const designResult = designState?.token === designOwner.token ? designState.value : null;
     const setDesignResult = (value: PrimerDesignResponse | null) => setDesignState(value ? { token: designOwner.token, value } : null);
     useEffect(() => { setDesignLoading(false); }, [designOwner.token]);
@@ -300,11 +359,12 @@ export function PrimerPanel({
     // QC has no chemistry input: changing Tm settings must not repeat template QC.
     useEffect(() => {
         setDraftQc(null);
-        if (activeTab !== 'sequence' || !cleanedDraftPrimer || !isValidNucleotideSequence(cleanedDraftPrimer)) return;
+        if (!qcRequestProfile || activeTab !== 'sequence' || !cleanedDraftPrimer || !isValidNucleotideSequence(cleanedDraftPrimer)) return;
         let cancelled = false;
         const controller = new AbortController();
         const timer = window.setTimeout(async () => {
             const response = await calculatePrimerQc({
+                profile: qcRequestProfile,
                 primers: [{ sequence: cleanedDraftPrimer, sequence_type: inferSequenceTypeFromSequence(cleanedDraftPrimer) }],
                 template_sequence: sequenceData.sequence,
                 template_sequence_type: sequenceType,
@@ -314,27 +374,39 @@ export function PrimerPanel({
             if (!cancelled) setDraftQc(response?.data.primers[0]?.qc || null);
         }, 250);
         return () => { cancelled = true; controller.abort(); window.clearTimeout(timer); };
-    }, [activeTab, cleanedDraftPrimer, sequenceData.circular, sequenceData.sequence, sequenceType]);
+    }, [activeTab, cleanedDraftPrimer, sequenceData.circular, sequenceData.sequence, sequenceType, qcRequestProfile]);
 
     useEffect(() => {
         if (activeTab !== 'qc') {
             return;
         }
+        setSequenceQcState(null);
+        setQcError(null);
+        setQcLoading(false);
+        if (!qcRequestProfile) return;
         const primers = sequenceData.primers || [];
         if (primers.length === 0) {
-            setSequenceQc({ primers: [], pairwise: [] });
+            setSequenceQc({ profile: qcRequestProfile, primers: [], pairwise: [] });
             return;
         }
 
         let cancelled = false;
         const controller = new AbortController();
         setQcLoading(true);
+        setQcError(null);
+        setSequenceQcState(null);
         void calculatePrimerQc({
+            profile: qcRequestProfile,
             primers: primers.map((primer) => ({
                 id: primer.id,
                 name: primer.name,
                 sequence: primer.sequence,
                 sequence_type: primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence),
+                ...(primer.binding_status !== 'needs_review' ? {
+                    intended_binding_start: primer.start,
+                    intended_binding_end: primer.end,
+                    intended_binding_strand: primer.strand,
+                } : {}),
             })),
             template_sequence: sequenceData.sequence,
             template_sequence_type: sequenceType,
@@ -345,7 +417,10 @@ export function PrimerPanel({
                 setSequenceQc(response.data);
             }
         }).catch((qcError) => {
-            if (!cancelled) console.error('Failed to calculate primer QC:', qcError);
+            if (!cancelled && qcOwner.isCurrent()) {
+                setSequenceQcState(null);
+                setQcError(qcError instanceof Error ? qcError.message : 'Primer QC failed. Retry to calculate current results.');
+            }
         }).finally(() => {
             if (!cancelled) {
                 setQcLoading(false);
@@ -356,7 +431,7 @@ export function PrimerPanel({
             cancelled = true;
             controller.abort();
         };
-    }, [activeTab, sequenceData.circular, sequenceData.primers, sequenceData.sequence, sequenceType]);
+    }, [activeTab, sequenceData.circular, sequenceData.primers, sequenceData.sequence, sequenceType, qcRequestProfile]);
 
     const handleSelectionAsPrimer = (reverse: boolean) => {
         if (!selectedRegion) return;
@@ -369,6 +444,9 @@ export function PrimerPanel({
             snapshot: selectedRegion,
             direction,
             expectedSequence: prepared.sequence,
+            templateSequence: sequenceData.sequence,
+            templateCircular: sequenceData.circular,
+            templateType: sequenceType,
         });
         setNewPrimerName(`Primer_${reverse ? 'Rev' : 'Fwd'}_${selectedRegion.start + 1}`);
     };
@@ -392,6 +470,9 @@ export function PrimerPanel({
         const usePinnedPlacement = Boolean(
             selectionPrimerDraft
             && pinnedPrepared
+            && selectionPrimerDraft.templateSequence === sequenceData.sequence
+            && selectionPrimerDraft.templateCircular === sequenceData.circular
+            && selectionPrimerDraft.templateType === sequenceType
             && cleanedPrimer === cleanNucleotideSequence(selectionPrimerDraft.expectedSequence)
             && isReverse === (selectionPrimerDraft.direction === 'reverse'),
         );
@@ -451,8 +532,6 @@ export function PrimerPanel({
             ),
         };
 
-        onAddPrimer(primer);
-
         if (saveToLibrary) {
             try {
                 const libraryData: PrimerCreate = {
@@ -460,18 +539,19 @@ export function PrimerPanel({
                     sequence: primer.sequence,
                     sequence_type: sequenceTypeForPrimer,
                     primer_type: isReverse ? 'reverse' : 'forward',
-                    binding_start: primer.start,
-                    binding_end: primer.end,
+                    // A reusable library oligo is independent of the editable construct.
                     binding_strand: primer.strand,
                     tm_settings: tmSettings,
                 };
                 await createPrimer(libraryData);
             } catch (createError) {
-                console.error('Failed to save primer to library:', createError);
+                if (addOwner.isCurrent()) setError(`Primer was not added: library save failed. ${createError instanceof Error ? createError.message : 'Retry, or uncheck Save to library.'}`);
+                return;
             }
         }
 
         if (!addOwner.isCurrent()) return;
+        onAddPrimer(primer);
         setNewPrimerName('');
         setNewPrimerSeq('');
         setIsReverse(false);
@@ -551,6 +631,8 @@ export function PrimerPanel({
     useEffect(() => () => designController.current?.abort(), [designOwner.token]);
 
     const runPrimerDesign = async () => {
+        if (!designRequestProfile) { setError('Primer design settings are unavailable from the server.'); return; }
+        if (sequenceType !== 'dna') { setError('PCR primer design requires DNA. Supply the intended cDNA sequence; reverse transcription is not modeled.'); return; }
         if (!sequenceData.sequence) return;
         designController.current?.abort();
         const controller = new AbortController();
@@ -559,6 +641,7 @@ export function PrimerPanel({
         setError(null);
         try {
             const response = await designPrimers({
+                search_profile: designRequestProfile,
                 name: sequenceData.name,
                 sequence: sequenceData.sequence,
                 sequence_type: sequenceType,
@@ -781,6 +864,7 @@ export function PrimerPanel({
                             </label>
                         </div>
 
+                        {newPrimerSeq && !qcRequestProfile && <p role="status" className="text-xs text-amber-300">Primer QC is waiting for model settings from the server.</p>}
                         {newPrimerSeq && (
                             <div className="rounded border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs text-slate-400 space-y-1">
                                 <div className="flex flex-wrap items-center gap-3">
@@ -788,7 +872,7 @@ export function PrimerPanel({
                                     <span className="text-emerald-300">
                                         {draftTmLabel}: {draftTmLoading ? 'Calculating...' : formatTm(draftTmResult)}
                                     </span>
-                                    <span>GC: {calculateGcPercent(cleanedDraftPrimer)}%</span>
+                                    <span>GC: {calculateGcPercent(cleanedDraftPrimer)}%{/[^ACGTU]/.test(cleanedDraftPrimer) ? ' (IUPAC estimate)' : ''}</span>
                                 </div>
                                 {selectionPrimerDraft ? (
                                     <div className="text-emerald-400">
@@ -809,19 +893,21 @@ export function PrimerPanel({
                                         {warning}
                                     </div>
                                 ))}
-                                {draftQc && (
+                                {draftQc && qcRequestProfile && (
                                     <div className="border-t border-slate-800 pt-2 text-slate-400">
-                                        QC • self {draftQc.max_self_complement} • 3′ self {draftQc.three_prime_self_complement} • hairpin {draftQc.max_hairpin_stem}
+                                        Exact-match QC • self {draftQc.max_self_complement ?? 'unavailable'} • 3′ self {draftQc.three_prime_self_complement ?? 'unavailable'} • hairpin {draftQc.max_hairpin_stem ?? 'unavailable'}
                                         {draftQc.binding_site_count != null ? ` • sites ${draftQc.binding_site_count}` : ''}
                                     </div>
                                 )}
-                                {draftQc?.warnings.map((warning) => (
+                                {qcRequestProfile && draftQc?.warnings.map((warning) => (
                                     <div key={warning} className="text-amber-300">
                                         {warning}
                                     </div>
                                 ))}
                             </div>
                         )}
+
+                        <PrimerDuplexTm sequence={cleanedDraftPrimer} settings={tmSettings} />
 
                         <button
                             onClick={addPrimer}
@@ -869,9 +955,10 @@ export function PrimerPanel({
                                                 <span className="text-sm text-slate-200 truncate">{primer.name}</span>
                                             </div>
                                             <div className="text-xs text-slate-400 mt-0.5">
-                                                {primer.sequence.length} {sequenceUnitLabel(primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence))} • Tm: {primer.tm?.toFixed(1) ?? 'n/a'}°C • GC: {primer.gc_percent ?? 'n/a'}%
+                                                {primer.sequence.length} {sequenceUnitLabel(primer.sequenceType || inferSequenceTypeFromSequence(primer.sequence))} • Tm: {primer.binding_status === 'needs_review' ? 'n/a' : primer.tm?.toFixed(1) ?? 'n/a'}°C • GC: {primer.gc_percent ?? 'n/a'}%
                                             </div>
                                         </div>
+                                        {primer.binding_status === 'needs_review' && <div className="text-xs text-amber-300" role="status">{primer.binding_warning || 'Binding needs review after template changes. Rebind this oligo before using its placement.'}</div>}
                                         <button
                                             onClick={() => onRemovePrimer(primer.id)}
                                             className="p-1 hover:bg-slate-500 rounded ml-2"
@@ -910,7 +997,10 @@ export function PrimerPanel({
                     )}
 
                     <div className="space-y-3 rounded border border-slate-700 bg-slate-800 p-3">
-                        <div className="text-sm font-medium text-slate-300">Primer Pair Design</div>
+                        <div className="text-sm font-medium text-slate-300">PCR Primer Pair Design</div>
+                        {!designRequestProfile && <p role="status" className="text-xs text-amber-300">Primer design is unavailable until model settings arrive from the server.</p>}
+                        {sequenceType !== 'dna' && <p role="alert" className="text-xs text-amber-300">PCR primer design requires DNA. Supply the intended cDNA sequence for this RNA source; reverse transcription is not modeled. RNA oligo Tm and QC remain available.</p>}
+                        <p className="text-xs text-slate-400">Product sizes include both 5′ tails. Fixed search profile flanking_exact_v1 uses at most 48 candidates per strand and permits 4 bases of target overlap; origin-wrapping candidates and overlapping primer footprints are excluded. QC uses exact paired runs on this template, not thermodynamic or genome-wide specificity screening.</p>
                         <div className="grid grid-cols-2 gap-3">
                             <SliderField
                                 label="Target start"
@@ -1086,7 +1176,7 @@ export function PrimerPanel({
 
                         <button
                             onClick={() => void runPrimerDesign()}
-                            disabled={designLoading || !sequenceData.sequence}
+                            disabled={designLoading || !sequenceData.sequence || sequenceType !== 'dna' || !designRequestProfile}
                             className="w-full rounded-lg bg-violet-600 px-3 py-2 font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
                         >
                             {designLoading ? 'Designing…' : 'Design Primer Pairs'}
@@ -1177,14 +1267,17 @@ export function PrimerPanel({
 
             {activeTab === 'qc' && (
                 <div className="space-y-3">
-                    {qcLoading ? (
+                    <p className="text-xs text-slate-400">Exact-match screen on this construct only. Sites use a 12-base 3′ core (whole primer if shorter); mismatches and the wider genome are not searched. Dimer scores count paired bases, not binding energy; “3′” requires both ends paired. Hairpins search 3–12-base loops. Zero does not rule out secondary structure or mispriming.</p>
+                    {qcProfile && <details className="text-xs text-slate-400"><summary>Fixed QC profile: {qcProfile.version}</summary><p>Binding core {qcProfile.binding_core_bases} bases; hairpin stems ≥{qcProfile.hairpin_min_stem}, loops {qcProfile.hairpin_min_loop}–{qcProfile.hairpin_max_loop}. Complementarity warnings: {qcProfile.moderate_complement_bases} moderate, {qcProfile.strong_complement_bases} strong; both-3′ ends {qcProfile.three_prime_warning_bases}; hairpin stem {qcProfile.hairpin_warning_stem_bases}. These are fixed exact-match thresholds.</p></details>}
+                    {qcError && <div role="alert" className="text-sm text-red-300">Current QC unavailable: {qcError}</div>}
+                    {!qcRequestProfile ? <p role="status" className="text-sm text-amber-300">Primer QC is waiting for model settings from the server.</p> : qcLoading ? (
                         <div className="rounded border border-slate-700 bg-slate-900/50 px-3 py-4 text-sm text-slate-400">
                             Calculating primer QC…
                         </div>
                     ) : (
                         <>
                             <div className="space-y-2">
-                                {(sequenceQc?.primers || []).length === 0 ? (
+                                {!qcError && (sequenceQc?.primers || []).length === 0 ? (
                                     <div className="rounded border border-dashed border-slate-700 bg-slate-900/40 px-3 py-4 text-xs text-slate-500">
                                         Add primers to the construct to run QC.
                                     </div>
@@ -1194,12 +1287,12 @@ export function PrimerPanel({
                                             <div>
                                                 <div className="font-medium text-slate-100">{entry.name || 'Primer'}</div>
                                                 <div className="mt-1 text-xs text-slate-500">
-                                                    self {entry.qc.max_self_complement} • 3′ self {entry.qc.three_prime_self_complement} • hairpin {entry.qc.max_hairpin_stem}
+                                                    self {entry.qc.max_self_complement ?? 'unavailable'} • 3′ self {entry.qc.three_prime_self_complement ?? 'unavailable'} • hairpin {entry.qc.max_hairpin_stem ?? 'unavailable'}
                                                     {entry.qc.binding_site_count != null ? ` • sites ${entry.qc.binding_site_count}` : ''}
                                                 </div>
                                             </div>
                                             <div className="text-xs text-slate-400">
-                                                off-target {entry.qc.off_target_site_count ?? 0}
+                                                off-target {entry.qc.off_target_site_count ?? 'unknown (intended site unverified)'}
                                             </div>
                                         </div>
                                         <div className="mt-2 font-mono text-xs text-slate-300 break-all">{entry.qc.sequence}</div>
@@ -1222,7 +1315,7 @@ export function PrimerPanel({
                                                     {(pair.left_name || 'Primer A')} × {(pair.right_name || 'Primer B')}
                                                 </div>
                                                 <div className="mt-1 text-xs text-slate-500">
-                                                    heterodimer {pair.heterodimer_complement} • 3′ heterodimer {pair.three_prime_heterodimer}
+                                                    heterodimer {pair.heterodimer_complement ?? 'unavailable'} • 3′ heterodimer {pair.three_prime_heterodimer ?? 'unavailable'}
                                                 </div>
                                                 {pair.warnings.length > 0 && (
                                                     <div className="mt-2 text-xs text-amber-300">{pair.warnings.join(' • ')}</div>
@@ -1283,7 +1376,7 @@ export function PrimerPanel({
                                             {primer.sequence.slice(0, 30)}{primer.length > 30 ? '...' : ''}
                                         </div>
                                         <div className="text-xs text-slate-500 mt-0.5">
-                                            {primer.length} {sequenceUnitLabel(primer.sequence_type || inferSequenceTypeFromSequence(primer.sequence))} • Tm: {primer.tm?.toFixed(1) ?? 'n/a'}°C • GC: {primer.gc_percent?.toFixed(0) ?? 'n/a'}%
+                                            {primer.length} {sequenceUnitLabel(primer.sequence_type || inferSequenceTypeFromSequence(primer.sequence))} • Full-oligo Tm: {primer.tm?.toFixed(1) ?? 'n/a'}°C • GC: {primer.gc_percent?.toFixed(0) ?? 'n/a'}%
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-1 ml-2">

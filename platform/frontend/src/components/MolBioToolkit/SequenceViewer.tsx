@@ -303,6 +303,8 @@ export interface Primer {
     start: number;
     end: number;
     strand: 1 | -1;
+    binding_status?: 'needs_review';
+    binding_warning?: string;
     tm?: number;
     gc_percent?: number;
     tm_algorithm?: string;
@@ -345,6 +347,7 @@ export interface AnalysisTrack {
 }
 
 export interface SequenceData {
+    digestFragment?: import('../../lib/restrictionAnalysis').RestrictionDigestFragment;
     name: string;
     description?: string;
     sequence: string;
