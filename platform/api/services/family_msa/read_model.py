@@ -7,6 +7,7 @@ ensemble member.
 from pydantic import BaseModel
 from bms_alignment.formats import coordinates
 from bms_alignment.models import Row
+from bms_alignment.similarity import alignment_similarity
 
 
 class AlignmentRow(BaseModel):
@@ -21,6 +22,7 @@ class AlignmentRow(BaseModel):
 class AlignmentDocument(BaseModel):
     result_id: str
     rows: list[AlignmentRow]
+    similarity: dict
 
 
 def alignment_document(*, result_id: str, fasta: str, roster: list[dict],
@@ -72,4 +74,5 @@ def alignment_document(*, result_id: str, fasta: str, roster: list[dict],
                                  source_member_id=source.get('source_member_id'), occurrence_id=source.get('occurrence_id'), source_positions=mapped))
     if len({len(row.aligned) for row in rows}) != 1:
         raise ValueError('alignment is not rectangular')
-    return AlignmentDocument(result_id=result_id, rows=rows)
+    return AlignmentDocument(result_id=result_id, rows=rows,
+                             similarity=alignment_similarity([(row.row_id, row.aligned) for row in rows]))

@@ -65,6 +65,7 @@ it('uploads a selected alignment without exposing its replay key', async () => {
   await act(async () => input.dispatchEvent(new Event('change', {bubbles: true})));
   const button = Array.from(div.querySelectorAll('button')).find(b => b.textContent === 'Import alignment')!;
   await act(async () => button.click());
+  expect(get.mock.calls.filter(([url]) => String(url).endsWith('/receipts'))).toHaveLength(2);
   expect(post).toHaveBeenCalledWith('/api/family-msa/projects/p/imports/alignment', file,
     expect.objectContaining({params: expect.objectContaining({format: 'fasta', molecule: 'protein'})}));
   expect(div.textContent).not.toContain('Replay key');

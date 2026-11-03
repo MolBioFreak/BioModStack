@@ -10,7 +10,21 @@ export interface AlignmentRow {
   sourceOffset?: number
 }
 
+export interface AlignmentSimilarity {
+  policy: string
+  pairs_complete: boolean
+  pair_count: number
+  pair_count_limit: number
+  pair_cell_limit: number
+  mean_pairwise_identity_percent: number | null
+  identical_columns: number
+  compared_columns: number
+  conserved_column_percent: number | null
+  pairs: {left_row_id: string; right_row_id: string; identical: number; compared: number; identity_percent: number | null}[]
+}
+
 export interface AlignmentDocument {
+  similarity?: AlignmentSimilarity
   resultId: string
   rows: AlignmentRow[]
 }

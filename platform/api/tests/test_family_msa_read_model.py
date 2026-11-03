@@ -47,3 +47,35 @@ def test_uncertain_mapping_does_not_block_projection(extra, expected):
     row = alignment_document(result_id='x', fasta='>a\nA-CG\n', roster=[source]).rows[0]
     assert row.aligned == 'A-CG'
     assert row.source_positions == expected
+
+
+def test_similarity_gap_policy_case_and_duplicate_labels():
+    result = alignment_document(result_id='x', fasta='>a\naN-.C\n>b\nANAAc\n>c\nAT-A-\n',
+                                roster=[{'row_id': x, 'header': 'same'} for x in 'abc'])
+    stats = result.similarity
+    assert [(p['left_row_id'], p['right_row_id'], p['identical'], p['compared']) for p in stats['pairs']] == [
+        ('a', 'b', 3, 3), ('a', 'c', 1, 2), ('b', 'c', 2, 3)]
+    assert stats['mean_pairwise_identity_percent'] == pytest.approx((100 + 50 + 200 / 3) / 3)
+    assert stats['conserved_column_percent'] == 50
+    assert stats['compared_columns'] == 2
+    assert stats['pairs_complete'] is True
+
+
+def test_similarity_undefined_and_single_row():
+    from bms_alignment.similarity import alignment_similarity
+    result = alignment_similarity([('a', 'A-'), ('b', '-C')])
+    assert result['pairs'][0]['identity_percent'] is None
+    assert result['mean_pairwise_identity_percent'] is None
+    assert result['conserved_column_percent'] is None
+    assert alignment_similarity([('a', 'AC')])['mean_pairwise_identity_percent'] is None
+
+
+def test_similarity_large_alignment_reports_omission_without_sampling():
+    from bms_alignment.similarity import alignment_similarity
+    result = alignment_similarity([(str(i), 'aC-') for i in range(22)])
+    assert result['pairs_complete'] is False
+    assert result['pair_count'] == 231
+    assert result['pairs'] == []
+    assert result['mean_pairwise_identity_percent'] is None
+    assert result['conserved_column_percent'] == 100
+    assert result['compared_columns'] == 2

@@ -85,3 +85,12 @@
   .alignment-tools { grid-template-columns: minmax(0, 1fr); }
   .alignment-result-bar { align-items: stretch; }
 }
+
+.alignment-navigation-help { margin: .5rem 0; padding: .6rem .8rem; border-left: 3px solid var(--accent-primary); font-size: .85rem; line-height: 1.5; }
+.alignment-similarity { padding: .6rem .8rem; margin-bottom: .5rem; border: 1px solid var(--border-primary); border-radius: .5rem; font-size: .85rem; }
+.alignment-similarity details { margin-top: .25rem; }
+.alignment-similarity summary { cursor: pointer; }
+.alignment-similarity table { width: 100%; text-align: left; border-collapse: collapse; }
+.alignment-similarity :is(th, td) { padding: .3rem .5rem; border-bottom: 1px solid var(--border-primary); overflow-wrap: anywhere; }
+.alignment-similarity td:not(:first-child) { white-space: nowrap; }
+.alignment-save-status { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; font-size: .85rem; }

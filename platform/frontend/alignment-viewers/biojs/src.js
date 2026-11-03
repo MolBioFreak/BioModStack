@@ -2,9 +2,28 @@ const payload = JSON.parse(document.getElementById('payload').textContent)
 const { rows, token } = payload
 const channel = 'bms-biojs-inline-v1'
 const send = data => window.parent.postMessage({channel, token, ...data}, '*')
-const viewer = window.msa({ el: document.getElementById('viewer'), seqs: rows.map((row, index) => ({ id: String(index), name: row.label, seq: row.aligned })), bootstrapMenu: false, conf: { dropImport: false, registerMouseClicks: true }, vis: { metaLinks: false }, zoomer: { alignmentHeight: Math.max(320, (payload.viewerHeight ?? 420) - 100), autoResize: true, labelNameLength: 220 } })
+const viewer = window.msa({ el: document.getElementById('viewer'), seqs: rows.map((row, index) => ({ id: String(index), name: row.label, seq: row.aligned })), bootstrapMenu: false, conf: { dropImport: false, registerMouseClicks: true }, vis: { metaLinks: false }, zoomer: { alignmentHeight: Math.max(320, (payload.viewerHeight ?? 420) - 100), autoResize: true, alignmentWidth: Math.max(100, document.documentElement.clientWidth - 260), labelNameLength: 220 } })
 viewer.g.on('residue:click', data => send({index: Number(data.seqId), column: data.rowPos}))
+// The upstream Gecko throttle eventually references an undefined `_`. Keep the
+// native draw routine, scheduling at most one draw per animation frame.
+const seqblock = viewer.getView('stage').getView('body').getView('seqblock')
+let drawFrame
+seqblock.throttledDraw = () => {
+  if (drawFrame != null) return
+  drawFrame = requestAnimationFrame(() => { drawFrame = undefined; seqblock.draw() })
+}
+function resize() {
+  const zoomer = viewer.g.zoomer
+  const cell = zoomer.get('columnWidth')
+  const available = document.documentElement.clientWidth - zoomer.getLeftBlockWidth() - 20
+  zoomer.set('alignmentWidth', Math.max(cell, Math.floor(available / cell) * cell))
+}
+resize()
 viewer.render()
+// Upstream autoResize silently changes attributes, leaving the canvas at its
+// default width while the ruler expands. Emit the real zoomer change instead.
+new ResizeObserver(resize).observe(document.documentElement)
+viewer.g.zoomer.on('change:columnWidth', resize)
 const canvas = document.querySelector('.biojs_msa_seqblock')
 canvas.addEventListener('click', event => {
   canvas.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, clientX: event.clientX, clientY: event.clientY, button: event.button, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey, altKey: event.altKey }))

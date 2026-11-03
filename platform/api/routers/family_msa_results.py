@@ -36,9 +36,29 @@ async def list_project_alignments(request: Request, project_id: str, after: str 
         ExperimentExternalEntityReceipt.id > after,
     ).order_by(ExperimentExternalEntityReceipt.id).limit(101))).all()
     page = rows[:100]
-    return {'items': [{'receipt_id': r.id, 'entity_kind': r.entity_kind,
-                       'availability': r.availability} for r in page],
-            'next_cursor': page[-1].id if len(rows) > 100 else None}
+    items = []
+    for row in page:
+        item = {'receipt_id': row.id, 'entity_kind': row.entity_kind,
+                'availability': row.availability, 'created_at': row.created_at}
+        try:
+            entries, read = await project_result_data(session, project_id, row.id)
+            receipts = [entry for entry in entries if entry['role'] == 'receipt']
+            if len(receipts) != 1:
+                raise ValueError('missing receipt')
+            native = json.loads(await read(receipts[0]['id']))
+            roster = native['requested']['roster']
+            labels = [r['header'] for r in roster['rows'][:3]]
+            item['label'] = ' / '.join(label[:100] for label in labels)
+            if len(roster['rows']) > 3:
+                item['label'] += f" / +{len(roster['rows']) - 3} more"
+            item['row_count'] = len(roster['rows'])
+            item['molecule'] = roster.get('molecule')
+        except (HTTPException, ValueError, KeyError, TypeError, UnicodeError):
+            # A damaged result remains visible and retryable; never fabricate a
+            # label or hide the rest of the Project's retained results.
+            item['summary_unavailable'] = True
+        items.append(item)
+    return {'items': items, 'next_cursor': page[-1].id if len(rows) > 100 else None}
 
 
 @router.get('/settings-schema')
