@@ -301,11 +301,11 @@ def _weight_acquisition_object(path):
     return False
 
 
-def copy_input(source, target, guest, direct_images, *, writable=False, excluded=()):
+def copy_input(source, target, guest, direct_images, *, writable=False, excluded=(), omitted=(), allocation=None):
     """Return source snapshot from the checked private CoW projection walk."""
     directories = []
     identities, cloned = {}, {}
-    for parent, name, relative, info in views._walk_tree(source, excluded=excluded):
+    for parent, name, relative, info in views._walk_tree(source, excluded=(*excluded, *omitted)):
         link = os.readlink(name, dir_fd=parent) if stat.S_ISLNK(info.st_mode) else None
         identities[relative] = views._identity(info) + (link,)
         destination = target if relative == '.' else target / relative
@@ -336,7 +336,10 @@ def copy_input(source, target, guest, direct_images, *, writable=False, excluded
                     continue
                 out = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 try:
-                    views.allocate_private_file(fd, out, before)
+                    method = views.allocate_private_file(fd, out, before)
+                    if allocation is not None:
+                        counter = method + '_bytes'
+                        allocation[counter] = allocation.get(counter, 0) + before.st_size
                     os.fchmod(out, stat.S_IMODE(before.st_mode) | (0o200 if writable else 0))
                     cloned[key] = destination
                 finally:
@@ -353,7 +356,24 @@ def copy_input(source, target, guest, direct_images, *, writable=False, excluded
     return identities
 
 
-def project_bindings(requested, inputs, direct_images, *, shared=None, writable_overrides=()):
+def _unused_weight_paths(shared, selected):
+    """Prune only unbound layout branches; never expose protected donor inodes."""
+    if shared in selected:
+        return []
+    omitted, pending = [], [shared]
+    while pending:
+        parent = pending.pop()
+        for child in parent.iterdir():
+            if child in selected or any(child.is_relative_to(path) for path in selected):
+                continue
+            if any(path.is_relative_to(child) for path in selected) and child.is_dir() and not child.is_symlink():
+                pending.append(child)
+            else:
+                omitted.append(child)
+    return omitted
+
+
+def project_bindings(requested, inputs, direct_images, *, shared=None, writable_overrides=(), weight_paths=None, allocation=None):
     """Shadow protected descendants of broad binds, preserving writable siblings.
 
     PRoot cannot enforce a kernel read-only bind. One private reflink projection
@@ -364,7 +384,20 @@ def project_bindings(requested, inputs, direct_images, *, shared=None, writable_
     requested = [(Path(source).resolve(strict=True), target, mode)
                  for source, target, mode in requested]
     roots = {source for source, _, mode in requested if mode == 'ro'}
+    omitted = []
     if shared is not None:
+        # Automatic cwd/home mounts are aliases, not requests to consume the
+        # entire job union. Keep an empty shadow for unused branches so broad
+        # writable binds still cannot reach immutable layout donors.
+        explicit = writable_overrides if writable_overrides else requested
+        selected = {Path(source).resolve(strict=True) for source, _, _ in explicit
+                    if Path(source).resolve(strict=True).is_relative_to(shared)}
+        if any(shared.is_relative_to(Path(source).resolve(strict=True)) and mode == 'ro'
+               for source, _, mode in explicit):
+            selected.add(shared)
+        if weight_paths is not None:
+            selected = {shared / member for member in weight_paths} | {path for path in selected if path != shared}
+        omitted = _unused_weight_paths(shared, selected)
         roots.add(shared)
     # Project each maximal protected root only once, including nested ro aliases.
     roots = sorted((root for root in roots if not any(root != other and root.is_relative_to(other)
@@ -375,8 +408,12 @@ def project_bindings(requested, inputs, direct_images, *, shared=None, writable_
     for index, source in enumerate(roots):
         view = inputs / str(index)
         excluded = [p.relative_to(source).as_posix() for p in writable if p != source and p.is_relative_to(source)]
-        before = copy_input(source, view, str(source), direct_images, excluded=excluded,
-                            writable=shared is not None and source.is_relative_to(shared))
+        # Guard the original layout, including omitted aliases, but allocate
+        # private bytes only for this task's bindings.
+        before = snapshot(source, excluded)
+        copy_input(source, view, str(source), direct_images, excluded=excluded,
+                   omitted=[p.relative_to(source).as_posix() for p in omitted if p.is_relative_to(source)],
+                   writable=shared is not None and source.is_relative_to(shared), allocation=allocation)
         if snapshot(source, excluded) != before:
             raise ValueError('declared input changed during projection')
         strict = any(mode == 'ro' and source == path for path, _, mode in requested)
@@ -405,7 +442,10 @@ def project_bindings(requested, inputs, direct_images, *, shared=None, writable_
                           objects / 'modes' / digest[:2] / (digest + '-' + format(row['mode'], '03o'))]
             for candidate in candidates:
                 if candidate.is_file():
-                    members.setdefault(candidate.parent, {})[candidate.name] = view / row['name']
+                    names = members.setdefault(candidate.parent, {})
+                    private = view / row['name']
+                    if private.is_file():
+                        names[candidate.name] = private
         for number, (directory, names) in enumerate(sorted(members.items(), key=lambda item: str(item[0]))):
             mirror = inputs / ('objects-' + str(number))
             mirror.mkdir(mode=0o700)
@@ -525,6 +565,18 @@ def run_owned(command, environment, pass_fds, identity):
             process.wait()
 
 
+def task_weight_paths(directory):
+    """Optional compiler placement hint; old/opaque callers retain bind scope."""
+    try:
+        value = json.loads((directory / '.bms-task-weights.json').read_text())
+        if isinstance(value, list) and all(isinstance(p, str) and p and
+                not PurePosixPath(p).is_absolute() and '..' not in PurePosixPath(p).parts for p in value):
+            return value
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def execute(invocation, identity):
     store = Path(os.environ['BMS_RUNTIME_IMAGE_STORE'])
     workspace = Path(os.environ['BMS_CONTAINER_WORK_ROOT'])
@@ -560,8 +612,13 @@ def execute(invocation, identity):
         shared = os.environ.get('BMS_SHARED_WEIGHTS_ROOT')
         shared = Path(shared).resolve(strict=True) if shared else None
         requested = [(source, target, 'rw') for source, target in volumes] + invocation.binds
+        allocation = {'reflink_bytes': 0, 'copy_bytes': 0}
         volumes, guarded = project_bindings(requested, inputs, direct_images, shared=shared,
-                                            writable_overrides=invocation.binds)
+                                            writable_overrides=invocation.binds, weight_paths=task_weight_paths(cwd),
+                                            allocation=allocation)
+        # Logical reflink bytes are shared extents, not newly allocated bytes.
+        # Full-copy bytes are per-task transient scratch, not persistent CAS.
+        os.write(2, ('BMS_PRIVATE_INPUT_ALLOCATION ' + json.dumps(allocation, sort_keys=True) + '\n').encode())
         volumes.extend(direct_images)
         # Bind the canonical object directory, not only the SIF: attestation
         # verifies its real 0500 parent as well as the file's inode and ctime.

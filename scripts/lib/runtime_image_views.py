@@ -412,11 +412,13 @@ def allocate_private_file(source_fd, destination_fd, before):
         raise Error('private allocation requires an independent exclusive inode')
     if not _same(before, os.fstat(source_fd)):
         raise Error('private allocation source changed')
+    method = 'reflink'
     try:
         fcntl.ioctl(destination_fd, FICLONE, source_fd)
     except OSError as exc:
         if exc.errno not in {errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL, errno.ENOSYS}:
             raise
+        method = 'copy'
         os.ftruncate(destination_fd, 0)
         offset = 0
         while offset < before.st_size:
@@ -435,6 +437,7 @@ def allocate_private_file(source_fd, destination_fd, before):
         raise Error('private allocation size mismatch')
     if not _same(before, os.fstat(source_fd)):
         raise Error('private allocation source changed')
+    return method
 
 
 def _bootstrap_members(rows):

@@ -131,7 +131,7 @@ INDEPENDENT_RUNTIME_MODELS = frozenset({
 # Image-only selection does not promise the model's selected weights/stages.
 # These public launcher entries already bind the named image in native plans.
 INDEPENDENT_RUNTIME_IMAGES = INDEPENDENT_RUNTIME_MODELS | frozenset({
-    'boltzgen', 'protein_local_redesign', 'molecular_dynamics',
+    'boltzgen', 'molecular_dynamics',
     'confornets_experimental',
 })
 
@@ -165,9 +165,9 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
         refs.append(RuntimeDependencyRef(kind='weights', relative_path='laproteina'))
     if model_id == 'complexa':
         from scripts.lib.complexa_contract import PROFILES
-        refs.extend(RuntimeDependencyRef(kind='weights', relative_path='complexa/' + pair + suffix)
-                    for pair in sorted({profile[1] for profile in PROFILES.values()})
-                    for suffix in ('.ckpt', '_ae.ckpt'))
+        refs.extend(RuntimeDependencyRef(kind=ref.kind, relative_path=ref.relative_path)
+                    for task in PROFILES for ref in native_checkpoint_dependencies('RunComplexa', {
+                        'complexa_request': {'task': task, 'task_name': 'preparation', 'operation': 'generate'}})[0])
     if model_id == 'bindcraft2':
         # Native campaign bind in scripts/run_bindcraft2.py; image-owned MPNN
         # plus the selected AlphaFold parameter tree.
@@ -242,9 +242,8 @@ def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
         groups = {'generators': tuple(ref.relative_path for ref in _denovo_runtime_dependencies()
                                       if ref.kind == 'weights'),
                   'rfd4_proteina': ('rfd4-proteina',),
-                  'complexa': tuple('complexa/' + pair + suffix
-                      for pair in sorted({profile[1] for profile in PROFILES.values()})
-                      for suffix in ('.ckpt', '_ae.ckpt'))}
+                  'complexa': tuple(ref.relative_path for ref in model_runtime_dependencies('complexa')
+                                    if ref.kind == 'weights')}
         for model_id in ('boltz2', 'esmfold2', 'caliby_experimental'):
             groups[model_id] = tuple(ref.relative_path for ref in model_runtime_dependencies(model_id)
                                      if ref.kind == 'weights')
@@ -513,6 +512,23 @@ def native_checkpoint_dependencies(process: str, params: dict):
             dependencies.append(SelectedDependency('weights:complexa:' + member, 'weights',
                 'complexa/' + member, 'scripts/bms_complexa/config.py:compose_request',
                 selector='complexa_weights_dir', selector_subpath=member))
+        from scripts.bms_complexa.config import selected_dependencies
+        external = {
+            'af2': ('alphafold/params',),
+            'rf3': ('foundry/checkpoints/rf3_foundry_01_24_latest_remapped.ckpt',),
+            'esmfold': ('huggingface/models--facebook--esmfold_v1',),
+            'esm': ('huggingface/models--facebook--esm2_t33_650M_UR50D',),
+            'protein_mpnn': ('laproteina/ProteinMPNN/vanilla_model_weights/v_48_020.pt',),
+            'ligand_mpnn': ('complexa/LigandMPNN/model_params/ligandmpnn_v_32_010_25.pt',),
+            'soluble_mpnn': ('complexa/LigandMPNN/model_params/solublempnn_v_48_020.pt',),
+            'novelty_pdb': ('complexa/foldseek_db/pdb_db',),
+            'novelty_afdb_rep_v4': ('complexa/foldseek_db/afdb_rep_v4_db',),
+            'novelty_afdb_rep_v4_geniefilters_maxlen512': ('complexa/foldseek_db/afdb_rep_v4_geniefilters_maxlen512',),
+        }
+        for selected in selected_dependencies(request):
+            for member in external.get(selected, ()):
+                dependencies.append(SelectedDependency('weights:' + member, 'weights', member,
+                    'scripts/bms_complexa/config.py:selected_dependencies'))
         if params.get('complexa_autoguidance_checkpoint'):
             dependencies.append(SelectedDependency('weights:complexa_autoguidance_checkpoint',
                 'weights', None, 'modules/complexa.nf:RunComplexa',
@@ -622,6 +638,37 @@ def native_checkpoint_dependencies(process: str, params: dict):
         dependencies.append(SelectedDependency('weights:disco:huggingface', 'weights',
             'disco/huggingface', owner, selector='weights_root',
             selector_subpath='disco/huggingface'))
+    elif process == 'EvaluateLaProteina':
+        import json
+        from paths import resolve_allowed_path
+        request = params.get('laproteina_evaluation_request') or {}
+        metric = {}
+        try:
+            closure = params.get('laproteina_evaluation_input_closure')
+            if closure:
+                root = Path(closure)
+                retained = json.loads((root / 'request.json').read_text())
+                config_path = root / retained['config_path']
+            else:
+                binding = (params.get('native_sources') or {}).get(request.get('config_slot'), {})
+                config_path = resolve_allowed_path(binding['path'])
+            metric = (yaml.safe_load(config_path.read_text()) or {}).get('generation', {}).get('metric', {})
+        except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError):
+            # Preview may precede materialization. Keep the prior launch path;
+            # unknown retained settings conservatively select evaluator assets,
+            # never a guessed scientific default or a new refusal condition.
+            pass
+        metric = {**metric, **request.get('metrics', {})}
+        members = []
+        if metric.get('compute_designability') is not False:
+            members.append('laproteina/ProteinMPNN/vanilla_model_weights/v_48_020.pt')
+        if any(metric.get('compute_' + name) is not False and
+               'esmfold' in metric.get(name + '_folding_models', ['esmfold'])
+               for name in ('designability', 'codesignability')):
+            members.append('huggingface/models--facebook--esmfold_v1')
+        for member in members:
+            dependencies.append(SelectedDependency('weights:' + member, 'weights', member,
+                'scripts/run_laproteina_inference.py:evaluate_native; retained generation.metric'))
     elif process == 'RunLaProteina':
         from paths import get_weights_root
 

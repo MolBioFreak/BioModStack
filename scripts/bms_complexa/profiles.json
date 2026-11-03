@@ -1,6 +1,6 @@
 {
   "source_revision": "acf55a89a9a7206d5ce9abc0bf2246c3b3829f92",
-  "authority": "Native Hydra profile defaults; discovery-only, never a parallel runtime resolver",
+  "authority": "Pinned native Hydra profile readback for discovery and selected dependency planning; execution composes native profiles",
   "tasks": {
     "protein_binder": {
       "args": {

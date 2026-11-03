@@ -147,11 +147,40 @@ def compose_request(request: Request, upstream: Path, directory: Path, weights: 
     return cfg
 
 
-def selected_dependencies(request: Request, cfg) -> list[str]:
-    """Selected inference dependencies, not a claim about Python import closure."""
-    from omegaconf import OmegaConf
+def selected_dependencies(request: Request, cfg=None) -> list[str]:
+    """Selected inference dependencies, not a claim about Python import closure.
+
+    The controller uses the pinned native profile readback without importing
+    Hydra/model packages. Execution still composes upstream Hydra; both paths
+    use this selector, and parity is qualified against that pinned composition.
+    """
+    if cfg is None:
+        import copy
+        import json
+        profile = json.loads(Path(__file__).with_name('profiles.json').read_text())['tasks'][request.task]
+        cfg = {'generation': copy.deepcopy(profile), 'metric': copy.deepcopy(profile['evaluation']),
+               'aggregation': copy.deepcopy(profile['analysis'])}
+        def merge(destination, override):
+            for key, value in override.items():
+                if isinstance(value, dict) and isinstance(destination.get(key), dict):
+                    merge(destination[key], value)
+                else:
+                    destination[key] = value
+        for field, destination in ((request.refinement, cfg['generation']['refinement']),
+                                   (request.evaluation, cfg['metric']), (request.analysis, cfg['aggregation'])):
+            if field is not None:
+                merge(destination, field.model_dump(exclude_unset=True))
+        if request.reward is None:
+            cfg['generation']['reward_model'] = None
+        elif request.reward != 'profile':
+            cfg['generation']['reward_model'] = {'reward_models': {
+                name: {} for name in ('af2folding', 'rf3folding', 'tmol', 'bioinformatics')
+                if getattr(request.reward, name) is not None}}
+    else:
+        from omegaconf import OmegaConf
+        cfg = OmegaConf.to_container(cfg, resolve=False)
     deps = {PROFILES[request.task][1]}
-    g = cfg.generation
+    g = cfg['generation']
     if request.operation in ("generate", "design"):
         reward = g.get("reward_model")
         if reward is not None:
@@ -160,7 +189,7 @@ def selected_dependencies(request: Request, cfg) -> list[str]:
         if g.get("refinement", {}).get("algorithm") == "sequence_hallucination":
             deps.add("af2")
     if request.operation in ("design", "evaluate", "analysis"):
-        m = OmegaConf.to_container(cfg.metric, resolve=False)
+        m = cfg['metric']
         if m.get("compute_binder_metrics") or m.get("compute_motif_binder_metrics"):
             method = m.get("binder_folding_method", "colabdesign")
             deps.add({"colabdesign": "af2", "rf3_latest": "rf3"}.get(method, method))

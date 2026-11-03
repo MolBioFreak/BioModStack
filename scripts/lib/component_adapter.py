@@ -204,13 +204,27 @@ def native_resource_config(plan: dict, resources: dict, lock_path: str, source_r
         if len(setup) > 1:
             raise ValueError('ambiguous compiled native setup authority')
         expression = setup[0] if setup else "''"
+        # Publish the existing selected-component closure beside .command.sh,
+        # before the container starts. Broad label binds otherwise make PRoot
+        # clone unrelated weights from the job union for every task. This is
+        # placement metadata, never an installer or an admission condition.
+        import json
+        dependency_map = {row['logical_id']: row for row in plan['metadata'].get('dependencies', [])}
+        weights = [dependency_map[key] for sibling in plan['metadata']['static_components']
+                   if sibling['authority'] == component['authority']
+                   for key in sibling.get('dependency_ids', [])
+                   if key in dependency_map and dependency_map[key]['kind'] == 'weights']
+        selection = (sorted({row['relative_path'] for row in weights})
+                     if 'dependencies' in plan['metadata'] and all(row.get('relative_path') for row in weights) else None)
+        placement = ("printf '%s\\n' " + shlex.quote(json.dumps(selection)) + " > .bms-task-weights.json\n"
+                     if 'dependencies' in plan['metadata'] else '')
         cpu = component['resources_json'].get('cpus', {})
         lines += [f'  withName: {groovy(name)} {{']
         if name == 'MD_GROMACS_REPLICA' and cpu.get('parameter') == 'md_config.execution.ntmpi * md_config.execution.ntomp':
             lines += [f'    cpus = {int(cpu["value"])}']
         lines += ['    beforeScript = {',
                   f'      def nativeSetup = {expression}',
-                  f'      return {groovy(acquire)} + (nativeSetup instanceof Closure ? nativeSetup.call() : nativeSetup)',
+                  f'      return {groovy(acquire + placement)} + (nativeSetup instanceof Closure ? nativeSetup.call() : nativeSetup)',
                   '    }', '  }']
     # Nextflow launches apptainer tasks with `env -`; without an explicit
     # whitelist the attempt context never reaches native scripts, so they cannot

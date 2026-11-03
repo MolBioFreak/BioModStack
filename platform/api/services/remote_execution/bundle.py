@@ -1616,6 +1616,22 @@ def retained_ont_lock_bytes(source: SourceIdentity) -> bytes:
             raise RemoteBundleError('Historical Dorado lock is unavailable or malformed') from exc
 
 
+def _private_weight_copy_upper_bound(metadata, weight_entries):
+    """Largest selected per-task body allocation, not a concurrent job peak."""
+    by_id = {row.logical_id: row for row in metadata.dependencies}
+    peaks, processes = [], {}
+    for component in (*metadata.static_components, *metadata.dynamic_templates):
+        processes.setdefault(component.authority, set()).update(component.dependency_ids)
+    for dependency_ids in processes.values():
+        paths = [by_id[key].relative_path for key in dependency_ids
+                 if by_id[key].kind == 'weights']
+        bodies = {(row['sha256'], row['mode']): int(row['size_bytes']) for row in weight_entries
+                  if 'target' not in row and (None in paths or any(path is not None and (
+                      row['name'] == path or str(row['name']).startswith(path + '/')) for path in paths))}
+        peaks.append(sum(bodies.values()))
+    return max(peaks, default=0)
+
+
 def prepare_remote_bundle(
     *,
     job: Any,
@@ -2057,6 +2073,17 @@ def prepare_remote_bundle(
         # Cached source/runtime/images are installation capacity, not new
         # per-job scratch. Their lifecycle/provisioning owner handles misses.
         scratch_bytes=sum(row.size_bytes for row in input_records if row.link_target is None))
+    # Diagnostic upper bound, not a new capacity/admission gate: FICLONE support
+    # is known only at task allocation. The task launcher reports actual copy
+    # bytes separately. Persistent CAS accounting intentionally excludes these.
+    if (binding or {}).get('environment', {}).get('BMS_CONTAINER_BACKEND') == 'udocker':
+        private_weight_bytes = _private_weight_copy_upper_bound(native_invocation.execution_plan.metadata, weight_entries)
+        resources['scratch_estimates'] = {
+            'input_bytes': resources['required']['scratch_bytes'],
+            'private_weights_per_task_copy_upper_bound_bytes': private_weight_bytes,
+            'scope': 'per-task selected weight projection; not job peak or persistent storage',
+            'allocation_observation': 'BMS_PRIVATE_INPUT_ALLOCATION in task stderr',
+        }
     import sys
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
