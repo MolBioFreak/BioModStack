@@ -518,7 +518,7 @@ def native_checkpoint_dependencies(process: str, params: dict):
             'rf3': ('foundry/checkpoints/rf3_foundry_01_24_latest_remapped.ckpt',),
             'esmfold': ('huggingface/models--facebook--esmfold_v1',),
             'esm': ('huggingface/models--facebook--esm2_t33_650M_UR50D',),
-            'protein_mpnn': ('laproteina/ProteinMPNN/vanilla_model_weights/v_48_020.pt',),
+            'protein_mpnn': ('complexa/ProteinMPNN/ca_model_weights/v_48_020.pt',),
             'ligand_mpnn': ('complexa/LigandMPNN/model_params/ligandmpnn_v_32_010_25.pt',),
             'soluble_mpnn': ('complexa/LigandMPNN/model_params/solublempnn_v_48_020.pt',),
             'novelty_pdb': ('complexa/foldseek_db/pdb_db',),

@@ -13,6 +13,44 @@ from scripts.bms_complexa.inputs import prepare_source
 from scripts.bms_complexa.publication import publish
 
 
+def prepare_community_models(native: Path, upstream: Path, dependencies: list[str]) -> Path:
+    """Expose native cwd-relative entrypoints without copying model payloads.
+
+    ProteinMPNN resolves weights relative to realpath(__file__), so its entrypoint
+    must be a private regular file, not a symlink into the immutable image.
+    """
+    community = native / "community_models"
+    if community.exists():
+        shutil.rmtree(community)
+    selected = set(dependencies)
+    packages = []
+    if "protein_mpnn" in selected:
+        packages.append(("ProteinMPNN", "protein_mpnn_run.py", {
+            "ca_model_weights": os.environ.get("COMPLEXA_PROTEINMPNN_CA_WEIGHTS"),
+        }))
+    if selected.intersection({"ligand_mpnn", "soluble_mpnn"}):
+        packages.append(("LigandMPNN", "run.py", {
+            "model_params": os.environ.get("COMPLEXA_LIGANDMPNN_WEIGHTS"),
+        }))
+    for name, entrypoint, weights in packages:
+        source = upstream.resolve() / "community_models" / name
+        destination = community / name
+        destination.mkdir(parents=True)
+        for member in source.iterdir():
+            if member.name in {"ca_model_weights", "vanilla_model_weights", "soluble_model_weights", "model_params", "__pycache__", ".git"}:
+                continue
+            target = destination / member.name
+            if member.name == entrypoint:
+                shutil.copyfile(member, target)
+            else:
+                target.symlink_to(member, target_is_directory=member.is_dir())
+        for name, path in weights.items():
+            # Keep native missing-file behavior; absence is not a new gate.
+            (destination / name).symlink_to(Path(path).absolute() if path else source / name,
+                                           target_is_directory=True)
+    return community
+
+
 def run(request: Request, *, upstream: Path, weights: Path, output: Path,
         source_path: Path | None = None, evaluation_directory: Path | None = None,
         motif_csv_path: Path | None = None,
@@ -49,6 +87,7 @@ def run(request: Request, *, upstream: Path, weights: Path, output: Path,
                "execution": "not_started", "returncode": None, "source": source}
     (output / "request.json").write_text(json.dumps(receipt["request"], indent=2))
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2))
+    community = prepare_community_models(native, upstream, receipt["selected_dependencies"])
     if prepare_only:
         return receipt
     env = os.environ.copy()
@@ -81,6 +120,8 @@ def run(request: Request, *, upstream: Path, weights: Path, output: Path,
         receipt["error"] = str(exc)
         raise
     finally:
+        if community.exists():
+            shutil.rmtree(community)
         if assets.is_symlink():
             assets.unlink()
         (output / "receipt.json").write_text(json.dumps(receipt, indent=2))

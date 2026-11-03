@@ -186,6 +186,103 @@
     "env/download_startup.sh": "bd44402f74a5dfedd99daed991abd76d6b1082d6d1202484fa138584c4e11ec8"
   },
   "selected_oracle_sources": {
+    "ligand_mpnn": [
+      {
+        "member_path": "complexa/LigandMPNN/model_params/ligandmpnn_v_32_010_25.pt",
+        "url": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_010_25.pt",
+        "size_bytes": 10541943,
+        "sha256": null,
+        "status": "native upstream URL; immutable SHA256 not published in inspected metadata; owner acquisition/approval pending"
+      },
+      {
+        "member_path": "complexa/LigandMPNN/model_params/solublempnn_v_48_020.pt",
+        "url": "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_020.pt",
+        "size_bytes": 6681301,
+        "sha256": null,
+        "status": "native upstream URL; immutable SHA256 not published in inspected metadata; owner acquisition/approval pending"
+      }
+    ],
+    "native_hf": {
+      "qualification": "public metadata only; no payload acquisition or license approval",
+      "hf": [
+        {
+          "repo": "facebook/esmfold_v1",
+          "revision": "75a3841ee059df2bf4d56688166c8fb459ddd97a",
+          "cache_root": "huggingface/models--facebook--esmfold_v1",
+          "refs/main": "75a3841ee059df2bf4d56688166c8fb459ddd97a",
+          "files": [
+            {
+              "name": "config.json",
+              "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/config.json",
+              "size_bytes": 2103,
+              "sha256": "6b98125e2685fef2875499f6bd7c83968a077993ab53f99bf5581113665f7cc6"
+            },
+            {
+              "name": "pytorch_model.bin",
+              "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/pytorch_model.bin",
+              "size_bytes": 8442062570,
+              "sha256": "2ee07356b125d1e3e57503c204111fd7323347fc4735d41d3caac57c2a78e116"
+            },
+            {
+              "name": "special_tokens_map.json",
+              "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/special_tokens_map.json",
+              "size_bytes": 121,
+              "sha256": "9000546299e3cd9007b851ba512167b6f62d274e22fa74485c4ab52aabae0f35"
+            },
+            {
+              "name": "tokenizer_config.json",
+              "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/tokenizer_config.json",
+              "size_bytes": 40,
+              "sha256": "bfd8a81f4215e59174634eec71eea99aa1841d8692bdf5c60e9ecaa12904fde8"
+            },
+            {
+              "name": "vocab.txt",
+              "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/vocab.txt",
+              "size_bytes": 72,
+              "sha256": "4c20cc7640bf894d2cdefaa6964ec702fd9b2e7a416abf2a50172d8763f3fc14"
+            }
+          ]
+        },
+        {
+          "repo": "facebook/esm2_t33_650M_UR50D",
+          "revision": "08e4846e537177426273712802403f7ba8261b6c",
+          "cache_root": "huggingface/models--facebook--esm2_t33_650M_UR50D",
+          "refs/main": "08e4846e537177426273712802403f7ba8261b6c",
+          "files": [
+            {
+              "name": "config.json",
+              "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/config.json",
+              "size_bytes": 724,
+              "sha256": "539095c22efc52a09d6147074ba4ca119f76a890df5901213b2b55f7d2f96b2b"
+            },
+            {
+              "name": "model.safetensors",
+              "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/model.safetensors",
+              "size_bytes": 2609506392,
+              "sha256": "a08adabb949fa67ad3c14b509d04fd60368b35007b0095e3358f81200c4f4db0"
+            },
+            {
+              "name": "special_tokens_map.json",
+              "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/special_tokens_map.json",
+              "size_bytes": 125,
+              "sha256": "3aedcd4211c0d43aec4e607ff60a63255f3174ead795e997350f09a5f8cd9ee1"
+            },
+            {
+              "name": "tokenizer_config.json",
+              "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/tokenizer_config.json",
+              "size_bytes": 95,
+              "sha256": "7e9161ecdb548ec45a41cbc6b24aa4476fdd418461f491c4207baa99419a29ad"
+            },
+            {
+              "name": "vocab.txt",
+              "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/vocab.txt",
+              "size_bytes": 93,
+              "sha256": "0b82cc0a7c7cf9e567b1e5892d793285b9fbae822c964ca48696f7db44598e03"
+            }
+          ]
+        }
+      ]
+    },
     "af2": {
       "selected_by": "protein_binder profile reward, colabdesign evaluation or sequence_hallucination",
       "url": "https://storage.googleapis.com/download/storage/v1/b/alphafold/o/alphafold_params_2022-12-06.tar?generation=1670353726160664&alt=media",
@@ -205,7 +302,26 @@
     "protein_mpnn": {
       "source_revision": "8907e6671bfbfc92303b5f79c4b5e6ce47cdef57",
       "source": "env/download_startup.sh:104,120",
-      "selected_by": "native designability or explicit mpnn/mpnn_fixed; choose required weight only"
+      "selected_by": "Complexa native default ca_only=True; La separately selects vanilla",
+      "members": [
+        {
+          "path": "ca_model_weights/v_48_020.pt",
+          "mode": "100644",
+          "type": "blob",
+          "sha": "7fd96c7abf26621fad0f4352e3aad15e452251b4",
+          "size": 6624011,
+          "url": "https://api.github.com/repos/dauparas/ProteinMPNN/git/blobs/7fd96c7abf26621fad0f4352e3aad15e452251b4"
+        },
+        {
+          "path": "vanilla_model_weights/v_48_020.pt",
+          "mode": "100644",
+          "type": "blob",
+          "sha": "66f81553eea491dfc1307582c679ef029511937b",
+          "size": 6681301,
+          "url": "https://api.github.com/repos/dauparas/ProteinMPNN/git/blobs/66f81553eea491dfc1307582c679ef029511937b"
+        }
+      ],
+      "status": "Git blob/source pins verified via public API; payload SHA256 and acquisition approval remain owner tasks"
     }
   },
   "layout": {
