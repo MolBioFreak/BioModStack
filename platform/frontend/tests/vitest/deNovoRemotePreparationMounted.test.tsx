@@ -134,7 +134,7 @@ it('connects global Workflow → De Novo to the telemetry target, not the stored
   await edit('Preparation workflow', 'protein_modification_experimental');
   expect(posts).toEqual([]);
   const panel = host.querySelector('[aria-label="Independent worker provisioning"]')!;
-  expect(panel.textContent).toContain('Downloads all supported De Novo generator');
+  expect(panel.textContent).toContain('All supported De Novo generator');
   await click('Prepare entire workflow', panel);
   expect(posts).toEqual([
     { url: '/api/execution-targets/vast%3A123/provision/preview', body: family },

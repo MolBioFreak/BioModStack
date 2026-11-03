@@ -791,7 +791,7 @@ describe('ProjectManager', () => {
         await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
         await waitUntil(() => expect(container.textContent).toContain('DNA sequence workspace'));
 
-        expect(container.textContent).toContain('1 current DNA sequences');
+        expect(container.textContent).toContain('1 Project DNA sequences');
         expect(container.textContent).toContain('A sequence can be a plasmid');
         expect(container.textContent).toContain('Latest editable · Revision 3');
         expect(container.textContent).toContain('ONT verification');
@@ -927,6 +927,8 @@ describe('ProjectManager', () => {
     });
 
     it('attaches an adapter search result from the selected Domain Experiment with an explicit lineage role', async () => {
+        // The shared attachment dialog lists only NGS/MolBio-domain adapters; expose the same fixture adapter under that domain.
+        managerApi.listDomainAdapters.mockResolvedValue({ schema: 'bms.global.adapter-registry.v1', adapters: [{ adapter_id: 'bms.rfd3.local-redesign-reference.adapter.v1', adapter_version: '1', domain_kind: 'ngs_molbio', entity_kind: 'rfd3_local_redesign_request' }] });
         await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
         await waitUntil(() => expect(container.textContent).toContain('Attach existing record'));
 

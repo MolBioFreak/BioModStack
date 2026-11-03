@@ -60,6 +60,7 @@ beforeEach(() => {
             expect(body.expected_generation).toBe(project.generation);
             project = { ...project, generation: project.generation + 1, draft: body.draft }; data = project;
         }
+        else if (url === '/api/files/materialize-structure' && config.method === 'post') data = { path: body.path, format: 'pdb', native_format: 'pdb', sha256: body.expected_sha256 ?? 'a'.repeat(64), model_number: body.model_number ?? 1, model_numbers: [body.model_number ?? 1], source_structure: body, author_residues: [] };
         else if (url === '/api/jobs' && config.method === 'post') data = { id: 'inert-job' };
         else if (url === '/api/user-templates' && config.method === 'post') { data = { ...body, id: 'saved-native', created_at: '2026-01-01', updated_at: '2026-01-01' }; saved = [data]; }
         else if (url === '/api/user-templates') data = saved;
