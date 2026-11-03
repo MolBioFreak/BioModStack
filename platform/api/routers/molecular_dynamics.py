@@ -868,6 +868,10 @@ async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession,
                 return await create_job(job_data, BackgroundTasks(), session,
                     experiment_session=experiment_session, _typed_md_project_launch=adapter, **kwargs)
         return await create_job(job_data, BackgroundTasks(), session, **kwargs)
+    except Exception:
+        if destination_launch_context_id is not None and experiment_session is not None:
+            await experiment_session.rollback()
+        raise
     finally:
         if resolved is not None:
             resolved.close()
