@@ -7873,7 +7873,8 @@ async def _create_job(
         )
         if successor_source is not None:
             job.provenance = {**(job.provenance or {}),
-                              "checkpoint_successor_request_sha256": successor_request_digest}
+                "checkpoint_successor_request_sha256": successor_request_digest,
+                "checkpoint_successor_selection_sha256": file_sha256(Path(job.source_selection_manifest_path))}
             from services.remote_execution.executor import claim_checkpoint_successor, RemoteExecutionError
             try:
                 await claim_checkpoint_successor(session, successor_source, job, successor_binding)

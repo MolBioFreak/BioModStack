@@ -180,10 +180,20 @@ async def test_http_checkpoint_successor_persist_retry_and_native_conflict(api, 
             # Exercise the existing final receiver against the artifact-only
             # process's owned output layout after the producer row is gone.
             import shutil
-            from services.result_ingester import ingest_loose_files
+            from services.result_ingester import ingest_loose_files, _job_stage_context, _resolve_parent_design_lineage
             destination = Path(successor.output_dir) / 'final_candidates'
             shutil.copytree(selected, destination)
-            assert await ingest_loose_files(successor.id, Path(successor.output_dir), verify, current_job=successor) == 1
+            manifest_path = Path(successor.source_selection_manifest_path)
+            sealed_bytes = manifest_path.read_bytes()
+            try:
+                manifest_path.write_bytes(sealed_bytes + b'\n')
+                with pytest.raises(ValueError, match='selected parent Design is missing'):
+                    await _resolve_parent_design_lineage(verify, _job_stage_context(successor), 'one')
+            finally:
+                manifest_path.write_bytes(sealed_bytes)
+            import asyncio
+            assert await asyncio.wait_for(ingest_loose_files(
+                successor.id, Path(successor.output_dir), verify, current_job=successor), timeout=30) == 1
             await verify.commit()
             final = (await verify.scalars(select(Design).where(Design.job_id == new_id))).one()
             manifest = json.loads(Path(successor.source_selection_manifest_path).read_text())

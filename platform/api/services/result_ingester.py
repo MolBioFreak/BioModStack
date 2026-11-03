@@ -1232,6 +1232,20 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
                     elif selection_index[key] != item:
                         selection_index[key] = None
 
+    # Canonical checkpoint submission seals this already retained selection.
+    # Its ancestry survives producer-row deletion without trusting an arbitrary
+    # caller-authored manifest or replacing ordinary selected-parent checks.
+    retained_checkpoint_selection = False
+    binding = params.get("checkpoint_successor") or {}
+    sealed = (getattr(job, "provenance", None) or {}).get("checkpoint_successor_selection_sha256")
+    if sealed and selection_manifest_path and isinstance(selection_manifest, dict):
+        try:
+            retained_checkpoint_selection = (
+                isinstance(binding, dict) and bool(binding.get("source_job_id"))
+                and selection_manifest.get("source_job_id") == binding["source_job_id"]
+                and hashlib.sha256(selection_manifest_path.read_bytes()).hexdigest() == sealed)
+        except OSError:
+            pass
     source_design_index = _build_source_design_index(params)
     stage_settings = _extract_stage_settings(params, stage_family, stage_mode)
 
@@ -1354,6 +1368,7 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         "review_artifact_manifest": None,
         "provenance": provenance,
         "selection_index": selection_index,
+        "retained_checkpoint_selection": retained_checkpoint_selection,
         "source_design_index": source_design_index,
     }
 
@@ -1480,6 +1495,8 @@ async def _resolve_parent_design_lineage(
     source_stage_family = str((manifest_item.get("design_stage_family") if manifest_item else None) or context.get("source_stage_family") or "").strip().lower() or None
     source_stage_mode = str((manifest_item.get("design_stage_mode") if manifest_item else None) or context.get("source_stage_mode") or "").strip().lower() or None
     parent_design = None
+    retained_parent = (context.get("retained_checkpoint_selection")
+                       and manifest_item is not None and manifest_item in selection_index.values())
     if parent_design_id:
         parent_design = cache.get(parent_design_id)
         if parent_design is None and parent_design_id not in cache:
@@ -1490,9 +1507,10 @@ async def _resolve_parent_design_lineage(
             )
             parent_design = result.scalar_one_or_none()
             cache[parent_design_id] = parent_design
-        if parent_design is None or (source_stage_job_id and parent_design.job_id != source_stage_job_id):
+        if ((parent_design is None and not retained_parent)
+                or (parent_design is not None and source_stage_job_id and parent_design.job_id != source_stage_job_id)):
             raise ValueError("selected parent Design is missing or belongs to a different source job")
-    if parent_design is None and candidate_source_ids:
+    if parent_design is None and not parent_design_id and candidate_source_ids:
         for candidate_id in _ordered_unique(candidate_source_ids):
             parent_design = cache.get(candidate_id)
             if parent_design is None and candidate_id not in cache:
@@ -1508,7 +1526,7 @@ async def _resolve_parent_design_lineage(
             if parent_design is not None:
                 parent_design_id = parent_design.id
                 break
-    if parent_design is None and source_pdb_path and source_stage_job_id:
+    if parent_design is None and not parent_design_id and source_pdb_path and source_stage_job_id:
         cache_key = f"pdb::{source_stage_job_id}::{source_pdb_path}"
         parent_design = cache.get(cache_key)
         if parent_design is None and cache_key not in cache:
@@ -1545,9 +1563,10 @@ async def _resolve_parent_design_lineage(
                 Design.id == parent_design.origin_design_id))
             origin_job_id = origin_owner or parent_design.origin_job_id
     elif parent_design_id:
-        origin_design_id = parent_design_id
-        origin_backbone_design_id = parent_design_id
-        origin_job_id = str(manifest_item.get("design_job_id")).strip() if manifest_item and manifest_item.get("design_job_id") else None
+        retained_item = manifest_item or {}
+        origin_design_id = retained_item.get("origin_design_id") or parent_design_id
+        origin_backbone_design_id = retained_item.get("origin_backbone_design_id") or parent_design_id
+        origin_job_id = retained_item.get("origin_job_id") or retained_item.get("design_job_id")
 
     return {
         "parent_design_id": parent_design_id,
