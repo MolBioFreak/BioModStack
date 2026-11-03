@@ -109,7 +109,7 @@ export function nullLabel(key: string, settings: Record<string, unknown> = {}): 
     if (settings.engine === 'mafft' && strategyControlled.has(key)) {
         const strategy = String(settings.strategy ?? 'fft_ns_2')
         const resolved = key === 'retree' ? strategyRetree[strategy] : key === 'maxiterate' ? strategyMaxiterate[strategy] : key === 'pair_method' ? strategyPair[strategy] : undefined
-        return resolved ? `Strategy default (${resolved})` : 'Strategy default (not passed)'
+        return resolved ? `Default (${resolved})` : 'Default'
     }
-    return 'Engine default (not passed)'
+    return 'Default'
 }

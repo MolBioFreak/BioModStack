@@ -94,7 +94,7 @@ function App() {
             <Route path="/alignments/compare" element={<AlignmentPage />} />
             <Route path="/alignments/jobs/:jobId" element={<AlignmentPage />} />
             <Route path="/alignments/results/:resultId" element={<AlignmentPage />} />
-            <Route path="*" element={<div className="p-8 text-content-secondary">This workspace provides MolBio, NGS, Alignments, and their shared Projects.</div>} />
+            <Route path="*" element={<div className="p-8 text-content-secondary">Page not found.</div>} />
             </Routes>
           </Suspense>
         </Layout>

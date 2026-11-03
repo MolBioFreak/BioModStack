@@ -7,5 +7,5 @@ import ViewerFrame from './ViewerFrame'
 
 export default function BiojsViewer(props: AlignmentViewerProps) {
   const key = useMemo(() => JSON.stringify([props.document.resultId, props.document.rows.map(r => [r.rowId, r.label, r.aligned])]), [props.document.resultId, props.document.rows])
-  return <ViewerFrame key={key} {...props} code={viewerCode + "\n" + adapterCode} css={viewerCss} unsafeEval channel="bms-biojs-inline-v1" title="BioJS MSAViewer" notice="Native viewport, colors, hidden columns and selection restore. Marks use native selection outlines; mark labels remain in the shared-state list." />
+  return <ViewerFrame key={key} {...props} code={viewerCode + "\n" + adapterCode} css={viewerCss} unsafeEval channel="bms-biojs-inline-v1" title="BioJS MSAViewer" notice="Position, colors, hidden columns and selection are saved. Mark names are listed under Marks." />
 }

@@ -3,6 +3,7 @@ import { api } from '../../lib/api'
 import AlignmentExport from './AlignmentExport'
 import { listGlobalExperiments, listDomainExperiments } from '../../lib/projectManager'
 import type { RendererState } from './viewerState'
+import { errorText } from './alignmentText'
 import type { ResidueAnchor } from '../../lib/alignmentCoordinates'
 
 type Coordinate = {scope: 'artifact_columns'; artifact_id: string; start: number; end: number} | {scope: 'source_positions'; source_member_id: string; occurrence_id: string; start: number; end: number}
@@ -26,7 +27,7 @@ export default function AlignmentShared({projectId, receiptId, artifactId, selec
       const experiments = await listGlobalExperiments(projectId)
       const groups = await Promise.all(experiments.map(async experiment => (await listDomainExperiments(projectId, experiment.id)).map(item => ({id: item.id, label: `${experiment.name} / ${item.name}`}))))
       if (live) setDomains(groups.flat())
-    } catch (e) { if (live) setError(String(e)) } })()
+    } catch (e) { if (live) setError(errorText(e)) } })()
     return () => { live = false }
   }, [projectId])
   const [revision, setRevision] = useState<Revision>()
@@ -39,7 +40,7 @@ export default function AlignmentShared({projectId, receiptId, artifactId, selec
   const storageKey = (datasetId: string) => `bms.alignment.draft:${JSON.stringify([projectId, datasetId])}`
   function persist(rev: Revision, state: State) {
     try { sessionStorage.setItem(storageKey(rev.id), JSON.stringify({revision: rev, draft: state})) }
-    catch { setError('Unable to retain the draft in this browser session; keep this page open and save it.') }
+    catch { setError('Couldn\'t keep unsaved changes in this tab; save before leaving the page.') }
   }
   function edit(update: (current: State) => State) {
     const next = update(draftRef.current)
@@ -50,33 +51,33 @@ export default function AlignmentShared({projectId, receiptId, artifactId, selec
 
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  async function run(fn: () => Promise<void>) { setBusy(true); setError(''); try { await fn() } catch (e) { setError(String(e)) } finally { setBusy(false) } }
+  async function run(fn: () => Promise<void>) { setBusy(true); setError(''); try { await fn() } catch (e) { setError(errorText(e)) } finally { setBusy(false) } }
   function received(value: Revision) {
     let saved: {revision: Revision; draft: State} | undefined
-    try { const raw = sessionStorage.getItem(storageKey(value.id)); if (raw) saved = JSON.parse(raw) } catch { setError('Could not read the retained draft.') }
+    try { const raw = sessionStorage.getItem(storageKey(value.id)); if (raw) saved = JSON.parse(raw) } catch { setError('Couldn\'t read your unsaved changes.') }
     const rev = saved?.revision ?? value
     const state = saved?.draft ?? value.state
     revisionRef.current = rev; draftRef.current = state
     setRevision(rev); setDataset(value.id); setDraft(state)
   }
-  return <section aria-label="Project shared alignment state">
-    <h2>Project shared alignment state</h2><p>Shared Project Dataset; coordinates are zero-based. Open or create a state before saving.</p>
-    {importedStateIds.map((stateId, index) => <button key={stateId} disabled={busy} onClick={() => void run(async () => received((await api.get<Revision>(`${base}/shared-state/${encodeURIComponent(stateId)}`)).data))}>Open imported saved state {index + 1}</button>)}
-    <label>Shared Dataset ID <input value={dataset} onChange={e => setDataset(e.target.value)}/></label>{' '}
-    <button disabled={busy || !dataset} onClick={() => void run(async () => received((await api.get<Revision>(`${base}/shared-state/${encodeURIComponent(dataset)}`)).data))}>Open shared state</button>{' '}
-    <label>Destination domain <select value={domain} onChange={e => setDomain(e.target.value)}><option value="">Choose a domain</option>{domains.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>{' '}
-    <button disabled={busy || !domain} onClick={() => void run(async () => received((await api.post<Revision>(`${base}/shared-state`, {name: name || 'Alignment shared state', domain_experiment_id: domain, state: empty()})).data))}>Create shared state</button>
+  return <section aria-label="Notes and saved views">
+    <h2>Notes and saved views</h2><p>Open or create a notes set to add marks and saved views.</p>
+    {importedStateIds.map((stateId, index) => <button key={stateId} disabled={busy} onClick={() => void run(async () => received((await api.get<Revision>(`${base}/shared-state/${encodeURIComponent(stateId)}`)).data))}>Open imported notes {index + 1}</button>)}
+    <label>Notes ID <input value={dataset} onChange={e => setDataset(e.target.value)}/></label>{' '}
+    <button disabled={busy || !dataset} onClick={() => void run(async () => received((await api.get<Revision>(`${base}/shared-state/${encodeURIComponent(dataset)}`)).data))}>Open notes</button>{' '}
+    <label>Save to experiment <select value={domain} onChange={e => setDomain(e.target.value)}><option value="">Choose experiment</option>{domains.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>{' '}
+    <button disabled={busy || !domain} onClick={() => void run(async () => received((await api.post<Revision>(`${base}/shared-state`, {name: name || 'Alignment shared state', domain_experiment_id: domain, state: empty()})).data))}>Create notes</button>
     {revision && <>
-      <p>Dataset {revision.id} · revision {revision.revision_id} · generation {revision.head_generation}</p>
+      <p title={`Dataset ${revision.id} · revision ${revision.revision_id}`}>Saved version {revision.head_generation}</p>
       <AlignmentExport key={`${projectId}:${receiptId}`} projectId={projectId} receiptId={receiptId} sharedStateId={revision.id} domain={domain}/>
       <label>Name <input value={name} onChange={e => setName(e.target.value)}/></label>{' '}
-      <button disabled={!selection || selection.resultId !== artifactId} onClick={() => { if (selection) edit(current => ({...current, marks: [...current.marks, {id: id(), label: name, coordinate: {scope: 'artifact_columns', artifact_id: artifactId, start: selection.column, end: selection.column}, note: '', provenance: {}}]})) }}>Add selected column mark</button>{' '}
-      <button disabled={!selection || selection.resultId !== artifactId || selection.sourcePosition === undefined || !selection.sourceMemberId || !selection.occurrenceId} onClick={() => { if (selection?.sourcePosition !== undefined && selection.sourceMemberId && selection.occurrenceId) edit(current => ({...current, marks: [...current.marks, {id: id(), label: name, coordinate: {scope: 'source_positions', source_member_id: selection.sourceMemberId!, occurrence_id: selection.occurrenceId!, start: selection.sourcePosition!, end: selection.sourcePosition!}, note: '', provenance: {}}]})) }}>Add selected source-position mark</button>{' '}
-      <button disabled={!name} onClick={() => edit(current => ({...current, views: [...current.views, {id: id(), name, artifact_id: artifactId, hidden_row_ids: hiddenRowIds, row_order: rowOrder, selected_marks: selectedMarks, ...(rendererState ? {renderer_state: rendererState} : {}), viewer, selected_row_id: selection?.rowId ?? (selectedRowId || null), selected_column: selection?.column ?? null}]}))}>Save current viewer as view</button>
-      <h3>Marks</h3><ul>{draft.marks.map(mark => <li key={mark.id}><label><input type="checkbox" checked={selectedMarks.includes(mark.id)} onChange={e => onSelectedMarksChange?.(e.target.checked ? [...selectedMarks, mark.id] : selectedMarks.filter(id => id !== mark.id))} /> Draw {mark.label}</label>: {mark.coordinate.scope === 'artifact_columns' ? `${mark.coordinate.artifact_id} columns ${mark.coordinate.start}–${mark.coordinate.end}` : `${mark.coordinate.source_member_id} / ${mark.coordinate.occurrence_id} positions ${mark.coordinate.start}–${mark.coordinate.end}`}</li>)}</ul>
-      <p>Saved views capture row order, visibility, selection, selected marks and the current renderer’s supported settings. Renderer capability limits are shown above the alignment; unsupported settings are not simulated.</p><h3>Saved views</h3><ul>{draft.views.map(view => <li key={view.id}>{view.name} ({view.artifact_id}) {view.artifact_id === artifactId && view.viewer && <button onClick={() => { if (applyView) applyView(view); else applyViewer(view.viewer!) }}>Apply viewer</button>}</li>)}</ul>
-      <h3>Compare retained alignments</h3><p><a href={`/alignments/compare?project_id=${encodeURIComponent(projectId)}&shared_state_id=${encodeURIComponent(revision.id)}`}>Open Compare workspace</a> to select retained results and run a managed comparison Job. Previously saved reports remain below.</p>
-      <ul>{draft.comparisons.map(item => <li key={item.id}><details><summary>{item.name}: {item.left_artifact_id} ↔ {item.right_artifact_id}</summary>{item.report.agreement && <p>Shared residue-pair agreement (Jaccard): {item.report.agreement.jaccard === null ? 'undefined (no aligned pairs)' : item.report.agreement.jaccard.toFixed(3)} · {item.report.agreement.shared_aligned_pairs} shared / {item.report.agreement.union_aligned_pairs} union pairs. Matched rows: {item.report.agreement.matched_rows}; excluded rows: {item.report.left_excluded} left, {item.report.right_excluded} right; unknown mapping rows: {item.report.agreement.rows_with_unknown_mapping}; unmapped residues: {item.report.agreement.left_unmapped_residues} left, {item.report.agreement.right_unmapped_residues} right. Agreement is not accuracy.</p>}<pre>{JSON.stringify(item.report, null, 2)}</pre></details></li>)}</ul>
+      <button disabled={!selection || selection.resultId !== artifactId} onClick={() => { if (selection) edit(current => ({...current, marks: [...current.marks, {id: id(), label: name, coordinate: {scope: 'artifact_columns', artifact_id: artifactId, start: selection.column, end: selection.column}, note: '', provenance: {}}]})) }}>Mark selected column</button>{' '}
+      <button disabled={!selection || selection.resultId !== artifactId || selection.sourcePosition === undefined || !selection.sourceMemberId || !selection.occurrenceId} onClick={() => { if (selection?.sourcePosition !== undefined && selection.sourceMemberId && selection.occurrenceId) edit(current => ({...current, marks: [...current.marks, {id: id(), label: name, coordinate: {scope: 'source_positions', source_member_id: selection.sourceMemberId!, occurrence_id: selection.occurrenceId!, start: selection.sourcePosition!, end: selection.sourcePosition!}, note: '', provenance: {}}]})) }}>Mark selected sequence position</button>{' '}
+      <button disabled={!name} onClick={() => edit(current => ({...current, views: [...current.views, {id: id(), name, artifact_id: artifactId, hidden_row_ids: hiddenRowIds, row_order: rowOrder, selected_marks: selectedMarks, ...(rendererState ? {renderer_state: rendererState} : {}), viewer, selected_row_id: selection?.rowId ?? (selectedRowId || null), selected_column: selection?.column ?? null}]}))}>Save current view</button>
+      <h3>Marks</h3><ul>{draft.marks.map(mark => <li key={mark.id}><label><input type="checkbox" checked={selectedMarks.includes(mark.id)} onChange={e => onSelectedMarksChange?.(e.target.checked ? [...selectedMarks, mark.id] : selectedMarks.filter(id => id !== mark.id))} /> Draw {mark.label}</label>: <span title={mark.coordinate.scope === 'artifact_columns' ? mark.coordinate.artifact_id : `${mark.coordinate.source_member_id} / ${mark.coordinate.occurrence_id}`}>{mark.coordinate.scope === 'artifact_columns' ? 'columns' : 'sequence positions'} {mark.coordinate.start + 1}–{mark.coordinate.end + 1}</span></li>)}</ul>
+      <p>A saved view keeps row order, hidden rows, selection, marks and viewer settings.</p><h3>Saved views</h3><ul>{draft.views.map(view => <li key={view.id}><span title={view.artifact_id}>{view.name}</span> {view.artifact_id === artifactId && view.viewer && <button onClick={() => { if (applyView) applyView(view); else applyViewer(view.viewer!) }}>Apply viewer</button>}</li>)}</ul>
+      <h3>Comparisons</h3><p><a href={`/alignments/compare?project_id=${encodeURIComponent(projectId)}&shared_state_id=${encodeURIComponent(revision.id)}`}>Compare with another alignment →</a></p>
+      <ul>{draft.comparisons.map(item => <li key={item.id}><details><summary title={`${item.left_artifact_id} ↔ ${item.right_artifact_id}`}>{item.name}</summary>{item.report.agreement && <p>Agreement: {item.report.agreement.jaccard === null ? '—' : item.report.agreement.jaccard.toFixed(3)} ({item.report.agreement.shared_aligned_pairs} of {item.report.agreement.union_aligned_pairs} pairs). {item.report.agreement.matched_rows} rows matched.</p>}</details></li>)}</ul>
       <button disabled={busy} onClick={() => void run(async () => {
         const submitted = draftRef.current
         const value = (await api.put<Revision>(`${base}/shared-state/${encodeURIComponent(revision.id)}`, {expected_head_generation: revision.head_generation, state: submitted})).data
@@ -87,9 +88,9 @@ export default function AlignmentShared({projectId, receiptId, artifactId, selec
         setRevision(value); setDraft(current)
         if (current === value.state) { try { sessionStorage.removeItem(storageKey(value.id)) } catch { /* no retained draft */ } }
         else persist(value, current)
-      })}>Save shared revision</button>
-      <p>Drafts are retained in this browser session when switching datasets or alignments. On a conflict your draft is retained.</p>
+      })}>Save notes</button>
+      <p>Unsaved changes are kept in this browser tab.</p>
     </>}
-    {error && <p role="alert">Shared state request failed (including revision conflicts): {error}</p>}
+    {error && <p role="alert">Couldn't save or load notes: {error}. If someone else changed them, reload and try again.</p>}
   </section>
 }

@@ -30,12 +30,12 @@ it('distinguishes failed receipt reads from empty results and retries without hi
   try {
     await act(async () => root.render(<MemoryRouter><AlignmentLibrary initialProject="p"/></MemoryRouter>));
     expect(div.textContent).toContain('Alignment library unavailable');
-    expect(div.textContent).not.toContain('No retained alignment results');
+    expect(div.textContent).not.toContain('No alignments yet');
     expect(div.querySelector('input[aria-label="Alignment file"]')).not.toBeNull();
     fail = false;
     await act(async () => Array.from(div.querySelectorAll('button')).find(b => b.textContent === 'Retry results')!.click());
     expect(div.textContent).not.toContain('Alignment library unavailable');
-    expect(div.textContent).toContain('No retained alignment results');
+    expect(div.textContent).toContain('No alignments yet');
   } finally { await act(async () => root.unmount()); get.mockRestore(); }
 });
 
@@ -48,7 +48,7 @@ it('lists authorized Project receipts and links the exact retained result', asyn
   await act(async () => { root.render(<MemoryRouter><AlignmentLibrary initialProject="p"/></MemoryRouter>); });
   await act(async () => { await new Promise(r => setTimeout(r, 30)); });
   expect(div.querySelector('a[href="/alignments/results/r?project_id=p"]')).not.toBeNull();
-  expect(div.textContent).toContain('does not create a Job');
+  expect(div.textContent).toContain('Import an exported alignment ZIP');
   await act(async () => root.unmount()); get.mockRestore();
 });
 

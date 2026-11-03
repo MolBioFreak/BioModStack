@@ -19,14 +19,14 @@ describe('alignment workspace host', () => {
       { label: 'external', href: 'https://example.com/secret' },
       { label: 'network path', href: '//example.com/secret' },
     ] }))
-    expect(html).toContain('JBrowseMSA is not connected')
+    expect(html).toContain('JBrowseMSA is not available')
     expect(html).toContain('/api/jobs/1/artifact')
     expect(html).not.toContain('example.com')
   })
   it('renders an explicitly injected adapter rather than a stand-in', () => {
     const html = renderToStaticMarkup(createElement(AlignmentWorkspace, { document, viewers: { jbrowse: TestAdapter } }))
     expect(html).toContain('adapter for result-1')
-    expect(html).not.toContain('JBrowseMSA is not connected')
+    expect(html).not.toContain('JBrowseMSA is not available')
   })
   it('keeps a failed renderer inside its panel with the result and downloads still usable', async () => {
     const Broken = () => { throw new Error('Failed to fetch dynamically imported module: viewer.js') }
@@ -49,11 +49,11 @@ describe('alignment settings presentation', () => {
   it('names native keys for operators and resolves strategy defaults from the compiler', () => {
     expect(fieldLabel('treeout')).toBe('Save guide tree')
     expect(optionLabel('strategy', 'fft_ns_2')).toContain('FFT-NS-2')
-    expect(nullLabel('maxiterate', { engine: 'mafft', strategy: 'fft_ns_2' })).toBe('Strategy default (0)')
-    expect(nullLabel('maxiterate', { engine: 'mafft', strategy: 'linsi' })).toBe('Strategy default (1000)')
-    expect(nullLabel('pair_method', { engine: 'mafft', strategy: 'ginsi' })).toBe('Strategy default (globalpair)')
-    expect(nullLabel('tree_method', { engine: 'mafft', strategy: 'auto' })).toBe('Strategy default (not passed)')
-    expect(nullLabel('go', { engine: 'famsa' })).toBe('Engine default (not passed)')
+    expect(nullLabel('maxiterate', { engine: 'mafft', strategy: 'fft_ns_2' })).toBe('Default (0)')
+    expect(nullLabel('maxiterate', { engine: 'mafft', strategy: 'linsi' })).toBe('Default (1000)')
+    expect(nullLabel('pair_method', { engine: 'mafft', strategy: 'ginsi' })).toBe('Default (globalpair)')
+    expect(nullLabel('tree_method', { engine: 'mafft', strategy: 'auto' })).toBe('Default')
+    expect(nullLabel('go', { engine: 'famsa' })).toBe('Default')
     expect(primaryFieldsFor('mafft', 'protein').has('bl')).toBe(true)
     expect(primaryFieldsFor('mafft', 'protein').has('kimura')).toBe(false)
     expect(primaryFieldsFor('mafft', 'dna').has('kimura')).toBe(true)

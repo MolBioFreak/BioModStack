@@ -22,7 +22,7 @@ describe('family alignment authoring', () => {
         const button = [...div.querySelectorAll('button')].find(x=>x.textContent === 'Start run')!;
         await act(async()=>{button.click();});
         expect(submit).toHaveBeenCalledWith(expect.objectContaining({model_id:'family_msa_protein',mode:'family_msa',params:expect.objectContaining({roster:expect.objectContaining({rows:expect.arrayContaining([expect.objectContaining({header:'a',sequence:'AA'})])}),settings:expect.objectContaining({engine:'mafft',threads:1})})}));
-        expect(div.textContent).toContain('job-real');
+        expect(div.querySelector('a[href="/alignments/jobs/job-real"]')?.getAttribute('title')).toBe('job-real');
         await act(async()=>root.unmount()); client.clear();
     });
 });
