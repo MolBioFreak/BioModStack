@@ -44,6 +44,8 @@ from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_ch
 from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.structure_utils import load_structure
 
+from services.plr_validator_scores import apply_validator_scores
+
 REVIEWABLE_STAGES = {"post_rfantibody", "post_boltzgen", "post_ppiflow_generator", "post_fampnn", "post_caliby", "post_structure_validation"}
 STRUCTURE_PATTERNS = ("*.pdb", "*.cif", "*.mmcif")
 METRIC_PATTERNS = ("*.json", "*.csv", "*.tsv")
@@ -1034,6 +1036,23 @@ def _rfantibody_review_metadata_refresh_required(
     return False
 
 
+def _resequence_gate_score_root(job: Job, stage: str, payload: Optional[dict] = None) -> Optional[Path]:
+    """Result root holding validation/<validator>/ output when this gate is a Resequence structure-validation gate."""
+    if stage != "post_structure_validation" or not _is_protein_local_redesign_job(job, payload):
+        return None
+    return resolve_output_dir(job_result_output_dir(job))
+
+
+def _apply_resequence_gate_scores(row: Design, job: Job, root: Optional[Path]) -> bool:
+    """Display-only: copy the validators' own scores onto a gate row. Missing or unreadable files change nothing."""
+    if root is None:
+        return False
+    validators = (job.params or {}).get("structure_validators")
+    return apply_validator_scores(
+        row, root, row.name or Path(str(row.pdb_path)).stem,
+        validators if isinstance(validators, (list, tuple)) else ())
+
+
 async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool = False) -> int:
     stage = str(job.awaiting_stage or "").strip().lower()
     if stage not in REVIEWABLE_STAGES:
@@ -1259,6 +1278,19 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
             )
             and not force
         ):
+            score_root = _resequence_gate_score_root(job, stage, repaired_payload)
+            if score_root is not None:
+                scored = False
+                for existing_row in (await session.execute(
+                    select(Design).where(Design.job_id == job.id, Design.source_stage == stage)
+                )).scalars():
+                    before = (existing_row.plddt_overall, existing_row.ptm, existing_row.conf_score,
+                              existing_row.confidence_metrics)
+                    _apply_resequence_gate_scores(existing_row, job, score_root)
+                    scored = scored or before != (existing_row.plddt_overall, existing_row.ptm,
+                                                  existing_row.conf_score, existing_row.confidence_metrics)
+                if scored:
+                    await session.commit()
             return existing_count
 
     await session.execute(
@@ -1282,6 +1314,7 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
     job_context = _job_stage_context(job)
     lineage_cache: dict[str, Optional[Design]] = {}
     rows: list[Design] = []
+    score_root = _resequence_gate_score_root(job, stage, repaired_payload)
 
     for artifact_group, structure_path in expected_files:
         design_name = structure_path.stem
@@ -1486,6 +1519,7 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
             lineage.get("source_design"),
             structure_path=structure_path,
         )
+        _apply_resequence_gate_scores(review_row, job, score_root)
 
     session.add_all(rows)
     await session.flush()
