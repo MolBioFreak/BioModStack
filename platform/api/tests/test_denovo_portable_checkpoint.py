@@ -182,6 +182,7 @@ async def test_successor_is_selected_native_job_not_old_runtime(store, tmp_path,
         from routers.jobs import _execution_plan_preview
         preview = _execution_plan_preview(request)
         assert preview['request']['execution_target_id'] == target
+        assert preview['admissible'], preview['blockers']
         invocation = nextflow.compile_nextflow_invocation(request.model_id, request.mode, request.params,
                                                           str(tmp_path / 'fresh-successor'), job_id='successor')
         assert invocation.native_parameters['plr_final_candidate_dir'] == request.params['plr_final_candidate_dir']
