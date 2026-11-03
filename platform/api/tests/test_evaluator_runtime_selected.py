@@ -12,4 +12,4 @@ def test_complexa_uses_native_ca_not_la_vanilla():
     assert not unresolved
     paths = {item.relative_path for item in dependencies}
     assert paths == {'complexa/complexa.ckpt', 'complexa/complexa_ae.ckpt',
-                     'complexa/ProteinMPNN/ca_model_weights/v_48_020.pt'}
+                     'complexa-evaluators/ProteinMPNN/ca_model_weights/v_48_020.pt'}

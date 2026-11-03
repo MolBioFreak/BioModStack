@@ -518,9 +518,9 @@ def native_checkpoint_dependencies(process: str, params: dict):
             'rf3': ('foundry/checkpoints/rf3_foundry_01_24_latest_remapped.ckpt',),
             'esmfold': ('huggingface/models--facebook--esmfold_v1',),
             'esm': ('huggingface/models--facebook--esm2_t33_650M_UR50D',),
-            'protein_mpnn': ('complexa/ProteinMPNN/ca_model_weights/v_48_020.pt',),
-            'ligand_mpnn': ('complexa/LigandMPNN/model_params/ligandmpnn_v_32_010_25.pt',),
-            'soluble_mpnn': ('complexa/LigandMPNN/model_params/solublempnn_v_48_020.pt',),
+            'protein_mpnn': ('complexa-evaluators/ProteinMPNN/ca_model_weights/v_48_020.pt',),
+            'ligand_mpnn': ('complexa-evaluators/LigandMPNN/model_params/ligandmpnn_v_32_010_25.pt',),
+            'soluble_mpnn': ('complexa-evaluators/LigandMPNN/model_params/solublempnn_v_48_020.pt',),
             'novelty_pdb': ('complexa/foldseek_db/pdb_db',),
             'novelty_afdb_rep_v4': ('complexa/foldseek_db/afdb_rep_v4_db',),
             'novelty_afdb_rep_v4_geniefilters_maxlen512': ('complexa/foldseek_db/afdb_rep_v4_geniefilters_maxlen512',),
@@ -661,7 +661,7 @@ def native_checkpoint_dependencies(process: str, params: dict):
         metric = {**metric, **request.get('metrics', {})}
         members = []
         if metric.get('compute_designability') is not False:
-            members.append('laproteina/ProteinMPNN/vanilla_model_weights/v_48_020.pt')
+            members.append('laproteina-evaluators/ProteinMPNN/vanilla_model_weights/v_48_020.pt')
         if any(metric.get('compute_' + name) is not False and
                'esmfold' in metric.get(name + '_folding_models', ['esmfold'])
                for name in ('designability', 'codesignability')):
@@ -808,6 +808,37 @@ def native_checkpoint_dependencies(process: str, params: dict):
                 'Native passthrough may select a different config or optional GNINA/ESMFold branch; '
                 'resolved native configuration metadata required')
     return tuple(dependencies), tuple(blockers)
+
+
+def evaluator_acquisition_layouts() -> list[tuple[dict, list[dict]]]:
+    """Selected evaluator layout declarations from their existing byte authority.
+
+    These are not model-wide acquisition requests. The selected runtime receiver
+    matches an exact immutable generation, then emits only the requested members.
+    Keep generator generations and ordinary model acquisition plans unchanged.
+    """
+    import json
+
+    source = json.loads((Path(__file__).resolve().parents[2] /
+        'scripts/bms_complexa/assets.json').read_text())['selected_oracle_sources']
+    groups: dict[str, list[dict]] = {}
+
+    def member(group, path, manifest):
+        groups.setdefault(group, []).append({'member_path': path, 'manifest': manifest})
+
+    for repository in source['native_hf']['hf']:
+        group, directory = repository['cache_root'].split('/', 1)
+        for entry in repository['files']:
+            member(group, directory + '/snapshots/' + repository['revision'] + '/' + entry['name'],
+                   entry['acquisition_manifest'])
+    for entry in source['protein_mpnn']['members']:
+        owner, path = entry['member_path'].split('/', 1)
+        member(owner + '-evaluators', path, entry['acquisition_manifest'])
+    for entry in source['ligand_mpnn']:
+        owner, path = entry['member_path'].split('/', 1)
+        member(owner + '-evaluators', path, entry['acquisition_manifest'])
+    return [({'kind': 'weights', 'relative_path': name}, entries)
+            for name, entries in sorted(groups.items())]
 
 
 class RuntimeAcquisitionArtifact(BaseModel):

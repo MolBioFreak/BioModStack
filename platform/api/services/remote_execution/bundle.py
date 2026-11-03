@@ -576,6 +576,18 @@ def _selected_weight_members(source: Path, model_id: str | None, *, resolved=Non
     # inferred model name or arbitrary symlink destination. Cache metadata only
     # within this inventory operation; byte custody remains _verify_tree's.
     def declared_layouts():
+        layout_parts = source.relative_to(weights / 'layouts').parts
+        if layout_parts and layout_parts[0] in {
+                'huggingface', 'complexa-evaluators', 'laproteina-evaluators'}:
+            from model_registry import evaluator_acquisition_layouts
+            key = ('selected-evaluator-layouts',)
+            layouts = resolved.get(key) if resolved is not None else None
+            if layouts is None:
+                layouts = evaluator_acquisition_layouts()
+                if resolved is not None:
+                    resolved[key] = layouts
+            yield from layouts
+
         def owned(owner):
             key = ('acquisition-layouts', owner)
             layouts = resolved.get(key) if resolved is not None else None

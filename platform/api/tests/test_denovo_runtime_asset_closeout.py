@@ -42,7 +42,7 @@ def test_complexa_native_evaluation_closure_not_generation_rewards():
 
 @pytest.mark.parametrize('design,codesign,overrides,expected', [
     (False, False, {}, set()),
-    (True, False, {}, {'laproteina/ProteinMPNN/vanilla_model_weights/v_48_020.pt', 'huggingface/models--facebook--esmfold_v1'}),
+    (True, False, {}, {'laproteina-evaluators/ProteinMPNN/vanilla_model_weights/v_48_020.pt', 'huggingface/models--facebook--esmfold_v1'}),
     (False, True, {}, {'huggingface/models--facebook--esmfold_v1'}),
     (True, True, {'compute_designability': False, 'compute_codesignability': False}, set()),
 ])
