@@ -1,4 +1,7 @@
 id: protein_local_redesign
+# Retained catalog identity only; generation lives in unified RFD3 region tasks.
+public_launch: false
+enabled: false
 name: RFD3 Local Redesign
 version: "1.0.0"
 category: generative_design

@@ -13,22 +13,26 @@ from pathlib import Path
 from contract import PREPARATION_RECEIPT_SCHEMA, canonical_json, canonical_sha256, validate_request
 
 
-def prepare(request: dict, *, source_destination: Path | None = None, staged_source_dir: Path | None = None) -> tuple[dict, dict]:
-    request = validate_request(request)
+def effective_native_settings(request: dict) -> dict:
+    """The length/conditioning authority shared by preparation and accounting."""
     generation = request["generation"]
-    native = {"generation_0": {"dialect": 2}}
-    # A region task takes its size from the input structure or its contig, never from the length range.
+    native: dict = {"dialect": 2}
     if "task" not in request:
-        native["generation_0"]["length"] = f"{generation['min_length']}-{generation['max_length']}"
+        native["length"] = f"{generation['min_length']}-{generation['max_length']}"
     if "conditioning" in request:
         from scripts.lib.rfd3_scientific_settings import conditioning_settings
-        native["generation_0"].update(conditioning_settings(request["conditioning"]))
-    if native["generation_0"].get("partial_t") is not None:
-        # Native RFD3 rejects `length` during partial diffusion; the input structure sets the size.
-        native["generation_0"].pop("length", None)
+        native.update(conditioning_settings(request["conditioning"]))
+    if native.get("partial_t") is not None:
+        native.pop("length", None)
+    return native
+
+
+def prepare(request: dict, *, source_destination: Path | None = None, staged_source_dir: Path | None = None, staged_source: Path | None = None) -> tuple[dict, dict]:
+    request = validate_request(request)
+    native = {"generation_0": effective_native_settings(request)}
     source_mapping = None
     if "source" in request:
-        source = Path(request["source"]["path"])
+        source = staged_source or Path(request["source"]["path"])
         if staged_source_dir is not None and (staged_source_dir / source.name).is_file():
             source = staged_source_dir / source.name  # the process only sees what the workflow staged
         if hashlib.sha256(source.read_bytes()).hexdigest() != request["source"]["sha256"]:
@@ -98,13 +102,15 @@ def main() -> None:
     parser.add_argument("--output-native", required=True)
     parser.add_argument("--output-receipt", required=True)
     parser.add_argument("--source-dir", help="Owned source closure staged with the native input")
+    parser.add_argument("--staged-source", help="Exact workflow-staged source file")
     parser.add_argument("--staged-source-dir", help="Directory holding the workflow-staged copy of the request source")
     args = parser.parse_args()
 
     request = validate_request(json.loads(Path(args.request).read_text(encoding="utf-8")))
     _require_expected(request, args)
     native, receipt = prepare(request, source_destination=Path(args.output_native).resolve().with_name("rfd3_native_source.cif"),
-                              staged_source_dir=Path(args.staged_source_dir).resolve() if args.staged_source_dir else None)
+                              staged_source_dir=Path(args.staged_source_dir).resolve() if args.staged_source_dir else None,
+                              staged_source=Path(args.staged_source).resolve() if args.staged_source else None)
     if args.source_dir:
         source_dir = Path(args.source_dir).resolve()
         source_dir.mkdir(parents=True, exist_ok=True)

@@ -125,8 +125,11 @@ class GenerationProducerTests(unittest.TestCase):
         self.assertIn("python3 -u '${params.code_root}/scripts/rfd3_generation/prepare_native_input.py'", workflow)
         self.assertIn("python3 -u '${params.code_root}/scripts/rfd3_generation/build_result_manifest.py'", workflow)
         self.assertIn("params.rfd3_generation_num_designs", module)
-        self.assertIn("params.rfd3_generation_seed", module)
-        self.assertIn("params.rfd3_generation_dump_trajectories", module)
+        self.assertIn("scripts/rfd3_generation/run_native.py --request", module)
+        from scripts.rfd3_generation.run_native import commands
+        argv = commands(request(), 'native.json', 'out')[0]
+        self.assertIn('seed=17', argv)
+        self.assertIn('dump_trajectories=false', argv)
 
     def test_manifest_hash_binds_candidates_metrics_and_aggregates(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -148,7 +151,7 @@ class GenerationProducerTests(unittest.TestCase):
                 accepted_candidate_ids={"generation_0_model_0"}, storage_prefix="run/rfd3",
             )
 
-            self.assertEqual(manifest["schema"], "bms.rfd3.generation.result-manifest.v1")
+            self.assertEqual(manifest["schema"], "bms.rfd3.generation.result-manifest.v2")
             self.assertEqual(manifest["job_id"], "job-generation-001")
             self.assertEqual(manifest["request_id"], "req-generation-001")
             self.assertEqual(manifest["request_sha256"], hashlib.sha256(canonical_json(request()).encode()).hexdigest())
@@ -166,18 +169,20 @@ class GenerationProducerTests(unittest.TestCase):
             self.assertEqual(candidate["artifact_manifest_sha256"], hashlib.sha256(
                 canonical_json(candidate["artifacts"]).encode()).hexdigest())
 
-    def test_manifest_rejects_nonexact_candidate_set(self) -> None:
+    def test_manifest_preserves_unpaired_candidate_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp_path = Path(raw_tmp)
             request_path = tmp_path / "request.json"
             request_path.write_text(json.dumps(request(num_designs=1)), encoding="utf-8")
             cif = tmp_path / "generation_0_model_0.cif.gz"
             write_cif(cif)
-            with self.assertRaisesRegex(ContractError, "metadata must match"):
-                build_result_manifest(
-                    request_path=request_path, structure_paths=[cif], metadata_paths=[],
-                    accepted_candidate_ids=set(), storage_prefix="run/rfd3",
-                )
+            manifest = build_result_manifest(
+                request_path=request_path, structure_paths=[cif], metadata_paths=[],
+                accepted_candidate_ids=set(), storage_prefix="run/rfd3",
+            )
+            self.assertEqual(manifest['candidates'], [])
+            self.assertEqual(manifest['population']['missing'], 1)
+            self.assertEqual(manifest['population']['unpaired_artifacts'][0]['sha256'], sha256(cif))
 
 
 if __name__ == "__main__":

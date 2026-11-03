@@ -36,7 +36,9 @@ def main():
     args = parser.parse_args()
     request = json.loads(Path(args.request).read_text())
     for command in commands(request, args.inputs, args.out_dir):
-        subprocess.run(command, check=True)
+        result = subprocess.run(command)
+        if result.returncode:
+            raise SystemExit(result.returncode if result.returncode > 0 else 128 - result.returncode)
 
 
 if __name__ == '__main__':

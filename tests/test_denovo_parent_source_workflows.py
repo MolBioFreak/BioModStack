@@ -44,25 +44,17 @@ def run_nextflow(tmp_path, pipeline, params, *, binaries=None):
     return list((tmp_path / 'work').glob('*/*/.command.sh'))
 
 
-@pytest.mark.parametrize('kind,mapped', [('generation', False), ('generation', True), ('local_redesign', True)])
+@pytest.mark.parametrize('kind,mapped', [('generation', False), ('generation', True)])
 def test_actual_rfd3_prepare_to_run_tuple(tmp_path, kind, mapped):
     source = tmp_path / 'original.cif'
     source.write_text(cif_source())
     source_digest = hashlib.sha256(source.read_bytes()).hexdigest()
     binding = {'path': str(source), 'sha256': source_digest}
-    if kind == 'generation':
-        request = generation()
-        request['source'] = binding
-        name = 'PrepareGeneralRFD3Input'
-        filename = 'workflows/protein_design.nf'
-        invoke = f'{name}(Channel.value(file(params.request)), Channel.value([file(params.source)]))'
-    else:
-        request = {'schema': 'bms.rfd3.local-redesign.request.v1', 'input': binding,
-            'rfd3': {'input': str(source), 'contig': 'A2'}, 'sequence_policy': 'skip',
-            'redesign_mode': 'native_recall', 'execution': {'num_designs': 2, 'seed': 0}}
-        name = 'PrepareProteinLocalNativeRFD3Input'
-        filename = 'workflows/protein_local_redesign.nf'
-        invoke = f'{name}(Channel.value(file(params.source)), Channel.value(file(params.request)))'
+    request = generation()
+    request['source'] = binding
+    name = 'PrepareGeneralRFD3Input'
+    filename = 'workflows/protein_design.nf'
+    invoke = f'{name}(Channel.value(file(params.request)), Channel.value([file(params.source)]))'
     if mapped:
         request['source_mapping'] = 'bms.rfd3.source-map.v1'
     request_path = tmp_path / 'request.json'
@@ -93,7 +85,7 @@ assert selected.parts[0] == 'rfd3_sources', item
 payload = selected.read_bytes()
 out = Path(args['out_dir']); out.mkdir(exist_ok=True)
 with gzip.open(out / 'fixture_0.cif.gz', 'wb') as f:
-    f.write(b'data_explicitly_inert_transport_fixture\\n#\\n')
+    f.write({cif_source().encode()!r})
 (out / 'fixture_0.json').write_text(json.dumps({{'native_execution': False,
     'source_sha256': hashlib.sha256(payload).hexdigest(), 'source_path': str(selected)}}))
 ''')

@@ -10,7 +10,7 @@ from test_rfd3_bounded_corrections import ROOT, cif_source, generation
 
 
 @pytest.mark.parametrize('mapped', [False, True])
-@pytest.mark.parametrize('kind', ['generation', 'local_redesign'])
+@pytest.mark.parametrize('kind', ['generation'])
 def test_prepared_source_survives_real_task_relocation(tmp_path, mapped, kind):
     source = tmp_path / 'original.cif'
     source.write_text(cif_source())
@@ -20,16 +20,10 @@ def test_prepared_source_survives_real_task_relocation(tmp_path, mapped, kind):
     work.mkdir()
     native = work / 'native.json'
     receipt = work / 'receipt.json'
-    if kind == 'generation':
-        request = generation()
-        request['source'] = source_binding
-        extra = ['--expected-min-length', '1', '--expected-max-length', '2',
-                 '--expected-num-designs', '2', '--expected-seed', '0', '--expected-dump-trajectories', 'false']
-    else:
-        request = {'schema': 'bms.rfd3.local-redesign.request.v1', 'input': source_binding,
-                   'rfd3': {'input': str(source), 'contig': 'A2'}, 'sequence_policy': 'skip',
-                   'redesign_mode': 'native_recall'}
-        extra = ['--input-structure', str(source)]
+    request = generation()
+    request['source'] = source_binding
+    extra = ['--expected-min-length', '1', '--expected-max-length', '2',
+             '--expected-num-designs', '2', '--expected-seed', '0', '--expected-dump-trajectories', 'false']
     if mapped:
         request['source_mapping'] = 'bms.rfd3.source-map.v1'
     request_path = tmp_path / 'request.json'

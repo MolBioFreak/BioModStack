@@ -257,52 +257,6 @@ def test_population_reader_over_old_limit_and_truncation(tmp_path):
             list(iter_manifest_records(path, chunk_size=3))
 
 
-@pytest.mark.parametrize('staged', [False, True])
-def test_local_partial_and_empty_producer_preserve_execution_state(tmp_path, staged):
-    import subprocess
-    import scripts.rfd3_local_redesign.contract as contract
-    source = tmp_path / 'source.cif'
-    source.write_text(cif_source())
-    params = local('partial_diffusion', num_designs=2)
-    params['input_structure'] = str(source)
-    request = build_request(params, source_sha256=hashlib.sha256(source.read_bytes()).hexdigest())
-    request_path = tmp_path / 'request.json'
-    request_path.write_text(json.dumps(request))
-    native_path, receipt_path = tmp_path / 'native.json', tmp_path / 'receipt.json'
-    subprocess.run([sys.executable, str(ROOT / 'scripts/rfd3_local_redesign/prepare_native_input.py'),
-        '--request', str(request_path), '--input-structure', str(source),
-        '--output-native', str(native_path), '--output-receipt', str(receipt_path),
-        *(['--source-dir', str(tmp_path / 'rfd3_sources')] if staged else [])], check=True)
-    structure = tmp_path / 'one.cif.gz'
-    with gzip.open(structure, 'wt') as handle:
-        handle.write(cif_source())
-    metadata = tmp_path / 'one.json'
-    metadata.write_text('{}')
-    log = tmp_path / 'run.log'
-    log.write_text('fixture failure')
-    index = tmp_path / 'index.jsonl'
-    index.write_text('')
-    output = tmp_path / 'manifest.json'
-    command = [sys.executable, str(ROOT / 'scripts/rfd3_local_redesign/build_result_manifest.py'),
-        '--request', str(request_path), '--native-input', str(native_path),
-        '--native-input-storage-path', str(native_path), '--preparation-receipt', str(receipt_path),
-        '--preparation-receipt-storage-path', str(receipt_path), '--log-file', str(log),
-        '--metadata-jsonl', str(index), '--output', str(output), '--storage-root', str(tmp_path),
-        '--request-storage-path', str(request_path), '--source-file', str(source),
-        '--source-storage-path', str(source)]
-    subprocess.run(command + ['--cif-file', str(structure), '--json-file', str(metadata), '--execution-status', 'failed'], check=True)
-    manifest = json.loads(output.read_text())
-    assert manifest['schema'].endswith('.v2')
-    assert manifest['population']['generated'] == 1
-    assert manifest['population']['missing'] == 1
-    assert manifest['execution_status'] == 'failed'
-    subprocess.run(command + ['--execution-status', 'cancelled'], check=True)
-    empty = json.loads(output.read_text())
-    assert empty['candidates'] == []
-    assert empty['population']['missing'] == 2
-    assert empty['execution_status'] == 'cancelled'
-
-
 def test_historical_fraction_and_boolean_normalization_is_not_hardened():
     spec = importlib.util.spec_from_file_location('generation_compat_api', ROOT / 'platform/api/services/rfd3_generation.py')
     api = importlib.util.module_from_spec(spec)

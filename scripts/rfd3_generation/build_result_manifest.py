@@ -8,6 +8,7 @@ import gzip
 import hashlib
 import json
 import math
+import re
 import shlex
 from pathlib import Path
 from statistics import mean
@@ -175,11 +176,17 @@ def build_result_manifest(
         if not path.is_file():
             raise ContractError(f"declared artifact does not exist: {path}")
 
+    from scripts.rfd3_generation.prepare_native_input import effective_native_settings
+    length = effective_native_settings(request).get("length")
+    literal = re.fullmatch(r"(\d+)(?:-(\d+))?", str(length))
+    bounds = (int(literal[1]), int(literal[2] or literal[1])) if literal else None
     candidates = []
     for candidate_id in sorted(paired_ids):
         metrics = _structure_metrics(structures[candidate_id])
         if accepted_candidate_ids is None:
-            accepted = request["generation"]["min_length"] <= metrics["residue_count"] <= request["generation"]["max_length"]
+            # Structure/contig-sized requests supply no literal length gate.
+            # Do not compare them to unrelated UI primary bounds or invent one.
+            accepted = bounds is None or bounds[0] <= metrics["residue_count"] <= bounds[1]
         else:
             accepted = candidate_id in accepted_candidate_ids
         artifacts = [
@@ -234,12 +241,14 @@ def main() -> None:
     parser.add_argument("--accepted-candidate-id", action="append")
     parser.add_argument("--storage-prefix", default="run/rfd3")
     parser.add_argument("--execution-status", choices=["unknown", "completed", "failed", "cancelled"], default="unknown")
+    parser.add_argument("--native-output-dir", help="Native final output directory, including empty/unpaired yields")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
+    native_dir = Path(args.native_output_dir) if args.native_output_dir else None
     manifest = build_result_manifest(
         request_path=Path(args.request),
-        structure_paths=[Path(value) for value in args.cif_file],
-        metadata_paths=[Path(value) for value in args.json_file],
+        structure_paths=[Path(value) for value in args.cif_file] + (sorted(native_dir.glob("*.cif.gz")) if native_dir else []),
+        metadata_paths=[Path(value) for value in args.json_file] + (sorted(native_dir.glob("*.json")) if native_dir else []),
         accepted_candidate_ids=set(args.accepted_candidate_id) if args.accepted_candidate_id is not None else None,
         storage_prefix=args.storage_prefix,
         execution_status=args.execution_status,
