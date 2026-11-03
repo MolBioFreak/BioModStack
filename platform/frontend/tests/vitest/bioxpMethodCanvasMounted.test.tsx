@@ -27,6 +27,8 @@ const plan = { labware: [{ id: 'plate', name: 'Reaction plate', station: 'LOC_MS
 const transfer = { source: { station: 'LOC_RC', location_id: 3, wells: ['A1'] }, destination: { station: 'LOC_MS', location_id: 0, wells: ['A1'], labware_id: 'plate', retained: null }, volume_ul: '002.5000', channels: [0], aspirate_speed: '030.00', dispense_speed: '040.00', source_position_flag: '0', destination_position_flag: '0', source_lift_height_steps: null, destination_lift_height_steps: null };
 beforeEach(() => {
     vi.stubGlobal('crypto', webcrypto);
+    // jsdom has no scrolling implementation; keep the real editor focus path.
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false } } });
     oldAdapter = api.defaults.adapter;
     // The integrated class selector reads the workspace library even before a class is chosen.
@@ -39,7 +41,7 @@ beforeEach(() => {
     };
     host = document.createElement('div'); document.body.append(host);
 });
-afterEach(async () => { if (root) await act(async () => root.unmount()); client.clear(); api.defaults.adapter = oldAdapter; host.remove(); vi.unstubAllGlobals(); });
+afterEach(async () => { if (root) await act(async () => root.unmount()); client.clear(); api.defaults.adapter = oldAdapter; host.remove(); vi.unstubAllGlobals(); Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView'); });
 
 it('inserts after processing and inside nested repeats without changing retained structure', () => {
     const nodes = [{ step_id: 'repeat', type: 'repeat', count: 0, future: null, steps: [{ step_id: 'hold', action: 'thermal_hold', inputs: { duration_s: '00.500' } }] }];
@@ -71,6 +73,35 @@ it('connects real deck wells into one ordered action and opens that same connect
     await click('Expand editor'); await click('Compact editor');
     expect((current.steps as MethodValue[])[0].inputs).toEqual({ target_temp_c: null });
     await click('Connect wells'); await well('LOC_RC', 'A2'); await click('Cancel connection'); expect(current.steps).toHaveLength(2);
+});
+
+it('keeps all planned barcodes and samples above connection strokes without changing the method', async () => {
+    const rows = [...'ABCDEFGH'];
+    const labware = [{ id: 'rc', station: 'LOC_RC', name: 'Barcodes', profile_id: '' },
+        { id: 'oc', station: 'LOC_OC', name: 'Reaction plate', profile_id: '' },
+        ...[1, 2, 3].map(n => ({ id: `strip${n}`, station: `LOC_STRIP${n}`, name: `Strip ${n}`, profile_id: '' }))];
+    const assignments = [
+        ...[1, 2, 3, 5, 6, 7, 9, 10, 11].flatMap(c => rows.map(row => ({ id: `rc-${row}${c}`, labware_id: 'rc', well: `${row}${c}`, material_id: 'barcode', volume_ul: '5' }))),
+        ...[1, 2, 3].flatMap(n => rows.map(row => ({ id: `s${n}-${row}`, labware_id: `strip${n}`, well: `${row}1`, material_id: 'sample', volume_ul: '9' }))),
+    ];
+    const initial = { schema: 'bms.bioxp-method.v1', deck_plan: { labware, assignments, materials: [
+        { id: 'barcode', name: 'Rapid barcode', kind: 'reagent', description: '' },
+        { id: 'sample', name: 'Planned sample', kind: 'sample', description: '' },
+    ] }, steps: [{ step_id: 'add', type: 'action', action: 'transfer', label: 'Add barcode', inputs: {
+        ...transfer, destination: { station: 'LOC_OC', location_id: 1, wells: ['A1'], labware_id: 'oc' },
+    } }] };
+    await mount(initial);
+    expect(host.querySelectorAll('.bwd-well.has-contents[data-station="LOC_RC"]')).toHaveLength(72);
+    expect(host.querySelectorAll('.bwd-well.has-contents[data-station^="LOC_STRIP"]')).toHaveLength(24);
+    expect(host.querySelectorAll('.bwd-well.has-contents[data-station="LOC_OC"]')).toHaveLength(0);
+    const connection = host.querySelector('[aria-label="Ordered liquid connections"]')!;
+    for (const resource of host.querySelectorAll('.bwd-resource')) {
+        expect(connection.compareDocumentPosition(resource) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(host.querySelectorAll('g.bioxp-method-plate')).toHaveLength(5);
+    await click('Edit connection Add barcode');
+    expect(host.querySelector('[aria-label="On-deck editor"]')?.hasAttribute('hidden')).toBe(false);
+    expect(current).toEqual(initial);
 });
 
 it('on-edge edits retain parameter references and independent duplicate bindings through cold serialized reopen', async () => {

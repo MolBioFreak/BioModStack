@@ -15,7 +15,7 @@ export type BioXpDeckLiveIntent = {
 };
 export type BioXpWorkflowDeckProps = {
     selection: BioXpDeckSelection; onChange: (selection: BioXpDeckSelection) => void; readOnly?: boolean;
-    live?: BioXpDeckLiveIntent; resources?: DeckResource[]; overlay?: React.ReactNode;
+    live?: BioXpDeckLiveIntent; resources?: DeckResource[]; overlay?: React.ReactNode; connections?: React.ReactNode;
     compact?: boolean; canvas?: boolean;
     /** Robot-recorded tip occupancy by tray (1-4), 96 row-major booleans. Shading only. */
     tipOccupancy?: Record<number, boolean[]>;
@@ -26,7 +26,7 @@ const fullView: DeckBounds = { x: 0, y: 0, ...deckSize };
 const modes: DeckSelectionMode[] = ['well', 'range', 'row', 'column'];
 
 /** Shared presentation. Authoring defaults remain selection-only; live intents are explicit callbacks. */
-export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, compact = false, canvas = false, tipOccupancy, contents }: BioXpWorkflowDeckProps) {
+export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, connections, compact = false, canvas = false, tipOccupancy, contents }: BioXpWorkflowDeckProps) {
     const id = useId();
     const svg = useRef<SVGSVGElement>(null);
     const anchor = useRef<{ station: string; well: string } | null>(null);
@@ -176,6 +176,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                 onWheel={live ? e => { e.preventDefault(); zoom(e.deltaY > 0 ? 1.12 : 1 / 1.12); } : undefined}>
                 <defs><pattern id={`${id}-dots`} width="28" height="28" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.8" className="bwd-dot" /></pattern></defs>
                 <rect width={deckSize.width} height={deckSize.height} fill={`url(#${id}-dots)`} />
+                {connections}
                 <rect className="bwd-strip-holder" x={stripBounds.x - 18} y={stripBounds.y - 25} width={stripBounds.width + 36} height={stripBounds.height + 50} rx="8" />
                 <text className="bwd-map-label" x={stripBounds.x - 19} y={stripBounds.y - 39}>Reagent strips</text>
                 {resources.map(resource => {
