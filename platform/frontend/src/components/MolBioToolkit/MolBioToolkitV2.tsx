@@ -2472,10 +2472,6 @@ export function MolBioToolkitV2() {
     }, []);
 
     useEffect(() => {
-        setRightPanelWidth(getDefaultMolBioToolPanelWidth(activePanel));
-    }, [activePanel]);
-
-    useEffect(() => {
         if (!isViewerFullscreen) {
             return undefined;
         }
