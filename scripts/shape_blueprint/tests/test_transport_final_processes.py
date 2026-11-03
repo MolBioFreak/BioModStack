@@ -80,16 +80,33 @@ def test_gate_receives_closed_channels_not_async_publishdir(tmp_path, scores):
     (tmp_path / 'complete').touch()
     score = tmp_path / 'one_summary_confidence_sample_0.json'
     score.write_text('{"ptm":0.0,"plddt":0.5,"ranking_score":0.0,"has_clash":false}')
-    score_input = f"[file('{score}')]" if scores else '[]'
+    score_input = 'OptionalScores.out.scores.collect().ifEmpty { [] }'
+    score_script = f"sleep 1; cp '{score}' one_summary_confidence_sample_0.json" if scores else 'exit 1'
     # Drive either installed native signature so the baseline observes the
     # publishDir race, rather than failing merely on a new process input arity.
     from native_components import PROCESS_CONTRACTS
     receives_scores = len(PROCESS_CONTRACTS['workflows/protein_local_redesign.nf:StageProteinLocalValidatedCandidates'][1]) > 3
+    if receives_scores:
+        # Use the workflow's real optional producer expression, including empty
+        # channel handling, rather than a test-only replacement for its semantics.
+        source_text = (ROOT / 'workflows/protein_local_redesign.nf').read_text()
+        binding = next(line for line in source_text.splitlines()
+                       if "selectedValidators.contains('protenix_v2') ?" in line)
+        score_input = binding.split(' ? ', 1)[1].split(' : ', 1)[0].replace(
+            'ProtenixFromComplex.out.confidence', 'OptionalScores.out.scores')
     extra = f", [], [], {score_input}" if receives_scores else ''
     score_output = (f"StageProteinLocalValidatedCandidates.out.scores.map {{ it.toString() }}.collectFile(name:'score-path.txt', storeDir:'{tmp_path}/paths', newLine:true)"
                     if receives_scores else '')
     workflow = f"""include {{ StageProteinLocalValidatedCandidates }} from '{ROOT}/workflows/protein_local_redesign'
+process OptionalScores {{
+ errorStrategy 'ignore'
+ output:
+ path 'one_summary_confidence_sample_0.json', emit: scores, optional: true
+ script:
+ "{score_script}"
+}}
 workflow {{
+ OptionalScores()
  StageProteinLocalValidatedCandidates([file('{tmp_path}/one.pdb')], file('{tmp_path}/receipt.json'), file('{tmp_path}/complete'){extra})
  StageProteinLocalValidatedCandidates.out.candidates.map {{ files -> (files instanceof Collection ? files[0] : files).parent.toString() }}.collectFile(name:'candidate-path.txt', storeDir:'{tmp_path}/paths', newLine:true)
  {score_output}

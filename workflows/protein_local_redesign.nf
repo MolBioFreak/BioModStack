@@ -739,9 +739,9 @@ workflow PROTEIN_LOCAL_REDESIGN {
             finalDesignPdbs,
             FinalizeProteinLocalValidatorSuite.out.receipt,
             EnforceProteinLocalValidatorSuite.out.complete,
-            selectedValidators.contains('boltz2') ? ExportProteinLocalBoltzPredictions.out.jsons.collect() : Channel.value([]),
-            selectedValidators.contains('esmfold2') ? ESMFold2FromPdb.out.typed_results.map { meta, validator, cifs, metrics -> metrics }.flatten().collect() : Channel.value([]),
-            selectedValidators.contains('protenix_v2') ? ProtenixFromComplex.out.confidence.flatten().collect() : Channel.value([])
+            selectedValidators.contains('boltz2') ? ExportProteinLocalBoltzPredictions.out.jsons.collect().ifEmpty { [] } : Channel.value([]),
+            selectedValidators.contains('esmfold2') ? ESMFold2FromPdb.out.typed_results.map { meta, validator, cifs, metrics -> metrics }.flatten().collect().ifEmpty { [] } : Channel.value([]),
+            selectedValidators.contains('protenix_v2') ? ProtenixFromComplex.out.confidence.flatten().collect().ifEmpty { [] } : Channel.value([])
         )
 
         def shouldPauseAfterValidation = interactiveGateEnabled &&
