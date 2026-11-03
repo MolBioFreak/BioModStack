@@ -205,3 +205,15 @@ def test_actual_nextflow_boltz_export_receiving(tmp_path):
     published = tmp_path / 'retained/validation/boltz2'
     assert (published / 'source.pae.npz').read_bytes() == b'fixture-pae'
     assert (published / 'boltz_samples_3.manifest').read_bytes() == b'{"samples":[]}'
+
+
+@pytest.mark.parametrize('spec,free', [('A10-12', [('A', 10, ''), ('A', 11, '')]),
+                                     ('A10A-12B', [('A', 10, 'A'), ('A', 11, ''), ('A', 12, 'B')])])
+def test_mpnn_insertion_endpoints_without_chain_change(tmp_path, spec, free):
+    domain = [('A', 10, ''), ('A', 10, 'A'), ('A', 11, ''), ('A', 12, 'B')]
+    source = tmp_path / 'inputs'; source.mkdir(); (source / 'source.pdb').write_text(pdb(domain))
+    subprocess.run([sys.executable, str(ROOT / 'scripts/add_fixed_labels_from_spec.py'), '--input_dir', str(source),
+                    '--output_dir', str(tmp_path / 'output'), '--designable_positions', spec], check=True)
+    text = (tmp_path / 'output/source.pdb').read_text()
+    role = json.loads(text.splitlines()[0].removeprefix('REMARK BMS_MPNN_ROLES '))
+    assert role['fixed_positions'] == [list(r) for r in domain if r not in free]

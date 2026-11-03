@@ -31,7 +31,8 @@ def parse_position_spec(spec: str, domain=None) -> Set[ResidueToken]:
             continue
         lower, upper = sorted(((start, icode_start), (end, icode_end)))
         if domain is not None:
-            result.update(r for r in domain if r[0] == chain and lower <= (r[1], r[2]) <= upper)
+            result.update(r for r in domain if r[0] == chain and lower <= (r[1], r[2]) <= upper
+                          and (icode_start or icode_end or not r[2]))
         elif icode_start or icode_end:
             # Without a source domain only the exact endpoints are known.
             result.update(((chain, start, icode_start), (chain, end, icode_end)))
