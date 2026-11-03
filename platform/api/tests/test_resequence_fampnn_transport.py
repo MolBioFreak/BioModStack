@@ -48,6 +48,7 @@ async def test_request_to_compiled_receiving_and_per_input_masks(admission, tmp_
         source = tmp_path / f'source{i}.pdb'; source.write_text(pdb(domain)); sources.append(source)
     monkeypatch.setattr(jobs, '_create_generic_selection_dir', lambda *a: selected)
     monkeypatch.setattr(files, 'is_path_allowed', lambda p: True)
+    monkeypatch.setattr(files, 'resolve_allowed_path', lambda p: tmp_path if p == 'inputs' else Path(p))
     monkeypatch.setattr(jobs, 'resolve_allowed_path', lambda p: Path(p))
     async def resolve(request, session):
         return Path(request.path), {}

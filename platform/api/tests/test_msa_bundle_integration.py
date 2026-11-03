@@ -75,7 +75,7 @@ def offline_bundle(tmp_path, monkeypatch):
     # Explicit supplied-input seam for this transport fixture. Query-only cache
     # bytes are NOT presented as provider/settings-qualified shared API evidence.
     native_prepare = msa_preparation.prepare_protenix_inputs
-    def supplied_inputs(config, input_json, destination, settings):
+    def supplied_inputs(config, input_json, destination, settings, **kwargs):
         if cached.exists():
             unpaired = cached.parent / 'supplied.a3m'
             paired = cached.parent / 'supplied-paired.a3m'
@@ -88,7 +88,7 @@ def offline_bundle(tmp_path, monkeypatch):
                     if isinstance(chain, dict) and chain.get('sequence') == SEQUENCE:
                         chain.update(unpairedMsaPath=str(unpaired), pairedMsaPath=str(paired))
             input_json.write_text(json.dumps(payload))
-        return native_prepare(config, input_json, destination, settings)
+        return native_prepare(config, input_json, destination, settings, **kwargs)
     monkeypatch.setattr(msa_preparation, 'prepare_protenix_inputs', supplied_inputs)
     output = roots['results']/'job'
     job = SimpleNamespace(id='msa-offline', model_id='protenix', mode='predict', child_output_dir=None,

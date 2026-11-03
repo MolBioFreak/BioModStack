@@ -522,10 +522,10 @@ async def resequence_submission_guard(value, session):
     """
     from sqlalchemy import event
 
-    sync = session.sync_session
     key = '_resequence_source_locks'
     directories = _preparation_directories(value)
-    if not directories and not sync.info.get(key):
+    sync = getattr(session, 'sync_session', None)
+    if not directories and (sync is None or not sync.info.get(key)):
         yield
         return
     locks = sync.info.setdefault(key, {})

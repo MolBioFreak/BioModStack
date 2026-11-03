@@ -4300,7 +4300,7 @@ def _shape_selected_gpu_memory_gib(job):
     from services.shape_requests import selected_gpu_memory_gib
     assigned = getattr(job, 'assigned_gpu', None)
     selected = [] if assigned is None else [assigned]
-    if job.execution_target_id:
+    if getattr(job, 'execution_target_id', None):
         assignment = (job.provenance or {}).get('remote_execution_assignment') or {}
         if assignment.get('execution_target_id') != job.execution_target_id:
             return None

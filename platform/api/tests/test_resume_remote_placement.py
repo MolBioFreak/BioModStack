@@ -227,7 +227,9 @@ async def test_component_checkpoint_resume_requires_binding_and_never_fakes_cont
     assert (await client.post('/jobs/source/resume', json={})).status_code == 422
     payload = dict(checkpoint_id=checkpoint["checkpoint_id"], checkpoint_sha256="c" * 64,
                    checkpoint_decision={"continue": True})
-    assert (await client.post('/jobs/source/resume', json=dict(payload, execution_target_id=None))).status_code == 422
+    # A changed target (here Local) is an ordinary checkpoint successor; the decision must still be an exact artifact selection.
+    changed = await client.post('/jobs/source/resume', json=dict(payload, execution_target_id=None))
+    assert changed.status_code == 409 and 'selected_artifacts' in changed.text
     from services.remote_execution import executor
     called = []
     async def preflight(session, job, bound, decision):
