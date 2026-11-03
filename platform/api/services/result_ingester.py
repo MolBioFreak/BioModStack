@@ -7648,7 +7648,15 @@ async def ingest_loose_files(
                     # A Resequence final's structure carries no confidence of its own; its validators wrote real
                     # scores beside the job. Read them into the existing columns (best effort, never a condition).
                     from services.plr_validator_scores import apply_validator_scores
-                    apply_validator_scores(design, output_path, design_name, job_params.get("structure_validators") or ())
+                    # A remote continuation is ingested from its nested continuation folder, but the validators wrote
+                    # under the job's own output directory, so look there first and then beside the ingest root.
+                    score_roots = []
+                    for candidate_root in (getattr(current_job, "output_dir", None), output_path):
+                        if candidate_root and Path(candidate_root) not in score_roots:
+                            score_roots.append(Path(candidate_root))
+                    for score_root in score_roots:
+                        if apply_validator_scores(design, score_root, design_name, job_params.get("structure_validators") or ()):
+                            break
                 session.add(design)
                 designs_created += 1
                 ingested_names.add(design_name)

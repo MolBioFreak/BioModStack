@@ -132,3 +132,31 @@ async def test_a_job_without_a_named_final_folder_is_read_as_before(tmp_path):
         rows = (await session.execute(select(Design))).scalars().all()
         assert rows and all(row.ptm is None for row in rows if row.name == NAME)
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_remote_continuation_finals_get_scores_from_the_job_output_not_the_nested_ingest_folder(tmp_path):
+    """A pulled remote Resequence is ingested from <job>/.bms-review/selections/<sha>/continuation while the validators
+    wrote <job>/validation; reading only the ingest folder left every final unscored on the real worker runs."""
+    from services.result_ingester import ingest_loose_files
+    job_output = tmp_path / "job"
+    final = job_output / ".bms-review" / "selections" / "abc"
+    continuation = final / "continuation"
+    continuation.mkdir(parents=True)
+    (final / f"{NAME}.pdb").write_text(PDB)
+    _boltz(job_output)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'remote.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        job = Job(id="remote", name="remote", model_id="protein_modification_experimental", mode="region_redesign",
+                  params={"plr_final_candidate_dir": str(final), "structure_validators": ["boltz2"]},
+                  output_dir=str(job_output))
+        session.add(job)
+        await session.commit()
+        assert await ingest_loose_files(job.id, continuation, session, current_job=job) == 1
+    async with factory() as session:
+        row = (await session.execute(select(Design))).scalar_one()
+        assert row.ptm == pytest.approx(0.914) and row.plddt_overall == pytest.approx(92.8)
+    await engine.dispose()
