@@ -25,6 +25,8 @@ async def both(selected, temperature=0.1, *, version=1):
                     {'invocation_id': 'authored', 'model_id': 'proteinmpnn', 'mode': 'design',
                      'params': {'mpnn_temperature': 0.1, 'design_chain': 'B', 'target_chain': 'A'}}]}]}}
     binder = binder_envelope()
+    if version == 1:
+        binder['sequence_design']['params'] = deepcopy(general['params'])
     binder['sequence_design']['params']['mpnn_temperature'] = temperature
     root.provenance = {GENERAL: general, rounds.REQUEST: binder}
     await session.commit()
