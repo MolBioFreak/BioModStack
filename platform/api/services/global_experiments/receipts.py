@@ -266,6 +266,36 @@ async def _domain_payload(
     return project, domain, json.loads(revision.canonical_payload)
 
 
+async def _retain_manual_alignment(experiment_session, core_session, external):
+    """Retain copies beside an immutable reference, including historical saves.
+
+    The receipt is never rewritten. Custody uses deterministic resource identities
+    and an append-only audit event, with every artifact checked against its digest.
+    """
+    if external.entity_kind != 'family_msa_job_result':
+        return
+    acknowledgement = json.loads(external.acknowledgement_json)
+    if acknowledgement['metadata'].get('retained_artifacts'):
+        return
+    from experiment_models import ExperimentArtifact
+    from services.family_msa.publication import retain_job_artifact, manual_result_inventory
+    retained = manual_result_inventory(external.id, external.workspace_id, acknowledgement['metadata'])
+    added = False
+    for entry in retained:
+        if await experiment_session.get(ExperimentArtifact, entry['resource_id']) is None:
+            added = True
+        await retain_job_artifact(core_session, experiment_session,
+            job_id=external.entity_id, artifact_id=entry['source_artifact_id'],
+            workspace_id=external.workspace_id, lifecycle_owner_id=external.id,
+            resource_id=entry['resource_id'], logical_role=entry['role'],
+            schema_name='bms.family-msa.native-artifact', schema_version='1')
+    if added:
+        add_audit_event(experiment_session, workspace_id=external.workspace_id,
+            resource_id=external.id, event_type='family_msa_artifacts_retained', generation=0,
+            payload={'source_digest': external.content_digest, 'retained_artifacts': retained})
+    await experiment_session.flush()
+
+
 async def attach_verified_entity(
     experiment_session: AsyncSession,
     core_session: AsyncSession,
@@ -326,6 +356,7 @@ async def attach_verified_entity(
         acknowledgement=source_receipt,
         verification_authority=adapter.adapter_id,
     )
+    await _retain_manual_alignment(experiment_session, core_session, external)
     normalized_request = {
         "schema": "bms.global.attachment-request.v1",
         "project_id": project_id,

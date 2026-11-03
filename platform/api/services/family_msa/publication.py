@@ -283,3 +283,14 @@ async def retain_job_artifact(
         provenance={"job_id": job_id, "job_artifact_id": artifact_id,
                     "attempt": source.attempt},
     )
+
+
+def manual_result_inventory(receipt_id: str, workspace_id: str, metadata: dict) -> list[dict]:
+    """Stable custody resource identities for a manually attached immutable receipt."""
+    import uuid
+    entries = [(metadata['manifest_artifact_id'], 'result_manifest')]
+    entries += [(item['id'], item['role']) for item in metadata['artifacts']]
+    return [{'source_artifact_id': artifact_id, 'role': role,
+             'resource_id': str(uuid.uuid5(uuid.NAMESPACE_URL,
+                 f'bms:family-msa:manual:{workspace_id}:{receipt_id}:{artifact_id}'))}
+            for artifact_id, role in entries]

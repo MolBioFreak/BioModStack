@@ -1,8 +1,9 @@
-import { Suspense, useState, type ComponentType } from 'react'
+import { Suspense, useCallback, useMemo, useState, type ComponentType } from 'react'
 import { anchorAt, type AlignmentDocument, type ResidueAnchor } from '../../lib/alignmentCoordinates'
 import type { RendererState } from './viewerState'
 import AlignmentShared, { type Mark, type View } from './AlignmentShared'
 import ViewerBoundary from './ViewerBoundary'
+import AlignmentSimilaritySummary from './AlignmentSimilaritySummary'
 
 export type AlignmentViewerId = 'jbrowse' | 'alignment-viewer-2' | 'biojs'
 export interface AlignmentViewerProps {
@@ -43,14 +44,17 @@ export default function AlignmentWorkspace({ projectLabel, projectId, receiptId,
   const rendererState = rendererStates[stateKey]
   const updateRendererState = (state: RendererState) => setRendererStates(old => JSON.stringify(old[stateKey]) === JSON.stringify(state) ? old : {...old, [stateKey]: state})
   const layout = document ? layouts[document.resultId] : undefined
-  const order = document ? [...(layout?.order ?? []).filter(id => document.rows.some(row => row.rowId === id)), ...document.rows.map(row => row.rowId).filter(id => !(layout?.order ?? []).includes(id))] : []
+  const order = useMemo(() => document ? [...(layout?.order ?? []).filter(id => document.rows.some(row => row.rowId === id)), ...document.rows.map(row => row.rowId).filter(id => !(layout?.order ?? []).includes(id))] : [], [document, layout])
   const hidden = layout?.hidden ?? []
   const updateLayout = (order: string[], hidden: string[]) => { if (document) setLayouts(old => ({...old, [document.resultId]: {order, hidden}})) }
-  const displayed = document && {...document, rows: order.filter(id => !hidden.includes(id)).map(id => document.rows.find(row => row.rowId === id)!)}
+  const displayed = useMemo(() => document && {...document, rows: order.filter(id => !(layout?.hidden ?? []).includes(id)).map(id => document.rows.find(row => row.rowId === id)!)}, [document, order, layout])
   const Viewer = viewers[viewerId]
   const localDownloads = downloads.filter(item => item.href.startsWith('/') && !item.href.startsWith('//') && !item.href.includes('\\'))
   const currentSelection = selection?.resultId === document?.resultId ? selection : undefined
+  const selectRow = useCallback((id: string) => { setRowId(id); setSelection(undefined) }, [])
   function select(anchor: ResidueAnchor) {
+    setRowId(anchor.rowId)
+    setColumn(String(anchor.column + 1))
     setSelection(anchor)
     onSelectionChange?.(anchor)
   }
@@ -69,6 +73,7 @@ export default function AlignmentWorkspace({ projectLabel, projectId, receiptId,
           </select>
         </label>
       </div>
+      <AlignmentSimilaritySummary document={document} selectedRowId={currentSelection?.rowId ?? rowId} onSelectRow={selectRow}/>
       <div className="alignment-viewer-slot">
         {Viewer ? <ViewerBoundary key={viewerId} name={viewerNames[viewerId]}><Suspense fallback={<p role="status">Loading {viewerNames[viewerId]}…</p>}><Viewer document={displayed!} selection={currentSelection} onSelect={select} marks={marks.filter(mark => selectedMarks.includes(mark.id))} rendererState={rendererState} onRendererStateChange={updateRendererState} /></Suspense></ViewerBoundary> : <p role="status">{viewerNames[viewerId]} is not connected. This result remains available for download.</p>}
       </div>

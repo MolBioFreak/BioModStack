@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import AlignmentResultList, { type AlignmentReceipt } from './AlignmentResultList';
 import { api } from '../../lib/api';
 import { searchProjects, listGlobalExperiments, listDomainExperiments, type ProjectListItem } from '../../lib/projectManager';
 
-type Receipt = {receipt_id: string; entity_kind: string; availability: string};
+type Receipt = AlignmentReceipt;
 type Page = {items: Receipt[]; next_cursor: string | null};
 
 /** Project-owned receipts only: imports do not create compute Jobs. */
@@ -58,6 +59,7 @@ export default function AlignmentLibrary({ initialProject }: {initialProject?: s
       const {data} = await api.post<{receipt_id: string; replayed: boolean; shared_state: string}>(`/api/family-msa/projects/${encodeURIComponent(project)}/imports/zip`, file, {params: {replay_key: replayKey, domain_experiment_id: domain || undefined}, headers: {'Content-Type': 'application/zip'}});
       setStatus(data.shared_state === 'retained_unmapped' ? 'Bundle imported. Shared state is retained but not restored.' : data.shared_state === 'imported_with_unresolved' ? 'Bundle imported; some shared state references could not be mapped.' : 'Bundle imported.');
       setImported({project, receipt: data.receipt_id});
+      setReload(n => n + 1);
     } catch (e) { setError(String(e)); }
   }
   async function uploadAlignment() {
@@ -67,6 +69,7 @@ export default function AlignmentLibrary({ initialProject }: {initialProject?: s
       const {data} = await api.post<{receipt_id: string}>(`/api/family-msa/projects/${encodeURIComponent(project)}/imports/alignment`, alignment,
         {params: {format, molecule, replay_key: alignmentKey}, headers: {'Content-Type': 'application/octet-stream'}});
       setImported({project, receipt: data.receipt_id});
+      setReload(n => n + 1);
       setStatus('Alignment imported. Original bytes are retained.');
     } catch (e) { setError(String(e)); }
   }
@@ -83,7 +86,7 @@ export default function AlignmentLibrary({ initialProject }: {initialProject?: s
       {receiptsLoading && <p role="status">Loading alignment results…</p>}
       {receiptsError && <p role="alert">Alignment library unavailable: {receiptsError} <button onClick={() => setReload(n => n + 1)}>Retry results</button></p>}
       {!receiptsLoading && !receiptsError && !rows.length && <p>No retained alignment results in this Project. Import an alignment below or use New to build one.</p>}
-      <ul>{rows.map((row, index) => <li key={row.receipt_id}><Link to={`/alignments/results/${encodeURIComponent(row.receipt_id)}?project_id=${encodeURIComponent(project)}`}>{row.entity_kind === 'family_msa_import' ? 'Imported alignment' : 'Alignment result'} {index + 1}</Link> · {row.availability}</li>)}</ul>{cursor && <button onClick={more}>Load more results</button>}</div><div className="alignment-imports">
+      <AlignmentResultList rows={rows} projectId={project}/>{cursor && <button onClick={more}>Load more results</button>}</div><div className="alignment-imports">
       <fieldset><legend>Import an alignment file</legend><p>Original bytes are retained. A3M displays match columns only; insertions remain in the original file. Stockholm annotations remain in the original file. Lossless conversion is not offered.</p>
         <label>Format <select value={format} onChange={e => {setFormat(e.target.value); setAlignmentKey(crypto.randomUUID());}}><option value="fasta">Aligned FASTA</option><option value="stockholm">Stockholm</option><option value="clustal">Clustal</option><option value="a3m">A3M</option></select></label>
         <label>Molecule <select value={molecule} onChange={e => {setMolecule(e.target.value); setAlignmentKey(crypto.randomUUID());}}><option value="protein">Protein</option><option value="dna">DNA</option><option value="rna">RNA</option></select></label>

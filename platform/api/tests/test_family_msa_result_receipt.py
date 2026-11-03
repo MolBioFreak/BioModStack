@@ -124,6 +124,33 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
         surface = await result_surface_for_receipt(pm, project_id=project_id, receipt_id=receipt_id)
         assert surface['route']['query'] == {'project_id': project_id, 'receipt_id': receipt_id}
         selected = next(x['resource_id'] for x in retained if x['role'] == 'alignment')
+    # Saving a standalone Job through the same dialog attachment service must
+    # retain bytes too, including upgrading a prior reference-only receipt.
+    from services.global_experiments.receipts import attach_verified_entity
+    async with read_model_store() as pm, core_factory() as core:
+        manual_project, manual_global, manual_domain = await _hierarchy(pm)
+        domain_revision = await pm.get(ExperimentRevision, manual_domain.current_revision_id)
+        domain_payload = json.loads(domain_revision.canonical_payload)
+        domain_payload['domain_kind'] = adapter.domain_kind
+        domain_revision.canonical_payload = json.dumps(domain_payload)
+        from experiment_operations import register_external_entity_receipt
+        verified = await adapter.verify(core, 'canonical-job-completed')
+        reference = await register_external_entity_receipt(pm, workspace_id=manual_project.id,
+            store_id=verified['store_id'], entity_kind=verified['entity_kind'], entity_id=verified['entity_id'],
+            generation_or_revision=verified['entity_revision_id'], content_digest=verified['content_digest'],
+            availability='available', acknowledgement=verified, verification_authority=adapter.adapter_id)
+        # Exercise the deployed immutable-receipt rule (the lightweight store
+        # fixture does not otherwise install migration triggers).
+        from sqlalchemy import text
+        await pm.execute(text("CREATE TRIGGER IF NOT EXISTS test_receipt_immutable BEFORE UPDATE ON external_entity_receipts BEGIN SELECT RAISE(ABORT, 'external entity receipt is immutable'); END"))
+        attachment = await attach_verified_entity(pm, core, project_id=manual_project.id,
+            global_experiment_id=manual_global.id, domain_experiment_id=manual_domain.id,
+            adapter_id=adapter.adapter_id, entity_id='canonical-job-completed',
+            operation='link_output', role='produced', note=None, expected_head_generation=manual_project.head_generation)
+        assert attachment['source_receipt_id'] == reference.id
+        assert 'retained_artifacts' not in json.loads(reference.acknowledgement_json)['metadata']
+        manual_project_id, manual_receipt_id = manual_project.id, reference.id
+        await pm.commit()
     import httpx
     from fastapi import FastAPI, Request
     from database import get_session
@@ -161,6 +188,11 @@ async def test_receipt_custody_survives_source_delete(read_model_store, tmp_path
     async with read_model_store() as pm:
         for resource_id, expected in before.items():
             assert (await retained_path(pm, await pm.get(ExperimentArtifact, resource_id))).read_bytes() == expected
+    async with read_model_store() as pm:
+        from routers.family_msa_results import project_result_data, document
+        manual_entries, manual_read = await project_result_data(pm, manual_project_id, manual_receipt_id)
+        manual_alignment = next(entry['id'] for entry in manual_entries if entry['role'] == 'alignment')
+        assert (await document(manual_entries, manual_read, manual_alignment))['rows'][0]['aligned'] == expected_aligned
     url = f'/api/family-msa/projects/{project_id}/receipts/{receipt_id}'
     assert (await client.get(url)).status_code == 401
     assert (await client.get(url, headers={'x-test-actor':'other'})).status_code == 404

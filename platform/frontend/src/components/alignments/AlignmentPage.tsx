@@ -1,17 +1,18 @@
-import { Link, useLocation, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import './alignmentPage.css';
 import AlignmentWorkspace from './AlignmentWorkspace';
+import { ProjectAttachmentDialog } from '../project-manager/ProjectAttachmentDialog';
 import { alignmentViewers } from './lazyViewers';
 import AlignmentEditor from './AlignmentEditor';
 import { MOLECULAR_ALIGNMENT_PARAM } from './MolecularAlignmentSources';
 import AlignmentLibrary from './AlignmentLibrary';
 import AlignmentComparison from './AlignmentComparison';
 import AlignmentOperationResult from './AlignmentOperationResult';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { jobPollingInterval } from '../../lib/queryPolling';
 import { api } from '../../lib/api';
-import type { AlignmentDocument } from '../../lib/alignmentCoordinates';
+import type { AlignmentDocument, AlignmentSimilarity } from '../../lib/alignmentCoordinates';
 import { ProjectWorkflowSetupBanner, useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup';
 import { projectManagerErrorMessage, listGlobalExperiments, listDomainExperiments } from '../../lib/projectManager';
 
@@ -50,6 +51,8 @@ export function EnsembleSupport({projectId, receiptId, reference, artifacts}: {p
 export default function AlignmentPage() {
     const { jobId: routeJobId, resultId } = useParams<{ jobId?: string; resultId?: string }>();
     const location = useLocation();
+    const navigate = useNavigate();
+    const [saveOpen, setSaveOpen] = useState(false);
     const setup = useProjectWorkflowSetup();
     const query = new URLSearchParams(location.search);
     // Historical receipts can still carry the Job query form.
@@ -61,7 +64,7 @@ export default function AlignmentPage() {
     const [selection, setSelection] = useState<{base: string | null; id: string}>({base: null, id: ''});
     const job = useQuery({
         queryKey: ['alignment-result-job', jobId],
-        queryFn: async ({ signal }) => (await api.get<{status: string; params?: {managed_operation?: {project_id: string; request: {operation: string}}}}>(`/api/jobs/${encodeURIComponent(jobId!)}`, { signal })).data,
+        queryFn: async ({ signal }) => (await api.get<{status: string; model_id?: string; name?: string; params?: {managed_operation?: {project_id: string; request: {operation: string}}}}>(`/api/jobs/${encodeURIComponent(jobId!)}`, { signal })).data,
         enabled: Boolean(jobId && !(projectId && receiptId)), retry: false,
         refetchInterval: q => !q.state.data || ['queued', 'running'].includes(q.state.data.status) ? jobPollingInterval(3000, q) : false,
         refetchIntervalInBackground: false,
@@ -92,12 +95,17 @@ export default function AlignmentPage() {
     const documentQuery = useQuery({
         queryKey: ['alignment-result-document', base, member],
         queryFn: async ({ signal }) => {
-            const { data } = await api.get<{result_id: string; rows: {row_id: string; label: string; aligned: string; source_member_id?: string | null; occurrence_id?: string | null; source_positions?: (number | null)[] | null}[]}>(`${base}/documents/${encodeURIComponent(member)}`, { signal });
-            return {resultId: data.result_id, rows: data.rows.map(row => ({rowId: row.row_id, label: row.label, aligned: row.aligned, sourceMemberId: row.source_member_id ?? undefined, occurrenceId: row.occurrence_id ?? undefined, sourcePositions: row.source_positions ?? undefined}))} satisfies AlignmentDocument;
+            const { data } = await api.get<{result_id: string; similarity?: AlignmentSimilarity; rows: {row_id: string; label: string; aligned: string; source_member_id?: string | null; occurrence_id?: string | null; source_positions?: (number | null)[] | null}[]}>(`${base}/documents/${encodeURIComponent(member)}`, { signal });
+            return {resultId: data.result_id, similarity: data.similarity, rows: data.rows.map(row => ({rowId: row.row_id, label: row.label, aligned: row.aligned, sourceMemberId: row.source_member_id ?? undefined, occurrenceId: row.occurrence_id ?? undefined, sourcePositions: row.source_positions ?? undefined}))} satisfies AlignmentDocument;
         },
         enabled: Boolean(base && member), retry: false,
     });
     const document = documentQuery.data;
+    const saveSource = useMemo(() => jobId && manifest.data &&
+        ['family_msa_protein', 'family_msa_nucleic'].includes(job.data?.model_id || '') ? {
+        adapterId: `bms.family-msa.${job.data!.model_id}.adapter.v1`, entityId: jobId,
+        label: job.data?.name || 'Alignment result', availability: 'available',
+    } : undefined, [jobId, job.data?.model_id, job.data?.name, manifest.data]);
     const error = manifest.error || documentQuery.error || job.error;
     const [selectedModel, setSelectedModel] = useState('family_msa_protein');
     const [selectedMolecule, setSelectedMolecule] = useState<'protein' | 'dna' | 'rna'>('protein');
@@ -111,8 +119,14 @@ export default function AlignmentPage() {
         {setup.setup && <ProjectWorkflowSetupBanner setup={setup.setup} />}
         <header className="alignment-page-header"><div><h1>Alignments</h1><p>Build, inspect and compare sequence alignments.</p></div>
         <nav aria-label="Alignment sections" className="alignment-page-nav">
-            {(['Library', 'New', 'Compare'] as const).map(name => <Link key={name} aria-current={section === name ? 'page' : undefined} to={{ pathname: `/alignments/${name.toLowerCase()}`, search: setup.active ? location.search : '' }}>{name}</Link>)}
+            {(['Library', 'New', 'Compare'] as const).map(name => <Link key={name} aria-current={section === name ? 'page' : undefined} to={{ pathname: `/alignments/${name.toLowerCase()}`, search: setup.active ? location.search : projectId ? `?project_id=${encodeURIComponent(projectId)}` : '' }}>{name}</Link>)}
         </nav></header>
+        {base && document && <div className="alignment-save-status">
+            {projectId && receiptId ? <p>Saved in this Project. <Link to={`/projects/${encodeURIComponent(projectId)}`}>Open Project</Link> · <Link to={`/alignments/library?project_id=${encodeURIComponent(projectId)}`}>Project alignment library</Link></p> : saveSource && <><button onClick={() => setSaveOpen(true)}>Save to Project</button><span>Save this result to make it available from the Project page.</span></>}
+        </div>}
+        {saveSource && <ProjectAttachmentDialog open={saveOpen} source={saveSource} initialProjectId={projectId || undefined} onClose={() => setSaveOpen(false)} onAttached={(savedReceipt, _revision, destination) => {
+            if (savedReceipt && destination) { setSaveOpen(false); navigate(`/alignments/results/${encodeURIComponent(savedReceipt)}?project_id=${encodeURIComponent(destination.projectId)}`); }
+        }}/>}
         {base && !manifest.data && !error && <p role="status">Waiting for alignment result{job.data?.status ? ` (Job ${job.data.status})` : ''}…</p>}
         {base && manifest.data && !alignments.length && <p role="status">No alignment artifact is available in this result. <button onClick={() => void manifest.refetch()}>Retry</button></p>}
         {error && <div role="alert">Alignment result unavailable: {String(error)} <button onClick={() => { if (job.error) void job.refetch(); if (manifest.error) void manifest.refetch(); if (documentQuery.error) void documentQuery.refetch(); }}>Retry</button></div>}
