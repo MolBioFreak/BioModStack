@@ -720,7 +720,11 @@ async def create_child_job(
             source_stage_job_id=source_parent_id,
             source_stage_family=(source_parent.stage_family or source_parent.model_id) if source_parent else "upload",
             source_stage_mode=(source_parent.stage_mode or source_parent.mode) if source_parent else "upload",
-            selection_source_type="selected_designs" if source_parent else "uploaded_structure",
+            selection_source_type=(
+                "selected_native_artifacts"
+                if trigger == "resequence_loop_candidate" and any(item.design_id is None for item in selections)
+                else "selected_designs" if source_parent else "uploaded_structure"
+            ),
             selection_source_job_id=source_parent_id,
             source_selection_count=len(lineage),
             stage_family="frustrampnn",

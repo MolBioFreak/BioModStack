@@ -125,6 +125,7 @@ async def test_loop_route_real_child_lineage_placement_and_copy(child_db, monkey
         child = await session.get(Job, child_id)
         assert child.parent_job_id == 'loop'
         assert child.selection_source_job_id == 'loop'
+        assert child.selection_source_type == ('selected_designs' if published else 'selected_native_artifacts')
         assert child.execution_target_id == ('vast:fixture' if placement == 'worker' else None)
         selected = child.params[children.ENVELOPE_KEY]['selection'][0]
         assert selected['source_job_id'] == 'loop'
