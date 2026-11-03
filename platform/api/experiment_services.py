@@ -452,6 +452,7 @@ async def persist_workflow_plan_authority(
     capability_id: str,
     normalized_job_request: Any | None = None,
     native_entrypoint: str | None = None,
+    md_input_resolver=None,
 ) -> tuple[ExperimentWorkflowPlanAuthority, dict[str, Any]]:
     """Persist or exactly replay the immutable authority for one Project Manager Plan."""
     head = await _head(session, workflow_id, "workflow")
@@ -465,7 +466,7 @@ async def persist_workflow_plan_authority(
         setup_capability = capability_id if ((capability_id in _PARAMETER_SCHEMAS and protein_setup_parameter_schema(capability_id).get("x-bms-native-editor-draft")) or family_msa_capability(capability_id) is not None) else None
         native_contract = normalized_job_plan_contract(
             normalized_job_request, native_entrypoint=native_entrypoint,
-            setup_capability_id=setup_capability,
+            setup_capability_id=setup_capability, md_input_resolver=md_input_resolver,
         )
         if native_contract["capability"]["capability_id"] != capability_id:
             raise ValidationFailure("native Job Plan capability identity disagrees")

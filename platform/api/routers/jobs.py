@@ -8325,7 +8325,7 @@ async def submit_selected_child_jobs(
         raise
 
 
-async def _create_prepared_child_batch(requests, background_tasks, session, experiment_session):
+async def _create_prepared_child_batch(requests, background_tasks, session, experiment_session, *, native_job_kwargs=None):
     from services.global_experiments.launch_contexts import validate_prepared_child_job_request
     from routers.project_manager import _project_bound_job
     pending = []
@@ -8344,13 +8344,22 @@ async def _create_prepared_child_batch(requests, background_tasks, session, expe
                 await validate_bound_job(experiment_session, context, existing)
                 pending.append((context, context.claim_token, existing, JobResponse.model_validate(existing)))
                 continue
+            native_kwargs = dict(native_job_kwargs or {})
+            approved = native_kwargs.get('_approved_execution_plan')
+            if isinstance(approved, ApprovedExecutionPlan):
+                from component_runtime import canonical_bytes
+                if canonical_bytes(item.model_dump(mode='json')) != approved.request_json:
+                    raise HTTPException(409, 'Trusted native preview request changed')
             context, claim = await claim_launch_context(experiment_session, item.launch_context_id)
             item.params = await validate_bound_job_request(experiment_session, context,
                 job_name=item.name, model_id=item.model_id, mode=item.mode,
                 params=dict(item.params), pinned_gpu=item.pinned_gpu)
+            if isinstance(approved, ApprovedExecutionPlan):
+                native_kwargs['_approved_execution_plan'] = ApprovedExecutionPlan(
+                    canonical_bytes(item.model_dump(mode='json')), approved.preview_json)
             response = await _create_job(item, background_tasks, session,
                 _preallocated_job_id=attempt.scheduler_job_id, _commit=False,
-                _trusted_workflow_adapter=True, _bound_launch_context_id=context.launch_context_id)
+                _trusted_workflow_adapter=True, _bound_launch_context_id=context.launch_context_id, **native_kwargs)
             job = await session.get(Job, response.id)
             await validate_bound_job(experiment_session, context, job)
             pending.append((context, claim, job, response))
@@ -10776,10 +10785,10 @@ async def resume_job(
                       pinned_gpu=(context.get('resources') or {}).get('gpu_id'),
                       awaiting_input=False, provenance=dict(job.provenance))
         job.provenance = provenance
+        from services.job_control import checkpoint_continuation_predicates
         with session.no_autoflush:
-            claimed = await session.execute(update(Job).where(Job.id == job.id,
-                Job.status == 'awaiting_input', Job.awaiting_input.is_(True),
-                Job.awaiting_payload == job.awaiting_payload, Job.provenance == provenance
+            claimed = await session.execute(update(Job).where(
+                *checkpoint_continuation_predicates(job)
             ).values(**values).execution_options(synchronize_session=False))
         if claimed.rowcount != 1:
             await session.rollback()

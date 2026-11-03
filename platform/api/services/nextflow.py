@@ -2744,33 +2744,10 @@ def _local_component_checkpoints(context_path):
 
 
 async def _publish_local_review_rows(session, job_id):
-    """List a local component gate's candidates as review rows.
+    """Publish optional local review rows through the fenced projection owner."""
+    from services.stage_review import publish_local_checkpoint_review_rows
 
-    A local gate that runs under the component runtime writes its review files into the job's result root as
-    checkpoint artifacts; the HTTP gate route that used to publish rows refuses component gates. Without this the
-    gate listed 0 designs and Continue / FrustraMPNN had nothing to act on. Best effort: the gate is already open.
-    """
-    from database import Job
-    from services.stage_review import ensure_stage_review_rows
-
-    job = await session.get(Job, job_id, populate_existing=True)
-    if job is None or not job.awaiting_input or job.execution_target_id or not job.output_dir:
-        return 0
-    checkpoint = (job.awaiting_payload or {}).get('component_checkpoint')
-    if not checkpoint:
-        return 0
-    root = Path(job.output_dir)
-    folders = sorted({(root / item['relative_path']).parent for item in checkpoint.get('artifacts', [])
-                      if item.get('schema') == 'bms.stage-review.candidate.v1'})
-    if len(folders) != 1:
-        return 0
-    payload = dict(job.awaiting_payload or {})
-    payload['candidate_dir'] = str(folders[0])
-    job.awaiting_payload = payload
-    await session.commit()
-    count = await ensure_stage_review_rows(session, job)
-    await session.commit()
-    return count
+    return await publish_local_checkpoint_review_rows(session, job_id)
 
 
 async def _project_local_components(job, session, context_path):
@@ -6658,9 +6635,11 @@ def compile_nextflow_invocation(
             params['rfd_mode'] = 'ppiflow_generator'
         params.setdefault('stage_family', 'ppiflow')
         params.setdefault('stage_mode', 'generator_backbone_refine')
-    elif model_id == 'protein_local_redesign' or (
-        model_id == 'protein_modification_experimental' and mode == 'region_redesign'
-    ):
+    elif model_id == 'protein_modification_experimental' and mode == 'region_redesign':
+        # Controller-owned source custody is retained on the Job, not passed as
+        # scientific CLI arguments or exposed to the native loop processes.
+        for custody_key in ('resequence_sources', 'resequence_preparation'):
+            params.pop(custody_key, None)
         protein_local_mappings = {
             'input_structure': 'plr_input_pdb',
             'input_pdb': 'plr_input_pdb',
@@ -6733,28 +6712,6 @@ def compile_nextflow_invocation(
 
         if 'plr_num_designs' in params and 'rfd_num_designs' not in params:
             params['rfd_num_designs'] = params['plr_num_designs']
-        if model_id == 'protein_local_redesign':
-            params['rfd3_batches_per_design'] = params.get('plr_num_designs', 1)
-            params['plr_write_full_json'] = True
-            params['plr_seq_method'] = 'skip'
-            params['seq_method'] = 'skip'
-            params['plr_run_boltz_validation'] = False
-            for disabled_key in (
-                'plr_fix_fixed_sidechains',
-                'seqs_per_design',
-                'boltz_sampling_steps',
-                'boltz_recycling_steps',
-                'interactive_gating',
-                'interactive_gate_stage',
-                'interactive_gate_continue',
-                'plr_backbone_input_pdbs',
-                'plr_sequence_input_pdbs',
-                'plr_validation_input_pdbs',
-                'plr_region_manifest',
-                'plr_final_candidate_dir',
-            ):
-                params.pop(disabled_key, None)
-            params['interactive_gating'] = False
         if 'plr_seq_method' in params and 'seq_method' not in params:
             params['seq_method'] = params['plr_seq_method']
         if not params.get('rfd_mode'):

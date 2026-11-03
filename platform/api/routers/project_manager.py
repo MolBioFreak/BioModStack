@@ -2899,3 +2899,36 @@ async def project_receipt_surface(
 
 
 __all__ = ["router"]
+
+
+@router.get("/api/projects/{project_id}/native-results/{receipt_id}")
+async def get_retained_native_result(project_id: str, receipt_id: str, request: Request,
+                                     session: AsyncSession = Depends(get_experiment_session)):
+    from services.global_experiments.receipts import retained_native_result
+    from services.family_msa.publication import CustodyError
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    try:
+        acknowledgement, files = await retained_native_result(session, workspace_id=project_id, receipt_id=receipt_id)
+        return {"receipt_id": receipt_id, "producer": acknowledgement,
+                "artifacts": [{**entry, "content_url": f"/api/projects/{project_id}/native-results/{receipt_id}/artifacts/{entry['resource_id']}"}
+                              for entry, _ in files]}
+    except (CustodyError, ValidationFailure, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(409, "Retained native result is unavailable or changed") from exc
+
+
+@router.get("/api/projects/{project_id}/native-results/{receipt_id}/artifacts/{artifact_id}")
+async def get_retained_native_artifact(project_id: str, receipt_id: str, artifact_id: str, request: Request,
+                                       session: AsyncSession = Depends(get_experiment_session)):
+    from fastapi.responses import FileResponse
+    from pathlib import PurePosixPath
+    from services.global_experiments.receipts import retained_native_result
+    from services.family_msa.publication import CustodyError
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    try:
+        _, files = await retained_native_result(session, workspace_id=project_id, receipt_id=receipt_id)
+        for entry, path in files:
+            if entry['resource_id'] == artifact_id:
+                return FileResponse(path, media_type=entry['media_type'], filename=PurePosixPath(entry['logical_path']).name)
+        raise HTTPException(404, "Retained native artifact not found")
+    except (CustodyError, ValidationFailure, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(409, "Retained native result is unavailable or changed") from exc
