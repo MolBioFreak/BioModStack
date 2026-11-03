@@ -84,12 +84,18 @@ def test_registry_manifests_reproduce_the_installed_layout_digest(model_id, layo
 
 
 @pytest.mark.parametrize("model_id", ["laproteina", "complexa", "caliby_experimental"])
-def test_weights_are_no_longer_reported_as_missing_acquisition_metadata(model_id):
+def test_generator_layout_coverage_keeps_unreviewed_native_oracles_explicit(model_id):
     plan = mr.model_acquisition_plan(model_id)
     missing = [b for b in plan["blockers"] if b.get("code") == "approved_acquisition_metadata_missing"
                and b.get("kind") == "weights"]
-    # Only the unrelated pinned Caliby soluble_caliby_v1 file (never acquired) may remain.
-    assert [b["relative_path"] for b in missing] in ([], ["caliby/model_params/caliby/soluble_caliby_v1.ckpt"])
+    # Installed legacy AF2 bytes do not invent an acquisition approval. Keep its
+    # existing metadata gap explicit while checking the acquired generator roots.
+    expected = {
+        "laproteina": [],
+        "complexa": ["alphafold/params"],
+        "caliby_experimental": ["caliby/model_params/caliby/soluble_caliby_v1.ckpt"],
+    }
+    assert [b["relative_path"] for b in missing] == expected[model_id]
 
 
 def test_laproteina_closure_includes_its_checkpoints():
