@@ -72,6 +72,7 @@ export default function AlignmentWorkspace({ projectLabel, projectId, receiptId,
           </select>
         </label>
       </div>
+      <p className="alignment-hint">Each row is a sequence and each column a position. Dashes are gaps. Click a residue to see its position in the original sequence.</p>
       <AlignmentSimilaritySummary document={document} selectedRowId={currentSelection?.rowId ?? rowId} onSelectRow={selectRow}/>
       <div className="alignment-viewer-slot">
         {Viewer ? <ViewerBoundary key={viewerId} name={viewerNames[viewerId]}><Suspense fallback={<p role="status">Loading {viewerNames[viewerId]}…</p>}><Viewer document={displayed!} selection={currentSelection} onSelect={select} marks={marks.filter(mark => selectedMarks.includes(mark.id))} rendererState={rendererState} onRendererStateChange={updateRendererState} /></Suspense></ViewerBoundary> : <p role="status">{viewerNames[viewerId]} is not available; try another viewer. The files can still be downloaded below.</p>}

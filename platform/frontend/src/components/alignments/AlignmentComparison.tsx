@@ -128,6 +128,7 @@ export default function AlignmentComparison({initialProject, savedState, operati
   }});
   return <section aria-label="Alignment comparison"><h2>Compare alignments</h2>
     <p>Pick two alignments to compare. Rows are matched by source sequence, not by name.</p>
+    <p className="alignment-hint">Use this to see whether two engines or settings gave the same answer. Agreement runs from 0 (nothing in common) to 1 (identical): it is the share of lined-up residue pairs found in both alignments. High agreement means the result is robust; it does not prove it is biologically right.</p>
     <label>Project <select value={project} onChange={e => setProject(e.target.value)}><option value="">Choose a Project</option>{projects.data?.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
     {projects.isLoading && <p role="status">Loading Projects…</p>}
     {projects.error && <p role="alert">Projects unavailable: {errorText(projects.error)} <button onClick={() => void projects.refetch()}>Retry Projects</button></p>}

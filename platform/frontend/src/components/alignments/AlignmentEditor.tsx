@@ -8,7 +8,7 @@ import { useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup
 import ProjectDatasetPicker, { type DatasetRow } from './ProjectDatasetPicker';
 import { MOLECULAR_ALIGNMENT_PARAM, MolecularAlignmentSourceList, useMolecularAlignmentSources } from './MolecularAlignmentSources';
 import requestSchema from './alignment-request.schema.json';
-import { engineLabels, fieldLabel, nullLabel, optionLabel, primaryFieldsFor } from './alignmentFieldPresentation';
+import { engineHelp, engineLabels, fieldHelp, fieldLabel, nullLabel, optionLabel, plasmidPreset, primaryFieldsFor } from './alignmentFieldPresentation';
 
 type Engine = 'mafft' | 'famsa' | 'muscle' | 'twilight';
 type Molecule = 'protein' | 'dna' | 'rna';
@@ -34,6 +34,12 @@ export function settingsInventory(schema: SettingsSchema, engine: Engine): {fiel
 }
 const inventory = Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(engine => [engine, settingsInventory(requestSchema as SettingsSchema, engine)])) as Record<Engine,ReturnType<typeof settingsInventory>>;
 const defaults = Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(engine => [engine, inventory[engine].defaults])) as Record<Engine,Settings>;
+/** Engine defaults with the standard plasmid settings applied to MAFFT. */
+function plasmidDrafts(base: Record<Engine,Settings> = defaults): Record<Engine,Settings> {
+    const next = structuredClone(base);
+    next.mafft = {...next.mafft, strategy: plasmidPreset.strategy, reorder: plasmidPreset.reorder};
+    return next;
+}
 export function fastaRoster(text: string, molecule: Molecule) {
     const rows: {row_id:string;header:string;sequence:string}[] = [];
     for (const line of text.split(/\r?\n/)) {
@@ -84,8 +90,11 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
     const urlContext = searchParams.get('launch_context_id');
     const urlJob = searchParams.get('alignment_job_id');
     const [molecule,setMolecule] = useState<Molecule>(initialMolecule ?? (model === 'family_msa_nucleic' ? 'dna' : 'protein'));
+    // Saved DNA sequences sent from the MolBio shelf get the standard plasmid settings.
+    const shelfDna = searchParams.getAll(MOLECULAR_ALIGNMENT_PARAM).length > 0 && (initialMolecule ?? searchParams.get('molecule')) === 'dna';
+    const [plasmidPresetOn, setPlasmidPresetOn] = useState(shelfDna);
     const [engine,setEngine] = useState<Engine>('mafft');
-    const [drafts,setDrafts] = useState<Record<Engine,Settings>>(() => structuredClone(defaults));
+    const [drafts,setDrafts] = useState<Record<Engine,Settings>>(() => shelfDna ? plasmidDrafts() : structuredClone(defaults));
     const [schemaWarning,setSchemaWarning] = useState('');
     useEffect(() => {
         let cancelled = false;
@@ -133,7 +142,9 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
         hydrated.current = id;
         const editor = (setup.setup.draft?.editor_state ?? setup.setup.draft) as {molecule?:Molecule;engine?:Engine;drafts?:Record<Engine,Settings>;fasta?:string;datasetRows?:DatasetRow[];molecularSources?:string[]} | undefined;
         setMolecule(editor?.molecule ?? (model === 'family_msa_nucleic' ? 'dna' : 'protein')); setEngine(editor?.engine && defaults[editor.engine] ? editor.engine : 'mafft');
-        setDrafts(Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(name => [name,{...structuredClone(defaults[name]),...editor?.drafts?.[name]}])) as Record<Engine,Settings>); setFasta(typeof editor?.fasta === 'string' ? editor.fasta : '');
+        const base = !editor?.drafts && shelfDna ? plasmidDrafts() : defaults;
+        if (editor?.drafts) setPlasmidPresetOn(false);
+        setDrafts(Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(name => [name,{...structuredClone(base[name]),...editor?.drafts?.[name]}])) as Record<Engine,Settings>); setFasta(typeof editor?.fasta === 'string' ? editor.fasta : '');
         setDatasetRows(Array.isArray(editor?.datasetRows) ? editor.datasetRows : []);
         // Keep sequences sent from the shelf alongside any saved in the draft.
         setMolecularSources([...new Set([...(Array.isArray(editor?.molecularSources) ? editor.molecularSources : []), ...searchParams.getAll(MOLECULAR_ALIGNMENT_PARAM)])]);
@@ -237,28 +248,44 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
     const renderField = (field: Field) => {
         const label = field.label;
         const tip = field.description ? `${field.key}: ${field.description}` : field.key;
+        const checkHelp = primary.has(field.key) ? fieldHelp(engine, field.key) : undefined;
         if (field.kind === 'boolean' && !field.format) return <label key={field.key} data-setting={field.key} className="alignment-setting alignment-setting-check" title={tip}>
-            <span className="alignment-setting-name">{label}</span><input type="checkbox" checked={Boolean(settings[field.key])} onChange={e=>update(field.key,e.target.checked)}/></label>;
+            <span className="alignment-setting-name">{label}</span><input type="checkbox" checked={Boolean(settings[field.key])} onChange={e=>update(field.key,e.target.checked)}/>{checkHelp && <span className="alignment-setting-help">{checkHelp}</span>}</label>;
         const control = field.format ? <NativeFileInput key={`${setup.setup?.project_id}:${setup.setup?.setup_context_id}:${engine}:${field.key}`} field={field} value={settings[field.key]} onChange={value=>update(field.key,value)}/>
             : field.kind === 'select' ? <select className={inputClass} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value === '' && field.nullable ? null : field.options?.find(option => String(option) === e.target.value) ?? e.target.value)}>{field.nullable && <option value="">{nullLabel(field.key, settings)}</option>}{field.options?.map(x=><option key={x} value={x}>{optionLabel(field.key, x)}</option>)}</select>
             : field.kind === 'mapping' ? <MappingInput value={(settings[field.key] || {}) as Record<string,string>} onChange={value=>update(field.key,value)}/>
             : field.kind === 'text' ? <textarea className={`${inputClass} block w-full`} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value || null)}/>
             : <input className={inputClass} type="number" step={field.kind === 'integer' ? 1 : 'any'} min={field.min} placeholder={field.nullable ? nullLabel(field.key, settings) : undefined} value={settings[field.key] == null ? '' : String(settings[field.key])} onChange={e=>update(field.key,e.target.value === '' ? null : Number(e.target.value))}/>;
         const wide = Boolean(field.format) || field.kind === 'mapping' || field.kind === 'text';
+        const explainer = primary.has(field.key) ? fieldHelp(engine, field.key) : undefined;
         return <label key={field.key} data-setting={field.key} className={`alignment-setting${wide ? ' alignment-setting-wide' : ''}`} title={tip}>
-            <span className="alignment-setting-name">{label}</span>{control}</label>;
+            <span className="alignment-setting-name">{label}</span>{control}{explainer && <span className="alignment-setting-help">{explainer}</span>}</label>;
     };
     return <section aria-label="New family alignment" className="alignment-editor">
         {schemaWarning && <p role="status">{schemaWarning}</p>}
         {setup.active && !setup.setup && <p role="status">Project setup must load before editing.</p>}
+        <details className="alignment-guide" open={!shelfDna}>
+            <summary>How alignment works</summary>
+            <ul>
+                <li>An alignment lines up two or more sequences so matching positions sit in the same column. Gaps (-) are added where one sequence has extra or missing bases.</li>
+                <li>Add sequences below: paste FASTA, pick saved sequences in MolBio Viewer (tick them, then Align selected), or add them from a Project.</li>
+                <li>Choose the molecule and an engine. The defaults are fine for most work; you rarely need the expert settings.</li>
+                <li>Start run. The result opens in a viewer where you can scroll, inspect columns, and see percent identity.</li>
+            </ul>
+        </details>
+        {plasmidPresetOn && engine === 'mafft' && <div role="status" className="alignment-preset">
+            <p><strong>Plasmid settings applied:</strong> MAFFT, Auto strategy (MAFFT picks the most accurate method your set size allows), output in the order you picked.</p>
+            <p>Plasmids are circular, so make sure they all start at the same position and point the same way before aligning, or matching regions will appear split.</p>
+            <button type="button" className={inputClass} onClick={() => { setDrafts(previous => ({...previous, mafft: structuredClone(defaults.mafft)})); setPlasmidPresetOn(false); }}>Use plain MAFFT defaults instead</button>
+        </div>}
         <fieldset disabled={busy || (setup.active && !setup.setup)}>
             <legend>Input</legend>
             <div className="alignment-settings-grid">
                 <label data-setting="molecule" className="alignment-setting"><span className="alignment-setting-name">Molecule</span><select aria-label="Molecule" className={inputClass} value={molecule} onChange={e=>chooseMolecule(e.target.value as Molecule)}>{moleculeOptions.map(x=><option key={x} value={x}>{x === 'protein' ? 'Protein' : x.toUpperCase()}</option>)}</select></label>
-                <label data-setting="engine" className="alignment-setting"><span className="alignment-setting-name">Engine</span><select aria-label="Engine" className={inputClass} value={engine} onChange={e=>setEngine(e.target.value as Engine)}>{(['mafft','famsa','muscle','twilight'] as Engine[]).map(x=><option key={x} value={x} disabled={unavailable(x)}>{engineLabels[x]}{unavailable(x) ? ' — not for this molecule' : ''}</option>)}</select></label>
+                <label data-setting="engine" className="alignment-setting"><span className="alignment-setting-name">Engine</span><select aria-label="Engine" className={inputClass} value={engine} onChange={e=>setEngine(e.target.value as Engine)}>{(['mafft','famsa','muscle','twilight'] as Engine[]).map(x=><option key={x} value={x} disabled={unavailable(x)}>{engineLabels[x]}{unavailable(x) ? ' — not for this molecule' : ''}</option>)}</select><span className="alignment-setting-help">{engineHelp[engine]}</span></label>
             </div>
             <label data-setting="fasta" className="alignment-setting alignment-setting-wide"><span className="alignment-setting-name">Sequences (FASTA)</span><textarea aria-label="FASTA roster" className={`${inputClass} block w-full font-mono`} rows={8} placeholder={'>sequence_1\nMKV...\n>sequence_2\nMKI...'} value={fasta} onChange={e=>setFasta(e.target.value)}/></label>
-            <p className="alignment-hint">Headers and duplicate sequences are kept as separate rows.</p>
+            <p className="alignment-hint">One sequence per FASTA record: a line starting with &gt; and a name, then the sequence. Duplicates are kept as separate rows.</p>
             <MolecularAlignmentSourceList sources={molecularSources} query={molecularQuery}
                 onRemove={source => { setMolecularSources(previous => previous.filter(value => value !== source)); dropMolecularParam(source); }}
                 onClear={() => { setMolecularSources([]); dropMolecularParam(); }} />
@@ -270,12 +297,12 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
         <fieldset disabled={busy || (setup.active && !setup.setup)}>
             <legend>{engineLabels[engine]} settings</legend>
             <div className="alignment-settings-grid">
-                <label data-setting="threads" className="alignment-setting" title="threads"><span className="alignment-setting-name">Threads</span><input aria-label="Threads" className={inputClass} type="number" min={1} step={1} value={String(settings.threads)} onChange={e=>update('threads',e.target.value === '' ? null : Number(e.target.value))}/></label>
+                <label data-setting="threads" className="alignment-setting" title="threads"><span className="alignment-setting-name">Threads</span><input aria-label="Threads" className={inputClass} type="number" min={1} step={1} value={String(settings.threads)} onChange={e=>update('threads',e.target.value === '' ? null : Number(e.target.value))}/><span className="alignment-setting-help">CPU cores to use. More is faster.</span></label>
                 {fields.filter(field => primary.has(field.key)).map(renderField)}
             </div>
             <details className="alignment-expert">
                 <summary>Expert settings ({fields.filter(field => !primary.has(field.key)).length})</summary>
-                <p className="alignment-hint">Blank means engine default. Hover a setting for details.</p>
+                <p className="alignment-hint">Only change these if you know you need to. Blank means the engine's own default. Hover a setting for a short description.</p>
                 <div className="alignment-settings-grid">{fields.filter(field => !primary.has(field.key)).map(renderField)}</div>
                 {engine === 'mafft' && <p className="alignment-hint">Some settings only apply to certain strategies. Conflicts are reported in the engine log.</p>}
                 {engine === 'muscle' && <p className="alignment-hint">Some MUSCLE settings can't be combined. If a run fails, check the engine log.</p>}

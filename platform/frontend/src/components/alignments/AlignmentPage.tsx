@@ -36,6 +36,7 @@ export function EnsembleSupport({projectId, receiptId, reference, artifacts}: {p
     const nameOf = (id: string) => { const index = artifacts.findIndex(a => a.id === id); return artifacts[index]?.logical_path || `Alignment ${index + 1}`; };
     return <section aria-label="Ensemble support"><h2>Ensemble support</h2>
         <p title={reference}>Reference: {nameOf(reference)}. Pick alignments to check against the reference.</p>
+        <p className="alignment-hint">Ensemble support checks how often the reference's lined-up pairs also appear in the other alignments (for example a MUSCLE ensemble). Values near 1 mean the alignment is stable; low values flag regions you shouldn't trust.</p>
         <label>Molecule <select value={molecule} onChange={e => setMolecule(e.target.value)}><option value="protein">Protein</option><option value="dna">DNA</option><option value="rna">RNA</option></select></label>
         <label>Save to experiment <select value={domain} onChange={e => setDomain(e.target.value)}><option value="">Choose experiment</option>{domains.data?.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></label>
         {artifacts.map(a => <label key={a.id}><input type="checkbox" checked={selected.includes(a.id)} onChange={e => setSelected(old => e.target.checked ? [...old, a.id] : old.filter(id => id !== a.id))}/><span title={a.id}>{nameOf(a.id)}</span> </label>)}
@@ -119,7 +120,7 @@ export default function AlignmentPage() {
         {setup.active && setup.isLoading && <p role="status">Loading Project workflow setup…</p>}
         {setup.active && setup.error && <p role="alert">Project workflow setup unavailable: {projectManagerErrorMessage(setup.error)}</p>}
         {setup.setup && <ProjectWorkflowSetupBanner setup={setup.setup} />}
-        <header className="alignment-page-header"><div><h1>Alignments</h1><p>Build, inspect and compare sequence alignments.</p></div>
+        <header className="alignment-page-header"><div><h1>Alignments</h1><p>Build, inspect and compare sequence alignments. <strong>Library</strong> lists saved alignments, <strong>New</strong> runs one, <strong>Compare</strong> checks two against each other.</p></div>
         <nav aria-label="Alignment sections" className="alignment-page-nav">
             {(['Library', 'New', 'Compare'] as const).map(name => <Link key={name} aria-current={section === name ? 'page' : undefined} to={{ pathname: `/alignments/${name.toLowerCase()}`, search: setup.active ? location.search : projectId ? `?project_id=${encodeURIComponent(projectId)}` : '' }}>{name}</Link>)}
         </nav></header>
