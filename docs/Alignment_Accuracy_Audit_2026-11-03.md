@@ -89,6 +89,16 @@ precisely bounded MUSCLE expected failures described below; expected failures
 are not counted as scientific passes. These counts cover overlapping suites
 and must not be summed into a unique-test total.
 
+The final complete alignment-core run, including the optional API integration
+cases and all four native engines, finished with **228 passes and two precisely
+bounded MUSCLE expected failures**, with no ordinary skips or new failures.
+The coordinate utility suite also passed four checks. After the locked
+first-party package was reinstalled, all 13 installed Python modules matched the
+audited source. The managed API reported healthy/ready and live, nonpersisting
+pUC19 requests returned 2,686 matches, zero mismatches/gaps, and correct original
+query coordinates in both forward and reverse orientations. The corrected
+frontend modules were verified as served; this was not a visual browser review.
+
 ## Remaining scientific qualification failures
 
 The five-row pUC19 known-edit control contains the original, identical copy, and
