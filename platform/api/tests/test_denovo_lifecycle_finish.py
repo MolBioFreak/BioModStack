@@ -63,7 +63,8 @@ async def test_cancel_delete_reconcile_finishes_custody(store, tmp_path, monkeyp
         assert (await verify.scalars(select(Job.id).where(outstanding_claim_clause()))).all() == ['gate-job']
         # Exact public visibility contract: never hide from claim/recovery readers.
         assert not (await verify.scalars(select(Job.id).where(Job.id == 'gate-job',
-            func.coalesce(Job.params['permanent_delete_cleanup'].as_boolean(), False).is_(False)))).all()
+            (job_control.visible_job_clause() if hasattr(job_control, 'visible_job_clause') else
+             func.coalesce(Job.params['permanent_delete_cleanup'].as_boolean(), False).is_(False))))).all()
     assert output.exists()
     async def stopped(session, job, **kwargs):
         return executor.RemoteAttemptStatus(job_id=job.id, attempt_id='attempt',

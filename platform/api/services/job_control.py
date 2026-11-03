@@ -28,6 +28,12 @@ _ACTIVE_JOB_STATUSES = {
 }
 
 
+def visible_job_clause():
+    """Public Job surfaces only; never apply to claims, recovery or path custody."""
+    from sqlalchemy import func
+    return func.coalesce(Job.params["permanent_delete_cleanup"].as_boolean(), False).is_(False)
+
+
 def checkpoint_continuation_predicates(job: Job) -> tuple:
     """Use in the local Continue UPDATE, after native checkpoint validation.
 
