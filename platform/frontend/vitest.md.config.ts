@@ -12,6 +12,9 @@ export default defineConfig({
         environment: 'jsdom',
         setupFiles: ['./tests/vitest/setup.ts'],
         include: [
+            './tests/vitest/alignment*.test.ts*',
+            './tests/vitest/biojsViewer.test.tsx',
+            './tests/vitest/projectWorkflowSetup.test.tsx',
             './tests/vitest/atomworksStudioMounted.test.tsx',
             ...(process.env.BMS_PARENT_RECEIPT_WIRE ? ['./tests/vitest/parentNativeReceivingMounted.test.tsx'] : []),
             './tests/vitest/alignmentPage.test.tsx',

@@ -494,7 +494,7 @@ export function Layout({ children }: LayoutProps) {
 
     useEffect(() => {
         const activeTab = document.querySelector<HTMLElement>('[data-bms-primary-nav-active="true"]');
-        activeTab?.scrollIntoView({ block: 'nearest', inline: 'center' });
+        activeTab?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }, [location.pathname, showDevFeatures]);
 
     const handleSetShowDevFeatures = (enabled: boolean) => {

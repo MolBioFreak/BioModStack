@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 import { sanitizeMolstarCss } from './build/molstarCssHygiene'
+import { alignmentViewerBundles } from './build/alignmentViewerBundles'
 
 import crypto from 'node:crypto'
 import os from 'node:os'
@@ -143,7 +144,7 @@ export default defineConfig(({ mode }) => ({
   // Use /bms/ for production (Tailscale Serve proxy), but / for dev mode
   base: mode === 'production' ? '/bms/' : '/',
   cacheDir: resolveViteCacheDir(),
-  plugins: [molstarCssHygienePlugin(), molstarCommonJsBuildResolver(), react(), tailwindcss()],
+  plugins: [alignmentViewerBundles(__dirname), molstarCssHygienePlugin(), molstarCommonJsBuildResolver(), react(), tailwindcss()],
   define: {
     __BMS_BUILD_METADATA__: JSON.stringify(buildMetadata),
   },
