@@ -8,6 +8,7 @@ import { nullLabel, fieldLabel, optionLabel, primaryFieldsFor } from '../../src/
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import AlignmentWorkspace, { type AlignmentViewerProps } from '../../src/components/alignments/AlignmentWorkspace'
+import { anchorAt, type AlignmentDocument } from '../../src/lib/alignmentCoordinates'
 
 const document = { resultId: 'result-1', rows: [{ rowId: 'r1', label: 'first', aligned: 'AC-' }] }
 function TestAdapter({ document: result }: AlignmentViewerProps) { return createElement('p', null, `adapter for ${result.resultId}`) }
@@ -27,6 +28,17 @@ describe('alignment workspace host', () => {
     const html = renderToStaticMarkup(createElement(AlignmentWorkspace, { document, viewers: { jbrowse: TestAdapter } }))
     expect(html).toContain('adapter for result-1')
     expect(html).not.toContain('JBrowseMSA is not available')
+  })
+  it('reports reverse-complemented source coordinates separately from alignment residue order', async () => {
+    const reversed: AlignmentDocument = {resultId: 'reversed', rows: [{rowId: 'a', label: 'same', aligned: 'C-GT',
+      sourceMemberId: 'revision', occurrenceId: 'first', sourcePositions: [2, null, 1, 0], sourceOrientation: 'reverse_complement'}]}
+    const Adapter = ({document: result, onSelect}: AlignmentViewerProps) => <button onClick={() => onSelect(anchorAt(result, 'a', 0)!)}>Select first displayed base</button>
+    const div = window.document.createElement('div'); const root = createRoot(div)
+    try {
+      await act(async () => root.render(<AlignmentWorkspace document={reversed} viewers={{jbrowse: Adapter}}/>))
+      await act(async () => [...div.querySelectorAll('button')].find(button => button.textContent === 'Select first displayed base')!.click())
+      expect(div.querySelector('.alignment-selection')?.textContent).toBe('Row same, column 1, residue 1; sequence position 3; reverse-complemented from the saved sequence')
+    } finally { await act(async () => root.unmount()) }
   })
   it('keeps a failed renderer inside its panel with the result and downloads still usable', async () => {
     const Broken = () => { throw new Error('Failed to fetch dynamically imported module: viewer.js') }

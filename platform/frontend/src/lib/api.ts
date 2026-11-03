@@ -4008,6 +4008,9 @@ export interface SequenceAlignmentResult {
     reference_wraps_origin?: boolean;
     query_start: number;
     query_end: number;
+    query_coordinate_system?: 'input' | 'reverse_complement';
+    query_input_start?: number;
+    query_input_end?: number;
     query_soft_clip_left?: number;
     query_soft_clip_right?: number;
     reference_flank_left?: number;

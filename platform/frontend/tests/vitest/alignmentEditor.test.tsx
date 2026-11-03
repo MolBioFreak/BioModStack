@@ -26,3 +26,21 @@ describe('family alignment authoring', () => {
         await act(async()=>root.unmount()); client.clear();
     });
 });
+it('blocks unqualified MUSCLE Align mode without changing it and identifies its nucleotide accuracy limit', async () => {
+ const div = document.createElement('div'), root = createRoot(div), client = new QueryClient();
+ await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><AlignmentEditor model="family_msa_nucleic"/></MemoryRouter></QueryClientProvider>));
+ try {
+  const engine = div.querySelector('[aria-label="Engine"]') as HTMLSelectElement;
+  await act(async () => { engine.value='muscle'; engine.dispatchEvent(new Event('change', {bubbles:true})); });
+  const mode = div.querySelector('[data-setting="mode"] select') as HTMLSelectElement;
+  expect(mode.value).toBe('align');
+  expect(div.textContent).toContain('ignores the requested molecule type');
+  expect(div.textContent).toContain('not qualified for sequence identity confirmation');
+  const start = [...div.querySelectorAll('button')].find(b => b.textContent === 'Start run')!;
+  expect(start.disabled).toBe(true);
+  await act(async () => { mode.value='super5'; mode.dispatchEvent(new Event('change', {bubbles:true})); });
+  expect(start.disabled).toBe(false);
+  expect(div.textContent).not.toContain('ignores the requested molecule type');
+  expect(div.textContent).toContain('not qualified for sequence identity confirmation');
+ } finally { await act(async () => root.unmount()); client.clear(); }
+});
