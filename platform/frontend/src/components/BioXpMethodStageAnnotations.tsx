@@ -1,4 +1,4 @@
-import { placeBounds, biosecurityCoverStorage, COVER_LABELS, placeName, type CustodyStep } from '../lib/bioxpMethodCustodySteps';
+import { placeBounds, COVER_LABELS, placeName, type CustodyStep } from '../lib/bioxpMethodCustodySteps';
 import type { DeckBounds } from '../lib/bioxpWorkflowDeck';
 
 const circled = (n: number) => n >= 1 && n <= 20 ? String.fromCharCode(0x2460 + n - 1) : `(${n})`;
@@ -48,13 +48,9 @@ export function BioXpMethodStageAnnotations({ steps, door, covers, markerId }: {
     const doorSteps = steps.filter(s => s.kind === 'door');
     const doorText = doorSteps.length ? `Door ${doorSteps.map(s => `${circled(s.n)} ${s.door ?? '?'}`).join(' → ')}` : door ? `Door ${door}` : null;
     const doorWidth = doorText ? 20 + doorText.length * 7.2 : 0;
-    const bscs = biosecurityCoverStorage;
     return <g aria-label="Plate, cover and door steps" className="bioxp-stage-custody">
         <defs><marker id={`${markerId}-cover`} markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L11,5.5 L0,11 Z" className="bioxp-cover-arrowhead" /></marker></defs>
-        <g className={`bioxp-bscs${steps.some(s => s.from === 'LOC_BSCS' || s.to === 'LOC_BSCS') ? ' is-involved' : ''}`} data-station="LOC_BSCS"><rect x={bscs.x - 3} y={bscs.y - 3} width={bscs.width + 6} height={bscs.height + 6} rx="9" />
-            <text x={bscs.x + bscs.width / 2} y={bscs.y + bscs.height + 18} textAnchor="middle">Biosecurity cover storage</text>
-            <title>Biosecurity cover storage (LOC_BSCS). Its calibrated gripper position is in the trough slot; outline is an estimate.</title></g>
-        {Object.entries(covers).map(([name, location]) => {
+        {Object.entries(covers).filter(([name]) => name in COVER_LABELS).map(([name, location]) => {
             const b = placeBounds(location);
             if (!b) return null;
             return <g key={name} className={`bioxp-cover-state${moved.has(name) ? ' is-moved' : ''}`} data-cover={name} data-cover-at={location}>

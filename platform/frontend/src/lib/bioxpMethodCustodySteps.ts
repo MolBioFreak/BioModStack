@@ -53,12 +53,11 @@ export function custodySteps(result: MethodCompile | null | undefined, initialSt
     return steps;
 }
 
-const ALIAS: Record<string, string> = { LOC_OC_COVER: 'LOC_OC', LOC_P_OC: 'LOC_OC', LOC_P_OC_PRESS: 'LOC_OC', LOC_RC_COVER: 'LOC_RC', LOC_P_RC_PRESS: 'LOC_RC', LOC_BSC: 'LOC_TC', LOC_P_TC: 'LOC_TC', LOC_P_TC_PRESS: 'LOC_TC', LOC_P_MS: 'LOC_MS', LOC_P_MS_PRESS: 'LOC_MS' };
-// OEM config.xml gripper positions: LOC_BSCS (82868, 61772) lies in the trough slot (LOC_TROUGH 85555, 63278),
-// so the biosecurity cover is stored over the trough position. Artwork outline, not a measured footprint.
-export const biosecurityCoverStorage: DeckBounds = deckRegions.find(r => r.id === 'LOC_TROUGH')!.bounds;
-export const COVER_LABELS: Record<string, string> = { OUTPUT_COVER: 'Output cover', REAGENT_COVER: 'Reagent cover', BIO_SECURITY_COVER: 'Biosecurity cover' };
-const PLACE_NAMES: Record<string, string> = { LOC_BSC: 'on the thermal cycler', LOC_BSCS: 'biosecurity cover storage (trough slot)', LOC_OC_COVER: 'on the output chiller', LOC_RC_COVER: 'on the reagent chiller', LOC_OC_COVER_STORAGE: 'output cover storage', LOC_RC_COVER_STORAGE: 'reagent cover storage' };
+const ALIAS: Record<string, string> = { LOC_OC_COVER: 'LOC_OC', LOC_P_OC: 'LOC_OC', LOC_P_OC_PRESS: 'LOC_OC', LOC_RC_COVER: 'LOC_RC', LOC_P_RC_PRESS: 'LOC_RC', LOC_P_TC: 'LOC_TC', LOC_P_TC_PRESS: 'LOC_TC', LOC_P_MS: 'LOC_MS', LOC_P_MS_PRESS: 'LOC_MS' };
+// The deck has two covers: the output cover (output chiller ↔ output cover storage)
+// and the reagent cover (reagent chiller ↔ reagent cover storage).
+export const COVER_LABELS: Record<string, string> = { OUTPUT_COVER: 'Output cover', REAGENT_COVER: 'Reagent cover' };
+const PLACE_NAMES: Record<string, string> = { LOC_OC_COVER: 'on the output chiller', LOC_RC_COVER: 'on the reagent chiller', LOC_OC_COVER_STORAGE: 'output cover storage', LOC_RC_COVER_STORAGE: 'reagent cover storage' };
 export const stationOf = (location: string | undefined) => location ? ALIAS[location] ?? location : undefined;
 export function placeName(location: string | undefined): string {
     if (!location) return 'unknown location';
@@ -66,11 +65,10 @@ export function placeName(location: string | undefined): string {
     return PLACE_NAMES[location] ?? (deckResources.find(r => r.id === station)?.label ?? deckRegions.find(r => r.id === station)?.label ?? location).toLowerCase();
 }
 
-/** Drawing bounds for a native object location token (station housing, cover storage, or BSCS). */
+/** Drawing bounds for a native object location token (station housing or cover storage). */
 export function placeBounds(location: string | undefined): DeckBounds | undefined {
     if (!location) return undefined;
     const station = ALIAS[location] ?? location;
-    if (station === 'LOC_BSCS') return biosecurityCoverStorage;
     const resource = deckResources.find(r => r.id === station);
     if (resource) { const b = resource.bounds, strip = resource.kind === 'strip'; return { x: b.x - (strip ? 10 : 21), y: b.y - (strip ? 17 : 44), width: b.width + (strip ? 20 : 42), height: b.height + (strip ? 34 : 66) }; }
     return deckRegions.find(r => r.id === station)?.bounds;

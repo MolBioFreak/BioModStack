@@ -336,12 +336,13 @@ it.runIf(!!process.env.BIOXP_WELL_INPUT && !!process.env.BIOXP_WELL_COMPILED)('s
     expect([...host.querySelectorAll('[data-transfer-channel]')].every(e => e.getAttribute('data-transfer-channel') === '0')).toBe(true);
     const poolText = (host.querySelector('[aria-label="Execution text"]') as HTMLTextAreaElement).value;
     expect(poolText).toContain('return unused tip to rack');
-    expect(poolText).toContain("missing-tip check is on");
+    expect(poolText).toContain('eject tips into the waste bin (P1)');
+    expect(poolText).not.toContain('missing-tip');
     // Stage contents follow the plan: pooled tubes are filled, sources/destinations are marked.
     expect(host.querySelectorAll('.bwd-well.has-contents[data-station="LOC_STRIP4"]')).toHaveLength(3);
     expect(host.querySelectorAll('.bwd-well.is-stage-source[data-station="LOC_OC"]')).toHaveLength(24);
     expect(host.querySelectorAll('.bwd-well.is-stage-destination[data-station="LOC_STRIP4"]')).toHaveLength(3);
-    expect(host.querySelector('[aria-label="Run hazards on this stage"]')!.textContent).toContain('only P1 holds a tip');
+    expect(host.querySelector('[aria-label="Run hazards on this stage"]')).toBeNull();
     // The method strip follows the stage: its first step is selected, no editor opens.
     const poolFirst = snapshot.method.editor_state.workflow_pages.find((p: any) => p.id === 'pool').step_ids[0];
     const poolPath = `/steps/${snapshot.method.steps.findIndex((s: any) => s.step_id === poolFirst)}`;
@@ -352,8 +353,11 @@ it.runIf(!!process.env.BIOXP_WELL_INPUT && !!process.env.BIOXP_WELL_COMPILED)('s
     expect(host.querySelectorAll('.bwd-well.is-stage-source[data-station="LOC_RC"]')).toHaveLength(24);
     expect(host.querySelectorAll('.bwd-well.is-stage-destination[data-station="LOC_OC"]')).toHaveLength(24);
     await input('Workflow stage', 'load-cycler');
-    expect([...host.querySelectorAll('.bioxp-stage-custody-list li')].map(li => li.getAttribute('value'))).toEqual(['1', '2', '3', '4', '5']);
-    expect([...host.querySelectorAll('.bioxp-stage-cover-move')].map(e => `${e.getAttribute('data-cover-from')}>${e.getAttribute('data-cover-to')}`)).toEqual(['LOC_BSC>LOC_BSCS', 'LOC_BSCS>LOC_BSC']);
+    // Door open, plate in, door closed. Only the two chiller covers exist; none moves here.
+    expect([...host.querySelectorAll('.bioxp-stage-custody-list li')].map(li => li.getAttribute('value'))).toEqual(['1', '2', '3']);
+    expect(host.querySelectorAll('.bioxp-stage-cover-move')).toHaveLength(0);
+    expect([...host.querySelectorAll('.bioxp-cover-state')].map(e => `${e.getAttribute('data-cover')}@${e.getAttribute('data-cover-at')}`).sort()).toEqual(['OUTPUT_COVER@LOC_OC_COVER_STORAGE', 'REAGENT_COVER@LOC_RC_COVER_STORAGE']);
+    expect(host.querySelector('[data-station="LOC_BSCS"]')).toBeNull();
     expect(host.querySelector('.bioxp-door-state')!.getAttribute('data-door')).toBe('closed');
     expect(host.querySelectorAll('.bwd-well.has-contents[data-station="LOC_TC"]')).toHaveLength(24);
     await click('Full workflow');

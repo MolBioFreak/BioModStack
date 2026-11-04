@@ -278,14 +278,10 @@
 .bioxp-method-map .bwd-well.has-contents .bwd-core { fill:color-mix(in srgb,var(--bxs-liquid) 55%,var(--bg-secondary)); }
 .bioxp-stage-custody { pointer-events:none; }
 .bioxp-stage-custody title { pointer-events:auto; }
-.bioxp-bscs rect { fill:none; stroke:var(--text-secondary); stroke-width:1.4; stroke-dasharray:5 4; }
-.bioxp-bscs text { fill:var(--text-secondary); font-size:12px; }
 .bioxp-cover-state rect { fill:color-mix(in srgb,var(--bxs-cover) 10%,transparent); stroke:var(--bxs-cover); stroke-width:2; }
 .bioxp-cover-state text { fill:var(--bxs-cover); font-size:12px; font-weight:600; }
 .bioxp-cover-state:not(.is-moved) rect { fill:none; stroke:var(--text-secondary); stroke-opacity:.45; stroke-dasharray:3 4; }
 .bioxp-cover-state:not(.is-moved) text { fill:var(--text-secondary); }
-.bioxp-bscs.is-involved rect { stroke:var(--bxs-cover); stroke-width:2; }
-.bioxp-bscs.is-involved text { fill:var(--bxs-cover); font-weight:600; }
 .bioxp-method-map .bwd-map-label { font-size:14px; }
 .bioxp-method-map .bioxp-liquid-origin { fill:var(--bxs-source); }
 .bioxp-stage-cover-move path { fill:none; stroke:var(--bxs-cover); stroke-width:2.6; stroke-dasharray:7 5; }

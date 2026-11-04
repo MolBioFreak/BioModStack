@@ -7,7 +7,7 @@ import { slotDefaults, slotHolderLabels, type WorkflowDeckPlan, type WorkflowSlo
 const STATION_OBJECTS: Record<string, { plate?: [string, string]; cover?: { name: string; on: string; stored: string } }> = {
     LOC_RC: { plate: ['REAGENT_PLATE', 'LOC_RC'], cover: { name: 'REAGENT_COVER', on: 'LOC_RC_COVER', stored: 'LOC_RC_COVER_STORAGE' } },
     LOC_OC: { plate: ['OUTPUT_PLATE', 'LOC_P_OC'], cover: { name: 'OUTPUT_COVER', on: 'LOC_OC_COVER', stored: 'LOC_OC_COVER_STORAGE' } },
-    LOC_TC: { plate: ['POOL_PLATE', 'LOC_P_TC'], cover: { name: 'BIO_SECURITY_COVER', on: 'LOC_BSC', stored: 'LOC_BSCS' } },
+    LOC_TC: { plate: ['POOL_PLATE', 'LOC_P_TC'] },
     LOC_STRIP1: { plate: ['STRIP_ONE', 'LOC_STRIP1'] }, LOC_STRIP2: { plate: ['STRIP_TWO', 'LOC_STRIP2'] },
     LOC_STRIP3: { plate: ['STRIP_THREE', 'LOC_STRIP3'] }, LOC_STRIP4: { plate: ['STRIP_FOUR', 'LOC_STRIP4'] },
 };
