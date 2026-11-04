@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import { methodPages, pageProvenance, pageNativeActions, pageState } from '../lib/bioxpMethodPages';
 import { methodManipulations, manipulationText } from '../lib/bioxpMethodManipulations';
 import { BioXpMethodPageSummary } from './BioXpMethodPageSummary';
+import { stageDeck } from '../lib/bioxpMethodStageDeck';
+import { custodySteps, doorAfter } from '../lib/bioxpMethodCustodySteps';
+import { BioXpMethodStageAnnotations } from './BioXpMethodStageAnnotations';
 import { BioXpMethodExecutionText } from './BioXpMethodExecutionText';
 import { insertMethodAction, methodCanvasEntries, editCanvasNode, plateBoundEndpoint, methodCarryLinks, duplicateCanvasNode, isThermalProgram } from '../lib/bioxpMethodCanvas';
 import { thermalTimerWait } from '../lib/bioxpMethodThermal';
-import { methodStateAfter } from '../lib/bioxpMethodSimulation';
+import { methodInitialState, methodStateAfter } from '../lib/bioxpMethodSimulation';
 import type { MethodCompile } from '../lib/bioxpMethods';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
 import type { MethodCatalog, MethodFinding, MethodValue } from '../lib/bioxpMethods';
@@ -81,12 +84,14 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
     const page = pages[pageIndex];
     const inPage = (path: string) => page.paths.some(p => path === p || path.startsWith(p + '/'));
     const pageActions = pageNativeActions(page, preview);
-    const alignment = previewReference === 'recorded' ? recordedAlignment : Number(previewReference);
+    // Display only: without a robot reading, preview with P1 on the named well (labelled as assumed).
+    const assumedAlignment = previewReference === 'recorded' && recordedAlignment == null;
+    const alignment = previewReference === 'recorded' ? recordedAlignment ?? -1 : Number(previewReference);
     const manipulations = methodManipulations(preview, alignment);
     const pageActionIds = new Set(pageActions.map(a => String(a.action_id)));
     const pageEvents = manipulations.events.filter(e => pageActionIds.has(e.actionId));
-    const projectionNotes = [...new Set(pageEvents.flatMap(e => e.notes))];
-    const referenceBasis = alignment == null ? 'Head reference unavailable; locations needing alignment are unresolved.' : `${previewReference === 'recorded' ? 'Recorded starting' : 'Preview-only planned'} head reference: ${alignment}. Active channels are selected independently for each action.`;
+    const projectionNotes = [...new Set(pageEvents.filter(e => !e.hazard).flatMap(e => e.notes))];
+    const referenceBasis = assumedAlignment ? 'Robot head reference unavailable; well positions assume P1 on the named well (head reference -1). Active channels are selected independently for each action.' : `${previewReference === 'recorded' ? 'Recorded starting' : 'Preview-only planned'} head reference: ${alignment}. Active channels are selected independently for each action.`;
     const pageActivity = referenceBasis + '\n' + manipulationText(manipulations, pageActionIds);
     const workflowActivity = referenceBasis + '\n' + manipulationText(manipulations);
     const occurrencePaths = new Set(pageProvenance(page, preview).filter(p => Array.isArray(p.native_action_ids) && p.native_action_ids.length).map(p => p.path));
@@ -94,7 +99,19 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
     const pageAfter = pageState(page, pages, preview, initialState);
     const stageState = occurrenceState ?? pageAfter ?? undefined;
     const stageColor = ['#94a3b8', '#38bdf8', '#a78bfa', '#fbbf24', '#34d399', '#fb7185'][pageIndex % 6];
-    const turnPage = (index: number) => { setPageId(pages[index].id); setOccurrence(''); setEditorOpen(false); setSelection({ station: '', wells: [] }); };
+    const arrowId = useId();
+    const turnPage = (index: number) => {
+        setPageId(pages[index].id); setOccurrence(''); setEditorOpen(false); setSelection({ station: '', wells: [] });
+        // Keep the method strip on this stage's first step; selection alone opens no editor.
+        setSelectedId(pages[index].paths[0] ?? '');
+        requestAnimationFrame(() => document.querySelector<HTMLElement>('.bioxp-page-navigation')?.scrollIntoView?.({ block: 'start' }));
+    };
+    useEffect(() => {
+        const first = page.paths[0];
+        const item = first ? document.querySelector<HTMLElement>(`.bioxp-method-sequence [data-method-path="${first}"]`)?.closest('li') : null;
+        const strip = item?.closest<HTMLElement>('.bioxp-method-sequence');
+        if (item && strip) strip.scrollLeft = item.offsetLeft - strip.offsetLeft - 8;
+    }, [pageId]);
     useEffect(() => {
         if (!selectedId) return;
         const path = entries.find(e => e.path === selectedId || e.node.step_id === selectedId)?.path;
@@ -305,29 +322,49 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
         sourceStation: l.source.station, destinationStation: l.destination.station,
     }));
     const links = referenceOnly ? referenceLinks.map(l => ({ ...l, path: nodePath(l.node), channel: null, sourceStation: '', destinationStation: '' })) : nativeLinks;
+    // Everything below is presentation of the compiled plan; none of it is a run input or gate.
+    const allActions = (Array.isArray(preview?.document?.stages) ? preview!.document!.stages as MethodValue[] : []).flatMap(s => Array.isArray(s.actions) ? s.actions as MethodValue[] : []);
+    const lastIndex = Math.max(-1, ...pageActions.map(a => allActions.indexOf(a)));
+    const throughActions = page.id === 'starting-deck' ? [] : allActions.slice(0, lastIndex + 1);
+    const deckAfter = preview?.document ? stageDeck(plan, preview, initialState, manipulations, new Set(throughActions.map(a => String(a.action_id)))) : null;
+    const pageCustody = custodySteps(preview, initialState, pageActions);
+    const coversAfter = Object.fromEntries(Object.entries(object(object(stageState ?? methodInitialState(preview?.simulation, initialState)).object_locations)).filter(([name, at]) => name.endsWith('_COVER') && typeof at === 'string')) as Record<string, string>;
+    const hazards = [...pageEvents.reduce((all, e) => e.hazard ? all.set(e.hazard, (all.get(e.hazard) ?? 0) + 1) : all, new Map<string, number>())];
     const activity: Record<string, string[]> = {}, activityLabels: Record<string, Record<string, string>> = {};
+    const activityKinds: Record<string, Record<string, 'source' | 'destination' | 'tip' | 'touch'>> = {};
+    const rank = { touch: 0, tip: 1, source: 2, destination: 3 } as const;
     for (const event of pageEvents) for (const w of event.wells) {
         activity[w.station] = [...new Set([...(activity[w.station] ?? []), w.well])];
         const station = activityLabels[w.station] ??= {};
         const label = `P${w.channel + 1}: ${event.operation}`;
         station[w.well] = [...new Set([...(station[w.well]?.split('; ') ?? []), label])].join('; ');
+        // A well's role is its first liquid operation on this stage: mixing back into a
+        // destination, or conditioning back into a source, does not flip its direction.
+        const kind = event.liquid === 'aspirate' ? 'source' : event.liquid === 'dispense' ? 'destination' : /tip/.test(event.operation) ? 'tip' : 'touch';
+        const kinds = activityKinds[w.station] ??= {}, prior = kinds[w.well];
+        const liquidPrior = prior === 'source' || prior === 'destination';
+        if (!prior || !liquidPrior && rank[kind] > rank[prior]) kinds[w.well] = kind;
     }
-    return <><div className="bioxp-method-view" role="group" aria-label="Authoring view"><button type="button" aria-pressed={!sequenceOnly} onClick={() => setSequenceOnly(false)}>Deck & sequence</button><button type="button" aria-pressed={sequenceOnly} onClick={() => setSequenceOnly(true)}>Sequence only</button></div><div className={`bioxp-method-workbench${sequenceOnly ? ' is-sequence-only' : ''}${thermalEditing ? ' has-thermal-editor' : ''}`} onClickCapture={e => { const origin = (e.target as Element).closest<HTMLElement>('[role="button"],button'); activationOrigin.current = origin && !sheetRef.current?.contains(origin) ? origin : null; }}>
+    return <><div className="bioxp-method-view" role="group" aria-label="Authoring view"><button type="button" aria-pressed={!sequenceOnly} onClick={() => setSequenceOnly(false)}>Deck & sequence</button><button type="button" aria-pressed={sequenceOnly} onClick={() => setSequenceOnly(true)}>Sequence only</button></div><div className={`bioxp-method-workbench${sequenceOnly ? ' is-sequence-only' : ''}${thermalEditing && editorOpen ? ' has-thermal-editor' : ''}`} onClickCapture={e => { const origin = (e.target as Element).closest<HTMLElement>('[role="button"],button'); activationOrigin.current = origin && !sheetRef.current?.contains(origin) ? origin : null; }}>
         <section aria-label="Method deck" className="bioxp-method-map" hidden={sequenceOnly} style={{ '--bwd-stage-color': stageColor } as CSSProperties}>
             <nav className="bioxp-page-navigation" aria-label="Workflow stage navigation">
                 <button type="button" aria-label="Previous stage" disabled={pageIndex === 0} onClick={() => turnPage(pageIndex - 1)}>Previous</button>
                 <label>Stage {pageIndex + 1} of {pages.length}<select aria-label="Workflow stage" value={page.id} onChange={e => turnPage(pages.findIndex(p => p.id === e.target.value))}>{pages.map((p, i) => <option key={p.id} value={p.id}>{i + 1}. {p.label}</option>)}</select></label>
                 <button type="button" aria-label="Next stage" disabled={pageIndex === pages.length - 1} onClick={() => turnPage(pageIndex + 1)}>Next</button>
             </nav>
-            <div className="bioxp-preview-reference"><label>Head reference (preview only)<select aria-label="Preview head reference" value={previewReference} onChange={e => setPreviewReference(e.target.value)}><option value="recorded">Recorded robot reference{recordedAlignment == null ? ' unavailable' : ` (${recordedAlignment})`}</option><option value="-1">No channel offset (−1)</option>{[0, 1, 2, 3].map(c => <option key={c} value={String(c)}>P{c + 1} reference ({c})</option>)}</select></label>{onRefreshAlignment && <button type="button" onClick={onRefreshAlignment}>Refresh recorded reference</button>}<small>Reference alignment is not the number of active tips. Each action uses its own selected channels.</small></div>
-            <BioXpMethodPageSummary page={page} method={method} bindings={bindings} actions={pageActions} preview={preview} catalog={catalog} onSelect={selectStep} />
-            <BioXpMethodExecutionText input={executionInput ?? { method, bindings, dependencies, initial_state: initialState }} result={preview} actions={pageActions} pageLabel={page.label} pageActivity={pageActivity} workflowActivity={workflowActivity} {...executionContext} />
-            <div className="bioxp-canvasbar"><strong>Deck & method</strong><span>Click an object to edit · drag a plate to carry it · right-click for actions</span><button type="button" aria-pressed={connecting} onClick={() => { setConnecting(!connecting); setConnectionSource(null); setEditorOpen(false); }}>{connecting ? 'Cancel connection' : 'Connect wells'}</button>{connecting && <p role="status">{connectionSource ? 'Choose destination wells. The new connection is inserted at the selected position.' : 'Choose source wells, then destination wells. No action is run.'}</p>}<button type="button" aria-expanded={setupOpen} onClick={() => { setSetupOpen(true); openEditor(); }}>Set up labware & reagents</button></div>
+            <BioXpMethodPageSummary page={page} method={method} bindings={bindings} actions={pageActions} preview={preview} catalog={catalog} onSelect={selectStep} custody={pageCustody} hazards={hazards} />
+            <div className="bioxp-canvasbar"><strong>Deck & method</strong><span title="Click an object to edit · drag a plate to carry it · right-click for actions">Click to edit</span><button type="button" aria-pressed={connecting} onClick={() => { setConnecting(!connecting); setConnectionSource(null); setEditorOpen(false); }}>{connecting ? 'Cancel connection' : 'Connect wells'}</button>{connecting && <p role="status">{connectionSource ? 'Choose destination wells. The new connection is inserted at the selected position.' : 'Choose source wells, then destination wells. No action is run.'}</p>}<button type="button" aria-expanded={setupOpen} onClick={() => { setSetupOpen(true); openEditor(); }}>Set up labware & reagents</button></div>
+            <ul className="bioxp-method-legend" aria-label="Map key">
+                {referenceOnly ? <li><i className="is-reference" />Draft link (not compiled yet)</li> : <li><i className="is-liquid" />Liquid: source → destination, one arrow per channel</li>}
+                <li><i className="is-source" />Aspirated from</li><li><i className="is-destination" />Dispensed into</li><li><i className="is-tip" />Tip picked up / returned</li>
+                <li><i className="is-filled" />Contains liquid (after this stage)</li><li><i className="is-tip-present" />Tip present</li>
+                <li><i className="is-plate" />Plate move</li><li><i className="is-cover" />Cover move · numbered as listed above</li>
+            </ul>
             <div className={`bioxp-method-canvas${connecting ? ' is-connecting' : ''}`} onContextMenu={e => { const target = (e.target as Element).closest('[data-station]'); if (target) { e.preventDefault(); chooseObject({ station: target.getAttribute('data-station')!, wells: target.getAttribute('data-well') ? [target.getAttribute('data-well')!] : [] }); } }}>
-            <BioXpWorkflowDeck compact canvas selection={selection} onChange={chooseObject} contents={plannedContents} activity={activity} activityLabels={activityLabels} connections={<g aria-label="Ordered liquid connections">{links.map(({ node, path, pair, channel, sourceStation, destinationStation, source, destination }, index) => source && destination && <g key={`${path}:${pair}`} data-transfer-channel={channel ?? undefined} data-source-station={sourceStation} data-source-well={source?.well} data-destination-station={destinationStation} data-destination-well={destination?.well} role="button" tabIndex={0} aria-label={`Edit connection ${String(node.label || node.step_id)}`} className={`bioxp-method-link${selectedPath === path ? ' is-selected' : ''}${referenceOnly ? ' is-reference-only' : ''}`} onClick={() => selectStep(path)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectStep(path); } }}>
-                <path d={`M ${source.x} ${source.y} Q ${(source.x + destination.x) / 2} ${Math.min(source.y, destination.y) - 60 - index % 4 * 18} ${destination.x} ${destination.y}`} />
+            <BioXpWorkflowDeck compact canvas selection={selection} onChange={chooseObject} contents={deckAfter?.contents ?? plannedContents} tipOccupancy={deckAfter?.tips} activity={activity} activityLabels={activityLabels} activityKinds={activityKinds} annotations={<><defs><marker id={`${arrowId}-liquid`} markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 Z" className="bioxp-liquid-arrowhead" /></marker><marker id={`${arrowId}-origin`} markerWidth="6" markerHeight="6" refX="3" refY="3" markerUnits="userSpaceOnUse"><circle cx="3" cy="3" r="2.4" className="bioxp-liquid-origin" /></marker></defs>{preview?.document && <BioXpMethodStageAnnotations steps={pageCustody} door={doorAfter(throughActions)} covers={coversAfter} markerId={arrowId} />}<g aria-label="Ordered liquid connections">{links.map(({ node, path, pair, channel, sourceStation, destinationStation, source, destination }, index) => source && destination && <g key={`${path}:${pair}`} data-transfer-channel={channel ?? undefined} data-source-station={sourceStation} data-source-well={source?.well} data-destination-station={destinationStation} data-destination-well={destination?.well} role="button" tabIndex={0} aria-label={`Edit connection ${String(node.label || node.step_id)}`} className={`bioxp-method-link${selectedPath === path ? ' is-selected' : ''}${referenceOnly ? ' is-reference-only' : ''}`} onClick={() => selectStep(path)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectStep(path); } }}>
+                {(() => { const mx = (source.x + destination.x) / 2, my = Math.min(source.y, destination.y) - 36 - index % 4 * 8; const dx = destination.x - mx, dy = destination.y - my, d = Math.hypot(dx, dy) || 1; return <><path className="bioxp-method-link-hit" d={`M ${source.x} ${source.y} Q ${mx} ${my} ${destination.x} ${destination.y}`} /><path className="bioxp-method-link-line" d={`M ${source.x} ${source.y} Q ${mx} ${my} ${destination.x - dx / d * 7} ${destination.y - dy / d * 7}`} markerStart={referenceOnly ? undefined : `url(#${arrowId}-origin)`} markerEnd={referenceOnly ? undefined : `url(#${arrowId}-liquid)`} /></>; })()}
                 <title>{referenceOnly ? 'Draft reference only' : `P${channel! + 1}: ${sourceStation} ${source.well} → ${destinationStation} ${destination.well}`} · {String(node.label || 'Liquid operation')} · ordered, not concurrent flow</title>
-            </g>)}</g>} overlay={<BioXpMethodPlateLayer plan={plan} stations={Object.fromEntries(plan.labware.map(l => [l.id, String(plateBoundEndpoint({}, l.id, plan, stageState)?.station ?? '')]))} selectedPlate={plateId} selectedPath={selectedPath} links={carryLinks} onPrepare={preparePlate} onCarry={carry} onSelect={selectStep} />} />
+            </g>)}</g></>} overlay={<BioXpMethodPlateLayer plan={plan} stations={Object.fromEntries(plan.labware.map(l => [l.id, String(plateBoundEndpoint({}, l.id, plan, stageState)?.station ?? '')]))} selectedPlate={plateId} selectedPath={selectedPath} links={carryLinks} onPrepare={preparePlate} onCarry={carry} onSelect={selectStep} />} />
             <section ref={sheetRef} className={`bioxp-method-local-editor${expanded ? ' is-expanded' : ''}${setupOpen ? ' is-setup' : ''}${action === 'transfer' ? ' is-transfer' : ''}`} aria-label="On-deck editor" hidden={!editorOpen} onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); closeEditor(); } }}>
                 <header><div className="bioxp-editor-heading"><h2>{!setupOpen && (emptyInstrument === 'LOC_TC' || !emptyInstrument && selected && isThermalProgram(selected)) ? 'Thermal cycler' : setupOpen ? station?.label || 'Labware & reagents' : String(selected?.label || selected?.action || 'Selected step').replaceAll('_', ' ')}</h2><p>{setupOpen ? 'Choose a plate, its contents and next action' : thermalEditing ? `${localPlate?.name || 'Method draft'} · temperature program` : action === 'plate_move' ? 'Same plate · next location' : action === 'transfer' ? 'Source → destination · exact amounts' : 'Edit this step in your method'}</p></div>{thermalEditing && <button type="button" onClick={() => setSetupOpen(true)}>Plate, tips & contents</button>}<button type="button" aria-pressed={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? 'Compact editor' : 'Expand editor'}</button><button className="bioxp-editor-close" type="button" aria-label="Close editor" onClick={closeEditor}>×</button></header><div className="bioxp-editor-body">
                 {!thermalEditing && <button className="bioxp-editor-switch" type="button" aria-pressed={setupOpen} onClick={() => setSetupOpen(!setupOpen)}>{setupOpen ? 'Step settings' : 'Plate, tips & contents'}</button>}
@@ -351,7 +388,8 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
                 {carryPlate !== null && <section aria-label="Choose plate destination"><h4>Move {plan.labware.find(l => l.id === carryPlate)?.name || 'plate'} to…</h4>{destinations.map(d => <button key={String(d.token)} type="button" onClick={() => carry(carryPlate, String(d.station))}>Move to {String(d.label)}</button>)}<button type="button" onClick={() => { setCarryPlate(null); setCarryNotice(''); }}>Cancel plate move</button><p>Or select a destination on the deck. Adds one ordered custody step only; choose native object and handling details in its editor.</p></section>}
             </div><footer className="bioxp-editor-footer">{thermalEditing ? <nav className="bioxp-thermal-method-context" aria-label="Thermal program method context"><span>{selectedRootIndex > 0 ? contextName(nodes[selectedRootIndex - 1]) : 'Start of method'}</span><span aria-hidden="true">→</span><strong>{programTitle}</strong><span aria-hidden="true">→</span><span>{selectedRootIndex + 1 < nodes.length ? contextName(nodes[selectedRootIndex + 1]) : 'End of method'}</span></nav> : <span>{localPlate?.name || String(method.name || 'Method draft')}</span>}<button type="button" className="primary" onClick={closeEditor}>Done</button></footer></section></div>
             {carryNotice && <p role="status">{carryNotice}</p>}
-            <p className="bioxp-method-link-key">{referenceOnly ? 'Grey draft links are reference targets only, not an active-channel footprint. ' : 'Lines connect each selected channel’s source and destination wells. '}Coloured wells show every projected manipulation, including tip pickup and returned extras; hover for details. Dashed arrows show plate movement. Dots remain planned starting contents, not live liquid levels.</p>
+            <div className="bioxp-preview-reference"><label title="Fixes where the four tips land for preview drawings only. It is the robot's alignment reference, not the number of tips in use; each step still uses its own channels.">Preview head alignment<select aria-label="Preview head reference" value={previewReference} onChange={e => setPreviewReference(e.target.value)}><option value="recorded">{recordedAlignment == null ? 'Robot reading unavailable · showing P1 on the named well' : recordedAlignment === -1 ? 'From robot: P1 lines up with the named well' : `From robot: P${recordedAlignment + 1} lines up with the named well`}</option><option value="-1">P1 lines up with the named well (no tip offset)</option>{[1, 2, 3].map(c => <option key={c} value={String(c)}>P{c + 1} lines up with the named well</option>)}</select></label>{onRefreshAlignment && <button type="button" onClick={onRefreshAlignment}>Refresh recorded reference</button>}</div>
+            <BioXpMethodExecutionText input={executionInput ?? { method, bindings, dependencies, initial_state: initialState }} result={preview} actions={pageActions} pageLabel={page.label} pageActivity={pageActivity} workflowActivity={workflowActivity} {...executionContext} />
             {projectionNotes.length > 0 && <details className="bioxp-projection-notes"><summary>Well projection notes ({projectionNotes.length})</summary>{projectionNotes.map(note => <p key={note}>{note}</p>)}</details>}
             {carryLinks.some(l => !l.source || !l.destination) && <details><summary>Carry steps with unresolved endpoints</summary>{carryLinks.filter(l => !l.source || !l.destination).map(l => <p key={l.path}><button type="button" onClick={() => selectStep(l.path)}>{String(l.node.label || l.node.step_id)}</button> {l.source || 'Unknown source'} → {l.destination || 'Unknown destination'}. Use compiled occurrence preview for conditional or repeated placement.</p>)}</details>}
 

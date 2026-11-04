@@ -149,7 +149,7 @@
 .bioxp-method-plate rect { fill:var(--card-bg,var(--bg-primary)); stroke:var(--border-primary); stroke-width:2; }
 .bioxp-method-plate[aria-pressed=true] rect { stroke:var(--accent-primary); stroke-width:3; }
 .bioxp-method-plate:focus .bioxp-method-plate-label,.bioxp-method-plate:hover .bioxp-method-plate-label { fill:var(--accent-primary); }
-.bioxp-method-plate-label { fill:var(--text-primary); font-size:20px; font-weight:600; pointer-events:all; }
+.bioxp-method-plate-label { fill:var(--text-primary); font-size:15px; font-weight:600; pointer-events:all; }
 .bioxp-method-carry { cursor:pointer; fill:none; color:var(--text-secondary); }
 .bioxp-method-carry-line { stroke:var(--text-secondary); stroke-width:4; stroke-dasharray:10 7; pointer-events:none; }
 .bioxp-method-link-hit { stroke:transparent; stroke-width:22; pointer-events:stroke; }
@@ -259,9 +259,61 @@
 .bioxp-page-summary details { margin:10px 0; }
 .bioxp-page-summary details ol { max-height:22rem; overflow:auto; }
 .bioxp-page-summary details button { text-align:left; font-size:12px; }
-.bioxp-method-map .bioxp-method-link path { stroke:var(--bwd-stage-color); }
-.bioxp-method-map .bioxp-method-carry-line { stroke:var(--bwd-stage-color); }
-.bioxp-method-map .bwd-well.is-stage-active { stroke:var(--bwd-stage-color); stroke-opacity:1; stroke-width:3; }
+.bioxp-method-map { --bxs-source:#3b82f6; --bxs-destination:#f59e0b; --bxs-tip:#c084fc; --bxs-liquid:#2dd4bf; --bxs-cover:#f472b6; --bxs-hazard:#f87171; }
+/* Stage drawings sit above the stations: thin per-channel arrows, never a ribbon hiding plates. */
+.bioxp-method-map .bioxp-method-link { stroke-width:inherit; }
+.bioxp-method-map .bioxp-method-link .bioxp-method-link-line { fill:none; stroke:var(--bxs-liquid); stroke-width:1.4; stroke-opacity:.6; pointer-events:none; }
+.bioxp-method-map .bioxp-method-link .bioxp-method-link-hit { fill:none; stroke:transparent; stroke-width:9; pointer-events:stroke; }
+.bioxp-method-map .bioxp-method-link:hover .bioxp-method-link-line,.bioxp-method-map .bioxp-method-link:focus .bioxp-method-link-line,.bioxp-method-map .bioxp-method-link.is-selected .bioxp-method-link-line { stroke-width:3.5; stroke-opacity:1; }
+.bioxp-method-map .bioxp-method-link.is-reference-only .bioxp-method-link-line { stroke:var(--text-secondary); stroke-dasharray:4 5; opacity:.6; }
+.bioxp-method-map .bioxp-liquid-arrowhead { fill:var(--bxs-liquid); }
+.bioxp-method-map .bioxp-method-carry-line { stroke:var(--text-primary); stroke-width:3; }
+.bioxp-method-map .bwd-well.is-stage-active .bwd-ring { stroke-width:3; }
+.bioxp-method-map .bwd-well.is-stage-source .bwd-ring { stroke:var(--bxs-source); }
+.bioxp-method-map .bwd-well.is-stage-destination .bwd-ring { stroke:var(--bxs-destination); }
+.bioxp-method-map .bwd-well.is-stage-tip .bwd-ring { stroke:var(--bxs-tip); }
+.bioxp-method-map .bwd-well.is-stage-touch .bwd-ring { stroke:var(--text-secondary); }
+.bioxp-method-map .bwd-tip { r:1.1px; opacity:.45; }
+.bioxp-method-map .bwd-tip.is-recorded { r:2.6px; opacity:1; fill:var(--text-primary); }
+.bioxp-method-map .bwd-well.has-contents .bwd-core { fill:color-mix(in srgb,var(--bxs-liquid) 55%,var(--bg-secondary)); }
+.bioxp-stage-custody { pointer-events:none; }
+.bioxp-stage-custody title { pointer-events:auto; }
+.bioxp-bscs rect { fill:none; stroke:var(--text-secondary); stroke-width:1.4; stroke-dasharray:5 4; }
+.bioxp-bscs text { fill:var(--text-secondary); font-size:12px; }
+.bioxp-cover-state rect { fill:color-mix(in srgb,var(--bxs-cover) 10%,transparent); stroke:var(--bxs-cover); stroke-width:2; }
+.bioxp-cover-state text { fill:var(--bxs-cover); font-size:12px; font-weight:600; }
+.bioxp-cover-state:not(.is-moved) rect { fill:none; stroke:var(--text-secondary); stroke-opacity:.45; stroke-dasharray:3 4; }
+.bioxp-cover-state:not(.is-moved) text { fill:var(--text-secondary); }
+.bioxp-bscs.is-involved rect { stroke:var(--bxs-cover); stroke-width:2; }
+.bioxp-bscs.is-involved text { fill:var(--bxs-cover); font-weight:600; }
+.bioxp-method-map .bwd-map-label { font-size:14px; }
+.bioxp-method-map .bioxp-liquid-origin { fill:var(--bxs-source); }
+.bioxp-stage-cover-move path { fill:none; stroke:var(--bxs-cover); stroke-width:2.6; stroke-dasharray:7 5; }
+.bioxp-cover-arrowhead { fill:var(--bxs-cover); }
+.bioxp-stage-badge circle { fill:var(--card-bg,var(--bg-primary)); stroke:var(--text-primary); stroke-width:2; }
+.bioxp-stage-badge.is-cover circle,.bioxp-stage-badge.is-inspect circle { stroke:var(--bxs-cover); }
+.bioxp-stage-badge text { fill:var(--text-primary); font-size:13px; font-weight:700; }
+.bioxp-door-state rect { fill:var(--card-bg,var(--bg-primary)); stroke:var(--text-primary); stroke-width:1.5; }
+.bioxp-door-state.is-open rect { stroke:var(--bxs-destination); }
+.bioxp-door-state text { fill:var(--text-primary); font-size:12px; font-weight:600; }
+.bioxp-stage-hazards { margin:10px 0; padding:8px 12px; border-left:4px solid var(--bxs-hazard,#f87171); background:color-mix(in srgb,#f87171 10%,transparent); border-radius:4px; }
+.bioxp-stage-hazards p { margin:4px 0!important; }
+.bioxp-methods .bioxp-stage-custody-list { margin:6px 0 10px; padding-left:26px; font-size:13px; line-height:1.6; list-style:decimal; }
+.bioxp-methods .bioxp-stage-custody-list li { list-style:decimal; }
+.bioxp-stage-custody-list li::marker { font-weight:700; }
+.bioxp-method-legend { display:flex; flex-wrap:wrap; gap:6px 18px; margin:0; padding:8px 20px 4px; list-style:none; font-size:12px; color:var(--text-secondary); }
+.bioxp-method-legend li { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+.bioxp-method-legend i { display:inline-block; width:12px; height:12px; border-radius:50%; border:2.5px solid; box-sizing:border-box; }
+.bioxp-method-legend i.is-source { border-color:var(--bxs-source); }
+.bioxp-method-legend i.is-destination { border-color:var(--bxs-destination); }
+.bioxp-method-legend i.is-tip { border-color:var(--bxs-tip); }
+.bioxp-method-legend i.is-filled { border:1px solid var(--border-secondary); background:color-mix(in srgb,var(--bxs-liquid) 55%,var(--bg-secondary)); }
+.bioxp-method-legend i.is-tip-present { width:6px; height:6px; border:0; background:var(--text-primary); }
+.bioxp-method-legend i.is-liquid,.bioxp-method-legend i.is-plate,.bioxp-method-legend i.is-cover,.bioxp-method-legend i.is-reference { width:22px; height:0; border-radius:0; border-width:2px 0 0; }
+.bioxp-method-legend i.is-liquid { border-color:var(--bxs-liquid); }
+.bioxp-method-legend i.is-plate { border-color:var(--text-primary); border-top-style:dashed; }
+.bioxp-method-legend i.is-cover { border-color:var(--bxs-cover); border-top-style:dashed; }
+.bioxp-method-legend i.is-reference { border-color:var(--text-secondary); border-top-style:dotted; }
 .bioxp-method-execution-text { margin:12px 20px; min-width:0; }
 .bioxp-method-execution-text textarea { width:100%; box-sizing:border-box; min-height:24rem; max-height:none; resize:vertical; white-space:pre; overflow:auto; font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; }
 .bioxp-method-execution-text p { font-size:12px; line-height:1.5; }

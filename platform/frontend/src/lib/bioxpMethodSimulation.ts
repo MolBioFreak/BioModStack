@@ -16,7 +16,7 @@ export function methodStateAfter(simulation: unknown, initialState: unknown, occ
     for (const snapshot of snapshots.slice(0, index + 1)) {
         const delta = record(record(snapshot).state_delta);
         for (const [key, value] of Object.entries(delta)) {
-            if (['vessels', 'labware', 'custody', 'thermal_tasks'].includes(key)) {
+            if (['vessels', 'labware', 'custody', 'thermal_tasks', 'object_locations'].includes(key)) {
                 state[key] = { ...record(state[key]), ...structuredClone(record(value)) };
             } else if (key === 'channels') {
                 const channels = { ...record(state.channels) };

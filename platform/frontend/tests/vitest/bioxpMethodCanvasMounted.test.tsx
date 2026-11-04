@@ -75,7 +75,7 @@ it('connects real deck wells into one ordered action and opens that same connect
     await click('Connect wells'); await well('LOC_RC', 'A2'); await click('Cancel connection'); expect(current.steps).toHaveLength(2);
 });
 
-it('keeps all planned barcodes and samples above connection strokes without changing the method', async () => {
+it('keeps all planned barcodes and samples visible with thin connection strokes drawn above stations, without changing the method', async () => {
     const rows = [...'ABCDEFGH'];
     const labware = [{ id: 'rc', station: 'LOC_RC', name: 'Barcodes', profile_id: '' },
         { id: 'oc', station: 'LOC_OC', name: 'Reaction plate', profile_id: '' },
@@ -95,8 +95,9 @@ it('keeps all planned barcodes and samples above connection strokes without chan
     expect(host.querySelectorAll('.bwd-well.has-contents[data-station^="LOC_STRIP"]')).toHaveLength(24);
     expect(host.querySelectorAll('.bwd-well.has-contents[data-station="LOC_OC"]')).toHaveLength(0);
     const connection = host.querySelector('[aria-label="Ordered liquid connections"]')!;
+    // Long links drawn under plates read as ending at the wrong plate; draw them above.
     for (const resource of host.querySelectorAll('.bwd-resource')) {
-        expect(connection.compareDocumentPosition(resource) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(resource.compareDocumentPosition(connection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
     expect(host.querySelectorAll('g.bioxp-method-plate')).toHaveLength(5);
     await click('Next stage');
@@ -335,7 +336,26 @@ it.runIf(!!process.env.BIOXP_WELL_INPUT && !!process.env.BIOXP_WELL_COMPILED)('s
     expect([...host.querySelectorAll('[data-transfer-channel]')].every(e => e.getAttribute('data-transfer-channel') === '0')).toBe(true);
     const poolText = (host.querySelector('[aria-label="Execution text"]') as HTMLTextAreaElement).value;
     expect(poolText).toContain('return unused tip to rack');
-    expect(poolText).toContain('existing missing-tip check');
+    expect(poolText).toContain("missing-tip check is on");
+    // Stage contents follow the plan: pooled tubes are filled, sources/destinations are marked.
+    expect(host.querySelectorAll('.bwd-well.has-contents[data-station="LOC_STRIP4"]')).toHaveLength(3);
+    expect(host.querySelectorAll('.bwd-well.is-stage-source[data-station="LOC_OC"]')).toHaveLength(24);
+    expect(host.querySelectorAll('.bwd-well.is-stage-destination[data-station="LOC_STRIP4"]')).toHaveLength(3);
+    expect(host.querySelector('[aria-label="Run hazards on this stage"]')!.textContent).toContain('only P1 holds a tip');
+    // The method strip follows the stage: its first step is selected, no editor opens.
+    const poolFirst = snapshot.method.editor_state.workflow_pages.find((p: any) => p.id === 'pool').step_ids[0];
+    const poolPath = `/steps/${snapshot.method.steps.findIndex((s: any) => s.step_id === poolFirst)}`;
+    expect(host.querySelector('.bioxp-method-sequence button[aria-pressed="true"]')!.getAttribute('data-method-path')).toBe(poolPath);
+    expect(host.querySelector('[aria-label="On-deck editor"]')!.hasAttribute('hidden')).toBe(true);
+    await input('Workflow stage', 'barcodes');
+    expect(host.querySelectorAll('.bwd-well.has-contents[data-station="LOC_OC"]')).toHaveLength(24);
+    expect(host.querySelectorAll('.bwd-well.is-stage-source[data-station="LOC_RC"]')).toHaveLength(24);
+    expect(host.querySelectorAll('.bwd-well.is-stage-destination[data-station="LOC_OC"]')).toHaveLength(24);
+    await input('Workflow stage', 'load-cycler');
+    expect([...host.querySelectorAll('.bioxp-stage-custody-list li')].map(li => li.getAttribute('value'))).toEqual(['1', '2', '3', '4', '5']);
+    expect([...host.querySelectorAll('.bioxp-stage-cover-move')].map(e => `${e.getAttribute('data-cover-from')}>${e.getAttribute('data-cover-to')}`)).toEqual(['LOC_BSC>LOC_BSCS', 'LOC_BSCS>LOC_BSC']);
+    expect(host.querySelector('.bioxp-door-state')!.getAttribute('data-door')).toBe('closed');
+    expect(host.querySelectorAll('.bwd-well.has-contents[data-station="LOC_TC"]')).toHaveLength(24);
     await click('Full workflow');
     const full = (host.querySelector('[aria-label="Execution text"]') as HTMLTextAreaElement).value;
     expect(JSON.parse(full.split('Exact compiled protocol JSON:\n')[1])).toEqual(compiled.document);

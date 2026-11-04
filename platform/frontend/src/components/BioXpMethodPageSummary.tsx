@@ -4,7 +4,7 @@ import { methodCanvasEntries } from '../lib/bioxpMethodCanvas';
 import { methodInputBinding } from '../lib/bioxpMethodInputBinding';
 import { deckStations } from '../lib/bioxpWorkflowDeck';
 import { isMethodNumber } from '../lib/bioxpMethodNumber';
-import { custodyMetadata } from './BioXpMethodCustodyEditor';
+import { CUSTODY_KINDS, placeName, type CustodyStep } from '../lib/bioxpMethodCustodySteps';
 
 const object = (v: unknown): MethodValue => v && typeof v === 'object' && !Array.isArray(v) ? v as MethodValue : {};
 const raw = (v: unknown): string => isMethodNumber(v) ? v.expr.value : v == null ? 'not set' : typeof v === 'object' ? JSON.stringify(v) : String(v);
@@ -14,9 +14,23 @@ const duration = (v: unknown): string => {
     return Number.isFinite(n) && n > 0 && n % 60 === 0 ? `${n / 60} min` : `${raw(v)} s`;
 };
 
-export function BioXpMethodPageSummary({ page, method, bindings, actions, preview, catalog, onSelect }: {
+/** Plate, cover and door steps, numbered as on the deck badges. */
+function custodyText(steps: CustodyStep[]) {
+    const byNumber = new Map<number, CustodyStep[]>();
+    for (const s of steps) byNumber.set(s.n, [...(byNumber.get(s.n) ?? []), s]);
+    return [...byNumber].map(([n, group]) => {
+        const first = group[0];
+        if (first.kind === 'door') return { n, text: `Cycler door ${first.door ?? 'command'}` };
+        const moves = group.filter(s => s.to).map(s => `${s.label ?? 'Object'}: ${s.from ? `${placeName(s.from)} → ` : ''}${placeName(s.to)}`);
+        if (first.kind === 'inspect') return { n, text: `Detect covers and store them${moves.length ? ` · ${moves.join('; ')}` : ''}` };
+        return { n, text: moves.join('; ') || `${first.kind === 'plate' ? 'Plate' : 'Cover'} move` };
+    });
+}
+
+export function BioXpMethodPageSummary({ page, method, bindings, actions, preview, catalog: _catalog, onSelect, custody = [], hazards = [] }: {
     page: MethodPage; method: MethodValue; bindings: MethodValue; actions: MethodValue[];
     preview?: MethodCompile; catalog: MethodCatalog; onSelect: (path: string) => void;
+    custody?: CustodyStep[]; hazards?: [string, number][];
 }) {
     const entries = methodCanvasEntries(Array.isArray(method.steps) ? method.steps as MethodValue[] : [])
         .filter(e => page.paths.some(p => e.path === p || e.path.startsWith(p + '/')));
@@ -32,30 +46,27 @@ export function BioXpMethodPageSummary({ page, method, bindings, actions, previe
         const prior = transfers.get(text);
         transfers.set(text, { text, count: prior ? prior.count === null || count === null ? null : prior.count + count : count });
     }
-    const custody = custodyMetadata(catalog);
-    const objectName = (token: unknown) => String(custody.objects.find(o => o.token === token)?.label ?? token);
-    const destinationName = (token: unknown) => String(custody.destinations.find(d => d.token === token)?.label ?? station(token));
     const actionCount = entries.filter(e => !Array.isArray(e.node.steps)).length;
     const settings = [...new Set(entries.filter(e => e.node.action === 'mix' && e.node.enabled !== false && occurrences(e.path)).map(e => { const i = object(methodInputBinding(method, e.node, bindings).inputs); return `Mix ${raw(i.volume_ul)} µL × ${raw(i.cycles)} cycles`; }))];
     for (const a of actions) {
         const p = object(a.params);
-        if (a.kind === 'plate_move' || a.kind === 'move_cover') {
-            settings.push(`${objectName(p.plate_id ?? p.cover_id)} → ${destinationName(p.target_location)}${p.move_mode ? ` · ${raw(p.move_mode)}` : ''}`);
-        } else if (a.kind === 'thermal_door') settings.push(`Cycler door ${p.door_command === 'DO' ? 'open' : p.door_command === 'DC' ? 'closed' : raw(p.door_command)}`);
-        else if (a.kind === 'thermal_profile') {
+        if (CUSTODY_KINDS.has(String(a.kind))) continue;
+        if (a.kind === 'thermal_profile') {
             const segments = Array.isArray(p.segments) ? p.segments : [];
             settings.push(`Cycler: ${segments.map(v => { const s = object(v); return `${raw(s.target_temp_c)} °C for ${duration(s.duration_s)} (${raw(s.bank)}, ${s.start === 'attainment' ? 'after reaching temperature' : 'from dispatch'})`; }).join(' → ')} · ${raw(p.repeat)} pass(es)`);
         } else if (['thermal_hold', 'incubate', 'thermal_setpoint'].includes(String(a.kind))) settings.push(`${raw(p.bank)}: ${raw(p.target_temp_c)} °C${p.duration_s !== undefined ? ` for ${duration(p.duration_s)}` : ''}`);
         else if (a.kind === 'chiller_setpoint') settings.push(`${String(p.bank).toUpperCase()} chiller: ${raw(p.target_temp_c)} °C`);
         else if (a.kind === 'wait') settings.push(`Wait ${duration(p.seconds)}`);
-        else if (a.kind === 'inspect') settings.push('Detect chiller covers and move them to their storage positions');
         else if (a.kind === 'pause_review') settings.push(`Operator step: ${raw(p.message ?? a.pause_message)}`);
         else if (a.kind === 'park') settings.push('Park gantry');
     }
+    const moves = custodyText(custody);
     return <section className="bioxp-page-summary" aria-label="Stage summary">
-        {page.id === 'starting-deck' ? <p>Planned starting contents and labware. Next shows the first operation; browsing does not move the robot.</p> : <>
+        {hazards.length > 0 && <div className="bioxp-stage-hazards" role="note" aria-label="Run hazards on this stage">{hazards.map(([text, count]) => <p key={text}><strong>Check before running:</strong> {text}{count > 1 ? ` (${count}× on this stage)` : ''}</p>)}</div>}
+        {page.id === 'starting-deck' ? <p>Planned starting contents, tips and covers. Next shows the first operation; browsing does not move the robot.</p> : <>
             <ul>{[...transfers.values()].map(t => <li key={t.text}>{t.count === null ? '' : `${t.count} transfers · `}{t.text}</li>)}
                 {settings.map((text, i) => <li key={i}>{text}</li>)}</ul>
+            {moves.length > 0 && <ol className="bioxp-stage-custody-list" aria-label="Plate, cover and door steps">{moves.map(m => <li key={m.n} value={m.n}>{m.text}</li>)}</ol>}
             {!preview && <p>Showing authored steps; compiled settings and resulting placement are not yet available.</p>}
             <details><summary>{actionCount} authored action{actionCount === 1 ? '' : 's'}{preview ? ` · ${actions.length} robot action${actions.length === 1 ? '' : 's'}` : ''} in this stage</summary>
                 <ol>{entries.filter(e => !Array.isArray(e.node.steps)).map(e => <li key={e.path}><button type="button" onClick={() => onSelect(e.path)}>{String(e.node.label || e.node.action || e.node.type || 'Step')}</button></li>)}</ol>

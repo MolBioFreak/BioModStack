@@ -121,7 +121,11 @@ it.runIf(!!process.env.BIOXP_WELL_COMPILED)('receives the actual saved workflow 
     expect(pools).toHaveLength(24);
     expect(new Set(pools.map(l => l.channel))).toEqual(new Set([0]));
     expect(new Set(pools.map(l => l.destination.well))).toEqual(new Set(['A1', 'B1', 'C1']));
-    const notes = projected.events.flatMap(e => e.notes);
-    expect(notes).toHaveLength(3);
-    expect(notes.every(n => n.includes('existing missing-tip check'))).toBe(true);
+    const selection = projected.events.filter(e => e.operation === 'ejection selection');
+    expect(selection).toHaveLength(3);
+    expect(selection.every(e => e.hazard?.includes('only P1 holds a tip'))).toBe(true);
+    // Every TIP_EJECT is in place; none of the saved ejects is over the waste bin.
+    const ejects = projected.events.filter(e => e.operation.startsWith('eject tip in place'));
+    expect(projected.events.filter(e => e.operation === 'ejection position')).toHaveLength(ejects.length);
+    expect(projected.events.filter(e => !e.hazard).flatMap(e => e.notes)).toEqual([]);
 });

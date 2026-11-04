@@ -153,6 +153,8 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
             }
             if (lane === 'liquid-classes') setSavedLiquid(exact); else setSavedMethod(exact); editVersion.current++;
             setNotice(`Opened exact revision ${exact.revision}.`);
+            // Bring the stage pages and deck into view; presentation only.
+            setTimeout(() => document.querySelector<HTMLElement>('.bioxp-page-navigation')?.scrollIntoView?.({ block: 'start' }), 0);
         });
     }
     const compileInput = (method = activeDraft): MethodValue => ({ method: clone(method), bindings: clone(bindings), dependencies: clone(dependencies), initial_state: clone(initialState) });

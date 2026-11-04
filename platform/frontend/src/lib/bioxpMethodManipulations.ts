@@ -1,8 +1,8 @@
 import type { MethodCompile, MethodValue } from './bioxpMethods';
-import { deckResources, deckStations } from './bioxpWorkflowDeck';
+import { deckRegions, deckResources, deckStations } from './bioxpWorkflowDeck';
 
 export type ManipulatedWell = { station: string; well: string; channel: number };
-export type WellManipulation = { actionId: string; path: string; operation: string; wells: ManipulatedWell[]; notes: string[] };
+export type WellManipulation = { actionId: string; path: string; operation: string; wells: ManipulatedWell[]; notes: string[]; liquid?: 'aspirate' | 'dispense'; hazard?: string };
 export type ManipulationLink = { actionId: string; path: string; channel: number; source: ManipulatedWell; destination: ManipulatedWell };
 export type MethodManipulations = { events: WellManipulation[]; links: ManipulationLink[] };
 const object = (v: unknown): MethodValue => v && typeof v === 'object' && !Array.isArray(v) ? v as MethodValue : {};
@@ -59,7 +59,7 @@ export function methodManipulations(result: MethodCompile | null | undefined, al
         const emit = (operation: string, selected: number[] | null, liquid?: 'aspirate' | 'dispense') => {
             const footprint = selected && position ? nativeChannelFootprint(position.location, position.well, selected, position.alignment, position.unadjusted) : { wells: [], notes: [selected === null ? `${operation}: active/loaded channel footprint is unresolved.` : `${operation}: XY well position is not established.`] };
             if (selected?.length === 0) return;
-            events.push({ actionId, path, operation, ...footprint });
+            events.push({ actionId, path, operation, ...footprint, ...(liquid ? { liquid } : {}) });
             for (const point of footprint.wells) {
                 if (liquid === 'aspirate') {
                     const previous = aspirated.get(point.channel);
@@ -142,8 +142,14 @@ export function methodManipulations(result: MethodCompile | null | undefined, al
             const requested = channels(settings.channels) ?? allChannels;
             const selected: number[] | null = loaded === null ? null : requested.filter(c => (loaded as number[]).includes(c));
             emit(`eject tip in place (requested ${requested.map(c => `P${c + 1}`).join(', ')})`, selected);
+            // Native TIP_EJECT has no gantry move: tips fall wherever the head already is.
+            const at = position as { location: number } | null;
+            const where = at && at.location !== 6 ? deckResources.find(r => r.locationId === at.location)?.label ?? deckRegions.find(r => r.locationId === at.location)?.label : undefined;
+            if (where) events.push({ actionId, path, operation: 'ejection position', wells: [], hazard: `Tips are ejected where the head already is, over the ${where}, not over the waste bin.`, notes: [`Tip eject has no move to the waste bin; the head is over the ${where}.`] });
             if (loaded !== null && settings.check_missing_tip !== false && requested.some(c => !(loaded as number[]).includes(c))) {
-                events.push({ actionId, path, operation: 'ejection selection', wells: [], notes: ['Native ejection requests channels without intended loaded tips; its existing missing-tip check is enabled.'] });
+                const held = (loaded as number[]).map(c => `P${c + 1}`).join(', ') || 'no channel';
+                const asked = requested.map(c => `P${c + 1}`).join(', ');
+                events.push({ actionId, path, operation: 'ejection selection', wells: [], hazard: `Tip eject asks for ${asked}, but only ${held} holds a tip. The robot's missing-tip check is on, so this eject is expected to stop with a missing-tip error.`, notes: [`Tip eject requests ${asked}, but only ${held} should hold a tip here; the robot's missing-tip check is on.`] });
             }
             if (selected) { loaded = (loaded as number[] | null)?.filter(c => !selected.includes(c)) ?? null; selected.forEach(c => aspirated.delete(c)); }
             transportReference = -1;

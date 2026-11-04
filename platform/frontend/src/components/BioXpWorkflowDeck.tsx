@@ -24,12 +24,16 @@ export type BioXpWorkflowDeckProps = {
     /** Every projected manipulated well for the selected stage; presentation only. */
     activity?: Record<string, string[]>;
     activityLabels?: Record<string, Record<string, string>>;
+    /** Role of each manipulated well on the selected stage; presentation only. */
+    activityKinds?: Record<string, Record<string, 'source' | 'destination' | 'tip' | 'touch'>>;
+    /** Drawn above stations so stage arrows never appear to end under another plate. */
+    annotations?: React.ReactNode;
 };
 const fullView: DeckBounds = { x: 0, y: 0, ...deckSize };
 const modes: DeckSelectionMode[] = ['well', 'range', 'row', 'column'];
 
 /** Shared presentation. Authoring defaults remain selection-only; live intents are explicit callbacks. */
-export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, connections, compact = false, canvas = false, tipOccupancy, contents, activity, activityLabels }: BioXpWorkflowDeckProps) {
+export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, connections, compact = false, canvas = false, tipOccupancy, contents, activity, activityLabels, activityKinds, annotations }: BioXpWorkflowDeckProps) {
     const id = useId();
     const svg = useRef<SVGSVGElement>(null);
     const anchor = useRef<{ station: string; well: string } | null>(null);
@@ -202,7 +206,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                         {resource.points.map(well => <g key={well.well} role={readOnly ? 'img' : 'button'} tabIndex={readOnly ? undefined : tabWell === well.well ? 0 : -1}
                             aria-label={`${resource.label} ${well.well}`} aria-pressed={selection.station === resource.id && selected.has(well.well)}
                             data-station={resource.id} data-well={well.well}
-                            className={`bwd-well${selection.station === resource.id && selected.has(well.well) ? ' is-selected' : ''}${contents?.[resource.id]?.[well.well] ? ' has-contents' : ''}${activity?.[resource.id]?.includes(well.well) ? ' is-stage-active' : ''}`}
+                            className={`bwd-well${selection.station === resource.id && selected.has(well.well) ? ' is-selected' : ''}${contents?.[resource.id]?.[well.well] ? ' has-contents' : ''}${activity?.[resource.id]?.includes(well.well) ? ' is-stage-active' : ''}${activityKinds?.[resource.id]?.[well.well] ? ` is-stage-${activityKinds[resource.id][well.well]}` : ''}`}
                             aria-disabled={live ? !!live.wellDisabledReason : undefined}
                             onClick={e => activate(e, () => chooseWell(resource, well, e))} onKeyDown={e => keyboardWell(e, resource, well)}
                             onPointerDown={e => wellPointerDown(e, resource, well)} onPointerEnter={() => wellPointerEnter(resource, well)}
@@ -239,6 +243,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                     <g className="bwd-chosen-outline" data-selected-station={live.selectedStation} aria-label="Selected dropdown destination">
                         {chosenBounds ? <rect {...chosenBounds} rx="10" /> : <circle cx={deckPark.point[0]} cy={deckPark.point[1]} r="13" />}
                     </g>}
+                {annotations}
                 {overlay}
             </svg>
         </div>
