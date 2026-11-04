@@ -145,11 +145,31 @@ class FamsaSettings(Closed):
     dsp: bool = False
     verbose: bool = False
 
+# Near-identical sequence comparison: 99% of pair-emission mass is on matches.
+# Keep MUSCLE's transition probabilities. This is an explicit authoring preset,
+# not an execution override: hmmin=None still means the native model.
+MUSCLE_IDENTITY_HMM = """HMM	nt
+T.START_M	0.6
+T.START_IS	0.02
+T.START_IL	0.18
+T.M_M	0.96
+T.M_IS	0.012
+T.M_IL	0.008
+T.IS_IS	0.35
+T.IS_M	0.65
+T.IL_IL	0.90
+T.IL_M	0.10
+""" + ''.join(
+    f'E.{a}{b}\t{0.2475 if a == b else 0.01 / 12:.17g}\n'
+    for i, a in enumerate('ACGT') for b in 'ACGT'[:i + 1]
+)
+
+
 class MuscleSettings(Closed):
     engine: Literal['muscle'] = 'muscle'
     mode: Literal['align', 'super5'] = 'align'
     guidetreeout: bool = Field(default=False, description='Write the guide tree only. MUSCLE stops before aligning, so no alignment is produced. Ignored with Random-chain tree.')
-    hmmin: str | None = Field(default=None, description='MUSCLE HMM parameter file.', json_schema_extra={'format': 'muscle-hmm'})
+    hmmin: str | None = Field(default=None, description='MUSCLE HMM parameters. The DNA/RNA sequence-identity preset uses 99% match emission mass for near-identical sequences; null keeps MUSCLE defaults. Custom files are used exactly as supplied.', json_schema_extra={'format': 'muscle-hmm', 'x-nucleotide-identity-hmm': MUSCLE_IDENTITY_HMM})
     hmmout: bool = Field(default=False, description='Write the HMM parameters to a file (Super5 only).')
     anchor_letter: str | None = Field(default=None, min_length=1, max_length=1, description='One-character HMM anchor (case-sensitive).')
     randseed: int | None = Field(default=None, description='Random seed. 0 picks a seed from the clock.')

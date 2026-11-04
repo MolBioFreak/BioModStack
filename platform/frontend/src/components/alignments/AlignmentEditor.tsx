@@ -34,10 +34,12 @@ export function settingsInventory(schema: SettingsSchema, engine: Engine): {fiel
 }
 const inventory = Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(engine => [engine, settingsInventory(requestSchema as SettingsSchema, engine)])) as Record<Engine,ReturnType<typeof settingsInventory>>;
 const defaults = Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(engine => [engine, inventory[engine].defaults])) as Record<Engine,Settings>;
-/** Engine defaults with the standard plasmid settings applied to MAFFT. */
-function plasmidDrafts(base: Record<Engine,Settings> = defaults): Record<Engine,Settings> {
-    const next = structuredClone(base);
-    next.mafft = {...next.mafft, strategy: plasmidPreset.strategy, reorder: plasmidPreset.reorder};
+const nucleotideIdentityHmm = requestSchema.$defs.MuscleSettings.properties.hmmin['x-nucleotide-identity-hmm'];
+/** Initial authoring choices only; saved settings are merged over these. */
+function initialDrafts(molecule: Molecule, plasmid = false): Record<Engine,Settings> {
+    const next = structuredClone(defaults);
+    if (molecule !== 'protein') next.muscle.hmmin = nucleotideIdentityHmm;
+    if (plasmid) next.mafft = {...next.mafft, strategy: plasmidPreset.strategy, reorder: plasmidPreset.reorder};
     return next;
 }
 export function fastaRoster(text: string, molecule: Molecule) {
@@ -49,12 +51,19 @@ export function fastaRoster(text: string, molecule: Molecule) {
     return {molecule, rows, source_format:'fasta', source_text:text};
 }
 const inputClass = 'rounded border border-slate-500 bg-slate-900 p-1 text-white';
-function NativeFileInput({field, value, onChange}: {field: Field; value: Value; onChange: (value: Value) => void}) {
+function NativeFileInput({field, value, onChange, identityPreset}: {field: Field; value: Value; onChange: (value: Value) => void; identityPreset?: string}) {
     const [error, setError] = useState('');
     const generation = useRef(0);
     useEffect(() => () => { generation.current++; }, []);
     return <span className="block">
         <span className="block text-sm">{field.description}</span>
+        {identityPreset && <select aria-label="Nucleotide scoring" className={inputClass}
+            value={value === identityPreset ? 'identity' : value === null ? 'native' : 'custom'}
+            onChange={e=>{generation.current++; onChange(e.target.value === 'identity' ? identityPreset : e.target.value === 'native' ? null : '');}}>
+            <option value="identity">Sequence identity (99% match model)</option>
+            <option value="native">MUSCLE default model</option>
+            <option value="custom">Custom HMM file</option>
+        </select>}
         <input type="file" aria-label={`Load ${field.key.replaceAll('_',' ')} file`} onChange={e=>{
             const file = e.target.files?.[0];
             const current = ++generation.current;
@@ -94,7 +103,7 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
     const shelfDna = searchParams.getAll(MOLECULAR_ALIGNMENT_PARAM).length > 0 && (initialMolecule ?? searchParams.get('molecule')) === 'dna';
     const [plasmidPresetOn, setPlasmidPresetOn] = useState(shelfDna);
     const [engine,setEngine] = useState<Engine>('mafft');
-    const [drafts,setDrafts] = useState<Record<Engine,Settings>>(() => shelfDna ? plasmidDrafts() : structuredClone(defaults));
+    const [drafts,setDrafts] = useState<Record<Engine,Settings>>(() => initialDrafts(molecule, shelfDna));
     const [schemaWarning,setSchemaWarning] = useState('');
     useEffect(() => {
         let cancelled = false;
@@ -142,7 +151,7 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
         hydrated.current = id;
         const editor = (setup.setup.draft?.editor_state ?? setup.setup.draft) as {molecule?:Molecule;engine?:Engine;drafts?:Record<Engine,Settings>;fasta?:string;datasetRows?:DatasetRow[];molecularSources?:string[]} | undefined;
         setMolecule(editor?.molecule ?? (model === 'family_msa_nucleic' ? 'dna' : 'protein')); setEngine(editor?.engine && defaults[editor.engine] ? editor.engine : 'mafft');
-        const base = !editor?.drafts && shelfDna ? plasmidDrafts() : defaults;
+        const base = editor?.drafts ? defaults : initialDrafts(editor?.molecule ?? (model === 'family_msa_nucleic' ? 'dna' : 'protein'), shelfDna);
         if (editor?.drafts) setPlasmidPresetOn(false);
         setDrafts(Object.fromEntries((Object.keys(schemaNames) as Engine[]).map(name => [name,{...structuredClone(base[name]),...editor?.drafts?.[name]}])) as Record<Engine,Settings>); setFasta(typeof editor?.fasta === 'string' ? editor.fasta : '');
         setDatasetRows(Array.isArray(editor?.datasetRows) ? editor.datasetRows : []);
@@ -251,7 +260,7 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
         const checkHelp = primary.has(field.key) ? fieldHelp(engine, field.key) : undefined;
         if (field.kind === 'boolean' && !field.format) return <label key={field.key} data-setting={field.key} className="alignment-setting alignment-setting-check" title={tip}>
             <span className="alignment-setting-name">{label}</span><input type="checkbox" checked={Boolean(settings[field.key])} onChange={e=>update(field.key,e.target.checked)}/>{checkHelp && <span className="alignment-setting-help">{checkHelp}</span>}</label>;
-        const control = field.format ? <NativeFileInput key={`${setup.setup?.project_id}:${setup.setup?.setup_context_id}:${engine}:${field.key}`} field={field} value={settings[field.key]} onChange={value=>update(field.key,value)}/>
+        const control = field.format ? <NativeFileInput key={`${setup.setup?.project_id}:${setup.setup?.setup_context_id}:${engine}:${field.key}`} field={field} value={settings[field.key]} onChange={value=>update(field.key,value)} identityPreset={field.format === 'muscle-hmm' && molecule !== 'protein' ? nucleotideIdentityHmm : undefined}/>
             : field.kind === 'select' ? <select className={inputClass} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value === '' && field.nullable ? null : field.options?.find(option => String(option) === e.target.value) ?? e.target.value)}>{field.nullable && <option value="">{nullLabel(field.key, settings)}</option>}{field.options?.map(x=><option key={x} value={x}>{optionLabel(field.key, x)}</option>)}</select>
             : field.kind === 'mapping' ? <MappingInput value={(settings[field.key] || {}) as Record<string,string>} onChange={value=>update(field.key,value)}/>
             : field.kind === 'text' ? <textarea className={`${inputClass} block w-full`} value={String(settings[field.key] ?? '')} onChange={e=>update(field.key,e.target.value || null)}/>
@@ -308,7 +317,7 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
                 {engine === 'muscle' && <p className="alignment-hint">Some MUSCLE settings can't be combined. Conflicts are reported in the engine log.</p>}
             </details>
             {engine === 'muscle' && settings.mode === 'align' && <p className="alignment-hint">MUSCLE Align decides for itself whether the sequences are DNA or protein; it does not use the molecule chosen here.</p>}
-            {engine === 'muscle' && molecule !== 'protein' && <p className="alignment-hint">In our pUC19 test MUSCLE misplaced one single-base deletion. For checking DNA edits base by base, MAFFT is more reliable.</p>}
+            {engine === 'muscle' && molecule !== 'protein' && <p className="alignment-hint">Scoring: {settings.hmmin === nucleotideIdentityHmm ? 'Sequence identity — for near-identical DNA/RNA.' : settings.hmmin === null ? 'MUSCLE default — may misplace gaps in near-identical sequences.' : 'Custom HMM.'} Change it under Expert settings → HMM parameters file.</p>}
             <div className="alignment-actions">
                 <button type="button" disabled={molecularBlocked} onClick={()=>void run('launch')} className={`${inputClass} alignment-action`}>Start run</button>
                 {setup.active && <button type="button" onClick={()=>void run('save')} className={inputClass}>Save Project draft</button>}
