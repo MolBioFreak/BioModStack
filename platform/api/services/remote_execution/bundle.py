@@ -740,8 +740,15 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
                         path = Path(rows[0]['source'])
             else:
                 path = Path(str(selected)).expanduser()
+        elif selected:
+            path = Path(str(selected)).expanduser()
+        elif relative and dependency.kind == 'weights':
+            # Same locator independent_plan uses: a plain path wins, otherwise the one
+            # pinned layout generation (e.g. complexa-evaluators/, huggingface/).
+            from paths import resolve_weight_dependency
+            path = resolve_weight_dependency(relative, root)
         else:
-            path = Path(str(selected)).expanduser() if selected else root / relative if relative else None
+            path = root / relative if relative else None
         if dependency.selector_subpath is not None:
             member = PurePosixPath(dependency.selector_subpath)
             declared = PurePosixPath(relative) if relative else None
