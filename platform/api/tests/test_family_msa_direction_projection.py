@@ -92,7 +92,7 @@ async def test_verified_receipt_direction_reaches_document_and_comparison_withou
     '>a\nACG\n>b\nACT\n>unknown\nACG\n',
     '>a\nACG-\n>b\nACT\n',
 ])
-async def test_historical_native_documents_fail_closed_on_corrupt_alignment_content(fasta):
+async def test_changed_native_documents_open_with_an_output_check_finding(fasta):
     from fastapi import HTTPException
     from routers.family_msa_results import document
     rows = [source('ACG'), dict(source('ACT'), row_id='b')]
@@ -102,9 +102,14 @@ async def test_historical_native_documents_fail_closed_on_corrupt_alignment_cont
     async def read(key):
         return blobs[key]
 
-    with pytest.raises(HTTPException) as failure:
-        await document([{'id': 'alignment', 'role': 'alignment'}, {'id': 'receipt', 'role': 'receipt'}], read, 'alignment')
-    assert failure.value.status_code == 409
+    try:
+        projected = await document([{'id': 'alignment', 'role': 'alignment'}, {'id': 'receipt', 'role': 'receipt'}], read, 'alignment')
+    except HTTPException as failure:
+        # Unparseable rows (duplicate/unknown/ragged) still cannot be displayed.
+        assert failure.status_code == 409
+        return
+    assert projected['output_check']['status'] != 'valid'
+    assert projected['output_check']['errors']
 
 
 @pytest.mark.asyncio

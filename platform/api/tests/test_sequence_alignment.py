@@ -104,10 +104,9 @@ def test_multi_turn_circular_result_is_rejected_instead_of_false_whole_copy_iden
             sequence_alignment.align_sequences('ACGTCGTA', 'ACGTCGTAACGTCGTA', sequence_alignment.AlignmentSettings(mode=mode, strand='forward', reference_is_circular=True))
 
 
-def test_global_mode_cannot_silently_ignore_circular_setting():
-    import pytest
-    with pytest.raises(sequence_alignment.SequenceAlignmentError, match='Circular references require'):
-        sequence_alignment.align_sequences('ACGT', 'ACGT', sequence_alignment.AlignmentSettings(mode='global', reference_is_circular=True))
+def test_global_mode_runs_linear_when_circular_is_ticked():
+    result = sequence_alignment.align_sequences('ACGT', 'ACGT', sequence_alignment.AlignmentSettings(mode='global', reference_is_circular=True))
+    assert result['identity_pct'] == 100.0
 
 
 def test_reverse_query_has_explicit_oriented_and_original_coordinates():

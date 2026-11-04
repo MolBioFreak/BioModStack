@@ -64,21 +64,19 @@ async def test_export_queues_under_verified_source_molecule(export_admission, mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(('actual', 'claimed'), [('dna', 'protein'), ('rna', 'dna'), ('protein', 'rna')])
-async def test_export_rejects_misclassification_before_any_write(export_admission, actual, claimed):
+async def test_export_uses_saved_molecule_over_browser_value(export_admission, actual, claimed):
     state = export_admission
     state['molecule'] = actual
-    with pytest.raises(HTTPException) as error:
-        await route.submit_operation(None, 'p', request(claimed), state['session'], state['core'])
-    assert error.value.status_code == 422
-    assert state['bound'] == state['created'] == []
+    result = await route.submit_operation(None, 'p', request(claimed), state['session'], state['core'])
+    assert result.status == 'queued'
+    assert state['bound'][0].molecule == actual
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('actual', [None, '', 'unknown'])
-async def test_unknown_source_molecule_cannot_be_guessed(export_admission, actual):
+async def test_unknown_source_molecule_keeps_requested_value(export_admission, actual):
     state = export_admission
     state['molecule'] = actual
-    with pytest.raises(HTTPException) as error:
-        await route.submit_operation(None, 'p', request('dna'), state['session'], state['core'])
-    assert error.value.status_code == 409
-    assert state['bound'] == state['created'] == []
+    result = await route.submit_operation(None, 'p', request('dna'), state['session'], state['core'])
+    assert result.status == 'queued'
+    assert state['bound'][0].molecule == 'dna'

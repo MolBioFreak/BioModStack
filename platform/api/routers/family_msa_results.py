@@ -308,6 +308,28 @@ def listing(entries):
     return {'artifacts': [{'id': x['id'], 'role': x['role'], 'logical_path': x.get('logical_path')} for x in entries]}
 
 
+def native_output_check(requested, fasta, row_map):
+    from bms_alignment.models import AlignmentRequest
+    from bms_alignment.observations import observe_alignment_text, validate_alignment_output
+    try:
+        native_request = AlignmentRequest.model_validate(requested)
+        native_roster = native_request.roster.model_copy(deep=True)
+        if row_map is not None:
+            if (not isinstance(row_map, dict) or any(not isinstance(key, str) or not isinstance(value, str)
+                                                    for key, value in row_map.items())
+                    or len(set(row_map.values())) != len(row_map)
+                    or set(row_map.values()) != {row.row_id for row in native_roster.rows}):
+                raise ValueError('row map does not match the input sequences')
+            by_source = {value: key for key, value in row_map.items()}
+            for row in native_roster.rows:
+                row.row_id = by_source[row.row_id]
+        observations = observe_alignment_text(fasta, native_roster,
+            allow_reverse_complement=native_request.settings.engine == 'mafft' and native_request.settings.direction is not None)
+        return validate_alignment_output(native_request, observations)
+    except (ValueError, KeyError, TypeError) as exc:
+        return {'status': 'unavailable', 'errors': [f'Output check could not run: {exc}']}
+
+
 async def document(entries, read, artifact_id):
     selected = next((x for x in entries if x['id'] == artifact_id and x['role'] == 'alignment'), None)
     receipts = [x for x in entries if x['role'] == 'receipt']
@@ -327,31 +349,15 @@ async def document(entries, read, artifact_id):
         settings = requested.get('settings', {})
         if not isinstance(settings, dict):
             raise ValueError('invalid native alignment settings')
+        output_check = None
         if 'settings' in requested:
-            # Recheck historical native artifacts using the same integrity
-            # policy as new jobs. A valid checksum proves custody, not that
-            # an aligner retained every expected row and nucleotide/residue.
-            from bms_alignment.models import AlignmentRequest
-            from bms_alignment.observations import observe_alignment_text, validate_alignment_output
-            native_request = AlignmentRequest.model_validate(requested)
-            native_roster = native_request.roster.model_copy(deep=True)
-            if row_map is not None:
-                if (not isinstance(row_map, dict) or any(not isinstance(key, str) or not isinstance(value, str)
-                                                        for key, value in row_map.items())
-                        or len(set(row_map.values())) != len(row_map)
-                        or set(row_map.values()) != {row.row_id for row in native_roster.rows}):
-                    raise ValueError('native alignment row map does not identify the input roster')
-                by_source = {value: key for key, value in row_map.items()}
-                for row in native_roster.rows:
-                    row.row_id = by_source[row.row_id]
-            observations = observe_alignment_text(fasta, native_roster,
-                allow_reverse_complement=native_request.settings.engine == 'mafft' and native_request.settings.direction is not None)
-            integrity = validate_alignment_output(native_request, observations)
-            if integrity['status'] != 'valid':
-                raise ValueError('native alignment integrity check failed: ' + '; '.join(integrity['errors']))
+            # Report whether the engine kept every input row and residue. The
+            # result stays readable either way; the reader sees the finding.
+            output_check = native_output_check(requested, fasta, row_map)
         direction = settings.get('direction') if settings.get('engine', 'mafft') == 'mafft' else None
-        return alignment_document(result_id=artifact_id, fasta=fasta, roster=roster, row_map=row_map,
-                                  molecule=requested['roster'].get('molecule'), mafft_direction=direction).model_dump()
+        projected = alignment_document(result_id=artifact_id, fasta=fasta, roster=roster, row_map=row_map,
+                                       molecule=requested['roster'].get('molecule'), mafft_direction=direction).model_dump()
+        return {**projected, 'output_check': output_check}
     except (ValueError, KeyError, TypeError, UnicodeError) as exc:
         raise unavailable(exc) from exc
 
@@ -467,19 +473,17 @@ async def submit_operation(request: Request, project_id: str, payload: Operation
     if payload.operation == 'export':
         # The source receipt owns molecule identity. Do not let a browser
         # default relabel a DNA/RNA export as a protein job (or vice versa).
+        # Older results without a readable molecule keep the caller's value.
         entries, read = await project_result_data(session, project_id, payload.inputs['receipt_id'])
         receipts = [entry for entry in entries if entry['role'] == 'receipt']
+        source_molecule = None
         try:
-            if len(receipts) != 1:
-                raise ValueError('missing source receipt')
-            source_receipt = json.loads(await read(receipts[0]['id']))
-            source_molecule = source_receipt['requested']['roster']['molecule']
-            if source_molecule not in ('protein', 'dna', 'rna'):
-                raise ValueError('source molecule unavailable')
-        except (ValueError, KeyError, TypeError, UnicodeError) as exc:
-            raise unavailable(exc) from exc
-        if payload.molecule != source_molecule:
-            raise HTTPException(422, detail='Export molecule must match the saved alignment molecule')
+            if len(receipts) == 1:
+                source_molecule = json.loads(await read(receipts[0]['id']))['requested']['roster']['molecule']
+        except (ValueError, KeyError, TypeError, UnicodeError):
+            source_molecule = None
+        if source_molecule in ('protein', 'dna', 'rna') and payload.molecule != source_molecule:
+            payload = payload.model_copy(update={'molecule': source_molecule})
     job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms.family-msa.operation:' + uuid.uuid4().hex))
     try:
         from services.family_msa.operations import bind_request

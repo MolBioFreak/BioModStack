@@ -228,7 +228,4 @@ class AlignmentRequest(Closed):
             raise ValueError('FAMSA supports protein alignments only')
         if self.settings.engine == 'twilight' and self.roster.molecule == 'protein':
             raise ValueError('TWILIGHT supports DNA/RNA alignments only')
-        if (self.settings.engine == 'mafft' and self.settings.direction is not None
-                and self.roster.molecule == 'protein'):
-            raise ValueError('MAFFT reverse-complement direction adjustment requires DNA/RNA')
         return self

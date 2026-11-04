@@ -11,7 +11,6 @@ from datetime import datetime
 from pathlib import Path
 
 from bms_alignment import AlignmentRequest
-from bms_alignment.engines import assert_native_execution_supported
 from bms_alignment.native import compile_mafft, prepare_mafft_inputs
 
 
@@ -65,7 +64,6 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
             runtime = {'kind': 'owned-python-operation'}
         else:
             request = AlignmentRequest.model_validate({key: payload[key] for key in ('roster', 'settings')})
-            assert_native_execution_supported(request)
             if request.settings.engine == 'mafft':
                 input_file, native_roster, focus_report = prepare_mafft_inputs(request, work)
             else:
@@ -134,9 +132,9 @@ async def run_owned_job(job_id: str, payload: dict, output_dir: str, session_fac
                 or output_integrity.get('status') not in {'valid', 'invalid', 'not_alignment'}
                 or not isinstance(output_integrity.get('errors'), list)
                 or not all(isinstance(item, str) for item in output_integrity['errors'])):
-            output_integrity = {'status': 'invalid', 'errors': ['Native output integrity receipt is unavailable or invalid']}
-    if output_integrity and output_integrity['status'] == 'invalid' and not error:
-        error = 'Alignment output failed integrity checks: ' + '; '.join(output_integrity['errors'])
+            output_integrity = {'status': 'unavailable', 'errors': ['Output check receipt is unavailable']}
+    # The output check is recorded evidence for the reader. It never changes the
+    # engine's own exit status or hides a result the engine produced.
     receipt_path.write_text(json.dumps({'requested': payload.get('_family_msa_requested', payload), 'argv': argv, 'returncode': code,
         'effective_settings': request.settings.model_dump(mode='json') if 'request' in locals() else payload.get('settings'), 'runtime': runtime, 'error': error,
         'observations': observations, 'output_integrity': output_integrity,

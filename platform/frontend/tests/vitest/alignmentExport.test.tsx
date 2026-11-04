@@ -62,15 +62,11 @@ it.each(['dna', 'rna', 'protein'] as const)('exports the saved %s molecule witho
   } finally { await act(async () => root.unmount()); div.remove() }
 })
 
-it('blocks export when the source molecule is unavailable instead of defaulting to protein', async () => {
-  const post = vi.spyOn(api, 'post')
+it('keeps export available for older results without a saved molecule; the server uses the saved one when present', async () => {
   const div = document.createElement('div'); const root = createRoot(div)
   try {
     await act(async () => root.render(<AlignmentExport projectId="p" receiptId="r" sharedStateId="s" domain="d"/>))
     const button = [...div.querySelectorAll('button')].find(button => button.textContent === 'Export ZIP')!
-    expect(button.disabled).toBe(true)
-    expect(div.querySelector('[role="alert"]')?.textContent).toContain('molecule is unavailable')
-    await act(async () => button.click())
-    expect(post).not.toHaveBeenCalled()
+    expect(button.disabled).toBe(false)
   } finally { await act(async () => root.unmount()); div.remove() }
 })

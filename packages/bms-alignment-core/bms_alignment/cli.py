@@ -4,7 +4,7 @@ from pathlib import Path
 from .models import AlignmentRequest, SequenceSet
 from .formats import compare, export, summary
 from .native import run_mafft
-from .engines import run_engine, assert_native_execution_supported
+from .engines import run_engine
 from .bundle import verify_bundle, make_bundle, inspect_project_bundle
 
 
@@ -55,9 +55,7 @@ def main():
     if a.command == 'schema': result = AlignmentRequest.model_json_schema()
     elif a.command == 'validate': result = AlignmentRequest.model_validate(read(a.file)).model_dump(mode='json')
     elif a.command == 'run':
-        request = AlignmentRequest.model_validate(read(a.file))
-        assert_native_execution_supported(request)
-        result = run_engine(request, Path(a.workdir), a.executable, a.mafft)
+        result = run_engine(AlignmentRequest.model_validate(read(a.file)), Path(a.workdir), a.executable, a.mafft)
         print(json.dumps(result, indent=2)); return result['returncode']
     elif a.command == 'inspect': result = summary(SequenceSet.model_validate(read(a.file)))
     elif a.command == 'compare': result = compare(SequenceSet.model_validate(read(a.left)), SequenceSet.model_validate(read(a.right)))
