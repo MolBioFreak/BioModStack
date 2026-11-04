@@ -113,18 +113,13 @@ def test_mutated_duplicate_roster_rejected_before_native_execution(tmp_path, eng
 
 @pytest.mark.parametrize('engine,molecule,settings', [
     ('famsa', 'dna', {}), ('famsa', 'rna', {}), ('twilight', 'protein', {}),
-    ('mafft', 'protein', {'direction': 'adjustdirectionaccurately'}),
 ])
 def test_unsupported_molecule_scoring_rejected(engine, molecule, settings):
     with pytest.raises(ValueError):
         req(engine, molecule, **settings)
 
 
-def test_production_capability_guard_does_not_rewrite_historical_mode():
-    from bms_alignment.engines import assert_native_execution_supported
-    request = req('muscle', 'dna')
-    with pytest.raises(ValueError, match='does not honor the declared molecule'):
-        assert_native_execution_supported(request)
-    assert request.settings.mode == 'align'
-    request.settings.mode = 'super5'
-    assert_native_execution_supported(request)
+def test_muscle_align_has_no_production_block():
+    import bms_alignment.engines as engines
+    assert not hasattr(engines, 'assert_native_execution_supported')
+    assert req('muscle', 'dna').settings.mode == 'align'

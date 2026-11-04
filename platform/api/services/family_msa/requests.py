@@ -4,7 +4,6 @@ These helpers do not submit or schedule jobs.  The canonical Job owner must
 persist the returned request and select its CPU-only scheduler path.
 """
 from bms_alignment import AlignmentRequest
-from bms_alignment.engines import assert_native_execution_supported
 
 MODEL_PROTEIN = 'family_msa_protein'
 MODEL_NUCLEIC = 'family_msa_nucleic'
@@ -25,6 +24,5 @@ def prepare_request(payload: dict) -> tuple[str, dict]:
         return model, {'managed_operation': operation.model_dump(mode='json')}
     requested = payload.get('_family_msa_requested', payload)
     request = AlignmentRequest.model_validate({key: value for key, value in payload.items() if key != '_family_msa_requested'})
-    assert_native_execution_supported(request)
     model = MODEL_PROTEIN if request.roster.molecule == 'protein' else MODEL_NUCLEIC
     return model, {**request.model_dump(mode='json'), '_family_msa_requested': requested}

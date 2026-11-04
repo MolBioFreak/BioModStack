@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { jobPollingInterval } from '../../lib/queryPolling';
 import { api } from '../../lib/api';
-import type { AlignmentDocument, AlignmentMolecule, AlignmentSimilarity } from '../../lib/alignmentCoordinates';
+import type { AlignmentDocument, AlignmentMolecule, AlignmentOutputCheck, AlignmentSimilarity } from '../../lib/alignmentCoordinates';
 import { ProjectWorkflowSetupBanner, useProjectWorkflowSetup } from '../project-manager/ProjectWorkflowSetup';
 import { projectManagerErrorMessage, listGlobalExperiments, listDomainExperiments } from '../../lib/projectManager';
 import { downloadLabel, errorText, statusText } from './alignmentText';
@@ -98,8 +98,8 @@ export default function AlignmentPage() {
     const documentQuery = useQuery({
         queryKey: ['alignment-result-document', base, member],
         queryFn: async ({ signal }) => {
-            const { data } = await api.get<{result_id: string; molecule?: AlignmentMolecule | null; similarity?: AlignmentSimilarity; rows: {row_id: string; label: string; aligned: string; source_member_id?: string | null; occurrence_id?: string | null; source_positions?: (number | null)[] | null; source_orientation?: 'forward' | 'reverse_complement' | null}[]}>(`${base}/documents/${encodeURIComponent(member)}`, { signal });
-            return {resultId: data.result_id, molecule: data.molecule ?? undefined, similarity: data.similarity, rows: data.rows.map(row => ({rowId: row.row_id, label: row.label, aligned: row.aligned, sourceMemberId: row.source_member_id ?? undefined, occurrenceId: row.occurrence_id ?? undefined, sourcePositions: row.source_positions ?? undefined, sourceOrientation: row.source_orientation ?? undefined}))} satisfies AlignmentDocument;
+            const { data } = await api.get<{result_id: string; molecule?: AlignmentMolecule | null; output_check?: AlignmentOutputCheck | null; similarity?: AlignmentSimilarity; rows: {row_id: string; label: string; aligned: string; source_member_id?: string | null; occurrence_id?: string | null; source_positions?: (number | null)[] | null; source_orientation?: 'forward' | 'reverse_complement' | null}[]}>(`${base}/documents/${encodeURIComponent(member)}`, { signal });
+            return {resultId: data.result_id, molecule: data.molecule ?? undefined, outputCheck: data.output_check ?? undefined, similarity: data.similarity, rows: data.rows.map(row => ({rowId: row.row_id, label: row.label, aligned: row.aligned, sourceMemberId: row.source_member_id ?? undefined, occurrenceId: row.occurrence_id ?? undefined, sourcePositions: row.source_positions ?? undefined, sourceOrientation: row.source_orientation ?? undefined}))} satisfies AlignmentDocument;
         },
         enabled: Boolean(base && member), retry: false,
     });
@@ -134,6 +134,7 @@ export default function AlignmentPage() {
         {base && manifest.data && !alignments.length && <p role="status">This result has no alignment file. <button onClick={() => void manifest.refetch()}>Retry</button></p>}
         {error && <div role="alert">Alignment result unavailable: {errorText(error)} <button onClick={() => { if (job.error) void job.refetch(); if (manifest.error) void manifest.refetch(); if (documentQuery.error) void documentQuery.refetch(); }}>Retry</button></div>}
         {observations.error && <p role="status">File notes unavailable; the original file can still be downloaded.</p>}
+        {document?.outputCheck && document.outputCheck.status !== 'valid' && document.outputCheck.status !== 'not_alignment' && <section aria-label="Output check" className="alignment-output-check"><h2>Output check</h2><p>The aligned sequences don't exactly match the input. Check these before relying on identity numbers:</p><ul>{document.outputCheck.errors.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
         {Boolean(observations.data?.length) && <section aria-label="File notes"><h2>File notes</h2><ul>{observations.data?.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
         {base && alignments.length > 1 && <label>Alignment <select value={selected} onChange={e => setSelection({base, id: e.target.value})}><option value="">Choose an alignment</option>{alignments.map((x, index) => <option key={x.id} value={x.id}>{x.logical_path || `Alignment ${index + 1}`}</option>)}</select></label>}
         {projectId && receiptId && member && alignments.length > 1 && <EnsembleSupport key={`${projectId}:${receiptId}:${member}`} projectId={projectId} receiptId={receiptId} reference={member} artifacts={alignments}/>}

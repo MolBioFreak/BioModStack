@@ -74,17 +74,6 @@ def compile_engine(request, executable, input_path, output_path, tree_path=None)
     raise ValueError('Unsupported engine')
 
 
-def assert_native_execution_supported(request):
-    """Production admission guard; raw adapters remain available for qualification.
-
-    Pinned MUSCLE 5.3 cmd_align ignores both -nt and -amino and guesses its
-    alphabet instead. Historical requests remain readable, but cannot be replayed
-    as though their declared molecule had been honored.
-    """
-    if request.settings.engine == 'muscle' and request.settings.mode == 'align':
-        raise ValueError('MUSCLE align is unavailable: the pinned runtime does not honor the declared molecule (-nt/-amino). Explicitly choose Super5 or another engine.')
-
-
 def run_engine(request: AlignmentRequest, workdir: Path, executable=None, mafft='mafft', env=None):
     # Lists and nested values can be mutated after initial request validation.
     request = AlignmentRequest.model_validate(request.model_dump())

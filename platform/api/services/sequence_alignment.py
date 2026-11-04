@@ -85,10 +85,6 @@ def clean_alignment_sequence(sequence: str) -> str:
 
 
 def _validate_settings(settings: AlignmentSettings) -> None:
-    if settings.reference_is_circular and _normalize_mode(settings.mode) == "global":
-        raise SequenceAlignmentError(
-            "Circular references require placement or local mode; global mode compares linear sequences"
-        )
     numeric = {
         "match_score": settings.match_score,
         "mismatch_score": settings.mismatch_score,

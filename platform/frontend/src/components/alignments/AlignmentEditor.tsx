@@ -150,7 +150,6 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
         setMolecularSources([...new Set([...(Array.isArray(editor?.molecularSources) ? editor.molecularSources : []), ...searchParams.getAll(MOLECULAR_ALIGNMENT_PARAM)])]);
     }, [setup.setup]);
     const settings = drafts[engine];
-    const unsupportedMuscleMode = engine === 'muscle' && settings.mode === 'align';
     const update = (key:string,value:Value) => setDrafts(previous=>({...previous,[engine]:{...previous[engine],[key]:value}}));
     const request = () => {
         if (molecularBlocked) throw new Error('Selected saved sequences must load and match the selected molecule before starting.');
@@ -308,10 +307,10 @@ export default function AlignmentEditor({ model, initialMolecule, onModelChange 
                 {engine === 'mafft' && <p className="alignment-hint">Some settings only apply to certain strategies. Conflicts are reported in the engine log.</p>}
                 {engine === 'muscle' && <p className="alignment-hint">Some MUSCLE settings can't be combined. Conflicts are reported in the engine log.</p>}
             </details>
-            {unsupportedMuscleMode && <p role="alert">The installed MUSCLE Align mode ignores the requested molecule type. Runs are blocked in this mode. Choose Super5 explicitly or another engine; saved settings have not been changed.</p>}
-            {engine === 'muscle' && molecule !== 'protein' && <p role="alert">MUSCLE did not recover a known one-base deletion correctly in the pUC19 accuracy benchmark. Its nucleotide results are not qualified for sequence identity confirmation.</p>}
+            {engine === 'muscle' && settings.mode === 'align' && <p className="alignment-hint">MUSCLE Align decides for itself whether the sequences are DNA or protein; it does not use the molecule chosen here.</p>}
+            {engine === 'muscle' && molecule !== 'protein' && <p className="alignment-hint">In our pUC19 test MUSCLE misplaced one single-base deletion. For checking DNA edits base by base, MAFFT is more reliable.</p>}
             <div className="alignment-actions">
-                <button type="button" disabled={molecularBlocked || unsupportedMuscleMode} onClick={()=>void run('launch')} className={`${inputClass} alignment-action`}>Start run</button>
+                <button type="button" disabled={molecularBlocked} onClick={()=>void run('launch')} className={`${inputClass} alignment-action`}>Start run</button>
                 {setup.active && <button type="button" onClick={()=>void run('save')} className={inputClass}>Save Project draft</button>}
             </div>
         </fieldset>

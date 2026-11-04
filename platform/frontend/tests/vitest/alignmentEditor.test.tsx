@@ -26,7 +26,7 @@ describe('family alignment authoring', () => {
         await act(async()=>root.unmount()); client.clear();
     });
 });
-it('blocks unqualified MUSCLE Align mode without changing it and identifies its nucleotide accuracy limit', async () => {
+it('keeps MUSCLE Align runnable and explains its molecule detection and DNA accuracy note', async () => {
  const div = document.createElement('div'), root = createRoot(div), client = new QueryClient();
  await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><AlignmentEditor model="family_msa_nucleic"/></MemoryRouter></QueryClientProvider>));
  try {
@@ -34,13 +34,13 @@ it('blocks unqualified MUSCLE Align mode without changing it and identifies its 
   await act(async () => { engine.value='muscle'; engine.dispatchEvent(new Event('change', {bubbles:true})); });
   const mode = div.querySelector('[data-setting="mode"] select') as HTMLSelectElement;
   expect(mode.value).toBe('align');
-  expect(div.textContent).toContain('ignores the requested molecule type');
-  expect(div.textContent).toContain('not qualified for sequence identity confirmation');
+  expect(div.textContent).toContain('decides for itself whether the sequences are DNA or protein');
+  expect(div.textContent).toContain('misplaced one single-base deletion');
   const start = [...div.querySelectorAll('button')].find(b => b.textContent === 'Start run')!;
-  expect(start.disabled).toBe(true);
+  expect(start.disabled).toBe(false);
   await act(async () => { mode.value='super5'; mode.dispatchEvent(new Event('change', {bubbles:true})); });
   expect(start.disabled).toBe(false);
-  expect(div.textContent).not.toContain('ignores the requested molecule type');
-  expect(div.textContent).toContain('not qualified for sequence identity confirmation');
+  expect(div.textContent).not.toContain('decides for itself');
+  expect(div.textContent).toContain('misplaced one single-base deletion');
  } finally { await act(async () => root.unmount()); client.clear(); }
 });

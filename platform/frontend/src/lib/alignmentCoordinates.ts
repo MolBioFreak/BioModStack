@@ -41,8 +41,14 @@ export interface AlignmentSimilarity {
 
 export type AlignmentMolecule = 'protein' | 'dna' | 'rna'
 
+export interface AlignmentOutputCheck {
+  status: string
+  errors: string[]
+}
+
 export interface AlignmentDocument {
   molecule?: AlignmentMolecule
+  outputCheck?: AlignmentOutputCheck
   similarity?: AlignmentSimilarity
   resultId: string
   rows: AlignmentRow[]

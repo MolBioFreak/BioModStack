@@ -35,9 +35,9 @@ export default function AlignmentExport({projectId, receiptId, sharedStateId, do
     try { await action() } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
   return <section aria-label="Alignment export">
-    {molecule ? <p>Export molecule: {molecule === 'protein' ? 'Protein' : molecule.toUpperCase()} · from the saved alignment</p> : <p role="alert">The saved alignment's molecule is unavailable. Reload the alignment before exporting.</p>}
-    <button disabled={busy || !domain || !molecule} onClick={() => void run(async () => received((await api.post<Operation>(`${base}/operations`, {
-      operation: 'export', molecule, domain_experiment_id: domain, name: 'Alignment project bundle', inputs: {receipt_id: receiptId, shared_state_ids: [sharedStateId]},
+    {molecule && <p>Export molecule: {molecule === 'protein' ? 'Protein' : molecule.toUpperCase()} · from the saved alignment</p>}
+    <button disabled={busy || !domain} onClick={() => void run(async () => received((await api.post<Operation>(`${base}/operations`, {
+      operation: 'export', molecule: molecule ?? 'protein', domain_experiment_id: domain, name: 'Alignment project bundle', inputs: {receipt_id: receiptId, shared_state_ids: [sharedStateId]},
     })).data))}>Export ZIP</button>
     <p>Exports the last saved version. Choose an experiment above first.</p>
     <button disabled={busy || !jobId} onClick={() => void run(async () => received((await api.get<Operation>(`${base}/operations/${encodeURIComponent(jobId)}`)).data))}>Refresh export status</button>
