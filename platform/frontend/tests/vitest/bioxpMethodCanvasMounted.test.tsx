@@ -17,7 +17,7 @@ const discovery = process.env.BIOXP_METHOD_MODEL_CONTRACT ? JSON.parse(readFileS
 let host: HTMLDivElement, root: Root, current: MethodValue, values: MethodValue;
 let client: QueryClient, oldAdapter: typeof api.defaults.adapter;
 async function mount(initial: MethodValue, preview?: MethodCompile, initialBindings: MethodValue = {}, actionProperties?: (node: MethodValue, change: (node: MethodValue) => void) => React.ReactNode) {
-    function Owner() { const [method, setMethod] = useState(initial), [bindings, setBindings] = useState(initialBindings); current = method; values = bindings; return <BioXpMethodDeckWorkbench method={method} onChange={setMethod} bindings={bindings} onBindingsChange={setBindings} catalog={discovery?.catalog ?? catalog} rootSchema={discovery?.schema.method ?? {}} preview={preview} actionProperties={actionProperties} />; }
+    function Owner() { const [method, setMethod] = useState(initial), [bindings, setBindings] = useState(initialBindings); current = method; values = bindings; return <BioXpMethodDeckWorkbench method={method} onChange={setMethod} bindings={bindings} onBindingsChange={setBindings} catalog={discovery?.catalog ?? catalog} rootSchema={discovery?.schema.method ?? {}} recordedAlignment={-1} preview={preview} actionProperties={actionProperties} />; }
     root = createRoot(host); await act(async () => root.render(<QueryClientProvider client={client}><Owner /></QueryClientProvider>));
 }
 async function click(label: string) { const button = [...host.querySelectorAll<HTMLButtonElement>('button,[role=button]')].find(b => b.textContent === label || b.getAttribute('aria-label') === label)!; expect(button, label).toBeTruthy(); await act(async () => button.dispatchEvent(new MouseEvent('click', { bubbles: true }))); }
@@ -316,6 +316,30 @@ it.runIf(!!discovery && !!process.env.BMS_TEST_PYTHON)('pages all 24 transfers t
     await click('Previous stage');
     expect(host.querySelector('[data-labware="plate"]')!.getAttribute('data-display-station')).toBe('LOC_TC');
     expect(current).toEqual(original);
+});
+
+it.runIf(!!process.env.BIOXP_WELL_INPUT && !!process.env.BIOXP_WELL_COMPILED)('shows every barcode and output well from the real saved four-channel passes, with exact text and unchanged inputs', async () => {
+    const snapshot = JSON.parse(readFileSync(process.env.BIOXP_WELL_INPUT!, 'utf8'));
+    const compiled = JSON.parse(readFileSync(process.env.BIOXP_WELL_COMPILED!, 'utf8'));
+    await mount(snapshot.method, compiled, snapshot.bindings);
+    await input('Workflow stage', 'barcodes');
+    expect(host.querySelectorAll('.bwd-well.is-stage-active[data-station="LOC_RC"]')).toHaveLength(24);
+    expect(host.querySelectorAll('.bwd-well.is-stage-active[data-station="LOC_OC"]')).toHaveLength(24);
+    expect(host.querySelectorAll('[data-transfer-channel]')).toHaveLength(24);
+    expect(host.querySelector('[data-station="LOC_RC"][data-well="H3"] title')!.textContent).toContain('P4');
+    const text = (host.querySelector('[aria-label="Execution text"]') as HTMLTextAreaElement).value;
+    expect(text).toContain('P4 Reagent chiller H3');
+    expect(text).toContain('P4 Output chiller H3');
+    await input('Workflow stage', 'pool');
+    expect(host.querySelectorAll('[data-transfer-channel]')).toHaveLength(24);
+    expect([...host.querySelectorAll('[data-transfer-channel]')].every(e => e.getAttribute('data-transfer-channel') === '0')).toBe(true);
+    const poolText = (host.querySelector('[aria-label="Execution text"]') as HTMLTextAreaElement).value;
+    expect(poolText).toContain('return unused tip to rack');
+    expect(poolText).toContain('existing missing-tip check');
+    await click('Full workflow');
+    const full = (host.querySelector('[aria-label="Execution text"]') as HTMLTextAreaElement).value;
+    expect(JSON.parse(full.split('Exact compiled protocol JSON:\n')[1])).toEqual(compiled.document);
+    expect(current).toEqual(snapshot.method); expect(values).toEqual(snapshot.bindings);
 });
 
 it('copies only the explicitly authored native plate association into a newly requested carry', async () => {

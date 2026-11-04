@@ -63,7 +63,8 @@ beforeEach(() => {
     const adapter: AxiosAdapter = async config => {
         const url = config.url!, method = config.method!, body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
         requests.push({ url, method, body, params: config.params }); let data: any;
-        if (url.endsWith('/starters')) data = [];
+        if (url === '/api/bioxp/operator-controls/catalog') data = { canonical: { dashboard: { deck: { head_alignment: { tip_location: -1 } } } } };
+        else if (url.endsWith('/starters')) data = [];
         else if (url.endsWith('/catalog')) data = catalog;
         else if (url.endsWith('/schema')) data = { method: schema, requests: {}, results: {}, openapi: '/openapi.json' };
         else if (url.endsWith('/examples')) data = [{ name: 'PCR', method: sourceMethod }];
@@ -228,8 +229,36 @@ it('opens raw exact revision, edits typed scientific value, preserves unknown/nu
     expect(sent.body.method.steps[0].inputs).toEqual({ location_id: 2, well: 'a1', height_steps: '002.3400', future: null });
     expect(sent.body.method.unknown).toEqual(sourceMethod.unknown); expect(sent.body.expected_base_revision).toBe(1);
     expect(host.textContent).toContain('Saved exact revision 2'); expect(submits()).toHaveLength(0);
-    expect(requests.every(r => r.url.startsWith('/api/bioxp/methods/'))).toBe(true);
+    expect(requests.every(r => r.url.startsWith('/api/bioxp/methods/') || r.method === 'get' && r.url === '/api/bioxp/operator-controls/catalog' && JSON.stringify(r.params) === JSON.stringify({ view: 'assessment' }))).toBe(true);
 });
+it('reads the recorded preview reference once and does not mutate or recompile the method while paging or changing the preview reference', async () => {
+    await mount(); await openOriginal(); await checked();
+    const count = checks().length;
+    const referenceReads = () => requests.filter(r => r.url === '/api/bioxp/operator-controls/catalog');
+    expect(referenceReads()).toHaveLength(1);
+    await click('Next stage'); await input('Preview head reference', '2'); await click('Previous stage'); await checked();
+    expect(checks()).toHaveLength(count);
+    expect(referenceReads()).toHaveLength(1);
+    expect(requests.filter(r => ['put', 'delete'].includes(r.method))).toEqual([]);
+    expect(submits()).toEqual([]);
+    await click('Refresh recorded reference');
+    expect(referenceReads()).toHaveLength(2);
+    expect(referenceReads().every(r => r.method === 'get' && r.params.view === 'assessment')).toBe(true);
+});
+
+it('keeps Save and existing Run behavior when the display-only head reference read fails', async () => {
+    const transport = api.defaults.adapter as AxiosAdapter;
+    api.defaults.adapter = async config => {
+        if (config.url === '/api/bioxp/operator-controls/catalog') fail(config, 503, 'Reference observation unavailable');
+        return transport(config);
+    };
+    await mount(); await openOriginal(); await checked();
+    expect(host.querySelector('[aria-label="Preview head reference"]')!.textContent).toContain('unavailable');
+    await click('Save'); expect(host.textContent).toContain('Saved exact revision 2');
+    await acknowledge(); expect(button('Run').disabled).toBe(false); await click('Run');
+    expect(submits()).toHaveLength(1); expect(submits()[0].body.revision).toBe(2);
+});
+
 it('provides structured nodes and expression AST, stable reorder and new duplicate identities', async () => {
     await mount(); await openOriginal(); await click('Use expression for Inputs move-original.height_steps');
     await input('Inputs move-original.height_steps operator', 'param'); await input('Inputs move-original.height_steps reference', 'volume');
@@ -527,7 +556,7 @@ it.each(['manual', 'class'])('composes map-driven Move and %s Transfer, selected
     await click('Save'); expect(db.m2.method).toEqual(saved);
     await click('Liquid classes'); await click('Methods'); await click('Save'); expect(db.m2.method).toEqual(saved);
     expect(submits()).toHaveLength(0);
-    expect(requests.every(r => r.url.startsWith('/api/bioxp/methods/'))).toBe(true);
+    expect(requests.every(r => r.url.startsWith('/api/bioxp/methods/') || r.method === 'get' && r.url === '/api/bioxp/operator-controls/catalog' && JSON.stringify(r.params) === JSON.stringify({ view: 'assessment' }))).toBe(true);
     expect(requests.filter(r => r.method !== 'get').every(r => /\/(library|check)(\/[^/]+)?$/.test(r.url))).toBe(true);
 });
 

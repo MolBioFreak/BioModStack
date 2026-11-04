@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useBioXpWorkflowMutationOwner } from './BioXpWorkflowMutationOwner';
 import { useQuery } from '@tanstack/react-query';
+import { api } from '../lib/api';
 import './BioXpMethodsWorkspace.css';
 import { liquidClassEditorSchema, methodParameterSchema, methodTipPolicySchema } from '../lib/bioxpMethodEditorSchema';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
@@ -157,6 +158,17 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
     const compileInput = (method = activeDraft): MethodValue => ({ method: clone(method), bindings: clone(bindings), dependencies: clone(dependencies), initial_state: clone(initialState) });
     // One pure check ~600 ms after the last edit; it never gates Save or Run.
     const hasContent = (Array.isArray(draft.steps) && draft.steps.length > 0) || draft.deck_plan !== undefined;
+    // One cached semantic-state read for preview addressing, never a hardware query or run prerequisite.
+    const headReference = useQuery({
+        queryKey: ['bioxp', 'method-preview-head-reference', generation],
+        queryFn: async () => {
+            const response = (await api.get('/api/bioxp/operator-controls/catalog', { params: { view: 'assessment' }, timeout: 12000 })).data;
+            const value = object(object(object(object(response).canonical).dashboard).deck).head_alignment;
+            return object(value).tip_location ?? null;
+        },
+        enabled: connected && visible && tab === 'Methods' && hasContent,
+        staleTime: Infinity, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
+    });
     const checkKey = tab === 'Methods' && visible && hasContent ? JSON.stringify(compileInput()) : '';
     useEffect(() => {
         if (!checkKey) return;
@@ -259,7 +271,7 @@ export function BioXpMethodsWorkspace({ generation, connected, controlsEnabled, 
                 </details>
                 <RepairWorkspaceContext.Provider value={{ method: activeDraft, dependencies, entries: methodRows<MethodValue>(starters.data), pin: entry => { const existing = dependencies.liquid_classes; if (existing !== undefined && !Array.isArray(existing)) { setNotice('Selected exact content retained in Transfer. Existing non-array dependencies are unchanged.'); return; } setDependencies({ ...dependencies, liquid_classes: [...(Array.isArray(existing) ? existing : []).filter(row => object(row).id !== entry.id || object(row).revision !== entry.revision), clone(entry)] }); } }}>
                 <BioXpWorkflowProfilesContext.Provider value={{ profiles: [...(Array.isArray(plates.data?.profiles) ? plates.data!.profiles as MethodValue[] : []), ...publishedTipProfiles(methodRows<MethodValue>(starters.data))], custodyObjects: Array.isArray(object(object(catalog.data?.authoring).custody).objects) ? object(object(catalog.data?.authoring).custody).objects as MethodValue[] : [], loading: starters.isLoading, error: starters.isError, pin: profile => { if (dependencies.labware_profiles !== undefined && !Array.isArray(dependencies.labware_profiles)) setNotice('Profile identity assigned. Retained null/expression profile dependencies were not replaced; edit Dependencies explicitly to pin its source metadata.'); editVersion.current++; setValues(previous => ({ ...previous, dependencies: pinLabwareProfile(previous.dependencies, profile) })); } }}>
-                <BioXpMethodDeckWorkbench onShowExamples={() => { const panel = examplesRef.current; if (panel) { panel.open = true; panel.scrollIntoView({ block: 'center' }); panel.querySelector<HTMLSelectElement>('select')?.focus(); } }} key={`method-${authoringEpoch}`} method={activeDraft} onChange={setActive} bindings={bindings} onBindingsChange={setBindings} catalog={catalog.data ?? {}} rootSchema={rootSchema} findings={methodStepFindings(check?.result, check ? object(check.input.method) : draft)} preview={freshCheck?.result} initialState={methodInitialState(freshCheck?.result.simulation, currentInput.initial_state)} dependencies={dependencies} executionInput={currentInput} executionContext={{ pinned: unchangedSinceSave && savedMethod ? { id: savedMethod.id, revision: savedMethod.revision } : null, basis: savedMethod ? { id: savedMethod.id, revision: savedMethod.revision, edited: !unchangedSinceSave } : null, generation }} />
+                <BioXpMethodDeckWorkbench onShowExamples={() => { const panel = examplesRef.current; if (panel) { panel.open = true; panel.scrollIntoView({ block: 'center' }); panel.querySelector<HTMLSelectElement>('select')?.focus(); } }} key={`method-${authoringEpoch}`} method={activeDraft} onChange={setActive} bindings={bindings} onBindingsChange={setBindings} catalog={catalog.data ?? {}} rootSchema={rootSchema} findings={methodStepFindings(check?.result, check ? object(check.input.method) : draft)} preview={freshCheck?.result} initialState={methodInitialState(freshCheck?.result.simulation, currentInput.initial_state)} dependencies={dependencies} recordedAlignment={typeof headReference.data === 'number' ? headReference.data : null} onRefreshAlignment={() => void headReference.refetch()} executionInput={currentInput} executionContext={{ pinned: unchangedSinceSave && savedMethod ? { id: savedMethod.id, revision: savedMethod.revision } : null, basis: savedMethod ? { id: savedMethod.id, revision: savedMethod.revision, edited: !unchangedSinceSave } : null, generation }} />
                 </BioXpWorkflowProfilesContext.Provider></RepairWorkspaceContext.Provider>
                 <details><summary>Parameters, expressions and bindings</summary><MethodFields label="Parameters" schema={properties.parameters ?? methodParameterSchema} rootSchema={rootSchema} value={activeDraft.parameters ?? []} onChange={v => setActive({ ...activeDraft, parameters: v })} /><MethodFields label="Bindings" schema={methodBindingsSchema(activeDraft, catalog.data ?? {})} value={bindings} onChange={v => setBindings(object(v))} />
                     <select aria-label="Parameter preset" value="" onChange={e => void storage(async () => { const preset = await methodsGet<MethodRecord>(`presets/${enc(e.target.value)}`); setBindings(clone(object(preset.method.bindings))); setDependencies(clone(object(preset.method.dependencies))); })}><option value="">Load preset…</option>{methodRows<MethodRecord>(presets.data).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>

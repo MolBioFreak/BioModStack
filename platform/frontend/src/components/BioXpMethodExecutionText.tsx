@@ -8,11 +8,13 @@ export type BioXpMethodExecutionTextProps = {
     result?: MethodCompile;
     actions: MethodValue[];
     pageLabel: string;
+    /** Human-readable planned well projection; never part of the native payload. */
+    pageActivity?: string;
+    workflowActivity?: string;
     pinned?: { id: string; revision: number } | null;
     basis?: { id: string; revision: number; edited: boolean } | null;
     generation?: number;
 };
-const object = (value: unknown): MethodValue => value && typeof value === 'object' && !Array.isArray(value) ? value as MethodValue : {};
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 
 function TextExport({ text, label, filename }: { text: string; label: string; filename: string }) {
@@ -37,18 +39,17 @@ function TextExport({ text, label, filename }: { text: string; label: string; fi
 }
 
 /** Display/export only. The caller owns freshness and selected-page action selection. */
-export function BioXpMethodExecutionText({ input, result, actions, pageLabel, pinned = null, basis = null, generation }: BioXpMethodExecutionTextProps) {
+export function BioXpMethodExecutionText({ input, result, actions, pageLabel, pageActivity, workflowActivity, pinned = null, basis = null, generation }: BioXpMethodExecutionTextProps) {
     const [full, setFull] = useState(false);
-    const stages = Array.isArray(result?.document?.stages) ? result.document.stages : [];
-    const heading = full ? 'Full workflow' : `Stage: ${pageLabel}`;
+    const heading = full ? 'Full workflow' : `Stage: ${pageLabel} — selected-page excerpt`;
+    const activity = full ? workflowActivity : pageActivity;
     const text = !result?.document
         ? `${heading}\nCompiled actions unavailable — no fresh compilation.\nAuthored input:\n${json(input)}`
-        : `${heading}\nNative actions belong to one submitted protocol, not individual HTTP calls.\n\n${full
-            ? stages.map((raw, index) => {
-                const stage = object(raw);
-                return `Stage: ${String(stage.name ?? stage.stage_id ?? index + 1)}\n${json(Array.isArray(stage.actions) ? stage.actions : [])}`;
-            }).join('\n\n')
-            : json(actions)}`;
+        : `${heading}\nNative actions belong to one submitted protocol, not individual HTTP calls.\n${full
+            ? 'Complete compiled protocol document, including enclosing execution context.'
+            : 'Selected native actions only — not a runnable protocol. Enclosing stage conditions and protocol metadata are preserved in Full workflow; consult that context when interpreting this excerpt.'}\n\n${activity
+            ? `Planned well projection (display only; not execution evidence or native payload):\n${activity}\n\n`
+            : ''}${full ? 'Exact compiled protocol JSON' : 'Exact selected native actions JSON'}:\n${json(full ? result.document : actions)}`;
     const request = buildMethodRunRequest(input, pinned, basis, 'GENERATED_ON_RUN', generation ?? 0);
     const runBody = generation === undefined ? { ...request.body, expected_generation: 'UNKNOWN' } : request.body;
     const apiText = `POST /api/bioxp/methods/check\n${json(input)}\n\nRun request template — not submitted.\nGENERATED_ON_RUN is a display placeholder; the real idempotency key is generated only on Run.\n${generation === undefined ? 'Connection generation is unknown; UNKNOWN is a display placeholder.' : `Current connection generation: ${generation}; submission freezes its own generation.`}\nPOST /api/bioxp/methods/${request.path}\n${json(runBody)}`;

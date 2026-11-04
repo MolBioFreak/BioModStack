@@ -21,14 +21,15 @@ export type BioXpWorkflowDeckProps = {
     tipOccupancy?: Record<number, boolean[]>;
     /** Planned starting contents by station and well (label shown on hover). Shading only. */
     contents?: Record<string, Record<string, string>>;
-    /** Selected stage head-reference wells; presentation only. */
+    /** Every projected manipulated well for the selected stage; presentation only. */
     activity?: Record<string, string[]>;
+    activityLabels?: Record<string, Record<string, string>>;
 };
 const fullView: DeckBounds = { x: 0, y: 0, ...deckSize };
 const modes: DeckSelectionMode[] = ['well', 'range', 'row', 'column'];
 
 /** Shared presentation. Authoring defaults remain selection-only; live intents are explicit callbacks. */
-export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, connections, compact = false, canvas = false, tipOccupancy, contents, activity }: BioXpWorkflowDeckProps) {
+export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, connections, compact = false, canvas = false, tipOccupancy, contents, activity, activityLabels }: BioXpWorkflowDeckProps) {
     const id = useId();
     const svg = useRef<SVGSVGElement>(null);
     const anchor = useRef<{ station: string; well: string } | null>(null);
@@ -206,7 +207,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                             onClick={e => activate(e, () => chooseWell(resource, well, e))} onKeyDown={e => keyboardWell(e, resource, well)}
                             onPointerDown={e => wellPointerDown(e, resource, well)} onPointerEnter={() => wellPointerEnter(resource, well)}
                             onFocus={() => setHover(`${resource.label} · ${well.well}`)} onMouseEnter={() => setHover(`${resource.label} · ${well.well}`)}>
-                            <title>{resource.label} · {well.well}{contents?.[resource.id]?.[well.well] ? ` · ${contents[resource.id][well.well]}` : ''}{live?.wellDisabledReason ? ` · ${live.wellDisabledReason}` : ''}</title>
+                            <title>{resource.label} · {well.well}{contents?.[resource.id]?.[well.well] ? ` · ${contents[resource.id][well.well]}` : ''}{activityLabels?.[resource.id]?.[well.well] ? ` · ${activityLabels[resource.id][well.well]}` : ''}{live?.wellDisabledReason ? ` · ${live.wellDisabledReason}` : ''}</title>
                             <circle className="bwd-ring" cx={well.x} cy={well.y} r="5.4" />
                             <circle className="bwd-core" cx={well.x} cy={well.y} r="3.8" />
                             {resource.kind === 'rack' && (() => {
