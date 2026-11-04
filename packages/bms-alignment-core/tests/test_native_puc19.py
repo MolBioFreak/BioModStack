@@ -10,14 +10,11 @@ from pathlib import Path
 
 import pytest
 from bms_alignment import AlignmentRequest, run_engine
+from bms_alignment.models import MUSCLE_IDENTITY_HMM
 from bms_alignment.similarity import alignment_similarity
 
 FIXTURE = Path(__file__).with_name('fixtures') / 'puc19.fa'
 SIF = os.environ.get('BMS_MSA_SIF')
-
-
-class KnownNativeQualificationFailure(AssertionError):
-    """Only the reproduced pinned-native defect may count as an expected failure."""
 
 
 def read_fasta(path):
@@ -52,12 +49,12 @@ def compare_rows(left, right):
 
 
 @pytest.mark.skipif(not SIF, reason='BMS_MSA_SIF not configured')
-@pytest.mark.parametrize('engine,mode', [
-    ('mafft', None), ('twilight', None),
-    pytest.param('muscle', 'align', marks=pytest.mark.xfail(strict=True, raises=KnownNativeQualificationFailure, reason='Pinned MUSCLE 5.3 misplaces the pUC19 deletion: 2684/2685 matches, expected 2685/2685; raw CLI reproduces')),
-    pytest.param('muscle', 'super5', marks=pytest.mark.xfail(strict=True, raises=KnownNativeQualificationFailure, reason='Pinned MUSCLE 5.3 Super5 misplaces the pUC19 deletion: 2684/2685 matches, expected 2685/2685; not accuracy-qualified')),
+@pytest.mark.parametrize('engine,mode,molecule', [
+    ('mafft', None, 'dna'), ('twilight', None, 'dna'),
+    ('muscle', 'align', 'dna'), ('muscle', 'super5', 'dna'),
+    ('muscle', 'align', 'rna'), ('muscle', 'super5', 'rna'),
 ])
-def test_native_puc19_known_edits(tmp_path, engine, mode):
+def test_native_puc19_known_edits(tmp_path, engine, mode, molecule):
     seq = sequence()
     changed = dict(zip('ACGT', 'CGTA'))[seq[1111]]
     inputs = {
@@ -70,9 +67,13 @@ def test_native_puc19_known_edits(tmp_path, engine, mode):
     settings = {'engine': engine}
     if mode is not None:
         settings['mode'] = mode
+    if engine == 'muscle':
+        settings['hmmin'] = MUSCLE_IDENTITY_HMM
+    if molecule == 'rna':
+        inputs = {name: bases.replace('T', 'U') for name, bases in inputs.items()}
     if engine == 'twilight':
         settings['guide_source'] = 'mafft'
-    request = AlignmentRequest(roster={'molecule': 'dna', 'rows': [
+    request = AlignmentRequest(roster={'molecule': molecule, 'rows': [
         {'row_id': name, 'header': name, 'sequence': bases} for name, bases in inputs.items()
     ]}, settings=settings)
     prefix = ['apptainer', 'exec', '--cleanenv', SIF]
@@ -80,6 +81,9 @@ def test_native_puc19_known_edits(tmp_path, engine, mode):
     attempt = Path(result['attempt_dir'])
     assert result['returncode'] == 0, (attempt / 'engine.log').read_text()
     assert result['output_integrity']['status'] == 'valid', result['output_integrity']
+    assert result['requested']['settings'] == result['effective_settings'] == request.settings.model_dump()
+    if engine == 'muscle':
+        assert (attempt / 'hmmin.txt').read_text() == MUSCLE_IDENTITY_HMM
     raw = read_fasta(attempt / 'alignment.fasta')
     mapping = json.loads((attempt / 'row-map.json').read_text()) if engine != 'mafft' else {key: key for key in inputs}
     output = {mapping[key]: value for key, value in raw.items()}
@@ -91,8 +95,6 @@ def test_native_puc19_known_edits(tmp_path, engine, mode):
                 'insertion': (2686, 2686), 'deletion': (2685, 2685)}
     for name, counts in expected.items():
         actual = compare_rows(output['reference'], output[name])
-        if engine == 'muscle' and name == 'deletion' and actual == (2685, 2684):
-            raise KnownNativeQualificationFailure(f'{mode}: deletion has {actual}, expected {counts}')
         assert actual == counts
     # The reported percentages and directional coverage must agree with the
     # independent oracle, including the insertion/deletion denominators.
@@ -104,6 +106,24 @@ def test_native_puc19_known_edits(tmp_path, engine, mode):
         assert pair['identity_percent'] == pytest.approx(100 * matches / count)
         assert pair['left_aligned_percent'] == pytest.approx(100 * count / len(inputs[left]))
         assert pair['right_aligned_percent'] == pytest.approx(100 * count / len(inputs[right]))
+
+
+@pytest.mark.skipif(not SIF, reason='BMS_MSA_SIF not configured')
+@pytest.mark.parametrize('mode', ['align', 'super5'])
+@pytest.mark.parametrize('position,size', [(0, 1), (1, 1), (99, 1), (100, 1), (100, 3), (100, 9), (198, 1), (199, 1)])
+def test_muscle_identity_terminal_and_repeat_indels(tmp_path, mode, position, size):
+    seq = sequence()[1800:2000]
+    inputs = {'reference': seq, 'deletion': seq[:position] + seq[position + size:]}
+    request = AlignmentRequest(roster={'molecule': 'dna', 'rows': [
+        {'row_id': name, 'header': name, 'sequence': bases} for name, bases in inputs.items()
+    ]}, settings={'engine': 'muscle', 'mode': mode, 'hmmin': MUSCLE_IDENTITY_HMM})
+    result = run_engine(request, tmp_path, ['apptainer', 'exec', '--cleanenv', SIF, 'muscle'])
+    assert result['returncode'] == 0
+    assert result['output_integrity']['status'] == 'valid'
+    output = read_fasta(Path(result['attempt_dir']) / 'alignment.fasta')
+    assert output['bmsrow00000001'].replace('-', '') == seq
+    assert output['bmsrow00000002'].replace('-', '') == inputs['deletion']
+    assert compare_rows(output['bmsrow00000001'], output['bmsrow00000002']) == (len(seq) - size,) * 2
 
 
 @pytest.mark.skipif(not SIF, reason='BMS_MSA_SIF not configured')

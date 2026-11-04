@@ -1076,9 +1076,10 @@
             }
           ],
           "default": null,
-          "description": "MUSCLE HMM parameter file.",
+          "description": "MUSCLE HMM parameters. The DNA/RNA sequence-identity preset uses 99% match emission mass for near-identical sequences; null keeps MUSCLE defaults. Custom files are used exactly as supplied.",
           "format": "muscle-hmm",
-          "title": "Hmmin"
+          "title": "Hmmin",
+          "x-nucleotide-identity-hmm": "HMM\tnt\nT.START_M\t0.6\nT.START_IS\t0.02\nT.START_IL\t0.18\nT.M_M\t0.96\nT.M_IS\t0.012\nT.M_IL\t0.008\nT.IS_IS\t0.35\nT.IS_M\t0.65\nT.IL_IL\t0.90\nT.IL_M\t0.10\nE.AA\t0.2475\nE.CA\t0.00083333333333333339\nE.CC\t0.2475\nE.GA\t0.00083333333333333339\nE.GC\t0.00083333333333333339\nE.GG\t0.2475\nE.TA\t0.00083333333333333339\nE.TC\t0.00083333333333333339\nE.TG\t0.00083333333333333339\nE.TT\t0.2475\n"
         },
         "hmmout": {
           "default": false,

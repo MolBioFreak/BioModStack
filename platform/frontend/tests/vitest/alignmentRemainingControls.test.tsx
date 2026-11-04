@@ -34,8 +34,9 @@ it('renders every new scalar/file control and submits exact aliases, file text, 
     expect(mocks.submit.mock.lastCall![0].params.settings).toMatchObject({pair_method:'oldgenafpair',tree_method:'large',refinement_policy:'simplehillclimbing',gop:0,anchors,focus:false,focus_rows:'row_00000001\nrow_00000002'});
     await change(div.querySelector('[aria-label="Engine"]')!,'muscle');
     for(const field of settingsInventory(schema as Parameters<typeof settingsInventory>[0],'muscle').fields) expect(label(field.label)).toBeTruthy();
-    // Align is blocked by the native molecule-type capability guard; explicitly
-    // select the supported mode before checking settings submission.
+    // Protein runs keep the native model; no nucleotide preset is substituted.
+    expect((div.querySelector('[aria-label="hmmin contents"]') as HTMLTextAreaElement).value).toBe('');
+    expect(div.querySelector('[aria-label="Nucleotide scoring"]')).toBeNull();
     await change(setting('mode').querySelector('select')!,'super5');
     await change(setting('randseed').querySelector('input')!,'0');
     await change(div.querySelector('[aria-label="hmmin contents"]')!,'temporary exact text\n');

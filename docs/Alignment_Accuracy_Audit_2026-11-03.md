@@ -2,6 +2,26 @@
 
 ## Qualification status
 
+**4 November follow-up:** the pUC19 deletion control now passes in MUSCLE Align
+and Super5 with the sequence-identity HMM preset, including RNA notation. The
+native binary is unchanged. The stock nucleotide model assigns only about 47.6%
+of normalized pair-emission probability to matching bases; maximum expected
+accuracy can therefore favor a misplaced gap next to a repeat. An independent
+double-precision forward/backward calculation reproduces this choice on a
+40-base pUC19 fragment, so this was a scoring-model mismatch, not a BNS coordinate
+or identity-counting error.
+
+New DNA/RNA editor drafts use an explicit 99%-match emission model through the
+existing `hmmin` field, retaining native transition probabilities. Its complete
+text is published in the settings schema as `x-nucleotide-identity-hmm`, submitted
+by the browser, and retained in requests and execution receipts. The HMM control
+also offers native defaults and custom files. Existing drafts, retries, protein
+settings and native results are preserved; no result polishing or blocking is
+added. This preset is for near-identical sequence comparisons, not a claim of
+universal homology accuracy. Native defaults still reproduce the original issue.
+
+The dated findings below describe the original 3 November audit.
+
 The application-level defects listed below are corrected. **Universal scientific
 accuracy is not certified. MUSCLE 5.3 fails a known-edit pUC19 alignment control.**
 A zero process exit code, preserved input bases, or 100% identity over a partial

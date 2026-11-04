@@ -35,6 +35,24 @@ def test_bundled_editor_schema_matches_request_owner():
     assert json.loads(bundled.read_text()) == AlignmentRequest.model_json_schema()
 
 
+def test_muscle_identity_preset_is_discoverable_and_never_overrides_requests():
+    property = AlignmentRequest.model_json_schema()['$defs']['MuscleSettings']['properties']['hmmin']
+    preset = property['x-nucleotide-identity-hmm']
+    pairs = {name: float(value) for name, value in (line.split('\t') for line in preset.splitlines()[1:])}
+    emissions = {name[2:]: value for name, value in pairs.items() if name.startswith('E.')}
+    assert sum(value for pair, value in emissions.items() if pair[0] == pair[1]) == pytest.approx(.99)
+    assert 2 * sum(value for pair, value in emissions.items() if pair[0] != pair[1]) == pytest.approx(.01)
+    assert pairs['T.M_M'] + 2 * (pairs['T.M_IS'] + pairs['T.M_IL']) == pytest.approx(1)
+    for hmm in (None, preset, 'operator-supplied HMM\n'):
+        req = request('muscle', 'dna', hmmin=hmm)
+        restored = AlignmentRequest.model_validate_json(req.model_dump_json())
+        assert restored.settings.hmmin == hmm
+        args = compile_engine(restored, 'muscle', 'input.fa', 'output.fa')
+        assert ('-hmmin' in args) == (hmm is not None)
+    assert request('muscle', 'dna').settings.hmmin is None
+    assert request('muscle', 'protein').settings.hmmin is None
+
+
 @pytest.mark.parametrize('strategy', ['fft_ns_2', 'linsi', 'ginsi', 'einsi', 'auto'])
 def test_mafft_explicit_overrides(strategy):
     args = compile_mafft(request('mafft', strategy=strategy, retree=1, maxiterate=3, reorder=True, quiet=True), 'mafft', 'in')

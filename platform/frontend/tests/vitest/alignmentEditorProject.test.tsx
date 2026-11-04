@@ -8,6 +8,19 @@ vi.mock('../../src/components/project-manager/ProjectWorkflowSetup',()=>({usePro
 vi.mock('../../src/lib/api',()=>({submitJob:mocked.submit,api:{post:mocked.post,get:mocked.get}}));
 vi.mock('../../src/lib/projectManager',async importOriginal=>({...await importOriginal<object>(),getLaunchContext:mocked.context,listDomainDatasets:mocked.datasets,listDomainDatasetRevisions:mocked.revisions}));
 mocked.datasets.mockResolvedValue({items:[],next_cursor:null});
+it.each([undefined, null, 'custom HMM\n'])('preserves a saved nucleotide HMM choice (%s), including legacy omission', async hmm => {
+ const original=mocked.setup; mocked.active=true; mocked.save.mockResolvedValue({});
+ mocked.setup={...original,draft:{molecule:'dna',engine:'muscle',drafts:{muscle:{engine:'muscle',...(hmm === undefined ? {} : {hmmin:hmm})}}}} as any;
+ const div=document.createElement('div'), root=createRoot(div);
+ try {
+  await act(async()=>root.render(<MemoryRouter><AlignmentEditor model="family_msa_nucleic"/></MemoryRouter>));
+  expect((div.querySelector('[aria-label="hmmin contents"]') as HTMLTextAreaElement).value).toBe(hmm ?? '');
+  await act(async()=>[...div.querySelectorAll('button')].find(x=>x.textContent==='Save Project draft')!.click());
+  const saved=mocked.save.mock.lastCall![0];
+  expect(saved.native_job_request.params.settings.hmmin).toBe(hmm ?? null);
+  expect(saved.editor_state.drafts.muscle.hmmin).toBe(hmm ?? null);
+ } finally { await act(async()=>root.unmount()); mocked.setup=original; vi.clearAllMocks(); }
+});
 describe('Project alignment editor',()=>{
  it('reopens flattened state and submits the pinned Project scheduler',async()=>{
   const div=document.createElement('div'), root=createRoot(div);
