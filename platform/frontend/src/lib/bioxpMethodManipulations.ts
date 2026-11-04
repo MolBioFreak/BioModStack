@@ -141,11 +141,13 @@ export function methodManipulations(result: MethodCompile | null | undefined, al
             const settings = action.kind === 'pipette_tip' ? object(p.metadata) : p;
             const requested = channels(settings.channels) ?? allChannels;
             const selected: number[] | null = loaded === null ? null : requested.filter(c => (loaded as number[]).includes(c));
-            emit(`eject tip in place (requested ${requested.map(c => `P${c + 1}`).join(', ')})`, selected);
-            // Native TIP_EJECT has no gantry move: tips fall wherever the head already is.
+            // The compiler moves to the waste bin before every eject; flag anything else.
             const at = position as { location: number } | null;
+            const names = requested.map(c => `P${c + 1}`).join(', ');
+            if (at?.location === 6) { if (selected?.length !== 0) events.push({ actionId, path, operation: `eject tips into the waste bin (${names})`, wells: [], notes: [] }); }
+            else emit(`eject tips (${names})`, selected);
             const where = at && at.location !== 6 ? deckResources.find(r => r.locationId === at.location)?.label ?? deckRegions.find(r => r.locationId === at.location)?.label : undefined;
-            if (where) events.push({ actionId, path, operation: 'ejection position', wells: [], hazard: `Tips are ejected where the head already is, over the ${where}, not over the waste bin.`, notes: [`Tip eject has no move to the waste bin; the head is over the ${where}.`] });
+            if (where) events.push({ actionId, path, operation: 'ejection position', wells: [], hazard: `Tips are ejected over the ${where}, not the waste bin.`, notes: [`Tip eject is not preceded by a move to the waste bin; the head is over the ${where}.`] });
             if (loaded !== null && settings.check_missing_tip !== false && requested.some(c => !(loaded as number[]).includes(c))) {
                 const held = (loaded as number[]).map(c => `P${c + 1}`).join(', ') || 'no channel';
                 const asked = requested.map(c => `P${c + 1}`).join(', ');

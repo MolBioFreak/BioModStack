@@ -418,6 +418,20 @@ def emit_rows(rows):
             action = deepcopy(_NATIVE['document_template']['stages'][0]['actions'][0])
             action.update(kind=direct[0], params=direct[1], metadata={}, required_capability=row.get('required_capability'))
             generated = [action]
+            if direct[0] == 'tip_eject':
+                # OEM script ET: movExecution to WASTE_BIN (locationID 6, well 0, positionflag 0), then ejt.
+                # Tips are never ejected wherever the head happens to be.
+                waste_row = {'step_id': row['step_id'], 'intent': {'operation': 'move', 'location_id': 6, 'well': 'A1', 'position_flag': 0}}
+                if 'required_capability' in row:
+                    waste_row['required_capability'] = row['required_capability']
+                to_waste = preview(WorkflowPreviewRequest.model_validate({'draft': {
+                    'schema': 'bms.bioxp-workflow-draft.v1', 'steps': [waste_row], 'editor_state': {}}, 'protocol_id': 'method-content'}))
+                if to_waste.document is None:
+                    issues.extend({'step_id': row['step_id'], 'message': i.message} for i in to_waste.issues)
+                    continue
+                for visible_action, move in zip(to_waste.actions, to_waste.document['stages'][0]['actions']):
+                    move['metadata']['pair_index'] = visible_action.pair_index
+                generated = to_waste.document['stages'][0]['actions'] + generated
         elif intent.get('operation') in ('checkpoint', 'note'):
             if (set(intent) - ({'operation', 'message', 'measurement_form'} if intent['operation'] == 'checkpoint' else {'operation', 'message'}) or not isinstance(intent.get('message'), str)):
                 issues.append({'step_id': row['step_id'], 'message': 'checkpoint/note requires exactly one string message'})
@@ -457,6 +471,8 @@ def native_cost(intent):
             fail(f'{field} must be an object')
     if operation == 'mix':
         return 2 * int(number(intent.get('cycles', 1)))
+    if operation == 'tip_eject':
+        return 2  # move to the waste bin, then eject
     if operation == 'transfer':
         pairs = len(intent.get('source', {}).get('wells', []))
         return pairs * (8 + native_cost({'operation': 'liquid_recipe', 'recipe': intent['recipe']}) if 'recipe' in intent else 8)
@@ -550,9 +566,12 @@ def compile_method(request):
                     else:
                         intent.pop('release_lift_mm', None)
                 elif occurrence['action'] in ('tip_eject', 'eject_tip'):
-                    if set(inputs) != {'channels'} or inputs.get('channels') != [0, 1, 2, 3] or any(type(c) is not int for c in inputs['channels']):
-                        fail('Source eject requires exactly explicit channels [0,1,2,3]; other settings are not discarded', occurrence['path'])
-                    intent = {'operation': 'tip_eject'}
+                    channels = inputs.get('channels')
+                    if (set(inputs) != {'channels'} or not isinstance(channels, list) or not channels or len(set(channels)) != len(channels)
+                            or any(type(c) is not int or c not in range(4) for c in channels)):
+                        fail('Tip eject requires explicit distinct channels 0..3; other settings are not discarded', occurrence['path'])
+                    # All four keeps the existing all-channel eject; a subset ejects only the tips kept by a partial pickup.
+                    intent = {'operation': 'tip_eject'} if sorted(channels) == [0, 1, 2, 3] else {'operation': 'tip_eject', 'channels': sorted(channels)}
                 if occurrence['action'] not in {'native_intent', 'calibration'} and inputs.get('operation', occurrence['action']) != occurrence['action']:
                     fail('Action/operation mismatch', occurrence['path'])
                 # Bound compound expansion before the existing emitter allocates its children.

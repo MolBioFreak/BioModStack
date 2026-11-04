@@ -55,7 +55,7 @@ def enum(*values):
 # remain BMS adapters for the canonical protocol owner.
 CONTRACTS = {
     **deepcopy(EXPORT['method_contract']['action_params']),
-    'tip_eject': obj({}),
+    'tip_eject': obj({'channels': {'type': 'array', 'items': {'enum': [0, 1, 2, 3]}, 'minItems': 1, 'uniqueItems': True}}, []),
     'inspect': obj({}),
     'plate_catch': obj({'plate': I, 'run_in_parallel': B}, ['plate']),
     'plate_release': obj({'destination': I, 'press_plate': B, 'run_in_parallel': B}, ['destination']),

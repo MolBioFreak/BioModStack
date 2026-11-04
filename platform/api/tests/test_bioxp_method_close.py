@@ -40,7 +40,8 @@ def test_positioned_class_transfer_segments_geometry_policy_and_raw():
     result = compile_method(f)
     emitted = actions(result)
     assert f == original
-    assert [a['kind'] for a in emitted] == ['pipette_manual_physical', 'pipette_manual_physical', 'tip_eject']
+    assert [a['kind'] for a in emitted] == ['pipette_manual_physical', 'pipette_manual_physical', 'pipette_position', 'tip_eject']
+    assert emitted[2]['params']['location_id'] == 6  # waste bin before the eject
     r = emitted[1]['params']['recipe']
     assert emitted[1]['params']['operation'] == 'cavro_liquid_recipe'
     assert r['commanded_aspiration_ul'] == 22.75
@@ -57,7 +58,9 @@ def test_positioned_class_transfer_segments_geometry_policy_and_raw():
     phases = emitted[1]['metadata']['bms_method']['planned_recipe_phase_effects']
     assert len([p for p in phases if p['recipe_phase'] == 'dispense_segments']) == 8
     assert all(p['volume_ul'] is None for p in phases if p['recipe_phase'] == 'dispense_segments')
-    assert result['simulation']['state']['head_reference']['operation'] == 'lift'
+    # The last head move is to the waste bin for the eject.
+    assert result['simulation']['state']['head_reference']['operation'] == 'move'
+    assert result['simulation']['state']['head_reference']['location_id'] == 6
 
 
 def test_class_transfer_pairs_keep_one_tip_policy_and_all_emission_ids():
@@ -67,7 +70,7 @@ def test_class_transfer_pairs_keep_one_tip_policy_and_all_emission_ids():
     f['method']['tip_policy'] = {'mode':'per_transfer', 'tip_pickup':{'tray':1,'well':'A1','overpress':False,'lift_z':True,'channels':[0,1,2,3]}, 'tip_eject':{'channels':[0,1,2,3]}}
     result = compile_method(f)
     emitted = actions(result)
-    assert len(emitted) == 4
+    assert len(emitted) == 5 and emitted[3]['params']['location_id'] == 6  # pickup, 2 pairs, waste move, eject
     assert [a['metadata'].get('pair_index') for a in emitted[1:3]] == [0,1]
     assert result['resolved']['liquids'][0]['fields']['dispense_segments']['emitted']['native_action_ids'] == [a['action_id'] for a in emitted[1:3]]
 
@@ -137,6 +140,20 @@ def test_all_eight_bound_documents_exported_separately():
     assert len(documents) == 8 and all(documents)
     if os.environ.get('BIOXP_BOUND_EXPORT'):
         Path(os.environ['BIOXP_BOUND_EXPORT']).write_text(json.dumps(documents))
+
+
+def test_every_tip_eject_moves_to_waste_first_and_ejects_only_named_channels():
+    f, _ = class_transfer()
+    f['method']['tip_policy'] = {'mode': 'per_transfer', 'tip_pickup': {'tray': 1, 'well': 'A1', 'overpress': False, 'lift_z': True, 'channels': [0]}, 'tip_eject': {'channels': [0]}}
+    emitted = actions(compile_method(f))
+    move, eject = emitted[-2:]
+    # OEM script ET: move to WASTE_BIN (locationID 6), then eject.
+    assert move['kind'] == 'pipette_position' and move['params'] == {'operation': 'move', 'location_id': 6, 'well': 'A1', 'position_flag': 0}
+    assert eject['kind'] == 'tip_eject' and eject['params'] == {'channels': [0]}
+    f['method']['tip_policy']['tip_eject']['channels'] = [0, 1, 2, 3]
+    assert actions(compile_method(f))[-1]['params'] == {}
+    f['method']['tip_policy']['tip_eject']['channels'] = [0, 0]
+    assert compile_method(f)['document'] is None
 
 
 def test_partial_tip_pickup_sends_keep_channels_and_preserves_authored_lift():

@@ -186,9 +186,9 @@ def method_catalog():
             'status': {'authorable': True, 'emitted': True, 'registered': True, 'connected_tested': False, 'physically_qualified': False},
             'effects': 'Explicit repeated-single transfers are not true multi aliquots; true multi uses complete native recipe'})
     actions.append({'action': 'tip_eject', 'inputs': {'type': 'object', 'required': ['channels'],
-        'properties': {'channels': {'const': [0, 1, 2, 3]}}, 'additionalProperties': False},
+        'properties': {'channels': {'type': 'array', 'items': {'enum': [0, 1, 2, 3]}, 'minItems': 1, 'uniqueItems': True}}, 'additionalProperties': False},
         'status': {'authorable': True, 'emitted': True, 'registered': True},
-        'effects': 'Existing all-channel source ejection; selected-channel diagnostic remains separate'})
+        'effects': 'Ejects the listed channels where the head is; precede it with a move to the waste bin (location 6), as the OEM ET command does. [0,1,2,3] is the existing all-channel eject'})
     pickup = deepcopy(schema['$defs']['ManualLoadTip'])
     pickup['properties'].pop('operation', None)
     pickup['required'] = [k for k in pickup.get('required', []) if k != 'operation']

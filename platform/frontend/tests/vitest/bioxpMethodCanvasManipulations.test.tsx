@@ -52,7 +52,7 @@ it('shows loaded-tip lowering separately from selected strokes and keeps ejectio
     const lowered = projected.events.find(e => e.operation === 'lower')!;
     expect(lowered.wells.map(w => [w.station, w.well])).toEqual([['LOC_RC', 'C1'], ['LOC_RC', 'G1']]);
     expect(projected.events.find(e => e.operation === 'aspirate')!.wells.map(w => w.well)).toEqual(['C1']);
-    expect(projected.events.find(e => e.operation.startsWith('eject tip in place'))!.wells.map(w => w.well)).toEqual(['C1', 'G1']);
+    expect(projected.events.find(e => e.operation.startsWith('eject tips'))!.wells.map(w => w.well)).toEqual(['C1', 'G1']);
 });
 
 it('includes conditioning, every aliquot, excess, final empty and standalone in-place mixing', () => {
@@ -121,11 +121,11 @@ it.runIf(!!process.env.BIOXP_WELL_COMPILED)('receives the actual saved workflow 
     expect(pools).toHaveLength(24);
     expect(new Set(pools.map(l => l.channel))).toEqual(new Set([0]));
     expect(new Set(pools.map(l => l.destination.well))).toEqual(new Set(['A1', 'B1', 'C1']));
-    const selection = projected.events.filter(e => e.operation === 'ejection selection');
-    expect(selection).toHaveLength(3);
-    expect(selection.every(e => e.hazard?.includes('only P1 holds a tip'))).toBe(true);
-    // Every TIP_EJECT is in place; none of the saved ejects is over the waste bin.
-    const ejects = projected.events.filter(e => e.operation.startsWith('eject tip in place'));
-    expect(projected.events.filter(e => e.operation === 'ejection position')).toHaveLength(ejects.length);
-    expect(projected.events.filter(e => !e.hazard).flatMap(e => e.notes)).toEqual([]);
+    // Every eject follows a move to the waste bin and names only the channels holding tips.
+    const ejects = projected.events.filter(e => e.operation.startsWith('eject tips'));
+    expect(ejects).toHaveLength(15);
+    expect(projected.events.filter(e => e.operation === 'ejection position' || e.operation === 'ejection selection')).toEqual([]);
+    const actions = compiled.document.stages.flatMap((s: any) => s.actions);
+    actions.forEach((a: any, i: number) => { if (a.kind === 'tip_eject') expect(actions[i - 1].params).toMatchObject({ operation: 'move', location_id: 6 }); });
+    expect(projected.events.flatMap(e => e.notes)).toEqual([]);
 });
