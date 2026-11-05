@@ -82,6 +82,10 @@ export function methodManipulations(result: MethodCompile | null | undefined, al
                 const location = Number(p.location_id);
                 position = p.location_id != null && Number.isInteger(location) ? { location, well: p.well, alignment: motionReference } : null;
                 // Travel itself is not a liquid stroke. Lower/lift use the retained XY, not their Z-calibration location.
+            } else if (op === 'move_sequence') {
+                // Fast lane: the head finishes at the last target, at travel height.
+                const last = object(Array.isArray(p.targets) ? p.targets[p.targets.length - 1] : undefined), location = Number(last.location_id);
+                position = last.location_id != null && Number.isInteger(location) ? { location, well: last.well, alignment: motionReference } : null;
             } else if (op === 'lower' || op === 'lift') emit(op, loaded);
             else if (op === 'park') position = null;
             else events.push({ actionId, path, operation: op, wells: [], notes: [`Position operation ${op} has no well projection.`] });

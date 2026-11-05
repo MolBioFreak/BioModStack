@@ -207,8 +207,11 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                     labware.setdefault(identity, {})["station"] = deepcopy(inputs.get("destination_station", inputs.get('target_location')))
                     changed_other["labware"] = {identity: deepcopy(labware[identity])}
             if action in {"move", "park", "pipette_position"}:
-                state["head_reference"] = deepcopy(inputs)
-                changed_other["head_reference"] = deepcopy(inputs)
+                reference = inputs
+                if inputs.get("operation") == "move_sequence" and isinstance(inputs.get("targets"), list) and inputs["targets"]:
+                    reference = {"operation": "move_sequence", **inputs["targets"][-1]}  # the head finishes at the last target
+                state["head_reference"] = deepcopy(reference)
+                changed_other["head_reference"] = deepcopy(reference)
             if '_native_head_reference' in occurrence and occurrence.get('status') not in {'failed', 'partial', 'unknown'}:
                 state['head_reference'] = deepcopy(occurrence['_native_head_reference'])
                 changed_other['head_reference'] = deepcopy(state['head_reference'])

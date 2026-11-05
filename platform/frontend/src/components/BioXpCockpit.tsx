@@ -29,6 +29,8 @@ import {
     type BioXpOperatorActionV2Request,
     type BioXpDeckDestinationV1,
     type BioXpDeckSubmission,
+    type BioXpXYTarget,
+    BIOXP_XY_SEQUENCE_MAX_TARGETS,
 
     type BioXpOperatorDashboardXAxis,
 
@@ -84,9 +86,9 @@ function DeckSubmissionRow({ item, generation, active, onSelect, onTerminal }: {
         : item.state === 'not_sent' ? 'not sent / connection changed'
         : item.state === 'rejected' ? 'not accepted' : `robot ${receipt?.status ?? 'accepted'}`;
     const captured = item.request;
-    const destinationLabel = captured.action_id === 'oem.deck.move_to_well'
-        ? `${deckStations.find(station => station.locationId === captured.inputs.location_id)?.label ?? String(captured.inputs.location_id)} · ${String(captured.inputs.well)}`
-        : `${captured.inputs.target}${captured.inputs.camera_offset === true ? ' + camera offset' : ''}`;
+    const destinationLabel = captured.action_id === 'oem.xy.move_sequence' ? `Fast lane: ${captured.inputs.targets.map(deckLaneTargetLabel).join(' → ')}`
+        : captured.action_id === 'oem.xy.retarget' ? `Retarget: ${deckLaneTargetLabel(captured.inputs.target)}`
+        : deckLaneTargetLabel(captured.inputs);
     return <p data-request-key={item.request.idempotency_key}>
         {destinationLabel} · {label}
         {' · '}{item.request.idempotency_key}
@@ -184,7 +186,14 @@ const CANONICAL_DECK_ACTION_IDS = new Set([
     'oem.deck.move_to_well',
     'oem.deck._mov_execution',
     'oem.deck._finite_operation',
+    'oem.xy.move_sequence',
+    'oem.xy.retarget',
 ]);
+
+type DeckMoveMode = 'full' | 'fast' | 'retarget';
+const deckLaneTargetLabel = (target: BioXpXYTarget) => 'target' in target ? `${target.target}${target.camera_offset === true ? ' + camera offset' : ''}`
+    : 'location_id' in target ? `${deckStations.find(station => station.locationId === target.location_id)?.label ?? String(target.location_id)} · ${String(target.well)}`
+        : `X ${target.x} · Y ${target.y}`;
 
 
 const integerMinimum = (input: BioXpOperatorInputSpec | undefined): number | undefined => {
@@ -388,6 +397,9 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const currentLifecycleActionId = lifecycleGenerationCurrent ? lifecycleActionId : null;
     const [deckTarget, setDeckTarget] = useState('');
     const [deckCameraOffset, setDeckCameraOffset] = useState(false);
+    const [deckMoveMode, setDeckMoveMode] = useState<DeckMoveMode>('full');
+    // Unsent local clicks only: Fast lane appends, Retarget keeps the newest.
+    const [deckLanePending, setDeckLanePending] = useState<{ generation: number; targets: BioXpXYTarget[] } | null>(null);
     const [deckSelectionCatalog, setDeckSelectionCatalog] = useState<{
         generation: number; options: BioXpDeckDestinationV1[];
     } | null>(null);
@@ -535,6 +547,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         setLifecycleDashboardBaselineAt(null);
         setYPendingActionId(null);
         setDeckCommandId(null);
+        setDeckLanePending(null);
         setYMutationGeneration(null);
         setZHomeMutationGeneration(null);
         setLifecycleMutationGeneration(null);
@@ -996,7 +1009,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         });
     };
     const submitDeckV2 = (request: BioXpOperatorActionV2Request) => {
-        if (!v2AuthorityCoherent || !['oem.deck.move_to_location', 'oem.deck.move_to_well'].includes(request.action_id)) return false;
+        if (!v2AuthorityCoherent || !['oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.xy.move_sequence', 'oem.xy.retarget'].includes(request.action_id)) return false;
         const captured = invokeDeckAction.submit(request);
         if (captured) setDeckMutationGeneration(generation);
         return captured;
@@ -1093,6 +1106,64 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             inputs: { location_id: locationId, well, position_flag: 1 },
         }, { station: station?.id ?? String(locationId), wells: [well] });
     };
+    // Fast lane and Retarget: clicks queue locally; one lane request is in flight at a time.
+    const laneActionId = deckMoveMode === 'fast' ? 'oem.xy.move_sequence' as const : 'oem.xy.retarget' as const;
+    const laneAction = v2NormalActionById(laneActionId);
+    type LaneSubmission = BioXpDeckSubmission & { request: Extract<BioXpDeckSubmission['request'], { action_id: 'oem.xy.move_sequence' | 'oem.xy.retarget' }> };
+    const laneSubmission = [...invokeDeckAction.submissions].reverse().find((item): item is LaneSubmission => item.request.expected_connection_generation === generation
+        && (item.request.action_id === 'oem.xy.move_sequence' || item.request.action_id === 'oem.xy.retarget'));
+    const laneInFlight = laneSubmission != null && (laneSubmission.state === 'submitting' || laneSubmission.state === 'uncertain'
+        || (laneSubmission.state === 'accepted' && laneSubmission.receipt?.terminal !== true));
+    const lanePending = deckLanePending?.generation === generation ? deckLanePending.targets : [];
+    const laneDisabledReason = (target?: string): string | null => {
+        if (!v2AuthorityCoherent) return 'Robot action catalog is unavailable.';
+        if (laneAction == null) return `Robot ${deckMoveMode === 'fast' ? 'fast lane' : 'retarget'} movement is unavailable.`;
+        if (laneAction.enabled !== true) return laneAction.disabled_reason ?? 'Robot action unavailable.';
+        if (target === undefined) return null;
+        const destination = deckDestinationFor(target);
+        if (!destination) return 'This destination is not in the robot catalog.';
+        return destination.enabled === true ? null : destination.disabled_reason ?? 'Selected robot destination is unavailable.';
+    };
+    const queueLaneTarget = (target: BioXpXYTarget, selection: BioXpDeckSelection) => {
+        setDeckLanePending(current => ({ generation, targets: deckMoveMode === 'retarget' ? [target]
+            : [...(current?.generation === generation ? current.targets : []), target] }));
+        setLiveDeckIntent({ generation, selection });
+    };
+    const clickDeckStation = (target: string) => {
+        if (deckMoveMode === 'full') return invokeNamedDeckMove(target, false);
+        const destination = deckDestinationFor(target);
+        if (laneDisabledReason(target) !== null || !destination) return;
+        const station = deckStations.find(item => item.id === destination.target || destination.aliases.includes(item.id));
+        queueLaneTarget({ target: destination.target, camera_offset: destination.camera_offset_option === true && deckCameraOffset },
+            { station: station?.id ?? destination.target, wells: [] });
+    };
+    const clickDeckWell = (locationId: number, well: string) => {
+        if (deckMoveMode === 'full') return invokeWellDeckMove(locationId, well);
+        if (laneDisabledReason() !== null) return;
+        queueLaneTarget({ location_id: locationId, well }, { station: deckStations.find(item => item.locationId === locationId)?.id ?? String(locationId), wells: [well] });
+    };
+    useEffect(() => {
+        if (lanePending.length === 0 || laneInFlight) return;
+        const envelope = v2NormalEnvelope();
+        if (!envelope) return;
+        const sent = deckMoveMode === 'retarget' ? lanePending.slice(-1) : lanePending.slice(0, BIOXP_XY_SEQUENCE_MAX_TARGETS);
+        const actionId = deckMoveMode === 'retarget' ? 'oem.xy.retarget' as const : 'oem.xy.move_sequence' as const;
+        const epochs = v2NormalActionById(actionId)?.expected_board_epoch_by_board ?? {};
+        if (!submitDeckV2(actionId === 'oem.xy.retarget'
+            ? { ...envelope, action_id: actionId, expected_board_epoch_by_board: epochs, inputs: { target: sent[0] } }
+            : { ...envelope, action_id: actionId, expected_board_epoch_by_board: epochs, inputs: { targets: sent } })) return;
+        // Clicks made meanwhile stay queued for the next request.
+        setDeckLanePending(current => current?.generation !== generation ? current
+            : { generation, targets: actionId === 'oem.xy.retarget' ? current.targets.filter(t => t !== sent[0]) : current.targets.slice(sent.length) });
+    }, [deckLanePending, laneInFlight, generation, deckMoveMode, v2AuthorityCoherent, currentDashboardV2?.ownership_generation, invokeDeckAction.isPending, invokeDeckAction.submissions]);
+    const laneStatus = deckMoveMode === 'full' ? null : [
+        laneSubmission && laneInFlight ? `Active: ${laneSubmission.request.action_id === 'oem.xy.move_sequence'
+            ? laneSubmission.request.inputs.targets.map(deckLaneTargetLabel).join(' → ') : deckLaneTargetLabel(laneSubmission.request.inputs.target)}` : null,
+        lanePending.length ? `Queued: ${lanePending.map(deckLaneTargetLabel).join(' → ')}` : null,
+    ].filter(Boolean).join(' · ') || 'None queued';
+    const chooseDeckMoveMode = (mode: DeckMoveMode) => { setDeckMoveMode(mode); setDeckLanePending(null); };
+    const mapStationDisabledReason = (target: string) => deckMoveMode === 'full' ? stationDisabledReason(target) : laneDisabledReason(target);
+    const mapWellDisabledReason = deckMoveMode === 'full' ? wellDisabledReason : laneDisabledReason();
     // Operator-confirmed preparation for a blocked live deck move (popup; nothing runs before Proceed).
     // Z is in the axes list; X and Y report through their own axis rows.
     const referencedState = (value: unknown) => typeof value === 'string' && ['referenced', 'homed'].includes(value);
@@ -1108,10 +1179,10 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         if ('station' in intent) {
             const destination = deckDestinationFor(intent.station);
             const label = deckStations.find(s => s.id === intent.station)?.label ?? destination?.label ?? intent.station;
-            movePreparation.request({ label, run: () => invokeNamedDeckMove(intent.station, false), ready: () => stationDisabledReason(intent.station) });
+            movePreparation.request({ label, run: () => clickDeckStation(intent.station), ready: () => mapStationDisabledReason(intent.station) });
         } else {
             const label = `${deckStations.find(s => s.locationId === intent.locationId)?.label ?? `location ${intent.locationId}`} · ${intent.well}`;
-            movePreparation.request({ label, run: () => invokeWellDeckMove(intent.locationId, intent.well), ready: () => wellDisabledReason });
+            movePreparation.request({ label, run: () => clickDeckWell(intent.locationId, intent.well), ready: () => mapWellDisabledReason });
         }
     };
     const invokeYMoveSteps = (steps: number) => {
@@ -1336,12 +1407,12 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         dashboard={catalogV2Query.data?.dashboard} stale={showingLastKnown || !linkHealthy}
                         selection={liveDeckIntent?.generation === generation ? liveDeckIntent.selection : { station: '', wells: [] }}
                         selectedDestination={selectedDeckDestination}
-                        onMoveToStation={target => invokeNamedDeckMove(target, false)} onMoveToWell={invokeWellDeckMove}
+                        onMoveToStation={clickDeckStation} onMoveToWell={clickDeckWell}
                         onBlockedMove={requestBlockedMove} preparation={<BioXpMovePreparation state={movePreparation} />}
                         stationDisabledReason={target => {
-                            const reason = stationDisabledReason(target);
+                            const reason = mapStationDisabledReason(target);
                             return reason === null ? null : bioXpDeckReadinessText(reason);
-                        }} wellDisabledReason={wellDisabledReason === null ? null : bioXpDeckReadinessText(wellDisabledReason)}
+                        }} wellDisabledReason={mapWellDisabledReason === null ? null : bioXpDeckReadinessText(mapWellDisabledReason)}
                         doorControls={<div data-testid="live-deck-door-controls" className="space-y-2">
                     <h3 className="font-semibold">Thermal door</h3>
                     <div className="flex gap-2">
@@ -1368,6 +1439,15 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                                 connectionGeneration={active ? generation : null} mutationEnabled={linkConnected && status?.mutation_access?.enabled === true} /></div>
                         </details>}
                         movementControls={<div className="space-y-3 text-sm">
+                    <div className="flex gap-2" role="group" aria-label="Movement mode">
+                        {([['full', 'Full report'], ['fast', 'Fast lane'], ['retarget', 'Retarget']] as const).map(([mode, label]) =>
+                            <button key={mode} type="button" aria-pressed={deckMoveMode === mode} onClick={() => chooseDeckMoveMode(mode)}
+                                className="flex-1 rounded border px-3 py-2 text-sm font-semibold"
+                                style={{ borderColor: deckMoveMode === mode ? 'var(--accent-primary, #0f766e)' : 'var(--border-primary)', background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+                                {label}
+                            </button>)}
+                    </div>
+                    {laneStatus !== null && <p role="status" data-testid="deck-lane-status" className="break-words text-xs">{laneStatus}</p>}
                     <label className="block">
                         Robot destination
                         <select value={selectedDeckDestination?.target ?? ''}
