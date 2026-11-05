@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AxiosResponse } from 'axios';
 import type { RemoteGpuTelemetry as Telemetry, RemoteTelemetrySample } from '../lib/api';
 import { TimeSeriesPlot } from './telemetryMetricPlot';
-import { mergeRemoteTelemetry, remoteMetricSeries } from './remoteTelemetryHistory';
+import { mergeRemoteTelemetry, remoteCadenceSeconds, remoteMetricSeries } from './remoteTelemetryHistory';
 import { PanelFrame, PLOT_TICK, METRIC_COLORS, legendName, formatDuration } from './telemetryCards';
 import { loadPersistedTelemetryPreferences, TELEMETRY_PREFERENCES_EVENT } from './infraTelemetryHistory';
 
@@ -128,7 +128,7 @@ export function RemoteGpuTelemetry({ dashboardSize = 'standard', executionTarget
             <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-card,var(--bg-secondary))] px-4 py-2 text-xs text-[var(--text-secondary)]">
                 <div>
                     <span className="text-sm font-semibold text-[var(--text-primary)]">Vast instance {telemetry.target.provider_instance_id}</span>
-                    <span className="ml-2" title="Read-only. The worker reports every 10 seconds and keeps one hour of history.">
+                    <span className="ml-2" title={`Read-only. The worker reports every ${remoteCadenceSeconds(telemetry.sample_interval_seconds)} seconds and keeps one hour of history.`}>
                         {telemetry.observed_at ? `updated ${new Date(telemetry.observed_at).toLocaleTimeString([], { hour12: false })}` : 'waiting for first sample'}
                         {collecting ? ` · ${formatDuration(now - firstSample!)} of history` : ''}
                     </span>

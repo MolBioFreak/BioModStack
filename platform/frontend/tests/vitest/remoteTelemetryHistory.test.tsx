@@ -24,7 +24,7 @@ vi.mock('../../src/components/InfraLiveTelemetry', () => ({
     InfraLiveTelemetry: ({ dashboardSize }: { dashboardSize: string }) =>
         <div data-testid="local-telemetry" data-size={dashboardSize} />,
 }));
-import { mergeRemoteTelemetry, remoteMetricSeries } from '../../src/components/remoteTelemetryHistory';
+import { mergeRemoteTelemetry, remoteCadenceSeconds, remoteMetricSeries } from '../../src/components/remoteTelemetryHistory';
 import type { RemoteGpuTelemetry, RemoteTelemetrySample } from '../../src/lib/api';
 
 const sample = (sequence: number, ago = 0): RemoteTelemetrySample => ({ sequence, observed_at: new Date(Date.now() - ago).toISOString(), available: true, gpus: [] });
@@ -135,5 +135,11 @@ describe('central remote history', () => {
         const outage = [sample(1, 60_000), sample(2, 10_000)];
         expect(remoteMetricSeries(outage, () => 1, 10).y).toEqual([1, null, 1]);
         expect(remoteMetricSeries(outage, () => 1, 30).y).toEqual([1, 1]);
+    });
+    it('states the reported sample cadence from the payload, defaulting to 10 s', () => {
+        expect(remoteCadenceSeconds(10)).toBe(10);
+        expect(remoteCadenceSeconds(30)).toBe(30);
+        expect(remoteCadenceSeconds(undefined)).toBe(10);
+        expect(remoteCadenceSeconds(0)).toBe(10);
     });
 });

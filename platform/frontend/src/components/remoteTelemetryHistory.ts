@@ -18,6 +18,10 @@ export const DEFAULT_REMOTE_SAMPLE_SECONDS = 10;
 export const remoteGapMs = (intervalSeconds?: number | null) =>
     2.5 * 1000 * (intervalSeconds != null && intervalSeconds > 0 ? intervalSeconds : DEFAULT_REMOTE_SAMPLE_SECONDS);
 
+// Header tooltip text: the cadence the payload reports, falling back to the default.
+export const remoteCadenceSeconds = (intervalSeconds?: number | null) =>
+    intervalSeconds != null && intervalSeconds > 0 ? intervalSeconds : DEFAULT_REMOTE_SAMPLE_SECONDS;
+
 export function remoteMetricSeries(history: RemoteTelemetrySample[], value: (sample: RemoteTelemetrySample) => number | null | undefined, intervalSeconds?: number | null) {
     const gap = remoteGapMs(intervalSeconds);
     const x: number[] = [], y: Array<number | null> = [];
