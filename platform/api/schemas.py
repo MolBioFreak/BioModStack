@@ -560,6 +560,7 @@ class JobSummaryResponse(BaseModel):
     awaiting_input: Optional[bool] = None
     awaiting_stage: Optional[str] = None
     frustrampnn_result_count: int = 0
+    native_result_count: int = 0
     frustrampnn_reopen_destination: Optional[dict] = None
     conformational_mapping_request_id: Optional[str] = None
 

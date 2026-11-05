@@ -5669,6 +5669,10 @@ async def list_jobs(
             str(parent_job_id): int(result_count)
             for parent_job_id, result_count in frustrampnn_counts.all()
         }
+    from services.rfd4_proteina_results import native_result_counts
+    native_count_by_job = await native_result_counts(session, [
+        job.id for job, count in rows
+        if not count and job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}])
     conformational_mapping_request_id_by_job: dict[str, str] = {}
     if listed_job_ids:
         cm_request_rows = await session.execute(
@@ -5759,6 +5763,7 @@ async def list_jobs(
             awaiting_input=job.awaiting_input,
             awaiting_stage=job.awaiting_stage,
             frustrampnn_result_count=frustrampnn_result_count,
+            native_result_count=native_count_by_job.get(job.id, 0),
             frustrampnn_reopen_destination=(
                 {"surface": "frustrampnn-workbench", "params": {"job_id": job.id}}
                 if frustrampnn_result_count else None
@@ -9313,6 +9318,10 @@ async def get_job(
     if (design_count or 0) == 0 and review_count is not None:
         design_count = review_count
     completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
+    native_result_count = 0
+    if (design_count or 0) == 0 and job.status in {JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value}:
+        from services.rfd4_proteina_results import native_result_counts
+        native_result_count = (await native_result_counts(session, [job.id])).get(job.id, 0)
     frustrampnn_result_count = int((await session.execute(
         select(func.count(FrustraMPNNResult.invocation_id)).where(FrustraMPNNResult.parent_job_id == job.id)
     )).scalar_one())
@@ -9374,6 +9383,7 @@ async def get_job(
         awaiting_payload=job.awaiting_payload,
         decision_history=job.decision_history,
         frustrampnn_result_count=frustrampnn_result_count,
+        native_result_count=native_result_count,
         frustrampnn_reopen_destination=(
             {"surface": "frustrampnn-workbench", "params": {"job_id": job.id}}
             if frustrampnn_result_count else None

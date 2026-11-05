@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import { JobDetailsPanel } from '../../src/components/JobDetailsPanel';
 import { api, type Job } from '../../src/lib/api';
+import { getJobOutputSummary, getBatchJobOutputSummary } from '../../src/lib/jobOutputSummary';
 
 let root: Root | undefined;
 let host: HTMLDivElement;
@@ -75,4 +76,14 @@ it('preserves explicit remote-result retrieval without starting a pull on expans
     expect(host.textContent).toContain('Results reported ready on worker');
     expect(host.querySelector('[data-remote-results-job="summary-job"] button')).not.toBeNull();
     expect(fetch).not.toHaveBeenCalled(); expect(api.get).not.toHaveBeenCalled();
+});
+
+it('counts published native results for native-only jobs without inventing designs', () => {
+    const native = { ...base, model_id: 'rfd4_proteina', design_count: 0, native_result_count: 1 } as Job;
+    expect(getJobOutputSummary(native)).toEqual({ count: 1, label: '1 native result' });
+    expect(getBatchJobOutputSummary([native, { ...native, native_result_count: 2 } as Job]).label).toBe('3 native results');
+    // Unpublished / requested-count / stored Design rows keep their existing display.
+    expect(getJobOutputSummary({ ...native, native_result_count: 0 } as Job).label).toBe('0 designs');
+    expect(getJobOutputSummary({ ...native, requested_design_count: 5 } as Job).label).toBe('5 designs');
+    expect(getJobOutputSummary({ ...native, design_count: 3 } as Job).label).toBe('3 designs');
 });

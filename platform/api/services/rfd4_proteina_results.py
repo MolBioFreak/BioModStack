@@ -337,3 +337,23 @@ async def read_publication_record(job, session, ref):
     if not page['records'] or page['records'][0]['candidate_ref'] != ref:
         raise ValueError('Native record identity differs from registered publication')
     return page['records'][0], page['publication']
+
+
+async def native_result_counts(session, job_ids):
+    """Registered native record counts per Job; absent publication stays absent (never zero-filled)."""
+    from sqlalchemy import func, select
+    from database import JobArtifact
+    ids = [str(i) for i in job_ids]
+    if not ids:
+        return {}
+    indexes = {f'{prefix}/{name}' for prefix, name, _ in
+               [*PUBLICATIONS.values(), ('collected/laproteina_evaluation', 'manifest.json', '')]}
+    rows = await session.execute(
+        select(JobArtifact.owner_job_id, JobArtifact.attempt,
+               func.json_array_length(JobArtifact.provenance, '$.native_generation_manifest.records'))
+        .where(JobArtifact.owner_job_id.in_(ids), JobArtifact.logical_path.in_(indexes)))
+    best = {}
+    for job_id, attempt, count in rows.all():
+        if count is not None and (job_id not in best or attempt >= best[job_id][0]):
+            best[job_id] = (attempt, int(count))
+    return {job_id: count for job_id, (_, count) in best.items()}

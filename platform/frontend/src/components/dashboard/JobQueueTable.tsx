@@ -108,7 +108,7 @@ export function JobQueueTable({
         });
     };
 
-    const getDisplayDesignCount = (job: Job) => job.requested_design_count ?? job.design_count;
+    const getDisplayDesignCount = (job: Job) => getJobOutputSummary(job).count;
 
     const getAwaitingPromptSummary = (job: Job) => {
         if (job.status !== 'awaiting_input') return '';
