@@ -163,7 +163,7 @@ it.each([null, 'vast:one'])('provider-only prediction removes local/remote GPU p
     expect(count('/api/gpu/status')).toBe(0);
     expect(count('/api/execution-targets/active/telemetry')).toBe(0);
     expect(draft).toHaveBeenCalledTimes(before);
-    expect(draft.mock.lastCall![0]).toMatchObject({ pred_method: 'boltz_api', sequence: 'ACDE', boltz_use_msa: false, boltz_num_samples: 2, run_frustrampnn: false });
+    expect((draft.mock.lastCall![0] as { editor_state: unknown }).editor_state).toMatchObject({ pred_method: 'boltz_api', sequence: 'ACDE', boltz_use_msa: false, boltz_num_samples: 2, run_frustrampnn: false });
     await click('Boltz');
     expect(intervals.mock.calls.filter(call => call[1] === 1000)).toHaveLength(1);
     expect(count('/api/gpu/status')).toBe(1);

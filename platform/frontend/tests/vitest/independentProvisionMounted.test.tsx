@@ -591,7 +591,7 @@ it('does not resurrect an approved workflow preview after a cancellation/recover
 
 it('the real de-novo typed form provisions the same unsaved request as launch and invalidates scientific edits', async () => {
   window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, target.id);
-  await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter><ProteinModificationTemplate onBack={() => {}} /></MemoryRouter></QueryClientProvider>); await settle(); });
+  await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter><ProteinModificationTemplate onBack={() => {}} initialValues={{ generator: 'rfd3' }} /></MemoryRouter></QueryClientProvider>); await settle(); });
   await act(async () => { await settle(); });
   expect(posts).toEqual([]);
   await click('Preview artifact downloads');

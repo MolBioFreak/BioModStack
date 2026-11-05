@@ -630,7 +630,7 @@ describe('remote execution operator surfaces', () => {
             await submitCmRequest({ ...cm, ...placement });
             await submitOntNgsJob('wf-clone', { ...ngs, ...placement });
             expect(post.mock.calls.map(([url, body]) => [url, body])).toEqual([
-                ['/api/shape-blueprint/requests', { ...shape, ...expectedPlacement }],
+                ['/api/shape-blueprint/requests', { ...shape, launch_context_id: null, ...expectedPlacement }],
                 ['/api/conformational-mapping/requests', { ...cm, ...expectedPlacement }],
                 ['/api/ont/ngs/wf-clone/submit', { ...ngs, ...expectedPlacement }],
             ]);
@@ -678,7 +678,7 @@ describe('remote execution operator surfaces', () => {
             expect(document.body.textContent).toContain('Review remote execution plan');
         });
         expect(calls).toEqual([
-            { url: '/api/shape-blueprint/requests', data: original },
+            { url: '/api/shape-blueprint/requests', data: { ...original, launch_context_id: null } },
             { url: '/api/jobs/execution-plan/preview', data: prepared },
         ]);
         // Changes made while reviewing cannot alter the submitted snapshot or destination.
@@ -689,7 +689,7 @@ describe('remote execution operator surfaces', () => {
         const outcome = await completed;
         if (approve) {
             expect('value' in outcome && outcome.value.data.job_id).toBe('retained-job');
-            expect(calls[2]).toEqual({ url: '/api/shape-blueprint/requests', data: { ...original, execution_plan_approval: 'd'.repeat(64) } });
+            expect(calls[2]).toEqual({ url: '/api/shape-blueprint/requests', data: { ...original, launch_context_id: null, execution_plan_approval: 'd'.repeat(64) } });
             expect(calls).toHaveLength(3);
         } else {
             expect('error' in outcome && outcome.error.message).toBe('Execution-plan approval cancelled');

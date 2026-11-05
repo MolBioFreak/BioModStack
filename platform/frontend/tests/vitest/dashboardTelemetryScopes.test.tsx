@@ -194,7 +194,8 @@ describe('Dashboard telemetry source tabs', () => {
             expect(container.textContent).toContain('Downloads complete');
             expect(container.textContent!.split('Downloads complete').length - 1).toBe(1);
             expect(container.textContent).toContain('protenix: started');
-            expect([...container.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === 'Preload selected worker')?.disabled).toBe(true);
+            // Provisioning is deliberately allowed alongside an active Job (dc77c3a); only an active preload disables it.
+            expect([...container.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === 'Preload selected worker')?.disabled).toBe(false);
             // Leaving/re-entering the mounted panel restores actual server activity, not a guessed stage.
             await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(b => b.textContent === 'Local')!.click());
             await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(b => b.textContent?.includes('Vast'))!.click());

@@ -23,7 +23,10 @@ it.each(['ready', 'unavailable'])('requires fleet selection and isolates telemet
         let data: unknown;
         if (config.method === 'get' && config.url === '/api/execution-targets/provision/catalog') data = [];
         else if (config.method === 'get' && ['/api/models', '/api/templates'].includes(config.url ?? '')) data = [];
-        else if (config.method === 'get' && /\/vast%3A[12]\/runtime-inventory$/.test(config.url ?? '')) {
+        else if (config.method === 'get' && config.url === '/api/execution-targets/providers/huggingface') {
+            data = { configured: false, available: false, bucket: null, mode: 'ssh', credential_configured: false, allow_publish: false, message: 'fixture' };
+        }
+        else if (config.method === 'get' && /\/vast%3A[12]\/runtime-inventory\/summary$/.test(config.url ?? '')) {
             inventory.push(config.url!); data = null;
         } else if (config.method === 'get' && config.url === '/api/execution-targets/active/telemetry') {
             const id = config.params.execution_target_id;
@@ -48,11 +51,18 @@ it.each(['ready', 'unavailable'])('requires fleet selection and isolates telemet
             details.open = true; details.dispatchEvent(new Event('toggle'));
         });
         await act(async () => { await flush(); });
+        // Inventory is demand-gated behind the nested evidence disclosure (IndependentProvisionPanel).
+        await act(async () => {
+            const evidence = [...container.querySelectorAll<HTMLDetailsElement>('details')]
+                .find(item => item.querySelector('summary')?.textContent === 'What is already on this worker')!;
+            evidence.open = true; evidence.dispatchEvent(new Event('toggle')); await flush();
+        });
     };
     try {
         await act(async () => { root.render(<QueryClientProvider client={client}><DashboardTelemetry /></QueryClientProvider>); await flush(); });
-        expect(container.querySelector<HTMLSelectElement>('[aria-label="Telemetry worker"]')!.value).toBe('');
-        expect(container.querySelectorAll('[role="tab"]')).toHaveLength(1);
+        // Display defaults to the first available worker (aa92c1f); it is not a scientific placement choice.
+        expect(container.querySelector<HTMLSelectElement>('[aria-label="Telemetry worker"]')!.value).toBe('vast:1');
+        expect(container.querySelectorAll('[role="tab"]')).toHaveLength(3);
         expect(reads).toEqual([]); expect(inventory).toEqual([]);
         await select('vast:1'); await tab('Vast');
         expect(inventory).toEqual([]);
@@ -66,8 +76,8 @@ it.each(['ready', 'unavailable'])('requires fleet selection and isolates telemet
         await act(async () => { pending.get('vast:2')!(payload('vast:2')); await flush(); });
         expect(container.textContent).toContain('Vast instance 2');
         expect(container.textContent).not.toContain('Vast instance 1');
-        expect(inventory).toContain('/api/execution-targets/vast%3A1/runtime-inventory');
-        expect(inventory).toContain('/api/execution-targets/vast%3A2/runtime-inventory');
+        expect(inventory).toContain('/api/execution-targets/vast%3A1/runtime-inventory/summary');
+        expect(inventory).toContain('/api/execution-targets/vast%3A2/runtime-inventory/summary');
         await tab('Combined');
         expect(container.textContent).toContain('Local fixture');
         expect(container.textContent).toContain('Vast instance 2');

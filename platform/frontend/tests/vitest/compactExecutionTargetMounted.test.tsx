@@ -179,7 +179,7 @@ it('binds compact runtime identity faithfully without serializing full legacy ma
   expect(start().disabled).toBe(false);
   target = { ...target, capabilities: { ...target.capabilities, critical_runtime: { release_sha256: 'release', state: 'verified', artifacts: [{ name: 'unused full manifest record' }] } } };
   await mount('workflow'); expect(start().disabled).toBe(false);
-  target = { ...target, capabilities: { ...target.capabilities, critical_runtime_binding: { release_sha256: 'release', paths: { runner: '/replacement' }, environment: { BMS_CONTAINER_BACKEND: 'udocker' } } } };
+  target = { ...target, capabilities: { ...target.capabilities, critical_runtime_binding: { release_sha256: 'release-replaced', paths: { runner: '/replacement' }, environment: { BMS_CONTAINER_BACKEND: 'udocker' } } } };
   await mount('workflow'); expect(start().disabled).toBe(true);
   expect(posts).toHaveLength(1);
 });
