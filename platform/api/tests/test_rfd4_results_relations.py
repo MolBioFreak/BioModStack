@@ -62,6 +62,21 @@ def test_source_metric_definitions_keep_counts_and_unknown_distinct():
     assert raw['sse_distribution.num_ss_elements_coi'] == '0'
 
 
+def test_oracle_metric_descriptors_label_scales_without_touching_values():
+    from scripts.bms_rfd4.metric_definitions import descriptors
+    raw = {'oracle.overall_plddt': '81.92', 'oracle.overall_ptm': '50.0', 'oracle.overall_pae': '10.4556',
+           'oracle.ptm_coi': '50.0', 'oracle.fraction_disordered': '0.79', 'refolded_backbone_rmsd.rmsd': '16.6015',
+           'oracle.has_clash': '0.0', 'oracle.ranking_score': '0.89'}
+    result = descriptors(raw)
+    assert result['oracle.overall_plddt']['unit'] == '0-100'
+    assert result['oracle.overall_ptm']['unit'] == '0-100' and result['oracle.ptm_coi']['unit'] == '0-100'
+    assert result['oracle.overall_pae']['unit'] == 'angstrom'
+    assert result['refolded_backbone_rmsd.rmsd']['unit'] == 'angstrom'
+    assert result['oracle.fraction_disordered']['unit'] == 'fraction'
+    assert 'oracle.has_clash' not in result and 'oracle.ranking_score' not in result  # undeclared stay unitless
+    assert raw['oracle.overall_ptm'] == '50.0'
+
+
 def test_native_writer_return_seams_do_not_guess_filenames():
     def frame(file, name, values, caller=None):
         return SimpleNamespace(f_code=SimpleNamespace(co_filename=file, co_name=name), f_locals=values, f_back=caller)
