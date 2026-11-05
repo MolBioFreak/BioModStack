@@ -10,9 +10,12 @@ export const RFD4_RECIPES = [
     ['mixed_context', 'Annotated molecular context'], ['partial', 'Partial diffusion'],
     ['inverse', 'Native inverse folding'], ['annotated', 'Annotated native input'],
 ] as const;
+/** Editable starting values only: the worker rejects blank design ids, but typed values (including explicit clears) are never rewritten. */
+export const RFD4_DEFAULT_INPUT_NAME = 'design';
+export const RFD4_DEFAULT_EXAMPLE_NAME = 'example';
 export const nativeRecord = (v: unknown): Record<string, any> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : {};
 export function rfd4RecipeRequest(recipe: string): Record<string, unknown> {
-    if (recipe === 'source_free') return { input: { kind: 'unconditional', name: '', chains: [] } };
+    if (recipe === 'source_free') return { input: { kind: 'unconditional', name: RFD4_DEFAULT_INPUT_NAME, chains: [] } };
     if (['protein_context', 'motif'].includes(recipe)) return { input: { kind: 'condition_spec', examples: [] } };
     return { input: { kind: 'annotated', slots: [] }, ...(recipe === 'inverse' ? { groups: { generation: 'inverse_folding' } } : {}) };
 }
@@ -130,7 +133,7 @@ export function Rfd4TaskWorkspace({ advanced, request, schema, mode, recipe, onR
             {renderSource ? renderSource('Add annotated source', '', slot => { if (slot !== '') setInput({ ...input, kind: 'annotated', slots: [...(input.slots ?? []), slot] }); }) : <button type="button" onClick={() => setInput({ ...input, kind: 'annotated', slots: [...(input.slots ?? []), ''] })}>Add annotated slot</button>}
         </fieldset>}
         {input.kind === 'condition_spec' && <>
-            {!examples.length && renderSource?.('Conditioned document', '', slot => { if (slot) setInput({ ...input, examples: [{ name: '', sources: [{ slot }] }] }); })}
+            {!examples.length && renderSource?.('Conditioned document', '', slot => { if (slot) setInput({ ...input, examples: [{ name: RFD4_DEFAULT_EXAMPLE_NAME, sources: [{ slot }] }] }); })}
             {examples.map((example: any, i: number) => <fieldset key={i} className="border rounded p-3 space-y-3"><legend>Example {i + 1}</legend>
                 <label>Example name<input aria-label={`Example ${i + 1} name`} value={example.name ?? ''} onChange={e => exampleChange(i, { ...example, name: e.target.value })} /></label>
                 <div className="rfd4-design-workbench"><div className="rfd4-design-source">
@@ -156,7 +159,7 @@ export function Rfd4TaskWorkspace({ advanced, request, schema, mode, recipe, onR
                 </fieldset>
                 </details>
                 <button type="button" onClick={() => setInput({ ...input, examples: examples.filter((_: any, n: number) => n !== i) })}>Remove example {i + 1}</button>
-            </fieldset>)}<button type="button" onClick={() => setInput({ ...input, examples: [...examples, { name: '', sources: [] }] })}>Add conditioned example</button></>}
+            </fieldset>)}<button type="button" onClick={() => setInput({ ...input, examples: [...examples, { name: RFD4_DEFAULT_EXAMPLE_NAME, sources: [] }] })}>Add conditioned example</button></>}
         <datalist id="rfd4-source-names">{sourceNames.map(name => <option key={name} value={name} />)}</datalist>
         {mode !== 'evaluate' && <fieldset><legend>Sampling amount</legend><p>Designs per input are replicates; batch size is parallel sampling, not final beam count.</p><div className="flex flex-wrap gap-3">{[['num_replicates', 'Designs per input'], ['batch_size', 'Batch size'], ['seed', 'Seed']].map(([key, label]) => <NativeNumber key={key} label={label} value={settings[key]} inheritedLabel={effectiveConfig && Object.hasOwn(effectiveConfig, key) ? 'Resolved native value' : 'Schema reference'} inherited={effectiveConfig && Object.hasOwn(effectiveConfig, key) ? effectiveConfig[key] : schema.properties?.settings?.properties?.[key]?.default} nullable={key === 'seed'} onChange={v => setSetting(key, v)} />)}</div></fieldset>}
         {recipe === 'partial' && <fieldset><legend>Partial diffusion</legend><p>Native trajectory-tail fraction has domain (0,1], not percent. Trajectory-tail fraction counts the tail of integration steps; backbone and latent partial times are separate native controls. No fraction is chosen automatically.</p>{['partial_trajectory_fraction_steps', 'partial_t_backbone', 'partial_t_latent'].map(key => <NativeNumber key={key} label={key} maximum={key === 'partial_trajectory_fraction_steps' ? 1 : undefined} help={key === 'partial_trajectory_fraction_steps' ? 'Native fraction (0,1]; exact precision retained, no default partial override.' : 'Independent native time; not a percentage.'} value={settings.generation?.args?.[key]} inherited={effectiveConfig?.generation?.args?.[key]} onChange={v => setSetting('generation', { ...nativeRecord(settings.generation), args: patchNative(nativeRecord(settings.generation?.args), key, v) })} />)}</fieldset>}

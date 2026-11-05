@@ -147,6 +147,20 @@ it('fresh source-free chains reach actual Axios and native normalization without
     expect(request).toEqual({ input: { kind: 'unconditional', name: 'chains', chains: [{ chain_id: 'A', min_length: 20, max_length: 30 }, { chain_id: 'B', min_length: 40, max_length: 40 }] }, settings: { seed: 0 } });
     expect(normalize(request)).toMatchObject(request); expect(draft.native_job_request.params.native_recipe).toBeUndefined();
 });
+it('fresh source-free chains submit a non-blank default input name the user can still edit or clear', async () => {
+    await mount('rfd4_proteina'); await edit('RFD4 task', 'source_free');
+    expect((document.querySelector('[aria-label="Input name"]') as HTMLInputElement).value).toBe('design');
+    await click('Add generated chain'); await edit('Chain 1 ID', 'A'); await edit('Chain 1 min_length', '20'); await edit('Chain 1 max_length', '30'); await edit('Seed', '0');
+    await click('Generate candidates');
+    expect(wire.find(w => w.url === '/api/jobs').body.params.rfd4_request.input.name).toBe('design');
+    await edit('Input name', 'typed'); expect(draft.rfd4_request.input.name).toBe('typed');
+    await edit('Input name', ''); expect(draft.rfd4_request.input.name).toBe('');
+});
+it('new conditioned examples start with an editable non-blank name', async () => {
+    await mount('rfd4_proteina'); await edit('RFD4 task', 'motif'); await click('Add conditioned example');
+    expect((document.querySelector('[aria-label="Example 1 name"]') as HTMLInputElement).value).toBe('example');
+    await edit('Example 1 name', ''); expect(draft.rfd4_request.input.examples[0].name).toBe('');
+});
 it('an unclassified legacy request and exact source binding can be restored after choosing a recipe', async () => {
     const request = { input: { kind: 'annotated', slots: ['target.v2'] }, settings: { seed: 0 } };
     await mount('rfd4_proteina', { rfd4_request: request, native_sources: { 'target.v2': source } });
