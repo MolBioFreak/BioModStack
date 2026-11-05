@@ -111,7 +111,8 @@ describe('DigestPanel backend authority', () => {
         } finally { vi.unstubAllGlobals(); }
     });
 
-    it('saves a hash-free preview from the mounted control and retains retry identity', async () => {
+    it.each(['', 'https://node.example.ts.net'])('saves a hash-free preview and opens the saved digest on the configured server (%s)', async (apiBase) => {
+        vi.stubGlobal('__BMS_API_BASE_URL__', apiBase);
         const preview = { ...simulation, source: { kind: 'molecular_revision', sequence_id: 'source', revision_id: 'revision', content_sha256: 'a'.repeat(64), topology: 'linear' }, catalog, selected_enzyme_ids: ['EcoRI'], simulation_sha256: null } as RestrictionDigestSimulation;
         const transport = vi.fn()
             .mockResolvedValueOnce(new Response(JSON.stringify({ detail: { code: 'analysis_busy' } }), { status: 503 }))
@@ -130,7 +131,7 @@ describe('DigestPanel backend authority', () => {
             expect(second).toMatchObject({ simulation_sha256: null, enzyme_ids: ['EcoRI'], persistence_mode: 'operation_and_fragments', source: { expected_content_sha256: 'a'.repeat(64), revision_id: 'revision' }, catalog: { expected_catalog_sha256: catalog.catalog_sha256 } });
             expect(second.idempotency_key).toBeTruthy();
             expect(button.disabled).toBe(true);
-            expect(container.querySelector('a')?.getAttribute('href')).toBe('/api/molbio/restriction/digests/saved-operation');
+            expect(container.querySelector('a')?.getAttribute('href')).toBe(`${apiBase}/api/molbio/restriction/digests/saved-operation`);
         } finally { vi.unstubAllGlobals(); }
     });
 

@@ -8,6 +8,32 @@ import pytest
 
 import biomodstack_tailnet as tailnet
 
+@pytest.mark.parametrize("binary", [False, True])
+def test_atomic_write_skips_only_identical_bytes_and_mode(tmp_path, monkeypatch, binary):
+    target = tmp_path / "control.conf"
+    content = b"stable config\n" if binary else "stable config\n"
+    tailnet._atomic_write(target, content, mode=0o600)
+    before = target.stat()
+    real_replace = tailnet.os.replace
+    replacements = []
+
+    def replace(*args):
+        replacements.append(args)
+        return real_replace(*args)
+
+    monkeypatch.setattr(tailnet.os, "replace", replace)
+    tailnet._atomic_write(target, content, mode=0o600)
+    assert replacements == []
+    assert target.stat().st_ino == before.st_ino
+    assert target.stat().st_mtime_ns == before.st_mtime_ns
+    tailnet._atomic_write(target, content, mode=0o640)
+    assert len(replacements) == 1
+    assert target.stat().st_mode & 0o7777 == 0o640
+    tailnet._atomic_write(target, "changed config\n", mode=0o640)
+    assert len(replacements) == 2
+    assert target.read_bytes() == b"changed config\n"
+
+
 REAL_SERVICE_OWNERSHIP_SNAPSHOT = tailnet._service_ownership_snapshot
 REAL_RESTORE_SERVICE_OWNERSHIP = tailnet._restore_service_ownership
 REAL_VALIDATED_RUNTIME_CONTAINER_LISTENER = tailnet._validated_runtime_container_listener

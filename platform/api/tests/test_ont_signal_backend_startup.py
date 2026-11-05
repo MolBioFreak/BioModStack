@@ -195,14 +195,32 @@ async def test_api_lifespan_yields_with_absent_backend(store, monkeypatch, caplo
     monkeypatch.setattr(targets, "AttachmentController", IdleWorker)
     monkeypatch.setattr(preloading, "PreloadController", IdleWorker)
     monkeypatch.setattr(targets, "invalidate_vast_inventory", AsyncMock())
-    monkeypatch.setattr(targets, "run_vast_inventory_refresh", AsyncMock())
-    monkeypatch.setattr(remote_telemetry, "run", AsyncMock())
-    async with main.lifespan(main.app):
+    polls = []
+    cancelled = []
+
+    async def blocked_poll(_sessions, stop):
+        polls.append(stop)
+        try:
+            await asyncio.Event().wait()  # In-flight provider/SSH call ignores stop.
+        except asyncio.CancelledError:
+            assert all(event.is_set() for event in polls)
+            cancelled.append(stop)
+            raise
+
+    monkeypatch.setattr(targets, "run_vast_inventory_refresh", blocked_poll)
+    monkeypatch.setattr(remote_telemetry, "run", blocked_poll)
+    context = main.lifespan(main.app)
+    await context.__aenter__()
+    await asyncio.sleep(0)
+    try:
         assert main._ont_signal_worker is not None
         assert main._ont_signal_worker._task is None
         assert main._ont_signal_worker._stop.is_set()
         assert main._orchestrator is None
         assert await snapshot(store) == before
+    finally:
+        await asyncio.wait_for(context.__aexit__(None, None, None), timeout=2)
+    assert len(cancelled) == len(polls) == 2
     assert await snapshot(store) == before
     assert "backend unavailable: worker blocked" in caplog.text
     assert "governed ONT signal-workbench worker started" not in caplog.text

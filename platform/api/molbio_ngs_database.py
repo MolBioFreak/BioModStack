@@ -63,7 +63,7 @@ async def init_molbio_ngs_db() -> None:
     path = _sqlite_path_from_url(get_molbio_ngs_db_url())
     if path is None:
         raise RuntimeError("MolBio/NGS scientific-state persistence currently requires SQLite")
-    await asyncio.to_thread(run_all, path)
+    await asyncio.to_thread(run_all, path, verify_data=False)
 
 
 async def molbio_ngs_health(*, deep: bool = True) -> dict[str, object]:

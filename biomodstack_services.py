@@ -2013,8 +2013,38 @@ def ensure_user_units(project_root: Path | None = None, runtime_mode: str | None
     DEVELOPMENT_WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
     PRODUCTION_WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
     CORE_RUNTIME_LOG.touch(exist_ok=True)
-    install_user_units(project_root=project_root, runtime_mode=runtime_mode)
-    daemon_reload(project_root=project_root)
+    written = install_user_units(project_root=project_root, runtime_mode=runtime_mode)
+    names = [path.name for path in written if path.suffix in {".service", ".target", ".slice", ".timer"}]
+    if DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE not in names:
+        names.append(DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE)
+    if units_need_daemon_reload(names, project_root=project_root):
+        daemon_reload(project_root=project_root)
+
+
+def units_need_daemon_reload(unit_names: list[str], project_root: Path | None = None) -> bool:
+    """Ask systemd whether any managed unit or drop-in changed on disk.
+
+    A daemon-reload re-reads every user unit and costs seconds on a loaded
+    host; every restart used to issue one even when nothing had changed.
+    systemd tracks edits itself (NeedDaemonReload), including drop-ins written
+    by other owners such as the Tailnet selector policy. A unit systemd has
+    never loaded reports LoadState=not-found and also requires a reload.
+    """
+    if not unit_names:
+        return False
+    try:
+        result = run_systemctl(
+            "show", "--property=Id,LoadState,NeedDaemonReload", *unit_names,
+            check=False, project_root=project_root,
+        )
+    except (FileNotFoundError, OSError):
+        return True
+    if result.returncode != 0:
+        return True
+    for line in result.stdout.splitlines():
+        if line in ("NeedDaemonReload=yes", "LoadState=not-found"):
+            return True
+    return False
 
 
 def ensure_target_enabled(project_root: Path | None = None, runtime_mode: str | None = None) -> None:

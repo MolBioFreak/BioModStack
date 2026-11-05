@@ -230,13 +230,15 @@ async def lifespan(app: FastAPI):
 
     yield
     
-    # Cleanup on shutdown
+    # Cancel polling before closing workers: provider/SSH calls can otherwise
+    # outlast the service stop timeout. Independently owned runs stay untouched.
     remote_telemetry_stop.set()
-    await remote_telemetry_task
+    vast_inventory_stop.set()
+    for task in (remote_telemetry_task, vast_inventory_task):
+        task.cancel()
+    await asyncio.gather(remote_telemetry_task, vast_inventory_task, return_exceptions=True)
     await app.state.preload_controller.close()
     await app.state.attachment_controller.close()
-    vast_inventory_stop.set()
-    await vast_inventory_task
     if _orchestrator:
         await _orchestrator.stop()
         logger.info("[SHUTDOWN] GPU Orchestrator stopped")

@@ -14,5 +14,8 @@ bms-alignment = "bms_alignment.cli:main"
 [tool.setuptools]
 packages = ["bms_alignment"]
 
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "bms_alignment/**/*.py" }]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
