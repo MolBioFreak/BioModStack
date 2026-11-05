@@ -132,7 +132,11 @@ def resolve_oracle_runtime(mode, params, *, resolved_assets=None, image_environm
             else:
                 path, _ = image_reference(row['relative_path'], get_container_dir(), {})
         else:
-            path = roots[row['kind']] / row['relative_path']
+            # Acquired weights live in immutable layout generations; follow them exactly as
+            # provisioning and dispatch do instead of assuming a plain directory.
+            from paths import resolve_weight_dependency
+            path = (resolve_weight_dependency(row['relative_path'], roots['weights'])
+                    if row['kind'] == 'weights' else roots[row['kind']] / row['relative_path'])
         if row.get('bind_parent'):
             # Official AF2 calls get_model_haiku_params(data_dir=...), which
             # appends params/. Reuse the existing AlphaFold parameter tree.

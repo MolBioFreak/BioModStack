@@ -592,7 +592,7 @@ def _selected_weight_members(source: Path, model_id: str | None, *, resolved=Non
             key = ('acquisition-layouts', owner)
             layouts = resolved.get(key) if resolved is not None else None
             if layouts is None:
-                layouts = list(_layouts(model_acquisition_plan(owner)))
+                layouts = list(_layouts(model_acquisition_plan(owner, include_optional=True)))
                 if resolved is not None:
                     resolved[key] = layouts
             return layouts

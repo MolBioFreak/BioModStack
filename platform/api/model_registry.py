@@ -860,7 +860,20 @@ class RuntimeAcquisitionArtifact(BaseModel):
     member_path: Optional[str] = None
 
 
-def model_acquisition_plan(model_id: str) -> dict:
+# Selected-only evaluator assets an owner model ships beside its own closure. They
+# are declared acquisition authority (so reviewed manifests are accepted) but are NOT
+# part of model_runtime_dependencies, the workflow-pack default set, or any job that
+# does not select them (e.g. RFD4 refolding oracles only when metrics_tags activate one).
+OPTIONAL_SELECTED_RUNTIME_DEPENDENCIES: dict[str, tuple[RuntimeDependencyRef, ...]] = {
+    'rfd4_proteina': (
+        RuntimeDependencyRef(kind='image', relative_path='af3-open.sif'),
+        RuntimeDependencyRef(kind='image', relative_path='af2-open.sif'),
+        RuntimeDependencyRef(kind='weights', relative_path='rfd4-oracles/of3'),
+    ),
+}
+
+
+def model_acquisition_plan(model_id: str, *, include_optional: bool = False) -> dict:
     """Resolve approved metadata against existing runtime dependency authority.
 
     Missing closure/metadata is an explicit blocker; URLs from legacy scripts,
@@ -889,15 +902,24 @@ def model_acquisition_plan(model_id: str) -> dict:
             ref.kind == "weights" and entry.member_path is not None
             and ref.relative_path == dependency.relative_path + "/" + entry.member_path)
 
+    optional = OPTIONAL_SELECTED_RUNTIME_DEPENDENCIES.get(model_id, ())
+    optional_entries = {entry.artifact_id for entry in model.acquisition
+                        if any(entry.dependency == ref or supplies(entry, ref) for ref in optional)}
     ids = [entry.artifact_id for entry in model.acquisition]
     if len(ids) != len(set(ids)) or any(
-        not any(binds(entry.dependency, ref) for ref in refs) for entry in model.acquisition
+        not any(binds(entry.dependency, ref) for ref in (*refs, *optional)) for entry in model.acquisition
     ):
         return {"model_id": model_id, "artifacts": [], "blockers": [
             {"code": "invalid_acquisition_dependency_binding"}]}
+    # Optional selected assets are visible to selected-layout receivers only
+    # (include_optional); the model's own plan/provision stays unchanged.
+    if not include_optional:
+        acquisition = [entry for entry in model.acquisition if entry.artifact_id not in optional_entries]
+    else:
+        acquisition = list(model.acquisition)
     emitted = set()
     for ref in refs:
-        entries = [entry for entry in model.acquisition if supplies(entry, ref)]
+        entries = [entry for entry in acquisition if supplies(entry, ref)]
         if not entries:
             blockers.append({"code": "approved_acquisition_metadata_missing",
                              **ref.model_dump()})
@@ -910,7 +932,7 @@ def model_acquisition_plan(model_id: str) -> dict:
                 **entry.model_dump(exclude={"dependency", "member_path"}), "kind": entry.dependency.kind}})
     # Entries that bind through a layout root but supply no requested member still
     # belong to that pinned layout generation; keep them so its digest is complete.
-    for entry in model.acquisition:
+    for entry in acquisition:
         if entry.artifact_id not in emitted:
             emitted.add(entry.artifact_id)
             artifacts.append({"dependency": entry.dependency.model_dump(), "member_path": entry.member_path,

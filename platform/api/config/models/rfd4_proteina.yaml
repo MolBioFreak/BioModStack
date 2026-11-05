@@ -77,3 +77,73 @@ acquisition:
     kind: weights
     relative_path: rfd4-proteina
   member_path: config.json
+- artifact_id: rfd4_proteina-af3-open-cu13-48377e45
+  url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/openfold3/runtime/of3_af3_refolding_env-cuda13.sif
+  sha256: 7bbd35478ed5e95131efa7756d03a2e754f3508e603ad08bb8f8db0bd89484a1
+  size_bytes: 3502800896
+  source_authority: huggingface.co
+  approval_ref: de-novo-full-20261021/Asset-Plan
+  license_id: null
+  redirect_policy:
+    source_url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/openfold3/runtime/of3_af3_refolding_env-cuda13.sif
+    approval_ref: de-novo-full-20261021/Asset-Plan
+    allowed_authorities:
+    - huggingface.co
+    - us.aws.cdn.hf.co
+    max_hops: 5
+  dependency:
+    kind: image
+    relative_path: af3-open.sif
+- artifact_id: rfd4_proteina-af2-open-cu13-48377e45
+  url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/alphafold2/runtime/alphafold2-pallas-cuda13-amd64.sif
+  sha256: b5160d179a0f11608e176f8883c8e9c644ab5c6a6b92bf05c2ca5b7a5ecb8d3f
+  size_bytes: 6051827712
+  source_authority: huggingface.co
+  approval_ref: de-novo-full-20261021/Asset-Plan
+  license_id: null
+  redirect_policy:
+    source_url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/alphafold2/runtime/alphafold2-pallas-cuda13-amd64.sif
+    approval_ref: de-novo-full-20261021/Asset-Plan
+    allowed_authorities:
+    - huggingface.co
+    - us.aws.cdn.hf.co
+    max_hops: 5
+  dependency:
+    kind: image
+    relative_path: af2-open.sif
+- artifact_id: rfd4_proteina-of3-weights-48377e45
+  url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/openfold3/weights/of3_ported_weights.bin.zst
+  sha256: 7ae00e49f8507593d6a8c5a7c0389e2151fea9a79062069979c42ebb5bbf14d2
+  size_bytes: 1369238320
+  source_authority: huggingface.co
+  approval_ref: de-novo-full-20261021/Asset-Plan
+  license_id: Apache-2.0
+  redirect_policy:
+    source_url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/openfold3/weights/of3_ported_weights.bin.zst
+    approval_ref: de-novo-full-20261021/Asset-Plan
+    allowed_authorities:
+    - huggingface.co
+    - us.aws.cdn.hf.co
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: rfd4-oracles/of3
+  member_path: of3_ported_weights.bin.zst
+- artifact_id: rfd4_proteina-of3-provenance-48377e45
+  url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/openfold3/weights/of3_ported_weights.provenance.json
+  sha256: b4e437d93b33c8b736c43c0238e9419c011f1890aafae6bbffc2c77b8a7cf416
+  size_bytes: 900
+  source_authority: huggingface.co
+  approval_ref: de-novo-full-20261021/Asset-Plan
+  license_id: Apache-2.0
+  redirect_policy:
+    source_url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/openfold3/weights/of3_ported_weights.provenance.json
+    approval_ref: de-novo-full-20261021/Asset-Plan
+    allowed_authorities:
+    - huggingface.co
+    - us.aws.cdn.hf.co
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: rfd4-oracles/of3
+  member_path: of3_ported_weights.provenance.json

@@ -23,7 +23,10 @@ from .shared_runtime_images import (
 
 def validate_members(dependency, entries, *, test_only=False):
     if (set(dependency) != {'kind', 'relative_path'} or dependency['kind'] != 'weights'
-            or not re.fullmatch(r'[A-Za-z0-9_-][A-Za-z0-9_.-]*', dependency['relative_path'])):
+            or not isinstance(dependency['relative_path'], str)
+            # Nested logical roots (e.g. rfd4-oracles/of3) use the member-path segment rule.
+            or any(not re.fullmatch(r'[A-Za-z0-9_-][A-Za-z0-9_.-]*', part)
+                   for part in dependency['relative_path'].split('/'))):
         raise AcquisitionError('invalid weights dependency binding')
     if not entries:
         raise AcquisitionError('empty weights layout')
