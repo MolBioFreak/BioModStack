@@ -37,12 +37,15 @@ process RunRFD4Proteina {
     def destination = quote("${params.out_dir}/collected/rfd4_proteina")
     """
     set -euo pipefail
-    mkdir -p .tmp .cache/matplotlib
+    mkdir -p .cache/matplotlib
     native_status=0
+    # TMPDIR stays short on purpose: multiprocessing binds its listener at TMPDIR/pymp-*/listener-*, and a
+    # rented worker's task directory pushes that past the 107-character AF_UNIX limit, so the data worker
+    # dies silently and the run waits forever (same failure RunCalibyResequence documents).
     ${quote(executable)} exec --no-home --nv \
       --env BMS_RFD4_COMPILE_CACHE_ROOT=${quote(cacheAvailable ? '/cache' : '')} --env BMS_RFD4_RUNTIME_IMAGE=${quote(runtimeImage)} \
       ${cacheBind} \
-      --env TMPDIR="\$PWD/.tmp" --env MPLCONFIGDIR="\$PWD/.cache/matplotlib" \
+      --env TMPDIR=/tmp --env MPLCONFIGDIR="\$PWD/.cache/matplotlib" \
       --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${params.gpu_id} \
       --env PYTHONPATH=/bms/scripts \
       --bind "\$PWD:\$PWD" \

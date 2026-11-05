@@ -147,6 +147,8 @@ print('FIXTURE ONLY: captured shell argv; no container, model or oracle executed
         assert request.read_bytes() == original
         assert (task / 'rfd4_closure/request.json').read_bytes() == original
         argv = capture['argv']
+        # Short TMPDIR: multiprocessing's listener socket path must stay under the 107-char AF_UNIX limit on workers.
+        assert 'TMPDIR=/tmp' in argv
         assert argv[:4] == ['exec', '--no-home', '--nv', '--env']
         assert argv[-12:] == [str(run / 'outer-images/rfd4_proteina.sif'),
                              'python', '-m', 'bms_rfd4.run', '--request',
