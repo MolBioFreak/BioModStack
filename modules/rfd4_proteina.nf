@@ -35,9 +35,21 @@ process RunRFD4Proteina {
     def cacheBind = cacheAvailable ? '--bind ' + quote(cacheRoot.toString() + ':/cache') : ''
     def executable = System.getenv('BMS_CONTAINER_EXECUTABLE') ?: 'apptainer'
     def destination = quote("${params.out_dir}/collected/rfd4_proteina")
+    // Host-side refolding-oracle launcher daemons (upstream *_LAUNCHER_SOCKET_TEMPLATE contract): rfproteina's own
+    // fallback spawns the daemon inside this container, where nested `apptainer run` fails on rented workers.
+    // Only a resolved AF3/OF3 or AF2 runtime adds anything; otherwise the script below is exactly as before.
+    def af3Family = ['af3', 'of3'].find { name -> oracleRuntime[name]?.AF3_IMAGE && oracleRuntime[name]?.AF3_MODEL_DIR }
+    def hostDaemons = []
+    if (af3Family) hostDaemons << "bms_oracle_start AF3 ${quote(oracleRuntime[af3Family].AF3_IMAGE)} ${quote(oracleRuntime[af3Family].AF3_MODEL_DIR)} --lazy-warmup"
+    if (oracleRuntime['af2']?.AF2_IMAGE && oracleRuntime['af2']?.AF2_MODEL_DIR) hostDaemons << "bms_oracle_start AF2 ${quote(oracleRuntime['af2'].AF2_IMAGE)} ${quote(oracleRuntime['af2'].AF2_MODEL_DIR)}"
+    def daemonSetup = hostDaemons ? """
+    . '${params.code_root}/scripts/bms_rfd4/oracle_daemons.sh'
+    bms_oracle_begin ${quote(executable)} '${image}' '${params.code_root}' ${quote(params.gpu_id)}
+    ${hostDaemons.join('\n    ')}""" : ''
+    def daemonArgs = hostDaemons ? ' ${BMS_ORACLE_ARGS[@]+"${BMS_ORACLE_ARGS[@]}"}' : ''
     """
     set -euo pipefail
-    mkdir -p .cache/matplotlib
+    mkdir -p .cache/matplotlib${daemonSetup}
     native_status=0
     # TMPDIR stays short on purpose: multiprocessing binds its listener at TMPDIR/pymp-*/listener-*, and a
     # rented worker's task directory pushes that past the 107-character AF_UNIX limit, so the data worker
@@ -51,7 +63,7 @@ process RunRFD4Proteina {
       --bind "\$PWD:\$PWD" \
       --bind '${params.code_root}/scripts:/bms/scripts:ro' \
       --bind '${params.weights_root}:${params.weights_root}:ro' \
-      ${oracleBinds} \
+      ${oracleBinds}${daemonArgs} \
       '${image}' python -m bms_rfd4.run \
       --request rfd4_closure/request.json --bindings rfd4_closure/bindings.json \
       --bundle '${bundle}' --output rfd4_proteina || native_status=\$?

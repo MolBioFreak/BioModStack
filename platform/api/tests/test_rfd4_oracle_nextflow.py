@@ -76,6 +76,8 @@ def test_actual_rfd4_oracle_nextflow_shell(case, tmp_path):
     shimdir.mkdir()
     shim = shimdir / 'apptainer'
     shim.write_text('#!' + sys.executable + '\n' + '''import hashlib, json, os, pathlib, sys
+if 'extract' in sys.argv and any(a.endswith('oracle_daemons.py') for a in sys.argv):
+    sys.exit(0)  # host-daemon source extraction: no daemon sources in this fixture, so none is started
 request = pathlib.Path('rfd4_closure/request.json')
 record = {'fixture_only': True, 'container_executed': False,
           'argv': sys.argv[1:], 'cwd': os.getcwd(),
