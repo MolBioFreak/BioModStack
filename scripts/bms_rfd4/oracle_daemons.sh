@@ -54,8 +54,12 @@ bms_oracle_begin() {
     mkdir -p oracle_daemon/bin
     cat > oracle_daemon/bin/apptainer <<'BMS_ORACLE_SHIM'
 #!/bin/bash
+# Take this shim's own directory off PATH so the launcher (and any other caller) sees the real apptainer.
+here="$(cd "$(dirname "$0")" && pwd)"
+PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -v -x -F "$here" | paste -sd: -)"; export PATH
 sub="$1"; shift
-case "$sub" in run|exec) ;; *) echo "unsupported container command: $sub" >&2; exit 125 ;; esac
+# Only run|exec go to the task launcher; everything else (e.g. `sif list`, which the launcher itself calls) is real apptainer.
+case "$sub" in run|exec) ;; *) exec apptainer "$sub" "$@" ;; esac
 args=()
 for a in "$@"; do
   for m in "${AF3_MODEL_DIR:-}" "${AF2_MODEL_DIR:-}"; do
