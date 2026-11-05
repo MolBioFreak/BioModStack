@@ -119,6 +119,17 @@ interface QuickViewerProps {
     onJobChange?: (jobId: string | null) => void;
 }
 
+/**
+ * Default structure for a job: prefer a produced result over a staged input.
+ * Staged inputs live under a `prepared/` or `inputs/` directory (for example the
+ * coordinate-less RFD4 sentinel CIF). Every file stays selectable; the API's
+ * name order is preserved within each group.
+ */
+export const pickDefaultQuickViewerStructure = <T extends { path: string }>(structures: readonly T[]): T | null => {
+    const isStagedInput = (path: string) => /(^|[\\/])(prepared|inputs?)[\\/]/.test(path);
+    return structures.find((structure) => !isStagedInput(structure.path)) ?? structures[0] ?? null;
+};
+
 const isMolecularDynamicsJob = (job: Job) =>
     job.model_id === 'molecular_dynamics' || job.mode === 'molecular_dynamics' || job.mode === 'md';
 
@@ -186,10 +197,10 @@ export function QuickViewer({ selectedJobId: externalJobId, onJobChange }: Quick
         enabled: !!quickViewerJobId,
     });
 
-    // Auto-select first structure when data loads
+    // Auto-select the default (result-preferred) structure when data loads
     useEffect(() => {
         if (structureData?.structures && structureData.structures.length > 0) {
-            setSelectedStructure(structureData.structures[0]);
+            setSelectedStructure(pickDefaultQuickViewerStructure(structureData.structures));
         } else {
             setSelectedStructure(null);
         }

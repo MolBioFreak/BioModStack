@@ -192,6 +192,8 @@ export default defineConfig({
             '../../scripts/bms_md/test_complete_md_20261023.test.tsx',
             './tests/vitest/molecularDynamicsGen2ShellRoundTrip.test.tsx',
             './tests/vitest/molstarViewerLoadStateMounted.test.tsx',
+            './tests/vitest/quickViewerDefaultStructureMounted.test.tsx',
+            './tests/vitest/molstarWebglInitRetryMounted.test.ts',
             './tests/vitest/shapeAuthoringCompletionMounted.test.tsx',
             './tests/vitest/shapeResultsCompletionMounted.test.tsx',
             './tests/vitest/boltzApiNativeControls.test.tsx',
