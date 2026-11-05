@@ -48,6 +48,7 @@ from services.ont_raw_signal import (
     transition_derivation,
     _assert_publication_directory_identity,
     _prepare_confined_directory,
+    _open_absolute_directory_nofollow,
 )
 
 # Linux sun_path holds 108 bytes including the terminating NUL.
@@ -58,14 +59,11 @@ def _bind_unix_socket(server: socket.socket, socket_path: Path) -> None:
     """Bind ``socket_path`` even when its absolute path exceeds sun_path.
 
     The socket file must stay in the stage directory because the container
-    reaches it through that bind mount. Long staging roots are bound through
-    the parent directory's /proc/self/fd entry, which keeps the socket at its
-    real location without changing the process-wide working directory.
+    reaches it through that bind mount. Bind through a confined parent
+    directory handle for short and long roots alike, without following
+    symlinks or changing the process-wide working directory.
     """
-    if len(os.fsencode(str(socket_path))) <= _UNIX_SOCKET_PATH_MAX:
-        server.bind(str(socket_path))
-        return
-    directory_fd = os.open(socket_path.parent, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
+    directory_fd = _open_absolute_directory_nofollow(socket_path.parent)
     try:
         short_path = f"/proc/self/fd/{directory_fd}/{socket_path.name}"
         if len(os.fsencode(short_path)) > _UNIX_SOCKET_PATH_MAX:
@@ -228,9 +226,13 @@ class OntRawSignalWorker:
             socket_path = Path(fd_socket)
             socket_path.unlink(missing_ok=True)
             descriptor_server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            _bind_unix_socket(descriptor_server, socket_path)
-            descriptor_server.listen(1)
-            descriptor_server.settimeout(0.5)
+            try:
+                _bind_unix_socket(descriptor_server, socket_path)
+                descriptor_server.listen(1)
+                descriptor_server.settimeout(0.5)
+            except BaseException:
+                descriptor_server.close()
+                raise
 
             def send_descriptors() -> None:
                 try:

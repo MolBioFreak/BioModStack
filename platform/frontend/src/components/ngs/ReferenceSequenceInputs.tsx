@@ -150,10 +150,10 @@ export function ReferenceSequenceInputs({ onAdded }: { onAdded: (records: Record
     const busy = preview.isPending || add.isPending || recheck.isPending;
     const valid = previews.length > 0 && previews.every(item => item.result.valid && !item.result.errors.length);
     return <section className="space-y-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3" data-testid="molbio-sequence-import-panel">
-        <h3 className="text-sm font-semibold text-[var(--text-primary)]">Add expected sequences</h3>
-        <p className="text-xs text-[var(--text-secondary)]">Add one plasmid or a batch. Each FASTA, GenBank or CSV record stays a separate saved sequence with its own version.</p>
+        <h3 className="text-sm font-semibold text-[var(--text-primary)]">Add reference sequences</h3>
+        <p className="text-xs text-[var(--text-secondary)]">Add one sequence or a batch. Each record is saved as its own sequence in Molecular Tools.</p>
         <p className="text-xs text-[var(--text-secondary)]">For barcoded plasmids, add all expected sequences here. Use Basecall DNA with your barcode kit and sample names, then map the demultiplexed barcodes to these plasmids in Runs.</p>
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Sequence input method">{([['paste','Paste sequence'],['files','Browse sequence files'],['saved','Saved MolBio sequences']] as const).map(([id,label]) => <button type="button" key={id} disabled={busy} aria-pressed={tab===id} onClick={() => { setTab(id); resetPreview(); }} className={`${BUTTON} ${tab===id ? 'border-[var(--accent-primary)] bg-[var(--bg-tertiary)]' : ''}`}>{label}</button>)}</div>
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Sequence input method">{([['paste','Paste sequence'],['files','Browse sequence files'],['saved','From Molecular Tools']] as const).map(([id,label]) => <button type="button" key={id} disabled={busy} aria-pressed={tab===id} onClick={() => { setTab(id); resetPreview(); }} className={`${BUTTON} ${tab===id ? 'border-[var(--accent-primary)] bg-[var(--bg-tertiary)]' : ''}`}>{label}</button>)}</div>
         {tab === 'saved' ? <>
             <input type="search" aria-label="Search saved MolBio sequences" placeholder="Search saved plasmids by name" value={search} disabled={busy} onChange={event => { setSearch(event.target.value); setOffset(0); }} className={CONTROL} />
             <p className="text-xs text-[var(--text-secondary)]">Select several sequences to add them together. Current versions are pinned when you add them; choose a historical version below if needed.</p>

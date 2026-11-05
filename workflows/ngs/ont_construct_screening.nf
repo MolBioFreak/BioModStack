@@ -19,6 +19,7 @@ include { FastqDimerAnalysis; BuildDimerCanonicalOutputs } from '../../modules/n
 include { ConstructVerify } from '../../modules/ngs/construct_verify.nf'
 include { RunCloneValidation; CloneValidationAdapter; ComparePlasmidConsensus } from '../../modules/ngs/clone_validation.nf'
 include { ComparisonPanelAttribution } from '../../modules/ngs/comparison_panel_attribution.nf'
+include { ModkitAnalysis } from '../../modules/ngs/modkit_analysis.nf'
 
 include { reportStage } from '../../modules/ngs/stage_reporting.nf'
 
@@ -223,6 +224,11 @@ workflow ONT_CONSTRUCT_SCREENING {
             breakpointEvidence = CloneValidationAdapter.out.breakpoint_call
             secondaryEvidence = CloneValidationAdapter.out.secondary_summary
         }
+    }
+    // Optional tandem methylation tables from the same aligned reads.
+    // FASTQ carries no MM/ML tags, so there is nothing for modkit to read.
+    if (params.run_modkit == true && !has_fastq) {
+        ModkitAnalysis(analysis_bam, Channel.value(reference_file))
     }
     if (runFastqQc || runAssembly) {
         ConstructVerify(

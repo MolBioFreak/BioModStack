@@ -298,9 +298,12 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
             "clone_validation_report",
             "construct_screening_summary",
             "plasmid_qc_summary",
+            "modkit_summary",
+            "methylation_bed",
         ),
         artifact_conditions=(
             ("run_assembly=true", ("clone_validation_assembly", "clone_validation_report")),
+            ("run_modkit=true", ("modkit_summary", "methylation_bed")),
         ),
         lifecycle="seed",
     ),
@@ -348,7 +351,10 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
             "plasmid_qc_summary",
             "igv_track_config",
             "igv_report",
+            "modkit_summary",
+            "methylation_bed",
         ),
+        artifact_conditions=(("run_modkit=true", ("modkit_summary", "methylation_bed")),),
         lifecycle="seed",
     ),
     "ont_fastq_qc": OntWorkflowSpec(

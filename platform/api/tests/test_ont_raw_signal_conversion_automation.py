@@ -1142,6 +1142,79 @@ async def test_execute_transfers_descriptors_from_stage_path_longer_than_sun_pat
     assert not fd_socket.exists()
 
 
+@pytest.mark.parametrize("long_stage_path", [False, True])
+def test_descriptor_socket_rejects_symlinked_parent(tmp_path: Path, long_stage_path: bool) -> None:
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(stage, target_is_directory=True)
+    if long_stage_path:
+        nested = "segment-" + "x" * 100
+        (stage / nested).mkdir()
+        linked = linked / nested
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        with pytest.raises(OSError):
+            ont_raw_signal_worker._bind_unix_socket(server, linked / "source.sock")
+    assert not (linked / "source.sock").exists()
+
+
+def test_descriptor_socket_rejects_overlong_encoded_name_and_closes_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opened: list[int] = []
+    real_open = ont_raw_signal_worker._open_absolute_directory_nofollow
+
+    def record_open(path: Path) -> int:
+        descriptor = real_open(path)
+        opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(ont_raw_signal_worker, "_open_absolute_directory_nofollow", record_open)
+    # Fewer than 107 characters, but too many UTF-8 bytes for sun_path.
+    name = "µ" * 60 + ".sock"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        with pytest.raises(OSError, match="AF_UNIX socket name is too long"):
+            ont_raw_signal_worker._bind_unix_socket(server, tmp_path / name)
+    assert len(opened) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened[0])
+    assert not (tmp_path / name).exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["open", "bind", "listen"])
+async def test_descriptor_socket_setup_failure_closes_server_before_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    class Server:
+        closed = False
+
+        def bind(self, path: str) -> None:
+            if failure == "bind":
+                raise OSError("bind failed")
+
+        def listen(self, backlog: int) -> None:
+            raise OSError("listen failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    server = Server()
+    monkeypatch.setattr(ont_raw_signal_worker.socket, "socket", lambda *args: server)
+    monkeypatch.setattr(ont_raw_signal_worker, "source_lease_break_requested", lambda: False)
+
+    async def unexpected_spawn(*args, **kwargs):
+        pytest.fail("socket setup failed but a child was spawned")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", unexpected_spawn)
+    stage = tmp_path / "missing" if failure == "open" else tmp_path
+    worker = OntRawSignalWorker(None)
+    with pytest.raises(OSError):
+        await worker._execute(["fake"], "job", "claim", source_fds=[0], fd_socket=str(stage / "s"))
+    assert server.closed
+    assert worker._child is None
+
+
 @pytest.mark.asyncio
 async def test_waveform_runtime_timeout_terminates_and_reaps_child(
     monkeypatch: pytest.MonkeyPatch,

@@ -74,7 +74,7 @@ describe('mounted NGS workflow chooser', () => {
         }));
         expect(groups).toEqual([
             { label: 'General DNA analysis and RNA basecalling', keys: ['dna', 'rna'] },
-            { label: 'Analyse reads against a saved sequence', keys: ['clone', 'fastqQc', 'modified'] },
+            { label: 'Analyse reads against a reference', keys: ['clone', 'fastqQc', 'modified'] },
             { label: 'Review pooled samples', keys: ['pooledAssignment'] },
         ]);
     });
