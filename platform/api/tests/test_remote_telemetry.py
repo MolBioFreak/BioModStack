@@ -117,7 +117,8 @@ async def test_handshake_time_is_not_observation_age_and_setup_is_independent(mo
     await store.collect(worker, state)
     assert state['history'][-1][1] == 124.0
     assert state['history'][-1][2]['available']
-    assert state['due'] == 135.0
+    # Period runs from collection start (100), not completion (125).
+    assert state['due'] == 110.0
     # The original freshness window has not increased.
     assert mod.FRESH_SECONDS == 20.0
 
@@ -180,7 +181,7 @@ async def test_collection_initial_plus_three_retries_publish_once(monkeypatch, t
         assert stamp == expected_stamp
         assert (datetime.fromisoformat(sample['observed_at']) - wall).total_seconds() == expected_stamp - 100
         assert state['raw'] == fixture(110) and state['failures'] == 0
-        assert state['due'] == clock[0] + 10
+        assert state['due'] == 100 + 10
         assert sample['cpu']['utilization'] == 50
         assert sample['network'][0]['rx_bytes_per_second'] == 1024
         assert admission['available'] and len(admission['gpus']) == 8
@@ -373,3 +374,22 @@ async def test_process_attribution_is_same_boot_attempt_and_survives_sample_read
     owner.entries[mod.identity(worker)] = value
     await owner.collect(worker, value)
     assert owner.read(worker, include_history=False)['gpu_processes'] == processes
+
+
+@pytest.mark.asyncio
+async def test_period_is_interval_from_collection_start_with_failure_backoff(monkeypatch):
+    store = mod.RemoteTelemetry(); worker = target(); state = entry()
+    clock = [100.0]
+    monkeypatch.setattr(mod.time, 'monotonic', lambda: clock[0])
+    async def remote(*args, **kwargs):
+        clock[0] += 2.3  # collection duration must not extend the period
+        return SimpleNamespace(stdout=json.dumps(fixture()), command_started=clock[0] - 1)
+    monkeypatch.setattr(mod, 'run_remote', remote)
+    await store.collect(worker, state)
+    assert state['failures'] == 0 and state['due'] == 100.0 + mod.INTERVAL
+    async def broken(*args, **kwargs):
+        clock[0] += 2.3
+        raise ValueError('x')
+    monkeypatch.setattr(mod, 'run_remote', broken)
+    await store.collect(worker, state)
+    assert state['failures'] == 1 and state['due'] == clock[0] + 20

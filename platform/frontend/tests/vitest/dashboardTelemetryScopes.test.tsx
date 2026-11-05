@@ -192,6 +192,7 @@ describe('Dashboard telemetry source tabs', () => {
             target = { ...target, preload: { ...target.preload!, phase: 'source_download_ready' }, progress: { operation_id: 'run', job_id: 'saved-job', phase: 'running', artifact: null, message: 'Scientific workflow running', updated_at: '2026-09-06', activity: { stage: 'protenix', state: 'started', updated_at: '2026-09-06' } } };
             await act(async () => { await client.invalidateQueries({ queryKey: ['execution-targets'] }); await new Promise(resolve => setTimeout(resolve, 20)); });
             expect(container.textContent).toContain('Downloads complete');
+            expect(container.textContent!.split('Downloads complete').length - 1).toBe(1);
             expect(container.textContent).toContain('protenix: started');
             expect([...container.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === 'Preload selected worker')?.disabled).toBe(true);
             // Leaving/re-entering the mounted panel restores actual server activity, not a guessed stage.

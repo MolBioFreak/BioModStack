@@ -73,7 +73,6 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
     </details>
     {error && <p role="alert" className="text-sm text-[var(--error)]">{error}</p>}
     {preload && <div role="status" aria-label="Preload progress" className="text-sm">
-      {preload.phase === 'source_download_ready' && <p>Downloads complete</p>}
       <p>{preload.message}</p>
       <p title="Counts completed files only; live transfer bytes and rate are not reported.">{preload.artifact_summary.verified_count} of {preload.artifact_summary.total_count} artifacts complete or cached · {formatBinaryBytes(preload.artifact_summary.verified_bytes)} of {formatBinaryBytes(preload.artifact_summary.total_bytes)}</p>
       {!preload.selection && <>

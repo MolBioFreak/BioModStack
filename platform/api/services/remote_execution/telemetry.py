@@ -158,7 +158,12 @@ class RemoteTelemetry:
         sample['sequence'] = self.sequence
         entry['history'].append((self.sequence, observed, sample))
         self._prune(entry, time.monotonic())
-        entry['due'] = time.monotonic() + min(60, INTERVAL * 2 ** min(entry['failures'], 3))
+        # Success: period is INTERVAL from collection START (collection time
+        # is not added). Failures keep the backoff measured from completion.
+        if entry['failures']:
+            entry['due'] = time.monotonic() + min(60, INTERVAL * 2 ** min(entry['failures'], 3))
+        else:
+            entry['due'] = started + INTERVAL
 
     async def run(self, session_factory, stop):
         from .targets import telemetry_eligible, status_query, _status_row
@@ -189,7 +194,12 @@ class RemoteTelemetry:
                     # Target status does not need a 1 s refresh: every pass reads
                     # all execution_targets rows. Five seconds keeps the console
                     # current without re-reading the table five times as often.
-                    await asyncio.wait_for(stop.wait(), timeout=5)
+                    # Wake early for the next idle target's due time so the
+                    # period is not rounded up to the next 5 s tick.
+                    idle = [e['due'] - time.monotonic() for e in self.entries.values()
+                            if e.get('task') is None or e['task'].done()]
+                    wait = min(5.0, max(0.25, min(idle))) if idle else 5.0
+                    await asyncio.wait_for(stop.wait(), timeout=wait)
                 except asyncio.TimeoutError:
                     pass
         finally:

@@ -757,6 +757,7 @@ export interface RemoteTelemetrySample {
 export interface RemoteGpuTelemetry extends Omit<RemoteTelemetrySample, 'gpus'> {
     cursor?: string;
     reset?: boolean;
+    sample_interval_seconds?: number;
     history?: RemoteTelemetrySample[];
     source: 'active_vast';
     available: boolean;

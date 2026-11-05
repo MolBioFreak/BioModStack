@@ -127,4 +127,13 @@ describe('central remote history', () => {
         history[2].cpu = { utilization: 65 };
         expect(remoteMetricSeries(history, s => s.cpu?.utilization).y).toEqual([45, null, null, 65]);
     });
+    it('does not break the line at the real 15-23 s cadence but breaks on an outage', () => {
+        const history = [sample(1, 61_000), sample(2, 38_000), sample(3, 15_000), sample(4)];
+        history.forEach((item, index) => { item.cpu = { utilization: index }; });
+        expect(remoteMetricSeries(history, s => s.cpu?.utilization, 10).y).toEqual([0, 1, 2, 3]);
+        expect(remoteMetricSeries(history, s => s.cpu?.utilization).y).toEqual([0, 1, 2, 3]);
+        const outage = [sample(1, 60_000), sample(2, 10_000)];
+        expect(remoteMetricSeries(outage, () => 1, 10).y).toEqual([1, null, 1]);
+        expect(remoteMetricSeries(outage, () => 1, 30).y).toEqual([1, 1]);
+    });
 });

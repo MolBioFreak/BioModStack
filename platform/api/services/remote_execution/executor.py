@@ -513,6 +513,14 @@ async def _publish_started_receipt(
             "status": "running", "queue_status": "running", "started_at": status.started_at,
             "remote_state": status.state, "provenance": provenance,
         }):
+            # Supersede the last staging message (e.g. "Materializing ...") now
+            # that the attempt is running; activity detail replaces it later.
+            # Display-only: a progress write failure must never undo the start receipt.
+            try:
+                from .progress import publish_job_progress
+                await publish_job_progress(session, current, phase="running", artifact=None, message="Running")
+            except Exception:
+                __import__("logging").getLogger(__name__).warning("Remote job progress supersede unavailable")
             return True
     return False
 

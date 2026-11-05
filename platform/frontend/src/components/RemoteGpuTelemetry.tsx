@@ -96,7 +96,8 @@ export function RemoteGpuTelemetry({ dashboardSize = 'standard', executionTarget
     const firstSample = history.map(s => Date.parse(s.observed_at ?? '')).find(Number.isFinite);
     // A young worker fills the chart with what it has instead of an empty hour.
     const collecting = firstSample != null && firstSample > windowStart;
-    const xDomain: [number, number] = [collecting ? Math.min(firstSample!, now - REMOTE_SAMPLE_MS) : windowStart, now];
+    const sampleMs = (telemetry.sample_interval_seconds ?? REMOTE_SAMPLE_MS / 1000) * 1000;
+    const xDomain: [number, number] = [collecting ? Math.min(firstSample!, now - sampleMs) : windowStart, now];
     const latest = history.at(-1);
 
     type Strip = { title: string; suffix: string; color: string; label: string; current: string; decimals?: number; value: (s: RemoteTelemetrySample) => number | null | undefined; range?: [number, number] };
@@ -108,7 +109,7 @@ export function RemoteGpuTelemetry({ dashboardSize = 'standard', executionTarget
             showXAxisLabels={false}
             yAxis={{ title: 'Metrics', color: PLOT_TICK }}
             series={strips.map(strip => ({
-                ...remoteMetricSeries(history, strip.value),
+                ...remoteMetricSeries(history, strip.value, telemetry.sample_interval_seconds),
                 axis: { title: strip.title, color: PLOT_TICK, suffix: strip.suffix, decimals: strip.decimals ?? 1, ...(strip.range ? { range: strip.range } : {}) },
                 name: legendName(strip.label, strip.current),
                 line: { color: strip.color, width: 1.5 },
