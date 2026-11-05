@@ -26,7 +26,7 @@ def test_plasmid_modkit_graph_and_nonblocking_fastq_default(tmp_path, workflow, 
     # The workflow must skip modkit rather than fail graph compilation.
     options = [] if mode == 'fastq' else ['--run_modkit', 'true']
     result = subprocess.run([
-        str(launcher), '-log', str(log), 'run', str(ROOT / f'workflows/ngs/{workflow}.nf'),
+        str(launcher), '-c', str(ROOT / 'nextflow.config'), '-log', str(log), 'run', str(ROOT / f'workflows/ngs/{workflow}.nf'),
         '-preview', '-offline', '-w', str(tmp_path / 'work'), '--code_root', str(ROOT),
         '--out_dir', str(tmp_path / 'out'),
         '--' + {'pod5': 'pod5_dir', 'bam': 'bam_path', 'fastq': 'fastq_path'}[mode], str(reads),
