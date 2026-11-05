@@ -21,4 +21,3 @@ export function resolveApiResourceUrl(
   } catch { /* Retain external/non-URL resources unchanged. */ }
   return value;
 }
-

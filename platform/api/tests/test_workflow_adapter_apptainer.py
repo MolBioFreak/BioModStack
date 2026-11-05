@@ -41,4 +41,3 @@ def test_workflow_adapter_prefers_the_installed_apptainer_without_reordering_pat
     assert original in script
     assert script.index(original) < script.index('readlink -f "$HOME/.local/bin/apptainer"')
     assert 'export PATH="$_bms_apptainer_dir:$PATH"' in script
-
