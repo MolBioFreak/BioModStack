@@ -2130,11 +2130,14 @@ export const useBioXpOperatorReceiptV2 = (
     commandId: string | null,
     connectionGeneration: number,
     enabled = true,
+    // Fast lane/Retarget completions are not in the robot's update feed; read the
+    // one in-flight receipt until it is terminal.
+    pollUntilTerminalMs?: number,
 ) => {
     useBioXpOperatorUpdates(connectionGeneration, enabled && Boolean(commandId));
     return useQuery({
         queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt', commandId, connectionGeneration],
-        queryFn: async ({ signal }) => {
+        queryFn: async ({ signal }): Promise<BioXpOperatorReceiptV2> => {
             const receipt = (
             await api.get<BioXpOperatorReceiptV2>(
                 `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
@@ -2144,6 +2147,9 @@ export const useBioXpOperatorReceiptV2 = (
             if (receipt.command_id !== commandId) throw new Error('Receipt command identity mismatch');
             return receipt;
         },
+        refetchInterval: (query: { state: { data?: BioXpOperatorReceiptV2 } }) =>
+            pollUntilTerminalMs && enabled && query.state.data?.terminal !== true ? pollUntilTerminalMs : false,
+        refetchIntervalInBackground: false,
         enabled: enabled && Boolean(commandId) && connectionGeneration > 0,
         gcTime: 0,
         retry: false,

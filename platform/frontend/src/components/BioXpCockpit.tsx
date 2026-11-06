@@ -74,7 +74,8 @@ function DeckSubmissionRow({ item, generation, active, onSelect, onTerminal }: {
     const documentVisible = useBioXpDocumentVisible();
     const current = active && item.request.expected_connection_generation === generation;
     const commandId = item.receipt?.command_id ?? item.commandId;
-    const query = useBioXpOperatorReceiptV2(commandId ?? null, item.request.expected_connection_generation, current && documentVisible && item.receipt?.terminal !== true);
+    const lane = item.request.action_id === 'oem.xy.move_sequence' || item.request.action_id === 'oem.xy.retarget';
+    const query = useBioXpOperatorReceiptV2(commandId ?? null, item.request.expected_connection_generation, current && documentVisible && item.receipt?.terminal !== true, lane ? 500 : undefined);
     const receipt = query.data?.action_id === item.request.action_id ? query.data : item.receipt;
     useEffect(() => {
         if (current && !query.error && query.data?.terminal && query.data.action_id === item.request.action_id)

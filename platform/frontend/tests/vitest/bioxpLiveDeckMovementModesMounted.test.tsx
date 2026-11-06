@@ -134,6 +134,19 @@ it('Fast lane batches pending clicks into one sequence and sends clicks made whi
     expect(status()).toBe('None queued');
 });
 
+it('Fast lane notices robot completion without an update-feed notice and sends the queued clicks', async () => {
+    await mount();
+    await click(button('Fast lane'));
+    await click(well('LOC_OC', 'A12')); await click(well('LOC_OC', 'H12'));
+    await release();
+    expect(status()).toBe('Active: Output chiller · A12 · Queued: Output chiller · H12');
+    // The robot finishes; nothing refetches explicitly and the update feed stays silent.
+    for (const [id, row] of receipts) receipts.set(id, { ...row, status: 'completed', terminal: true, completion_class: 'completed' });
+    await advance(600); await advance(50);
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1].body.inputs).toEqual({ targets: [{ location_id: 1, well: 'H12' }] });
+});
+
 it('Fast lane station clicks carry the current camera-offset choice', async () => {
     await mount();
     const select = [...live().querySelectorAll('label')].find(el => el.textContent?.trim().startsWith('Robot destination'))!.querySelector('select')!;
