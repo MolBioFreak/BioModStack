@@ -21,8 +21,8 @@ export function workflowProduct(product: Solution, design: GoldenGateDesignResul
  return {name,sequence:product.sequence,circular:product.topology === 'circular',sequenceType:'dna',features,
  primers:design.primers.flatMap(p => { const f=features.find(f => f.id === `${p.part_id}:${p.id}:binding` || f.id === `${p.id}:binding`); return f ? [{id:p.id,name:p.id,sequence:p.full_sequence,start:f.start,end:f.end,strand:f.strand,tm:p.tm.tm ?? undefined,tm_settings:design.primer_settings,notes:{annealing_sequence:p.annealing_sequence,footprint_mappings:p.footprint_mappings}}] : []; })};
 }
-export default function GoldenGateWorkflowWorkspace({ sequenceData, options: suppliedOptions, onLoadProduct, operationId }: {
- sequenceData: SequenceData; options: GoldenGateAssemblyOptionsResponse | null; onLoadProduct: (v: SequenceData, id?: string | null) => void; operationId?: string;
+export default function GoldenGateWorkflowWorkspace({ sequenceData, options: suppliedOptions, onLoadProduct, operationId, suggested }: {
+ sequenceData: SequenceData; options: GoldenGateAssemblyOptionsResponse | null; onLoadProduct: (v: SequenceData, id?: string | null) => void; operationId?: string; suggested?: { request: WorkflowRequest } | null;
 }) {
  const discovery=useQuery({queryKey:['molbio-golden-gate-options'],queryFn:async({signal})=>(await fetchGoldenGateAssemblyOptions(signal)).data,enabled:!suppliedOptions,staleTime:300000});
  const options=suppliedOptions ?? discovery.data ?? null;
@@ -48,6 +48,8 @@ export default function GoldenGateWorkflowWorkspace({ sequenceData, options: sup
  const reaction=candidate?.reaction !== undefined ? candidate.reaction : (selected===result?.selected_solution_id ? result?.reaction : null);
  const edit=(v:WorkflowRequest)=>{active.current?.abort();generation.current++;setBusy(false);current.current=v;setDraft(v);setMessage('');};
  useEffect(()=>()=>{active.current?.abort();generation.current++;},[]);
+ // Suggest plan "Use this plan": load the proposal's split request into the controls (no run).
+ useEffect(()=>{if(suggested){setBatchSlots([]);setReceipt(null);edit(structuredClone(suggested.request));}},[suggested]);
  const receive=(r:WorkflowResult,saved?:SavedDesign)=>{const request=structuredClone(r.requested);current.current=request;setDraft(request);setReceipt({owner:request,result:r,saved,frozen:true});setSelected(r.selected_solution_id);};
  useEffect(()=>{if(!operationId)return;const controller=new AbortController();const g=++generation.current;active.current?.abort();active.current=controller;void readGoldenGateDesign(operationId,controller.signal).then(({data})=>{if(g===generation.current&&!controller.signal.aborted)receive(data.result,data);}).catch(e=>{if(!controller.signal.aborted)setMessage(String(e));});return()=>controller.abort();},[operationId]);
  const run=async()=>{active.current?.abort();const controller=new AbortController();active.current=controller;const owner=draft;const g=++generation.current;setBusy(true);setReceipt(null);setMessage('');try{const {data}=await designGoldenGate(structuredClone(owner),controller.signal);if(current.current===owner&&g===generation.current&&!controller.signal.aborted){setReceipt({owner,result:data,frozen:false});setSelected(data.selected_solution_id);}}catch(e){if(g===generation.current&&!controller.signal.aborted)setMessage(String(e));}finally{if(g===generation.current)setBusy(false);}};

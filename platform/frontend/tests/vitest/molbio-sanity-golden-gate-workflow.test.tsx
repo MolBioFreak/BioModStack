@@ -88,8 +88,8 @@ describe('Assembly Golden Gate native receiving',()=>{
   expect(left.map(f=>[f.value,f.disabled])).toEqual([['',true],['top',false]]);
   expect(right.map(f=>[f.value,f.disabled])).toEqual([['bottom',false],['',true]]);
   expect(transferred.map((f:any)=>({id:f.id,left:f.left_end,right:f.right_end,segments:f.metadata.source_segments}))).toEqual([
-   {id:'digest-0',left:{type:'blunt',overhang:'',protruding_strand:null},right:{type:'sticky_5',overhang:'AATT',protruding_strand:'bottom'},segments:[[0,10001]]},
-   {id:'digest-1',left:{type:'sticky_5',overhang:'AATT',protruding_strand:'top'},right:{type:'blunt',overhang:'',protruding_strand:null},segments:[[10001,20006]]},
+   {id:'digest-0',left:{type:'blunt',overhang:'',protruding_strand:null},right:{type:'sticky_5',overhang:'AATT',protruding_strand:'bottom',five_prime_phosphate:'phosphorylated'},segments:[[0,10001]]},
+   {id:'digest-1',left:{type:'sticky_5',overhang:'AATT',protruding_strand:'top',five_prime_phosphate:'phosphorylated'},right:{type:'blunt',overhang:'',protruding_strand:null},segments:[[10001,20006]]},
   ]);
   expect(transferred.map((f:any)=>f.sequence)).toEqual(simulation.fragments.map(f=>f.top_strand_sequence));
   expect(transferred.map((f:any)=>f.source_sequence_id)).toEqual(['source-document','source-document']);evidence('mounted-digest-transfer',transferred);});

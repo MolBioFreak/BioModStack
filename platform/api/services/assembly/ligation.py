@@ -2,7 +2,26 @@
 from __future__ import annotations
 
 from .common import orient_fragment, overhangs_compatible
-from .types import AssemblyError, AssemblyFragment, AssemblyJunction, AssemblyProduct, OrientedFragment
+from .types import (
+    AssemblyError, AssemblyFragment, AssemblyJunction, AssemblyProduct, FragmentEnd, OrientedFragment, SealedState,
+)
+
+UNKNOWN_SEAL_NOTE = "joined, ligation chemistry not established"
+
+
+def junction_seal(left: FragmentEnd | None, right: FragmentEnd | None) -> tuple[SealedState, list[str]]:
+    """Label only. A strand is sealed when the downstream strand's 5' end at the junction is phosphorylated.
+
+    The two downstream 5' termini at a junction are the 5' end of each fragment's own end record
+    (the left fragment's right end and the right fragment's left end). Never affects whether fragments join.
+    """
+    states = [end.five_prime_phosphate if end is not None else "unknown" for end in (left, right)]
+    if "unknown" in states:
+        return "unknown", [UNKNOWN_SEAL_NOTE]
+    count = states.count("phosphorylated")
+    return ("both", "one_strand", "none")[2 - count], (
+        [] if count == 2 else ["joined, nicked"] if count == 1 else ["joined, not sealed on either strand"]
+    )
 
 
 def simulate_ligation(
@@ -44,6 +63,7 @@ def _ligate_oriented_fragments(
         if notes:
             warnings.extend(notes)
         sequence += right.sequence
+        sealed, seal_notes = junction_seal(left.right_end, right.left_end)
         junctions.append(
             AssemblyJunction(
                 left_fragment_id=left.id,
@@ -55,7 +75,8 @@ def _ligate_oriented_fragments(
                 right_end_type=right.left_end.type if right.left_end else None,
                 overhang_sequence=(left.right_end.overhang if left.right_end and left.right_end.overhang else None),
                 junction_sequence=left.sequence[-12:] + right.sequence[:12],
-                notes=notes,
+                notes=[*notes, *seal_notes],
+                sealed=sealed,
             )
         )
 
@@ -69,6 +90,7 @@ def _ligate_oriented_fragments(
             )
         if notes:
             warnings.extend(notes)
+        sealed, seal_notes = junction_seal(last.right_end, first.left_end)
         junctions.append(
             AssemblyJunction(
                 left_fragment_id=last.id,
@@ -80,7 +102,8 @@ def _ligate_oriented_fragments(
                 right_end_type=first.left_end.type if first.left_end else None,
                 overhang_sequence=(last.right_end.overhang if last.right_end and last.right_end.overhang else None),
                 junction_sequence=last.sequence[-12:] + first.sequence[:12],
-                notes=notes,
+                notes=[*notes, *seal_notes],
+                sealed=sealed,
             )
         )
 

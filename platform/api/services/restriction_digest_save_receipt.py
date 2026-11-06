@@ -38,6 +38,8 @@ class RestrictionDigestSaveReceipt(_ClosedReceiptModel):
     fragment_name_prefix: Annotated[
         str | None, Field(default=None, min_length=1, max_length=128, pattern=r".*\S.*")
     ]
+    # Planned partial digest. Omitted while empty so earlier receipts and fingerprints are unchanged.
+    excluded_cleavage_group_ids: tuple[str, ...] = Field(default=(), exclude_if=lambda value: not value)
 
     @field_validator("enzyme_ids")
     @classmethod
@@ -54,6 +56,9 @@ def normalized_save_request(value: Mapping[str, Any]) -> RestrictionDigestSaveRe
     enzyme_ids = normalized.get("enzyme_ids")
     if isinstance(enzyme_ids, (list, tuple)):
         normalized["enzyme_ids"] = tuple(enzyme_ids)
+    excluded = normalized.get("excluded_cleavage_group_ids")
+    if isinstance(excluded, (list, tuple)):
+        normalized["excluded_cleavage_group_ids"] = tuple(sorted(set(excluded)))
     prefix = normalized.get("fragment_name_prefix")
     if isinstance(prefix, str):
         normalized["fragment_name_prefix"] = prefix.strip()

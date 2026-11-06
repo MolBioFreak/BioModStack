@@ -2190,7 +2190,7 @@ async def test_digest_rejects_declared_nonduplex_substrate_for_inline_and_revisi
 @pytest.mark.asyncio
 async def test_digest_source_resolver_retains_physical_substrate_without_database():
     from types import SimpleNamespace
-    fragment = _simulate('TTGAATTCAA', ('EcoRI',)).fragments[0]
+    fragment = _simulate('TTGAATTCAA', ('EcoRI',)).fragments[1]
     dna = fragment.top_strand_sequence
     document = SimpleNamespace(id='duplex-doc', name='sticky fragment')
     revision = SimpleNamespace(id='duplex-rev', document_id=document.id, revision_number=1,
@@ -2208,7 +2208,8 @@ async def test_digest_source_resolver_retains_physical_substrate_without_databas
     source = await molbio_restriction._resolve_revision_source(payload.source, Session())
     assert source.molecule_strandedness == 'double'
     assert source.has_staggered_ends is True
-    from fastapi import HTTPException
-    with pytest.raises(HTTPException) as error:
-        molbio_restriction._complete_digest_pipeline(payload=payload, authority=catalog_authority, resolved_revision=source)
-    assert error.value.detail['code'] == 'unsupported_digest_substrate'
+    # Retained overhangs are no longer refused: the digest runs on the real duplex.
+    output = molbio_restriction._complete_digest_pipeline(payload=payload, authority=catalog_authority, resolved_revision=source)
+    assert output.simulation.fragments[0].top_strand_sequence == dna
+    assert output.simulation.fragments[0].left_end.overhang_sequence_5to3 == 'AATT'
+    assert source.retained_left_end is not None or source.retained_right_end is not None

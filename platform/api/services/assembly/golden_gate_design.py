@@ -18,6 +18,7 @@ from services.restriction_catalog import catalog_authority
 from services.restriction_digest import DigestEnd, DigestFragment, simulate_digest
 
 from .common import overhangs_compatible
+from .feature_mapping import map_features, position_mappings, region_positions
 from .golden_gate import TypeIISEnzyme, resolve_golden_gate_enzyme, simulate_golden_gate
 from .golden_gate_design_types import (
     DesignMaterial, DigestOutcome, Feature, Geometry, GoldenGateDesignRequest,
@@ -26,9 +27,13 @@ from .golden_gate_design_types import (
     PCRPreparation, SynthesisPreparation, PreparedPreparation,
 )
 from .ligation import simulate_ligation
+from .physical_ends import digest_end_to_fragment_end
 from .types import AssemblyError, AssemblyFragment, FragmentEnd, EndType
 
-RAW_ENZYMES = ("BsaI", "BsmBI", "Esp3I", "BbsI", "SapI")
+# Enzymes whose raw PCR/synthesis tails are proven against independent strand-coordinate
+# expectations (tests/test_golden_gate_design_core.py ENZYMES). Prepared mode works for any catalog enzyme.
+RAW_ENZYMES = ("BsaI", "BsmBI", "Esp3I", "BbsI", "SapI", "PaqCI", "BtgZI",
+               "BpiI", "Eco31I", "Bso31I", "LguI", "BspQI", "BfuAI")
 
 
 def preparation_geometry(enzyme: TypeIISEnzyme) -> Geometry:
@@ -42,103 +47,13 @@ def preparation_geometry(enzyme: TypeIISEnzyme) -> Geometry:
                     overhang_length=event.overhang_length_nt)
 
 
-def _positions(region: Region, material: Material) -> list[int]:
-    n = len(material.sequence)
-    if region.start >= n or region.end > n:
-        raise AssemblyError("Selected interval is outside its source")
-    if region.wraps_origin:
-        if material.topology != "circular" or region.end > region.start:
-            raise AssemblyError("Origin-wrapping interval requires a circular source and end <= start")
-        return list(range(region.start, n)) + list(range(region.end))
-    if region.end <= region.start:
-        raise AssemblyError("Selected interval must be nonempty")
-    return list(range(region.start, region.end))
-
-
-def _mappings(positions: Sequence[int | None], parent: str, strand: Literal[-1, 1] = 1) -> list[Mapping]:
-    """Compress coordinate runs; synthesized bases have no invented parent slice."""
-    runs: list[Mapping] = []
-    i = 0
-    while i < len(positions):
-        first = positions[i]
-        if first is None:
-            i += 1
-            continue
-        j = i + 1
-        while j < len(positions) and positions[j] == first + (j - i) * strand:
-            j += 1
-        a, b = first, first + (j - i - 1) * strand
-        runs.append(Mapping(output_start=i, output_end=j, parent_id=parent,
-                            parent_start=min(a, b), parent_end=max(a, b) + 1, strand=strand))
-        i = j
-    return runs
-
-
-def _map_features(features: list[Feature], parent: Material, positions: Sequence[int | None], strand: Literal[-1, 1] = 1) -> list[Feature]:
-    lookup: dict[int, list[int]] = {}
-    for out, coordinate in enumerate(positions):
-        if coordinate is not None:
-            lookup.setdefault(coordinate, []).append(out)
-    mapped = []
-    for feature in features:
-        # Match the shared GenBank owner: ordered location parts, each traversed
-        # biologically on its own strand. Reverse orientation must not swap exons.
-        chunks = []
-        for segment in feature.segments:
-            coordinates = _positions(segment, parent)
-            if segment.wraps_origin:
-                split = len(parent.sequence) - segment.start
-                chunks.extend((coordinates[:split], coordinates[split:]))
-            else:
-                chunks.append(coordinates)
-        original = [p for chunk in chunks for p in (reversed(chunk) if feature.strand == -1 else chunk)]
-        retained_indices = [i for i, p in enumerate(original) if p in lookup]
-        retained = list(dict.fromkeys(out for i in retained_indices for out in lookup[original[i]]))
-        if not retained:
-            continue
-        direction = (feature.strand or 1) * strand
-        segments = []
-        start = previous = retained[0]
-        for coordinate in retained[1:]:
-            if coordinate != previous + direction:
-                segments.append(Region(start=min(start, previous), end=max(start, previous) + 1))
-                start = coordinate
-            previous = coordinate
-        segments.append(Region(start=min(start, previous), end=max(start, previous) + 1))
-        intact = len(retained_indices) == len(original)
-        internal_loss = any(b != a + 1 for a, b in zip(retained_indices, retained_indices[1:]))
-        status = feature.status if intact else "disrupted" if internal_loss or feature.status == "disrupted" else "truncated"
-        qualifiers = dict(feature.qualifiers)
-        codon_start = feature.codon_start
-        if feature.type == "CDS" and not intact:
-            if feature.strand:
-                old = codon_start if codon_start is not None else qualifiers.get("codon_start", 1)
-                if isinstance(old, list):
-                    old = old[0] if old else None
-                if old in (1, 2, 3, "1", "2", "3"):
-                    codon_start = (int(old) - 1 - retained_indices[0]) % 3 + 1
-                    if "codon_start" in qualifiers:
-                        previous_value = qualifiers["codon_start"]
-                        qualifiers["codon_start"] = ([str(codon_start)] if isinstance(previous_value, list)
-                            else str(codon_start) if isinstance(previous_value, str) else codon_start)
-            # Original translation remains on the source; it no longer describes
-            # this truncated/disrupted feature. This annotation never blocks use.
-            qualifiers.pop("translation", None)
-        mapped.append(feature.model_copy(update={
-            "segments": segments, "strand": feature.strand * strand, "status": status,
-            "codon_start": codon_start, "qualifiers": qualifiers,
-            "frame_preserved": (feature.frame_preserved if feature.frame_preserved is not None else True)
-            if intact and feature.type == "CDS" else (False if feature.type == "CDS" else None),
-        }))
-    return mapped
+_positions = region_positions
+_mappings = position_mappings
+_map_features = map_features
 
 
 def _digest_end(value: DigestEnd) -> FragmentEnd:
-    if value.kind == "no_cut_circular":
-        raise AssemblyError("An uncut circular molecule has no ligatable ends")
-    kind: EndType = "sticky_5" if value.kind == "five_prime_overhang" else "sticky_3" if value.kind == "three_prime_overhang" else "blunt"
-    return FragmentEnd(type=kind, overhang=value.overhang_sequence_5to3 or "",
-                       protruding_strand=value.protruding_strand)
+    return digest_end_to_fragment_end(value)
 
 
 def digest_fragment_to_assembly(fragment: DigestFragment, *, part: Part) -> AssemblyFragment:

@@ -102,11 +102,11 @@ describe('DigestPanel backend authority', () => {
             await act(async () => render(next));
             await act(async () => save().click());
             await act(async () => finishSecond(new Response(JSON.stringify(ack('second')))));
-            expect(container.querySelector('a')?.getAttribute('href')).toBe('/api/molbio/restriction/digests/second');
+            expect(container.querySelector('a')).toBeNull(); expect([...container.querySelectorAll('button')].some(b => b.textContent === 'Open saved digest')).toBe(true);
             await act(async () => finishFirst(lateFailure
                 ? new Response(JSON.stringify({ detail: { code: 'analysis_busy' } }), { status: 503 })
                 : new Response(JSON.stringify(ack('first')))));
-            expect(container.querySelector('a')?.getAttribute('href')).toBe('/api/molbio/restriction/digests/second');
+            expect(container.querySelector('a')).toBeNull(); expect([...container.querySelectorAll('button')].some(b => b.textContent === 'Open saved digest')).toBe(true);
             expect(save().disabled).toBe(true);
         } finally { vi.unstubAllGlobals(); }
     });
@@ -131,7 +131,7 @@ describe('DigestPanel backend authority', () => {
             expect(second).toMatchObject({ simulation_sha256: null, enzyme_ids: ['EcoRI'], persistence_mode: 'operation_and_fragments', source: { expected_content_sha256: 'a'.repeat(64), revision_id: 'revision' }, catalog: { expected_catalog_sha256: catalog.catalog_sha256 } });
             expect(second.idempotency_key).toBeTruthy();
             expect(button.disabled).toBe(true);
-            expect(container.querySelector('a')?.getAttribute('href')).toBe(`${apiBase}/api/molbio/restriction/digests/saved-operation`);
+            expect(container.querySelector('a')).toBeNull(); expect([...container.querySelectorAll('button')].some(b => b.textContent === 'Open saved digest')).toBe(true);
         } finally { vi.unstubAllGlobals(); }
     });
 

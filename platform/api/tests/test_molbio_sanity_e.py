@@ -199,7 +199,7 @@ async def test_forward_digest_index_preserves_historical_bytes(store):
     async with engine.begin() as connection:
         before = (await connection.execute(text("SELECT id, snapshot, content_sha256 FROM molecular_revisions ORDER BY id"))).all()
         await connection.execute(text("DROP INDEX ix_molecular_revisions_digest_created"))
-        await connection.execute(text("DELETE FROM molbio_schema_migrations WHERE version='0008_revision_digest_index'"))
+        await connection.execute(text("DELETE FROM molbio_schema_migrations WHERE version IN ('0008_revision_digest_index','0009_operation_edge_revision_indexes')"))
     await init_molbio_db(engine=engine)
     async with engine.connect() as connection:
         after = (await connection.execute(text("SELECT id, snapshot, content_sha256 FROM molecular_revisions ORDER BY id"))).all()

@@ -56,6 +56,9 @@ from services.restriction_digest import (
     DigestSimulation,
     _simulate_normalized_digest_canonical,
 )
+from services.assembly.feature_mapping import map_stored_features
+from services.assembly.physical_ends import read_physical_ends
+from services.restriction_digest_substrate import substrate_from_ends
 from services.restriction_digest_save_receipt import (
     canonical_save_request_receipt,
     load_canonical_save_request_receipt,
@@ -546,6 +549,10 @@ class DigestSimulationRequest(StrictResponse):
         min_length=1, max_length=MAX_SELECTED_ENZYMES,
         json_schema_extra={"maxItems": MAX_SELECTED_ENZYMES},
     )
+    excluded_cleavage_group_ids: list[str] = Field(
+        default_factory=list, max_length=4096,
+        description="contributor_group_id values of cleavage events to leave uncut (planned partial digest).",
+    )
 
     @field_validator("enzyme_ids")
     @classmethod
@@ -568,6 +575,10 @@ class DigestSaveRequest(StrictResponse):
     persistence_mode: Literal["operation_only", "operation_and_fragments"]
     fragment_name_prefix: str | None = Field(
         default=None, min_length=1, max_length=128, pattern=r".*\S.*",
+    )
+    excluded_cleavage_group_ids: list[str] = Field(
+        default_factory=list, max_length=4096,
+        description="contributor_group_id values of cleavage events to leave uncut (planned partial digest).",
     )
 
     @field_validator("enzyme_ids")
@@ -1114,6 +1125,9 @@ class _ResolvedRevisionSource:
     topology: str | None
     molecule_strandedness: str = "double"
     has_staggered_ends: bool = False
+    features: tuple[dict[str, Any], ...] = ()
+    retained_left_end: Any = None
+    retained_right_end: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1227,13 +1241,13 @@ async def _resolve_revision_source(
         raise _error(404, "source_revision_not_found", "molecular revision was not found")
     snapshot = revision.snapshot if isinstance(revision.snapshot, dict) else {}
     provenance = revision.provenance if isinstance(getattr(revision, "provenance", None), dict) else {}
+    left_end, right_end = _retained_ends(provenance)
     digest_geometry = provenance.get("geometry") if provenance.get("schema") == "bms.molbio.restriction-digest-fragment-provenance.v1" else None
-    is_digest_fragment = isinstance(digest_geometry, dict)
-    has_staggered_ends = is_digest_fragment and any(
-        isinstance(digest_geometry.get(side), dict)
-        and digest_geometry[side].get("kind") in {"five_prime_overhang", "three_prime_overhang"}
-        for side in ("left_end", "right_end")
+    has_retained_ends = isinstance(digest_geometry, dict) or isinstance(provenance.get("physical_ends"), dict)
+    has_staggered_ends = any(
+        end is not None and end.type in {"sticky_5", "sticky_3"} for end in (left_end, right_end)
     )
+    stored_features = snapshot.get("features")
     return _ResolvedRevisionSource(
         document_id=str(document.id),
         document_name=str(document.name),
@@ -1245,9 +1259,17 @@ async def _resolve_revision_source(
         sequence=str(snapshot.get("sequence") or ""),
         is_circular=(snapshot.get("is_circular") if isinstance(snapshot.get("is_circular"), bool) else None),
         topology=(snapshot.get("topology") if snapshot.get("topology") in {"linear", "circular"} else None),
-        molecule_strandedness=str(snapshot.get("molecule_strandedness") or ("double" if is_digest_fragment else "unknown")),
+        molecule_strandedness=str(snapshot.get("molecule_strandedness") or ("double" if has_retained_ends else "unknown")),
         has_staggered_ends=has_staggered_ends,
+        features=tuple(row for row in stored_features if isinstance(row, dict)) if isinstance(stored_features, list) else (),
+        retained_left_end=left_end,
+        retained_right_end=right_end,
     )
+
+
+def _retained_ends(provenance: Mapping[str, Any]) -> tuple[Any, Any]:
+    """Physical ends kept on a revision (digest geometry or ``physical_ends``)."""
+    return read_physical_ends(provenance)
 
 
 def _analysis_source(
@@ -1409,8 +1431,10 @@ def _complete_digest_pipeline(
     )
     if strandedness != "double":
         raise _error(422, "unsupported_digest_substrate", "Digest simulation requires confirmed double-stranded DNA. Single-stranded or unknown substrates are not supported.")
-    if resolved_revision and resolved_revision.has_staggered_ends:
-        raise _error(422, "unsupported_digest_substrate", "Redigestion of a fragment with retained overhangs is not supported. Preserve its duplex ends or perform an explicit end-repair operation first.")
+    substrate = (
+        substrate_from_ends(sequence, resolved_revision.retained_left_end, resolved_revision.retained_right_end)
+        if resolved_revision and topology == "linear" else None
+    )
     simulation, canonical = _simulate_normalized_digest_canonical(
         sequence=sequence, source_sha=source_receipt.content_sha256, topology=topology, catalog=view,
         records=_digest_records(view, payload.enzyme_ids),
@@ -1418,6 +1442,8 @@ def _complete_digest_pipeline(
         source_receipt=source_receipt.model_dump(mode="json", by_alias=True),
         catalog_receipt=_receipt(authority).model_dump(mode="json", by_alias=True),
         persisted_identity=persisted_identity,
+        excluded_cleavage_group_ids=tuple(payload.excluded_cleavage_group_ids),
+        substrate=substrate,
     )
     return _CanonicalSimulationOutput(simulation=simulation, canonical_bytes=canonical)
 
@@ -1515,10 +1541,24 @@ def _serialize_saved_digest_response(response: SavedDigestResponse) -> bytes:
     return canonical
 
 
+def _child_features(
+    fragment: Any, source_features: Any, source_sequence: str, source_topology: str,
+) -> list[dict[str, Any]]:
+    """Source features mapped onto one digest child through its source segments."""
+    if not isinstance(source_features, (list, tuple)) or not source_features or not source_sequence:
+        return []
+    positions = [index for start, end in fragment.source_segments for index in range(start, end)]
+    return map_stored_features(
+        [row for row in source_features if isinstance(row, dict)],
+        source_sequence, source_topology, positions,
+    )
+
+
 def _prepare_saved_digest_fragments(
     *, simulation: DigestSimulation, fragment_ids: tuple[_FragmentIds, ...],
     operation_id: str, source_revision_id: str, catalog_id: str,
     catalog_sha256: str, fragment_name_prefix: str | None,
+    source_features: Any = (), source_sequence: str = "", source_topology: str = "linear",
 ) -> _PreparedSavedDigest:
     """Prepare every output record and the exact response in one CPU worker."""
     fragments = simulation.fragments
@@ -1546,6 +1586,9 @@ def _prepare_saved_digest_fragments(
             "is_circular": fragment.topology == "circular",
             "topology": fragment.topology, "name": name,
         }
+        mapped = _child_features(fragment, source_features, source_sequence, source_topology)
+        if mapped:
+            revision_snapshot["features"] = mapped
         revision_provenance: dict[str, object] = {
             "schema": "bms.molbio.restriction-digest-fragment-provenance.v1",
             "source_revision_id": source_revision_id, "operation_id": operation_id,
@@ -1798,6 +1841,11 @@ def _validate_saved_digest_snapshot(*, snapshot: _SavedDigestSnapshot) -> _Prepa
             "is_circular": fragment.topology == "circular",
             "topology": fragment.topology, "name": expected_name,
         }
+        # Digests saved before child features existed have no key; newer ones must match the mapper.
+        if "features" in revision_snapshot:
+            expected_snapshot["features"] = _child_features(
+                fragment, source_data.get("features"), source_sequence, source_topology or "linear",
+            )
         expected_provenance = {
             "schema": "bms.molbio.restriction-digest-fragment-provenance.v1",
             "source_revision_id": response.source_revision_id,
@@ -2071,6 +2119,7 @@ async def save_restriction_digest(
     simulation_request = DigestSimulationRequest(
         schema="bms.molbio.restriction-digest-simulation-request.v1",
         source=payload.source, catalog=payload.catalog, enzyme_ids=payload.enzyme_ids,
+        excluded_cleavage_group_ids=payload.excluded_cleavage_group_ids,
     )
     try:
         simulation_output = await _run_capacity_owned(
@@ -2113,6 +2162,8 @@ async def save_restriction_digest(
         catalog_id=payload.catalog.catalog_id,
         catalog_sha256=payload.catalog.expected_catalog_sha256,
         fragment_name_prefix=normalized_fragment_name_prefix,
+        source_features=resolved.features, source_sequence=resolved.sequence,
+        source_topology=simulation.source.topology,
     )
     canonical = prepared.canonical_bytes
     operation = MolecularOperation(

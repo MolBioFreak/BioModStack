@@ -11,7 +11,7 @@ const GoldenGateRetainedWorkspace = lazy(() => import('./panels/golden-gate/Gold
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ngsResultHref } from '../../lib/ngsResultRouting';
 import { createLatestAsyncResourceController } from '../../lib/latestAsyncResource';
-import { retainedDigestFragment, requireSupportedDigestImport, DUPLEX_EDIT_REASON } from '../../lib/retainedDigestFragment';
+import { retainedDigestFragment, digestFragmentFromImport, DUPLEX_EDIT_REASON } from '../../lib/retainedDigestFragment';
 import {
     fetchRestrictionAnalysisBatch,
     fetchRestrictionCatalogBrowse,
@@ -41,6 +41,8 @@ import {
 import { VisibilityPanel } from './VisibilityPanel';
 import { createHistoryState, reconcileSavedHistory, useSequenceHistory, type HistoryState } from './hooks/useSequenceHistory';
 import { useSequenceOperations } from './hooks/useSequenceOperations';
+import { FragmentChooser, fragmentFromRevision, loadChooserFragment } from './FragmentChooser';
+import { fetchCurrentRevisionRef, type CurrentRevisionRef } from './utils/currentRevision';
 import { AlignmentPanel, AssemblyPanel, DigestPanel, HistoryPanel, PCRPanel, PrimerPanel, RnaStructurePanel, FeaturePanel, EditPanel, SearchPanel } from './panels';
 import { AutoAnnotatePanel, type AutoAnnotateSettings } from './AutoAnnotatePanel';
 import {
@@ -51,7 +53,7 @@ import {
 } from './SelectionActionDialog';
 import { MolecularInputModal } from './MolecularInputModal';
 import { RnaStructureViewer, type RnaStructureDisplayMode } from './RnaStructureViewer';
-import { getFeatureColor, normalizeFeatureType, isSequenceAnnotation } from './featureCatalog';
+import { getFeatureColor, isSequenceAnnotation } from './featureCatalog';
 import {
     didFocusLeaveContainer,
     moveMenuFocus,
@@ -76,6 +78,8 @@ import { loadDemoPlasmids } from './demoConstructs';
 import {
     calculatePrimerTm,
     fetchProjectHub,
+    exportMolBioBranch,
+    importMolBioBranch,
     fetchMolecularRevision,
     fetchMolecularRevisionSummaries,
     fetchNucleotideSequence,
@@ -115,8 +119,6 @@ import {
 } from './utils/nucleotides';
 import { findOpenReadingFrames } from './utils/orfs';
 import {
-    dedupeFeatures,
-    featureBounds,
     featureLength,
     featureOverlapLength,
 } from './utils/features';
@@ -125,11 +127,13 @@ import {
     buildPrimerTmRequest,
     createSelectionSnapshot,
     getPrimerHighlightRegions,
-    normalizeStoredPrimerPlacement,
     prepareSelectionPrimer,
     type SelectionSnapshot,
 } from './utils/selectionActions';
 import { applyImportedTopology, type ImportTopology } from './utils/topology';
+import { browserParsedFeature, normalizeFeatureList, normalizeFeatureRecord, normalizePrimerRecord, sequenceDataFromApiRecord } from './utils/sequenceRecord';
+import { importViaServer } from './utils/serverImport';
+import { branchImportMessage, downloadBranchBundle, firstImportedRevision, isBranchBundle } from './utils/branchTransfer';
 import {
     MOLBIO_LIBRARY_PANEL_DEFAULT_WIDTH,
     clampMolBioPanelWidth,
@@ -380,7 +384,8 @@ const DEFAULT_DNA_TM_SETTINGS: PrimerTmSettings = {
     self_complementary: false,
 };
 
-const EXACT_REVISION_ALLOWED_PANELS = new Set<ActivePanel>(['view', 'history', 'search']);
+// Digest, PCR and Assembly read the viewed revision as their source; none of them writes it.
+const EXACT_REVISION_ALLOWED_PANELS = new Set<ActivePanel>(['view', 'history', 'search', 'digest', 'pcr', 'assembly']);
 
 function PanelTabs({ active, onChange, sequenceType, readOnlyAuthority = false }: PanelTabsProps) {
     const panels = sequenceType === 'rna'
@@ -410,115 +415,6 @@ function PanelTabs({ active, onChange, sequenceType, readOnlyAuthority = false }
             })}
         </div>
     );
-}
-
-function normalizeFeatureList(features: Feature[]): Feature[] {
-    return dedupeFeatures(features);
-}
-
-function normalizeFeatureRecord(feature: Partial<Feature> & Record<string, UntypedApiValue>, fallbackId: string): Feature {
-    const rawSegments = Array.isArray(feature.segments)
-        ? feature.segments
-        : Array.isArray(feature.locations)
-            ? feature.locations
-            : [];
-
-    const segments = rawSegments
-        .map((segment: UntypedApiValue) => ({
-            start: Number(segment?.start ?? segment?.startIndex ?? segment?.rangeBegin ?? feature.start ?? 0),
-            end: Number(segment?.end ?? segment?.endIndex ?? segment?.rangeEnd ?? feature.end ?? 0),
-        }))
-        .filter((segment: { start: number; end: number }) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start);
-
-    const start = typeof feature.start === 'number'
-        ? feature.start
-        : (segments[0]?.start ?? 0);
-    const end = typeof feature.end === 'number'
-        ? feature.end
-        : (segments[segments.length - 1]?.end ?? 0);
-
-    const normalizedType = normalizeFeatureType(feature.type || 'misc_feature');
-    const normalized: Feature = {
-        id: feature.id || fallbackId,
-        name: feature.name || feature.type || 'feature',
-        type: normalizedType,
-        start,
-        end,
-        strand: feature.strand === -1 ? -1 : 1,
-        color: feature.color || getFeatureColor(normalizedType),
-        description: feature.description,
-        notes: feature.notes,
-        qualifiers: feature.qualifiers || feature.notes,
-        provenance: feature.provenance,
-        segments: segments.length > 0 ? segments : undefined,
-    };
-
-    const bounds = featureBounds(normalized);
-    return {
-        ...normalized,
-        start: bounds.start,
-        end: bounds.end,
-    };
-}
-
-function normalizePrimerRecord(
-    primer: Partial<Primer> & Record<string, UntypedApiValue>,
-    fallbackId: string,
-    sequenceLength: number,
-    circular: boolean,
-): Primer {
-    const placement = normalizeStoredPrimerPlacement(primer, sequenceLength, circular);
-    return {
-        id: primer.id || fallbackId,
-        name: primer.name || 'Primer',
-        sequence: (primer.sequence || '').toUpperCase(),
-        sequenceType: primer.sequenceType || primer.sequence_type || inferSequenceTypeFromSequence(primer.sequence || ''),
-        start: placement.start,
-        end: placement.end,
-        strand: placement.strand,
-        tm: placement.binding_status === 'needs_review' ? undefined : primer.tm,
-        gc_percent: primer.gc_percent,
-        tm_algorithm: placement.binding_status === 'needs_review' ? undefined : primer.tm_algorithm,
-        tm_salt_correction: placement.binding_status === 'needs_review' ? undefined : primer.tm_salt_correction,
-        tm_settings: placement.binding_status === 'needs_review' ? undefined : primer.tm_settings,
-        notes: primer.notes,
-        provenance: primer.provenance,
-        sites: placement.sites,
-        binding_status: placement.binding_status,
-        binding_warning: placement.binding_warning,
-    };
-}
-
-function sequenceDataFromApiRecord(seq: NucleotideSequenceResponse): SequenceData {
-    return {
-        name: seq.name,
-        description: seq.description ?? undefined,
-        sequence: seq.sequence,
-        circular: seq.is_circular,
-        sequenceType: seq.sequence_type,
-        moleculeStrandedness: seq.molecule_strandedness,
-        moleculeOrientation: seq.molecule_orientation,
-        moleculeLabel: seq.molecule_label,
-        features: normalizeFeatureList((seq.features || []).map((feature: Feature, index: number) => normalizeFeatureRecord(
-            feature as Feature & Record<string, UntypedApiValue>,
-            feature.id || `loaded_feature_${index}`,
-        ))),
-        primers: (seq.primers || []).map((primer: Primer, index: number) => normalizePrimerRecord(
-            primer as Primer & Record<string, UntypedApiValue>,
-            primer.id || `loaded_primer_${index}`,
-            seq.sequence.length,
-            seq.is_circular,
-        )),
-        translations: [],
-        analysisTracks: (seq.analysis_tracks || []).map(trackFromApi),
-        organism: seq.organism ?? undefined,
-        accession: seq.accession ?? undefined,
-        sourceFile: seq.source_file ?? undefined,
-        parentId: seq.parent_id ?? null,
-        operation: seq.operation ?? null,
-        operationParams: seq.operation_params ?? null,
-        version: seq.version ?? null,
-    };
 }
 
 function sequenceDataFromMolecularRevision(revision: MolecularRevision): SequenceData {
@@ -581,24 +477,6 @@ function sequenceDataFromMolecularRevision(revision: MolecularRevision): Sequenc
         updated_at: typeof snapshot.updated_at === 'string' ? snapshot.updated_at : null,
     });
     return { ...data, digestFragment: retainedDigestFragment(revision.provenance, sequence) };
-}
-
-function trackFromApi(track: SequenceAnalysisTrack): AnalysisTrack {
-    return {
-        id: track.id,
-        name: track.name,
-        kind: track.kind,
-        description: track.description ?? undefined,
-        color: track.color ?? undefined,
-        sourceFormat: track.source_format ?? undefined,
-        sourceName: track.source_name ?? undefined,
-        sourceUrl: track.source_url ?? undefined,
-        normalization: track.normalization ?? undefined,
-        values: track.values || [],
-        minValue: track.min_value ?? undefined,
-        maxValue: track.max_value ?? undefined,
-        createdAt: track.created_at ?? undefined,
-    };
 }
 
 function trackToApi(track: AnalysisTrack): SequenceAnalysisTrack {
@@ -957,8 +835,21 @@ export function MolBioToolkitV2() {
     const restrictionAnalysisControllerRef = useRef(createLatestAsyncResourceController());
     const restrictionAuthorityControllerRef = useRef(createLatestAsyncResourceController());
     const restrictionDigestControllerRef = useRef(createLatestAsyncResourceController());
+    // Current revision of a saved, unedited molecule (fetched only while Digest is open).
+    const [currentRevisionRef, setCurrentRevisionRef] = useState<CurrentRevisionRef | null>(null);
+    const savedCleanRevision = !selectedExactMolecularRevision && !isDirty && selectedSequenceId
+        && currentRevisionRef?.sequenceId === selectedSequenceId ? currentRevisionRef : null;
     const restrictionSource = useMemo<RestrictionSource | null>(() => {
         if (!sequenceData.sequence || sequenceData.sequenceType !== 'dna') return null;
+        if (savedCleanRevision && savedCleanRevision.content_length === sequenceData.sequence.length) {
+            return {
+                kind: 'molecular_revision',
+                sequence_id: savedCleanRevision.sequenceId,
+                revision_id: savedCleanRevision.revision_id,
+                expected_content_sha256: savedCleanRevision.content_sha256,
+                topology: sequenceData.circular ? 'circular' : 'linear',
+            };
+        }
         if (selectedExactMolecularRevision) {
             return {
                 kind: 'molecular_revision',
@@ -975,7 +866,7 @@ export function MolBioToolkitV2() {
             topology: sequenceData.circular ? 'circular' : 'linear',
             molecule_strandedness: sequenceData.moleculeStrandedness ?? 'unknown',
         };
-    }, [selectedExactMolecularRevision, sequenceData.circular, sequenceData.name, sequenceData.sequence, sequenceData.sequenceType, sequenceData.moleculeStrandedness]);
+    }, [savedCleanRevision, selectedExactMolecularRevision, sequenceData.circular, sequenceData.name, sequenceData.sequence, sequenceData.sequenceType, sequenceData.moleculeStrandedness]);
 
     // Fence callbacks during render as well as effect cleanup: a previous source
     // can finish between a construct/catalog render and its passive effects.
@@ -1093,7 +984,7 @@ export function MolBioToolkitV2() {
         restrictionFullCatalogWaitRef.current = null;
     }, []);
 
-    const runRestrictionDigest = useCallback((enzymeIds: string[]) => {
+    const runRestrictionDigest = useCallback((enzymeIds: string[], excludedCleavageGroupIds?: string[]) => {
         const controller = restrictionDigestControllerRef.current;
         const token = controller.begin();
         setRestrictionDigest(null);
@@ -1109,6 +1000,7 @@ export function MolBioToolkitV2() {
             source: expectedSource,
             catalog: { catalog_id: expectedCatalog.catalog_id, expected_catalog_sha256: expectedCatalog.catalog_sha256 },
             enzymeIds,
+            excludedCleavageGroupIds,
         }).then((result) => {
             if (!controller.isCurrent(token)) return;
             setRestrictionDigest(result);
@@ -1632,7 +1524,7 @@ export function MolBioToolkitV2() {
                     operation_type?: string;
                     operation_id?: string;
                     inputs?: Array<{ revision_id?: string }>;
-                    outputs?: Array<{ revision_id?: string }>;
+                    outputs?: Array<{ revision_id?: string; document_id?: string; role?: string }>;
                 };
                 const linkedRevisionIds = [...(detail.inputs ?? []), ...(detail.outputs ?? [])]
                     .map((item) => item.revision_id)
@@ -1644,6 +1536,15 @@ export function MolBioToolkitV2() {
                     throw new Error('operation identity mismatch');
                 }
                 if (!cancelled) { setDeepLinkOperationState('loaded'); if(detail.operation_type === 'golden_gate_design') setGoldenGateLinkedOperation(deepLinkOperationId); }
+                // Operation-only link: open the product-role output (else the first output) as an exact revision.
+                if (!cancelled && !requestedCanonicalMolecularSequenceId && !deepLinkSequenceId) {
+                    const outputs = detail.outputs ?? [];
+                    const target = outputs.find((item) => item.role === 'product' && item.document_id && item.revision_id)
+                        ?? outputs.find((item) => item.document_id && item.revision_id);
+                    if (target?.document_id && target.revision_id) {
+                        updateQueryParams({ molbio_sequence_id: target.document_id, molbio_revision_id: target.revision_id }, { replace: true });
+                    }
+                }
             })
             .catch(() => {
                 if (!cancelled) setDeepLinkOperationState('unavailable');
@@ -1721,10 +1622,44 @@ export function MolBioToolkitV2() {
         const ownsCompletion = captureEditableOwner();
         if (exactMolecularAuthorityRef.current) return;
         try {
-            if (/\.json$/i.test(file.name)) requireSupportedDigestImport(JSON.parse(await file.text()));
+            const fileText = typeof file.text === 'function' ? await file.text() : await new Response(file).text();
+            if (/\.json$/i.test(file.name)) {
+                const saved = JSON.parse(fileText);
+                if (isBranchBundle(saved)) {
+                    const result = await importMolBioBranch(saved);
+                    setWorkspaceRestoreNotice(branchImportMessage(result));
+                    await loadLibrary();
+                    const opened = firstImportedRevision(saved, result);
+                    if (opened) {
+                        approveMolecularOpenRequest({ kind: 'exact', sequenceId: opened.sequenceId, revisionId: opened.revisionId });
+                        updateQueryParams({ molbio_sequence_id: opened.sequenceId, molbio_revision_id: opened.revisionId });
+                    }
+                    return;
+                }
+                const fragment = typeof saved?.sequence === 'string' ? digestFragmentFromImport(saved, saved.sequence) : undefined;
+                if (fragment) {
+                    openWorkspace({ ...saved, circular: false, features: saved.features || [], primers: saved.primers || [], translations: [], analysisTracks: [], digestFragment: fragment }, {
+                        sequenceId: null, dirty: false, label: `Import ${saved.name}`,
+                    });
+                    return;
+                }
+            }
+            const served = await importViaServer(file, fileText, topology).catch(() => null);
+            if (served) {
+                if (!ownsCompletion()) return;
+                openWorkspace(served.data, {
+                    sequenceId: served.sequenceId,
+                    dirty: served.needsSave,
+                    label: `Import and save ${served.data.name}`,
+                });
+                await loadLibrary();
+                return;
+            }
             const { anyToJson } = await import('@teselagen/bio-parsers');
             const result = await anyToJson(file, {
                 fileName: file.name,
+                inclusive1BasedStart: false,
+                inclusive1BasedEnd: true,
                 parseOptions: { inclusive1BasedStart: false, jsonType: 'json' }
             });
             if (!ownsCompletion()) return;
@@ -1755,7 +1690,7 @@ export function MolBioToolkitV2() {
                 moleculeStrandedness: moleculeMetadata.moleculeStrandedness,
                 moleculeOrientation: moleculeMetadata.moleculeOrientation,
                 moleculeLabel: moleculeMetadata.moleculeLabel,
-                features: normalizeFeatureList((parsed.features || []).map((f: UntypedApiValue, i: number) => normalizeFeatureRecord(f, `f_${i}`))),
+                features: normalizeFeatureList((parsed.features || []).map((f: UntypedApiValue, i: number) => browserParsedFeature(f, `f_${i}`, normalizedSequence.length))),
                 primers: (parsed.primers || []).map((p: UntypedApiValue, i: number) => normalizePrimerRecord(
                     p,
                     `p_${i}`,
@@ -1790,7 +1725,7 @@ export function MolBioToolkitV2() {
             console.error('Import error:', error);
             alert(`Failed to parse file: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-    }, [openWorkspace, createSequence, loadLibrary]);
+    }, [openWorkspace, createSequence, loadLibrary, approveMolecularOpenRequest, updateQueryParams]);
 
     // Save one explicit workspace so transition order cannot retarget the write.
     const saveWorkspace = useCallback(async (workspaceId: string): Promise<boolean> => {
@@ -1868,6 +1803,18 @@ export function MolBioToolkitV2() {
         } catch (error) {
             if (requestId === projectAttachmentRequestRef.current) setProjectAttachmentError(error instanceof Error ? error.message : 'Unable to load saved revision.');
         }
+    };
+
+    const exportBranch = async () => {
+        const sequenceId = selectedExactMolecularRevision?.sequence_id ?? selectedSequenceId;
+        let revisionId = selectedExactMolecularRevision?.revision_id;
+        for (let offset = 0; sequenceId && !revisionId; offset += 50) {
+            const page = await fetchMolecularRevisionSummaries(sequenceId, 50, offset);
+            revisionId = page.find((item) => item.is_current)?.revision_id;
+            if (page.length < 50) break;
+        }
+        if (!revisionId) throw new Error('The saved molecular revision is unavailable.');
+        downloadBranchBundle(await exportMolBioBranch([revisionId]), sequenceData.name);
     };
 
     const saveSequence = useCallback(
@@ -2481,6 +2428,45 @@ export function MolBioToolkitV2() {
         viewportWidth,
         viewportHeight,
     });
+    // Saved, unedited molecule: Digest submits its current revision instead of inline DNA.
+    useEffect(() => {
+        if (isDirty) { setCurrentRevisionRef(null); return undefined; }
+        if (activePanel !== 'digest' || !selectedSequenceId || selectedExactMolecularRevision) return undefined;
+        const controller = new AbortController();
+        void fetchCurrentRevisionRef(selectedSequenceId, controller.signal)
+            .then((ref) => { if (!controller.signal.aborted) setCurrentRevisionRef(ref); })
+            .catch(() => { if (!controller.signal.aborted) setCurrentRevisionRef(null); });
+        return () => controller.abort();
+    }, [activePanel, isDirty, selectedSequenceId, selectedExactMolecularRevision]);
+
+    // Derive from this revision: Assembly starts with the viewed revision as its one fragment.
+    const exactAssemblySeedRef = useRef<string | null>(null);
+    useEffect(() => {
+        if (activePanel !== 'assembly' || !selectedExactMolecularRevision) { exactAssemblySeedRef.current = null; return; }
+        if (exactAssemblySeedRef.current === selectedExactMolecularRevision.revision_id) return;
+        exactAssemblySeedRef.current = selectedExactMolecularRevision.revision_id;
+        setDigestAssemblyFragments([fragmentFromRevision(selectedExactMolecularRevision)]);
+    }, [activePanel, selectedExactMolecularRevision]);
+
+    const addChooserFragment = useCallback((fragment: import('../../lib/api').AssemblyFragmentInput) => {
+        setDigestAssemblyFragments((current) => [...(current ?? []), fragment]);
+        setActivePanel('assembly');
+    }, []);
+    const onAddChooserFragment = useCallback(async (item: import('../../lib/api').ChooserItem) => {
+        addChooserFragment(await loadChooserFragment(item));
+    }, [addChooserFragment]);
+    const useRelativeInAssembly = useCallback(async (edge: import('../../lib/api').RelativeEdge) => {
+        const revision = await fetchMolecularRevision(edge.document_id, edge.revision_id);
+        addChooserFragment(fragmentFromRevision(revision));
+    }, [addChooserFragment]);
+    const openRelativeForPanel = useCallback((edge: import('../../lib/api').RelativeEdge, panel: 'digest' | 'pcr' | 'edit') => {
+        requestWorkspaceTransition('open a related molecule', () => {
+            setActivePanel(panel);
+            approveMolecularOpenRequest({ kind: 'exact', sequenceId: edge.document_id, revisionId: edge.revision_id });
+            updateQueryParams({ molbio_sequence_id: edge.document_id, molbio_revision_id: edge.revision_id });
+        });
+    }, [approveMolecularOpenRequest, requestWorkspaceTransition, updateQueryParams]);
+
     const restrictionConsumerVisible = (Boolean(restrictionSource) && visibility.cutsites) || (isMobileMolBio
         ? mobileSurface === 'digest'
         : !isToolPanelCollapsed && activePanel === 'digest');
@@ -2772,6 +2758,7 @@ export function MolBioToolkitV2() {
         const result = await anyToJson(file, {
             fileName: file.name,
             inclusive1BasedStart: false,
+            inclusive1BasedEnd: true,
             jsonType: 'json',
         });
         const results = Array.isArray(result) ? result : [result];
@@ -3540,6 +3527,8 @@ export function MolBioToolkitV2() {
                             onFocusViewer={sequenceData.circular ? toggleViewerFullscreen : undefined}
                             onExportToProject={() => void openProjectExport()}
                             projectExportDisabled={!(selectedExactMolecularRevision || selectedSequenceId) || isDirty}
+                            onExportBranch={exportBranch}
+                            branchExportDisabled={!(selectedExactMolecularRevision || selectedSequenceId) || isDirty}
                             onUndo={isExactMolecularAuthority ? undefined : undo}
                             onRedo={isExactMolecularAuthority ? undefined : redo}
                             onAutoAnnotate={isExactMolecularAuthority ? undefined : handleAutoAnnotate}
@@ -3896,9 +3885,19 @@ export function MolBioToolkitV2() {
                                     molbio_sequence_id: sequenceId,
                                     molbio_revision_id: revisionId,
                                 })}
+                                exactRevisionId={selectedExactMolecularRevision?.revision_id ?? null}
+                                relativeActions={{
+                                    operationHref: (operationId) => contextHref(location.pathname, {
+                                        molbio_operation_id: operationId,
+                                        molbio_sequence_id: null,
+                                        molbio_revision_id: null,
+                                    }),
+                                    onUseInAssembly: (edge) => { void useRelativeInAssembly(edge); },
+                                    onOpenForPanel: openRelativeForPanel,
+                                }}
                             />
                         )}
-                        {!isExactMolecularAuthority && activePanel === 'assembly' && (
+                        {activePanel === 'assembly' && (<>
                             <AssemblyPanel
                                 transferredFragments={digestAssemblyFragments}
                                 sequenceData={sequenceData}
@@ -3907,7 +3906,8 @@ export function MolBioToolkitV2() {
                                 onLoadProduct={handleLoadAssemblyProduct}
                                 onLoadSavedWorkup={guardedLoadSequence}
                             />
-                        )}
+                            <div className="px-3 pb-3"><FragmentChooser onPick={(item) => { void onAddChooserFragment(item); }} /></div>
+                        </>)}
                         {!isExactMolecularAuthority && activePanel === 'edit' && (
                             sequenceData.digestFragment ? <p role="alert">{DUPLEX_EDIT_REASON}</p> :
                             <EditPanel
@@ -3923,7 +3923,7 @@ export function MolBioToolkitV2() {
                                 }}
                             />
                         )}
-                        {!isExactMolecularAuthority && activePanel === 'digest' && (
+                        {activePanel === 'digest' && (
                             <DigestPanel
                                 onUseInAssembly={fragments => { setDigestAssemblyFragments(fragments); setActivePanel('assembly'); }}
                                 sequenceData={sequenceData}
@@ -3950,10 +3950,10 @@ export function MolBioToolkitV2() {
                         onAnalyzeAll={requestFullRestrictionAnalysis}
                             />
                         )}
-                        {!isExactMolecularAuthority && activePanel === 'pcr' && (
+                        {activePanel === 'pcr' && (
                             <PCRPanel
                                 sequenceData={sequenceData}
-                                sequenceId={selectedSequenceId}
+                                sequenceId={isExactMolecularAuthority ? null : selectedSequenceId}
                                 onHighlight={setHighlightedRegions}
                                 tmOptions={primerTmOptions}
                                 tmSettings={primerTmSettings}

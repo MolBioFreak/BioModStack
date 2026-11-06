@@ -272,8 +272,10 @@ def build_design_exports(
     exports["parts.csv"] = _csv(part_fields, rows)
     junction_fields = ["solution_id", "index", "left_fragment_id", "right_fragment_id", "left_fragment_name", "right_fragment_name",
                        "mode", "left_end_type", "right_end_type", "overhang_sequence", "overlap_sequence", "overlap_length",
-                       "junction_sequence", "validation", "notes", "end_convention"]
-    exports["junctions.csv"] = _csv(junction_fields, [dict(solution_id=solution.id, index=i, **asdict(junction),
+                       "junction_sequence", "validation", "notes", "sealed", "end_convention"]
+    gibson_only = {"overlap_tm", "overlap_tm_2_4", "overlap_tm_model"}  # Gibson information; not Golden Gate columns
+    exports["junctions.csv"] = _csv(junction_fields, [dict(solution_id=solution.id, index=i,
+        **{k: v for k, v in asdict(junction).items() if k not in gibson_only},
         end_convention="Native oriented left-fragment right-end overhang, physical 5prime-to-3prime when explicit; see parts.csv for original end notation")
         for i, junction in enumerate(solution.junctions)] if solution else [])
     exports["worksheet.txt"] = _worksheet(design)

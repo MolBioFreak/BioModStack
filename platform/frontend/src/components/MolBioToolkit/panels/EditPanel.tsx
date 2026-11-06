@@ -15,7 +15,8 @@ import {
     sequenceUnitLabel,
 } from '../utils/nucleotides';
 import { createSelectionSnapshot } from '../utils/selectionActions';
-import { findLinearizationBlockers, setSequenceTopology } from '../utils/topology';
+import { setSequenceTopology } from '../utils/topology';
+import { setOrigin } from '../utils/setOrigin';
 
 interface EditPanelProps {
     sequenceData: SequenceData;
@@ -59,10 +60,8 @@ export function EditPanel({
         ? selectionSnapshot.placement
         : null;
     const selectedSequence = selectionSnapshot?.sequence || '';
-    const linearizationBlockers = useMemo(
-        () => findLinearizationBlockers(sequenceData),
-        [sequenceData],
-    );
+    const [originPosition, setOriginPosition] = useState('');
+    const [originReverse, setOriginReverse] = useState(false);
 
     // Validate sequence input
     const validateSequence = useCallback((seq: string): boolean => {
@@ -230,6 +229,16 @@ export function EditPanel({
         );
     }, [onSequenceChange, sequenceData]);
 
+    const handleSetOrigin = useCallback(() => {
+        const requested = Number(originPosition || (selection ? selection.start + 1 : 1));
+        if (!Number.isInteger(requested) || requested < 1 || requested > sequenceData.sequence.length) return;
+        onSequenceChange(
+            setOrigin(sequenceData, requested - 1, originReverse),
+            `Set origin to position ${requested}${originReverse ? ' (reverse complement)' : ''}`,
+        );
+        setOriginPosition('');
+    }, [originPosition, originReverse, selection, sequenceData, onSequenceChange]);
+
     const selectionLength = selectionSnapshot?.length || 0;
 
     return (
@@ -278,7 +287,7 @@ export function EditPanel({
             </div>
             {wrapsOrigin && (
                 <div className="rounded border border-amber-700/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-200">
-                    Origin-spanning delete, replace, reverse, and complement edits are disabled because they would redefine the construct origin. Case conversion remains safe; rotate the origin before destructive edits.
+                    Origin-spanning delete, replace, reverse, and complement edits are disabled because they would redefine the construct origin. Case conversion remains safe; use Set origin (Transform tab) first.
                 </div>
             )}
 
@@ -383,7 +392,7 @@ export function EditPanel({
                 <div className="space-y-3">
                     <div className="text-xs text-slate-400 mb-2">
                         {wrapsOrigin
-                            ? 'Rotate the construct origin before transforming this selection.'
+                            ? 'Use Set origin below before transforming this selection.'
                             : selectionSnapshot ? 'Transform selected region:' : 'Select a region to transform'}
                     </div>
 
@@ -443,17 +452,33 @@ export function EditPanel({
                         <div className="mb-2 text-xs text-slate-400">Molecule topology:</div>
                         <button
                             onClick={handleTopologyChange}
-                            disabled={sequenceData.circular && linearizationBlockers.length > 0}
-                            className="w-full rounded bg-slate-700 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
-                            title={linearizationBlockers.length > 0
-                                ? `Rotate the origin first: ${linearizationBlockers.join(', ')}`
-                                : undefined}
+                            className="w-full rounded bg-slate-700 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-600"
                         >
                             {sequenceData.circular ? 'Linearize at current origin' : 'Circularize construct'}
                         </button>
-                        {sequenceData.circular && linearizationBlockers.length > 0 && (
-                            <div className="mt-2 rounded border border-amber-700/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-200">
-                                Linearization blocked by {linearizationBlockers.join(' and ')}. Rotate the origin before linearizing.
+                        {sequenceData.circular && (
+                            <div className="mt-3 space-y-2">
+                                <div className="text-xs text-slate-400">Set origin (circular):</div>
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="number" min={1} max={sequenceData.sequence.length}
+                                        value={originPosition}
+                                        onChange={(e) => setOriginPosition(e.target.value)}
+                                        placeholder={selection ? String(selection.start + 1) : 'position'}
+                                        aria-label="New origin position"
+                                        className="w-24 rounded border border-slate-600 bg-slate-800 px-2 py-1 font-mono text-xs"
+                                    />
+                                    <label className="flex items-center gap-1 text-xs text-slate-300">
+                                        <input type="checkbox" checked={originReverse} onChange={(e) => setOriginReverse(e.target.checked)} />
+                                        Reverse complement
+                                    </label>
+                                </div>
+                                <button
+                                    onClick={handleSetOrigin}
+                                    className="w-full rounded bg-slate-700 py-2 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-600"
+                                >
+                                    Set origin
+                                </button>
                             </div>
                         )}
                     </div>

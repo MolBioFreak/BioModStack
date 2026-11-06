@@ -1,3 +1,5 @@
+import { splitAtLinearization } from './setOrigin.js';
+
 export type ImportTopology = 'preserve' | 'linear' | 'circular';
 
 interface SegmentLike {
@@ -33,51 +35,9 @@ export function applyImportedTopology(
     return parsedCircular;
 }
 
-function traversesOrigin(
-    start: number | undefined,
-    end: number | undefined,
-    segments: SegmentLike[] | undefined,
-    sequenceLength: number,
-): boolean {
-    if (typeof start === 'number' && typeof end === 'number' && start > end) {
-        return true;
-    }
-    if (!segments || segments.length < 2 || sequenceLength <= 0) {
-        return false;
-    }
-
-    return segments.some((segment, index) => {
-        const next = segments[(index + 1) % segments.length];
-        return (segment.end === sequenceLength && next.start === 0)
-            || (segment.start === 0 && next.end === sequenceLength);
-    });
-}
-
-function blockerLabel(count: number, singular: string): string {
-    return `${count} origin-spanning ${singular}${count === 1 ? '' : 's'}`;
-}
-
-export function findLinearizationBlockers(sequenceData: TopologySequenceLike): string[] {
-    if (!sequenceData.circular) return [];
-
-    const sequenceLength = sequenceData.sequence.length;
-    const featureCount = (sequenceData.features || []).filter((feature) => traversesOrigin(
-        feature.start,
-        feature.end,
-        feature.segments,
-        sequenceLength,
-    )).length;
-    const primerCount = (sequenceData.primers || []).filter((primer) => traversesOrigin(
-        primer.start,
-        primer.end,
-        primer.sites,
-        sequenceLength,
-    )).length;
-
-    const blockers: string[] = [];
-    if (featureCount > 0) blockers.push(blockerLabel(featureCount, 'feature'));
-    if (primerCount > 0) blockers.push(blockerLabel(primerCount, 'primer'));
-    return blockers;
+/** Linearization no longer blocks: crossing entries are kept as split two-segment entries. */
+export function findLinearizationBlockers(_sequenceData: TopologySequenceLike): string[] {
+    return [];
 }
 
 export function setSequenceTopology<T extends TopologySequenceLike>(
@@ -85,13 +45,6 @@ export function setSequenceTopology<T extends TopologySequenceLike>(
     circular: boolean,
 ): T {
     if (sequenceData.circular === circular) return sequenceData;
-    if (!circular) {
-        const blockers = findLinearizationBlockers(sequenceData);
-        if (blockers.length > 0) {
-            throw new Error(
-                `Cannot linearize at the current origin: ${blockers.join(', ')}. Rotate the origin before linearizing.`,
-            );
-        }
-    }
+    if (!circular) return { ...splitAtLinearization(sequenceData as never) as T, circular };
     return { ...sequenceData, circular };
 }

@@ -807,6 +807,16 @@
           ],
           "default": null,
           "title": "Protruding Strand"
+        },
+        "five_prime_phosphate": {
+          "default": "unknown",
+          "enum": [
+            "unknown",
+            "phosphorylated",
+            "unphosphorylated"
+          ],
+          "title": "Five Prime Phosphate",
+          "type": "string"
         }
       },
       "required": [
@@ -1119,9 +1129,150 @@
       "title": "PreparedPreparation",
       "type": "object"
     },
+    "PrimerDesignSearchProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "flanking_exact_v1",
+          "default": "flanking_exact_v1",
+          "title": "Version",
+          "type": "string"
+        },
+        "candidates_per_strand": {
+          "const": 48,
+          "default": 48,
+          "title": "Candidates Per Strand",
+          "type": "integer"
+        },
+        "target_overlap_bases": {
+          "const": 4,
+          "default": 4,
+          "title": "Target Overlap Bases",
+          "type": "integer"
+        },
+        "origin_wrapping_candidates": {
+          "const": false,
+          "default": false,
+          "title": "Origin Wrapping Candidates",
+          "type": "boolean"
+        },
+        "product_size_includes_tails": {
+          "const": true,
+          "default": true,
+          "title": "Product Size Includes Tails",
+          "type": "boolean"
+        },
+        "overlapping_footprints": {
+          "const": false,
+          "default": false,
+          "title": "Overlapping Footprints",
+          "type": "boolean"
+        },
+        "substrate": {
+          "const": "dna_template",
+          "default": "dna_template",
+          "title": "Substrate",
+          "type": "string"
+        },
+        "qc": {
+          "$ref": "#/$defs/PrimerQcProfile"
+        }
+      },
+      "title": "PrimerDesignSearchProfile",
+      "type": "object"
+    },
+    "PrimerQcProfile": {
+      "additionalProperties": false,
+      "description": "Closed, versioned fixed search profile; not thermodynamic predictions.",
+      "properties": {
+        "version": {
+          "const": "exact_match_v1",
+          "default": "exact_match_v1",
+          "title": "Version",
+          "type": "string"
+        },
+        "binding_core_bases": {
+          "const": 12,
+          "default": 12,
+          "title": "Binding Core Bases",
+          "type": "integer"
+        },
+        "shorter_primer_uses_whole_sequence": {
+          "const": true,
+          "default": true,
+          "title": "Shorter Primer Uses Whole Sequence",
+          "type": "boolean"
+        },
+        "hairpin_min_stem": {
+          "const": 3,
+          "default": 3,
+          "title": "Hairpin Min Stem",
+          "type": "integer"
+        },
+        "hairpin_min_loop": {
+          "const": 3,
+          "default": 3,
+          "title": "Hairpin Min Loop",
+          "type": "integer"
+        },
+        "hairpin_max_loop": {
+          "const": 12,
+          "default": 12,
+          "title": "Hairpin Max Loop",
+          "type": "integer"
+        },
+        "moderate_complement_bases": {
+          "const": 6,
+          "default": 6,
+          "title": "Moderate Complement Bases",
+          "type": "integer"
+        },
+        "strong_complement_bases": {
+          "const": 8,
+          "default": 8,
+          "title": "Strong Complement Bases",
+          "type": "integer"
+        },
+        "three_prime_warning_bases": {
+          "const": 4,
+          "default": 4,
+          "title": "Three Prime Warning Bases",
+          "type": "integer"
+        },
+        "hairpin_warning_stem_bases": {
+          "const": 5,
+          "default": 5,
+          "title": "Hairpin Warning Stem Bases",
+          "type": "integer"
+        },
+        "three_prime_requires_both_ends": {
+          "const": true,
+          "default": true,
+          "title": "Three Prime Requires Both Ends",
+          "type": "boolean"
+        },
+        "template_scope": {
+          "const": "provided_template_only",
+          "default": "provided_template_only",
+          "title": "Template Scope",
+          "type": "string"
+        }
+      },
+      "title": "PrimerQcProfile",
+      "type": "object"
+    },
     "PrimerSelectionSettings": {
       "additionalProperties": false,
       "properties": {
+        "schema_version": {
+          "const": "primer-design-v1",
+          "default": "primer-design-v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "search_profile": {
+          "$ref": "#/$defs/PrimerDesignSearchProfile"
+        },
         "primer_min_length": {
           "default": 18,
           "title": "Primer Min Length",
@@ -1925,6 +2076,12 @@
       "additionalProperties": false,
       "description": "Same fields/defaults/ranges as the global Tm contract; reject typos.",
       "properties": {
+        "schema_version": {
+          "const": "primer-tm-settings-v1",
+          "default": "primer-tm-settings-v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
         "algorithm": {
           "default": "nn_santalucia_hicks_2004",
           "title": "Algorithm",

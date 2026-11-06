@@ -5,7 +5,9 @@ import {
     type AssemblyFragmentInput,
     type GibsonDesignRequest,
     type GibsonDesignResponse,
+    type SavedGibsonDesignRequest,
 } from '../../../lib/api';
+import { buildAssemblyPrimersCsv, buildFragmentsFasta } from '../utils/exportData';
 import type { SequenceData } from '../types';
 
 interface GibsonDesignWorkspaceProps {
@@ -15,8 +17,15 @@ interface GibsonDesignWorkspaceProps {
     saveDescription: string;
     sequenceName: string;
     initialCircular: boolean;
+    restored?: SavedGibsonDesignRequest | null;
     onSaved?: () => void;
     onLoadProduct: (sequenceData: SequenceData, savedSequenceId?: string | null) => void;
+}
+
+/** Mapped product site when the server supplies one; otherwise "needs review" (never 0/0). */
+function primerProductSite(primer: GibsonDesignResponse['primers'][number]): { start: number; end: number; binding_status?: 'needs_review' } {
+    const site = primer.product_site;
+    return site ? { start: site.start, end: site.end } : { start: 0, end: 0, binding_status: 'needs_review' };
 }
 
 function errorMessage(error: unknown): string {
@@ -42,6 +51,7 @@ export function GibsonDesignWorkspace({
     saveDescription,
     sequenceName,
     initialCircular,
+    restored,
     onLoadProduct,
     onSaved,
 }: GibsonDesignWorkspaceProps) {
@@ -71,6 +81,37 @@ export function GibsonDesignWorkspace({
         setCircular(initialCircular);
     }, [initialCircular]);
 
+    // A reopened saved design restores its settings for editing; calculating again makes a new result.
+    useEffect(() => {
+        if (!restored) return;
+        if (typeof restored.circular === 'boolean') setCircular(restored.circular);
+        if (typeof restored.overlap === 'number') setOverlap(restored.overlap);
+        if (typeof restored.target_tm === 'number') setTargetTm(restored.target_tm);
+        if (typeof restored.min_anneal === 'number') setMinAnneal(restored.min_anneal);
+    }, [restored]);
+
+    const download = (content: string, filename: string, type: string) => {
+        const url = URL.createObjectURL(new Blob([content], { type }));
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        anchor.click();
+        URL.revokeObjectURL(url);
+    };
+    const exportName = (saveName.trim() || sequenceName || 'gibson-design').replace(/[^A-Za-z0-9._-]+/g, '_');
+    const downloadPrimers = () => {
+        if (!result) return;
+        download(buildAssemblyPrimersCsv(result.primers.map((primer) => ({
+            id: primer.id, name: `${primer.fragment_name} ${primer.direction === 'forward' ? 'F' : 'R'}`, direction: primer.direction,
+            full_sequence: primer.full_sequence, annealing_sequence: primer.annealing_sequence, tail_sequence: primer.tail_sequence,
+            tm: primer.tm, tm_model: primer.tm_model ?? '', warnings: primer.warnings,
+        }))), `${exportName}-primers.csv`, 'text/csv');
+    };
+    const downloadFragments = () => {
+        if (!result) return;
+        download(buildFragmentsFasta(result.designed_fragments.map((fragment) => ({ id: fragment.id, name: fragment.name, sequence: fragment.sequence }))), `${exportName}-fragments.fasta`, 'text/plain');
+    };
+
     useEffect(() => {
         setResult(null);
         setError(null);
@@ -83,8 +124,8 @@ export function GibsonDesignWorkspace({
     }, [requestScope]);
 
     const runDesign = async () => {
-        if (fragments.length < 2) {
-            setError('Add at least two ordered fragments before designing.');
+        if (fragments.length < 1) {
+            setError('Add a fragment before designing.');
             return;
         }
         previewController.current?.abort();
@@ -141,10 +182,10 @@ export function GibsonDesignWorkspace({
                 name: `${primer.fragment_name} ${primer.direction}`,
                 sequence: primer.full_sequence,
                 sequenceType: 'dna' as const,
-                start: 0,
-                end: 0,
+                ...primerProductSite(primer),
                 strand: primer.direction === 'forward' ? 1 as const : -1 as const,
                 tm: primer.tm,
+                ...(primerProductSite(primer).binding_status ? { binding_warning: 'No mapped binding site; review before use.' } : {}),
                 notes: {
                     fragment_id: primer.fragment_id,
                     annealing_sequence: primer.annealing_sequence,
@@ -225,7 +266,7 @@ export function GibsonDesignWorkspace({
             <button
                 type="button"
                 onClick={() => void runDesign()}
-                disabled={loading !== null || fragments.length < 2}
+                disabled={loading !== null || fragments.length < 1}
                 className="w-full rounded-lg bg-violet-600 px-3 py-2 font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
             >
                 {loading === 'design' ? 'Designing…' : 'Design & Simulate'}
@@ -256,6 +297,8 @@ export function GibsonDesignWorkspace({
                         >
                             Load preview
                         </button>
+                        <button type="button" onClick={downloadPrimers} disabled={result.primers.length === 0} className="rounded-lg bg-slate-700 px-3 py-2 text-xs font-medium text-white hover:bg-slate-600 disabled:opacity-40">Download primers CSV</button>
+                        <button type="button" onClick={downloadFragments} disabled={result.designed_fragments.length === 0} className="rounded-lg bg-slate-700 px-3 py-2 text-xs font-medium text-white hover:bg-slate-600 disabled:opacity-40">Download fragments FASTA</button>
                     </div>
 
                     {result.warnings.length > 0 && (
@@ -274,13 +317,16 @@ export function GibsonDesignWorkspace({
                                     <div key={primer.id} className="rounded border border-slate-800 bg-slate-950/70 p-3">
                                         <div className="flex items-center justify-between gap-2">
                                             <div className="font-medium text-slate-200">{primer.fragment_name} {primer.direction === 'forward' ? 'F' : 'R'}</div>
-                                            <div className="text-xs text-slate-500">Tm {primer.tm.toFixed(1)} °C</div>
+                                            <div className="text-xs text-slate-500">Tm {primer.tm.toFixed(1)} °C{primer.tm_model ? ` (${primer.tm_model})` : ''}</div>
                                         </div>
                                         <div className="mt-2 break-all font-mono text-xs text-cyan-300">{primer.full_sequence}</div>
                                         <div className="mt-2 grid gap-1 text-[11px] sm:grid-cols-2">
                                             <div><span className="text-slate-500">Tail:</span> <span className="break-all font-mono text-violet-300">{primer.tail_sequence || '—'}</span></div>
                                             <div><span className="text-slate-500">Anneal:</span> <span className="break-all font-mono text-emerald-300">{primer.annealing_sequence}</span></div>
                                         </div>
+                                        {!primer.product_site && <div className="mt-2 text-[11px] text-amber-300">Binding site needs review</div>}
+                                        {primer.template_site && <div className="mt-1 text-[11px] text-slate-500">template {primer.template_site.start + 1}–{primer.template_site.end} ({primer.template_site.strand === -1 ? '−' : '+'})</div>}
+                                        {primer.product_site && <div className="mt-1 text-[11px] text-slate-500">product {primer.product_site.start + 1}–{primer.product_site.end} ({primer.product_site.strand === -1 ? '−' : '+'})</div>}
                                         {primer.warnings.length > 0 && (
                                             <div className="mt-2 text-[11px] text-amber-300">{primer.warnings.join(' • ')}</div>
                                         )}
@@ -295,7 +341,7 @@ export function GibsonDesignWorkspace({
                         {result.selected_product.junctions.map((junction, index) => (
                             <div key={`${junction.left_fragment_id}:${junction.right_fragment_id}:${index}`} className="rounded border border-slate-800 bg-slate-950/70 px-3 py-2">
                                 <div className="text-xs font-medium text-slate-200">{junction.left_fragment_name} → {junction.right_fragment_name}</div>
-                                <div className="mt-1 text-xs text-slate-400">{junction.overlap_length} nt overlap</div>
+                                <div className="mt-1 text-xs text-slate-400">{junction.overlap_length} nt overlap{typeof junction.overlap_tm === 'number' ? ` • overlap Tm ${junction.overlap_tm.toFixed(1)} °C` : ''}</div>
                                 <div className="mt-1 break-all font-mono text-[11px] text-slate-500">{junction.overlap_sequence}</div>
                             </div>
                         ))}

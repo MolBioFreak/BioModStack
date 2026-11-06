@@ -221,7 +221,10 @@ it('mounted digest compact save is identity-only, preserves held fragments and p
     expect(body).not.toHaveProperty('simulation'); expect(body.source).not.toHaveProperty('dna');
     expect(body.enzyme_ids).toEqual(simulation.selected_enzyme_ids);
     expect(host.querySelectorAll('[data-fragment-index]')).toHaveLength(simulation.fragments.length);
-    expect(host.querySelector('a')?.getAttribute('href')).toContain(JSON.parse(fixture.digest.compact).operation_id);
+    // Open saved digest is now a button that lists the saved children, not a link to raw API JSON.
+    expect(host.querySelector('a')).toBeNull();
+    const openSaved = [...host.querySelectorAll('button')].find(b => b.textContent === 'Open saved digest'); expect(openSaved).toBeDefined();
+    await act(async () => openSaved!.click()); expect(host.querySelectorAll('[data-saved-digest-fragment]').length).toBe(simulation.fragments.length);
     expect(() => parseRestrictionDigestSaveAcknowledgement(JSON.parse(fixture.digest.full))).toThrow();
     console.info('PAIRING_DIGEST_METRICS', JSON.stringify({ ...call, fullResponseBytes: bytes(fixture.digest.full), count: simulation.fragments.length, eagerGets: 0 }));
 });

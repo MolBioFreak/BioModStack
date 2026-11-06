@@ -6,8 +6,8 @@ Provides digest, PCR, ligation, mutagenesis, Gibson, and Golden Gate workflows.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, Query
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator, TypeAdapter, AliasChoices
-from typing import Any, List, Literal, Optional
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_serializer, model_validator, TypeAdapter, AliasChoices
+from typing import Any, Dict, List, Literal, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 from sqlalchemy import select, func, or_
@@ -58,6 +58,14 @@ from services.molbio_sequence_import import (
 )
 from services.assembly.common import fragment_provenance_payload, orient_fragment, reverse_complement_end
 from services.assembly.gibson import simulate_gibson
+from services.assembly.physical_ends import with_unphosphorylated_blunt_ends, write_physical_ends
+from services.assembly.product_content import (
+    FragmentSource,
+    inline_original_length,
+    map_product_features,
+    pcr_product_content,
+    slice_coordinates,
+)
 from services.assembly.golden_gate import (
     GoldenGateAnalysisLimitError,
     GoldenGateCatalogDigestMismatchError,
@@ -67,6 +75,7 @@ from services.assembly.golden_gate import (
     resolve_golden_gate_enzyme,
     simulate_golden_gate,
 )
+from services.assembly.junction_sites import observe_junction_sites
 from services.assembly.ligation import simulate_ligation
 from services.assembly.pydna_gibson import design_gibson
 from services.assembly.dnaweaver_gibson import DnaWeaverGibsonPlan, plan_vendor_gibson
@@ -919,6 +928,17 @@ class AssemblyFragmentEndSchema(BaseModel):
         default=None,
         description="Physical overhang strand; overhang is that strand 5′→3′ and sequence is the top span. Omit for historical unspecified notation.",
     )
+    five_prime_phosphate: Literal["unknown", "phosphorylated", "unphosphorylated"] = Field(
+        default="unknown",
+        description="State of this end's 5′ terminus. Omitted from serialization while unknown; never decides whether fragments join.",
+    )
+
+    @model_serializer(mode="wrap")
+    def _omit_unknown_phosphate(self, handler):
+        data = handler(self)
+        if isinstance(data, dict) and data.get("five_prime_phosphate") == "unknown":
+            data.pop("five_prime_phosphate")
+        return data
 
 
 class AssemblyFragmentSchema(BaseModel):
@@ -938,6 +958,9 @@ class AssemblyFragmentSchema(BaseModel):
     left_end: Optional[AssemblyFragmentEndSchema] = None
     right_end: Optional[AssemblyFragmentEndSchema] = None
     metadata: Optional[dict[str, Any]] = None
+    # Inline fragments only: stored features in fragment-local top-strand coordinates.
+    # Ignored when the fragment's source is a saved revision.
+    features: Optional[list[dict[str, Any]]] = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class AssemblyFragmentResponse(BaseModel):
@@ -970,6 +993,17 @@ class AssemblyJunctionResponse(BaseModel):
     junction_sequence: str
     validation: str = "validated"
     notes: List[str] = Field(default_factory=list)
+    overlap_tm: Optional[float] = None
+    overlap_tm_2_4: Optional[float] = None
+    overlap_tm_model: Optional[str] = None
+    sealed: Literal["both", "one_strand", "none", "unknown"] = "unknown"
+
+    @model_serializer(mode="wrap")
+    def _omit_unknown_sealed(self, handler):
+        data = handler(self)
+        if isinstance(data, dict) and data.get("sealed") == "unknown":
+            data.pop("sealed")
+        return data
 
 
 class GoldenGateCatalogAuthorityResponse(BaseModel):
@@ -1006,6 +1040,14 @@ class AssemblyOperationResponse(BaseModel):
     product: AssemblyProductResponse
     saved_sequence: NucleotideSequenceResponse | SavedSequenceMetadata | None = None
     message: str
+    junction_sites: Optional[List[Dict[str, Any]]] = None  # information only; omitted when not requested
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_junction_sites(self, handler):
+        data = handler(self)
+        if isinstance(data, dict) and data.get("junction_sites") is None:
+            data.pop("junction_sites", None)
+        return data
 
 
 class LigationAssemblyRequest(BaseModel):
@@ -1013,6 +1055,14 @@ class LigationAssemblyRequest(BaseModel):
     circular: bool = True
     new_name: Optional[str] = None
     save_description: Optional[str] = None
+    observe_enzymes: Optional[List[str]] = None  # report whether junctions regenerate these sites; never blocks a join
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_observe_enzymes(self, handler):
+        data = handler(self)
+        if isinstance(data, dict) and data.get("observe_enzymes") is None:
+            data.pop("observe_enzymes", None)
+        return data
 
 
 class GibsonAssemblyRequest(BaseModel):
@@ -1105,6 +1155,10 @@ class GibsonPrimerResponse(BaseModel):
     tail_sequence: str
     tm: float
     warnings: List[str] = Field(default_factory=list)
+    tm_model: str = ""
+    tm_assumptions: dict[str, Any] = Field(default_factory=dict)
+    template_site: Optional[dict[str, int]] = None
+    product_site: Optional[dict[str, int]] = None
 
 
 class GibsonDesignedFragmentResponse(BaseModel):
@@ -1331,6 +1385,8 @@ def create_child_sequence(
     operation: str,
     operation_params: dict,
     sequence_type: Optional[str] = None,
+    features: Optional[list[dict]] = None,
+    primers: Optional[list[dict]] = None,
 ) -> NucleotideSequence:
     def calc_gc(seq: str) -> float:
         if not seq:
@@ -1352,8 +1408,8 @@ def create_child_sequence(
         molecule_orientation=(parent.molecule_orientation if parent else "unknown"),
         is_circular=circular,
         length=len(sequence),
-        features=[],
-        primers=[],
+        features=features or [],
+        primers=primers or [],
         analysis_tracks=[],
         organism=parent.organism if parent else None,
         accession=parent.accession if parent else None,
@@ -1387,6 +1443,7 @@ def build_assembly_fragment(fragment: AssemblyFragmentSchema) -> AssemblyFragmen
             overhang=fragment.left_end.overhang,
             label=fragment.left_end.label,
             protruding_strand=fragment.left_end.protruding_strand,
+            five_prime_phosphate=fragment.left_end.five_prime_phosphate,
         ),
         right_end=None
         if fragment.right_end is None
@@ -1395,8 +1452,10 @@ def build_assembly_fragment(fragment: AssemblyFragmentSchema) -> AssemblyFragmen
             overhang=fragment.right_end.overhang,
             label=fragment.right_end.label,
             protruding_strand=fragment.right_end.protruding_strand,
+            five_prime_phosphate=fragment.right_end.five_prime_phosphate,
         ),
         metadata=fragment.metadata or {},
+        features=fragment.features,
     )
 
 
@@ -1417,6 +1476,10 @@ def assembly_junction_to_response(
         junction_sequence=junction.junction_sequence,
         validation=junction.validation,
         notes=junction.notes,
+        overlap_tm=junction.overlap_tm,
+        overlap_tm_2_4=junction.overlap_tm_2_4,
+        overlap_tm_model=junction.overlap_tm_model,
+        sealed=junction.sealed,
     )
 
 
@@ -1445,6 +1508,7 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
                     overhang=fragment.left_end.overhang,
                     label=fragment.left_end.label,
                     protruding_strand=fragment.left_end.protruding_strand,
+                    five_prime_phosphate=fragment.left_end.five_prime_phosphate,
                 ),
                 right_end=None
                 if fragment.right_end is None
@@ -1453,6 +1517,7 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
                     overhang=fragment.right_end.overhang,
                     label=fragment.right_end.label,
                     protruding_strand=fragment.right_end.protruding_strand,
+                    five_prime_phosphate=fragment.right_end.five_prime_phosphate,
                 ),
                 metadata=fragment.metadata or None,
             )
@@ -1513,6 +1578,10 @@ def gibson_design_to_response(
                 tail_sequence=primer.tail_sequence,
                 tm=primer.tm,
                 warnings=primer.warnings,
+                tm_model=primer.tm_model,
+                tm_assumptions=primer.tm_assumptions,
+                template_site=primer.template_site,
+                product_site=primer.product_site,
             )
             for primer in result.primers
         ],
@@ -1561,7 +1630,19 @@ async def _assembly_source_revision(session: AsyncSession, sequence_id: str, rev
     return revision, SimpleNamespace(
         sequence=sequence, length=len(sequence), name=snapshot.get("name", ""),
         is_circular=bool(snapshot.get("is_circular")), sequence_type=snapshot.get("sequence_type") or "dna",
+        features=snapshot.get("features") or [],
     )
+
+
+def _assembly_product_provenance(product: "AssemblyProduct") -> dict[str, Any]:
+    """A linear product keeps its non-blunt external ends for the next operation."""
+    provenance: dict[str, Any] = {"source": "api", "validated": True}
+    if product.circular or not product.fragments:
+        return provenance
+    left, right = product.fragments[0].left_end, product.fragments[-1].right_end
+    if any(end is not None and (end.type != "blunt" or end.five_prime_phosphate != "unknown") for end in (left, right)):
+        provenance = write_physical_ends(provenance, left, right, "assembly_product")
+    return provenance
 
 
 async def persist_assembly_product(
@@ -1572,6 +1653,7 @@ async def persist_assembly_product(
     save_description: Optional[str],
     extra_operation_params: Optional[dict[str, Any]] = None,
     product_primers: Optional[list[dict[str, Any]]] = None,
+    features_override: Optional[list[dict[str, Any]]] = None,
 ):
     await begin_immediate_molbio_write(session)
     source_ids = [
@@ -1580,18 +1662,16 @@ async def persist_assembly_product(
         if fragment.source_sequence_id
     ]
     distinct_source_ids = sorted(set(source_ids))
+    # A retained child (digest fragment, intermediate, earlier product) has an
+    # immutable revision but no shelf row; its revision is the source authority.
     source_rows: dict[str, NucleotideSequence] = {}
     for source_id in distinct_source_ids:
         source = await session.get(NucleotideSequence, source_id)
-        if source is None:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Assembly source projection is missing: {source_id}",
-            )
-        source_rows[source_id] = source
+        if source is not None:
+            source_rows[source_id] = source
 
     parent: Optional[NucleotideSequence] = (
-        source_rows[distinct_source_ids[0]] if len(distinct_source_ids) == 1 else None
+        source_rows.get(distinct_source_ids[0]) if len(distinct_source_ids) == 1 else None
     )
 
     input_revisions = []
@@ -1606,6 +1686,7 @@ async def persist_assembly_product(
             resolved = await _assembly_source_revision(session, *source_key)
             resolved_sources[source_key] = resolved
             resolved_sources[(source_key[0], resolved[0].revision_number)] = resolved
+    content_sources: list[Optional[FragmentSource]] = []
     for fragment in product.fragments:
         fragment_snapshot = {
             "fragment": {
@@ -1652,7 +1733,7 @@ async def persist_assembly_product(
                     or end < 0
                     or start >= source.length
                     or end >= source.length
-                    or start <= end
+                    or start < end
                 ):
                     raise HTTPException(
                         status_code=409,
@@ -1697,7 +1778,16 @@ async def persist_assembly_product(
                 }
             )
             input_revisions.append((source_revision, "fragment", fragment_snapshot))
+            content_sources.append(FragmentSource(
+                stored=getattr(source, "features", None), sequence=source.sequence,
+                topology="circular" if source.is_circular else "linear",
+                coords=slice_coordinates(source.length, start, end, fragment.source_wraps_origin),
+            ))
         else:
+            content_sources.append(FragmentSource(
+                stored=fragment.features, sequence="N" * inline_original_length(fragment),
+                topology="linear", coords=list(range(inline_original_length(fragment))),
+            ) if fragment.features else None)
             inline_fragment = NucleotideSequence(
                 id=str(uuid.uuid4()),
                 name=fragment.name,
@@ -1745,6 +1835,10 @@ async def persist_assembly_product(
     sequence_name = (
         name or ""
     ).strip() or f"{product.mode.replace('_', ' ').title()} product"
+    product_features = (
+        list(features_override) if features_override is not None
+        else map_product_features(product, content_sources)
+    )
     if parent is not None:
         sequence_row = create_child_sequence(
             parent=parent,
@@ -1753,6 +1847,7 @@ async def persist_assembly_product(
             circular=product.circular,
             operation=product.mode,
             operation_params=operation_params,
+            features=product_features,
         )
         if save_description is not None:
             sequence_row.description = save_description
@@ -1765,7 +1860,7 @@ async def persist_assembly_product(
             sequence_type="dna",
             is_circular=product.circular,
             length=len(product.sequence),
-            features=[],
+            features=product_features,
             primers=[],
             organism=None,
             accession=None,
@@ -1794,7 +1889,7 @@ async def persist_assembly_product(
         implementation="services.assembly",
         parameters=operation_params,
         warnings=list(product.warnings),
-        provenance={"source": "api", "validated": True},
+        provenance=_assembly_product_provenance(product),
         input_revisions=input_revisions,
         inline_inputs=inline_inputs,
     )
@@ -1973,6 +2068,8 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
             # Mol Bio session factory uses expire_on_commit=False.
             await session.commit()
 
+    # Unmodified primers leave a blunt product with 5'-OH ends (kept off the fingerprint above).
+    product_provenance = with_unphosphorylated_blunt_ends(provenance, "pcr_product")
     product_payload = PCRProductResponse(
         sequence=product.sequence,
         start=product.start,
@@ -1995,6 +2092,10 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
     saved_sequence = None
     operation_id = None
     if request.save:
+        amplicon_features, amplicon_primers = pcr_product_content(
+            parent.features, parent.sequence, bool(parent.is_circular), product, forward_primer, reverse_primer,
+            forward_tm=forward_tm.tm, reverse_tm=reverse_tm.tm, tm_settings=resolved_tm_settings.model_dump(),
+        )
         saved_sequence = create_child_sequence(
             parent=parent if request.sequence_id else None,
             sequence=product.sequence,
@@ -2007,6 +2108,8 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
                 "tm_settings": resolved_tm_settings.model_dump(),
                 "search_settings": search_settings,
             },
+            features=amplicon_features,
+            primers=amplicon_primers,
         )
         saved_sequence.molecule_strandedness = "double"
         saved_sequence.molecule_orientation = "both"
@@ -2031,6 +2134,7 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
                 notes=request.notes,
                 review_state=request.review_state,
                 provenance=provenance,
+                product_provenance=product_provenance,
                 idempotency_key=request.idempotency_key,
                 request_fingerprint=request_fingerprint,
                 product_sequence=saved_sequence,
@@ -2088,6 +2192,7 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
             },
             warnings=warnings,
             provenance=provenance,
+            product_provenance=product_provenance,
             inline_inputs=(
                 [
                     (
@@ -2431,6 +2536,12 @@ async def get_molecular_operation(
             )
         ).all()
     )
+    output_documents = {}
+    if outputs:
+        output_documents = dict((await session.execute(
+            select(MolecularRevision.id, MolecularRevision.document_id)
+            .where(MolecularRevision.id.in_([item.revision_id for item in outputs]))
+        )).all())
     return {
         "operation_id": operation.id,
         "operation_type": operation.operation_kind,
@@ -2441,10 +2552,20 @@ async def get_molecular_operation(
             for item in inputs
         ],
         "outputs": [
-            {"revision_id": item.revision_id, "role": item.role, "ordinal": item.position}
+            {"revision_id": item.revision_id, "document_id": output_documents.get(item.revision_id),
+             "role": item.role, "ordinal": item.position}
             for item in outputs
         ],
     }
+
+
+def _observed_junction_sites(product, request: LigationAssemblyRequest):
+    if not request.observe_enzymes:
+        return None
+    try:
+        return observe_junction_sites(product, request.observe_enzymes)
+    except AssemblyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/assembly/ligation/simulate", response_model=AssemblyOperationResponse)
@@ -2460,6 +2581,7 @@ async def simulate_ligation_assembly(request: LigationAssemblyRequest):
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
         message=f"Validated ligation across {len(product.fragments)} fragments",
+        junction_sites=_observed_junction_sites(product, request),
     )
 
 
@@ -2488,6 +2610,7 @@ async def save_ligation_assembly(
         product=assembly_product_to_response(product),
         saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else saved),
         message=f"Saved ligation product '{saved.name}'",
+        junction_sites=_observed_junction_sites(product, request),
     )
 
 
@@ -2652,6 +2775,7 @@ def _gibson_design_operation_params(
         "target_tm": result.target_tm,
         "min_anneal": result.min_anneal,
         "source_fragments": result.source_provenance,
+        "circular": result.circular,
         "primers": [
             {
                 "id": primer.id,
@@ -2663,6 +2787,10 @@ def _gibson_design_operation_params(
                 "tail_sequence": primer.tail_sequence,
                 "tm": primer.tm,
                 "warnings": primer.warnings,
+                "tm_model": primer.tm_model,
+                "tm_assumptions": primer.tm_assumptions,
+                "template_site": primer.template_site,
+                "product_site": primer.product_site,
             }
             for primer in result.primers
         ],
@@ -2782,6 +2910,14 @@ async def _resolve_dnaweaver_target(
     return source.sequence, source
 
 
+async def _dnaweaver_target_features(session: AsyncSession, request: DnaWeaverPlanRequest, sequence: str) -> list[dict[str, Any]]:
+    """The planned product is the selected target itself, so its annotations carry over unchanged."""
+    source = await session.get(NucleotideSequence, request.target_sequence_id) if request.target_sequence_id else None
+    if source is None or source.sequence.upper() != sequence.upper():
+        return []
+    return [dict(feature) for feature in (source.features or []) if isinstance(feature, dict)]
+
+
 def _dnaweaver_operation_params(
     plan: DnaWeaverGibsonPlan,
     request: DnaWeaverPlanSaveRequest,
@@ -2856,16 +2992,13 @@ async def save_dnaweaver_gibson_assembly(
             raise AssemblyError(
                 "Selected DNA Weaver plan checksum is stale or invalid; plan again before saving"
             )
-        if not plan.order_ready:
-            raise AssemblyError(
-                "DNA Weaver plan has manufacturability blockers and cannot be saved as order-ready"
-            )
         saved = await persist_assembly_product(
             session,
             product=plan.product,
             name=request.new_name,
             save_description=request.save_description,
             extra_operation_params={"computation_id": computation_id, **_dnaweaver_operation_params(plan, request)},
+            features_override=await _dnaweaver_target_features(session, request, plan.product.sequence),
         )
         response = _dnaweaver_plan_to_response(
             plan,
@@ -2903,6 +3036,48 @@ async def design_gibson_assembly(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _gibson_product_primers(result: GibsonDesignResult) -> list[dict[str, Any]]:
+    primers = []
+    for primer in result.primers:
+        site = primer.product_site
+        payload = {
+            "id": primer.id,
+            "name": f"{primer.fragment_name} {primer.direction}",
+            "sequence": primer.full_sequence,
+            "sequence_type": "dna",
+            "start": site["start"] if site else 0,
+            "end": site["end"] if site else 0,
+            "strand": 1 if primer.direction == "forward" else -1,
+            "tm": primer.tm if site else None,
+            "notes": {
+                "fragment_id": primer.fragment_id,
+                "annealing_sequence": primer.annealing_sequence,
+                "tail_sequence": primer.tail_sequence,
+                "warnings": primer.warnings,
+                "tm_model": primer.tm_model,
+                "tm_assumptions": primer.tm_assumptions,
+            },
+        }
+        if site is None:
+            payload["binding_status"] = "needs_review"
+        primers.append(payload)
+    return primers
+
+
+async def _save_gibson_children(session, saved, result: GibsonDesignResult, selected) -> None:
+    from services.assembly.gibson_children import save_designed_fragments
+    operation_id = (saved.operation_params or {}).get("operation_id")
+    if not operation_id:
+        return
+    revisions = {}
+    for fragment in selected.product.fragments:
+        if fragment.source_sequence_id:
+            revision, _ = await _assembly_source_revision(session, fragment.source_sequence_id, fragment.source_revision)
+            revisions[(fragment.source_sequence_id, fragment.source_revision)] = revision
+    await save_designed_fragments(session, operation_id, result, selected.product.fragments, revisions)
+    await session.commit()
+
+
 @router.post("/assembly/gibson/design/save", response_model=GibsonDesignResponse)
 async def save_designed_gibson_assembly(
     request: GibsonDesignRequest,
@@ -2936,27 +3111,12 @@ async def save_designed_gibson_assembly(
             extra_operation_params={"computation_id": computation_id, **_gibson_design_operation_params(
                 result,
                 request.selected_candidate_checksum,
-            )},
-            product_primers=[
-                {
-                    "id": primer.id,
-                    "name": f"{primer.fragment_name} {primer.direction}",
-                    "sequence": primer.full_sequence,
-                    "sequence_type": "dna",
-                    "start": 0,
-                    "end": 0,
-                    "strand": 1 if primer.direction == "forward" else -1,
-                    "tm": primer.tm,
-                    "notes": {
-                        "fragment_id": primer.fragment_id,
-                        "annealing_sequence": primer.annealing_sequence,
-                        "tail_sequence": primer.tail_sequence,
-                        "warnings": primer.warnings,
-                    },
-                }
-                for primer in result.primers
-            ],
+            ), "design_request": request.model_dump(mode="json", exclude={
+                "computation_id", "selected_candidate_checksum", "new_name", "save_description",
+            })},
+            product_primers=_gibson_product_primers(result),
         )
+        await _save_gibson_children(session, saved, result, selected)
         response = gibson_design_to_response(
             result,
             saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else NucleotideSequenceResponse.model_validate(saved).model_copy(update={
@@ -3730,7 +3890,7 @@ class PrimerDesignSearchProfile(BaseModel):
     version: Literal["flanking_exact_v1"] = "flanking_exact_v1"
     candidates_per_strand: Literal[48] = 48
     target_overlap_bases: Literal[4] = 4
-    origin_wrapping_candidates: Literal[False] = False
+    origin_wrapping_candidates: bool = True
     product_size_includes_tails: Literal[True] = True
     overlapping_footprints: Literal[False] = False
     substrate: Literal["dna_template"] = "dna_template"
@@ -4306,22 +4466,36 @@ def design_primer_pairs_for_request(
     reverse_candidates: list[dict[str, Any]] = []
     warnings: list[str] = ["Search considers at most 48 Tm-ranked candidates per strand and excludes overlapping primer footprints; results are not an exhaustive primer search."]
 
-    if request.is_circular:
-        warnings.append(
-            "Primer design currently excludes origin-wrapping candidates on circular templates."
-        )
+    # On a circular template candidates may cross the origin. Search coordinates
+    # are "unrolled" (start may be negative, end may exceed the length); the
+    # reported start/end are folded back so end > length marks a wrapped site.
+    wrap = bool(request.is_circular and search_profile.origin_wrapping_candidates)
 
-    forward_start_min = max(0, request.target_start - request.flank_search_span)
+    def _window(u_start: int, u_end: int) -> Optional[str]:
+        if not wrap:
+            return _linear_segment(template, u_start, u_end)
+        if u_end - u_start > sequence_length or u_start >= u_end:
+            return None
+        return (template * 3)[u_start + sequence_length:u_end + sequence_length]
+
+    def _place(candidate: dict[str, Any], u_start: int, u_end: int) -> dict[str, Any]:
+        candidate["u_start"], candidate["u_end"] = u_start, u_end
+        if wrap:
+            candidate["start"] = u_start % sequence_length
+            candidate["end"] = candidate["start"] + (u_end - u_start)
+        return candidate
+
+    forward_start_min = max(-sequence_length if wrap else 0, request.target_start - request.flank_search_span)
     forward_start_max = min(sequence_length, request.target_start + 1)
     reverse_end_min = max(0, target_end)
-    reverse_end_max = min(sequence_length, target_end + request.flank_search_span)
+    reverse_end_max = min(2 * sequence_length if wrap else sequence_length, target_end + request.flank_search_span)
 
     for start in range(forward_start_min, forward_start_max):
         for anneal_length in range(
             request.primer_min_length, request.primer_max_length + 1
         ):
             end = start + anneal_length
-            anneal_sequence = _linear_segment(template, start, end)
+            anneal_sequence = _window(start, end)
             if anneal_sequence is None:
                 continue
             if end > request.target_start + search_profile.target_overlap_bases:
@@ -4342,14 +4516,14 @@ def design_primer_pairs_for_request(
                 tm_max_delta_c=request.tm_max_delta_c,
             )
             if candidate:
-                forward_candidates.append(candidate)
+                forward_candidates.append(_place(candidate, start, end))
 
     for end in range(reverse_end_min, reverse_end_max + 1):
         for anneal_length in range(
             request.primer_min_length, request.primer_max_length + 1
         ):
             start = end - anneal_length
-            anneal_template = _linear_segment(template, start, end)
+            anneal_template = _window(start, end)
             if anneal_template is None:
                 continue
             if start < target_end - search_profile.target_overlap_bases:
@@ -4371,7 +4545,7 @@ def design_primer_pairs_for_request(
                 tm_max_delta_c=request.tm_max_delta_c,
             )
             if candidate:
-                reverse_candidates.append(candidate)
+                reverse_candidates.append(_place(candidate, start, end))
 
     forward_candidates.sort(
         key=lambda candidate: (
@@ -4407,16 +4581,18 @@ def design_primer_pairs_for_request(
         for reverse in reverse_candidates:
             # Match the supported PCR sequence geometry; overlapping 3′ ends
             # require a different extension/primer-dimer model.
-            if forward["end"] > reverse["start"]:
+            if forward["u_end"] > reverse["u_start"]:
                 continue
-            product_length = (reverse["end"] - forward["start"]
+            product_length = (reverse["u_end"] - forward["u_start"]
                               + forward["overhang_length"] + reverse["overhang_length"])
             if (
                 product_length < request.product_min_length
                 or product_length > request.product_max_length
             ):
                 continue
-            if forward["start"] > request.target_start or reverse["end"] < target_end:
+            if forward["u_start"] > request.target_start or reverse["u_end"] < target_end:
+                continue
+            if wrap and reverse["u_end"] - forward["u_start"] > sequence_length:
                 continue
 
             tm_delta = abs(forward["tm"] - reverse["tm"])
@@ -4438,7 +4614,8 @@ def design_primer_pairs_for_request(
                     "penalty": penalty,
                     "tm_delta": round(tm_delta, 2),
                     "product_start": forward["start"],
-                    "product_end": reverse["end"],
+                    "product_end": (reverse["u_end"] - sequence_length
+                                    if wrap and reverse["u_end"] > sequence_length else reverse["u_end"]),
                     "product_length": product_length,
                     "heterodimer_complement": pair_qc.heterodimer_complement,
                     "three_prime_heterodimer": pair_qc.three_prime_heterodimer,

@@ -987,11 +987,11 @@ export function PrimerPanel({
                                 onClick={useSelectionAsDesignTarget}
                                 disabled={selectedRegion.placement.wrapsOrigin}
                                 title={selectedRegion.placement.wrapsOrigin
-                                    ? 'Origin-spanning primer-design targets are not supported; rotate the construct origin or choose one contiguous range.'
+                                    ? 'Origin-spanning primer-design targets are not supported; use Set origin in the Edit panel or choose one contiguous range.'
                                     : undefined}
                                 className="rounded bg-cyan-600 px-2 py-1 font-medium text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-slate-600 disabled:text-slate-300"
                             >
-                                {selectedRegion.placement.wrapsOrigin ? 'Rotate Origin First' : 'Use Selection'}
+                                {selectedRegion.placement.wrapsOrigin ? 'Use Set origin first' : 'Use Selection'}
                             </button>
                         </div>
                     )}
@@ -1000,7 +1000,7 @@ export function PrimerPanel({
                         <div className="text-sm font-medium text-slate-300">PCR Primer Pair Design</div>
                         {!designRequestProfile && <p role="status" className="text-xs text-amber-300">Primer design is unavailable until model settings arrive from the server.</p>}
                         {sequenceType !== 'dna' && <p role="alert" className="text-xs text-amber-300">PCR primer design requires DNA. Supply the intended cDNA sequence for this RNA source; reverse transcription is not modeled. RNA oligo Tm and QC remain available.</p>}
-                        <p className="text-xs text-slate-400">Product sizes include both 5′ tails. Fixed search profile flanking_exact_v1 uses at most 48 candidates per strand and permits 4 bases of target overlap; origin-wrapping candidates and overlapping primer footprints are excluded. QC uses exact paired runs on this template, not thermodynamic or genome-wide specificity screening.</p>
+                        <p className="text-xs text-slate-400">Product sizes include both 5′ tails. Fixed search profile flanking_exact_v1 uses at most 48 candidates per strand and permits 4 bases of target overlap; overlapping primer footprints are excluded; on circular templates candidates may cross the origin. QC uses exact paired runs on this template, not thermodynamic or genome-wide specificity screening.</p>
                         <div className="grid grid-cols-2 gap-3">
                             <SliderField
                                 label="Target start"

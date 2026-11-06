@@ -84,6 +84,8 @@ async def test_operation_open_chooses_product_with_historical_fallback(tmp_path,
                     .where(model.operation_id == operation.id).order_by(model.position, model.id))).all()
                 expected_edges[key] = [dict(revision_id=row.revision_id, role=row.role, ordinal=row.position)
                                        for row in rows]
+            for edge in expected_edges['outputs']:
+                edge['document_id'] = (await session.get(MolecularRevision, edge['revision_id'])).document_id
             expected_detail = dict(operation_id=operation.id, operation_type=operation.operation_kind,
                 status=operation.status, request_fingerprint_sha256=operation.request_fingerprint,
                 **expected_edges)
@@ -95,15 +97,15 @@ async def test_operation_open_chooses_product_with_historical_fallback(tmp_path,
         assert reopened.status_code == 200, reopened.text
         assert reopened.json() == saved
         query = parse_qs(urlparse(receipt['reopen_uri']).query)
-        assert query['operation_id'] == [saved['operation_id']]
+        assert query['molbio_operation_id'] == [saved['operation_id']]
         if mode == 'product':
-            assert query['sequence_id'] == [saved['product_document_id']]
-            assert query['revision_id'] == [saved['product_revision_id']]
+            assert query['molbio_sequence_id'] == [saved['product_document_id']]
+            assert query['molbio_revision_id'] == [saved['product_revision_id']]
         elif mode == 'historical_fallback':
-            assert query['sequence_id'] == [first.document_id]
-            assert query['revision_id'] == [first.id]
+            assert query['molbio_sequence_id'] == [first.document_id]
+            assert query['molbio_revision_id'] == [first.id]
         else:
-            assert 'sequence_id' not in query and 'revision_id' not in query
+            assert 'molbio_sequence_id' not in query and 'molbio_revision_id' not in query
 
 
 @pytest.mark.asyncio

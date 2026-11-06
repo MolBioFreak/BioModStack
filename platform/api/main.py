@@ -29,6 +29,7 @@ from routers import (
     jobs,
     models,
     molbio_ngs_experiments,
+    molbio_end_operations,
     molbio_ops,
     molbio_restriction,
     ngs_alignment_sessions,
@@ -350,7 +351,16 @@ app.include_router(nucleotide_sequences.router)  # /api/sequences/*
 app.include_router(system.router, prefix="/api", tags=["system"])  # /api/system/*
 app.include_router(telemetry.router, prefix="/api", tags=["telemetry"])
 app.include_router(molbio_ops.router)
+from routers import molbio_golden_gate_design
+app.include_router(molbio_golden_gate_design.router)
+from routers import molbio_gibson_suggest
+app.include_router(molbio_gibson_suggest.router)
 app.include_router(molbio_restriction.router)
+from routers import molbio_relatives
+app.include_router(molbio_relatives.router)
+from routers import molbio_branches
+app.include_router(molbio_branches.router)
+app.include_router(molbio_end_operations.router)
 app.include_router(rna_structure.router)
 app.include_router(ribocentre.router, prefix="/api/ribocentre", tags=["ribocentre"])
 app.include_router(sequence_qc.router, prefix="/api/sequence-qc", tags=["sequence-qc"])
