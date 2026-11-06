@@ -9,8 +9,11 @@ the source sequences are never edited.
 """
 from __future__ import annotations
 
+from dataclasses import asdict, replace
 from hashlib import sha256
 from typing import Any, Iterable
+
+from .feature_mapping import map_stored_features
 
 from services.molbio_ops import reverse_complement
 from services.restriction_analysis import analyze_sequence, normalize_dna
@@ -107,13 +110,21 @@ def _insert_piece(fragments: tuple[DigestFragment, ...]) -> DigestFragment | Non
     return middle[0] if len(middle) == 1 else None
 
 
-def _to_fragment(piece: DigestFragment, fid: str, name: str, orientation: str = "forward") -> AssemblyFragment:
-    # Enzymes that made each end, so junction observations name only the enzymes that formed that junction.
+def _piece_features(piece: DigestFragment, sequence: str, topology: str,
+                    features: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not features:
+        return []
+    positions = [i for start, end in piece.source_segments for i in range(start, end)]
+    return map_stored_features(features, sequence, topology, positions)
+
+
+def _to_fragment(piece: DigestFragment, fid: str, name: str, orientation: str = "forward",
+                 features: list[dict[str, Any]] | None = None) -> AssemblyFragment:
     ends = {"left": list(piece.left_end.contributing_enzyme_ids), "right": list(piece.right_end.contributing_enzyme_ids)}
     return AssemblyFragment(id=fid, name=name, sequence=piece.top_strand_sequence, orientation=orientation,  # type: ignore[arg-type]
                             left_end=digest_end_to_fragment_end(piece.left_end),
-                            right_end=digest_end_to_fragment_end(piece.right_end),
-                            metadata={"end_enzymes": ends})
+                            right_end=digest_end_to_fragment_end(piece.right_end), features=features,
+                            metadata={"end_enzymes": ends, "digest_fragment": piece.model_dump(mode="json")})
 
 
 def _try(fragments: list[AssemblyFragment]):
@@ -126,24 +137,44 @@ def _try(fragments: list[AssemblyFragment]):
 def _evaluate(catalog: CatalogView, backbone: str, btopo: str, region, insert: str,
               vector_enzymes: tuple[RestrictionRecord, RestrictionRecord],
               insert_enzymes: tuple[RestrictionRecord, RestrictionRecord],
-              vector_phosphate: str) -> dict[str, Any] | None:
+              vector_phosphate: str, *, insert_topology: str = "linear",
+              payload_region: tuple[int, int] | None = None,
+              backbone_features: list[dict[str, Any]] | None = None,
+              insert_features: list[dict[str, Any]] | None = None,
+              selection: dict[str, Any] | None = None) -> dict[str, Any] | None:
     vector_digest = _digest(catalog, backbone, btopo, vector_enzymes)
     vector = _backbone_piece(vector_digest.fragments, region)
-    insert_digest = _digest(catalog, insert, "linear", insert_enzymes)
+    insert_digest = _digest(catalog, insert, insert_topology, insert_enzymes)
     payload = _insert_piece(insert_digest.fragments)
+    if insert_topology == "circular" or payload_region is not None:
+        def contains_payload(fragment):
+            if payload_region is None:
+                return not fragment.wraps_origin
+            start, end = payload_region
+            return sum(max(0, min(b, end) - max(a, start)) for a, b in fragment.source_segments) == end - start
+        choices = [f for f in insert_digest.fragments if contains_payload(f)]
+        payload = choices[0] if len(choices) == 1 else None
+    if selection is not None:
+        vector = next((f for f in vector_digest.fragments if f.fragment_index == selection["vector_fragment_index"]), None)
+        payload = next((f for f in insert_digest.fragments if f.fragment_index == selection["insert_fragment_index"]), None)
     if vector is None or payload is None:
         return None
-    vector_fragment = _to_fragment(vector, "vector", "backbone")
+    vector_fragment = _to_fragment(vector, "vector", "backbone", features=_piece_features(vector, backbone, btopo, backbone_features or []))
+    insert_fragment = _to_fragment(payload, "insert", "insert", features=_piece_features(payload, insert, insert_topology, insert_features or []))
     if vector_phosphate != "unknown":
         for end in (vector_fragment.left_end, vector_fragment.right_end):
             end.five_prime_phosphate = vector_phosphate  # type: ignore[assignment]
-    forward = _try([vector_fragment, _to_fragment(payload, "insert", "insert")])
-    reverse = _try([vector_fragment, _to_fragment(payload, "insert", "insert", "reverse")])
+    forward = _try([vector_fragment, insert_fragment])
+    reverse_fragment = replace(insert_fragment, orientation="reverse")
+    reverse = _try([vector_fragment, reverse_fragment])
     if forward is None and reverse is None:
         return None
     orientation = "either" if forward and reverse else "forward" if forward else "reverse"
-    product = forward or reverse
-    assert product is not None
+    chosen_orientation = selection["insert_orientation"] if selection is not None else ("forward" if forward else "reverse")
+    product = forward if chosen_orientation == "forward" else reverse
+    if product is None:
+        return None
+    chosen_insert = insert_fragment if chosen_orientation == "forward" else reverse_fragment
     seal, _notes = junction_seal(vector_fragment.right_end, vector_fragment.left_end)
     self_ok, _why = overhangs_compatible(vector_fragment.right_end, vector_fragment.left_end)
     names = sorted({r.canonical_name for r in (*vector_enzymes, *insert_enzymes)})
@@ -164,7 +195,17 @@ def _evaluate(catalog: CatalogView, backbone: str, btopo: str, region, insert: s
         "vector_length": len(vector.top_strand_sequence),
         "insert_payload_length": len(payload.top_strand_sequence),
         "product_length": len(product.sequence),
+        "product_sequence": product.sequence,
+        "vector_source_segments": vector.source_segments,
+        "insert_source_segments": payload.source_segments,
         "junction_sites": junctions,
+        "assembly_request": {"fragments": [asdict(vector_fragment), asdict(chosen_insert)],
+                             "circular": True, "observe_enzymes": names},
+        "selection": {"vector_enzymes": [r.enzyme_id for r in vector_enzymes],
+                      "insert_enzymes": [r.enzyme_id for r in insert_enzymes],
+                      "vector_fragment_index": vector.fragment_index,
+                      "insert_fragment_index": payload.fragment_index,
+                      "insert_orientation": chosen_orientation},
     }
 
 
@@ -177,21 +218,100 @@ def _tail_site(record: RestrictionRecord) -> str | None:
     return motifs[0] if 0 < min(event.top_offset, event.bottom_offset) and max(event.top_offset, event.bottom_offset) < len(motifs[0]) else None
 
 
+def _backbone_region(body: dict[str, Any], length: int) -> tuple[int, int] | None:
+    start, end = body.get("backbone_region_start"), body.get("backbone_region_end")
+    if start is None and end is None:
+        return None
+    return 0 if start is None else int(start), length if end is None else int(end)
+
+
+def _payload_interval(body: dict[str, Any], sequence: str) -> tuple[int, int]:
+    start, end = body.get("insert_start"), body.get("insert_end")
+    start = 0 if start is None else int(start)
+    end = len(sequence) if end is None else int(end)
+    if not 0 <= start < end <= len(sequence):
+        raise AssemblyError("Insert payload interval is invalid")
+    return start, end
+
+
+def _tailed_insert(body: dict[str, Any], records: tuple[RestrictionRecord, RestrictionRecord]):
+    sequence = normalize_dna(body["insert_sequence"])
+    start, end = _payload_interval(body, sequence)
+    site_left, site_right = _tail_site(records[0]), _tail_site(records[1])
+    if site_left is None or site_right is None:
+        raise AssemblyError("Selected enzymes do not support an automatic primer-tail preparation")
+    prefix, suffix = CLAMP + site_left, site_right + reverse_complement(CLAMP)
+    positions = [None] * len(prefix) + list(range(start, end)) + [None] * len(suffix)
+    features = map_stored_features(body.get("insert_features") or [], sequence,
+                                  body.get("insert_topology", "linear"), positions)
+    return prefix + sequence[start:end] + suffix, features, {
+        "forward_primer_5prime_tail": prefix, "reverse_primer_5prime_tail": reverse_complement(suffix),
+        "note": "Tails are added to the primers' 5' ends outside the payload; the source sequence is unchanged. Clamp bases are a default and may be changed.",
+    }
+
+
+def _primer_choices(body: dict[str, Any], tails: dict[str, str]) -> tuple[list[dict[str, Any]], list[str]]:
+    # Reuse the native primer search, exactly as the Golden Gate automatic-footprint owner does.
+    from routers.molbio_ops import PrimerDesignRequest, design_primer_pairs_for_request
+    sequence = normalize_dna(body["insert_sequence"])
+    start, end = _payload_interval(body, sequence)
+    payload = sequence[start:end]
+    anchor = min(24, (len(payload) - 1) // 2)
+    length = len(payload) + len(tails["forward_primer_5prime_tail"]) + len(tails["reverse_primer_5prime_tail"])
+    if length < 40:
+        return [], ["No automatic primer pair: the prepared insert is below the native primer search's product-length range. Exact synthesis DNA and tails remain available."]
+    request = PrimerDesignRequest(sequence=payload, sequence_type="dna", is_circular=False,
+        target_start=anchor, target_end=len(payload) - anchor, flank_search_span=anchor,
+        product_min_length=length, product_max_length=length, max_pairs=1,
+        overhang_forward=tails["forward_primer_5prime_tail"], overhang_reverse=tails["reverse_primer_5prime_tail"])
+    result = design_primer_pairs_for_request(request, "restriction insert")
+    pairs = [pair for pair in result.pairs if pair.product_start == 0 and pair.product_end == len(payload)]
+    notes = list(result.warnings)
+    if not pairs:
+        notes.append("Native primer search found no boundary-preserving pair under its default settings; no source interval was changed. Use the exact prepared synthesis sequence or design explicit primer footprints.")
+        return [], notes
+    return [pairs[0].forward.model_dump(mode="json"), pairs[0].reverse.model_dump(mode="json")], notes
+
+
+def selected_restriction_cloning(body: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
+    """Materialize only the chosen digestion/preparation, without repeating proposal search."""
+    catalog = catalog_authority.require()
+    def pair(names):
+        return resolve_records([names[0]], catalog)[1][0], resolve_records([names[1]], catalog)[1][0]
+    vector_records = pair(selection["vector_enzymes"])
+    insert_records = pair(selection["insert_enzymes"])
+    insert = normalize_dna(body["insert_sequence"])
+    features = body.get("insert_features") or []
+    topology = body.get("insert_topology", "linear")
+    tails = None
+    if selection["kind"] == "primer_tail":
+        insert, features, tails = _tailed_insert(body, insert_records)
+        topology = "linear"
+    backbone = normalize_dna(body["backbone_sequence"])
+    region = _backbone_region(body, len(backbone))
+    result = _evaluate(catalog, backbone, body.get("backbone_topology", "circular"),
+                       region, insert, vector_records, insert_records, body.get("vector_five_prime_phosphate", "unknown"),
+                       insert_topology=topology, backbone_features=body.get("backbone_features") or [],
+                       insert_features=features, selection=selection)
+    if result is None:
+        raise AssemblyError("The selected fragments do not produce a compatible circular ligation")
+    result.update(kind=selection["kind"], primer_tails=tails)
+    result["selection"]["kind"] = selection["kind"]
+    if tails:
+        result["prepared_insert"] = {"sequence": insert, "features": features}
+    return result
+
+
 def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
     backbone = normalize_dna(body["backbone_sequence"])
     insert_full = normalize_dna(body["insert_sequence"])
     btopo = body.get("backbone_topology", "circular")
-    if body.get("insert_topology", "linear") != "linear":
-        raise AssemblyError("The insert must be linear (cut or amplify it first)")
+    itopo = body.get("insert_topology", "linear")
     if btopo != "circular":
         raise AssemblyError("Restriction cloning proposals need a circular backbone")
     explicit = body.get("insert_start") is not None or body.get("insert_end") is not None
-    start = body.get("insert_start") or 0
-    end = body.get("insert_end") or len(insert_full)
-    if not 0 <= start < end <= len(insert_full):
-        raise AssemblyError("Insert payload interval is invalid")
-    rs, re_ = body.get("backbone_region_start"), body.get("backbone_region_end")
-    region = (int(rs), int(re_)) if rs is not None and re_ is not None else None
+    start, end = _payload_interval(body, insert_full)
+    region = _backbone_region(body, len(backbone))
     limit = int(body.get("limit", 3))
     vector_phosphate = body.get("vector_five_prime_phosphate", "unknown")
     catalog = catalog_authority.require()
@@ -201,7 +321,7 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
     vector_single = _single_cutters(backbone, btopo, catalog, records)
     if region is not None:
         vector_single = {k: v for k, v in vector_single.items() if region[0] <= v["cut"] <= region[1]}
-    insert_single = _single_cutters(insert_full, "linear", catalog, records)
+    insert_single = _single_cutters(insert_full, itopo, catalog, records)
     # Existing flank sites: left flank cuts at/before the payload start, right flank at/after its end.
     # With an explicit payload interval the flank sites must lie outside it; otherwise the payload is
     # whatever lies between a left-flank and a right-flank site that each cut the insert once.
@@ -232,7 +352,9 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
     proposals: list[dict[str, Any]] = []
     seen: set[tuple] = set()
     for _rank, (a_id, b_id), (p_id, q_id), kind in candidates[:200]:
-        result = _evaluate(catalog, backbone, btopo, region, insert_full, (by_id[a_id], by_id[b_id]), (by_id[p_id], by_id[q_id]), vector_phosphate)
+        result = _evaluate(catalog, backbone, btopo, region, insert_full, (by_id[a_id], by_id[b_id]), (by_id[p_id], by_id[q_id]), vector_phosphate,
+                           insert_topology=itopo, payload_region=(start, end) if explicit else None,
+                           backbone_features=body.get("backbone_features") or [], insert_features=body.get("insert_features") or [])
         if result is None:
             continue
         signature = (result["vector_enzymes"][0], result["vector_enzymes"][1], result["insert_enzymes"][0], result["insert_enzymes"][1])
@@ -248,20 +370,19 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
     # Sites added to the insert through explicit primer tails (never an edit of the source).
     if len(proposals) < limit:
         payload = insert_full[start:end]
-        payload_scan = _single_cutters(payload, "linear", catalog, records) if payload else {}
         payload_all = analyze_sequence(sequence=payload, topology="linear", catalog=catalog, records=records, include_possible_sites=False)
         payload_hits = {s.enzyme_id for s in payload_all.enzyme_summaries if s.recognition_site_count_definite}
         free = [(k, v) for k, v in vector_single.items() if k not in payload_hits and _tail_site(by_id[k])]
         free.sort(key=lambda kv: by_id[kv[0]].canonical_name)
         tail_candidates = []
-        for i, (a_id, a) in enumerate(free):
+        for a_id, a in free:
             for b_id, b in free:
                 if a_id != b_id and a["key"] != b["key"]:
                     tail_candidates.append((a_id, b_id))
         for a_id, b_id in tail_candidates[:300]:
-            site_a, site_b = _tail_site(by_id[a_id]), _tail_site(by_id[b_id])
-            tailed = CLAMP + site_a + payload + site_b + reverse_complement(CLAMP)  # type: ignore[operator]
-            result = _evaluate(catalog, backbone, btopo, region, tailed, (by_id[a_id], by_id[b_id]), (by_id[a_id], by_id[b_id]), vector_phosphate)
+            tailed, tailed_features, tails = _tailed_insert(body, (by_id[a_id], by_id[b_id]))
+            result = _evaluate(catalog, backbone, btopo, region, tailed, (by_id[a_id], by_id[b_id]), (by_id[a_id], by_id[b_id]), vector_phosphate,
+                               backbone_features=body.get("backbone_features") or [], insert_features=tailed_features)
             if result is None:
                 continue
             signature = (result["vector_enzymes"][0], result["vector_enzymes"][1], "tail")
@@ -269,22 +390,24 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
                 continue
             seen.add(signature)
             result["kind"] = "primer_tail"
-            result["primer_tails"] = {
-                "forward_primer_5prime_tail": CLAMP + site_a,  # type: ignore[operator]
-                "reverse_primer_5prime_tail": reverse_complement(site_b + reverse_complement(CLAMP)),  # type: ignore[operator]
-                "note": "Tails are added to the primers' 5' ends outside the payload; the source sequence is unchanged. "
-                        "Clamp bases are a default and may be changed.",
-            }
+            result["primer_tails"] = tails
+            result["prepared_insert_sequence"] = tailed
             proposals.append(result)
             if len(proposals) >= limit * 3:
                 break
 
     proposals.sort(key=lambda p: (not p["directional"], p["kind"] == "primer_tail", p["vector_self_ligation"] != "not possible", p["vector_enzymes"]))
     proposals = proposals[:limit]
+    for proposal in proposals:
+        proposal["selection"]["kind"] = proposal["kind"]
+        primers, notes = _primer_choices(body, proposal["primer_tails"]) if proposal["primer_tails"] else ([], [])
+        proposal["selection"].update(primers=primers, primer_notes=notes,
+                                     parent_revisions=body.get("_source_parent_revisions") or {})
     return {
         "proposals": proposals,
         "no_suitable_pair": not proposals,
         "alternatives": ALTERNATIVES if not proposals else [],
         "considered": {"enzymes": len(records), "unique_in_backbone": len(vector_single), "unique_in_insert": len(insert_single)},
-        "notes": ["Proposals are observations from sequence analysis; methylation sensitivity and enzyme activity are not evaluated."],
+        "notes": ["Proposals are observations from sequence analysis; methylation sensitivity and enzyme activity are not evaluated.",
+                  *(body.get("_source_notes") or [])],
     }

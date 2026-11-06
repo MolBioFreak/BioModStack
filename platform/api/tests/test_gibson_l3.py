@@ -199,11 +199,14 @@ def test_save_maps_primer_sites_stores_children_and_restore_data(app_and_session
             return outs, revs, shelf
 
     outs, revs, shelf = asyncio.run(read())
-    assert len(outs) == 1  # only the PCR backbone is a designed amplicon
-    assert revs[0].snapshot["sequence"] == next(
-        d for d in design.json()["designed_fragments"] if d["id"] == "bb")["sequence"]
-    assert revs[0].provenance["physical_ends"]["left_end"]["kind"] == "blunt"
-    assert shelf == [None]
+    assert len(outs) == 2  # PCR and supplied ready fragments are both reusable children.
+    by_id = {out.snapshot["fragment_id"]: revision for out, revision in zip(outs, revs)}
+    assert set(by_id) == {"bb", "cas"}
+    for designed in design.json()["designed_fragments"]:
+        assert by_id[designed["id"]].snapshot["sequence"] == designed["sequence"]
+    assert by_id["bb"].provenance["physical_ends"]["left_end"]["kind"] == "blunt"
+    assert by_id["cas"].provenance["preparation"] == "ready_linear"
+    assert shelf == [None, None]
 
 
 def test_a1f_more_than_ten_pieces_still_saves(app_and_sessions) -> None:

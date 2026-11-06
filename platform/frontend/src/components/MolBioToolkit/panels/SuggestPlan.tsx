@@ -3,7 +3,11 @@ import {
     fetchMolecularRevision,
     suggestGibsonPlan,
     suggestGoldenGatePlan,
+    prepareRestrictionCloning,
     suggestRestrictionCloning,
+    type LigationAssemblyRequest,
+    type SuggestRestrictionRequest,
+    type SuggestRestrictionProposal,
     type ChooserItem,
     type SavedGibsonDesignRequest,
     type SequenceFeature,
@@ -85,11 +89,12 @@ function GoldenGateProposal({ proposal, onUse }: { proposal: SuggestGoldenGatePr
     </li>;
 }
 
-export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onUseGoldenGate }: {
+export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onUseGoldenGate, onUseRestriction }: {
     sequenceData: SequenceData;
     selectedSequenceId: string | null;
     onUseGibson: (design: SavedGibsonDesignRequest) => void;
     onUseGoldenGate: (request: WorkflowRequest) => void;
+    onUseRestriction: (request: LigationAssemblyRequest) => void;
 }) {
     const [open, setOpen] = useState(false);
     const [method, setMethod] = useState<Method>('gibson');
@@ -110,6 +115,12 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
     const [preparation, setPreparation] = useState<'synthesis' | 'pcr'>('synthesis');
     const [fusion, setFusion] = useState('');
     const [restrictionEnzymes, setRestrictionEnzymes] = useState('');
+    const [backboneStart, setBackboneStart] = useState('');
+    const [backboneEnd, setBackboneEnd] = useState('');
+    const [insertStart, setInsertStart] = useState('');
+    const [insertEnd, setInsertEnd] = useState('');
+    const [vectorPhosphate, setVectorPhosphate] = useState<'unknown' | 'phosphorylated' | 'unphosphorylated'>('unknown');
+    const [restrictionInput, setRestrictionInput] = useState<{ body: SuggestRestrictionRequest; name: string; keys: string[] } | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [gibson, setGibson] = useState<{ proposals: SuggestGibsonProposal[]; diagnostics: string[] } | null>(null);
@@ -165,11 +176,29 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
                 const insert = selectedSources[0];
                 if (!insert) { setError('Select the insert as a source.'); return; }
                 const names = restrictionEnzymes.split(/[\s,]+/).filter(Boolean);
-                const { data } = await suggestRestrictionCloning({
-                    backbone_sequence: target.sequence, backbone_topology: 'circular', insert_sequence: insert.sequence,
+                const body: SuggestRestrictionRequest = {
+                    ...(target.revision_id ? { backbone_revision_id: target.revision_id } : {
+                        backbone_sequence: target.sequence, backbone_features: target.features ?? [],
+                        backbone_source_document_id: target.document_id,
+                    }),
+                    backbone_topology: target.circular ? 'circular' : 'linear',
+                    ...(insert.revision_id ? { insert_revision_id: insert.revision_id } : {
+                        insert_sequence: insert.sequence, insert_features: insert.features ?? [],
+                        insert_source_document_id: insert.document_id,
+                    }),
+                    insert_topology: insert.circular ? 'circular' : 'linear',
+                    ...(backboneStart !== '' ? { backbone_region_start: Number(backboneStart) } : {}),
+                    ...(backboneEnd !== '' ? { backbone_region_end: Number(backboneEnd) } : {}),
+                    ...(insertStart !== '' ? { insert_start: Number(insertStart) } : {}),
+                    ...(insertEnd !== '' ? { insert_end: Number(insertEnd) } : {}),
+                    vector_five_prime_phosphate: vectorPhosphate,
                     ...(names.length ? { enzymes: names } : {}), limit: 3,
-                });
-                if (mine === request.current) setRestriction(data);
+                };
+                const { data } = await suggestRestrictionCloning(body);
+                if (mine === request.current) {
+                    setRestriction(data);
+                    setRestrictionInput({ body, name: target.name, keys: data.proposals.map(() => crypto.randomUUID()) });
+                }
             }
         } catch (e) {
             if (mine === request.current) setError(errorText(e));
@@ -178,6 +207,16 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
         }
     };
 
+    const useRestriction = async (proposal: SuggestRestrictionProposal, index: number) => {
+        if (!restrictionInput) return;
+        setBusy(true); setError(null);
+        try {
+            const { data } = await prepareRestrictionCloning({ request: restrictionInput.body, selection: proposal.selection,
+                name: `${restrictionInput.name} restriction assembly`, idempotency_key: restrictionInput.keys[index] });
+            onUseRestriction(data.assembly_request);
+        } catch (e) { setError(errorText(e)); }
+        finally { setBusy(false); }
+    };
     const copy = (text: string) => { void navigator.clipboard?.writeText(text); };
 
     if (!open) {
@@ -242,8 +281,21 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
                         <input className="w-32 rounded border border-slate-700 bg-slate-950 px-2 py-1 font-mono text-slate-200" value={fusion} onChange={(e) => setFusion(e.target.value)} /></label>}
                 </div>
             </div>}
-            {method === 'restriction' && <label className="flex flex-col gap-1 text-slate-400">Enzymes (optional, comma-separated)
-                <input className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={restrictionEnzymes} onChange={(e) => setRestrictionEnzymes(e.target.value)} /></label>}
+            {method === 'restriction' && <div className="space-y-2">
+                <label className="flex flex-col gap-1 text-slate-400">Enzymes (optional, comma-separated)
+                    <input className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={restrictionEnzymes} onChange={(e) => setRestrictionEnzymes(e.target.value)} /></label>
+                <p className="text-slate-500">Optional intervals use zero-based boundaries, with the end excluded. Blank donor bounds use the existing flanking sites, or the whole donor for primer tails.</p>
+                <div className="flex flex-wrap gap-3">{([
+                    ['Backbone cut-window start', backboneStart, setBackboneStart], ['Backbone cut-window end', backboneEnd, setBackboneEnd],
+                    ['Donor payload start', insertStart, setInsertStart], ['Donor payload end', insertEnd, setInsertEnd],
+                ] as const).map(([label, value, change]) => <label key={label} className="flex flex-col gap-1 text-slate-400">{label}
+                    <input type="number" className="w-28 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200"
+                        value={value} onChange={(e) => change(e.target.value)} /></label>)}</div>
+                <label className="flex flex-col gap-1 text-slate-400">Vector 5′ phosphate
+                    <select value={vectorPhosphate} onChange={(e) => setVectorPhosphate(e.target.value as typeof vectorPhosphate)} className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200">
+                        <option value="unknown">As digested</option><option value="unphosphorylated">Dephosphorylated</option><option value="phosphorylated">Phosphorylated</option>
+                    </select></label>
+            </div>}
             {method !== 'restriction' && <label className="flex flex-col gap-1 text-slate-400">Fixed boundaries (positions, comma-separated)
                 <input className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={boundaries} onChange={(e) => setBoundaries(e.target.value)} /></label>}
 
@@ -267,12 +319,19 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
                     <div className="font-medium text-slate-100">#{i + 1} Vector: {p.vector_enzymes.join(' + ')} · Insert: {p.insert_enzymes.join(' + ')}{p.kind === 'primer_tail' ? ' (via primer tails)' : ''}</div>
                     <div className="text-slate-300">{p.directional ? 'Directional' : 'Not directional'} · insert orientation: {p.insert_orientation} · vector self-ligation: {p.vector_self_ligation}</div>
                     <div className="text-slate-400">Vector {p.vector_length} bp + insert {p.insert_payload_length} bp → product {p.product_length} bp</div>
+                    <div className="text-slate-500">Retained backbone: {p.vector_source_segments.map(([a, b]) => `${a}–${b}`).join(', ')} · {p.kind === 'primer_tail' ? 'prepared insert' : 'donor'}: {p.insert_source_segments.map(([a, b]) => `${a}–${b}`).join(', ')}</div>
                     {p.junction_sites.map((j, k) => <div key={k} className="text-slate-400">{j.between}: regenerated {j.regenerated.join(', ') || 'none'} · destroyed {j.destroyed.join(', ') || 'none'}</div>)}
                     {p.primer_tails && <div className="space-y-1 text-slate-300">
                         <div>Forward primer 5′ tail: <code>{p.primer_tails.forward_primer_5prime_tail}</code> <button type="button" className="text-cyan-300" onClick={() => copy(p.primer_tails!.forward_primer_5prime_tail)}>Copy</button></div>
                         <div>Reverse primer 5′ tail: <code>{p.primer_tails.reverse_primer_5prime_tail}</code> <button type="button" className="text-cyan-300" onClick={() => copy(p.primer_tails!.reverse_primer_5prime_tail)}>Copy</button></div>
                         <div className="text-slate-500">{p.primer_tails.note}</div>
                     </div>}
+                    {p.selection.primers.map((primer) => <div key={primer.strand} className="break-all text-slate-300">{primer.strand === 1 ? 'Forward' : 'Reverse'} primer: <code>{primer.sequence}</code> <button type="button" className="text-cyan-300" onClick={() => copy(primer.sequence)}>Copy primer</button></div>)}
+                    {p.selection.primer_notes.map((note, j) => <p key={j} className="text-slate-500">{note}</p>)}
+                    {p.prepared_insert_sequence && <button type="button" className="mr-3 text-cyan-300" onClick={() => copy(p.prepared_insert_sequence!)}>Copy prepared insert DNA</button>}
+                    <button type="button" className="text-cyan-300" onClick={() => copy(p.product_sequence)}>Copy product DNA</button>
+                    <p className="text-slate-500">Prepare creates reusable fragment children. Save the final construct in Ligation.</p>
+                    <button type="button" disabled={busy} className="rounded bg-violet-600 px-2 py-1 text-white disabled:opacity-50" onClick={() => void useRestriction(p, i)}>Prepare fragments and use this plan</button>
                 </li>)}</ul>
                 {restriction.notes.map((n, i) => <p key={i} className="text-slate-500">{n}</p>)}
             </div>}

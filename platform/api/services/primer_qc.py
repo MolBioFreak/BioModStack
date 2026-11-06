@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SerializeAsAny
 
 from Bio.SeqUtils import gc_fraction
 
@@ -48,9 +48,8 @@ class PrimerQcMetrics:
     hairpin_loop_size: int | None
     binding_site_count: int | None
     off_target_site_count: int | None
-    # Bool must precede int: FastAPI's response schema serialization otherwise
-    # emits reverse_primer_binding as 0/1 while model_dump preserves false/true.
-    binding_positions: list[dict[str, bool | int]]
+    # Preserve BNS bool-first validation while emitting each native scalar unchanged.
+    binding_positions: SerializeAsAny[list[dict[str, bool | int]]]
     warnings: list[str]
 
 

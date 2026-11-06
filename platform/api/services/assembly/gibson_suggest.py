@@ -312,6 +312,9 @@ def suggest_gibson(req: SuggestRequest) -> SuggestResult:
     if not any(p.is_match for p in pieces):
         diagnostics.append("No supplied source matches the target; whole-target synthesis is planned by the DNA Weaver planner")
     features = _feature_report(req, pieces, rotation, target, sources)
+    if req.target.features and any(source.features for source in sources.values()):
+        notes.append("Feature report lists source coverage and target match coverage separately; "
+                     "the same annotation can appear in both roles, not as duplicate product features.")
     scored = []
     seen: set[str] = set()
     for variant in (1, 2, 3):

@@ -451,6 +451,7 @@ export function AssemblyPanel({
     const [gibsonWorkflow, setGibsonWorkflow] = useState<'plan' | 'design' | 'validate'>('plan');
     const [gibsonPreparations, setGibsonPreparations] = useState<Record<string, 'pcr' | 'ready_linear'>>({});
     const [saveName, setSaveName] = useState('');
+    const [ligationCircular, setLigationCircular] = useState<boolean | null>(null);
     const [saveDescription, setSaveDescription] = useState('');
     const queryClient = useQueryClient();
     const optionsQuery = useQuery({
@@ -503,7 +504,7 @@ export function AssemblyPanel({
     const planOwner = useInputOwnership([selectedSequenceId, sequenceData.sequence, sequenceData.circular, mode, gibsonWorkflow, plannerMinFragmentLength, plannerMaxFragmentLength, plannerOverlapLength, plannerVendorName, plannerPricePerBp, plannerLeadTimeDays]);
     const dnaWeaverPlan = planState?.token === planOwner.token ? planState.value : null;
     const setDnaWeaverPlan = (value: DnaWeaverPlanResponse | null) => setPlanState(value ? { token: planOwner.token, value } : null);
-    const owner = useInputOwnership([selectedSequenceId, sequenceData.sequence, sequenceData.circular, mode, gibsonWorkflow, fragments, goldenGateEnzyme, goldenGateOptions, gibsonMinOverlap, gibsonPreferredOverlap, gibsonMaxOverlap, saveName, saveDescription]);
+    const owner = useInputOwnership([selectedSequenceId, sequenceData.sequence, sequenceData.circular, mode, gibsonWorkflow, fragments, goldenGateEnzyme, goldenGateOptions, gibsonMinOverlap, gibsonPreferredOverlap, gibsonMaxOverlap, saveName, saveDescription, ligationCircular]);
     const result = resultState?.token === owner.token ? resultState.value : (mode === 'gibson' && gibsonWorkflow === 'plan' && dnaWeaverPlan && fragments === dnaWeaverPlan.ordered_fragments ? { product: dnaWeaverPlan.selected_product, saved_sequence: dnaWeaverPlan.saved_sequence || undefined, message: dnaWeaverPlan.message } : null);
     const setResult = (value: AssemblyOperationResponse | null) => setResultState(value ? { token: owner.token, value } : null);
     useEffect(() => { setLoading(null); setPlanning(false); setError(null); }, [owner.token]);
@@ -511,6 +512,7 @@ export function AssemblyPanel({
     useEffect(() => {
         setDnaWeaverPlan(null);
         setResult(null);
+        setLigationCircular(null);
     }, [selectedSequenceId, sequenceData.sequence, sequenceData.circular]);
 
     const [restoredGibson, setRestoredGibson] = useState<{ token: object; request: SavedGibsonDesignRequest } | null>(null);
@@ -778,7 +780,7 @@ export function AssemblyPanel({
             if (mode === 'ligation') {
                 const payload = {
                     fragments,
-                    circular: sequenceData.circular,
+                    circular: ligationCircular ?? sequenceData.circular,
                     new_name: saveName || undefined,
                     save_description: saveDescription || undefined,
                     observe_enzymes: observedEnzymes(fragments),
@@ -860,6 +862,11 @@ export function AssemblyPanel({
                 selectedSequenceId={selectedSequenceId}
                 onUseGibson={restoreGibsonDesign}
                 onUseGoldenGate={(request) => { setMode('golden_gate'); setRawGoldenGate(true); setSuggestedGoldenGate({ request }); }}
+                onUseRestriction={(request) => {
+                    setMode('ligation'); setRawGoldenGate(false); setFragments(request.fragments);
+                    setLigationCircular(request.circular ?? true); setSaveName(request.new_name ?? '');
+                    setDnaWeaverPlan(null); setResult(null);
+                }}
             />
 
             <div className="flex flex-wrap gap-2">
