@@ -1,4 +1,3 @@
-import { resolveApiResourceUrl } from '../../../runtime/apiResourceUrl';
 import { digestFragmentsForAssembly } from '../../../lib/digestAssemblyTransfer';
 import type { AssemblyFragmentInput } from '../../../lib/api';
 import { useEffect, useMemo, useRef, useState } from 'react';

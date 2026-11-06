@@ -3722,7 +3722,7 @@ export interface AssemblyOperationResponse {
     product: AssemblyProduct;
     saved_sequence?: SavedSequenceMetadata | null;
     message: string;
-    junction_sites?: Array<{ left_fragment_id: string; right_fragment_id: string; position: number; regenerated: string[]; destroyed: string[]; note: string }>;
+    junction_sites?: Array<{ left_fragment_id?: string; right_fragment_id?: string; position?: number; regenerated: string[]; destroyed: string[]; note: string; status?: 'unavailable' }>;
 }
 
 export interface LigationAssemblyRequest {

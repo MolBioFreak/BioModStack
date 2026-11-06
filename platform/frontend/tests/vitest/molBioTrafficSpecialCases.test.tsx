@@ -13,7 +13,7 @@ import type { RestrictionAnalysisBatch, RestrictionCatalogReceipt, RestrictionCa
 // Independent exact-ID expectation from the source ledger, not helper output.
 const special = ['AbaSI', 'AbaUMB2I', 'AoxI', 'AspBHI', 'BisI', 'BlsI', 'BmeDI', 'Dde51507I', 'EcoBLMcrX', 'EcoO157SI', 'FspEI', 'GlaI', 'GluI', 'KroI', 'LpnPI', 'MspJI', 'MteI', 'NhoI', 'PcsI', 'Pfl8569I', 'PkrI', 'PsuGI', 'RlaI', 'SgeI', 'SgrTI', 'TagI', 'YkrI'];
 const ordinary = ['EcoRI', 'BamHI', 'HindIII', 'Nt.BbvCI', 'BsaI'];
-const sequence: SequenceData = { name: 'special-case fixture', sequence: 'ACGTACGTACGT', sequenceType: 'dna', circular: true, features: [] };
+const sequence: SequenceData = { name: 'special-case fixture', sequence: 'ACGTACGTACGT', sequenceType: 'dna', moleculeStrandedness: 'double', circular: true, features: [] };
 const records = [...ordinary, ...special].map(enzyme_id => ({
     enzyme_id, canonical_name: enzyme_id, aliases: [], recognition_site: 'ACGT',
     recognition_sites: ['ACGT'], recognition: { site_iupac: 'ACGT' },

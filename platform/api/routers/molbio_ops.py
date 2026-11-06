@@ -76,6 +76,7 @@ from services.assembly.golden_gate import (
     simulate_golden_gate,
 )
 from services.assembly.junction_sites import observe_junction_sites
+from services.restriction_catalog import CatalogUnavailable
 from services.assembly.ligation import simulate_ligation
 from services.assembly.pydna_gibson import design_gibson
 from services.assembly.dnaweaver_gibson import DnaWeaverGibsonPlan, plan_vendor_gibson
@@ -2564,8 +2565,11 @@ def _observed_junction_sites(product, request: LigationAssemblyRequest):
         return None
     try:
         return observe_junction_sites(product, request.observe_enzymes)
-    except AssemblyError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (AssemblyError, CatalogUnavailable) as exc:
+        # This optional check describes a completed join; unavailable evidence
+        # must not turn an otherwise usable ligation into an HTTP failure.
+        return [{"status": "unavailable", "regenerated": [], "destroyed": [],
+                 "note": f"Junction site check unavailable: {exc}"}]
 
 
 @router.post("/assembly/ligation/simulate", response_model=AssemblyOperationResponse)
