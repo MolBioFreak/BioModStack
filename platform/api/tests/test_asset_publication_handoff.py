@@ -77,5 +77,3 @@ def test_shared_owner_rendering_and_explicit_precedence(installation, monkeypatc
     installation.unlink()
     assert asset_publication_environment() == {}
     assert KEY not in environment(manager.render_user_units(ROOT, runtime_mode=mode)[name])
-
-

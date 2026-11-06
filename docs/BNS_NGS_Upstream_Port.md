@@ -60,6 +60,19 @@ Initial completed runs:
 
 - Root runtime views + lifecycle: **107 passed**.
 - Twelve API files (shared publication, Python/lifecycle, ONT runtime/import/conversion/retention/device/workflow controls): **315 passed, 2 failed, 1 deselected**, plus **7 unittest subtests passed**. Both failures reproduced at the exact BNS base: `test_install_user_units_writes_expected_files` and `test_mobile_update_publisher_unit_is_outside_both_runtime_targets`; these are pre-existing lifecycle expectations, not newly ported blocks.
-- An additional seven-file ONT run hit a 180-second timeout. A longer retry completed but five prepared-launch cases rejected the intentionally dirty checkout after a test-docstring edit. Those runs are not acceptance evidence for those cases; rerun on the committed clean tree is required and recorded in the scratch evidence.
+- Clean committed-tree final ONT run (the seven additional ONT files plus publication rendering): **211 passed**, exit 0, 272.27 seconds, tested source `18f673ec782b0cfe4a223f6d6f754e9c121f8f82`. The earlier timed-out/dirty-source attempts are retained as non-acceptance evidence; all five source-identity failures disappeared on the clean full-roster rerun. No source-identity check was changed.
 
-Evidence directory: `/home/dalab/.hermes/profiles/fresh/cache/scratch/ngs-port-evidence/` (JUnit reports and logs). No assertion or production gate was loosened to turn failures green.
+Evidence directories:
+
+- `/home/dalab/.hermes/profiles/fresh/cache/scratch/ngs-port-evidence/`: root/API/baseline JUnit, earlier attempt logs, retained lock/policy snapshot and `reproduce.sh` with exact commands and full file rosters.
+- `/home/dalab/.hermes/profiles/fresh/cache/scratch/test-runs/bns-ngs-ont-clean-final/`: clean final `junit.xml` and `log.txt`, including `pytest_exit=0`.
+
+The root command was `env -u PYTHONHOME PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.:scripts /home/dalab/biomodstack/dev-test-canonical/platform/api/.venv/bin/python -m pytest tests/test_runtime_image_views.py tests/test_runtime_image_lifecycle.py -o addopts='' -p no:cacheprovider --junitxml=<evidence>/root-runtime.xml -q`.
+
+The clean final command was `timeout 900 bash /home/dalab/.hermes/profiles/fresh/skills/bms-mounted-test-runner-env/scripts/run-api-tests.sh <worktree> bns-ngs-ont-clean-final tests/test_ont_signal_backend_startup.py tests/test_ont_signal_workbench.py tests/test_ont_read_squiggle.py tests/test_ont_ngs_contract.py tests/test_ont_ngs_result_schema.py tests/test_ont_prepared_launch.py tests/test_ont_ngs_submission.py tests/test_asset_publication_handoff.py -m 'not runtime_integration' --tb=short -q`.
+
+No assertion or production gate was loosened to turn failures green.
+
+## Existing documentation caveat for host provisioning
+
+The final paragraph of the historical `BNS_NGS_Runtime_Deployment.md` still says managed Dorado requires CUDA. That upstream text is stale, not a reason to disable CPU: the current contract supports CPU and CUDA (`BMS_ONT_DORADO_DEVICE=cpu` selects the installation default), and this lane's CPU-device tests passed. The historical guide's native acceptance claims describe its earlier host, not the new CachyOS host. Full host provisioning and a real new-host job remain parent-owned.
