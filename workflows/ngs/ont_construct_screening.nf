@@ -236,28 +236,31 @@ workflow ONT_CONSTRUCT_SCREENING {
             analysis_bam, statsEvidence, breakpointEvidence, secondaryEvidence,
         )
     }
+    // Named-workflow scope is gone at shutdown; retain its metadata and params.
+    def completionWorkflow = workflow
+    def completionParams = params
     workflow.onComplete {
-        if (workflow.success) {
-            if (runAssembly) reportStage(params, "wf_clone_validation", [
-                "${params.out_dir}/assembly/wf_clone_out",
-                "${params.out_dir}/assembly/runtime_provenance.json",
-                "${params.out_dir}/assembly/input_model_provenance.json",
-                "${params.out_dir}/assembly/adapter/adapter_manifest.json",
+        if (completionWorkflow.success) {
+            if (runAssembly) reportStage(completionParams, "wf_clone_validation", [
+                "${completionParams.out_dir}/assembly/wf_clone_out",
+                "${completionParams.out_dir}/assembly/runtime_provenance.json",
+                "${completionParams.out_dir}/assembly/input_model_provenance.json",
+                "${completionParams.out_dir}/assembly/adapter/adapter_manifest.json",
             ])
-            if (runFastqQc || runAssembly) reportStage(params, "construct_verification", [
-                "${params.out_dir}/verification/qc_manifest.json",
-                "${params.out_dir}/verification/verification_summary.tsv",
+            if (runFastqQc || runAssembly) reportStage(completionParams, "construct_verification", [
+                "${completionParams.out_dir}/verification/qc_manifest.json",
+                "${completionParams.out_dir}/verification/verification_summary.tsv",
             ])
             if (runFastqQc) {
-                reportStage(params, "fastq_qc", ["${params.out_dir}/fastq_qc/qc_manifest.json"])
-                reportStage(params, "dimer_qc", [
-                    "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
-                    "${params.out_dir}/multimer_qc/dimer_secondary_summary.tsv",
+                reportStage(completionParams, "fastq_qc", ["${completionParams.out_dir}/fastq_qc/qc_manifest.json"])
+                reportStage(completionParams, "dimer_qc", [
+                    "${completionParams.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
+                    "${completionParams.out_dir}/multimer_qc/dimer_secondary_summary.tsv",
                 ])
-                if (params.comparison_panel_snapshot) reportStage(params, "comparison_panel", [
-                    "${params.out_dir}/comparison_panel/comparison_panel_summary.json",
-                    "${params.out_dir}/comparison_panel/comparison_panel.bam",
-                    "${params.out_dir}/comparison_panel/comparison_panel.bam.bai",
+                if (completionParams.comparison_panel_snapshot) reportStage(completionParams, "comparison_panel", [
+                    "${completionParams.out_dir}/comparison_panel/comparison_panel_summary.json",
+                    "${completionParams.out_dir}/comparison_panel/comparison_panel.bam",
+                    "${completionParams.out_dir}/comparison_panel/comparison_panel.bam.bai",
                 ])
             }
         }
