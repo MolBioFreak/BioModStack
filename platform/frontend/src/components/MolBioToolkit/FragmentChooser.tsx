@@ -44,6 +44,9 @@ export function fragmentFromChooserItem(item: ChooserItem, sequence = ''): Assem
         source_revision: item.revision_number,
         ...(left !== undefined ? { left_end: left } : {}),
         ...(right !== undefined ? { right_end: right } : {}),
+        // The revision id lets End operations read the saved molecule (features included); ends that came from the
+        // saved molecule are marked so a mode switch does not replace them with the mode's defaults.
+        metadata: { revision_id: item.revision_id, ...(left || right ? { retained_ends: true } : {}) },
     };
 }
 
