@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "1d41fb50300a4e574670f6a02a0345e597ac9ed4",
   "baseline_source_tree": "af85061039a5fafdcb828336f09ea6355713d1a9",
-  "content_sha256": "8c50e5c245a237fc1a2b0ab2b269e6f4435cbed2487823da384c4819297f399d",
+  "content_sha256": "8fc398602dface7c0749aa748d867806dd1b9abfb376259679bfbac1d10ece5f",
   "entries": [
     {
       "path": "schemas/ngs_molbio/domain-experiment-v2.schema.json",
@@ -492,14 +492,14 @@
     {
       "path": "schemas/ngs_molbio/molbio-golden-gate-workflow-request-v1.schema.json",
       "schema_id": "bms.golden-gate-workflow-request.v1",
-      "schema_sha256": "49b6c0938ba057c1af68faf2238122d5189cd3d9ed44ff5ef332c13a4659cbac",
-      "schema_canonical_sha256": "404c18b9acd2e9ea2bd8bcb297bd1e97e56834463e59470c822b83d7a63b3b2d"
+      "schema_sha256": "73d66da8342cfdf8404c082da802938d62b4df655db1c04d628b5f1c51a2d039",
+      "schema_canonical_sha256": "317aa5156b06867db124b49a13741d2abc804f83c95d60adfc372e362b4858f7"
     },
     {
       "path": "schemas/ngs_molbio/molbio-golden-gate-workflow-save-v1.schema.json",
       "schema_id": "bms.golden-gate-workflow-save.v1",
-      "schema_sha256": "07454f82d8fe2f4692cd2003d604fb69593588de1d001f6b971080fc147a7f09",
-      "schema_canonical_sha256": "a39676c1b136db88f2aa7b12b3d0e767f90c4566678a2c63e4961f5a2b44fb89"
+      "schema_sha256": "206518c8a557dfc4ef4395f19416bf152705b14413b9ec6c867ad06e76ec44a2",
+      "schema_canonical_sha256": "3cd103bddac6d2786c4a82dc54c568eeb5cf9a674a590fd42e568dee54d50844"
     }
   ],
   "schema": "bms.ngs-molbio.schema-registry.v2"

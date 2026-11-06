@@ -6,7 +6,7 @@ intermediate DNA are read from immutable revisions, not mutable shelf projection
 from __future__ import annotations
 
 import copy
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 import hashlib
 import json
 import uuid
@@ -16,7 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from molbio_models import MolecularOperation, MolecularRevision, NucleotideSequence
 from services.molbio_persistence import (
     begin_immediate_molbio_write, create_operation, record_sequence_revision,
-    _record_inline_sequence_input, add_operation_edges,
+    _record_inline_sequence_input, add_operation_edges, sequence_snapshot,
 )
 from services.assembly.golden_gate_design import design_material
 from services.assembly.physical_ends import with_unphosphorylated_blunt_ends, write_physical_ends
@@ -86,11 +86,38 @@ def _prepared_provenance(material, provenance):
     return provenance
 
 
-async def _record_intermediate(session, sequence, *, operation, provenance, created_by=None):
+async def _record_intermediate(session, sequence, *, operation, provenance, created_by=None, revision_id=None):
     # Immutable history only: intermediates are outputs, not shelf projections or
     # falsely attested unchanged inline inputs.
     return await record_sequence_revision(session, sequence, change_kind='operation_intermediate',
-        operation_id=operation.id, provenance=provenance)
+        operation_id=operation.id, provenance=provenance, revision_id=revision_id)
+
+
+@dataclass
+class _RetentionPlan:
+    """Allocate identities in memory before inserting the immutable operation.
+
+    Only the existing persistence helpers write history. Nothing is flushed until
+    the operation has its complete portable payload and exact revision references.
+    """
+    pending: list = field(default_factory=list)
+
+    async def record(self, session, sequence, *, retain, shelf=False, **kwargs):
+        revision = MolecularRevision(id=str(uuid.uuid4()), snapshot=sequence_snapshot(sequence))
+        self.pending.append((retain, sequence, shelf, dict(kwargs, revision_id=revision.id)))
+        return revision
+
+    async def inline(self, session, sequence, **kwargs):
+        return await self.record(session, sequence, retain=_record_inline_sequence_input, **kwargs)
+
+    async def intermediate(self, session, sequence, **kwargs):
+        return await self.record(session, sequence, retain=_record_intermediate, **kwargs)
+
+    async def persist(self, session):
+        for retain, sequence, shelf, kwargs in self.pending:
+            if shelf:
+                session.add(sequence)
+            await retain(session, sequence, **kwargs)
 
 
 async def read_workup(session, operation_id):
@@ -167,16 +194,15 @@ async def save_workup(session, request: SaveDesignRequest):
     candidate = candidate.model_copy(update={'id': selection.solution_id})
     result = result.model_copy(update={'solutions': [candidate], 'selected_solution_id': selection.solution_id})
     product = design.solutions[0]
-    operation = await create_operation(session, operation_kind=KIND, implementation='services.assembly.golden_gate_workflow',
-        idempotency_key=request.idempotency_key, request_fingerprint=fingerprint,
-        parameters={}, warnings=design.diagnostics + product.warnings, provenance={'source': 'api', 'fixed_selection': True})
+    operation = MolecularOperation(id=str(uuid.uuid4()))
+    retention = _RetentionPlan()
     material_revisions = {}
     source_map = {s.id: s for s in selection.request.sources}
     original_revisions = {}
     for source_id, source in originals.items():
         if isinstance(source.source, InlineSource):
             material = material_for(source, None)
-            original_revisions[source_id] = await _record_inline_sequence_input(session,
+            original_revisions[source_id] = await retention.inline(session,
                 _row(material, name=f'{request.name} original {source_id}', operation_id=operation.id),
                 operation=operation, provenance={'source_id': source_id}, created_by=None)
         else:
@@ -192,7 +218,7 @@ async def save_workup(session, request: SaveDesignRequest):
             parent = material_revisions.get(material.parent_id)
             if material.stage == 'source':
                 parent = original_revisions.get(material.id.removeprefix('source:'))
-            retain = _record_inline_sequence_input if material.stage == 'source' and parent is None else _record_intermediate
+            retain = retention.inline if material.stage == 'source' and parent is None else retention.intermediate
             revision = await retain(session,
                 _row(material, name=f'{request.name} {material.id}', operation_id=operation.id), operation=operation,
                 provenance=_prepared_provenance(material, {'material_id': material.id, 'transformation': 'accepted_edit' if parent and material.stage == 'source' else material.transformation,
@@ -203,7 +229,7 @@ async def save_workup(session, request: SaveDesignRequest):
     for digest in design.digests:
         for mid in digest.fragment_material_ids:
             material = design_material(design, mid)
-            material_revisions[mid] = await _record_intermediate(session,
+            material_revisions[mid] = await retention.intermediate(session,
                 _row(material, name=f'{request.name} {mid}', operation_id=operation.id), operation=operation,
                 provenance=write_physical_ends({'material_id': mid, 'transformation': 'digest',
                     'parent_revision_id': material_revisions[material.parent_id].id,
@@ -227,16 +253,9 @@ async def save_workup(session, request: SaveDesignRequest):
         primers=product_primers)
     product_row.operation_params = {**product_row.operation_params, 'engine': 'golden_gate_design', 'engine_version': '1',
         'fragment_count': len(selection.request.parts), 'primer_count': len(design.primers)}
-    session.add(product_row)
-    product_revision = await record_sequence_revision(session, product_row, change_kind='operation_result', operation_id=operation.id,
+    product_revision = await retention.record(session, product_row, retain=record_sequence_revision, shelf=True,
+        change_kind='operation_result', operation_id=operation.id,
         provenance={'selected_solution_id': selection.solution_id})
-    edited_ids = {f'source:{edit.source_id}' for edit in selection.accepted_edits}
-    await add_operation_edges(session, operation,
-        input_revisions=[(r, 'original_source', {'source_id': sid}) for sid, r in original_revisions.items()] +
-            [(r, 'source', {'material_id': mid}) for mid, r in material_revisions.items() if mid.startswith('source:') and mid not in edited_ids],
-        output_revisions=[(r, 'intermediate', {'material_id': mid}) for mid, r in material_revisions.items()
-            if not mid.startswith('source:') or mid in edited_ids] +
-            [(product_revision, 'product', {'document_id': product_row.id})])
     saved = SavedDesign(operation_id=operation.id, product_document_id=product_row.id,
         product_revision_id=product_revision.id, selection=selection, result=result)
     payload = saved.model_dump(mode='json')
@@ -295,7 +314,19 @@ async def save_workup(session, request: SaveDesignRequest):
     payload['result']['requested'] = None
     payload['result']['solutions'][0]['fixed_request'] = None
     payload['result']['edits'] = None
-    operation.parameters = {'workup': payload, 'dna_references': references, 'replay_owner': 'selection',
-        'summary': {'name': request.name, 'fragment_count': len(selection.request.parts), 'primer_count': len(design.primers)}}
+    await create_operation(session, operation_id=operation.id, operation_kind=KIND,
+        implementation='services.assembly.golden_gate_workflow',
+        idempotency_key=request.idempotency_key, request_fingerprint=fingerprint,
+        parameters={'workup': payload, 'dna_references': references, 'replay_owner': 'selection',
+            'summary': {'name': request.name, 'fragment_count': len(selection.request.parts), 'primer_count': len(design.primers)}},
+        warnings=design.diagnostics + product.warnings, provenance={'source': 'api', 'fixed_selection': True})
+    await retention.persist(session)
+    edited_ids = {f'source:{edit.source_id}' for edit in selection.accepted_edits}
+    await add_operation_edges(session, operation,
+        input_revisions=[(r, 'original_source', {'source_id': sid}) for sid, r in original_revisions.items()] +
+            [(r, 'source', {'material_id': mid}) for mid, r in material_revisions.items() if mid.startswith('source:') and mid not in edited_ids],
+        output_revisions=[(r, 'intermediate', {'material_id': mid}) for mid, r in material_revisions.items()
+            if not mid.startswith('source:') or mid in edited_ids] +
+            [(product_revision, 'product', {'document_id': product_row.id})])
     await session.commit()
     return await read_workup(session, operation.id)

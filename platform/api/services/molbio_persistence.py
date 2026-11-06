@@ -223,6 +223,7 @@ async def current_molecular_revision(
 async def create_operation(
     session: AsyncSession,
     *,
+    operation_id: str | None = None,
     operation_kind: str,
     implementation: str,
     parameters: dict[str, Any] | None = None,
@@ -232,8 +233,9 @@ async def create_operation(
     request_fingerprint: str | None = None,
     created_by: str | None = None,
 ) -> MolecularOperation:
+    # Workups can allocate identities before assembling their immutable payload.
     operation = MolecularOperation(
-        id=str(uuid.uuid4()),
+        id=operation_id or str(uuid.uuid4()),
         operation_kind=operation_kind,
         implementation=implementation,
         implementation_version="biomodstack-api-v1",
@@ -257,9 +259,10 @@ async def record_sequence_revision(
     change_kind: str,
     provenance: dict[str, Any] | None = None,
     operation_id: str | None = None,
+    revision_id: str | None = None,
     created_by: str | None = None,
 ) -> MolecularRevision:
-    """Append a complete sequence snapshot and atomically advance its head."""
+    """Append a complete snapshot and advance its head, using an optional allocated ID."""
 
     await session.flush()
     document = await session.get(MolecularDocument, sequence.id)
@@ -285,7 +288,7 @@ async def record_sequence_revision(
         )
     ).scalar_one()
     revision = MolecularRevision(
-        id=str(uuid.uuid4()),
+        id=revision_id or str(uuid.uuid4()),
         document_id=sequence.id,
         revision_number=int(max_revision or 0) + 1,
         change_kind=change_kind,
@@ -413,8 +416,9 @@ async def _record_inline_sequence_input(
     operation: MolecularOperation,
     provenance: dict[str, Any] | None,
     created_by: str | None,
+    revision_id: str | None = None,
 ) -> MolecularRevision:
-    """Capture a request-only sequence as immutable private operation input history."""
+    """Capture private input history, optionally using a preallocated revision ID."""
     document = MolecularDocument(
         id=sequence.id,
         document_kind="inline_sequence_input",
@@ -424,7 +428,7 @@ async def _record_inline_sequence_input(
     session.add(document)
     await session.flush()
     revision = MolecularRevision(
-        id=str(uuid.uuid4()),
+        id=revision_id or str(uuid.uuid4()),
         document_id=document.id,
         revision_number=1,
         change_kind="operation_input",

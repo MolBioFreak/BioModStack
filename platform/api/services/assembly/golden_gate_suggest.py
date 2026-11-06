@@ -9,7 +9,7 @@ sites and missing datasets are reported, never refused.
 from __future__ import annotations
 
 import math
-from typing import Callable
+from typing import Any, Callable, cast
 
 from pydantic import Field
 
@@ -197,7 +197,16 @@ def suggest_golden_gate(request: SuggestRequest, *, resolve_revision: Callable[[
             reports.append(EnzymeReport(**report, status=f"no proposal: {exc}"))
             continue
         if not result.solutions:
-            reports.append(EnzymeReport(**report, status="no proposal: " + ("; ".join(result.diagnostics[:2]) or "no feasible split")))
+            search = cast(dict[str, Any], result.search_result or {})
+            choices = search.get("solutions", [])
+            if choices:
+                stage = f"none of {len(choices)} searched junction set(s) yielded a physical design"
+            else:
+                stage = "no junction set returned by this search"
+            evidence = list(dict.fromkeys([*result.diagnostics[:2], *search.get("diagnostics", [])]))
+            if sites:
+                evidence.insert(0, f"target contains {sites} internal recognition site(s)")
+            reports.append(EnzymeReport(**report, status="no proposal: " + "; ".join([stage, *evidence])))
             continue
         reports.append(EnzymeReport(**report, status=f"{len(result.solutions)} proposal(s)"))
         donor_index = (default_retained_fragment_index(donor, enzyme, (request.donor_region.start, request.donor_region.end))
@@ -223,5 +232,5 @@ def suggest_golden_gate(request: SuggestRequest, *, resolve_revision: Callable[[
     found.sort(key=lambda x: x[:3])
     proposals = [p.model_copy(update={"rank": i + 1}) for i, (*_, p) in enumerate(found[:request.proposals])]
     if not proposals:
-        diagnostics.append("No enzyme produced a feasible split for this target and constraints; see per-enzyme status")
+        diagnostics.append("No enzyme returned a physical split proposal in this search; see per-enzyme status")
     return SuggestResult(proposals=proposals, enzymes=reports, diagnostics=diagnostics)

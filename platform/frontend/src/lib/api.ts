@@ -3777,15 +3777,31 @@ export const suggestGoldenGatePlan = (data: SuggestGoldenGateRequest, signal?: A
     api.post<SuggestGoldenGateResponse>('/api/molbio/assembly/golden-gate/suggest', data, { signal });
 
 export interface SuggestRestrictionRequest {
-    backbone_sequence: string; backbone_topology: 'circular'; insert_sequence: string;
-    enzymes?: string[]; limit: number;
+    backbone_sequence?: string | null; backbone_revision_id?: string | null; backbone_features?: SequenceFeature[];
+    backbone_source_document_id?: string | null; insert_source_document_id?: string | null;
+    backbone_topology?: 'circular' | 'linear';
+    insert_sequence?: string | null; insert_revision_id?: string | null; insert_features?: SequenceFeature[];
+    insert_topology?: 'circular' | 'linear';
+    backbone_region_start?: number | null; backbone_region_end?: number | null;
+    insert_start?: number | null; insert_end?: number | null;
+    vector_five_prime_phosphate?: 'unknown' | 'phosphorylated' | 'unphosphorylated';
+    enzymes?: string[]; limit?: number;
+}
+export interface RestrictionCloningSelection {
+    kind: 'existing_flank_sites' | 'primer_tail'; vector_enzymes: string[]; insert_enzymes: string[];
+    vector_fragment_index: number; insert_fragment_index: number; insert_orientation: 'forward' | 'reverse';
+    primers: PrimerDesignCandidate[]; primer_notes: string[];
+    parent_revisions: Partial<Record<'backbone' | 'insert', string>>;
 }
 export interface SuggestRestrictionProposal {
     kind: 'existing_flank_sites' | 'primer_tail';
     vector_enzymes: string[]; insert_enzymes: string[];
     directional: boolean; insert_orientation: 'forward' | 'reverse' | 'either';
     vector_ends_match_each_other: boolean; vector_self_ligation: string; vector_end_seal: string;
-    vector_length: number; insert_payload_length: number; product_length: number;
+    vector_length: number; insert_payload_length: number; product_length: number; product_sequence: string;
+    vector_source_segments: Array<[number, number]>; insert_source_segments: Array<[number, number]>;
+    assembly_request: LigationAssemblyRequest; selection: RestrictionCloningSelection;
+    prepared_insert_sequence?: string | null;
     junction_sites: Array<{ between: string; regenerated: string[]; destroyed: string[]; note: string }>;
     primer_tails: null | { forward_primer_5prime_tail: string; reverse_primer_5prime_tail: string; note: string };
 }
@@ -3795,6 +3811,16 @@ export interface SuggestRestrictionResponse {
 }
 export const suggestRestrictionCloning = (data: SuggestRestrictionRequest, signal?: AbortSignal) =>
     api.post<SuggestRestrictionResponse>('/api/molbio/assembly/restriction-cloning/suggest', data, { signal });
+export interface PreparedRestrictionCloning {
+    operation_id: string; selection: RestrictionCloningSelection; request: SuggestRestrictionRequest;
+    outputs: Array<{ document_id: string; revision_id: string; name: string; role: string }>;
+    assembly_request: LigationAssemblyRequest; notes: string[];
+}
+export const prepareRestrictionCloning = (data: {
+    request: SuggestRestrictionRequest; selection: RestrictionCloningSelection; name?: string; idempotency_key?: string;
+}) => api.post<PreparedRestrictionCloning>('/api/molbio/assembly/restriction-cloning/prepare', data);
+export const fetchRestrictionCloningPreparation = (operationId: string, signal?: AbortSignal) =>
+    api.get<PreparedRestrictionCloning>(`/api/molbio/assembly/restriction-cloning/preparations/${encodeURIComponent(operationId)}`, { signal });
 
 export interface GoldenGateCatalogAuthority {
     enzyme_id: string;
@@ -4906,8 +4932,8 @@ export interface PrimerTmInput {
 
 export interface PrimerTmResult {
     schema_version?: 'primer-tm-result-v1';
-    effective_input?: PrimerTmInput;
-    effective_settings?: PrimerTmSettings;
+    effective_input?: PrimerTmInput | null;
+    effective_settings?: PrimerTmSettings | null;
     id?: string | null;
     name?: string | null;
     sequence: string;

@@ -13,7 +13,8 @@ from starlette.concurrency import run_in_threadpool
 
 from molbio_database import get_molbio_session
 from molbio_models import MolecularDocument, MolecularOperation, MolecularRevision
-from routers.molbio_ops import AssemblyFragmentEndSchema
+from routers.molbio_ops import (AssemblyFragmentEndSchema, LigationAssemblyRequest,
+                               PrimerDesignCandidateResponse)
 from services.assembly.end_operations import EndOperationResult, apply_end_operation
 from services.assembly.physical_ends import read_physical_ends, write_physical_ends
 from services.assembly.restriction_cloning import suggest_restriction_cloning
@@ -174,13 +175,20 @@ async def apply_end_operation_route(request: EndOperationRequest, session: Async
 
 
 class RestrictionCloningRequest(BaseModel):
-    backbone_sequence: str
+    # A revision pins native DNA/features/topology; inline DNA remains supported and unsaved.
+    backbone_sequence: Optional[str] = None
+    backbone_revision_id: Optional[str] = None
+    backbone_source_document_id: Optional[str] = None
+    backbone_features: list[dict[str, Any]] = Field(default_factory=list)
     backbone_topology: Literal["linear", "circular"] = "circular"
-    insert_sequence: str
+    insert_sequence: Optional[str] = None
+    insert_revision_id: Optional[str] = None
+    insert_source_document_id: Optional[str] = None
+    insert_features: list[dict[str, Any]] = Field(default_factory=list)
     insert_topology: Literal["linear", "circular"] = "linear"
     # Enzyme IDs/names to consider; empty means every commercial double-strand enzyme in the catalog.
     enzymes: list[str] = Field(default_factory=list)
-    # Backbone interval (zero-based, half-open) where the insert goes; None = anywhere.
+    # Backbone cut window, zero-based half-open; an omitted bound means 0 or source length.
     backbone_region_start: Optional[int] = None
     backbone_region_end: Optional[int] = None
     # Insert payload; default the whole sequence.
@@ -190,9 +198,92 @@ class RestrictionCloningRequest(BaseModel):
     limit: int = Field(default=3, ge=1, le=10)
 
 
-@router.post("/assembly/restriction-cloning/suggest")
-async def suggest_cloning(request: RestrictionCloningRequest):
+class RestrictionCloningSelection(BaseModel):
+    kind: Literal["existing_flank_sites", "primer_tail"]
+    vector_enzymes: list[str] = Field(min_length=2, max_length=2)
+    insert_enzymes: list[str] = Field(min_length=2, max_length=2)
+    vector_fragment_index: int
+    insert_fragment_index: int
+    insert_orientation: Literal["forward", "reverse"]
+    primers: list[PrimerDesignCandidateResponse] = Field(default_factory=list)
+    primer_notes: list[str] = Field(default_factory=list)
+    parent_revisions: dict[Literal["backbone", "insert"], str] = Field(default_factory=dict)
+
+
+class RestrictionCloningProposal(BaseModel):
+    kind: Literal["existing_flank_sites", "primer_tail"]
+    vector_enzymes: list[str]
+    insert_enzymes: list[str]
+    directional: bool
+    insert_orientation: Literal["forward", "reverse", "either"]
+    vector_ends_match_each_other: bool
+    vector_self_ligation: str
+    vector_end_seal: str
+    vector_length: int
+    insert_payload_length: int
+    product_length: int
+    product_sequence: str
+    vector_source_segments: list[tuple[int, int]]
+    insert_source_segments: list[tuple[int, int]]
+    junction_sites: list[dict[str, Any]]
+    primer_tails: Optional[dict[str, str]] = None
+    prepared_insert_sequence: Optional[str] = None
+    assembly_request: LigationAssemblyRequest
+    selection: RestrictionCloningSelection
+
+
+class RestrictionCloningResponse(BaseModel):
+    proposals: list[RestrictionCloningProposal]
+    no_suitable_pair: bool
+    alternatives: list[dict[str, str]]
+    considered: dict[str, int]
+    notes: list[str]
+
+
+class RestrictionCloningPrepareRequest(BaseModel):
+    request: RestrictionCloningRequest
+    selection: RestrictionCloningSelection
+    name: str = "Restriction cloning"
+    idempotency_key: Optional[str] = Field(default=None, max_length=255)
+
+
+class RestrictionCloningPreparedOutput(BaseModel):
+    document_id: str
+    revision_id: str
+    name: str
+    role: str
+
+
+class RestrictionCloningPreparedResponse(BaseModel):
+    operation_id: str
+    outputs: list[RestrictionCloningPreparedOutput]
+    assembly_request: LigationAssemblyRequest
+    selection: RestrictionCloningSelection
+    request: RestrictionCloningRequest
+    notes: list[str]
+
+
+@router.post("/assembly/restriction-cloning/suggest", response_model=RestrictionCloningResponse)
+async def suggest_cloning(request: RestrictionCloningRequest, session: AsyncSession = Depends(get_molbio_session)):
+    from services.assembly.restriction_cloning_persistence import resolve_cloning_sources
     try:
-        return await run_in_threadpool(suggest_restriction_cloning, request.model_dump())
+        body, _sources = await resolve_cloning_sources(session, request.model_dump(mode="json"))
+        return await run_in_threadpool(suggest_restriction_cloning, body)
     except AssemblyError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/assembly/restriction-cloning/prepare", response_model=RestrictionCloningPreparedResponse)
+async def prepare_cloning(request: RestrictionCloningPrepareRequest, session: AsyncSession = Depends(get_molbio_session)):
+    from services.assembly.restriction_cloning_persistence import save_preparation
+    try:
+        return await save_preparation(session, body=request.request.model_dump(mode="json"),
+            selection=request.selection.model_dump(mode="json"), name=request.name, idempotency_key=request.idempotency_key)
+    except AssemblyError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.get("/assembly/restriction-cloning/preparations/{operation_id}", response_model=RestrictionCloningPreparedResponse)
+async def reopen_cloning_preparation(operation_id: str, session: AsyncSession = Depends(get_molbio_session)):
+    from services.assembly.restriction_cloning_persistence import read_preparation
+    return await read_preparation(session, await session.get(MolecularOperation, operation_id))

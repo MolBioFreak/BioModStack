@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SerializeAsAny
 
 from Bio.SeqUtils import gc_fraction
 
@@ -48,7 +48,7 @@ class PrimerQcMetrics:
     hairpin_loop_size: int | None
     binding_site_count: int | None
     off_target_site_count: int | None
-    binding_positions: list[dict[str, int | bool]]
+    binding_positions: SerializeAsAny[list[dict[str, int | bool]]]
     warnings: list[str]
 
 

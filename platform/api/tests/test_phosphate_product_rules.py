@@ -267,7 +267,15 @@ def test_gibson_designed_pcr_amplicon_is_5_prime_hydroxyl(client_and_sessions):
             return [await session.get(MolecularRevision, o.revision_id) for o in outs]
 
     revs = asyncio.run(read())
-    assert len(revs) == 1  # only the PCR backbone is an amplicon; the synthetic cassette is an order sequence
-    left, right = read_physical_ends(revs[0].provenance)
+    assert len(revs) == 2
+    by_preparation = {revision.provenance["preparation"]: revision for revision in revs}
+    assert set(by_preparation) == {"pcr", "ready_linear"}
+    amplicon = by_preparation["pcr"]
+    left, right = read_physical_ends(amplicon.provenance)
     assert (left.five_prime_phosphate, right.five_prime_phosphate) == ("unphosphorylated", "unphosphorylated")
-    assert revs[0].provenance["physical_ends"]["source"] == "pcr_product"
+    assert amplicon.provenance["physical_ends"]["source"] == "pcr_product"
+    supplied = by_preparation["ready_linear"]
+    assert supplied.snapshot["sequence"] == cassette
+    # No physical ends were supplied: retain that absence, not invented PCR chemistry.
+    assert read_physical_ends(supplied.provenance) == (None, None)
+    assert supplied.provenance["physical_ends"]["source"] == "ready_fragment"

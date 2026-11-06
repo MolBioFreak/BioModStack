@@ -107,7 +107,8 @@ async def test_a1a_amplicon_child_is_a_usable_source(tmp_path):
         amplicon = next(d for d in body["designed_fragments"] if d["id"] == "bb")["sequence"]
         async with sessions() as session:
             output = (await session.execute(select(MolecularOperationOutput).where(
-                MolecularOperationOutput.role == "designed_fragment"))).scalars().one()
+                MolecularOperationOutput.role == "designed_fragment",
+                MolecularOperationOutput.snapshot["fragment_id"].as_string() == "bb"))).scalars().one()
         child_id = output.snapshot["document_id"]
         response = await ligate(client, [source_fragment("a", child_id, amplicon, 0, len(amplicon))])
         assert response.status_code == 200 and response.json()["saved_sequence"]["sequence"] == amplicon

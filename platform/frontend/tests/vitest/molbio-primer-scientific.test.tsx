@@ -113,6 +113,17 @@ it('direct duplex controls send native strand orientation and signed shift witho
  expect(primerProps.onAddPrimer.mock.calls[0][0].tm).toBe(40);
 });
 
+it.each(['absent', 'null'] as const)('receives historical duplex Tm with %s provenance without inventing a receipt', async provenance => {
+ await render(<PrimerPanel {...primerProps}/>);
+ await input(host.querySelector('input[placeholder="Sequence (5\'→3\')"]')!, 'ACGTACGTACGTACGT'); await tick();
+ const result = { ...metric(42), ...(provenance === 'null' ? { effective_input: null, effective_settings: null } : {}) };
+ vi.mocked(api.calculatePrimerTm).mockResolvedValueOnce({ data: [result] } as any);
+ await click('Calculate duplex Tm');
+ expect(host.textContent).toContain('Duplex Tm: 42.0°C');
+ expect(host.textContent).not.toContain('Calculated ACGTACGTACGTACGT');
+ expect(vi.mocked(api.calculatePrimerTm).mock.calls).toHaveLength(2);
+});
+
 it('a changed direct-duplex input hides an earlier result and ignores late completion', async () => {
  await render(<PrimerPanel {...primerProps}/>);
  await input(host.querySelector('input[placeholder="Sequence (5\'→3\')"]')!,'ACGTACGTACGTACGT'); await tick();

@@ -119,6 +119,11 @@ describe('Suggest plan', () => {
             proposals: [{
                 kind: 'primer_tail', vector_enzymes: ['EcoRI', 'BamHI'], insert_enzymes: ['EcoRI', 'BamHI'], directional: true, insert_orientation: 'forward',
                 vector_ends_match_each_other: false, vector_self_ligation: 'not possible', vector_end_seal: 'both', vector_length: 3000, insert_payload_length: 500, product_length: 3500,
+                // Presentation-only stub; actual native transport/chemistry is exercised by the connected handoff suite.
+                product_sequence: 'ACGT', vector_source_segments: [[0, 3000]], insert_source_segments: [[0, 500]],
+                assembly_request: { fragments: [], circular: true },
+                selection: { kind: 'primer_tail', vector_enzymes: ['EcoRI', 'BamHI'], insert_enzymes: ['EcoRI', 'BamHI'],
+                    vector_fragment_index: 0, insert_fragment_index: 1, insert_orientation: 'forward', primers: [], primer_notes: [], parent_revisions: {} },
                 junction_sites: [{ between: 'vector → insert', regenerated: ['EcoRI'], destroyed: [], note: '' }],
                 primer_tails: { forward_primer_5prime_tail: 'GCGCGCGAATTC', reverse_primer_5prime_tail: 'GCGCGCGGATCC', note: 'tails' },
             }], no_suitable_pair: false, alternatives: [], notes: [],
@@ -126,7 +131,8 @@ describe('Suggest plan', () => {
         await render(); await click('Suggest plan'); await click('Restriction-ligation');
         await click('Add saved source'); await click('Suggest');
         expect(vi.mocked(api.suggestRestrictionCloning).mock.calls[0][0]).toEqual({
-            backbone_sequence: seq.sequence, backbone_topology: 'circular', insert_sequence: 'GGGGCCCCAAAATTTT', limit: 3,
+            backbone_sequence: seq.sequence, backbone_topology: 'circular', backbone_features: [], backbone_source_document_id: 'seq-open',
+            insert_revision_id: 'rev-src', insert_topology: 'linear', vector_five_prime_phosphate: 'unknown', limit: 3,
         });
         const text = host.textContent ?? '';
         for (const part of ['EcoRI + BamHI', 'insert orientation: forward', 'vector self-ligation: not possible', 'regenerated EcoRI', 'GCGCGCGAATTC', 'GCGCGCGGATCC']) expect(text).toContain(part);
