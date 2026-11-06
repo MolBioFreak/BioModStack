@@ -1,6 +1,7 @@
-"""Generated service -> actual launcher config phase -> runner -> shared selection.
+"""BNS service rendering preserves optional non-secret publication selection.
 
-Tiny private payloads only: no services, container execution or remote transport.
+Ported from eb5f23f; trimmed-product execution fixtures are intentionally absent.
+No services, container execution or remote transport.
 """
 import json
 import os

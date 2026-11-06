@@ -1,0 +1,1895 @@
+{
+  "bns": "4aeaee783cda69035522a823e80824a86e3512df",
+  "test": "7e662af00f56bdd70a74978ba0ff5fd54a6704fd",
+  "main": "84476f5622e7a8f257f77fd823bd41756544dd94",
+  "merge_base": "dc701125bf1ee0c9813f6974886cbd9c48c2df38",
+  "method": "Final tree comparisons include merge resolutions; status is scoped hunk status, not claim of whole-commit cherry-pick.",
+  "files": [
+    {
+      "path": "apptainer/dorado.def",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "biomodstack_frontend_prerequisites.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "biomodstack_python_prerequisites.py",
+      "status": "superseded",
+      "reason": "Keep BNS 4aeaee7 original pyvenv.cfg home allowance; upstream would regress relocated support-Python dispatch.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "biomodstack_runtime_profile.py",
+      "status": "ported",
+      "reason": "eb5f23f asset_publication_environment, complete 30-line helper.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "biomodstack_services.py",
+      "status": "ported",
+      "reason": "eb5f23f publication_environment render + three service insertions only. Exclude Studio descriptor/unit, mobile publisher activation and Tailnet restart hooks to preserve trimmed edition.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "config/mk1d-reconnect/install-native-root-helper.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "config/ngs/bns_runtime_builds_v1.json",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "config/ngs/dorado_v2.1.2.lock.json",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "config/ngs/wf_clone_validation_v1.8.4.lock.json",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "docker/ont-squigualiser-comparison.Dockerfile",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "docker/ont-squigualiser.Dockerfile",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "docs/BNS_NGS_Runtime_Deployment.md",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "docs/Nonproduction_Installation.md",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "docs/ONT_DNA_Plasmid_Analysis.md",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "modules/ngs/dorado_basecall.nf",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "modules/ngs/modkit_analysis.nf",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/config/ont_signal_workbench/comparison_render_runtime_policy_v1.json",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/config/ont_signal_workbench/raw_signal_runtime_policy_v1.json",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/config/ont_signal_workbench/runtime_policy_v1.json",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/config/ont_signal_workbench/squigulator_runtime_policy_v1.json",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/routers/ngs_alignment_sessions.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/routers/ont_runs.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/routers/ont_signal_workbench.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/nextflow.py",
+      "status": "edition-excluded",
+      "reason": "Read every changed shared hunk. Remaining differences are protein generation/chemistry/checkpoint/oracle/review-row paths. ONT replay/runtime/compiler hooks already present. Do not restore trimmed product surfaces.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ngs_alignment_sessions.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ont_minknow_client.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ont_ngs_completion.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ont_ngs_contract.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ont_ngs_results.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ont_pod5_restore.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ont_raw_signal.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ont_raw_signal_worker.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ont_read_report.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ont_read_squiggle.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ont_run_control.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ont_signal_workbench.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ont_signal_worker.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/ont_submission_trust.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/remote_execution/hf_assets.py",
+      "status": "edition-excluded",
+      "reason": "Full-product optional HF local resolver and bounded release companion publication. New release cap/role refusal is NOT carried.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/services/runtime_acquisition.py",
+      "status": "edition-excluded",
+      "reason": "Full-product model acquisition HF mirror and layout receipt reuse; no change needed by existing BNS direct pinned NGS installer.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_bns_raw_signal_import.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_completion_output_authority.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_dorado_cpu_device.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_host_agent_proxy.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_minknow_flow_cell_fields.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_ngs_contract.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_ngs_phase1_acceptance.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_ngs_result_schema.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_ngs_runtime_controls.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_ngs_submission.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_pod5_restore.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_pod5_retention.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_policy_regression.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_prepared_launch.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_raw_signal_conversion_automation.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_read_report.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_read_squiggle.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_retained_execution.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_run_control.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_signal_backend_startup.py",
+      "status": "superseded",
+      "reason": "BNS retains stronger blocked remote-poll cancellation regression; upstream weaker AsyncMock fixture is not a fix.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_signal_runtime_contract.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_signal_workbench.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_slow5_conversion.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_start_receipts.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_ont_workflow_harmonization.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tests/test_python_prerequisites.py",
+      "status": "superseded",
+      "reason": "Keep BNS relocated-Python regression cases absent upstream.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tools/bms_container.py",
+      "status": "edition-excluded",
+      "reason": "De novo task-private weight placement, alias grouping/accounting, optional userspace NVIDIA CLI exposure. Not required for parent ONT Apptainer provisioning; existing execution kept.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "platform/api/tools/bms_managed_runtime.py",
+      "status": "edition-excluded",
+      "reason": "Rental userspace udocker bms2-to-bms3 support change; not needed for ONT native Apptainer host.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "schemas/ngs/ont_fastq_qc_result_v1.schema.json",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-ont-basecall_dna-v1.schema.json",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-ont-basecall_rna-v1.schema.json",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-ont-methylation_analysis-v1.schema.json",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-ont-plasmid_qc-v1.schema.json",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/build_ont_raw_signal_runtime.sh",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/build_ont_squigualiser_comparison_runtime.sh",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/build_ont_squigualiser_runtime.sh",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/build_ont_squigulator_runtime.sh",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/dorado_p4_preflight.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/lib/ont_minknow_host.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/lib/ont_start_receipts.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/lib/pinned_acquisition.py",
+      "status": "edition-excluded",
+      "reason": "Optional full-product HF mirror resolver and invocation-local hashing optimization; current BNS direct pinned NGS deployment owners are identical to upstream and do not require these hooks.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/lib/pinned_weight_layout.py",
+      "status": "edition-excluded",
+      "reason": "Nested RFD4 oracle logical roots and de novo weight acquisition receipt optimization; unrelated to pinned Dorado direct runtime provisioning.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/lib/runtime_image_views.py",
+      "status": "ported",
+      "reason": "f92a54a ctypes import, remove per-inode fsync, checked _sync_filesystem, pre-publication syncfs. Exclude later allocate_private_file return-method accounting for de novo private weight views.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/manage_desktop_services.py",
+      "status": "edition-excluded",
+      "reason": "Full-product Tailnet selection hooks; BNS launcher intentionally has no automatic Tailnet selection.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/ont_signal_runtime.py",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/publish_runtime_images.py",
+      "status": "ported",
+      "reason": "1d69c8c semantic selector acceptance; broadens existing allow-list, not a new execution gate.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "scripts/python_runtime_guard.sh",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "workflows/ngs/ont_basecall_dna.nf",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "workflows/ngs/ont_construct_screening.nf",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "workflows/ngs/ont_plasmid_qc.nf",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    },
+    {
+      "path": "workflows/ngs/wf_clone_validation.nf",
+      "status": "already-present",
+      "reason": "Byte-identical final file to pinned test; merge-result hunks included in comparison.",
+      "upstream_test_main_identical": true
+    }
+  ],
+  "source_commits": [
+    {
+      "commit": "689e6212d6bbc3a8c767ec3971b085967525a726",
+      "subject": "Repair shared native lineage, ensemble transport and confidence readback",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "598702429990e44567bac782bee35113714a1985",
+      "subject": "Integrate cross-model native chemistry and launch fidelity follow-ups",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "3a4274998b1de08bbceb01c9cae5320a0f088620",
+      "subject": "fix(boltzgen): reconcile public modes with pinned native capabilities",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "28bcaa8546e90244eb89777ec6aefeb6c6a66176",
+      "subject": "Support explicit HF release companions and pinned local mirror acquisition",
+      "files": [
+        {
+          "path": "platform/api/services/remote_execution/hf_assets.py",
+          "final_hunk_status": "edition-excluded"
+        },
+        {
+          "path": "platform/api/services/runtime_acquisition.py",
+          "final_hunk_status": "edition-excluded"
+        },
+        {
+          "path": "scripts/lib/pinned_acquisition.py",
+          "final_hunk_status": "edition-excluded"
+        },
+        {
+          "path": "scripts/lib/pinned_weight_layout.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "fae6618c2705a05a8da54342fd3d68cf8aa95574",
+      "subject": "fix(denovo): wire native discovery jobs compiler and shared MD receiving",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "7f0240f853a8b7e2dd16245f3bce0d4f2b2da518",
+      "subject": "Complete runtime-data pack and MD worker snapshot bindings",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "1f94a139cef4b06a2438cc2612437809c266f716",
+      "subject": "Connect retained de novo deliveries through shared launch and result callers",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "6e1267cd76919c9451a961441e725ff4bcc4e1c7",
+      "subject": "Connect selected RFD4 oracle runtime through local and remote callers",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "b6d5e62db4b5c1496e087c6706a0239790ce1388",
+      "subject": "Route retained La-Proteina evaluation through ordinary native owners",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "6ff8a9356837e39c33f2924651c2aace6bd3faf0",
+      "subject": "Repair native La motif overrides and DISCO active input import closure",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "f92a54a97ad412424515f06c4d60a551f5a03306",
+      "subject": "Batch extracted runtime durability before atomic publication",
+      "files": [
+        {
+          "path": "scripts/lib/runtime_image_views.py",
+          "final_hunk_status": "ported"
+        }
+      ]
+    },
+    {
+      "commit": "a54e13c7c0786030f2acda59d9a07727d79677b7",
+      "subject": "Execute family alignment jobs in owned CPU workflow runner",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "82bdca2982559cf1044550de3c2a8b4a188649c3",
+      "subject": "Enable family alignment image release registration",
+      "files": [
+        {
+          "path": "scripts/publish_runtime_images.py",
+          "final_hunk_status": "ported"
+        }
+      ]
+    },
+    {
+      "commit": "d8193ffc89e8ea4f5be3abd932ac49fc77a6a67f",
+      "subject": "Stage managed CPU Studio and isolate molecular preparation execution",
+      "files": [
+        {
+          "path": "biomodstack_services.py",
+          "final_hunk_status": "ported"
+        }
+      ]
+    },
+    {
+      "commit": "ddf57d928514e0ac2c5be893d4638c834acda78b",
+      "subject": "Expose optional host NVIDIA telemetry in userspace GPU tasks",
+      "files": [
+        {
+          "path": "platform/api/tools/bms_container.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "047452963f02513477dda7d92166bb53d0a2ba4f",
+      "subject": "Preserve symlinked checkpoint metadata during PRoot reads",
+      "files": [
+        {
+          "path": "platform/api/tools/bms_managed_runtime.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "0a20e36bfac1e66ed0ccda2b1c0f98a4cacef1d6",
+      "subject": "Allow only the hash-pinned source-only docopt dependency during bootstrap",
+      "files": [
+        {
+          "path": "biomodstack_python_prerequisites.py",
+          "final_hunk_status": "superseded"
+        },
+        {
+          "path": "docs/Nonproduction_Installation.md",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_python_prerequisites.py",
+          "final_hunk_status": "superseded"
+        }
+      ]
+    },
+    {
+      "commit": "81e77498bc5d78197162ce166c330f476711784c",
+      "subject": "Resolve managed Python using its selected interpreter",
+      "files": [
+        {
+          "path": "platform/api/tests/test_python_prerequisites.py",
+          "final_hunk_status": "superseded"
+        },
+        {
+          "path": "scripts/python_runtime_guard.sh",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "b560a326b6d856393c19bd65360af3a207611a85",
+      "subject": "Preserve rootless container client session during NGS recovery",
+      "files": [
+        {
+          "path": "platform/api/services/ont_signal_worker.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "71c6ad0a70a317d12c3c5469778957ac84719527",
+      "subject": "Preserve native pLannotate installation across managed API restarts",
+      "files": [
+        {
+          "path": "biomodstack_services.py",
+          "final_hunk_status": "ported"
+        }
+      ]
+    },
+    {
+      "commit": "a7864b6b41feddf6e416a0fa5ba5f01de1bdeeb8",
+      "subject": "Preserve rootless container context for raw signal inspection and workers",
+      "files": [
+        {
+          "path": "platform/api/services/ont_raw_signal.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_raw_signal_worker.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_signal_worker.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_raw_signal_conversion_automation.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_signal_backend_startup.py",
+          "final_hunk_status": "superseded"
+        }
+      ]
+    },
+    {
+      "commit": "1dba2e538ac6d587f8db8c1b303749f9a47bbe10",
+      "subject": "Connect native MinKNOW management and repair idle detection and output discovery",
+      "files": [
+        {
+          "path": "config/mk1d-reconnect/install-native-root-helper.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_raw_signal.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_host_agent_proxy.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_raw_signal_conversion_automation.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/lib/ont_minknow_host.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "61f842a8d86c63976db851cefeea2530bb7d4987",
+      "subject": "Drop native recovery client credentials without a PAM login session",
+      "files": [
+        {
+          "path": "config/mk1d-reconnect/install-native-root-helper.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "7879cb8c1be502fedae06a480da4ab454499f6de",
+      "subject": "Provision pinned NGS runtimes and expose native raw signal import",
+      "files": [
+        {
+          "path": "biomodstack_services.py",
+          "final_hunk_status": "ported"
+        },
+        {
+          "path": "config/ngs/bns_runtime_builds_v1.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "config/ngs/dorado_v2.1.2.lock.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "config/ngs/wf_clone_validation_v1.8.4.lock.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "docker/ont-squigualiser-comparison.Dockerfile",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "docker/ont-squigualiser.Dockerfile",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "docs/BNS_NGS_Runtime_Deployment.md",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/config/ont_signal_workbench/comparison_render_runtime_policy_v1.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/config/ont_signal_workbench/raw_signal_runtime_policy_v1.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/config/ont_signal_workbench/runtime_policy_v1.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/config/ont_signal_workbench/squigulator_runtime_policy_v1.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/routers/ont_runs.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_raw_signal.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_signal_worker.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_bns_raw_signal_import.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_ngs_runtime_controls.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_raw_signal_conversion_automation.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/build_ont_raw_signal_runtime.sh",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/build_ont_squigualiser_comparison_runtime.sh",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/build_ont_squigualiser_runtime.sh",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/build_ont_squigulator_runtime.sh",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "5ec6e0539cc28a1b11e0deee5aedbe7ca59b7b54",
+      "subject": "Keep external raw signal provenance separate from instrument receipts",
+      "files": [
+        {
+          "path": "platform/api/services/ont_raw_signal.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_bns_raw_signal_import.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "33f81019f9c39a69085d56d2de67e405f0afe534",
+      "subject": "Bind raw-signal descriptor sockets under long staging roots",
+      "files": [
+        {
+          "path": "platform/api/services/ont_raw_signal_worker.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_raw_signal_conversion_automation.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "88a4c4e0528f0babb3541b8e3e7a3220eeeefb26",
+      "subject": "Restore BNS native NGS signal tools and provision pinned runtimes",
+      "files": [
+        {
+          "path": "docs/BNS_NGS_Runtime_Deployment.md",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_raw_signal_conversion_automation.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "c49c724885cbc57effceef73822f2a42aa1e0dbf",
+      "subject": "Simplify BNS NGS setup and consolidate duplicate basecalling controls",
+      "files": [
+        {
+          "path": "docs/BNS_NGS_Runtime_Deployment.md",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "c895c82bab89f8fd96a826de190bd94c5a6b18b7",
+      "subject": "Repair ONT completion output discovery and surface alignment runtime failures",
+      "files": [
+        {
+          "path": "docs/BNS_NGS_Runtime_Deployment.md",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ngs_alignment_sessions.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_ngs_results.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_run_control.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_completion_output_authority.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_ngs_submission.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_policy_regression.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_prepared_launch.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_retained_execution.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/lib/ont_minknow_host.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "1bb7bafd615d10e42b4f9750ca76e45ff0431edb",
+      "subject": "Start and stop MinKNOW runs from BMS",
+      "files": [
+        {
+          "path": "docs/BNS_NGS_Runtime_Deployment.md",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/routers/ont_runs.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_raw_signal_worker.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_run_control.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_host_agent_proxy.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_run_control.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/lib/ont_minknow_host.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "f8fb753241fe513cb5e8ff5b845111b5071b847a",
+      "subject": "Repair MinKNOW start recovery and simplify BNS instrument controls",
+      "files": [
+        {
+          "path": "docs/BNS_NGS_Runtime_Deployment.md",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/routers/ont_runs.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_raw_signal_worker.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_run_control.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_run_control.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_start_receipts.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/lib/ont_minknow_host.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/lib/ont_start_receipts.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "54284d1e8fed64b0b2adcae1718dadda5ce950e2",
+      "subject": "Verify DNA V14 and RNA004 catalog compatibility across MinKNOW SDK results",
+      "files": [
+        {
+          "path": "docs/BNS_NGS_Runtime_Deployment.md",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_start_receipts.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/lib/ont_minknow_host.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "8142ff72945d2ae8dad053b400599ca02bbb6a31",
+      "subject": "Tidy NGS instrument and results UI wording",
+      "files": [
+        {
+          "path": "platform/api/routers/ngs_alignment_sessions.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "19292be8909ff0950de2afc1d04e49b78684f6ba",
+      "subject": "Filter ONT run history by Project on the server and page older runs",
+      "files": [
+        {
+          "path": "platform/api/routers/ont_runs.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_run_control.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_run_control.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "8849453d4f2ef03ee6f503400b3ac51f21770b72",
+      "subject": "Convert uploaded SLOW5 to indexed BLOW5 and drop the inert POD5 view option",
+      "files": [
+        {
+          "path": "platform/api/services/ont_raw_signal.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_raw_signal_worker.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_slow5_conversion.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "7d12acd72b560ef53b447a643744b498cbf2d278",
+      "subject": "Keep host selections across managed restarts and default to the installed lane",
+      "files": [
+        {
+          "path": "biomodstack_runtime_profile.py",
+          "final_hunk_status": "ported"
+        },
+        {
+          "path": "biomodstack_services.py",
+          "final_hunk_status": "ported"
+        },
+        {
+          "path": "scripts/manage_desktop_services.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "fde6492e38290ccb41b89c8d32b20db9519fa48c",
+      "subject": "Let operators choose whether to keep POD5 after a verified BLOW5",
+      "files": [
+        {
+          "path": "platform/api/routers/ont_runs.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_raw_signal.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_raw_signal_worker.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_pod5_retention.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "16fc890e408fcc91372eecd679fda9435fe5ae49",
+      "subject": "Allow Dorado basecalling on CPU for hosts without CUDA",
+      "files": [
+        {
+          "path": "biomodstack_runtime_profile.py",
+          "final_hunk_status": "ported"
+        },
+        {
+          "path": "biomodstack_services.py",
+          "final_hunk_status": "ported"
+        },
+        {
+          "path": "modules/ngs/dorado_basecall.nf",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_ngs_contract.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_dorado_cpu_device.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/dorado_p4_preflight.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "60e117a3beb607064dd61496b79d88d7cd107df6",
+      "subject": "Pass the CPU basecalling device and POD5 Python through to Nextflow",
+      "files": [
+        {
+          "path": "biomodstack_services.py",
+          "final_hunk_status": "ported"
+        }
+      ]
+    },
+    {
+      "commit": "f97fab6b24ef124babce50f7babbba2ac8fd4440",
+      "subject": "Register a basecall job's own calls.bam as a move source",
+      "files": [
+        {
+          "path": "platform/api/routers/ont_signal_workbench.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_signal_workbench.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "5f8742348a1a3bb8ef10067546fc5af266913966",
+      "subject": "Let operators choose CPU or CUDA basecalling and accept Dorado's trailing partial stride",
+      "files": [
+        {
+          "path": "platform/api/routers/ont_runs.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_ngs_contract.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_submission_trust.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_dorado_cpu_device.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_signal_runtime_contract.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/ont_signal_runtime.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "819e869188f13dbe83a4aaab195a29796b5abe25",
+      "subject": "Pin the rebuilt Squigualiser runtime carrying the Dorado trailing-stride check",
+      "files": [
+        {
+          "path": "config/ngs/bns_runtime_builds_v1.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/config/ont_signal_workbench/runtime_policy_v1.json",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "f54c5f84aa0ce92a8d377081f1a460ff1af8d887",
+      "subject": "Allow a fresh validation attempt for a failed job-sourced move BAM",
+      "files": [
+        {
+          "path": "platform/api/services/ont_signal_workbench.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "844e76da6e1306b0f4e004861a141cb9b8035ff4",
+      "subject": "Accept job move-BAM retries whose tracked file has no recorded size",
+      "files": [
+        {
+          "path": "platform/api/services/ont_signal_workbench.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "6e28cc105f1077b2c02abf8e4bd48471d9c8d633",
+      "subject": "Clear systemd's start-limit counter on an operator restart",
+      "files": [
+        {
+          "path": "biomodstack_services.py",
+          "final_hunk_status": "ported"
+        }
+      ]
+    },
+    {
+      "commit": "9616c8508ed901f575fe6f43773f09c312e53a02",
+      "subject": "Pass the Domain session when registering an existing POD5 candidate",
+      "files": [
+        {
+          "path": "platform/api/services/ont_raw_signal.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_raw_signal_conversion_automation.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "24a4def7a8af084cc2edaaeb0bb5983825b87226",
+      "subject": "Accept move tables from standalone basecall jobs after independent validation",
+      "files": [
+        {
+          "path": "platform/api/services/ont_signal_worker.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_signal_workbench.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "be3470c7c4c4da8ed901a492fac7bc042d27294c",
+      "subject": "Let failed basecall move tables be re-validated (migration 49)",
+      "files": [
+        {
+          "path": "platform/api/tests/test_ont_signal_workbench.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "092d1668aa0d108443d3a3661815d0e885bfd9e0",
+      "subject": "Add a Restore POD5 button that rebuilds POD5 from a ready BLOW5",
+      "files": [
+        {
+          "path": "platform/api/routers/ont_runs.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_pod5_restore.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_pod5_restore.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "096ae50cd3eac18fe9cd419ac007b7d85979c9e0",
+      "subject": "Harmonize DNA and plasmid analysis with tandem modkit and target-scoped devices",
+      "files": [
+        {
+          "path": "docs/ONT_DNA_Plasmid_Analysis.md",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "modules/ngs/modkit_analysis.nf",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/routers/ont_runs.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_ngs_contract.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_ngs_phase1_acceptance.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_ngs_runtime_controls.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_workflow_harmonization.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "schemas/ngs_molbio/ngs-ont-basecall_dna-v1.schema.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "schemas/ngs_molbio/ngs-ont-plasmid_qc-v1.schema.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "workflows/ngs/ont_basecall_dna.nf",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "workflows/ngs/ont_plasmid_qc.nf",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "c5cad96a9c64a799d53c1c2d8ea0457d5f85e6d9",
+      "subject": "Harmonize BNS DNA and plasmid analysis with tandem modkit and target-aware devices",
+      "files": [
+        {
+          "path": "platform/api/tests/test_ont_workflow_harmonization.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "b454c410697583e0d3c3a39fec321a5e4f2ee965",
+      "subject": "Consolidate analysis format references and normalize workflow formatting",
+      "files": [
+        {
+          "path": "docs/ONT_DNA_Plasmid_Analysis.md",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "workflows/ngs/ont_basecall_dna.nf",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "039d64c0a5ca03da228818fb5e15426ca4bdba46",
+      "subject": "Accept verifier variant_analysis_status in ONT FASTQ-QC result schema",
+      "files": [
+        {
+          "path": "platform/api/tests/test_ont_ngs_result_schema.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "schemas/ngs/ont_fastq_qc_result_v1.schema.json",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "e8f297efce9b291acf2cc5831ba8e195a5b2998b",
+      "subject": "Pin every Dorado 2.1.2 modification model and allow multi-model calling",
+      "files": [
+        {
+          "path": "config/ngs/dorado_v2.1.2.lock.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "modules/ngs/dorado_basecall.nf",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_ngs_completion.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_ngs_contract.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_submission_trust.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "schemas/ngs_molbio/ngs-ont-basecall_dna-v1.schema.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "schemas/ngs_molbio/ngs-ont-basecall_rna-v1.schema.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "schemas/ngs_molbio/ngs-ont-methylation_analysis-v1.schema.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "schemas/ngs_molbio/ngs-ont-plasmid_qc-v1.schema.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/dorado_p4_preflight.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "2181d22889030c6006a745c9ec4cade7e4d991e6",
+      "subject": "Add sample summary and per-position review to the plasmid QC report",
+      "files": [
+        {
+          "path": "platform/api/services/ont_ngs_results.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_ngs_result_schema.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "schemas/ngs/ont_fastq_qc_result_v1.schema.json",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "1cf3b21c39a724987f5672fbc6d6c52ba1040a24",
+      "subject": "Give DNA analysis and basecall runs a read report",
+      "files": [
+        {
+          "path": "platform/api/routers/ngs_alignment_sessions.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_read_report.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_read_report.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "06e56387788012bcc580601dae6b4bd3d71de51f",
+      "subject": "Quote modification model ids in the Dorado snapshot jq lookup",
+      "files": [
+        {
+          "path": "modules/ngs/dorado_basecall.nf",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "5bdade87c23414cee28ccf52f0271eedbdc03534",
+      "subject": "Show squiggles directly from a run's POD5 and move table",
+      "files": [
+        {
+          "path": "platform/api/routers/ngs_alignment_sessions.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_read_squiggle.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_read_squiggle.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "d90842522c53efd4dccde7c44b45ea352604ef14",
+      "subject": "Call Dam and Dcm methylation at their motifs in the read report",
+      "files": [
+        {
+          "path": "platform/api/services/ont_read_report.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_read_report.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "c5afb6869776bb5cf2051669cdf47424977b6249",
+      "subject": "Install first-party alignment package through managed Python bootstrap",
+      "files": [
+        {
+          "path": "biomodstack_python_prerequisites.py",
+          "final_hunk_status": "superseded"
+        },
+        {
+          "path": "platform/api/tests/test_python_prerequisites.py",
+          "final_hunk_status": "superseded"
+        }
+      ]
+    },
+    {
+      "commit": "ca8bb07e30699298218e87cb3659ffda209bc7e1",
+      "subject": "Include native alignment viewers in managed frontend bootstrap",
+      "files": [
+        {
+          "path": "biomodstack_frontend_prerequisites.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "ff4c316669a041f61ec49c32c187752c2e94a1e2",
+      "subject": "Version-aware NGS runtime and card-share Dorado VRAM booking",
+      "files": [
+        {
+          "path": "apptainer/dorado.def",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "config/ngs/dorado_v2.1.2.lock.json",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ngs_alignment_sessions.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_ngs_completion.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "scripts/dorado_p4_preflight.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "0413e13d9b60fd7ffc35213d93b1454cd65b80e5",
+      "subject": "Detect the inserted flow cell when MinKNOW omits optional fields",
+      "files": [
+        {
+          "path": "platform/api/services/ont_minknow_client.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_minknow_flow_cell_fields.py",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "36f29d94c9fcb2728c13b0e4b4b84a0b81a06ad3",
+      "subject": "Repair de novo runtime defaults: acquired weight layouts, Apptainer, RFD3 request, native publication, Studio framing",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "b85e1f51936f2ceb9ff8675272b086e7183ced71",
+      "subject": "Development restart: refresh adapter policy before reload; run-event compaction",
+      "files": [
+        {
+          "path": "biomodstack_services.py",
+          "final_hunk_status": "ported"
+        }
+      ]
+    },
+    {
+      "commit": "2054579e5c2825c39b6032d8de89bee1cc219b90",
+      "subject": "Development restart: stop cleanly, reload and restart only what changed",
+      "files": [
+        {
+          "path": "biomodstack_services.py",
+          "final_hunk_status": "ported"
+        }
+      ]
+    },
+    {
+      "commit": "2e0640ef6bdb877a87258e3aaffe7eef9ed148d1",
+      "subject": "Resequence loop: selectable fixed/designable positions, no region manifest needed",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "b965d273cb23012a735614680aed7bf641069525",
+      "subject": "Terminal publication: let a workflow-opened review gate reach awaiting_input",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "8aa54d03da1337398dd4c78ed799f9212f31fc03",
+      "subject": "Resequence loop: LigandMPNN, Caliby and ProtonPottsMPNN as in-loop designers",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "1da53bf94af1f10ef42f6a70cf463b73ff6dd5ff",
+      "subject": "Delete the retired RFD3 local-redesign service, routes, hooks and covering tests",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "eb5f23fd11f39d31f30f9cbb6f81a3135287ae73",
+      "subject": "Propagate non-secret asset publication selection to managed adapters",
+      "files": [
+        {
+          "path": "biomodstack_runtime_profile.py",
+          "final_hunk_status": "ported"
+        },
+        {
+          "path": "biomodstack_services.py",
+          "final_hunk_status": "ported"
+        }
+      ]
+    },
+    {
+      "commit": "1d69c8cb3214727eafd015ae24314e7efd2b8beb",
+      "subject": "Image publisher: accept semantic BMS_RUNTIME_IMAGE_<NAME>_SIF keys so legacy-symlink images such as boltz2.sif can be registered",
+      "files": [
+        {
+          "path": "scripts/publish_runtime_images.py",
+          "final_hunk_status": "ported"
+        }
+      ]
+    },
+    {
+      "commit": "7ad175a554318502612af351024a3274599c145d",
+      "subject": "Container launcher: bind weight-object aliases per directory, not per file",
+      "files": [
+        {
+          "path": "platform/api/tools/bms_container.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "56afee88c4d827e949f3997a505779c87309bfab",
+      "subject": "Checkpoint continuation: an empty compiled plan keeps the admitted budget",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "4f301778045cc5c37a5a53d70dc6e6b9249465f3",
+      "subject": "Checkpoint continuation: write into the generation directory, not the saved parent out_dir",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "6e4c9d7d1118167dcb08f8fee7ef71e17ba23c2f",
+      "subject": "Local component gates list their candidates as review rows",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "0efeb12fa1cc3549887ebb00b053de52022f80b6",
+      "subject": "Close selected de novo oracle assets and scope task-private weight views",
+      "files": [
+        {
+          "path": "platform/api/tools/bms_container.py",
+          "final_hunk_status": "edition-excluded"
+        },
+        {
+          "path": "scripts/lib/runtime_image_views.py",
+          "final_hunk_status": "ported"
+        }
+      ]
+    },
+    {
+      "commit": "3cade3e1e26105b51caa8026b1401cc7f3a94d51",
+      "subject": "Connect fenced lifecycle and native Project caller handoffs",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "39f45f558539b901d93575f425e52e57d4b1a1df",
+      "subject": "Bind selected Shape capacity and finish hidden visibility and frozen review polling",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "b6b3c317170f05d73e633f99753134f0c7e87a2a",
+      "subject": "Tolerate stub sessions and job snapshots in new submission/Shape paths; align stale test doubles",
+      "files": [
+        {
+          "path": "platform/api/services/nextflow.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "c53683c22732e0442ac7efa0005d3c69aa455371",
+      "subject": "Name the task weight placement hint without a .json suffix so directory-wide JSON scanners ignore it",
+      "files": [
+        {
+          "path": "platform/api/tools/bms_container.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    },
+    {
+      "commit": "78ac20c12a28ec0dc755b3c7f3a03dae9ea921e3",
+      "subject": "Port all-plasmid tandem modkit and confined raw-signal sockets from BNS",
+      "files": [
+        {
+          "path": "platform/api/services/ont_ngs_contract.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/services/ont_raw_signal_worker.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_ngs_contract.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "platform/api/tests/test_ont_raw_signal_conversion_automation.py",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "workflows/ngs/ont_construct_screening.nf",
+          "final_hunk_status": "already-present"
+        },
+        {
+          "path": "workflows/ngs/wf_clone_validation.nf",
+          "final_hunk_status": "already-present"
+        }
+      ]
+    },
+    {
+      "commit": "eb1b8960046c8f5d4cbde5349493c2722572728b",
+      "subject": "RFD4: declare OpenFold3 refolding-oracle assets as optional selected acquisition; resolve layout weights for oracle runtime",
+      "files": [
+        {
+          "path": "scripts/lib/pinned_weight_layout.py",
+          "final_hunk_status": "edition-excluded"
+        }
+      ]
+    }
+  ]
+}
