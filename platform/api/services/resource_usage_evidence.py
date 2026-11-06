@@ -785,7 +785,9 @@ class WorkflowResourceMonitor:
         mismatches = [
             key
             for key, matches in (
-                ("CPUAccounting", self._enforcement["cpu_accounting"]),
+                # systemd 258+ deprecates this toggle; newer releases omit it.
+                # Unified-cgroup CPU accounting is checked by the snapshot below.
+                ("CPUAccounting", not properties.cpu_accounting or self._enforcement["cpu_accounting"]),
                 ("MemoryAccounting", self._enforcement["memory_accounting"]),
                 ("TasksAccounting", self._enforcement["tasks_accounting"]),
                 ("CPUQuotaPerSecUSec", actual_cpu_usec == expected_cpu_usec),
@@ -807,6 +809,10 @@ class WorkflowResourceMonitor:
         self._invocation_id = properties.invocation_id
         try:
             accounting = self._snapshot_with_retry()
+            if not properties.cpu_accounting:
+                # This is observed cpu.stat accounting, not an invented systemd
+                # property. Keep the existing snapshot and quota checks intact.
+                self._enforcement["cpu_accounting"] = True
             self._last_accounting = accounting
             self._write_checkpoint(accounting)
         except (OSError, ValueError, subprocess.SubprocessError, ResourceUsageEvidenceError) as exc:
