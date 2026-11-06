@@ -75,7 +75,9 @@ function DeckSubmissionRow({ item, generation, active, onSelect, onTerminal }: {
     const current = active && item.request.expected_connection_generation === generation;
     const commandId = item.receipt?.command_id ?? item.commandId;
     const lane = item.request.action_id === 'oem.xy.move_sequence' || item.request.action_id === 'oem.xy.retarget';
-    const query = useBioXpOperatorReceiptV2(commandId ?? null, item.request.expected_connection_generation, current && documentVisible && item.receipt?.terminal !== true, lane ? 500 : undefined);
+    const query = useBioXpOperatorReceiptV2(commandId ?? null, item.request.expected_connection_generation, current && documentVisible && item.receipt?.terminal !== true,
+        // Retarget returns ~0.6 s after dispatch; a coarse poll delays the next click.
+        item.request.action_id === 'oem.xy.retarget' ? 100 : lane ? 250 : undefined);
     const receipt = query.data?.action_id === item.request.action_id ? query.data : item.receipt;
     useEffect(() => {
         if (current && !query.error && query.data?.terminal && query.data.action_id === item.request.action_id)

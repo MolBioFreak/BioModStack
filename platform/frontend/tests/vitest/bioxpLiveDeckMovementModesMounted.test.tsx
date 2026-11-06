@@ -142,7 +142,7 @@ it('Fast lane notices robot completion without an update-feed notice and sends t
     expect(status()).toBe('Active: Output chiller · A12 · Queued: Output chiller · H12');
     // The robot finishes; nothing refetches explicitly and the update feed stays silent.
     for (const [id, row] of receipts) receipts.set(id, { ...row, status: 'completed', terminal: true, completion_class: 'completed' });
-    await advance(600); await advance(50);
+    await advance(300); await advance(50);
     expect(writes()).toHaveLength(2);
     expect(writes()[1].body.inputs).toEqual({ targets: [{ location_id: 1, well: 'H12' }] });
 });
