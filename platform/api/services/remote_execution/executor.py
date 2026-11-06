@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -112,8 +113,12 @@ def _worker_argv(
     attempt_dir: str,
     *extra: str,
 ) -> list[str]:
+    # -B: these run over SSH beside live containers that guard the read-only release tree. Without it the
+    # worker interpreter writes bytecode into that tree mid-task (for example while delivering a generated
+    # MSA) and the container reports "declared scientific input changed during execution".
     return [
         connection.runtime_binding["paths"]["python"] if connection.runtime_binding else "python3",
+        "-B",
         _worker_path(connection),
         command,
         "--attempt-dir",
@@ -429,8 +434,12 @@ def _attempt_lease_predicates(job: Job) -> list:
     return [ExecutionTarget.lease_acquired_at == epoch]
 
 
+_UNSET_CHECKPOINT_HISTORY = object()
+
+
 async def _publish_remote_transition(
     session: AsyncSession, job: Job, values: dict[str, Any], *, release_lease: bool = False, require_lease: bool = True,
+    checkpoint_history: Any = _UNSET_CHECKPOINT_HISTORY,
 ) -> bool:
     """CAS the complete attempt/claim snapshot; never autoflush a stale owner."""
     lease_authority = [job_claim_authority(job)]
@@ -440,6 +449,7 @@ async def _publish_remote_transition(
         result = await session.execute(
             update(Job).where(
                 *lease_authority,
+                *([Job.decision_history == checkpoint_history] if checkpoint_history is not _UNSET_CHECKPOINT_HISTORY else []),
                 Job.id == str(job.id),
                 Job.status == job.status,
                 Job.queue_status == job.queue_status,
@@ -503,6 +513,14 @@ async def _publish_started_receipt(
             "status": "running", "queue_status": "running", "started_at": status.started_at,
             "remote_state": status.state, "provenance": provenance,
         }):
+            # Supersede the last staging message (e.g. "Materializing ...") now
+            # that the attempt is running; activity detail replaces it later.
+            # Display-only: a progress write failure must never undo the start receipt.
+            try:
+                from .progress import publish_job_progress
+                await publish_job_progress(session, current, phase="running", artifact=None, message="Running")
+            except Exception:
+                __import__("logging").getLogger(__name__).warning("Remote job progress supersede unavailable")
             return True
     return False
 
@@ -1434,15 +1452,37 @@ async def _retry_remote_component_owned(session, job, intent: dict[str, Any]):
         raise RemoteExecutionError('Retry start is unresolved; original lease retained: ' + str(exc)) from exc
 
 
+# The orchestrator's periodic status check holds the per-job controller lock while it reads the worker (up to its
+# 30 s transport timeout). A Continue that lands in that window waits for it instead of being refused at once.
+CHECKPOINT_RESUME_LOCK_WAIT_SECONDS = 40.0
+
+
 async def request_remote_checkpoint_resume(session: AsyncSession, job: Job, checkpoint: dict, decision: dict) -> dict:
-    with _controller_attempt_guard(str(job.id)) as owned:
-        if not owned:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + CHECKPOINT_RESUME_LOCK_WAIT_SECONDS
+    while True:
+        with _controller_attempt_guard(str(job.id)) as owned:
+            if owned:
+                # The lock holder (reconcile) may have rewritten the job while we waited; the owned path's
+                # compare-and-swap must see the current row, not the snapshot the request loaded earlier.
+                await session.refresh(job)
+                from .targets import ExecutionTargetError
+                try:
+                    return await _request_remote_checkpoint_resume_owned(session, job, checkpoint, decision)
+                except ExecutionTargetError as exc:
+                    await session.rollback()
+                    raise RemoteExecutionError(str(exc)) from exc
+        if loop.time() >= deadline:
             raise RemoteExecutionError('Checkpoint controller operation is already active')
-        return await _request_remote_checkpoint_resume_owned(session, job, checkpoint, decision)
+        await asyncio.sleep(0.25)
 
 
 async def _request_remote_checkpoint_resume_owned(session: AsyncSession, job: Job, checkpoint: dict, decision: dict) -> dict:
     """Commit the explicit operation before transport; acceptance owns generation."""
+    checkpoint_history = job.decision_history
+    if any((entry.get('checkpoint_successor') or {}).get('checkpoint_sha256') == checkpoint.get('checkpoint_sha256')
+           for entry in checkpoint_history or []):
+        raise RemoteExecutionError('Checkpoint already continued as a successor')
     if (job.provenance or {}).get('remote_checkpoint_operation', {}).get('state') in {'requested', 'uncertain'}:
         raise RemoteExecutionError('Checkpoint decision is unresolved; reconcile the original operation')
     if not job.awaiting_input or job.status != 'awaiting_input' or job.queue_status == 'cancelling':
@@ -1488,7 +1528,7 @@ async def _request_remote_checkpoint_resume_owned(session: AsyncSession, job: Jo
     if not await _publish_remote_transition(session, job, {
         "status": "running", "queue_status": "running", "remote_state": "checkpoint_resume_requested",
         "awaiting_input": False, "provenance": provenance,
-    }, require_lease=False):
+    }, require_lease=False, checkpoint_history=checkpoint_history):
         raise RemoteExecutionError("Checkpoint owner changed during resource reacquisition")
     await _recover_remote_checkpoint(session, job)
     intent = (job.provenance or {}).get('remote_checkpoint_operation') or {}
@@ -1591,15 +1631,13 @@ async def retrieve_remote_checkpoint_review(session: AsyncSession, job: Job, che
     """Explicit selected-file transfer only; no terminal result import or release."""
     import tempfile
     from component_runtime import ResultReference
-    observed = await remote_status(session, job)
-    if (observed.state != 'awaiting_input' or not observed.quiescent
-            or checkpoint not in observed.checkpoints):
-        raise RemoteExecutionError('Review checkpoint is no longer the quiescent owned observation')
     refs = [ResultReference(**item) for item in checkpoint['artifacts']]
-    if not refs or sum(ref.size_bytes for ref in refs) > 64 * 1024 * 1024:
+    optional = [ref for ref in refs if ref.schema == 'bms.stage-review.validator-scores.v1']
+    required = [ref for ref in refs if ref.schema != 'bms.stage-review.validator-scores.v1']
+    if not required or sum(ref.size_bytes for ref in required) > 64 * 1024 * 1024:
         raise RemoteExecutionError('Declared review set is empty or exceeds the bounded 64 MiB review transfer')
-    target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
-    connection, attempt_dir = _connection_for_attempt(target, job)
+    if sum(ref.size_bytes for ref in refs) > 64 * 1024 * 1024:
+        optional = []  # oversized advisory scores do not prevent stage pickup
     output = Path(job.output_dir)
     if not output.is_absolute():
         output = get_data_root() / output
@@ -1607,26 +1645,274 @@ async def retrieve_remote_checkpoint_review(session: AsyncSession, job: Job, che
     review_root.mkdir(parents=True, exist_ok=True)
     destination = review_root / checkpoint['checkpoint_sha256']
     if destination.exists():
-        for ref in refs:
+        if json.loads((destination / 'checkpoint-review.json').read_text()) != checkpoint:
+            raise RemoteExecutionError('Retained review checkpoint identity conflicts')
+        for ref in required:
             ref.resolve(destination)
         return destination
+    observed = await remote_status(session, job)
+    if (observed.state != 'awaiting_input' or not observed.quiescent
+            or checkpoint not in observed.checkpoints):
+        raise RemoteExecutionError('Review checkpoint is no longer the quiescent owned observation')
+    target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
+    connection, attempt_dir = _connection_for_attempt(target, job)
     with tempfile.TemporaryDirectory(prefix='.incoming-', dir=review_root) as temporary:
         incoming = Path(temporary)
         await rsync_selected_from_remote(connection, attempt_dir + '/results', incoming,
-            [ref.relative_path for ref in refs], max_file_bytes=64 * 1024 * 1024, timeout=300)
-        for ref in refs:
+            [ref.relative_path for ref in required], max_file_bytes=64 * 1024 * 1024, timeout=300)
+        for ref in required:
             ref.resolve(incoming)
+        if optional:
+            try:
+                await rsync_selected_from_remote(connection, attempt_dir + '/results', incoming,
+                    [ref.relative_path for ref in optional], max_file_bytes=64 * 1024 * 1024, timeout=300)
+            except (RemoteTransportError, OSError, ValueError):
+                import logging
+                logging.getLogger(__name__).warning('Optional validator score transfer failed for Job %s', job.id, exc_info=True)
         current = await remote_status(session, job)
         if current.attempt_id != observed.attempt_id or current.boot_id != observed.boot_id or checkpoint not in current.checkpoints:
             raise RemoteExecutionError('Checkpoint changed during explicit review transfer')
         # Registration is an immutable native artifact projection, not scientific completion.
         (incoming / 'checkpoint-review.json').write_text(json.dumps(checkpoint, sort_keys=True))
         if destination.exists():
-            for ref in refs:
+            for ref in required:
                 ref.resolve(destination)
         else:
             os.rename(incoming, destination)
     return destination
+
+
+async def prepare_checkpoint_successor(session: AsyncSession, job: Job, checkpoint: dict,
+                                       decision: dict, execution_target_id: str | None,
+                                       name_suffix: str = '_continued'):
+    """Prepare an ordinary JobCreate from a completed native review boundary.
+
+    This does not move an attempt, acquire a lease, approve a plan, or enqueue.
+    The caller submits through create_job, with claim_checkpoint_successor in
+    that same transaction. The retained checkpoint is the scientific source.
+    """
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from component_runtime import ResultReference, canonical_bytes, digest, durable_write
+    from database import Design
+    from schemas import JobCreate
+    from routers.jobs import (_native_gate_resume_params, _native_checkpoint_domain_follow_on,
+        _derive_source_stage_payload, _build_selection_manifest_item, _selection_manifest_path)
+    from services.stage_review import ensure_stage_review_rows
+
+    if (not job.awaiting_input or job.status != 'awaiting_input'
+            or job.queue_status == 'cancelling'
+            or (job.params or {}).get('cancellation_receipt', {}).get('state') in {'requested', 'completed'}
+            or (job.awaiting_payload or {}).get('component_checkpoint') != checkpoint):
+        raise RemoteExecutionError('Checkpoint owner changed or was cancelled')
+    if execution_target_id is not None:
+        from services.remote_execution.targets import target_eligible
+        target = await session.get(ExecutionTarget, execution_target_id, populate_existing=True)
+        if target is None or not target_eligible(target):
+            raise RemoteExecutionError('execution_target_id is not an active ready execution target')
+    if set(decision) != {'selected_artifacts'}:
+        raise RemoteExecutionError('Checkpoint decision requires only selected_artifacts')
+    selected = decision['selected_artifacts']
+    if (not isinstance(selected, list) or not selected
+            or any(not isinstance(p, str) for p in selected) or len(set(selected)) != len(selected)):
+        raise RemoteExecutionError('Explicit nonempty unique review selection required')
+    root = (await retrieve_remote_checkpoint_review(session, job, checkpoint) if job.execution_target_id
+            else Path(job.output_dir) if Path(job.output_dir).is_absolute() else get_data_root() / job.output_dir)
+    refs = {r['relative_path']: ResultReference(**r) for r in checkpoint['artifacts']}
+    controls = [r for r in refs.values() if r.schema == 'bms.stage-review.control.v1']
+    if len(controls) != 1:
+        raise RemoteExecutionError('Native gate control artifact required')
+    control = json.loads(controls[0].resolve(root).read_text())
+    stage = control['stage']
+    if stage != checkpoint['stage'] or stage != job.awaiting_stage:
+        raise RemoteExecutionError('Checkpoint stage identity conflicts')
+    chosen = []
+    for relative in selected:
+        ref = refs.get(relative)
+        if (ref is None or ref.schema not in {'bms.stage-review.candidate.v1',
+                'bms.stage-review.raw.v1', 'bms.stage-review.filtered.v1'}
+                or Path(relative).suffix.lower() not in {'.pdb', '.cif'}):
+            raise RemoteExecutionError('Selection contains a foreign or nonstructure review artifact')
+        ref.resolve(root)
+        chosen.append(ref)
+    if len({Path(r.relative_path).name for r in chosen}) != len(chosen):
+        raise RemoteExecutionError('Selected native candidate filenames collide')
+    parent = dict(id=job.id, name=job.name, model_id=job.model_id, mode=job.mode,
+                  params=deepcopy(job.params or {}), output_dir=str(root), pinned_gpu=None)
+    if control.get('generation') and not control.get('continuation'):
+        raise RemoteExecutionError('Retained generation is missing its native continuation authority')
+    if control.get('continuation'):
+        previous = control['continuation']
+        parent.update(model_id=previous['model_id'], mode=previous['mode'], params=deepcopy(previous['native_parameters']))
+    binding = dict(source_job_id=job.id, checkpoint_id=checkpoint['checkpoint_id'],
+                   checkpoint_sha256=checkpoint['checkpoint_sha256'], decision=deepcopy(decision),
+                   execution_target_id=execution_target_id, name_suffix=name_suffix)
+    selection = root / '.bms-review' / 'successor-selections' / digest(binding)
+    for ref in chosen:
+        destination = selection / Path(ref.relative_path).name
+        body = ref.resolve(root).read_bytes()
+        if destination.exists() and destination.read_bytes() != body:
+            raise RemoteExecutionError('Immutable selected artifact conflicts')
+        durable_write(destination, body)
+    source = SimpleNamespace(**parent, awaiting_input=True, awaiting_stage=stage,
+                             awaiting_payload={'candidate_dir': str(selection)})
+    if stage in {'post_boltzgen', 'post_ppiflow_generator'}:
+        request, manifest_path, manifest = _native_checkpoint_domain_follow_on(parent, stage, selection, chosen)
+    else:
+        if stage not in {'post_rfantibody', 'post_fampnn', 'post_caliby', 'post_structure_validation'}:
+            raise RemoteExecutionError('This native gate has no supported continuation policy')
+        # Publish exact local document identities through the existing stage owner.
+        folders = {ref.resolve(root).parent for ref in chosen}
+        if len(folders) == 1:
+            await ensure_stage_review_rows(session, job, candidate_dir=next(iter(folders)))
+        rows = (await session.scalars(select(Design).where(Design.job_id == job.id,
+                                                         Design.source_stage == stage))).all()
+        by_path = {Path(row.pdb_path).resolve(): row for row in rows if row.pdb_path}
+        designs = [by_path.get(ref.resolve(root)) for ref in chosen]
+        if any(row is None for row in designs):
+            raise RemoteExecutionError('Selected review document identity is no longer available')
+        metadata = _derive_source_stage_payload(job, designs, selection)
+        overrides, hint = _native_gate_resume_params(source, {})
+        params = {**parent['params'], **overrides, **metadata}
+        # A successor has fresh runtime authority and never carries old cache/GPU bindings.
+        for key in list(params):
+            if key.startswith('resume_') or key in {'out_dir', 'output_dir', 'work_dir', 'stage_work_dir',
+                    'batch_name', 'job_name', 'gpu_id', 'gpu_ids', 'pinned_gpus', 'execution_target_id',
+                    'remote_result_policy', 'execution_policy', 'core_protein_scientific_contract',
+                    'core_protein_requested_params', 'checkpoint_successor',
+                    'fampnn_analysis_declaration', 'fampnn_analysis_policy'}:
+                params.pop(key, None)
+        params.update(resume_requested_stage=hint, reorchestrated_from_job_id=job.id,
+            lineage_root_job_id=job.lineage_root_job_id or job.id,
+            selection_source_type='review_gate', selection_source_job_id=job.id,
+            interactive_gate_continue=True)
+        manifest_path = _selection_manifest_path(selection)
+        manifest = dict(action='continue_review', root_job_id=job.lineage_root_job_id or job.id,
+            source_job_id=job.id, design_count=len(designs), **metadata,
+            designs=[_build_selection_manifest_item(row, source_path=ref.resolve(root),
+                selection_path=selection / Path(ref.relative_path).name, selection_entry_mode='copy',
+                extra={'checkpoint_artifact_sha256': ref.sha256, 'checkpoint_artifact_path': ref.relative_path})
+                for row, ref in zip(designs, chosen)])
+        request = JobCreate(name=job.name + name_suffix, model_id=parent['model_id'], mode=parent['mode'],
+                            params=params, execution_target_id=execution_target_id)
+    body = canonical_bytes(manifest)
+    if manifest_path.exists() and manifest_path.read_bytes() != body:
+        raise RemoteExecutionError('Immutable selected lineage conflicts')
+    durable_write(manifest_path, body)
+    request.execution_target_id = execution_target_id
+    request.pinned_gpu = None
+    request.execution_plan_approval = None
+    request.params['checkpoint_successor'] = binding
+    return request
+
+
+def checkpoint_successor_id(job: Job, binding: dict) -> str | None:
+    """One successor per exact checkpoint; retry returns the existing Job."""
+    for entry in job.decision_history or []:
+        prior = entry.get('checkpoint_successor')
+        if prior and prior.get('checkpoint_sha256') == binding.get('checkpoint_sha256'):
+            if prior != binding:
+                raise RemoteExecutionError('Checkpoint already continued with a different selection or target')
+            return entry['new_job_id']
+    return None
+
+
+async def claim_checkpoint_successor(session: AsyncSession, source: Job, successor: Job, binding: dict) -> None:
+    """CAS the existing decision history in the successor insertion transaction.
+
+    Call before any ORM flush, after ordinary admission. Never commit here.
+    Do not change source completion, stop custody, claims, or native settings.
+    """
+    from sqlalchemy import update
+    from services.job_control import checkpoint_continuation_predicates
+    checkpoint = (source.awaiting_payload or {}).get('component_checkpoint') or {}
+    if (binding.get('source_job_id') != source.id
+            or binding.get('checkpoint_id') != checkpoint.get('checkpoint_id')
+            or binding.get('checkpoint_sha256') != checkpoint.get('checkpoint_sha256')
+            or binding.get('execution_target_id') != successor.execution_target_id):
+        raise RemoteExecutionError('Successor checkpoint binding conflicts')
+    existing = checkpoint_successor_id(source, binding)
+    if existing:
+        if existing == successor.id:
+            return
+        raise RemoteExecutionError('Checkpoint already continued as ' + existing)
+    history = [*(source.decision_history or []), dict(stage=source.awaiting_stage,
+        new_job_id=successor.id, resume_mode='checkpoint_successor', checkpoint_successor=binding)]
+    with session.no_autoflush:
+        changed = await session.execute(update(Job).where(*checkpoint_continuation_predicates(source),
+            Job.decision_history == source.decision_history).values(decision_history=history)
+            .execution_options(synchronize_session=False))
+    if changed.rowcount != 1:
+        raise RemoteExecutionError('Checkpoint owner changed while queueing successor')
+    await session.refresh(source)
+
+
+_review_row_attempts: dict[str, float] = {}
+
+
+async def publish_remote_review_rows(session: AsyncSession, job: Job) -> int:
+    """Fetch a remote gate's bounded review set and publish the review rows the results view reads.
+
+    A remote gate carries its candidates only as checkpoint artifacts on the worker, so the host-side
+    row publisher (which scans a local candidate directory) saw nothing and the gate listed 0 designs.
+    Best effort: the gate is already open and never depends on this.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    checkpoint = (job.awaiting_payload or {}).get('component_checkpoint')
+    if not checkpoint:
+        return 0
+    try:
+        from database import Design
+        from services.job_control import checkpoint_continuation_predicates
+        from services.stage_review import ensure_stage_review_rows
+        owner = (*checkpoint_continuation_predicates(job),
+                 Job.awaiting_stage == checkpoint.get('stage'),
+                 Job.remote_attempt_id == job.remote_attempt_id,
+                 Job.execution_target_id == job.execution_target_id)
+        if not await session.scalar(select(Job.id).where(*owner)):
+            return 0
+        # A completed frozen projection is already durable evidence. Poll only
+        # its document identities, not every artifact byte or the retired host.
+        # Explicit source pickup/Continue still validates the retained files.
+        output = Path(job.output_dir)
+        if not output.is_absolute():
+            output = get_data_root() / output
+        retained = output / '.bms-review-import' / checkpoint['checkpoint_sha256']
+        artifacts = checkpoint.get('artifacts') or []
+        expected = {('candidate', str(retained / item['relative_path'])) for item in artifacts
+                    if item.get('schema') == 'bms.stage-review.candidate.v1'}
+        candidate_dirs = {str(Path(path).parent) for _, path in expected}
+        mixed_groups = any(item.get('schema') in {'bms.stage-review.raw.v1', 'bms.stage-review.filtered.v1'}
+                           for item in artifacts)
+        if (expected and not mixed_groups and len(candidate_dirs) == 1
+                and (job.awaiting_payload or {}).get('candidate_dir') in candidate_dirs):
+            rows = (await session.execute(select(Design.artifact_group, Design.pdb_path)
+                .join(Job, Job.id == Design.job_id).where(*owner, Design.source_stage == job.awaiting_stage))).all()
+            if len(rows) == len(expected) and set(rows) == expected:
+                return len(rows)
+        root = await retrieve_remote_checkpoint_review(session, job, checkpoint)
+        folders = sorted({(root / item['relative_path']).parent for item in checkpoint['artifacts']
+                          if item.get('schema') == 'bms.stage-review.candidate.v1'})
+        if len(folders) != 1:
+            return 0
+        from component_runtime import ResultReference
+        score_roots = set()
+        try:
+            for item in checkpoint['artifacts']:
+                if item.get('schema') == 'bms.stage-review.validator-scores.v1':
+                    ResultReference(**item).resolve(root)
+                    if '/validator-scores/' in item['relative_path']:
+                        score_roots.add(root / item['relative_path'].split('/validator-scores/', 1)[0])
+        except (OSError, ValueError, RuntimeError):
+            score_roots.clear()  # optional, never block candidate receiving
+        return await ensure_stage_review_rows(session, job, candidate_dir=folders[0],
+            validation_root=next(iter(score_roots)) if len(score_roots) == 1 else '')
+    except Exception:
+        log.exception("Job %s: remote review rows for gate '%s' were not published; the gate stays open",
+                      job.id, job.awaiting_stage)
+        await session.rollback()
+        return 0
 
 
 async def remote_status(session: AsyncSession, job: Job, *, recover_staging: bool = True) -> RemoteAttemptStatus:
@@ -1701,7 +1987,7 @@ async def remote_live_logs(session: AsyncSession, job: Job, *, tail: int = 200) 
     script = helpers + "\nexec(" + repr(Path(native_diagnostics.__file__).read_text()) + ")\n" + Path(reader.__file__).read_text()
     response = await run_remote(connection, [
         connection.runtime_binding['paths']['python'] if connection.runtime_binding else 'python3',
-        '-c', script, attempt_dir,
+        '-B', '-c', script, attempt_dir,
         json.dumps(identity), str(max(1, min(int(tail), 5000))),
     ], timeout=30)
     # A retry/reattachment while SSH was in flight must not expose predecessor logs.
@@ -2342,13 +2628,18 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
                     or not checkpoint.get("checkpoint_sha256") or not checkpoint.get("artifacts")):
                 raise RemoteExecutionError("Remote review checkpoint identity is incomplete or foreign")
         if job.remote_state == "awaiting_input" and job.awaiting_input:
+            # Rows missing (first attempt failed or predates this publisher): retry, at most once a minute.
+            now = time.monotonic()
+            if now - _review_row_attempts.get(str(job.id), -60.0) >= 60.0:
+                _review_row_attempts[str(job.id)] = now
+                await publish_remote_review_rows(session, job)
             return False
         receipt = dict((job.provenance or {}).get('remote_execution_receipt') or {})
         receipt.update(boot_id=status.boot_id, generation=status.generation,
             continuation_lease_id=status.continuation_lease_id, plan_sha256=status.plan_sha256,
             native_output_directory=status.native_output_directory,
             started_at=status.started_at.isoformat() if status.started_at else None)
-        return await _publish_remote_transition(session, job, {
+        published = await _publish_remote_transition(session, job, {
             "provenance": dict(job.provenance or {}, remote_execution_receipt=receipt),
             "status": "awaiting_input", "queue_status": "completed", "remote_state": "awaiting_input",
             "awaiting_input": True, "awaiting_stage": status.checkpoints[0]["stage"],
@@ -2357,6 +2648,10 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
             "assigned_gpu": None,
             "params": release_scheduler_gpu_assignment(job.params),
         }, release_lease=True)
+        if published:
+            _review_row_attempts[str(job.id)] = time.monotonic()
+            await publish_remote_review_rows(session, job)
+        return published
     if (job.status, job.queue_status) not in {("running", "running"), ("queued", "preparing")}:
         return False
     if status.state == "prepared":
@@ -2445,14 +2740,6 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
             from services.conformational_mapping.persistence import terminalize_failed_request_for_job
 
             await terminalize_failed_request_for_job(session, job_id=str(job.id))
-        if str(job.model_id or "").lower() == "protein_local_redesign":
-            from services.rfd3_local_redesign import terminalize_failed_request_for_job
-
-            await terminalize_failed_request_for_job(
-                session,
-                job_id=str(job.id),
-                exit_code=status.exit_code or 1,
-            )
         await _release_remote_target_lease(session, job)
         await session.commit()
         return True
@@ -3003,6 +3290,24 @@ def _native_result_view(job, status, artifact_root, manifest):
     return relative, root, manifest.model_copy(update={'artifacts': records, 'directories': directories})
 
 
+def _resequence_final_candidate_dir(job, relative, local_output):
+    """The reviewed selection a remote Resequence continuation publishes, as its final candidate directory.
+
+    A local Continue runs as a new job whose params name that selection (plr_final_candidate_dir). A remote
+    continuation is the same job, so nothing names it, and the ingester would look in the continuation's
+    log-only output folder. The selection is the continuation folder's parent, taken from the authenticated
+    continuation output path. Only the final validation gate publishes finals.
+    """
+    binding = ((job.provenance or {}).get('remote_checkpoint_operation') or {}).get('binding') or {}
+    resequence = (job.model_id == 'protein_local_redesign'
+                  or (job.model_id == 'protein_modification_experimental' and job.mode == 'region_redesign'))
+    parts = PurePosixPath(relative).parts
+    if (not resequence or not str(binding.get('checkpoint_id') or '').endswith(':post_structure_validation')
+            or len(parts) < 4 or parts[-1] != 'continuation' or parts[-3] != 'selections'):
+        return None
+    return Path(local_output).parent
+
+
 def retained_result_view(job, *, diagnostics: bool = False):
     """One job-scoped authority for current logs and manifest-listed history.
 
@@ -3171,6 +3476,9 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
         except (OSError, RemoteExecutionError) as exc:
             raise RemoteCollectionPending(str(exc)) from exc
         local_output = _safe_result_path(local_artifact_root, relative.as_posix(), allow_root=True)
+        final_candidates = _resequence_final_candidate_dir(job, relative, local_output)
+        if final_candidates is not None:
+            job.params = {**dict(job.params or {}), 'plr_final_candidate_dir': str(final_candidates)}
         if projection_context is not None:
             from services.result_ingester import ingest_component_projection
             await ingest_component_projection(job, str(local_artifact_root), session,
@@ -3264,14 +3572,6 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
             from services.conformational_mapping.persistence import terminalize_failed_request_for_job
 
             await terminalize_failed_request_for_job(session, job_id=str(job.id))
-        if str(job.model_id or "").lower() == "protein_local_redesign":
-            from services.rfd3_local_redesign import terminalize_failed_request_for_job
-
-            await terminalize_failed_request_for_job(
-                session,
-                job_id=str(job.id),
-                exit_code=status.exit_code or 1,
-            )
     job.assigned_gpu = None
     job.params = release_scheduler_gpu_assignment(job.params)
     job.completed_at = job.completed_at or datetime.utcnow()

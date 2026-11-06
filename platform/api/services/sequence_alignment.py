@@ -70,7 +70,10 @@ class _AlignmentCandidate:
 
 
 def clean_alignment_sequence(sequence: str) -> str:
-    compact = "".join((sequence or "").upper().split())
+    compact = "".join((sequence or "").split())
+    if not compact.isascii():
+        raise SequenceAlignmentError("Sequence must use ASCII nucleotide symbols")
+    compact = compact.upper()
     if not compact:
         raise SequenceAlignmentError("Sequence contains no valid nucleotide characters")
     invalid = sorted(set(compact).difference(VALID_ALIGNMENT_BASES))
@@ -118,8 +121,12 @@ def _is_rna(sequence: str) -> bool:
     return "U" in sequence and "T" not in sequence
 
 
-def _reverse_complement(sequence: str) -> str:
-    complements = _RNA_COMPLEMENTS if _is_rna(sequence) else _DNA_COMPLEMENTS
+def _reverse_complement(sequence: str, *, reference_sequence: str = "") -> str:
+    # A query containing no U may still be RNA (for example AAAA against UUUU).
+    # Use evidence from both inputs. Mixed T/U is not inferred to be RNA and
+    # retains DNA complementation; scoring still compares the original symbols
+    # literally, with no T/U substitution in either submitted sequence.
+    complements = _RNA_COMPLEMENTS if _is_rna(sequence + reference_sequence) else _DNA_COMPLEMENTS
     return "".join(complements.get(base, base) for base in reversed(sequence))
 
 
@@ -397,10 +404,10 @@ def _select_candidate(
     if strand == "auto":
         query_variants = [
             ("forward", query_sequence),
-            ("reverse", _reverse_complement(query_sequence)),
+            ("reverse", _reverse_complement(query_sequence, reference_sequence=reference_sequence)),
         ]
     elif strand == "reverse":
-        query_variants = [("reverse", _reverse_complement(query_sequence))]
+        query_variants = [("reverse", _reverse_complement(query_sequence, reference_sequence=reference_sequence))]
     else:
         query_variants = [("forward", query_sequence)]
 
@@ -458,7 +465,7 @@ def _select_candidate(
 def _result_from_candidate(candidate: _AlignmentCandidate) -> dict[str, object]:
     reference_length = len(candidate.original_reference_sequence)
     columns = candidate.columns
-    trim_info = candidate.trim_info
+    trim_info = dict(candidate.trim_info)
 
     if not columns:
         raise SequenceAlignmentError("Alignment produced no comparable span")
@@ -466,11 +473,18 @@ def _result_from_candidate(candidate: _AlignmentCandidate) -> dict[str, object]:
     reference_aligned, query_aligned = _aligned_strings_from_columns(columns)
     midline = _midline(reference_aligned, query_aligned)
     matches, mismatches, gap_columns, aligned_columns = _count_metrics(reference_aligned, query_aligned)
+    if not aligned_columns:
+        raise SequenceAlignmentError("Alignment has no paired positions; identity is undefined")
 
     reference_positions = candidate.reference_positions
     query_positions = candidate.query_positions
     raw_reference_start = reference_positions[0] if reference_positions else 0
     raw_reference_end = (reference_positions[-1] + 1) if reference_positions else 0
+    if candidate.reference_is_circular and raw_reference_end - raw_reference_start > reference_length:
+        raise SequenceAlignmentError(
+            "Circular alignment spans more than one reference copy. This viewer cannot represent "
+            "multiple turns; use linear mode to inspect the repeated sequence."
+        )
     reference_start, reference_end, wraps_origin = _normalize_reference_interval(
         raw_reference_start,
         raw_reference_end,
@@ -479,6 +493,20 @@ def _result_from_candidate(candidate: _AlignmentCandidate) -> dict[str, object]:
     )
     query_start = query_positions[0] if query_positions else 0
     query_end = (query_positions[-1] + 1) if query_positions else 0
+    if candidate.mode == "local":
+        # Local alignments omit unaligned terminal positions entirely; they
+        # never reach the placement-mode terminal-gap trimming routine.
+        trim_info.update(
+            query_left=query_start,
+            query_right=len(candidate.query_sequence) - query_end,
+            reference_left=raw_reference_start,
+            reference_right=reference_length - raw_reference_end,
+        )
+    if candidate.reference_is_circular:
+        # A circle has no terminal flanks. The search uses two copies, whose
+        # padding must not become biological flank counts. Unaligned circular
+        # positions are represented by reference_coverage instead.
+        trim_info.update(reference_left=0, reference_right=0)
 
     variants = _detect_variants(
         columns,
@@ -514,6 +542,9 @@ def _result_from_candidate(candidate: _AlignmentCandidate) -> dict[str, object]:
         "reference_wraps_origin": wraps_origin,
         "query_start": query_start,
         "query_end": query_end,
+        "query_coordinate_system": "reverse_complement" if candidate.strand == "reverse" else "input",
+        "query_input_start": len(candidate.query_sequence) - query_end if candidate.strand == "reverse" else query_start,
+        "query_input_end": len(candidate.query_sequence) - query_start if candidate.strand == "reverse" else query_end,
         "query_soft_clip_left": trim_info["query_left"],
         "query_soft_clip_right": trim_info["query_right"],
         "reference_flank_left": trim_info["reference_left"],

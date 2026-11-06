@@ -982,7 +982,7 @@ def build_frustrampnn_predict_batch_command(
 
     input_paths: list[Path] = []
     for index, record in enumerate(records):
-        if not isinstance(record, dict) or set(record) != {
+        if not isinstance(record, dict) or set(record) - {"command_plan"} != {
             "ordinal", "candidate_id", "invocation_id", "staged_pdb_path",
             "source_sha256",
         }:

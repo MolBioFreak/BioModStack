@@ -10,7 +10,7 @@ from database import get_session
 from services.remote_execution.contracts import (
     ExecutionTargetActivateRequest,
     PreloadRequest, ProvisionRequest, ProvisionSelection, ProvisionPreview, ObservedArtifactInventory,
-    WorkflowProvisionSelection, WorkflowProvisionRequest, WorkflowPackSelection, WorkflowPackRequest,
+    WorkflowProvisionSelection, WorkflowProvisionRequest, WorkflowPackSelection, WorkflowPackRequest, WorkflowPackCatalogEntry,
     ExecutionTargetInventoryResponse,
     ExecutionTargetResponse, ExecutionTargetDetails, CachedArtifactPage, PreloadArtifactPage,
     HFAssetLinkStatus,
@@ -19,7 +19,7 @@ from services.remote_execution.contracts import (
 from services.remote_execution.targets import (
     ExecutionTargetError,
     active_remote_telemetry,
-    deactivate_target,
+    deactivate_target, dismiss_target,
     list_targets, get_target, observed_artifact_inventory,
     refresh_vast_targets, target_status, artifact_page, _target_response,
 )
@@ -123,6 +123,14 @@ async def activate_execution_target(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@router.post("/{execution_target_id}/dismiss", response_model=ExecutionTargetResponse)
+async def dismiss_execution_target(execution_target_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        return await dismiss_target(session, execution_target_id)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/{execution_target_id}/deactivate", response_model=ExecutionTargetResponse)
 async def deactivate_execution_target(
     execution_target_id: str,
@@ -150,15 +158,16 @@ async def preload_execution_target(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.get("/provision/catalog", response_model=list[ProvisionSelection | WorkflowPackSelection])
+@router.get("/provision/catalog", response_model=list[ProvisionSelection | WorkflowPackCatalogEntry])
 async def provision_catalog():
-    from model_registry import INDEPENDENT_RUNTIME_MODELS, INDEPENDENT_RUNTIME_IMAGES, get_registry
+    from model_registry import INDEPENDENT_RUNTIME_MODELS, INDEPENDENT_RUNTIME_IMAGES, get_registry, workflow_pack_components
     return [ProvisionSelection(kind=kind, model_id=model_id)
         for kind, models in (("model", INDEPENDENT_RUNTIME_MODELS), ("image", INDEPENDENT_RUNTIME_IMAGES))
         for model_id in sorted(models)
         if get_registry().get_model(model_id) is not None] + [
-            WorkflowPackSelection(kind="workflow_pack", workflow_id=workflow_id)
-            for workflow_id in ("structure_prediction", "antibody_denovo")]
+            WorkflowPackCatalogEntry(kind="workflow_pack", workflow_id=workflow_id,
+                                     components=list(workflow_pack_components(workflow_id)))
+            for workflow_id in ("structure_prediction", "antibody_denovo", "de_novo_design")]
 
 
 @router.post("/{execution_target_id}/provision/preview", response_model=ProvisionPreview)

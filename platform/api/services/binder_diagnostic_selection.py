@@ -84,7 +84,11 @@ def independent_structure_components(path, chain_ids=None):
         kind = _classify_pdb_chain(names)
         if kind is None:
             raise ValueError('Independent nonpolymer structure needs an explicit SMILES or CCD identity')
-        letters = [_map_residue_to_letter(name, kind) for name in names]
+        # These are independent source identities, not ESMFold2's reduced
+        # input alphabet. Let the selected predictor own its native alphabet;
+        # in particular Protenix supports inosine rather than an unknown base.
+        letters = [('I' if kind in {'dna', 'rna'} and name in {'DI', 'I'}
+                    else _map_residue_to_letter(name, kind)) for name in names]
         if not names or not all(letters):
             raise ValueError('Independent target has an unrepresented residue identity')
         components.append({'id': chain.id, 'type': kind, 'sequence': ''.join(letters)})

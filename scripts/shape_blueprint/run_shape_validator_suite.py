@@ -12,11 +12,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-
-try:
-    from build_shape_result import retain_file
-except ModuleNotFoundError:  # Package import by API-side callers.
-    from scripts.shape_blueprint.build_shape_result import retain_file
 import json
 import os
 import re
@@ -27,6 +22,9 @@ import subprocess
 import sys
 from typing import Any, Iterable
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_shape_result import retain_file
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lib.native_diagnostics import redact_text
@@ -160,6 +158,8 @@ def _capture_native(validator: str, output_dir: Path, argv: list[str]) -> None:
         _write(output_dir / "shape_native_samples.json", {"samples": samples})
 
     if validator == "boltz2":
+        from lib.boltz_fidelity import install_native_chemistry_fix
+        install_native_chemistry_fix()
         import torch
         from boltz.data.write.writer import BoltzWriter
         original = BoltzWriter.write_on_batch_end
@@ -218,9 +218,13 @@ def _run_boltz(sequence: str, output_dir: Path, *, recycling_steps: int, samplin
     settings = settings or {}
     inputs = output_dir / "boltz_inputs"
     inputs.mkdir()
+    msa = "empty"
+    if settings.get("boltz_use_msa", False):
+        from generated_msa import boltz_alignment
+        msa = boltz_alignment(sequence, output_dir)
     # JSON is valid YAML and avoids a dependency in the wrapper process.
     (inputs / "shape.yaml").write_bytes(_canonical({
-        "sequences": [{"protein": {"id": ["A"], "sequence": sequence, **({} if settings.get("boltz_use_msa", False) else {"msa": "empty"})}}]
+        "sequences": [{"protein": {"id": ["A"], "sequence": sequence, "msa": msa}}]
     }) + b"\n")
     command = [
         "boltz", "predict", str(inputs), "--output_format", "pdb",
@@ -256,11 +260,15 @@ def _run_boltz(sequence: str, output_dir: Path, *, recycling_steps: int, samplin
 def _run_protenix(sequence: str, output_dir: Path, *, seed: int, code_root: Path, diagnostics: list[dict[str, Any]], settings: dict[str, Any] | None = None) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     settings = settings or {}
+    chain = {"sequence": sequence, "count": 1}
+    if settings.get("protenix_use_msa", False) and settings.get("protenix_msa_backend") not in {"none", "esm"}:
+        from generated_msa import generated_chain
+        chain = generated_chain("protenix_v2", sequence)
     input_path = output_dir / "protenix_input.json"
     input_path.write_bytes(_canonical([{
         "name": "shape",
         "modelSeeds": [int(seed)],
-        "sequences": [{"proteinChain": {"sequence": sequence, "count": 1}}],
+        "sequences": [{"proteinChain": chain}],
     }]) + b"\n")
     prediction_dir = output_dir / "protenix_predictions"
     command = [

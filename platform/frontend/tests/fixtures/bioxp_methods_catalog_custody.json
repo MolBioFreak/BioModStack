@@ -1,0 +1,166 @@
+{
+ "authoring": {
+  "custody": {
+   "objects": [
+    {
+     "token": "PL_POOL",
+     "label": "Pool plate",
+     "kind": "plate",
+     "ordinal": 0
+    },
+    {
+     "token": "PL_OUTPUT",
+     "label": "Output plate",
+     "kind": "plate",
+     "ordinal": 1
+    },
+    {
+     "token": "PL_REAGENT",
+     "label": "Reagent plate",
+     "kind": "plate",
+     "ordinal": 2
+    },
+    {
+     "token": "CV_BIOSECURITY",
+     "label": "Biosecurity cover",
+     "kind": "cover",
+     "ordinal": 3
+    },
+    {
+     "token": "CV_OUTPUT",
+     "label": "Output cover",
+     "kind": "cover",
+     "ordinal": 4
+    },
+    {
+     "token": "CV_REAGENT",
+     "label": "Reagent cover",
+     "kind": "cover",
+     "ordinal": 5
+    },
+    {
+     "token": "STRIP1",
+     "label": "Strip one",
+     "kind": "plate",
+     "ordinal": 7
+    },
+    {
+     "token": "STRIP2",
+     "label": "Strip two",
+     "kind": "plate",
+     "ordinal": 8
+    },
+    {
+     "token": "STRIP3",
+     "label": "Strip three",
+     "kind": "plate",
+     "ordinal": 9
+    },
+    {
+     "token": "STRIP4",
+     "label": "Strip four",
+     "kind": "plate",
+     "ordinal": 10
+    },
+    {
+     "token": "TROUGH",
+     "label": "Trough",
+     "kind": "plate",
+     "ordinal": 11
+    },
+    {
+     "token": "PL_SYNTHESIS",
+     "label": "Synthesis plate",
+     "kind": "plate",
+     "ordinal": 12
+    },
+    {
+     "token": "PL_OLIGO_QUANT",
+     "label": "Oligo quantitation plate",
+     "kind": "plate",
+     "ordinal": 13
+    },
+    {
+     "token": "PL_GENE_QUANT",
+     "label": "Gene quantitation plate",
+     "kind": "plate",
+     "ordinal": 14
+    },
+    {
+     "token": "PL_ELUTION",
+     "label": "Elution plate",
+     "kind": "plate",
+     "ordinal": 16
+    },
+    {
+     "token": "PL_ACC",
+     "label": "Accumulation plate",
+     "kind": "plate",
+     "ordinal": 17
+    },
+    {
+     "token": "PL_TFF_REAGENT",
+     "label": "TFF reagent block",
+     "kind": "plate",
+     "ordinal": 19
+    }
+   ],
+   "destinations": [
+    {
+     "token": "LOC_TC",
+     "label": "Thermal cycler",
+     "station": "LOC_TC",
+     "plate_destination": 23,
+     "cover_destination": 5
+    },
+    {
+     "token": "LOC_OC",
+     "label": "Output chiller",
+     "station": "LOC_OC",
+     "plate_destination": 21,
+     "cover_destination": 17
+    },
+    {
+     "token": "LOC_RC",
+     "label": "Reagent cover position",
+     "station": "LOC_RC",
+     "plate_destination": null,
+     "cover_destination": 19
+    },
+    {
+     "token": "LOC_BSCS",
+     "label": "Biosecurity cover storage",
+     "station": "LOC_BSCS",
+     "plate_destination": null,
+     "cover_destination": 4
+    },
+    {
+     "token": "LOC_RCS",
+     "label": "Reagent cover storage",
+     "station": "LOC_RC_COVER_STORAGE",
+     "plate_destination": null,
+     "cover_destination": 20
+    },
+    {
+     "token": "LOC_OCS",
+     "label": "Output cover storage",
+     "station": "LOC_OC_COVER_STORAGE",
+     "plate_destination": null,
+     "cover_destination": 18
+    },
+    {
+     "token": "LOC_MS",
+     "label": "Magnetic station \u2014 plate placement (LOC_P_MS)",
+     "station": "LOC_MS",
+     "plate_destination": 25,
+     "cover_destination": null
+    }
+   ],
+   "press_mode": {
+    "token": "PRESS",
+    "label": "Press plate at placement (source PRESS mode)"
+   },
+   "source_anchor": "Original BioXPCommonLib/ClassGlobals.cs lookupSrcDstPlate/lookupDesLocation and plateName.cs; native 4af441d30b0eb1f16aa7764f3fb234f6d4e0a69e src/bioxp/oem_deck_movement.py OEM_SCRIPT_PLATE_TOKENS/translate_oem_plate_move. Suggestions only: null means not offered, not refused. LOC_MS pipette ordinal 0 differs from LOC_P_MS plate destination 25; named labware is planned accounting, not physical custody evidence."
+  }
+ }
+}

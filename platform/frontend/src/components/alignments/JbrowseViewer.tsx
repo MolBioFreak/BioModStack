@@ -1,0 +1,9 @@
+import { useMemo } from 'react'
+import viewerCode from '../../../alignment-viewers/jbrowse/dist/viewer.js?raw'
+import type { AlignmentViewerProps } from './AlignmentWorkspace'
+import ViewerFrame from './ViewerFrame'
+
+export default function JbrowseViewer(props: AlignmentViewerProps) {
+  const key = useMemo(() => JSON.stringify([props.document.resultId, props.document.rows.map(r => [r.rowId, r.label, r.aligned])]), [props.document.resultId, props.document.rows])
+  return <ViewerFrame key={key} {...props} code={viewerCode} channel="bms-jbrowse-inline-v1" title="JBrowseMSA" notice="Selection, marks, position, colors and gap filtering are saved. Column hiding isn't supported." />
+}

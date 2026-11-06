@@ -84,12 +84,11 @@ def test_canonical_region_mode_reuses_internal_local_redesign_entrypoint() -> No
         CANONICAL_MODEL_ID,
         "region_redesign",
         {
-            "input_pdb": "/tmp/input.pdb",
+            "backbone_input_pdbs": "/tmp/designs",
             "design_chains": "A",
-            "region_mode": "manual_ranges",
-            "redesign_ranges": "10-20",
-            "sequence_redesign_ranges": "A12-14",
-            "num_designs": 3,
+            "seq_method": "mpnn",
+            "fixed_positions": "A1-20",
+            "designable_positions": "A21-40",
         },
         "/tmp/protein-modification-region",
         job_id="protein-modification-region",
@@ -99,9 +98,10 @@ def test_canonical_region_mode_reuses_internal_local_redesign_entrypoint() -> No
     assert cmd[1] == "run"
     assert cmd[2] == "workflows/protein_local_redesign.nf"
     assert "protein_local_redesign,workstation_ryzen7960x" in cmd
-    assert "--plr_input_pdb /tmp/input.pdb" in joined
-    assert "--plr_redesign_ranges 10-20" in joined
-    assert "--plr_sequence_redesign_ranges A12-14" in joined
+    assert "--plr_backbone_input_pdbs /tmp/designs" in joined
+    assert "--plr_fixed_positions A1-20" in joined
+    assert "--plr_designable_positions A21-40" in joined
+    assert "--plr_seq_method mpnn" in joined
     assert "--modification_mode region_redesign" in joined
 
 

@@ -74,7 +74,12 @@ is `runtime.sif` even in the weights namespace; this is a cache naming conventio
 **not** an assertion that weights are SIF images. The member materializer preserves
 pinned identities in an immutable approved directory layout; CLI/release consumers
 use `layouts[].dependency` → `layouts[].path`, never opaque member paths.
-No such layout approvals exist in the current production registry.
+Registry approvals now exist for the layouts already installed on the controller: La-Proteina
+(`laproteina`, 10 members), Complexa (`complexa`, 6) and the Caliby checkpoints (`caliby`, 5), plus
+RFD4-Proteina. Their manifests reproduce the installed layout digests byte for byte. A layout root is
+bound to the per-member dependencies it supplies, so `complexa/complexa.ckpt` resolves through the
+`complexa` generation. The Caliby `soluble_caliby_v1.ckpt` file has no approval yet and stays a
+reported blocker.
 Staging is retained for explicit reconciliation; budget roughly two artifact
 copies for staging plus publication, separately from any future expansion.
 

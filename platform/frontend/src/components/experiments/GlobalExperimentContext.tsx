@@ -108,7 +108,8 @@ export function GlobalExperimentProvider({ children }: { children: ReactNode }) 
             domainExperimentId as string,
             signal,
         ),
-        enabled: workspaceId !== null && globalExperimentId !== null && domainExperimentId !== null,
+        enabled: workspaceId !== null && globalExperimentId !== null && domainExperimentId !== null
+            && location.pathname !== '/alignments' && !location.pathname.startsWith('/alignments/'),
         retry: false,
         staleTime: 5_000,
         refetchInterval: (query) => query.state.data?.provisioning_state === 'provisioning' ? 2_000 : false,

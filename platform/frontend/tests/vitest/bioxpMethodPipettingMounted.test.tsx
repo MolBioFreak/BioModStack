@@ -1,6 +1,7 @@
 import React, { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { webcrypto } from 'node:crypto';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BioXpMethodPipettingEditor } from '../../src/components/BioXpMethodPipettingEditor';
 import { BioXpMethodDeckWorkbench } from '../../src/components/BioXpMethodDeckWorkbench';
@@ -13,7 +14,7 @@ function Owner({ initial }: { initial: MethodValue }) {
     const [value, setValue] = useState(initial); current = value;
     return <BioXpMethodDeckWorkbench method={value} onChange={setValue} catalog={catalog as unknown as MethodCatalog} rootSchema={{}} />;
 }
-async function mount(initial: MethodValue) { await act(async () => root.render(<Owner initial={initial} />)); await settle(); }
+async function mount(initial: MethodValue) { await act(async () => root.render(<QueryClientProvider client={new QueryClient()}><Owner initial={initial} /></QueryClientProvider>)); await settle(); }
 async function click(name: string) {
     const button = [...host.querySelectorAll('button')].find(e => e.textContent === name || e.getAttribute('aria-label') === name)!;
     expect(button, name).toBeTruthy(); await act(async () => button.click()); await settle();
@@ -44,6 +45,20 @@ it('authors a native Move from a deck well through plain station/reference/heigh
     await click('Deck & sequence'); expect((current.steps as MethodValue[])[0].inputs).toMatchObject({ well: 'B4' });
 });
 
+it('offers a per-move Movement setting that defaults to Full and leaves omitted saved moves untouched', async () => {
+    const saved = { location_id: 3, well: 'A3', position_flag: '1' };
+    await mount({ schema: 'bms.bioxp-method.v1', name: 'Move movement', steps: [{ step_id: 'move', type: 'action', action: 'move', inputs: saved }] });
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="Movement"]')!;
+    expect([...select.options].map(o => [o.value, o.textContent])).toEqual([['full', 'Full'], ['fast', 'Fast lane']]);
+    expect(select.value).toBe('full');
+    await input('Move reference well', 'B4');
+    expect((current.steps as MethodValue[])[0].inputs).toEqual({ ...saved, well: 'B4' }); // omitted stays omitted
+    await input('Movement', 'fast');
+    expect((current.steps as MethodValue[])[0].inputs).toEqual({ ...saved, well: 'B4', movement: 'fast' });
+    await input('Movement', 'full');
+    expect((current.steps as MethodValue[])[0].inputs).toEqual({ ...saved, well: 'B4', movement: 'full' });
+});
+
 it('keeps omitted fields, null lift, numeric spelling and endpoint extensions when editing a Transfer', async () => {
     const original = { source: { station: 'LOC_RC', location_id: 3, wells: ['A3'], labware_id: 'stable-source' }, destination: { station: 'LOC_OC', location_id: 1, wells: ['B4'] }, channels: [0], volume_ul: '001.200', source_lift_height_steps: null, future: { explicit: false } };
     await mount({ schema: 'bms.bioxp-method.v1', name: 'Transfer authoring', steps: [{ step_id: 'transfer', type: 'action', action: 'transfer', inputs: original }] });
@@ -72,7 +87,7 @@ function TransferOwner({ initial }: { initial: MethodValue }) {
     return <BioXpMethodPipettingEditor node={node} onChange={setNode} catalog={catalog as unknown as MethodCatalog} selection={selection} onSelect={onSelect} endpointLabels={{ source: 'Authored reagent', destination: 'Planned reaction plate' }} />;
 }
 const transferNode = (inputs: MethodValue) => ({ step_id: 'direct', type: 'action', action: 'transfer', inputs });
-async function direct(inputs: MethodValue) { await act(async () => root.render(<TransferOwner initial={transferNode(inputs)} />)); await settle(); }
+async function direct(inputs: MethodValue) { await act(async () => root.render(<QueryClientProvider client={new QueryClient()}><TransferOwner initial={transferNode(inputs)} /></QueryClientProvider>)); await settle(); }
 
 it('connects two native well panes with exact volume, explicit adoption and ordered pairs, not broadcast', async () => {
     const original = { source: { station: 'LOC_RC', location_id: 3, wells: ['A3'], future: false }, destination: { station: 'LOC_MS', location_id: 0, wells: ['B2', 'C2'] }, volume_ul: '001.200', future: null };

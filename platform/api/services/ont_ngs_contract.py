@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Mapping
@@ -104,6 +105,36 @@ def resolve_expected_plasmid_size(params: dict[str, Any], reference_length: int)
     params["expected_plasmid_size"] = effective_expected_plasmid_size(requested, reference_length)
 
 
+DORADO_DEVICE_ENV = "BMS_ONT_DORADO_DEVICE"
+_DORADO_DEVICE = re.compile(r"^(?:cpu|cuda:(?:all|[0-9]+(?:,[0-9]+)*))$")
+
+
+def installed_dorado_device() -> str:
+    """The host's basecalling device: cuda:0 unless the installation selects cpu or other GPUs."""
+    value = os.environ.get(DORADO_DEVICE_ENV, "").strip().lower() or ONT_QUALITY_MODE_CONTRACT["default_device"]
+    if not _DORADO_DEVICE.fullmatch(value):
+        raise ValueError(f"{DORADO_DEVICE_ENV} must be cpu or cuda:<ids>/cuda:all")
+    return value
+
+
+def basecall_device_options(*, execution_target_id: str | None = None) -> dict[str, Any]:
+    """Selectable Dorado devices; CUDA is offered only where the host exposes NVIDIA GPUs."""
+    if execution_target_id:
+        # Placement selects the worker; controller observations and installation
+        # defaults say nothing about its GPUs. This is not a hardware admission probe.
+        return {"default": "cuda:0", "cuda_available": None, "options": [
+            {"value": "cpu", "label": "Worker CPU"},
+            {"value": "cuda:0", "label": "Worker CUDA (scheduler assigned)"},
+            {"value": "cuda:all", "label": "All assigned worker CUDA GPUs"},
+        ]}
+    import shutil
+    cuda_available = shutil.which("nvidia-smi") is not None or Path("/dev/nvidia0").exists()
+    options = [{"value": "cpu", "label": "CPU"}]
+    if cuda_available:
+        options += [{"value": "cuda:0", "label": "CUDA GPU 0"}, {"value": "cuda:all", "label": "All CUDA GPUs"}]
+    return {"default": installed_dorado_device(), "cuda_available": cuda_available, "options": options}
+
+
 ONT_QUALITY_MODE_CONTRACT: dict[str, Any] = {
     "molecule_types": ("dna", "rna"),
     "basecalling_modes": ("simplex", "duplex"),
@@ -112,7 +143,7 @@ ONT_QUALITY_MODE_CONTRACT: dict[str, Any] = {
     "default_basecalling_mode": "simplex",
     "default_device": "cuda:0",
     "device_examples": ("cuda:0", "cuda:all", "cpu"),
-    "modified_base_models": ("none", "5mC", "6mA", "6mA 4mC_5mC", "6mA 5mC"),
+    "modified_base_models": "dorado_v2.1.2.lock.json models.modified_bases (space-separated per basecaller; one per canonical base)",
     "sample_multiplexing_fields": ("barcode_kit", "sample_sheet"),
 }
 
@@ -191,10 +222,13 @@ class OntWorkflowSpec:
 CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
     "ont_basecall_dna": OntWorkflowSpec(
         workflow_id="ont_basecall_dna",
-        display_name="ONT DNA Basecalling",
-        description="Dorado DNA basecalling from existing POD5 run outputs using configured CUDA resources.",
-        input_modes=("pod5",),
+        display_name="ONT DNA Analysis",
+        description="DNA POD5 basecalling or BAM/FASTQ analysis, with optional shared QC and tandem modkit; CPU or CUDA on the selected execution target.",
+        input_modes=("pod5", "bam", "fastq"),
+        artifact_conditions=(("run_modkit=true", ("modkit_summary", "methylation_bed")),),
         artifact_kinds=(
+            "modkit_summary",
+            "methylation_bed",
             "raw_reads",
             "basecall_reads",
             "alignment_bam",
@@ -228,7 +262,10 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
         display_name="ONT Plasmid QC",
         description="Reference-required plasmid QC supporting POD5/BAM/FASTQ input modes with per-base support, consensus, and evidence artifacts.",
         input_modes=("pod5", "bam", "fastq"),
+        artifact_conditions=(("run_modkit=true", ("modkit_summary", "methylation_bed")),),
         artifact_kinds=(
+            "modkit_summary",
+            "methylation_bed",
             "basecall_reads",
             "alignment_bam",
             "alignment_bai",
@@ -261,9 +298,12 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
             "clone_validation_report",
             "construct_screening_summary",
             "plasmid_qc_summary",
+            "modkit_summary",
+            "methylation_bed",
         ),
         artifact_conditions=(
             ("run_assembly=true", ("clone_validation_assembly", "clone_validation_report")),
+            ("run_modkit=true", ("modkit_summary", "methylation_bed")),
         ),
         lifecycle="seed",
     ),
@@ -311,7 +351,10 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
             "plasmid_qc_summary",
             "igv_track_config",
             "igv_report",
+            "modkit_summary",
+            "methylation_bed",
         ),
+        artifact_conditions=(("run_modkit=true", ("modkit_summary", "methylation_bed")),),
         lifecycle="seed",
     ),
     "ont_fastq_qc": OntWorkflowSpec(
@@ -556,7 +599,7 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
                            if any(normalized.get(key) for key in keys)]
         if len(selected_inputs) == 1:
             normalized["ont_input_mode"] = selected_inputs[0]
-    if canonical_id in {"ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"}:
+    if canonical_id in {"ont_basecall_dna", "ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"}:
         normalized["expected_plasmid_size"] = effective_expected_plasmid_size(normalized.get("expected_plasmid_size"))
         consensus_setting = samtools_consensus_setting()
         consensus_config = normalized.setdefault("samtools_consensus_config", consensus_setting["default"])
@@ -643,6 +686,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
         raise ValueError("unsupported barcode kit")
     if barcode_kit and canonical_id != "ont_basecall_dna":
         raise ValueError("inline barcode classification is only supported by ont_basecall_dna")
+    if barcode_kit and (normalized.get("run_modkit") or normalized.get("run_fastq_qc")):
+        raise ValueError("barcoded reads require downstream per-barcode QC/modkit submission")
     if barcode_kit and basecall_mode == "duplex":
         raise ValueError("barcode classification is incompatible with duplex in the locked runtime")
     sample_sheet = str(normalized.get("sample_sheet") or "").strip() or None
@@ -654,12 +699,12 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     if basecall_mode == "simplex" and duplex_pairs:
         raise ValueError("duplex_pairs is only valid in duplex mode")
 
-    modified_bases = str(normalized.get("modified_bases") or "none").strip()
-    if modified_bases not in {"none", "5mC_5hmC", "6mA"}:
-        raise ValueError("unsupported modified-base selection")
-    if modified_bases != "none" and (molecule_type != "dna" or quality_mode != "hac" or basecall_mode != "simplex"):
-        raise ValueError("modified-base selection requires DNA HAC simplex basecalling")
+    from scripts.dorado_p4_preflight import canonical_modified_bases, resolve_modified_bases
+
+    modified_bases = canonical_modified_bases(resolve_modified_bases(
+        lock, molecule_type, quality_mode, basecall_mode, normalized.get("modified_bases")))
     if barcode_kit and modified_bases != "none":
+        # Barcoded completion seals unmodified demux units; per-barcode modkit is downstream.
         raise ValueError("inline barcode classification and modified-base calling are mutually exclusive")
 
     raw_batch = normalized.get("dorado_batch_size")
@@ -706,8 +751,10 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
         else:
             normalized[key] = value
     normalized["dorado_lock_sha256"] = submitted_lock_sha256 if cached_resume and submitted_lock_sha256 else current_lock_sha256
-    if not cached_resume or not normalized.get("dorado_device"):
-        normalized["dorado_device"] = ONT_QUALITY_MODE_CONTRACT["default_device"]
+    requested_device = str(normalized.get("dorado_device") or "").strip().lower()
+    if requested_device and not _DORADO_DEVICE.fullmatch(requested_device):
+        raise ValueError("dorado_device must be cpu, cuda:<ids> or cuda:all")
+    normalized["dorado_device"] = requested_device or installed_dorado_device()
     normalized["manifest_contract"] = MANIFEST_SCHEMA
     raw_emit_moves = normalized.get("emit_moves", basecall_mode == "simplex")
     if not isinstance(raw_emit_moves, bool):

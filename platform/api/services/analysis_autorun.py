@@ -29,6 +29,17 @@ logger = logging.getLogger(__name__)
 
 _RECENT_AUTORUN_REQUESTS: dict[str, float] = {}
 _AUTORUN_DEBOUNCE_SECONDS = 45.0
+# Round predictions found fully analyzed by a pass. Scheduler recovery re-checks every completed
+# prediction on each cycle; a settled one is left alone for a while instead of re-reading its
+# designs and analysis runs. Completion and ingest callers do not consult this.
+_SETTLED_ROUND_PREDICTIONS: dict[str, float] = {}
+_SETTLED_RECOVERY_SECONDS = 600.0
+
+
+def recently_settled(job_id: str | None) -> bool:
+    """True when the last pass for this round prediction found every analysis already recorded."""
+    settled = _SETTLED_ROUND_PREDICTIONS.get(str(job_id or "").strip())
+    return settled is not None and (time.monotonic() - settled) < _SETTLED_RECOVERY_SECONDS
 
 
 def _autorun_max_designs() -> int:
@@ -134,6 +145,7 @@ async def ensure_viewer_minimum_analyses_for_job(job_id: str) -> dict[str, int]:
         queued = 0
         reused = 0
         skipped = 0
+        failed = 0
         # Round recovery finds missing default analysis tasks, rather than
         # reopening immutable native publications for every historical sample
         # on every scheduler poll. Explicit analysis requests retain the normal
@@ -171,6 +183,7 @@ async def ensure_viewer_minimum_analyses_for_job(job_id: str) -> dict[str, int]:
                     else:
                         queued += 1
                 except Exception as exc:
+                    failed += 1
                     logger.warning(
                         "[ANALYSIS AUTO] Failed to queue %s for %s (%s): %s",
                         analysis_type,
@@ -186,6 +199,10 @@ async def ensure_viewer_minimum_analyses_for_job(job_id: str) -> dict[str, int]:
             reused,
             skipped,
         )
+        if round_prediction and reused and not (queued or skipped or failed):
+            _SETTLED_ROUND_PREDICTIONS[str(job.id)] = time.monotonic()
+        else:
+            _SETTLED_ROUND_PREDICTIONS.pop(str(job.id), None)
         return {"designs": design_count, "queued": queued, "reused": reused, "skipped": skipped}
 
 

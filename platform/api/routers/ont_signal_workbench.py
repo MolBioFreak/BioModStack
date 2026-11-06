@@ -68,7 +68,8 @@ class ClosedModel(BaseModel):
 
 class MoveSourceCreate(ClosedModel):
     raw_representation_id: str
-    input_file_id: str
+    # Omit to use the source basecall job's own move-tagged calls.bam.
+    input_file_id: str | None = None
     molecule_type: Literal["dna", "rna"]
     source_job_id: str
 

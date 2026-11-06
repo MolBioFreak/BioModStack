@@ -98,3 +98,11 @@ class TestCloneAndDimerNormalization:
         assert normalized["single_ref_split_min_mapq"] == 30
         with pytest.raises(ValueError, match="single_ref_split_min_mapq"):
             normalize_ont_launch_params("ont_plasmid_qc", {"single_ref_split_min_mapq": 61})
+
+
+def test_every_plasmid_method_declares_conditional_modkit_artifacts():
+    from services.ont_ngs_contract import CANONICAL_ONT_WORKFLOWS
+    for workflow_id in ("ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"):
+        spec = CANONICAL_ONT_WORKFLOWS[workflow_id]
+        assert {"modkit_summary", "methylation_bed"} <= set(spec.artifact_kinds), workflow_id
+        assert ("run_modkit=true", ("modkit_summary", "methylation_bed")) in spec.artifact_conditions, workflow_id

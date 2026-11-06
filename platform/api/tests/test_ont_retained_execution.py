@@ -174,4 +174,8 @@ def test_retained_bundle_uses_verified_historical_source(upgraded_source, tmp_pa
     assert str(root) not in ' '.join(prepared.envelope.command)
     assert str(repo) not in ' '.join(prepared.envelope.command)
     assert prepared.remote_source_dir in ' '.join(prepared.envelope.command)
-    assert (prepared.source_transfer.source / invocation.entrypoint).read_bytes() == (root / invocation.entrypoint).read_bytes()
+    # Source is transported as one verified archive, not an extracted tree.
+    import tarfile
+    with tarfile.open(prepared.source_transfer.source / '.bms-source.tar.gz', 'r:gz') as archive:
+        shipped = archive.extractfile(str(invocation.entrypoint)).read()
+    assert shipped == (root / invocation.entrypoint).read_bytes()

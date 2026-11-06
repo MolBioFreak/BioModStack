@@ -7,6 +7,19 @@ from tests.test_remote_rectify_inputs import offline_bundle, placement, compile_
 from tests.test_conformational_mapping_routing import _request_params
 
 
+@pytest.fixture(autouse=True)
+def private_cm_images(placement, monkeypatch):
+    from services.remote_execution import bundle
+    roots, _, _ = placement
+    from services.remote_execution import images
+    original = images.image_reference
+    def reference(name, root, params=None):
+        return ((roots['containers'] / name, None) if name == 'frustrampnn.sif'
+                else original(name, root, params))
+    monkeypatch.setattr(bundle, 'image_reference', reference)
+    monkeypatch.setattr(images, 'image_reference', reference)
+
+
 def test_cm_root_is_native_aggregate_not_candidate():
     root = resolve_result_contract(model_type='conformational_mapping', stage_mode='map')
     assert root.analysis_contract_id == 'conformational_mapping_ensemble_v1'
@@ -22,7 +35,8 @@ def test_cm_root_is_native_aggregate_not_candidate():
 def test_canonical_root_preview_and_bundle(placement, monkeypatch, backend):
     roots, job, target = placement
     controls = _request_params('confornets')
-    checkpoint = roots['inputs'] / 'checkpoint.pt'
+    checkpoint = roots['weights'] / 'openfold3/of3-p2-155k.pt'
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
     checkpoint.write_bytes(b'explicit offline checkpoint transport double')
     import hashlib
     controls['confornets']['checkpoint'] = dict(path=str(checkpoint), sha256=hashlib.sha256(checkpoint.read_bytes()).hexdigest())
@@ -45,7 +59,11 @@ def test_canonical_root_preview_and_bundle(placement, monkeypatch, backend):
         installed.write_bytes(checkpoint.read_bytes())
     from schemas import JobCreate
     from routers.jobs import _execution_plan_preview
-    preview = _execution_plan_preview(JobCreate(name="CM admission", model_id="conformational_mapping", mode="map", params=dict(job.params)))
+    # Preview describes requirements; dispatcher GPU bindings belong only to execution.
+    physical = JobCreate(name="CM admission", model_id="conformational_mapping", mode="map", params=dict(job.params))
+    with pytest.raises(ValueError, match="native preview cannot carry physical GPU bindings"):
+        _execution_plan_preview(physical)
+    preview = _execution_plan_preview(physical.model_copy(update={"params": {k: v for k, v in job.params.items() if k != "gpu_id"}}))
     assert preview["admissible"], preview["blockers"]
     assert materialized.request_path.read_bytes() == before
     # The scientific image is not installed in this route-free fixture. Use
@@ -124,7 +142,7 @@ async def test_actual_cm_operator_route_stored_job_bundle(placement, monkeypatch
         checkpoint.write_bytes(b'explicit offline checkpoint transport fixture')
         from routers.jobs import _execution_plan_preview, normalize_job_request
         from schemas import JobCreate
-        typed = JobCreate(name=job.name,model_id=job.model_id,mode=job.mode,params={k:v for k,v in job.params.items() if k != 'remote_result_policy'}, execution_policy={'remote_result_policy':job.params['remote_result_policy']})
+        typed = JobCreate(name=job.name,model_id=job.model_id,mode=job.mode,params={k:v for k,v in job.params.items() if k not in {'remote_result_policy', 'gpu_id'}}, execution_policy={'remote_result_policy':job.params['remote_result_policy']})
         normalized = normalize_job_request(typed)
         assert normalized.params == typed.params
         preview = _execution_plan_preview(typed)
@@ -134,16 +152,19 @@ async def test_actual_cm_operator_route_stored_job_bundle(placement, monkeypatch
         assert all(p.read_bytes()==raw for p,raw in documents.items())
         if backend == 'confornets':
             checkpoint.write_bytes(b'changed selected runtime source')
-            with pytest.raises(ValueError, match='selected managed runtime source'):
+            with pytest.raises(ValueError, match='CM selected checkpoint digest/identity mismatch'):
                 _execution_plan_preview(typed)
             with pytest.raises(bundle.RemoteBundleError, match='selected dependency'):
                 pack((roots,job,target),invocation)
             checkpoint.write_bytes(b'explicit offline checkpoint transport fixture')
             request_document = json.loads(Path(job.params['cm_request_path']).read_bytes())
             snapshot = Path(job.params['cm_request_path']).parent / request_document['confornets']['checkpoint']['path']
-            snapshot.write_bytes(b'changed request-owned checkpoint')
-            with pytest.raises(ValueError, match='selected managed runtime source'):
+            # Checkpoints are now digest-selected managed assets, not request-owned copies.
+            assert not snapshot.exists()
+            request_document['confornets']['checkpoint']['sha256'] = '0' * 64
+            Path(job.params['cm_request_path']).write_text(json.dumps(request_document))
+            with pytest.raises(ValueError, match='CM selected checkpoint digest/identity mismatch'):
                 _execution_plan_preview(typed)
-            with pytest.raises(bundle.RemoteBundleError, match='declared checkpoint digest'):
+            with pytest.raises(bundle.RemoteBundleError, match='Native input closure is invalid: CM checkpoint digest is not a selected dependency'):
                 pack((roots,job,target),invocation)
     await engine.dispose()

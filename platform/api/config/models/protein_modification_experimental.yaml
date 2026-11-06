@@ -8,6 +8,39 @@ description: >
   retaining distinct scientific contracts under one product boundary.
 container: foundry.sif
 
+# Public maintainer links are presentation metadata, not runtime assets.
+engine_references:
+  rfd4_proteina:
+    name: RFD4-Proteina
+    description: Protein sequence–structure co-design
+    github: https://github.com/RosettaCommons/RFD4-Proteina
+    paper: https://rfd4-proteina.org/assets/paper/RFD4-Proteina.pdf
+    docs: https://rfd4-proteina.org/latest/
+  rfd3:
+    name: RFD3
+    description: All-atom conditioned protein backbone design
+    github: https://github.com/RosettaCommons/foundry
+    paper: https://www.biorxiv.org/content/early/2025/11/19/2025.09.18.676967
+    docs: https://rosettacommons.github.io/foundry/models/rfd3/input.html
+  disco:
+    name: DISCO
+    description: Protein sequence–structure co-design with molecular context
+    github: https://github.com/DISCO-design/DISCO
+    paper: https://arxiv.org/abs/2604.05181
+    docs: https://github.com/DISCO-design/DISCO#readme
+  laproteina:
+    name: La-Proteina
+    description: Atomistic protein generation and motif scaffolding
+    github: https://github.com/NVIDIA-BioNeMo/la-proteina
+    paper: https://arxiv.org/abs/2507.09466
+    docs: https://github.com/NVIDIA-BioNeMo/la-proteina#inference
+  complexa:
+    name: Complexa
+    description: Atomistic protein design and native search
+    github: https://github.com/NVIDIA-BioNeMo/Proteina-Complexa
+    paper: https://arxiv.org/abs/2603.27950
+    docs: https://github.com/NVIDIA-BioNeMo/Proteina-Complexa#readme
+
 ui_icon: cube
 ui_color: "#22C55E"
 
@@ -75,6 +108,10 @@ modes:
       - num_designs
       - seq_method
       - structure_validators
+      - backbone_input_pdbs
+      - designer_template
+      - fixed_positions
+      - designable_positions
 
 params:
   - name: generator
@@ -82,7 +119,7 @@ params:
     description: General-generation authority; RFD3 is preferred
     required: false
     default: rfd3
-    enum: [rfd3, disco, laproteina]
+    enum: [rfd3, disco, laproteina, rfd4_proteina, complexa]
     ui_group: De Novo Design
     ui_order: 1
   - name: generation_mode
@@ -145,11 +182,10 @@ params:
     ui_order: 2
   - name: num_designs
     type: integer
-    description: Number of candidates to generate
+    description: Number of candidates to generate; positive native count without a presentation-only cap
     required: false
     default: 8
     minimum: 1
-    maximum: 512
     ui_group: General
     ui_order: 3
   - name: target_lengths
@@ -270,7 +306,7 @@ params:
     description: Sequence redesign engine
     required: false
     default: fampnn
-    enum: [fampnn, mpnn]
+    enum: [fampnn, mpnn, ligandmpnn, caliby, protonpottsmpnn]
     ui_group: Region Redesign
     ui_order: 37
   - name: structure_validators
@@ -281,3 +317,27 @@ params:
     enum: [boltz2, esmfold2, protenix_v2]
     ui_group: Region Redesign
     ui_order: 38
+  - name: backbone_input_pdbs
+    type: string
+    description: Directory of existing designs to resequence and validate
+    required: false
+    ui_group: Region Redesign
+    ui_order: 39
+  - name: designer_template
+    type: string
+    description: Prepared request template for LigandMPNN, Caliby or ProtonPottsMPNN
+    required: false
+    ui_group: Region Redesign
+    ui_order: 42
+  - name: fixed_positions
+    type: string
+    description: Residues kept as-is during resequencing, e.g. A1-20,B5
+    required: false
+    ui_group: Region Redesign
+    ui_order: 40
+  - name: designable_positions
+    type: string
+    description: Residues the sequence engine may change, e.g. A21-40
+    required: false
+    ui_group: Region Redesign
+    ui_order: 41

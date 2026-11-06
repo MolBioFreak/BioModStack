@@ -1,3 +1,4 @@
+import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import { lazy, Suspense, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchCalibyNativeResults, fetchLigandMPNNDesignResults } from '../lib/api';
@@ -73,7 +74,7 @@ function Receipt({ title, value }: { title: string; value: unknown }) {
 function Files({ files, onView }: { files: NativeFile[]; onView: (file: NativeFile) => void }) {
     return <ul className="space-y-2">{files.map(file => <li key={file.path} className="flex flex-wrap items-center gap-3 text-sm">
         <span className="break-all">{file.path}</span>
-        {file.download_url && <a className="text-cyan-300 underline" href={file.download_url} download>Download {file.path}</a>}
+        {file.download_url && <a className="text-cyan-300 underline" href={resolveApiResourceUrl(file.download_url)} download>Download {file.path}</a>}
         {file.download_url && /\.(cif|mmcif)$/i.test(file.path) && <button type="button" className="rounded border border-slate-600 px-3 py-1" onClick={() => onView(file)}>View CIF {file.path}</button>}
     </li>)}</ul>;
 }

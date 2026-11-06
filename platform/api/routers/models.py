@@ -282,6 +282,24 @@ def _frustrampnn_discovery_metadata() -> dict:
 
 def _native_parameter_schema(model_id: str, mode_id: str) -> dict | None:
     """Discovery metadata only; scientific validation stays model-owned."""
+    if model_id in {'family_msa_protein', 'family_msa_nucleic'} and mode_id == 'family_msa':
+        from services.family_msa.requests import request_schema
+        return request_schema()
+    if model_id == 'laproteina' and mode_id == 'evaluate':
+        from services.laproteina_evaluation import parameter_schema
+        return parameter_schema(mode_id)
+    if model_id == 'rfd4_proteina' and mode_id in ('generate', 'evaluate'):
+        from services.rfd4_proteina import parameter_schema
+        return parameter_schema(mode_id)
+    if model_id == 'complexa' and mode_id in ('generate', 'evaluate'):
+        from services.complexa import parameter_schema
+        return parameter_schema()
+    if model_id in {'boltz2', 'esmfold2', 'esmfold2_experimental'} and mode_id in ('predict', 'complex'):
+        from services.structure_native_schemas import parameter_schema
+        return parameter_schema(model_id)
+    if model_id == 'protenix' and mode_id in ('predict', 'complex'):
+        from scripts.protenix_chemistry import parameter_schema
+        return parameter_schema()
     if model_id == 'caliby_experimental':
         from services.caliby_native import SUPPORTED_MODES, parameter_schema
         if mode_id in SUPPORTED_MODES:
@@ -324,6 +342,7 @@ async def list_models(
             "version": m.version,
             "category": m.category,
             "description": m.description,
+            **({'capabilities': m.capabilities} if m.id in {'family_msa_protein', 'family_msa_nucleic'} else {}),
             "modes": [
                 {
                     "id": mode.id, 
@@ -334,7 +353,7 @@ async def list_models(
                         "parameter_schema": _native_parameter_schema(m.id, mode.id),
                     })
                 }
-                for mode in m.modes
+                for mode in m.modes if not mode.compatibility_only
             ],
             **({} if compact else {"params": [
                 p.model_dump()
@@ -421,14 +440,81 @@ async def read_bindcraft2_campaign_settings(job_id: str, session: AsyncSession =
     return result
 
 
+@router.post('/rfd4_proteina/condition-inspection')
+async def inspect_rfd4_condition(request: dict, session: AsyncSession = Depends(get_session)):
+    """Optional row observation, never a request mutation or Generate prerequisite."""
+    from services.rfd4_condition_inspection import inspect_rfd4_condition as inspect
+    try:
+        return await inspect(request, session)
+    except (ValueError, OSError, KeyError, IndexError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post('/{model_id}/generation-settings/preview')
+async def preview_generation_settings(model_id: str, request: dict, mode: str = 'generate'):
+    """Observational native readback, independent of admission and preparation."""
+    if model_id != 'rfd4_proteina' or mode not in ('generate', 'evaluate'):
+        raise HTTPException(status_code=404, detail='Model has no native settings preview')
+    from starlette.concurrency import run_in_threadpool
+    from services.rfd4_proteina import preview_settings
+    try:
+        return await run_in_threadpool(preview_settings, mode, request)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get('/{model_id}/generation-settings')
-async def get_generation_settings(model_id: str, mode: str):
+async def get_generation_settings(model_id: str, mode: str, generator: str | None = None, task: str | None = None):
     """Model-owned initial-generation settings for browser and agent callers."""
     registry = get_registry()
     model = registry.get_model(model_id)
     if model is None or mode not in {item.id for item in model.modes}:
         raise HTTPException(status_code=404, detail='Initial-generation model/mode not found')
     try:
+        selected = generator if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id
+        native_mode = task or ('generate' if selected != model_id else mode)
+        if selected == 'rfd3':
+            from scripts.lib.rfd3_scientific_settings import scientific_inventory
+            inventory = scientific_inventory()
+            public = {param.name: param.model_dump() for param in model.params}
+            # Catalog validation is the public admission owner. Native positive
+            # lengths and task labels remain separately scoped observations.
+            generation = {key: {**definition, **{name: public[key][name]
+                          for name in ('minimum', 'maximum', 'default')
+                          if public[key].get(name) is not None},
+                          'scope': 'current public admission (not native physical limits)'}
+                          for key, definition in inventory['generation'].items()}
+            return {**inventory, 'model_id': selected,
+                    'mode': task or public['generation_mode']['default'],
+                    'native_tasks': inventory['tasks'],
+                    'tasks': public['generation_mode']['enum'],
+                    'generation_mode': {key: public['generation_mode'][key]
+                                        for key in ('type', 'default', 'enum')},
+                    'native_generation': inventory['generation'], 'generation': generation}
+        if selected == 'laproteina' and native_mode == 'evaluate':
+            from services.laproteina_evaluation import generation_settings
+            return generation_settings(native_mode)
+        if selected == 'laproteina':
+            from scripts.lib.laproteina_contract import settings_schema, evaluation_schema, PROFILES, resolve_profile, native_profile_defaults, native_task_catalog
+            return {'model_id': selected, 'mode': native_mode, 'parameter_schema': settings_schema(),
+                    'native_profile_defaults': native_profile_defaults(),
+                    'native_task_catalog': native_task_catalog(),
+                    'evaluation_schema': evaluation_schema(),
+                    'evaluation_scope': 'Separate laproteina/evaluate Job operation; not an implicit generation stage',
+                    'profiles': {name: resolve_profile(name) for name in PROFILES}}
+        if selected == 'disco':
+            from pydantic import TypeAdapter
+            from scripts.lib.disco_contract import settings_schema, BondedNativeJob, NATIVE_REVISION, native_profile_reference
+            return {'model_id': selected, 'mode': native_mode, 'source_revision': NATIVE_REVISION,
+                    'native_profile_reference': native_profile_reference(),
+                    'parameter_schema': settings_schema(),
+                    'input_schema': TypeAdapter(list[BondedNativeJob]).json_schema()}
+        if selected == 'rfd4_proteina':
+            from services.rfd4_proteina import generation_settings
+            return generation_settings(native_mode)
+        if selected == 'complexa':
+            from services.complexa import discovery
+            return {**discovery(), 'mode': native_mode}
         if model_id == 'ppiflow':
             from services.ppiflow_generation import ppiflow_generation_inventory
             return ppiflow_generation_inventory(mode)
@@ -458,6 +544,11 @@ async def get_model(model_id: str):
         "category": model.category,
         "description": model.description,
         "container": model.container,
+        "engine_references": {
+            key: {**reference.model_dump(), "registry_version": definition.version if (definition := registry.get_model(key)) else None}
+            for key, reference in model.engine_references.items()
+        },
+        **({'capabilities': model.capabilities} if model.id in {'family_msa_protein', 'family_msa_nucleic'} else {}),
         "inputs": model.inputs,
         "outputs": model.outputs,
         "modes": [
@@ -465,6 +556,7 @@ async def get_model(model_id: str):
                 "id": mode.id,
                 "name": mode.name,
                 "description": mode.description,
+                "compatibility_only": mode.compatibility_only,
                 "params": mode.params,
                 "parameter_schema": _native_parameter_schema(model.id, mode.id),
             }
@@ -538,10 +630,11 @@ async def get_model_modes(model_id: str):
                 "id": mode.id,
                 "name": mode.name,
                 "description": mode.description,
+                "compatibility_only": mode.compatibility_only,
                 "params": mode.params,
                 "parameter_schema": _native_parameter_schema(model.id, mode.id),
             }
-            for mode in model.modes
+            for mode in model.modes if not mode.compatibility_only
         ]
     }
 

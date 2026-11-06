@@ -1,0 +1,15 @@
+/* Selection belongs to SeqViz, not the browser's text/image drag operation. */
+.sequence-viewer .la-vz-viewer-event-router {
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.sequence-viewer .la-vz-viewer-event-router :is(svg, svg *, img, canvas) {
+    -webkit-user-drag: none;
+}
+
+/* Text in inspection popups remains available to copy. */
+.sequence-viewer [role="dialog"] {
+    -webkit-user-select: text;
+    user-select: text;
+}

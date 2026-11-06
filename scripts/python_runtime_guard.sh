@@ -3,8 +3,14 @@
 _BMS_PYTHON_GUARD_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 bms_python_runtime_resolve() {
     # A managed but stale/incomplete environment must not fall back to host uv.
-    local resolved_python
-    resolved_python="$(PYTHONPATH="$_BMS_PYTHON_GUARD_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -B -c '
+    local resolved_python resolver_python=python3
+    # A managed environment owns its interpreter as well as its packages.
+    # User launchers may prepend another Python to PATH (including a different
+    # minor version); validate the selected environment with its own Python.
+    if [ -n "${BMS_PYTHON_ROOT:-}" ] && [ -x "$BMS_PYTHON_ROOT/environment/bin/python" ]; then
+        resolver_python="$BMS_PYTHON_ROOT/environment/bin/python"
+    fi
+    resolved_python="$(PYTHONPATH="$_BMS_PYTHON_GUARD_ROOT${PYTHONPATH:+:$PYTHONPATH}" "$resolver_python" -B -c '
 import sys
 import subprocess
 sys.path.insert(0, sys.argv[2])

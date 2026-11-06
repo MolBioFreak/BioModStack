@@ -1,4 +1,4 @@
-import React, { useId, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { deckBounds, deckPark, deckRegions, deckResources, deckSize, deckStations, selectedDeckWells,
     type BioXpDeckSelection, type DeckBounds, type DeckResource, type DeckSelectionMode, type DeckWell } from '../lib/bioxpWorkflowDeck';
 import './BioXpWorkflowDeck.css';
@@ -10,17 +10,30 @@ export type BioXpDeckLiveIntent = {
     stationDisabledReason: (target: string) => string | null;
     wellDisabledReason: string | null;
     selectedStation?: string | null;
+    /** A click on a blocked destination; the owner may offer to resolve the block first. */
+    onBlocked?: (intent: { station: string } | { locationId: number; well: string }) => void;
 };
 export type BioXpWorkflowDeckProps = {
     selection: BioXpDeckSelection; onChange: (selection: BioXpDeckSelection) => void; readOnly?: boolean;
-    live?: BioXpDeckLiveIntent; resources?: DeckResource[]; overlay?: React.ReactNode;
+    live?: BioXpDeckLiveIntent; resources?: DeckResource[]; overlay?: React.ReactNode; connections?: React.ReactNode;
     compact?: boolean; canvas?: boolean;
+    /** Robot-recorded tip occupancy by tray (1-4), 96 row-major booleans. Shading only. */
+    tipOccupancy?: Record<number, boolean[]>;
+    /** Planned starting contents by station and well (label shown on hover). Shading only. */
+    contents?: Record<string, Record<string, string>>;
+    /** Every projected manipulated well for the selected stage; presentation only. */
+    activity?: Record<string, string[]>;
+    activityLabels?: Record<string, Record<string, string>>;
+    /** Role of each manipulated well on the selected stage; presentation only. */
+    activityKinds?: Record<string, Record<string, 'source' | 'destination' | 'tip' | 'touch'>>;
+    /** Drawn above stations so stage arrows never appear to end under another plate. */
+    annotations?: React.ReactNode;
 };
 const fullView: DeckBounds = { x: 0, y: 0, ...deckSize };
 const modes: DeckSelectionMode[] = ['well', 'range', 'row', 'column'];
 
 /** Shared presentation. Authoring defaults remain selection-only; live intents are explicit callbacks. */
-export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, compact = false, canvas = false }: BioXpWorkflowDeckProps) {
+export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, connections, compact = false, canvas = false, tipOccupancy, contents, activity, activityLabels, activityKinds, annotations }: BioXpWorkflowDeckProps) {
     const id = useId();
     const svg = useRef<SVGSVGElement>(null);
     const anchor = useRef<{ station: string; well: string } | null>(null);
@@ -34,12 +47,12 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
     const selected = new Set(selection.wells);
     const chooseStation = (next: string) => {
         if (readOnly) return;
-        if (live) { if (!live.stationDisabledReason(next)) live.onStation(next); return; }
+        if (live) { if (!live.stationDisabledReason(next)) live.onStation(next); else live.onBlocked?.({ station: next }); return; }
         anchor.current = null; onChange({ station: next, wells: [] });
     };
     const chooseWell = (resource: DeckResource, well: DeckWell, event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
         if (readOnly) return;
-        if (live) { if (!live.wellDisabledReason && resource.locationId !== null) live.onWell(resource.locationId, well.well); return; }
+        if (live) { if (resource.locationId === null) return; if (!live.wellDisabledReason) live.onWell(resource.locationId, well.well); else live.onBlocked?.({ locationId: resource.locationId, well: well.well }); return; }
         const start = anchor.current?.station === resource.id ? anchor.current.well : undefined;
         const effectiveMode = event.shiftKey ? 'range' : mode;
         const picked = selectedDeckWells(resource, well, effectiveMode, start);
@@ -80,6 +93,20 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
     // Capture only background pans: capturing a target retargets trusted clicks to SVG.
     const drag = useRef<{ x: number; y: number; view: DeckBounds; pan: boolean; moved: boolean } | null>(null);
     const suppressClick = useRef(false);
+    // Press on a well and drag across others to select the rectangle between them.
+    const wellDrag = useRef<{ resource: string; start: string; dragged: boolean } | null>(null);
+    useEffect(() => { const end = () => { if (wellDrag.current?.dragged) suppressClick.current = true; wellDrag.current = null; }; document.addEventListener('pointerup', end); return () => document.removeEventListener('pointerup', end); }, []);
+    const wellPointerDown = (event: React.PointerEvent, resource: DeckResource, well: DeckWell) => {
+        if (readOnly || live || event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey) return;
+        wellDrag.current = { resource: resource.id, start: well.well, dragged: false };
+    };
+    const wellPointerEnter = (resource: DeckResource, well: DeckWell) => {
+        const d = wellDrag.current;
+        if (!d || d.resource !== resource.id || (!d.dragged && d.start === well.well)) return;
+        d.dragged = true;
+        anchor.current = { station: resource.id, well: d.start };
+        onChange({ station: resource.id, wells: selectedDeckWells(resource, well, 'range', d.start) });
+    };
     const pointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
         if (event.button !== 0) return;
         suppressClick.current = false;
@@ -156,6 +183,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                 onWheel={live ? e => { e.preventDefault(); zoom(e.deltaY > 0 ? 1.12 : 1 / 1.12); } : undefined}>
                 <defs><pattern id={`${id}-dots`} width="28" height="28" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.8" className="bwd-dot" /></pattern></defs>
                 <rect width={deckSize.width} height={deckSize.height} fill={`url(#${id}-dots)`} />
+                {connections}
                 <rect className="bwd-strip-holder" x={stripBounds.x - 18} y={stripBounds.y - 25} width={stripBounds.width + 36} height={stripBounds.height + 50} rx="8" />
                 <text className="bwd-map-label" x={stripBounds.x - 19} y={stripBounds.y - 39}>Reagent strips</text>
                 {resources.map(resource => {
@@ -178,14 +206,18 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                         {resource.points.map(well => <g key={well.well} role={readOnly ? 'img' : 'button'} tabIndex={readOnly ? undefined : tabWell === well.well ? 0 : -1}
                             aria-label={`${resource.label} ${well.well}`} aria-pressed={selection.station === resource.id && selected.has(well.well)}
                             data-station={resource.id} data-well={well.well}
-                            className={`bwd-well${selection.station === resource.id && selected.has(well.well) ? ' is-selected' : ''}`}
+                            className={`bwd-well${selection.station === resource.id && selected.has(well.well) ? ' is-selected' : ''}${contents?.[resource.id]?.[well.well] ? ' has-contents' : ''}${activity?.[resource.id]?.includes(well.well) ? ' is-stage-active' : ''}${activityKinds?.[resource.id]?.[well.well] ? ` is-stage-${activityKinds[resource.id][well.well]}` : ''}`}
                             aria-disabled={live ? !!live.wellDisabledReason : undefined}
                             onClick={e => activate(e, () => chooseWell(resource, well, e))} onKeyDown={e => keyboardWell(e, resource, well)}
+                            onPointerDown={e => wellPointerDown(e, resource, well)} onPointerEnter={() => wellPointerEnter(resource, well)}
                             onFocus={() => setHover(`${resource.label} · ${well.well}`)} onMouseEnter={() => setHover(`${resource.label} · ${well.well}`)}>
-                            <title>{resource.label} · {well.well}{live?.wellDisabledReason ? ` · ${live.wellDisabledReason}` : ''}</title>
+                            <title>{resource.label} · {well.well}{contents?.[resource.id]?.[well.well] ? ` · ${contents[resource.id][well.well]}` : ''}{activityLabels?.[resource.id]?.[well.well] ? ` · ${activityLabels[resource.id][well.well]}` : ''}{live?.wellDisabledReason ? ` · ${live.wellDisabledReason}` : ''}</title>
                             <circle className="bwd-ring" cx={well.x} cy={well.y} r="5.4" />
                             <circle className="bwd-core" cx={well.x} cy={well.y} r="3.8" />
-                            {resource.kind === 'rack' && <circle className="bwd-tip" cx={well.x} cy={well.y} r="1.35" />}
+                            {resource.kind === 'rack' && (() => {
+                                const present = resource.tipTray !== null ? tipOccupancy?.[resource.tipTray]?.[well.row * 12 + well.column] : undefined;
+                                return present === false ? null : <circle className={`bwd-tip${present ? ' is-recorded' : ''}`} cx={well.x} cy={well.y} r="1.35" data-tip={present === undefined ? undefined : 'present'} />;
+                            })()}
                             <circle className="bwd-hit" cx={well.x} cy={well.y} r="8.5" />
                         </g>)}
                     </g>;
@@ -198,7 +230,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                 </g>)}
                 <g className={`bwd-park${selection.station === deckPark.id ? ' is-active' : ''}`} role={readOnly ? 'img' : 'button'} tabIndex={readOnly ? undefined : 0} aria-label="Select Park target" aria-pressed={selection.station === deckPark.id} aria-disabled={live ? !!live.stationDisabledReason(deckPark.id) : undefined} onClick={e => activate(e, () => chooseStation(deckPark.id))} onKeyDown={e => keyboardStation(e, deckPark.id)}>
                     <title>{live?.stationDisabledReason(deckPark.id) ?? 'Park target'}</title>
-                    <circle cx={deckPark.point[0]} cy={deckPark.point[1]} r="6" /><text className="bwd-map-label" x={deckPark.point[0] + 12} y={deckPark.point[1] + 4}>Park target</text>
+                    <circle cx={deckPark.point[0]} cy={deckPark.point[1]} r="6" /><text className="bwd-map-label" x={deckPark.point[0] + 12} y={deckPark.point[1] + 4}>Gantry park</text>
                 </g>
                 {live && <g aria-label="Station move buttons">
                     {deckResources.filter(resource => resource.kind !== 'strip').map(resource => moveButton(resource.id, resource.label,
@@ -211,6 +243,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                     <g className="bwd-chosen-outline" data-selected-station={live.selectedStation} aria-label="Selected dropdown destination">
                         {chosenBounds ? <rect {...chosenBounds} rx="10" /> : <circle cx={deckPark.point[0]} cy={deckPark.point[1]} r="13" />}
                     </g>}
+                {annotations}
                 {overlay}
             </svg>
         </div>

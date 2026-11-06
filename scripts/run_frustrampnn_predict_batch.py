@@ -9,6 +9,7 @@ import importlib
 import json
 import re
 import sys
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
@@ -127,7 +128,7 @@ def _validated_records(value: Any) -> list[dict[str, Any]]:
     for index, item in enumerate(value):
         if not isinstance(item, dict):
             raise BatchAdapterError("input_invalid", f"record {index} must be an object")
-        if set(item) != RECORD_FIELDS:
+        if set(item) not in (RECORD_FIELDS, RECORD_FIELDS | {"command_plan"}):
             raise BatchAdapterError("input_invalid", f"record fields are not closed at index {index}")
         ordinal = item["ordinal"]
         if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0:
@@ -138,6 +139,20 @@ def _validated_records(value: Any) -> list[dict[str, Any]]:
             item["staged_pdb_path"], field="staged_pdb_path"
         )
         source_sha256 = _source_sha256(item["source_sha256"], index=index)
+        if "command_plan" in item:
+            plan = item["command_plan"]
+            if not isinstance(plan, list) or not plan:
+                raise BatchAdapterError("input_invalid", "command_plan must be nonempty")
+            for entry in plan:
+                if not isinstance(entry, dict) or set(entry) != {"chains", "positions"}:
+                    raise BatchAdapterError("input_invalid", "invalid command_plan entry")
+                chains, positions = entry["chains"], entry["positions"]
+                if chains is not None and (not isinstance(chains, list) or not chains or
+                        any(not isinstance(c, str) or len(c) != 1 for c in chains)):
+                    raise BatchAdapterError("input_invalid", "invalid native chains")
+                if positions is not None and (chains is None or not isinstance(positions, list) or not positions or
+                        any(type(p) is not int or p < 0 for p in positions)):
+                    raise BatchAdapterError("input_invalid", "invalid native positions")
         records.append(
             {
                 "ordinal": ordinal,
@@ -145,6 +160,7 @@ def _validated_records(value: Any) -> list[dict[str, Any]]:
                 "invocation_id": invocation_id,
                 "staged_pdb_path": staged_pdb_path,
                 "source_sha256": source_sha256,
+                **({"command_plan": item["command_plan"]} if "command_plan" in item else {}),
             }
         )
 
@@ -255,13 +271,13 @@ def _base_terminal_record(
     }
 
 
-def _evidence(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def _evidence(records: Sequence[Mapping[str, Any]], model_load_count: int = 1, method_identity: str = METHOD_IDENTITY) -> dict[str, Any]:
     return {
         "schema_name": EVIDENCE_SCHEMA_NAME,
         "schema_version": 1,
-        "method_identity": METHOD_IDENTITY,
+        "method_identity": method_identity,
         "upstream_sequential_semantics": UPSTREAM_SEQUENTIAL_SEMANTICS,
-        "model_load_count": 1,
+        "model_load_count": model_load_count,
         "record_count": len(records),
         "records": [dict(record) for record in records],
     }
@@ -286,6 +302,8 @@ def _fail_all(
     failure_code: str,
     diagnostic: str,
     clock: Callable[[], datetime],
+    model_load_count: int = 0,
+    method_identity: str = METHOD_IDENTITY,
 ) -> dict[str, Any]:
     terminal = []
     bounded_diagnostic = " ".join(str(diagnostic).split())[:1024] or failure_code
@@ -295,7 +313,7 @@ def _fail_all(
         entry["diagnostic"] = bounded_diagnostic
         entry["terminal_at"] = _utc_timestamp(clock)
         terminal.append(entry)
-    evidence = _evidence(terminal)
+    evidence = _evidence(terminal, model_load_count, method_identity)
     _publish_evidence(output, evidence)
     return evidence
 
@@ -369,6 +387,7 @@ def run_batch(
     pdb_paths = [record["staged_pdb_path"] for record in records]
     stems = [Path(path).stem for path in pdb_paths]
     output = _safe_output_directory(output_dir)
+    method_identity = "frustrampnn.FrustraMPNN.predict" if any("command_plan" in r for r in records) else METHOD_IDENTITY
     active_clock = clock or (lambda: datetime.now(timezone.utc))
     started_at = [_utc_timestamp(active_clock) for _ in records]
 
@@ -382,7 +401,7 @@ def run_batch(
             started_at,
             "source_verification_failed",
             exc.diagnostic,
-            active_clock,
+            active_clock, method_identity=method_identity,
         )
         raise
 
@@ -393,7 +412,7 @@ def run_batch(
         except Exception as exc:
             _fail_all(
                 output, records, stems, started_at, "model_load_failed",
-                "frustrampnn package could not be imported", active_clock,
+                "frustrampnn package could not be imported", active_clock, method_identity=method_identity,
             )
             raise BatchAdapterError(
                 "model_load_failed", "frustrampnn package could not be imported"
@@ -406,22 +425,34 @@ def run_batch(
     except Exception as exc:
         _fail_all(
             output, records, stems, started_at, "model_load_failed",
-            "FrustraMPNN model could not be loaded", active_clock,
+            "FrustraMPNN model could not be loaded", active_clock, method_identity=method_identity,
         )
         raise BatchAdapterError(
             "model_load_failed", "FrustraMPNN model could not be loaded"
         ) from exc
 
     try:
-        batch_frame = model.predict_batch(
-            pdb_paths,
-            chains=None,
-            show_progress=False,
-        )
+        if any("command_plan" in record for record in records):
+            frames = []
+            for record in records:
+                # Preserve upstream sequential per-structure exception isolation.
+                # No trimming, score filtering, embedding reuse or mutation batching.
+                try:
+                    shards = [model.predict(
+                        record["staged_pdb_path"], chains=entry["chains"],
+                        positions=entry["positions"], show_progress=False,
+                    ) for entry in record.get("command_plan", [{"chains": None, "positions": None}])]
+                    frames.append(pd.concat(shards, ignore_index=True))
+                except Exception as exc:
+                    warnings.warn(f"Failed to process {record['staged_pdb_path']}: {exc}", stacklevel=2)
+                    continue
+            batch_frame = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=CSV_COLUMNS)
+        else:
+            batch_frame = model.predict_batch(pdb_paths, chains=None, show_progress=False)
     except Exception as exc:
         _fail_all(
             output, records, stems, started_at, "batch_call_failed",
-            "FrustraMPNN.predict_batch raised at batch scope", active_clock,
+            "FrustraMPNN.predict_batch raised at batch scope", active_clock, model_load_count=1, method_identity=method_identity,
         )
         raise BatchAdapterError(
             "batch_call_failed", "FrustraMPNN.predict_batch raised at batch scope"
@@ -432,7 +463,7 @@ def run_batch(
     except BatchAdapterError as exc:
         _fail_all(
             output, records, stems, started_at, "upstream_output_invalid",
-            exc.diagnostic, active_clock,
+            exc.diagnostic, active_clock, model_load_count=1, method_identity=method_identity,
         )
         raise
 
@@ -476,7 +507,7 @@ def run_batch(
         )
         terminal.append(entry)
 
-    evidence = _evidence(terminal)
+    evidence = _evidence(terminal, method_identity=method_identity)
     _publish_evidence(output, evidence)
     return evidence
 

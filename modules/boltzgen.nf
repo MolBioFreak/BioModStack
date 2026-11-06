@@ -36,9 +36,10 @@ process PrepBoltzGenInput {
     script:
     def quote = { value -> "'" + value.toString().replace("'", "'\"'\"'") + "'" }
     def generationMode = params.get('boltzgen_generation_mode')
-    def genericScaffold = generationMode in ['protein_binder', 'peptide_binder'] && params.get('boltzgen_scaffold_path')
+    def genericScaffold = generationMode in ['protein_binder', 'peptide_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand'] && params.get('boltzgen_scaffold_path')
     def arguments = [
         ligand_smiles: ligand_smiles, ntp_type: ntp_type,
+        ligand_chains: params.get('boltzgen_ligand_chains'),
         scaffold_length: scaffold_length, num_designs: num_designs,
         binding_site_residues: binding_site_residues,
         protein_sequence: protein_sequence, dna_template_seq: dna_template_seq,
@@ -55,13 +56,14 @@ process PrepBoltzGenInput {
         scaffold_design_ranges: params.get('boltzgen_scaffold_design_ranges'),
         output_yaml: 'boltzgen_input.yaml'
     ]
-    if (input_pdb.name != 'NO_INPUT_PDB') arguments[genericScaffold ? 'scaffold_path' : 'input_pdb'] = input_pdb
-    if (ligand_pdb.name != 'NO_LIGAND_PDB') arguments.ligand_pdb = ligand_pdb
-    if (dna_structure.name != 'NO_DNA_STRUCT') arguments.dna_structure = dna_structure
-    if (target_pdb.name != 'NO_TARGET_PDB') arguments.target_pdb = target_pdb
+    if (input_pdb.toString().tokenize('/').last() != 'NO_INPUT_PDB') arguments[genericScaffold ? 'scaffold_path' : 'input_pdb'] = input_pdb
+    if (ligand_pdb.toString().tokenize('/').last() != 'NO_LIGAND_PDB') arguments.ligand_pdb = ligand_pdb
+    if (dna_structure.toString().tokenize('/').last() != 'NO_DNA_STRUCT') arguments.dna_structure = dna_structure
+    if (target_pdb.toString().tokenize('/').last() != 'NO_TARGET_PDB') arguments.target_pdb = target_pdb
     def argv = arguments.findAll { key, value -> value != null && value.toString() != '' }
         .collect { key, value -> "--${key} ${quote(value)}" }.join(' ')
     if (catalytic_site) argv += ' --catalytic_site'
+    if (params.get('boltzgen_cyclic')) argv += ' --cyclic'
     """
     export MAMBA_ROOT_PREFIX=/opt/conda/
     if [ -x /opt/conda/envs/pyrosetta/bin/python3 ]; then

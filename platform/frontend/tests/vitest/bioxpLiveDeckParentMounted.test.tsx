@@ -11,6 +11,7 @@ import metadata from '../fixtures/bioxp_xy_bms_metadata.json';
 import destinations from '../fixtures/bioxp_deck_admission_catalog.json';
 import manual from '../fixtures/bioxpManualCatalogProducer.json';
 import park from '../fixtures/bioxp_park_completed_receipt.json';
+import custodyCatalog from '../fixtures/bioxp_methods_catalog_custody.json';
 import { deckResources } from '../../src/lib/bioxpWorkflowDeck';
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
 import App from '../../src/App';
@@ -96,12 +97,20 @@ beforeEach(() => {
             if (url.includes('/receipts/')) return response(config, receipts.get(decodeURIComponent(url.split('/').at(-1)!)));
             if (url === '/api/bioxp/protocols/jobs') return response(config, { rows: [] });
             if (url === '/api/bioxp/protocols/presets') return response(config, []);
+            if (url === '/api/bioxp/methods/catalog') return response(config, custodyCatalog);
+            if (url === '/api/bioxp/operator-controls/deck/state') return response(config, { schema_version: 'bioxp.operator_deck_state.v1',
+                semantic: { plate_on_gantry: null, movable_plate_locations: { OUTPUT_COVER: 'LOC_OC_COVER_STORAGE', REAGENT_COVER: 'LOC_RC_COVER' } },
+                movable_objects: {}, physical_observation: false });
+            if (url === '/api/bioxp/operator-controls/tip-trays') return response(config, { schema_version: 'bioxp.operator_tip_trays.v1',
+                trays: [1, 2, 3, 4].map(tray => ({ tray, tray_id: tray - 1, occupancy: Array(96).fill(tray !== 3), four_channel_groups_available: tray !== 3 ? 24 : 0 })),
+                physical_observation: false });
             throw new Error(`Unexpected GET ${url}`);
         }
         if (url.includes('/v2/actions/oem.deck.move_to_')) {
             if (autoAccept) return admit(config, body);
             return new Promise(resolve => held.push({ config, body, resolve }));
         }
+        if (url.endsWith('/v2/actions/meta.deactivate_motion') || url.endsWith('/v2/actions/meta.activate_motion')) return admit(config, body);
         if (url.includes('/v2/interrupts/')) return response(config, { ...park, action_id: url.split('/').at(-1), command_id: 'stop-parent' });
         if (url.includes('/operator-controls/actions/route.motion_thermal_door_')) return response(config, { ...metadata.legacy, action_id: url.split('/').at(-1), command_id: `door-${mutations().length}` });
         throw new Error(`Unexpected mutation ${method} ${url}`);
@@ -129,7 +138,12 @@ it('relocates deck controls to a fourth tab without changing the default robot l
     expect(host.querySelector('#control-panel-robot [data-testid="oem-deck-movement"]')).toBeNull();
     expect(live().querySelector('[data-testid="live-deck-door-controls"]')).not.toBeNull();
     expect(live().textContent).toContain('Refresh deck readiness');
-    expect(live().textContent).toContain('Plate and cover');
+    expect(live().querySelector('[aria-label="Move plate / cover"]')?.textContent).toContain('Inspect covers');
+    // Deck record sits first in the side column and reads only; Motion toggle is in the top bar.
+    await vi.waitFor(() => expect(live().querySelector('[data-testid="deck-record-panel"]')?.textContent).toContain('Reagent chiller'));
+    expect(live().querySelector('[data-testid="tips-3"]')?.textContent).toBe('0/96 tips · 0 pickups');
+    expect(live().querySelectorAll('[data-station="TECANRACK3"] .bwd-tip')).toHaveLength(0);
+    expect(host.querySelector('header [data-testid="motion-toggle"]')).not.toBeNull();
     expect(mutations()).toEqual([]);
 });
 
@@ -273,4 +287,20 @@ it.each(['Open', 'Close'])('quick door %s uses the exact existing manual action 
     expect(legacy.body.expected_ownership_generation).toBe(quick?.body.expected_ownership_generation);
     expect(mutations()).toHaveLength(2);
     expect(deckWrites()).toHaveLength(0);
+});
+
+it('top-bar Motion Off posts Motion Off once even when the robot reports Activate unavailable', async () => {
+    catalog.actions = catalog.actions.filter((a: any) => !a.action_id.startsWith('meta.')).concat([
+        { action_id: 'meta.activate_motion', request_schema_version: 'bioxp.operator_action_request.v2',
+            response_schema_version: 'bioxp.operator_action_receipt.v2', interrupt: false, enabled: false, disabled_reason: 'Door open' },
+    ]);
+    await mount('robot');
+    const toggle = host.querySelector<HTMLElement>('header [data-testid="motion-toggle"]')!;
+    expect(button('On', toggle).disabled).toBe(true);
+    expect(button('Off', toggle).disabled).toBe(false);
+    await click(button('Off', toggle));
+    const sent = mutations().filter(row => row.url.includes('/v2/actions/meta.'));
+    expect(sent).toHaveLength(1);
+    expect(sent[0].url).toBe('/api/bioxp/operator-controls/v2/actions/meta.deactivate_motion');
+    expect(sent[0].body).toMatchObject({ schema_version: 'bioxp.operator_action_request.v2', inputs: {} });
 });

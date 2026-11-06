@@ -50,6 +50,10 @@ async def test_failed_setup_two_consumers_delete_retry_exact_roots(selected, mon
         child.output_dir = str(tmp_path / 'results' / child.id)
         Path(child.output_dir).mkdir(parents=True)
         (Path(child.output_dir) / 'failed-setup.txt').write_text('setup failure')
+    # Output roots are sibling directories: the existing cleanup planner deliberately preserves a deleted
+    # directory that lies inside a remaining Job's output root, and the fixture roots are tmp_path itself.
+    root.output_dir = str(tmp_path / 'root-output')
+    source.output_dir = str(tmp_path / 'round-one-output')
     await session.commit()
     removed_id = children[0].id
     deleted = await jobs.delete_job_permanently(removed_id, session)

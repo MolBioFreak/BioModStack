@@ -44,9 +44,9 @@ def test_selected_backend_executes_only_canonical_sif(tmp_path, monkeypatch, app
         assert not any(value.startswith('docker://') for value in argv)
     if not apptainer_ok:
         env = calls[-1][1]['env']
-        assert env['BMS_UDOCKER'] == str(tmp_path / 'tools/udocker-1.3.17-bms2/bin/udocker')
-        assert env['UDOCKER_BIN'] == str(tmp_path / 'tools/udocker-1.3.17-bms2/engines/bin')
-        assert env['UDOCKER_LIB'] == str(tmp_path / 'tools/udocker-1.3.17-bms2/engines/lib')
+        assert env['BMS_UDOCKER'] == str(tmp_path / 'tools/udocker-1.3.17-bms3/bin/udocker')
+        assert env['UDOCKER_BIN'] == str(tmp_path / 'tools/udocker-1.3.17-bms3/engines/bin')
+        assert env['UDOCKER_LIB'] == str(tmp_path / 'tools/udocker-1.3.17-bms3/engines/lib')
         assert env['BMS_CONTAINER_WORK_ROOT'] == str(tmp_path / 'container-workspaces')
         assert env['BMS_RUNTIME_IMAGE_STORE'] == str(tmp_path / 'cache/runtime-images')
         assert env['BMS_NEXTFLOW_EXECUTABLE'] == str(release / 'bin/bms-nextflow')
@@ -294,7 +294,7 @@ def test_upstream_checksum_failure_publishes_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(urllib.request, 'urlopen', lambda *args, **kwargs: io.BytesIO(b'wrong upstream bytes'))
     with pytest.raises(ValueError, match='upstream checksum mismatch'):
         exec(compile(embedded, 'bootstrap-upstream-installer', 'exec'), {})
-    assert not (tmp_path / 'tools/udocker-1.3.17-bms2').exists()
+    assert not (tmp_path / 'tools/udocker-1.3.17-bms3').exists()
     assert not list((tmp_path / 'tools').iterdir())
 
 
@@ -320,7 +320,7 @@ def test_exact_upstream_install_repeat_and_corruption(tmp_path, monkeypatch, eng
         raise AssertionError('verified repeat installation must stay offline')
     monkeypatch.setattr(urllib.request, 'urlopen', no_network)
     exec(compile(embedded, 'bootstrap-upstream-installer', 'exec'), {})
-    installed = tmp_path / 'tools/udocker-1.3.17-bms2'
+    installed = tmp_path / 'tools/udocker-1.3.17-bms3'
     record = json.loads((installed / 'manifest.json').read_text())
     assert 'bin/udocker' in record['files']
     assert 'engines/bin/proot-x86_64' in record['files']

@@ -10,6 +10,20 @@ import sys
 
 
 def _adapt(module):
+    if module.__name__ == 'bindcraft.score':
+        # Native score-folder helper, not AF2 prediction/campaign acceptance.
+        # Zero is a finite CA reading; keep the native scale convention intact.
+        @wraps(module.binder_confidence)
+        def binder_confidence(structure, binder_chains):
+            readings = [r['b_factor'] for r in module.read_structure_atoms(structure)
+                        if r['chain_id'] in binder_chains and r['name'] == 'CA'
+                        and module.math.isfinite(r['b_factor'])]
+            if not readings:
+                return None
+            confidence = sum(readings) / len(readings)
+            return module.recorded_number(confidence / 100.0 if confidence > 1.0 else confidence)
+        module.binder_confidence = binder_confidence
+        return
     native = module.induced_fit_interface_masks
 
     @wraps(native)
@@ -42,7 +56,7 @@ class _MaskLoader:
 
 class _MaskFinder:
     def find_spec(self, fullname, path=None, target=None):
-        if fullname != 'bindcraft.loss':
+        if fullname not in ('bindcraft.loss', 'bindcraft.score'):
             return None
         spec = PathFinder.find_spec(fullname, path, target)
         if spec is not None and spec.loader is not None:

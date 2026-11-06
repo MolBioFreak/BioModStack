@@ -43,7 +43,7 @@ process PrepMPNN {
 
     if ${params.get('sequence_design_engine') == 'proteinmpnn' ? 'false' : 'true'}; then
     # Legacy antibody preparation retains its existing chain locks.
-    # This is the official method used by dl_binder_design
+    # Translate H/L roles to native masks; preserve inpaint residue locks.
     python /scripts/add_fixed_labels.py \
         --input_dir "mpnn_input" \
         --output_dir "mpnn_fixed" \
@@ -78,20 +78,17 @@ process RunMPNN {
     path "*.log"
 
     script:
-    def roles = params.get('sequence_design_engine') == 'proteinmpnn' && params.get('binder_chains')
-    def roleRequest = ['binder_chains', 'target_chains', 'fixed_positions'].collectEntries { key -> [(key): params.get(key)] }
-    def roleBase64 = groovy.json.JsonOutput.toJson(roleRequest).getBytes('UTF-8').encodeBase64().toString()
-    def nativeLauncher = roles ? "/scripts/proteinmpnn_binder_roles.py --request-base64 '${roleBase64}' --" : (params.get('sequence_design_engine') == 'proteinmpnn' ? '/scripts/proteinmpnn_native_binding.py --native /dl_binder_design/mpnn_fr/dl_interface_design_multi.py --' : '/dl_binder_design/mpnn_fr/dl_interface_design_multi.py')
+    def nativeLauncher = '/scripts/proteinmpnn_native_binding.py --native /dl_binder_design/mpnn_fr/dl_interface_design_multi.py --'
     def extraBase64 = (params.get('mpnn_extra_config') != null ? params.get('mpnn_extra_config') : '').toString().getBytes('UTF-8').encodeBase64().toString()
     """
+    eval "\$(micromamba shell hook --shell bash)"
+    micromamba activate mpnn
     # Raw config remains argv data, never shell syntax or command substitution.
     python -c 'import base64,shlex,sys; args=shlex.split(base64.b64decode(sys.argv[1]).decode()); reserved=["-pdbdir", "-outpdbdir", "-augment_eps", "-checkpoint_path", "-omit_AAs", "-relax_max_cycles", "-relax_output", "-relax_seqs_per_cycle", "-relax_convergence_rmsd", "-relax_convergence_score", "-relax_convergence_max_cycles", "-seqs_per_struct", "-temperature", "-debug", "-num_connections", "-bias_AA_jsonl", "-output_intermediates"]; conflicts=[a for a in args if a.split("=",1)[0].lstrip("+~") in reserved]; sys.exit("extra_config cannot override typed/system-owned arguments: "+str(conflicts)) if sys.argv[2] == "true" and conflicts else None; sys.stdout.buffer.write((chr(0).join(args)+chr(0) if args else "").encode())' '${extraBase64}' '${params.get("sequence_design_engine") == "proteinmpnn"}' > native_extra_args.bin
     mapfile -d '' -t native_extra_args < native_extra_args.bin
     export OPENBLAS_NUM_THREADS=1 
     export MKL_NUM_THREADS=1
 
-    eval "\$(micromamba shell hook --shell bash)"
-    micromamba activate mpnn
     mkdir results
         
     python ${nativeLauncher} \

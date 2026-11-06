@@ -1,4 +1,5 @@
 import { BioXpMeasurementReview } from './BioXpMeasurementReview';
+import { BioXpCopyId } from './BioXpCopyId';
 import { definiteMethodRefusal } from '../lib/bioxpMethods';
 import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useEffect, useRef, useState, type RefObject } from 'react';
@@ -42,6 +43,10 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
         if (job?.command && job.job_id === jobId) setActiveObservation(job.command.terminal ? null : { jobId: job.job_id, generation });
     }, [job, jobId, generation]);
     useEffect(() => { if (job) onObserved?.(job); }, [job, onObserved]);
+    // Last canonical command identity seen for this job. A failed or non-canonical
+    // read must never hide or disable Pause/Abort; the robot verifies identity.
+    const knownCommand = useRef<{ jobId: string; command: NonNullable<typeof job>['command'] } | null>(null);
+    if (job?.command && job.job_id === jobId && job.command.command_id === jobId) knownCommand.current = { jobId, command: job.command };
     const command = job?.command;
     const runtime = job?.execution?.runtime_state;
     const workflow = runtime?.workflow;
@@ -58,14 +63,17 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
     const wakeReached = workflow?.gate === 'deferred_pause' && workflow.requested_control === null
         && workflow.reached_control_id != null && workflow.reached_control_id !== workflow.gate_id
         && workflow.reached_control_id === workflow.last_control_id;
-    async function send(action: BioXpWorkflowAction) {
-        if (!mutable || !command || !jobId || busyRef.current) return;
+    async function send(action: BioXpWorkflowAction, always = false) {
+        const owner = command ?? (knownCommand.current?.jobId === jobId ? knownCommand.current.command : null);
+        if (!jobId || busyRef.current || !always && (!mutable || !command)) return;
         busyRef.current = true; onBusyChange(true);
         setLocalError(null);
         setAbortConfirmed(false);
         try {
-            await control.mutateAsync({ jobId, request: { ...action, command_id: command.command_id,
-                expected_ownership_generation: command.ownership_generation,
+            // Without any readback the canonical command is the job itself; the
+            // robot checks ownership and reports a mismatch rather than acting.
+            await control.mutateAsync({ jobId, request: { ...action, command_id: owner?.command_id ?? jobId,
+                expected_ownership_generation: owner?.ownership_generation ?? 0,
                 expected_connection_generation: generation, idempotency_key: crypto.randomUUID() } });
             void query.refetch();
         } catch (error) {
@@ -120,26 +128,27 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
     const gate = workflow?.gate;
     const gateId = workflow?.gate_id;
     return <>
-        {jobId && <p className="break-all text-sm">Canonical job: {jobId}</p>}
+        {jobId && <p className="text-sm">Status: {job?.command?.status ?? job?.status ?? (query.isError ? 'not readable right now' : 'checking…')}{workflow?.phase ? ` · ${workflow.phase.replaceAll('_', ' ')}` : ''} <BioXpCopyId label="job ID" value={jobId} /></p>}
+        {jobId && <div className="flex flex-wrap gap-2" aria-label="Run controls">
+            <button className={buttonClass} disabled={control.isPending || review.isPending} onClick={() => void send({ action: 'pause', mode: 'ordinary' }, true)}>Pause workflow</button>
+            <label className="text-sm"><input type="checkbox" checked={abortConfirmed} onChange={event => setAbortConfirmed(event.target.checked)} /> Confirm Abort</label>
+            <button className={buttonClass} disabled={!abortConfirmed || control.isPending || review.isPending} onClick={() => void send({ action: 'abort' }, true)}>Abort workflow</button>
+        </div>}
         {(query.isError || discoveryError) && <p role="status">Workflow readback unavailable; checking again. Do not resubmit uncertain work.</p>}
         {pending && !job && <p role="status">Submission outcome not yet reconciled. Checking the original job; no automatic retry.</p>}
         {!controlsEnabled && connected && <p className="text-sm">Workflow controls unavailable until current connection status recovers; passive readback continues.</p>}
         {canonical && <>
-            <p role="status">Robot status: {command.status} · Phase: {workflow.phase}{gate ? ` · Gate: ${gate}` : ''}</p>
-            <p className="text-sm">Source occurrence: {workflow.source_occurrence_id ?? 'none'} · State version: {command.state_version}</p>
+            {gate && <p role="status">Waiting at: {gate.replaceAll('_', ' ')}</p>}
             {workflow.held_reason && <p className="text-amber-200">Held reason: {workflow.held_reason}</p>}
             {workflow.requested_control && <p>Requested control: {workflow.requested_control.action} — acceptance is not a reached boundary.</p>}
-            {workflow.reached_control_id && <p className="text-xs">Reached control: {workflow.reached_control_id}</p>}
+            <details className="text-xs"><summary>Run identifiers</summary><BioXpCopyId label="step reference" value={workflow.source_occurrence_id} /> <BioXpCopyId label="reached control" value={workflow.reached_control_id} /> State version {command.state_version}</details>
             <p className="text-xs">Pause does not establish physical quiescence. Cooperative Abort is not addressed motor Stop. Native evidence remains in the existing receipt history.</p>
             <div className="flex flex-wrap gap-2">
-                <button className={buttonClass} disabled={!mutable || pendingControl || workflow.phase !== 'executing'} onClick={() => void send({ action: 'pause', mode: 'ordinary' })}>Pause workflow</button>
                 <button className={buttonClass} disabled={!mutable || pendingControl || workflow.phase !== 'executing'} onClick={() => void send({ action: 'pause', mode: 'deferred' })}>Request deferred pause</button>
                 {gate === 'deferred_pause' && gateId && <button className={buttonClass} disabled={!mutable || pendingControl || wakeReached || workflow.phase !== 'waiting'} onClick={() => void send({ action: 'wake', gate_id: gateId })}>Wake workflow</button>}
                 {(gate === 'ordinary_pause' || gate === 'deferred_pause' || gate === 'delaypoint') && gateId && <button className={buttonClass} disabled={!mutable || pendingControl || workflow.phase !== 'waiting' || gate === 'deferred_pause' && !wakeReached} onClick={() => void send({ action: 'continue', gate, gate_id: gateId })}>{gate === 'delaypoint' ? 'Start now' : 'Continue workflow'}</button>}
                 <button className={buttonClass} disabled={!mutable} onClick={() => void send({ action: 'safe_stop' })}>Request safe-state stop</button>
             </div>
-            <label className="block text-sm"><input type="checkbox" checked={abortConfirmed} onChange={event => setAbortConfirmed(event.target.checked)} /> Confirm cooperative job Abort</label>
-            <button className={buttonClass} disabled={!mutable || !abortConfirmed} onClick={() => void send({ action: 'abort' })}>Abort workflow</button>
             {gate === 'review' && <div className="space-y-2">
                 <p>{pendingReview?.reason}</p>
                 {pendingReview?.measurement_form && <BioXpMeasurementReview form={pendingReview.measurement_form} values={measurements} onChange={values => setMeasurementDrafts(previous => ({ ...previous, [reviewIdentity]: values }))} />}
@@ -148,8 +157,8 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
                 <button className={buttonClass} disabled={!mutable || !reviewer.trim() || !job?.operator?.pending_review?.stage_id} onClick={() => void acknowledgeReview()}>Acknowledge protocol review</button>
             </div>}
         </>}
-        {job && !canonical && <p>Historical or nonphysical job — no live workflow control authority.</p>}
-        {control.data && control.variables?.request.expected_connection_generation === generation && control.data.command_id === jobId && <p>Control {control.data.control_command_id}: {control.data.accepted ? 'accepted' : 'not accepted'} · {control.data.reached ? 'reached' : 'not yet reached'}</p>}
+        {job && !canonical && <p>Historical or nonphysical job; Pause and Abort are still sent to the robot, which decides.</p>}
+        {control.data && control.variables?.request.expected_connection_generation === generation && control.data.command_id === jobId && <p>Control request {control.data.accepted ? 'accepted' : 'not accepted'} · {control.data.reached ? 'reached' : 'not yet reached'}</p>}
         {localError && <p role="alert">{localError} No automatic submission or control retry; reconcile robot state before further action.</p>}
     </>;
 }

@@ -480,15 +480,15 @@ def test_prepared_batch_rejects_missing_or_ambiguous_task_identity(tmp_path):
 
 def test_native_adapter_preserves_original_complex_construction(tmp_path):
     # Expected values retain the original PrepProtenixComplex construction,
-    # including CCD prefixing, count coercion, ID lists and default naming.
+    # including CCD prefixing, valid native copy IDs and default naming.
     components = [
         {"type": "protein", "id": "B", "sequence": "ACDE", "count": 2},
         {"type": "peptide", "id": "A", "sequence": "FGHI"},
-        {"type": "dna", "id": "D", "sequence": "ACGT", "count": "2"},
+        {"type": "dna", "id": "D", "sequence": "ACGT", "count": 2},
         {"type": "rna", "id": "R", "sequence": "ACGU"},
         {"type": "ligand", "id": "L", "ccd": "ATP"},
-        {"type": "ligand", "smiles": "CCO", "count": 0},
-        {"type": "ion", "id": "Z", "element": "zn", "count": "invalid"},
+        {"type": "ligand", "smiles": "CCO", "count": 1},
+        {"type": "ion", "id": "Z", "element": "zn", "count": 1},
     ]
     source = tmp_path / "native-name.json"
     source.write_text(json.dumps({"components": components}, indent=2))
@@ -496,9 +496,9 @@ def test_native_adapter_preserves_original_complex_construction(tmp_path):
     payload = prepare_protenix_msa.load_native_protenix_input({
         "complex_json_path": str(source), "protenix_seeds": "7,19"})
     assert payload == [{"name": "native-name", "modelSeeds": [7, 19], "sequences": [
-        {"proteinChain": {"sequence": "ACDE", "count": 2, "id": ["B"]}},
+        {"proteinChain": {"sequence": "ACDE", "count": 2}},
         {"proteinChain": {"sequence": "FGHI", "count": 1, "id": ["A"]}},
-        {"dnaSequence": {"sequence": "ACGT", "count": 2, "id": ["D"]}},
+        {"dnaSequence": {"sequence": "ACGT", "count": 2}},
         {"rnaSequence": {"sequence": "ACGU", "count": 1, "id": ["R"]}},
         {"ligand": {"ligand": "CCD_ATP", "count": 1, "id": ["L"]}},
         {"ligand": {"ligand": "CCO", "count": 1}},
@@ -548,6 +548,58 @@ def test_native_adapter_generated_roster_copy_preserves_science():
     assert result == original
     result[0]["sequences"][0]["proteinChain"]["id"].append("C")
     assert tasks == original
+
+
+def test_prepared_file_ligand_identity_uses_exact_portable_binding(tmp_path, monkeypatch):
+    import copy
+    import pytest
+    from biomodstack_msa_handoff import digest, hydrate_prepared_protenix_task
+    from scripts.lib.portable_inputs import SCHEMA
+    ligand = tmp_path / 'worker' / 'ligand.sdf'
+    ligand.parent.mkdir()
+    ligand.write_bytes(b'exact retained ligand bytes')
+    source = '/controller/results/protenix_ligands/2.sdf'
+    bindings = tmp_path / 'bindings.json'
+    bindings.write_text(json.dumps({'schema': SCHEMA, 'roots': [str(tmp_path)],
+        'bindings': [{'reference': {'source_path': source, 'sha256': digest(ligand.read_bytes()),
+                                  'size_bytes': ligand.stat().st_size}, 'path': str(ligand)}]}))
+    monkeypatch.setenv('BMS_PORTABLE_INPUT_BINDINGS', str(bindings))
+    payload = [{'name': 'complex', 'sequences': [
+        {'proteinChain': {'sequence': 'ACDE', 'id': ['A'], 'count': 1,
+                          'unpairedMsa': '>q\nACDE\n'}},
+        {'ligand': {'id': ['L'], 'count': 1, 'ligand': 'FILE_' + source}}]}]
+    root = tmp_path / 'prepared'
+    root.mkdir()
+    manifest = {'schema': 'bms.msa-inputs.v1', 'settings': {}, 'artifacts': [], 'model_input': payload}
+    path = root / 'msa-inputs.json'
+    path.write_text(json.dumps(manifest))
+    original = path.read_bytes()
+    worker = copy.deepcopy(payload)
+    worker[0]['sequences'][1]['ligand']['ligand'] = 'FILE_' + str(ligand)
+    assert hydrate_prepared_protenix_task(worker, root, digest(original)) == worker
+    # Protenix's installed `scripts` package shadows our namespace in-container.
+    import sys
+    import types
+    with monkeypatch.context() as collision:
+        collision.setitem(sys.modules, 'scripts', types.ModuleType('scripts'))
+        collision.delitem(sys.modules, 'scripts.lib', raising=False)
+        collision.delitem(sys.modules, 'scripts.lib.portable_inputs', raising=False)
+        collision.syspath_prepend(str(Path(__file__).resolve().parent))
+        assert hydrate_prepared_protenix_task(worker, root, digest(original)) == worker
+    assert path.read_bytes() == original
+    assert payload[0]['sequences'][1]['ligand']['ligand'] == 'FILE_' + source
+    changed = copy.deepcopy(worker)
+    changed[0]['sequences'][1]['ligand']['count'] = 2
+    with pytest.raises(ValueError, match='identity'):
+        hydrate_prepared_protenix_task(changed, root, digest(original))
+    other = ligand.with_name('different.sdf')
+    other.write_bytes(b'other chemistry')
+    changed[0]['sequences'][1]['ligand'].update(count=1, ligand='FILE_' + str(other))
+    with pytest.raises(ValueError, match='identity'):
+        hydrate_prepared_protenix_task(changed, root, digest(original))
+    ligand.write_bytes(b'corrupted')
+    with pytest.raises(ValueError, match='digest/size'):
+        hydrate_prepared_protenix_task(worker, root, digest(original))
 
 
 def test_native_adapter_reordered_entities_cannot_consume_prepared(tmp_path):

@@ -137,7 +137,10 @@ async def test_panel_replay_exact_bytes_no_publication_and_tamper(launch, tamper
     child = root / tamper
     child.write_bytes(b"changed")
     bad = await launch.client.post("/api/ont/ngs/ont_plasmid_qc/submit", json=first["request"])
-    assert bad.status_code == 422 and "bytes changed" in bad.text
+    assert bad.status_code == 422, bad.text
+    assert any(text in bad.text for text in (
+        "bytes changed", "does not match the selected reference", "digest-mismatched",
+    )), bad.text
     await no_claims(launch)
     assert root.is_dir()
 
@@ -447,7 +450,9 @@ async def test_retained_snapshot_digest_tamper_is_rejected_before_claims(launch,
     content = snapshot.read_bytes()
     snapshot.write_bytes(b"X" + content[1:])
     response = await launch.client.post("/api/ont/ngs/ont_fastq_qc/submit", json=first["request"])
-    assert response.status_code == 422 and ("digest mismatch" in response.text or "bytes changed" in response.text)
+    assert response.status_code == 422 and any(text in response.text for text in (
+        "digest mismatch", "bytes changed", "bytes do not match authority",
+    ))
     await no_claims(launch)
     assert snapshot.is_file()
 

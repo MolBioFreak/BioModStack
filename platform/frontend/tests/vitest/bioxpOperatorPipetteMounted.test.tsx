@@ -43,7 +43,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
     bioXpErrorText: (error: unknown) => String(error),
 }));
 
-import { BioXpPipetteControlPanel } from '../../src/components/BioXpPipetteControlPanel';
+import { BioXpPipetteAdvancedTools, BioXpPipetteControlPanel, BioXpSoftwareTipType } from '../../src/components/BioXpPipetteControlPanel';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -82,22 +82,23 @@ afterEach(async () => {
     document.body.replaceChildren();
 });
 
-describe('mounted BioXP four-channel pipette panel', () => {
+describe('mounted BioXP pipette status and tools', () => {
     it.each([undefined, null, false, true])('keeps an absent stop observation unknown without erasing false (%s)', async allowToStop => {
         const pipettes = { channels: [], allow_to_stop: allowToStop } as never;
         await act(async () => root.render(<BioXpPipetteControlPanel connected generation={77} pipettes={pipettes} />));
         const term = [...container.querySelectorAll('dt')].find(node => node.textContent === 'Allow to stop')!;
         expect(term.nextElementSibling?.textContent).toBe(allowToStop == null ? 'unavailable' : String(allowToStop));
         expect(state.readbackCalls).toEqual([]);
-        expect(state.planCalls).toEqual([]);
     });
-    it('renders returned fields instead of only semantic success and reuses the deliberate newOperation owner', async () => {
+    it('shows returned hardware fields and reuses the deliberate newOperation owner', async () => {
         state.data = {truth_source:'live_hardware_queries', receipt_id:'read-1', semantic_ok:false,
-            channels: [{channel:0, semantic_ok:true, firmware:{firmware:'fixture-fw'}, status:{ok:true}, tip:{tip_loaded:false, reply_received:true}, pressure:{pressure:0, hardware_truth_level:'hardware_query'}, data:{samples:[0,1]}}]};
+            channels: [{channel:0, semantic_ok:true, firmware:{firmware:'fixture-fw'}, status:{ok:true}, tip:{ok:true, tip_loaded:false, reply_received:true}, pressure:{ok:true, pressure:0, hardware_truth_level:'hardware_query'}, data:{samples:[0,1]}}]};
         state.submission = {idempotencyKey:'identity-1', expectedConnectionGeneration:77};
         await act(async () => root.render(<BioXpPipetteControlPanel connected generation={77}/>));
-        const card = container.querySelector('[data-pipette-channel="0"]')!;
-        for (const value of ['fixture-fw', 'tip loaded', 'false', 'pressure', '0', 'samples']) expect(card.textContent).toContain(value);
+        const row = container.querySelector('[data-pipette-channel="0"]')!;
+        expect(row.textContent).toContain('no tip');
+        expect(row.textContent).toContain('0');
+        expect(container.querySelector('[data-returned-hardware]')?.textContent).toContain('fixture-fw');
         expect(container.querySelectorAll('[data-pipette-channel]')).toHaveLength(4);
         const read = [...container.querySelectorAll('button')].find(b => b.textContent === 'Read hardware again')!;
         expect(read.closest('details')).toBeNull();
@@ -105,225 +106,66 @@ describe('mounted BioXP four-channel pipette panel', () => {
         expect(state.readbackCalls).toEqual([{newOperation:true, include_data:false}]);
         expect(container.textContent).toContain('Request identity-1');
     });
-    it('renders four fixed truthful channel cards and robot-owned disabled physical controls', async () => {
-        const pipettes = {
-            ok: false,
-            transport: 'novo_usb_can',
-            channels: [
-                channel(0, {
-                    hardware_tip_status: {
-                        ok: true,
-                        hardware_truth_level: 'hardware_query',
-                        tip_loaded: false,
-                    },
-                    hardware_pressure: {
-                        ok: true,
-                        hardware_truth_level: 'hardware_query',
-                        pressure: 12.5,
-                    },
-                }),
-                channel(2, {
-                    available: false,
-                    pressure: 999,
-                    hardware_pressure: {
-                        ok: false,
-                        hardware_truth_level: 'no_readback',
-                        pressure: 999,
-                    },
-                }),
-            ],
-            channel_count: 4,
-            live_query_performed: false,
-            liquid_mutation_enabled: false,
-            allow_to_stop: true,
-            last_error: {
-                channel: 2,
-                error_code: 17,
-                source: 'ClassPipetteCollection.handlePipetteMessage',
-            },
-            last_group_transaction: {
-                ok: false,
-                outcome: 'condition_or_status_failed',
-            },
-            latest_receipt: null,
-            application: null,
-            physical_effect_verified: false,
-        } as never;
-
-        await act(async () => {
-            root.render(
-                <BioXpPipetteControlPanel
-                    generation={77}
-                    connected
-                    pipettes={pipettes}
-                    freshness={{ state: 'stale', age_s: 41.25, fresh_for_s: 30 }}
-                />,
-            );
-            await Promise.resolve();
-        });
-
-        const cards = [...container.querySelectorAll('[data-pipette-channel]')];
-        expect(cards).toHaveLength(4);
-        expect(cards.map((card) => card.getAttribute('data-pipette-channel'))).toEqual(['0', '1', '2', '3']);
-        expect(container.textContent).toContain('Include data sweep');
-        expect([...container.querySelectorAll('h3, h4, label, button, [title]')]
-            .map(node => `${node.textContent} ${node.getAttribute('title') ?? ''}`).join(' ')).not.toMatch(/\bOEM\b/);
-        expect(container.textContent).toContain('Channel 1');
-        expect(container.textContent).toContain('Channel 4');
-        expect(cards[1].textContent).toContain('Unavailable — no channel report');
-        expect(cards[3].textContent).toContain('Unavailable — no channel report');
-        expect(cards[0].textContent).toContain('Hardware tip readback: not loaded');
-        expect(cards[0].textContent).toContain('Hardware pressure: 12.5');
-        expect(cards[2].textContent).toContain('No valid hardware readback');
-        expect(cards[0].textContent).toContain('Software record: initialized; tip loaded');
-        expect(container.textContent).not.toContain('"position"');
+    it('one row per channel: hardware values only from valid queries, errors surfaced, read on request', async () => {
+        const pipettes = { channels: [
+            channel(0, { hardware_tip_status: { ok: true, hardware_truth_level: 'hardware_query', tip_loaded: false },
+                hardware_pressure: { ok: true, hardware_truth_level: 'hardware_query', pressure: 12.5 } }),
+            channel(2, { available: false, hardware_pressure: { ok: false, hardware_truth_level: 'no_readback', pressure: 999 } }),
+        ], allow_to_stop: true, last_error: { channel: 2, error_code: 17 }, last_group_transaction: { ok: false, outcome: 'condition_or_status_failed' },
+            latest_receipt: null, tip_type: 10 } as never;
+        await act(async () => root.render(<BioXpPipetteControlPanel generation={77} connected pipettes={pipettes} freshness={{ state: 'stale', age_s: 41.25, fresh_for_s: 30 }} />));
+        const rows = [...container.querySelectorAll('[data-pipette-channel]')];
+        expect(rows.map(r => r.getAttribute('data-pipette-channel'))).toEqual(['0', '1', '2', '3']);
+        expect(rows[0].textContent).toContain('12.5');
+        expect(rows[0].textContent).toContain('tip loaded');
+        expect(rows[1].textContent).toContain('no report');
+        expect(rows[2].textContent).toContain('unavailable');
         expect(container.textContent).not.toContain('999');
-
-        expect(container.textContent).toContain('Cached report');
-        expect(container.textContent).toContain('Stale snapshot · age 41.25 s');
-        expect(container.textContent).toContain('Group error: channel 3 · code 17');
-        expect(container.textContent).toContain('Last transaction: condition_or_status_failed');
-        expect(container.textContent).toContain('Latest receipt: unavailable');
-        expect(container.textContent).not.toContain('physical execution blocked');
-        expect(container.textContent).not.toContain('Robot-owned blocker');
-        expect(container.textContent).not.toContain('physical_pipette_execution_not_authorized');
-        const planner = [...container.querySelectorAll('h4')].find(node => node.textContent === 'No-motion application planner')?.parentElement;
-        expect(planner?.textContent).toContain('Planner dependencies: gantry:unbound');
-        expect(planner?.querySelector('[data-physical-pipette-control]')).toBeNull();
-
-        const physicalControls = [...container.querySelectorAll<HTMLButtonElement>('[data-physical-pipette-control]')];
-        expect(physicalControls).toHaveLength(5);
-        expect(physicalControls.every((button) => button.disabled)).toBe(true);
-        expect(physicalControls.map((button) => button.textContent)).toEqual([
-            'Assign source tip type / location (host only)',
-            'Move to waste physically',
-            'Detect fluid physically',
-            'Lift pipette head (Z)',
-            'Lower pipette head (Z)',
-        ]);
-        expect(state.planCalls).toEqual([]);
-        expect(state.readbackCalls).toEqual([]);
-
-        const readbackButton = [...container.querySelectorAll<HTMLButtonElement>('button')]
-            .find((button) => button.textContent === 'Read live hardware');
-        expect(readbackButton).toBeDefined();
-        await act(async () => {
-            readbackButton?.click();
-            await Promise.resolve();
-        });
+        expect(container.textContent).toContain('Tip type in software: 10');
+        expect(container.textContent).toContain('41.25 s ago');
+        expect(container.querySelector('[role="alert"]')?.textContent).toContain('channel 3 · code 17');
+        expect(container.textContent).toContain('condition_or_status_failed');
+        const read = [...container.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === 'Read live hardware')!;
+        await act(async () => read.click());
         expect(state.readbackCalls).toEqual([{ include_data: false }]);
     });
-
-    it('enables physical controls from catalog admission and dispatches the mapped OEM action', async () => {
+    it('robot primitives follow catalog admission and dispatch the mapped action; planner is separate', async () => {
         const invokeCalls: Array<{ actionId: string; inputs: Record<string, unknown> }> = [];
-        const action = (actionId: string, enabled: boolean, disabledReason: string | null = null) => ({
-            action_id: actionId,
-            label: actionId,
-            subsystem: 'motion',
-            category: 'oem',
-            kind: 'primitive',
-            safety_class: 'motion',
-            description: 'test action',
-            source_anchor: null,
-            informational_method: 'POST',
-            informational_path: '/test',
-            provider_available: true,
-            provider_unavailable_reason: null,
-            available: enabled,
-            unavailable_reason: null,
-            enabled,
-            disabled_reason: disabledReason,
-            dependencies: [],
-            requires_confirmation: false,
-            timeout_seconds: 30,
-            required_provider_capability: null,
-            inputs: [],
-            stages: [],
-        } as never);
-        const actions = [
-            action('route.liquid_tip_liquid_tip_post.08698e28', true),
-            action('oem.z.scriptmove_to', true),
+        const action = (actionId: string, enabled: boolean, disabledReason: string | null = null) => ({ action_id: actionId, enabled, disabled_reason: disabledReason, unavailable_reason: null } as never);
+        const actions = [action('route.liquid_tip_liquid_tip_post.08698e28', true), action('oem.z.scriptmove_to', true),
             action('route.liquid_fluid_detection_liquid_fluid_detection_post.a12feee3', false, 'Motion arm is not confirmed.'),
-            action('oem.z.lift_pipette', true),
-            action('oem.z.lower_pipette', true),
-        ];
-
-        await act(async () => {
-            root.render(
-                <BioXpPipetteControlPanel
-                    generation={77}
-                    connected
-                    pipettes={null as never}
-                    freshness={{ state: 'fresh', age_s: 3.2, fresh_for_s: 30 }}
-                    actions={actions}
-                    invokePending={false}
-                    invokeAction={(actionId, inputs) => invokeCalls.push({ actionId, inputs })}
-                />,
-            );
-            await Promise.resolve();
-        });
-
+            action('oem.z.lift_pipette', true), action('oem.z.lower_pipette', true)];
+        await act(async () => root.render(<BioXpPipetteAdvancedTools generation={77} connected actions={actions} invokeAction={(actionId, inputs) => invokeCalls.push({ actionId, inputs })} />));
         const buttons = [...container.querySelectorAll<HTMLButtonElement>('[data-physical-pipette-control]')];
-        expect(buttons).toHaveLength(5);
-        expect(buttons.map((button) => ({ label: button.textContent, disabled: button.disabled }))).toEqual([
-            { label: 'Assign source tip type / location (host only)', disabled: false },
-            { label: 'Move to waste physically', disabled: false },
-            { label: 'Detect fluid physically', disabled: true },
-            { label: 'Lift pipette head (Z)', disabled: false },
-            { label: 'Lower pipette head (Z)', disabled: false },
-        ]);
-        const blocked = buttons.find((button) => button.textContent === 'Detect fluid physically');
-        expect(blocked?.title).toBe('Motion arm is not confirmed.');
-        expect(container.textContent).not.toContain('physical_pipette_execution_not_authorized');
-        expect(container.textContent).toContain('No-motion application planner');
+        expect(buttons.map(b => [b.textContent, b.disabled])).toEqual([
+            ['Assign source tip type / location (host only)', false], ['Move to waste physically', false],
+            ['Detect fluid physically', true], ['Lift pipette head (Z)', false], ['Lower pipette head (Z)', false]]);
+        expect(buttons[2].title).toBe('Motion arm is not confirmed.');
+        await act(async () => buttons[2].click());
         expect(invokeCalls).toEqual([]);
-        await act(async () => blocked?.click());
-        expect(invokeCalls).toEqual([]);
-
-        await act(async () => {
-            buttons.find((button) => button.textContent === 'Lift pipette head (Z)')?.click();
-            await Promise.resolve();
-        });
-        expect(invokeCalls).toEqual([
-            { actionId: 'oem.z.lift_pipette', inputs: { location_id: 'LOC_TC' } },
-        ]);
+        await act(async () => buttons[3].click());
+        expect(invokeCalls).toEqual([{ actionId: 'oem.z.lift_pipette', inputs: { location_id: 'LOC_TC' } }]);
+        expect(container.textContent).toContain('Planner dependencies: gantry:unbound');
+        expect(state.planCalls).toEqual([]);
     });
-
-    it('selects only the advertised software tip type action and displays cached software readback', async () => {
+    it('sets tip type only through the advertised action, including 10 µL', async () => {
         const calls: Array<{ actionId: string; inputs: Record<string, unknown> }> = [];
-        const tipAction = {
-            action_id: 'route.liquid_pipette_tip_type_liquid_pipette_tip_type_post.example',
-            informational_method: 'POST', informational_path: '/liquid/pipette/tip-type',
-            enabled: true, disabled_reason: null, unavailable_reason: null,
-        } as never;
-        const render = async (actions: typeof tipAction[], pipettes: unknown, invokePending = false) => {
-            await act(async () => {
-                root.render(<BioXpPipetteControlPanel generation={77} connected pipettes={pipettes as never}
-                    actions={actions} invokePending={invokePending}
-                    invokeAction={(actionId, inputs) => calls.push({ actionId, inputs })} />);
-                await Promise.resolve();
-            });
-        };
+        const tipAction = { action_id: 'tip-type', informational_method: 'POST', informational_path: '/liquid/pipette/tip-type', enabled: true, disabled_reason: null, unavailable_reason: null } as never;
+        const render = async (actions: unknown[], pipettes: unknown, invokePending = false) => act(async () => root.render(
+            <BioXpSoftwareTipType connected pipettes={pipettes as never} actions={actions as never} invokePending={invokePending} invokeAction={(actionId, inputs) => calls.push({ actionId, inputs })} />));
         const button = () => container.querySelector<HTMLButtonElement>('[data-software-tip-type-control] button')!;
         await render([], { tip_type: 201, channels: [] });
         expect(button().disabled).toBe(true);
-        expect(container.querySelector('[data-software-tip-type-control]')?.textContent).toContain('Selected in robot software: 201');
+        expect(container.textContent).toContain('Currently 201');
         await render([tipAction], { tip_type: 201, channels: [] });
-        expect(button().disabled).toBe(false);
         const select = container.querySelector<HTMLSelectElement>('select[aria-label="Software tip type"]')!;
-        expect([...select.options].map(option => Number(option.value))).toEqual([50, 200, 201]);
-        await act(async () => {
-            select.value = '50';
-            select.dispatchEvent(new Event('change', { bubbles: true }));
-        });
+        expect([...select.options].map(o => Number(o.value))).toEqual([10, 50, 200, 201]);
+        await act(async () => { select.value = '10'; select.dispatchEvent(new Event('change', { bubbles: true })); });
         await act(async () => button().click());
-        expect(calls).toEqual([{ actionId: tipAction.action_id, inputs: { tip_type: 50 } }]);
-        expect(container.querySelector('[data-software-tip-type-control]')?.textContent).toContain('Selected in robot software: 201');
-        await render([tipAction], { tip_type: 50, channels: [] }, true);
+        expect(calls).toEqual([{ actionId: 'tip-type', inputs: { tip_type: 10 } }]);
+        await render([tipAction], { tip_type: 10, channels: [] }, true);
         expect(button().disabled).toBe(true);
-        expect(container.querySelector('[data-software-tip-type-control]')?.textContent).toContain('Selected in robot software: 50');
-        await render([{ ...tipAction, enabled: false, disabled_reason: 'Robot unavailable' }], { tip_type: 50, channels: [] });
-        expect(button().disabled).toBe(true);
+        await render([{ ...(tipAction as object), enabled: false, disabled_reason: 'Robot unavailable' }], { tip_type: 10, channels: [] });
         expect(button().title).toBe('Robot unavailable');
         expect(calls).toHaveLength(1);
     });

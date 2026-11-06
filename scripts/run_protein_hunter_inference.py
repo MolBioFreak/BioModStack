@@ -72,7 +72,7 @@ def _structure_sequence(path: Path, preferred_chain: str | None = None) -> str:
     structure = gemmi.read_structure(str(path))
     model = structure[0]
     residues: list[str] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, int, str, str]] = set()
     chain_names: Iterable[str]
     if preferred_chain:
         chain_names = [preferred_chain]
@@ -85,7 +85,7 @@ def _structure_sequence(path: Path, preferred_chain: str | None = None) -> str:
         for residue in chain:
             if residue.het_flag not in ("A", ""):
                 continue
-            key = (chain_name, residue.seqid.num.__str__(), residue.name)
+            key = (chain_name, residue.seqid.num, residue.seqid.icode, residue.name)
             if key in seen:
                 continue
             seen.add(key)

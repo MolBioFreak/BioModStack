@@ -323,30 +323,31 @@ def _source_receipt_field(title: str = "Source structure receipt") -> dict[str, 
 
 def _model_sequence_design_schema(capability_id: str, model: str) -> dict[str, Any]:
     source = {"source_structure_receipt_id": _source_receipt_field()}
-    if model == "fampnn":
-        source.update({
-            "mode": _field(title="Design mode", kind="string", description="FA-MPNN design role.", default="design", enum=["design", "fixed_backbone", "binder_design"], control="select", group="Design", order=20),
-            "design_chain": _field(title="Design chains", kind="string", description="Comma-separated source chain identifiers to redesign.", default="A", pattern="^[A-Za-z0-9]+(?:,[A-Za-z0-9]+)*$", control="chain_selector", group="Design", order=30),
-            "target_chain": _field(title="Fixed target chains", kind="string", description="Optional fixed target chain identifiers.", default="", pattern="^(?:|[A-Za-z0-9]+(?:,[A-Za-z0-9]+)*)$", control="chain_selector", group="Design", order=40, applicability="binder_design"),
-            "fixed_positions": _field(title="Fixed residues", kind="string", description="Typed chain/residue ranges retained during redesign.", default="", control="residue_range_selector", group="Constraints", order=50, applicability="fixed_backbone"),
-            "fampnn_temperature": _field(title="Sampling temperature", kind="number", description="FA-MPNN sequence sampling temperature.", default=0.1, minimum=0.01, maximum=2.0, control="bounded_number", group="Sampling", order=60),
-            "fampnn_exclude_cys": _field(title="Exclude cysteine", kind="boolean", description="Exclude cysteine from sampled positions.", default=True, control="checkbox", group="Constraints", order=70),
-            "fampnn_fix_target_sidechains": _field(title="Fix target sidechains", kind="boolean", description="Keep target sidechain coordinates fixed.", default=False, control="checkbox", group="Constraints", order=80),
-            "fampnn_psce_threshold": _field(title="PSCE threshold", kind="number", description="Sidechain-confidence filtering threshold.", default=0.3, minimum=0.0, maximum=1.0, control="bounded_number", group="Filtering", order=90),
-            "fampnn_seq_only": _field(title="Sequence-only mode", kind="boolean", description="Skip sidechain diffusion.", default=False, control="checkbox", group="Sampling", order=100),
-            "fampnn_num_steps": _field(title="Denoising steps", kind="integer", description="FA-MPNN denoising timesteps.", default=100, minimum=10, maximum=500, control="integer", group="Sampling", order=110),
-            "fampnn_batch_size": _field(title="Batch size", kind="integer", description="FA-MPNN inference batch size.", default=16, minimum=1, maximum=64, control="integer", group="Execution", order=120),
-            "fampnn_repack_last": _field(title="Final sidechain repack", kind="boolean", description="Repack sidechains after denoising.", default=True, control="checkbox", group="Sampling", order=130),
-        })
-    elif model == "proteinmpnn":
-        source.update({
-            "mpnn_temperature": _field(title="Sampling temperature", kind="number", description="ProteinMPNN sampling temperature.", default=0.1, minimum=0.01, maximum=2.0, control="bounded_number", group="Sampling", order=20),
-            "mpnn_omitAAs": _field(title="Excluded amino acids", kind="string", description="One-letter amino acids excluded from sampling.", default="CX", pattern="^[ACDEFGHIKLMNPQRSTVWYX]*$", control="amino_acid_selector", group="Constraints", order=30),
-            "mpnn_checkpoint_type": _field(title="Checkpoint family", kind="string", description="Installed ProteinMPNN checkpoint family.", default="soluble", enum=["vanilla", "soluble"], control="select", group="Model authority", order=40),
-            "mpnn_checkpoint_model": _field(title="Checkpoint noise model", kind="string", description="Installed ProteinMPNN backbone-noise checkpoint.", default="v_48_020", enum=["v_48_002", "v_48_010", "v_48_020", "v_48_030"], control="select", group="Model authority", order=50),
-            "mpnn_backbone_noise": _field(title="Backbone noise", kind="number", description="Gaussian backbone noise used during design.", default=0, minimum=0, maximum=1, control="bounded_number", group="Sampling", order=60, units="angstrom"),
-            "mpnn_relax_max_cycles": _field(title="FastRelax cycles", kind="integer", description="Maximum post-design FastRelax cycles; zero disables refinement.", default=0, minimum=0, maximum=10, control="integer", group="Refinement", order=70),
-        })
+    if model in {"fampnn", "proteinmpnn"}:
+        # Discovery-only Project descriptors share the native model catalog.
+        # Direct Project dispatch remains unavailable; this does not enable it.
+        from model_registry import get_registry
+        definition = get_registry().get_model(model)
+        source["mode"] = _field(title="Design mode", kind="string",
+            description="Native sequence-design mode.", default=definition.modes[0].id,
+            enum=[mode.id for mode in definition.modes], control="select", order=20)
+        for index, parameter in enumerate(definition.params, start=3):
+            if parameter.type in {"file", "directory"}:
+                continue  # Source bytes are selected by the existing receipt.
+            kind = {"text": "string", "textarea": "string", "float": "number",
+                    "string_list": "array"}.get(parameter.type, parameter.type)
+            field = _field(title=parameter.label or parameter.name, kind=kind,
+                description=parameter.description, default=copy.deepcopy(parameter.default),
+                enum=parameter.enum, minimum=parameter.minimum, maximum=parameter.maximum,
+                pattern=parameter.pattern, units=parameter.units,
+                control=parameter.ui_control or ("select" if parameter.enum else
+                    {"boolean": "checkbox", "integer": "integer", "number": "bounded_number"}.get(kind, "typed_control")),
+                group=parameter.group or "Scientific settings", order=index * 10)
+            if kind == "array":
+                field["items"] = {"type": "string"} if parameter.type == "string_list" else {}
+            if parameter.default is None and not parameter.required:
+                field["type"] = [kind, "null"]
+            source[parameter.name] = field
     else:
         source.update({
             "mode": _field(title="LigandMPNN mode", kind="string", description="Foundry-owned LigandMPNN scientific context.", default="ligand_aware", enum=["ligand_aware", "ntp_aware", "metal_aware", "dna_aware"], control="select", group="Design", order=20),
@@ -383,7 +384,7 @@ def _specialized_schemas() -> dict[str, dict[str, Any]]:
         "num_designs": _field(title="Candidate count", kind="integer", description="Number of RFD3 candidates.", default=8, minimum=1, maximum=512, control="integer", group="Execution", order=130),
         "seed": _field(title="Seed", kind="integer", description="Effective RFD3 random seed.", default=0, minimum=0, maximum=2147483647, control="integer", group="Execution", order=140),
         "dump_trajectories": _field(title="Retain trajectories", kind="boolean", description="Retain native noisy and denoised trajectories.", default=False, control="checkbox", group="Artifacts", order=150),
-        "write_full_json": _field(title="Retain full metadata", kind="boolean", description="Retain complete native RFD3 prediction metadata.", default=True, control="checkbox", group="Artifacts", order=160),
+        "write_full_json": _field(title="Full metadata (profile-fixed)", kind="boolean", description="Effective value is true: complete native metadata is required by typed result ingestion. Historical requested values remain separately preserved; this profile field is not an admission restriction.", default=True, control="read_only", group="Artifacts", order=160),
         "profile_id": _field(title="Redesign profile", kind="string", description="Server-defined protected-context and acceptance profile.", default="generic_local_redesign_v1", enum=["generic_local_redesign_v1", "drt4_datp_gate_v1"], control="select", group="Acceptance", order=170),
     }
     schemas["protein.de_novo.local_redesign"] = _schema("protein.de_novo.local_redesign", "Governed RFD3 local-redesign settings", local_fields, list(local_fields), authority="typed_core_job_outside_project_manager", source_contracts=["bms.rfd3.local-redesign.request.v1"])
@@ -682,7 +683,7 @@ def _with_project_setup_state(
 # The executable Plan is built by normalized_job_plan_contract at preparation;
 # this is only the existing setup's editor-state transport schema.
 _NATIVE_BINDER_SETUP_PAIRS = {
-    'boltzgen': ('protein_binder', 'nanobody_binder', 'peptide_binder'),
+    'boltzgen': ('protein_binder', 'nanobody_binder', 'peptide_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'),
     'ppiflow': ('protein_binder', 'antibody_binder', 'nanobody_binder'),
     'bindcraft2': ('campaign',),
     'antibody_denovo': ('antibody_denovo_pipeline',),
@@ -712,6 +713,8 @@ for _model_id, _modes in _NATIVE_BINDER_SETUP_PAIRS.items():
             result_adapter_ids=[f'bms.native-binder.{_model_id}.adapter.v1'] if _model_id != 'antibody_denovo' else ['bms.core-job.antibody_denovo.adapter.v1'],
             result_contracts=['native_binder_result'], viewer_id='job_results', accepted_source_roles=[],
             receipt_contracts=[], project_setup_destination=_destination, project_native_owner_id=_owner))
+        if _model_id == 'boltzgen' and _mode == 'backbone_docking':
+            _CAPABILITIES[-1]['label'] = 'BoltzGen · legacy backbone / ligand request (compatibility only)'
 
 
 # Shape authoring retains its submitted request, not browser-created staged paths.
@@ -739,6 +742,46 @@ _CAPABILITIES.append(_capability(
 ))
 
 
+# Native de novo editors persist complete requests; Project does not reconstruct
+# their science. Legacy generator selection remains in params/editor state.
+_NATIVE_GENERATION_SETUPS = {
+    'protein.native.laproteina.evaluate': ('laproteina', 'evaluate', None),
+    'protein.de_novo.rfd3': ('protein_modification_experimental', 'de_novo_design', 'rfd3'),
+    'protein.de_novo.laproteina': ('protein_modification_experimental', 'de_novo_design', 'laproteina'),
+    'protein.de_novo.disco': ('protein_modification_experimental', 'de_novo_design', 'disco'),
+    'protein.native.protein_modification_experimental.region_redesign': ('protein_modification_experimental', 'region_redesign', None),
+    **{f'protein.native.{model}.{mode}': (model, mode, None)
+       for model in ('rfd4_proteina', 'complexa') for mode in ('generate', 'evaluate')},
+}
+for _id, (_model_id, _mode, _generator) in _NATIVE_GENERATION_SETUPS.items():
+    _legacy_editor = _model_id in {'protein_modification_experimental', 'protein_local_redesign'}
+    _owner = 'protein_modification_experimental' if _legacy_editor else f'{_model_id}:{_mode}'
+    _destination = '/submit?template=protein_modification_experimental' if _legacy_editor else f'/submit?model={_model_id}&mode={_mode}'
+    _editor = {'model_id': _model_id, 'mode': _mode, 'modification_mode': 'rfd3_local_redesign' if _mode == 'local_redesign' else _mode}
+    if _generator is not None:
+        _editor['generator'] = _generator
+    _native_schema = _schema(_id, f'{_generator or _model_id} native editor draft', {
+        'native_job_request': {'type': 'object', 'description': 'Complete native JobCreate, normalized by the model owner during preparation.'},
+        'editor_state': {'type': 'object', 'default': _editor, 'description': 'Reopenable native editor state.'},
+    }, ['native_job_request'], authority='project_manager_typed_launcher_handoff')
+    _native_schema['x-bms-native-editor-draft'] = True
+    _PARAMETER_SCHEMAS[_id] = _native_schema
+    _PARAMETER_SCHEMA_BY_ID[_native_schema['$id']] = _native_schema
+    _CAPABILITIES = [record for record in _CAPABILITIES if record['capability_id'] != _id]
+    _CAPABILITIES.append(_capability(_id, label=f'{_generator or _model_id} · {_mode.replace("_", " ")}',
+        family='de_novo_design', category='generative_design', role='general_de_novo_generation',
+        allowed_modes=['design', 'redesign', 'analysis'], plannable=True, exposure_state='accepted',
+        availability_state='operational', availability_reason=None, workflow_family='typed_core_job',
+        workflow_adapter_id=f'bms.core-job.{_model_id}.adapter.v1', launch_mode='typed_launcher_handoff',
+        destination=_destination, model_modes=[{'model_id': _model_id, 'mode': _mode}],
+        result_adapter_ids=[f'bms.core-job.{_model_id}.adapter.v1' if _model_id == 'protein_local_redesign'
+                            else f'bms.native-binder.{_model_id}.adapter.v1'],
+        result_contracts=['rfd3_local_redesign_v1' if _model_id == 'protein_local_redesign'
+                          else 'native_binder_result'], viewer_id='job_results', accepted_source_roles=[],
+        receipt_contracts=[], project_setup_destination=_destination,
+        project_native_owner_id=_owner))
+
+
 _CAPABILITY_BY_ID = {record["capability_id"]: record for record in _CAPABILITIES}
 if len(_CAPABILITY_BY_ID) != len(_CAPABILITIES):
     raise RuntimeError("duplicate Protein Project capability ID")
@@ -747,10 +790,14 @@ if set(_CAPABILITY_BY_ID) != set(_PARAMETER_SCHEMAS):
 
 
 def protein_capability_inventory(*, project_ready_only: bool = False) -> dict[str, Any]:
-    ready_capability_ids = _project_ready_capability_ids(_CAPABILITIES)
+    # Historical editor lookup/normalization remains intact. Do not advertise a
+    # zero-design request as a new native BoltzGen operation or follow-up.
+    public_records = [record for record in _CAPABILITIES
+                      if record['capability_id'] != 'protein.native.boltzgen.backbone_docking']
+    ready_capability_ids = _project_ready_capability_ids(public_records)
     capabilities = [
         _with_project_setup_state(record, ready_capability_ids=ready_capability_ids)
-        for record in _CAPABILITIES
+        for record in public_records
     ]
     if project_ready_only:
         picker_capabilities = [
@@ -811,7 +858,7 @@ def protein_setup_parameter_schema(capability_id: str) -> dict[str, Any]:
     return schema
 
 
-def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | None = None, setup_capability_id: str | None = None) -> dict[str, Any]:
+def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | None = None, setup_capability_id: str | None = None, md_input_resolver=None) -> dict[str, Any]:
     """Pin the native normalizer's exact request, not a second settings schema.
 
     This server-only child seam does not advertise a Project authoring surface.
@@ -832,17 +879,21 @@ def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | N
         raise ProteinProjectCapabilityError("native child entrypoint does not match its exact registered route")
     if request.launch_context_id is not None:
         raise ProteinProjectCapabilityError("native child must not reuse a destination launch context")
-    request = normalize_job_request(request, native_entrypoint=native_entrypoint)
+    request = normalize_job_request(request, native_entrypoint=native_entrypoint, md_input_resolver=md_input_resolver)
     supplied_adapter = request.params.pop("workflow_adapter", None)
     if supplied_adapter not in (None, adapter_id):
         raise ProteinProjectCapabilityError("native child workflow adapter disagrees")
     capability_id = f"protein.native.{request.model_id}.{request.mode}"
-    if setup_capability_id is not None:
-        supported_pair = (
-            pair == ('protein_modification_experimental', 'shape_blueprint')
-            if setup_capability_id == SHAPE_SETUP_CAPABILITY_ID
-            else request.mode in _NATIVE_BINDER_SETUP_PAIRS.get(request.model_id, ())
-        )
+    if setup_capability_id is not None and setup_capability_id in {'family_msa_protein', 'family_msa_nucleic'}:
+        if pair != (setup_capability_id, 'family_msa'):
+            raise ProteinProjectCapabilityError("native setup request must use its supported editor")
+        capability_id = setup_capability_id
+    elif setup_capability_id is not None:
+        supported_pair = any(pair == (allowed['model_id'], allowed['mode'])
+                             for allowed in protein_capability_record(setup_capability_id)['allowed_model_modes'])
+        generation_setup = _NATIVE_GENERATION_SETUPS.get(setup_capability_id)
+        if generation_setup and generation_setup[2] is not None:
+            supported_pair = supported_pair and request.params.get('generator', 'rfd3') == generation_setup[2]
         if setup_capability_id.startswith('protein.structure_prediction.') or setup_capability_id == 'protein.simulation.gromacs_md':
             supported_pair = any(
                 pair == (allowed['model_id'], allowed['mode'])
@@ -868,6 +919,19 @@ def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | N
         "native_entrypoint": native_entrypoint,
         "normalized_job_request": request.model_dump(mode="json"),
     }
+    declared = _CAPABILITY_BY_ID.get(capability_id)
+    if declared is None and setup_capability_id is not None:
+        from services.family_msa_project_capabilities import family_msa_capability
+        family = family_msa_capability(setup_capability_id)
+        declared = family[0] if family is not None else None
+    if declared is not None:
+        capability["result_adapter_ids"] = copy.deepcopy(declared["result_adapter_ids"])
+    elif request.model_id == "molecular_dynamics":
+        capability["result_adapter_ids"] = ["bms.md.result-reference.adapter.v1"]
+        capability["result_contracts"] = ["md_result"]
+    elif request.model_id in {"proteinmpnn", "fampnn", "caliby_experimental", "ligandmpnn", "protonpottsmpnn"}:
+        capability["result_adapter_ids"] = [f"bms.native-binder.{request.model_id}.adapter.v1"]
+        capability["result_contracts"] = ["native_binder_job_result"]
     return {
         "schema": "bms.workflow-plan-capability-contract.v1",
         "capability": capability, "allowed_model_modes": [pair_document],

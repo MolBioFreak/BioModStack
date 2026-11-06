@@ -392,7 +392,7 @@ def test_real_native_csv_parser_contract(tmp_path, parser_name):
 
 def test_controller_prepares_before_all_launch_lanes():
     source = (ROOT / 'platform/api/services/nextflow.py').read_text()
-    start = source.index('prepared_params = launch_params if checkpoint_resume else await _prepare_launch_msa_on_controller(')
+    start = source.index('prepared_params = launch_params if checkpoint_resume or model_id in {\'family_msa_protein\', \'family_msa_nucleic\'} else await _prepare_launch_msa_on_controller(')
     compiled = source.index('prepared_invocation = compile_job_nextflow_invocation(')
     assert compiled < source.index('prepared_invocation.materialize_inputs(', compiled) < start
     assert start < source.index('if job.execution_target_id:', start)
@@ -500,7 +500,7 @@ def test_compiled_protenix_batch_real_producer_and_relocated_cli(tmp_path, monke
             assert msa.is_relative_to(relocated)
             assert f'>operation-{index}' in msa.read_text()
         assert task['sequences'][0]['proteinChain']['count'] == 2
-        assert task['sequences'][0]['proteinChain']['id'] == ['B']
+        assert 'id' not in task['sequences'][0]['proteinChain']  # Scalar BMS label is not a two-copy ID roster.
         assert task['sequences'][2:] == native[index - 1]['sequences'][2:]
 
 @pytest.mark.asyncio

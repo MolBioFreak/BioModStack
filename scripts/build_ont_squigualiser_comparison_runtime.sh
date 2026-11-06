@@ -10,6 +10,8 @@ case "$RUNTIME" in docker|podman) ;; *) exit 64 ;; esac
 command -v "$RUNTIME" >/dev/null 2>&1 || exit 69
 "$RUNTIME" build --file "$REPO_ROOT/docker/ont-squigualiser-comparison.Dockerfile" --tag "$TAG" "$REPO_ROOT"
 IMAGE_ID="$($RUNTIME image inspect --format '{{.Id}}' "$TAG")"
+# Podman returns the same SHA-256 identifier without Docker's prefix.
+IMAGE_ID="sha256:${IMAGE_ID#sha256:}"
 [[ "$IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Invalid built image ID" >&2; exit 70; }
 # Publish this measured ID through the checked-in policy after qualification.
 printf '%s\n' "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE=$IMAGE_ID" "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST=${IMAGE_ID#sha256:}"

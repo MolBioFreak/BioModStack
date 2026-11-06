@@ -22,9 +22,10 @@ from build_identity import current_build_identity
 from readiness import collect_runtime_readiness, http_readiness
 from dev_issue_screenshot_upload_limit import DevIssueScreenshotUploadLimitMiddleware
 from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
+from routers import atomworks_studio, molecular_construction, molecular_geometry
 from routers import binder_blind_pose, binder_continuation
 from routers import ligandmpnn_interface_context, sequence_native, protonpottsmpnn, protonpottsmpnn_prediction
-from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, execution_targets, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, molbio_restriction, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
+from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, execution_targets, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, molbio_restriction, molbio_share, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
 from runtime_policy import (
     WorkflowAdmissionBlocked,
     workflow_launch_block_detail,
@@ -51,6 +52,11 @@ from services.restriction_catalog import catalog_authority
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+# httpx/httpcore log every request line at INFO. Background pollers (BioXP
+# status every 10 s, adapter health, provider probes) made that most of
+# api.log; failures still surface through WARNING and the callers' own logs.
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Global orchestrator instance
@@ -63,6 +69,7 @@ _global_experiment_worker: GlobalExperimentWorker | None = None
 _ont_raw_signal_worker: OntRawSignalWorker | None = None
 _ont_signal_worker: OntSignalWorker | None = None
 _frustrampnn_statistics_worker: FrustraMPNNStatisticsWorker | None = None
+_ont_run_monitor = None
 
 
 async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
@@ -117,6 +124,7 @@ async def lifespan(app: FastAPI):
     global _ont_signal_worker
     global _frustrampnn_statistics_worker
     bioxp_runtime = None
+    global _ont_run_monitor
     
     # Required checked-in scientific authority must be complete before workers start.
     catalog_authority.require()
@@ -205,6 +213,14 @@ async def lifespan(app: FastAPI):
         _ont_raw_signal_worker = None
         logger.info("[STARTUP] ONT raw-signal worker disabled: pinned runtime identity absent")
 
+    # The raw-signal worker already polls active runs; otherwise run a plain
+    # status monitor so MinKNOW runs started from BMS still reach completion.
+    if _ont_raw_signal_worker is None and os.getenv("BMS_ONT_MINKNOW_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        from services.ont_run_control import OntRunMonitor
+        _ont_run_monitor = OntRunMonitor(poll_interval=10.0)
+        await _ont_run_monitor.start()
+        logger.info("[STARTUP] ONT run status monitor started")
+
     try:
         OntSignalWorker._runtime_identity()
     except (OSError, RuntimeError):
@@ -251,13 +267,17 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Cleanup on shutdown
+    # Cleanup on shutdown. Cancel the two polling loops rather than wait for
+    # them: the Vast refresh can sit in a 15 s provider request and remote
+    # telemetry in an SSH probe, and waiting for either pushed the stop past
+    # systemd's 20 s TimeoutStopSec, so restarts ended in SIGKILL.
     remote_telemetry_stop.set()
-    await remote_telemetry_task
+    vast_inventory_stop.set()
+    for task in (remote_telemetry_task, vast_inventory_task):
+        task.cancel()
+    await asyncio.gather(remote_telemetry_task, vast_inventory_task, return_exceptions=True)
     await app.state.preload_controller.close()
     await app.state.attachment_controller.close()
-    vast_inventory_stop.set()
-    await vast_inventory_task
     if bioxp_runtime is not None:
         await bioxp_runtime.close()
         logger.info("[SHUTDOWN] BioXP control plane closed")
@@ -286,6 +306,9 @@ async def lifespan(app: FastAPI):
     if _ont_raw_signal_worker:
         await _ont_raw_signal_worker.stop()
         logger.info("[SHUTDOWN] ONT raw-signal lease-recovery worker stopped")
+    if _ont_run_monitor:
+        await _ont_run_monitor.stop()
+        logger.info("[SHUTDOWN] ONT run status monitor stopped")
     if _ont_signal_worker:
         await _ont_signal_worker.stop()
         logger.info("[SHUTDOWN] ONT signal-workbench worker stopped")
@@ -388,6 +411,9 @@ app.include_router(designs.router, prefix="/api/designs", tags=["designs"])
 app.include_router(analyses.router, prefix="/api", tags=["analyses"])
 app.include_router(gpu.router, prefix="/api/gpu", tags=["gpu"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
+app.include_router(atomworks_studio.router)
+app.include_router(molecular_construction.router)
+app.include_router(molecular_geometry.router)
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(user_sequences.router, prefix="/api/user-sequences", tags=["user-sequences"])
 app.include_router(user_templates.router, prefix="/api/user-templates", tags=["user-templates"])
@@ -395,6 +421,8 @@ app.include_router(experiment_workspaces.router)
 app.include_router(molbio_ngs_experiments.router)
 app.include_router(projects.router)
 app.include_router(project_manager.router)
+from routers import family_msa_results
+app.include_router(family_msa_results.router)
 app.include_router(ngs_molbio_n5.router)
 app.include_router(payload_ownership_audit.router)
 if dev_issues.dev_issue_ledger_enabled():
@@ -412,6 +440,7 @@ app.include_router(molbio_ops.router)
 from routers import molbio_golden_gate_design
 app.include_router(molbio_golden_gate_design.router)
 app.include_router(molbio_restriction.router)
+app.include_router(molbio_share.router)  # tailnet-only guest share grants
 app.include_router(rna_structure.router)
 app.include_router(msa.router)
 app.include_router(ribocentre.router, prefix="/api/ribocentre", tags=["ribocentre"])

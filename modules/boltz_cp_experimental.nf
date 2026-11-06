@@ -219,19 +219,24 @@ PY
     fi
 
     # Only the invocation-private copy is adapted. Original configs stay sealed.
-    if [ -n "\${BMS_PORTABLE_INPUT_BINDINGS:-}" ] && [ "\$INPUT_FORMAT" = "config_files" ]; then
+    if [ "\$INPUT_FORMAT" = "config_files" ]; then
         python3 - "\$CODE_ROOT" "\$DATA_ARG" ${inputConfigPath} <<'PY'
 import sys
 from pathlib import Path
 import yaml
 sys.path.insert(0, str(Path(sys.argv[1]) / 'scripts'))
+import os
 from lib.portable_inputs import bind_native_document
+from fold_cp_input import normalize_ligand_files
 root, original = Path(sys.argv[2]), Path(sys.argv[3]).resolve()
 files = sorted(root.rglob('*.yaml')) + sorted(root.rglob('*.yml')) if root.is_dir() else [root]
 for path in files:
-    owner = original / (path.relative_to(root) if root.is_dir() else path.name)
+    if path.suffix.lower() not in {'.yaml', '.yml'}:
+        continue  # native FASTA input has no ligand document to normalize
+    owner = original / (path.relative_to(root) if root.is_dir() else path.name) if original.is_dir() else original
     document = yaml.safe_load(path.read_text())
-    bound = bind_native_document(document, 'boltz-yaml', owner=owner)
+    bound = bind_native_document(document, 'boltz-yaml', owner=owner) if os.environ.get('BMS_PORTABLE_INPUT_BINDINGS') else document
+    bound = normalize_ligand_files(bound, owner.parent)
     path.write_text(yaml.safe_dump(bound, sort_keys=False))
 PY
     fi

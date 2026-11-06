@@ -262,7 +262,7 @@ async def prepare_boltzgen_params_for_launch(params: dict[str, Any]) -> tuple[di
         return normalized, notes
     # Generic generation consumes its own explicit scaffold/sequence input.
     # Do not perform antibody annotation/downloads just because BoltzGen is used.
-    if normalized.get("boltzgen_mode") in {"protein_binder", "peptide_binder"}:
+    if normalized.get("boltzgen_mode") in {"protein_binder", "peptide_binder", "antibody_binder", "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking"}:
         return normalized, notes
 
     scaffold_specs, scaffold_notes = await resolve_nanobody_scaffold_specs(normalized)

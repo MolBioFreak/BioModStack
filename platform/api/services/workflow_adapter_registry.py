@@ -6,6 +6,8 @@ from typing import Any
 
 
 TYPED_CORE_JOB_MODELS = {
+    "family_msa_protein",
+    "family_msa_nucleic",
     "boltz2",
     "boltz_cp_experimental",
     "boltzgen",
@@ -29,9 +31,13 @@ TYPED_CORE_JOB_MODELS = {
     "caliby_binder",
     "caliby_experimental",
     "proteinmpnn",
+    "protonpottsmpnn",
     "fampnn",
     "frustrampnn",
     "ligandmpnn",
+    "laproteina",
+    "rfd4_proteina",
+    "complexa",
 }
 TYPED_CORE_JOB_ADAPTERS = {
     f"bms.core-job.{model_id}.adapter.v1": model_id
@@ -74,14 +80,26 @@ PROJECT_NATIVE_OWNER_REGISTRY: dict[str, dict[str, Any]] = {
 
 # JobSubmission's native generation forms report/reopen these exact modes.
 for _model, _modes in {
-    "boltzgen": ("protein_binder", "nanobody_binder", "peptide_binder"),
+    "boltzgen": ("protein_binder", "nanobody_binder", "peptide_binder", "antibody_binder", "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking"),
     "ppiflow": ("protein_binder", "antibody_binder", "nanobody_binder"),
+    "laproteina": ("evaluate",),
+    "rfd4_proteina": ("generate", "evaluate"),
+    "complexa": ("generate", "evaluate"),
+    "protein_modification_experimental": ("de_novo_design",),
+    "protein_local_redesign": ("local_redesign",),
 }.items():
     for _mode in _modes:
         PROJECT_NATIVE_OWNER_REGISTRY[f"{_model}:{_mode}"] = {
             "setup_path": "/submit", "setup_query": {"model": [_model], "mode": [_mode]},
             "supports_initial_values": True, "supports_draft_reporting": True,
         }
+
+
+for _model in ("family_msa_protein", "family_msa_nucleic"):
+    PROJECT_NATIVE_OWNER_REGISTRY[f"{_model}:family_msa"] = {
+        "setup_path": "/alignments", "setup_query": {"model": [_model], "mode": ["family_msa"]},
+        "supports_initial_values": True, "supports_draft_reporting": True,
+    }
 
 
 def register_workflow_adapter(workflow_family: str, adapter_id: str) -> None:
@@ -114,7 +132,7 @@ def is_project_native_owner_registered(native_owner_id: Any) -> bool:
             "supports_initial_values",
             "supports_draft_reporting",
         }, {"setup_path", "setup_query", "supports_initial_values", "supports_draft_reporting"})
-        and contract["setup_path"] == "/submit"
+        and contract["setup_path"] in {"/submit", "/alignments"}
         and contract["supports_initial_values"] is True
         and contract["supports_draft_reporting"] is True
         and ("setup_query" not in contract or (
@@ -139,6 +157,9 @@ def is_project_native_destination_registered(native_owner_id: Any, destination: 
     contract = PROJECT_NATIVE_OWNER_REGISTRY[native_owner_id]
     if parsed.scheme or parsed.netloc or parsed.fragment or parsed.path != contract["setup_path"]:
         return False
+    if parsed.path == "/alignments":
+        expected = contract["setup_query"]
+        return destination == f"/alignments?model={expected['model'][0]}&mode={expected['mode'][0]}"
     if "setup_query" in contract:
         return query == contract["setup_query"]
     return query.get("template") == [native_owner_id]

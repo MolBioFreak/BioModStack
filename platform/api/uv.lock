@@ -281,6 +281,7 @@ dependencies = [
     { name = "biotite", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "biotite", version = "1.6.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "biotite", version = "1.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "bms-alignment-core" },
     { name = "dnachisel" },
     { name = "dnaweaver" },
     { name = "duckdb" },
@@ -331,6 +332,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.19.0" },
     { name = "biopython", specifier = ">=1.87,<2" },
     { name = "biotite", specifier = ">=0.42.0" },
+    { name = "bms-alignment-core", directory = "../../packages/bms-alignment-core" },
     { name = "dnachisel", specifier = "==3.2.16" },
     { name = "dnaweaver", specifier = "==0.3.10" },
     { name = "duckdb", specifier = ">=1.4.0,<2" },
@@ -560,6 +562,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f0/6f/ab71525583a7824c70f71de387a1c5ceb27ddcb3fda2dacb734e5b875f14/biotraj-1.2.2-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2dcfa4a4c755ddc206f81999fd47664747cd2e546e16a51d885332cd4c955f41", size = 2246545, upload-time = "2024-11-02T11:30:50.829Z" },
     { url = "https://files.pythonhosted.org/packages/e0/9a/46d2d67b5b672d5d2ffbfb3551fc4b499b45d5edce2558e259f69b72a0d9/biotraj-1.2.2-cp313-cp313-win_amd64.whl", hash = "sha256:e0ed1b586e23ad53e53fb42be8541fb964ec6c4183e6d500fef0bcc1bdcd7487", size = 359596, upload-time = "2024-11-02T11:30:52.876Z" },
 ]
+
+[[package]]
+name = "bms-alignment-core"
+version = "0.1.0"
+source = { directory = "../../packages/bms-alignment-core" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2,<3" }]
 
 [[package]]
 name = "brotli"

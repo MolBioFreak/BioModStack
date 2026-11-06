@@ -445,3 +445,27 @@ def test_msa_batch_is_guarded_by_transient_runner_mode() -> None:
     direct_source = ast.unparse(direct_launcher)
     assert "if not transient_workflow_runner_mode():" in direct_source
     assert "msa_batch execution is only permitted inside the transient workflow runner" in direct_source
+
+
+def test_live_discovery_skips_failed_units_without_show(monkeypatch) -> None:
+    import services.execution_ownership as ownership
+    from types import SimpleNamespace
+
+    live = "biomodstack-development-job-11111111-1111-4111-8111-111111111111-attempt-1.service"
+    dead = "biomodstack-development-job-22222222-2222-4222-8222-222222222222-attempt-1.service"
+    listing = f"{live} loaded active running x\n{dead} loaded failed failed x\n"
+    shown: list[str] = []
+
+    def fake_systemctl(*args):
+        return SimpleNamespace(returncode=0, stdout=listing, stderr="")
+
+    def fake_show(unit_name, lane):
+        shown.append(unit_name)
+        return SimpleNamespace(active_state="active")
+
+    monkeypatch.setattr(ownership, "_systemctl_user", fake_systemctl)
+    monkeypatch.setattr(ownership, "show_unit_properties", fake_show)
+    assert ownership._list_workflow_unit_names("development") == sorted([live, dead])
+    discovered = ownership.discover_active_workflow_units("development")
+    assert shown == [live]
+    assert list(discovered.values()) == [live]

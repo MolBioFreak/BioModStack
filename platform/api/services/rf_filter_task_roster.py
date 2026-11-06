@@ -15,7 +15,10 @@ BRANCH_DEFAULTS = dict(diffusion_method='rfd3', pred_method='af2', run_rfd_only=
     skip_rfd=False, skip_rfd_seq=False, skip_rfd_seq_pred=False, skip_pred=False,
     rfd3_generation_request_path=None, rfd3_request_path=None,
     plr_validation_input_pdbs=None, plr_sequence_input_pdbs=None, plr_backbone_input_pdbs=None)
-EVENT = re.compile(r'^\[([0-9a-f]{2}/[0-9a-f]+)\]\s+(Submitted|Cached) process >\s+([\w:]+)\s+\(([1-9][0-9]*)\)\s*$', re.I)
+# The same event arrives bare on the console stream and with Nextflow's log framing
+# ("Oct-29 14:06:17.649 [Task submitter] INFO  nextflow.Session - ") once the workflow
+# has copied its native log over the streamed file. Malformed events stay rejected.
+EVENT = re.compile(r'^(?:.*\s-\s)?\[([0-9a-f]{2}/[0-9a-f]+)\]\s+(Submitted|Cached) process >\s+([\w:]+)\s+\(([1-9][0-9]*)\)\s*$', re.I)
 
 
 def launch_settings(params):

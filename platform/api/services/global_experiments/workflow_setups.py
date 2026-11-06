@@ -33,6 +33,7 @@ from experiment_services import (
     sha256_text,
 )
 from services.global_experiments.launch_contexts import create_prepared_launch_context
+from services.family_msa_project_capabilities import family_msa_capability
 from services.protein_project_capabilities import (
     ProteinProjectCapabilityError,
     SHAPE_SETUP_CAPABILITY_ID,
@@ -166,6 +167,12 @@ async def _claim(
 
 
 def _capability_contract(capability_id: str) -> tuple[dict[str, Any], str, str]:
+    alignment = family_msa_capability(capability_id)
+    if alignment is not None:
+        capability, parameter_schema = alignment
+        return ({"schema": "bms.project-workflow-setup-capability.v1", "capability": capability,
+                 "parameter_schema": parameter_schema}, capability["project_setup_adapter_id"],
+                capability["safe_setup_destination"])
     try:
         capability = protein_capability_record(capability_id)
         parameter_schema = protein_parameter_schema(capability_id)
@@ -185,7 +192,7 @@ def _capability_contract(capability_id: str) -> tuple[dict[str, Any], str, str]:
     return contract, adapter_id, destination
 
 
-def _global_payload(name: str, objective: str) -> dict[str, Any]:
+def _global_payload(name: str, objective: str, domain_kind: str = "protein_in_silico") -> dict[str, Any]:
     return {
         "schema": "bms.global-experiment.v1",
         "name": name,
@@ -194,13 +201,18 @@ def _global_payload(name: str, objective: str) -> dict[str, Any]:
         "description": objective,
         "status": "active",
         "priority": "normal",
-        "success_criteria": ["Complete the configured primary Protein workflow"],
+        "success_criteria": ["Complete the configured primary workflow" if domain_kind == "ngs_molbio" else "Complete the configured primary Protein workflow"],
     }
 
 
 def _domain_payload(
-    name: str, objective: str, capability_id: str, experiment_mode: str
+    name: str, objective: str, capability_id: str, experiment_mode: str, domain_kind: str
 ) -> dict[str, Any]:
+    if domain_kind == "ngs_molbio":
+        return {"schema": "bms.domain-experiment.v1", "domain_kind": domain_kind,
+                "domain_contract_version": "1", "name": name, "objective": objective,
+                "status": "active", "source_receipt_ids": [], "dataset_ids": [],
+                "domain_payload": {"schema": "bms.ngs-molbio-experiment.v1"}}
     return {
         "schema": "bms.domain-experiment.v1",
         "domain_kind": "protein_in_silico",
@@ -241,7 +253,7 @@ def _materialize_draft(schema: dict[str, Any], supplied: dict[str, Any]) -> tupl
                 SubmittedShapeRequest.model_validate(supplied["shape_submitted_request"])
             except ValueError as exc:
                 raise ValidationFailure(str(exc)) from exc
-        if "native_job_request" in supplied:
+        if supplied.get("native_job_request") is not None:
             from schemas import JobCreate
             try:
                 JobCreate.model_validate(supplied["native_job_request"])
@@ -269,7 +281,9 @@ def _materialize_draft(schema: dict[str, Any], supplied: dict[str, Any]) -> tupl
             raise ValidationFailure(f"workflow setup field {name} is server-owned")
         materialized[name] = copy.deepcopy(value)
     required = schema.get("required") or []
-    missing = [name for name in required if name not in materialized]
+    missing = [name for name in required if name not in materialized
+               or (schema.get("x-bms-native-editor-draft") and name == "native_job_request"
+                   and materialized[name] is None)]
     if missing:
         return materialized, "incomplete"
     try:
@@ -309,16 +323,16 @@ async def create_workflow_setup(
     await _project(session, project_id)
     if relationship_kind not in {"primary", "follow_up"}:
         raise ValidationFailure("relationship_kind must be primary or follow_up")
-    if domain_kind != "protein_in_silico":
-        raise ValidationFailure("Project workflow setup supports only protein_in_silico")
     contract, _adapter_id, destination = _capability_contract(capability_id)
+    if domain_kind != contract["capability"].get("domain_kind", "protein_in_silico"):
+        raise ValidationFailure("Project workflow setup capability does not belong to this domain")
     if relationship_kind == "primary":
         if global_experiment_id is not None:
             raise ValidationFailure("primary workflow setup cannot select an existing Global Experiment")
         if not str(experiment_name or "").strip() or not str(experiment_objective or "").strip():
             raise ValidationFailure("primary workflow setup requires experiment name and objective")
         global_head = await create_global_experiment(
-            session, project_id, _global_payload(str(experiment_name).strip(), str(experiment_objective).strip())
+            session, project_id, _global_payload(str(experiment_name).strip(), str(experiment_objective).strip(), domain_kind)
         )
     else:
         if experiment_name is not None or experiment_objective is not None:
@@ -350,12 +364,13 @@ async def create_workflow_setup(
             objective,
             capability_id,
             experiment_mode,
+            domain_kind,
         ),
     )
     workflow = await create_workflow(
         session,
         project_id,
-        f"{global_head.display_name} — {protein_capability_record(capability_id)['label']}",
+        f"{global_head.display_name} — {capability['label']}",
         capability_id,
         experiment_id=domain.aggregate_id,
     )
@@ -447,7 +462,7 @@ async def save_workflow_setup_draft(
     # Editor storage is separate from the immutable scientific capability
     # contract. Legacy flat drafts still use their original strict schema.
     draft_schema = contract['parameter_schema']
-    if 'editor_state' in draft:
+    if 'editor_state' in draft and not draft_schema.get('x-bms-native-editor-draft'):
         draft_schema = protein_setup_parameter_schema(row.capability_id)
     materialized, validation_state = _materialize_draft(draft_schema, draft)
     row.draft_json = canonical_json(materialized)
@@ -530,6 +545,20 @@ async def prepare_workflow_setup_launch(
         except ValueError as exc:
             raise ValidationFailure(str(exc)) from exc
         native_request = shape_job_request(staged, submitted).model_dump(mode="json")
+    if native and core_session is not None and (native_request or {}).get("params", {}).get("native_sources"):
+        # Freeze the same retained source projection that canonical Job creation
+        # consumes; otherwise valid source materialization changes Plan params.
+        # Unbound authoring drafts retain their existing Prepare behavior.
+        from schemas import JobCreate
+        from routers.jobs import normalize_job_request
+        from services.native_generation_sources import prepare_native_sources
+        staged = normalize_job_request(JobCreate.model_validate(native_request))
+        # Use the immutable Plan's serialization before deriving closure paths.
+        # Model normalization adds request defaults; their insertion order must
+        # not make a second source preparation select a different directory.
+        staged = JobCreate.model_validate(json.loads(canonical_json(staged.model_dump(mode="json"))))
+        await prepare_native_sources(staged, core_session)
+        native_request = staged.model_dump(mode="json")
     authority, plan_contract = await persist_workflow_plan_authority(
         session, workflow_id=row.workflow_id, workspace_id=project_id,
         domain_experiment_id=row.domain_experiment_id,
@@ -545,7 +574,31 @@ async def prepare_workflow_setup_launch(
     payload["parameters"] = (dict(plan_contract["capability"]["normalized_job_request"]["params"])
                              if native else stored_draft)
     if native:
-        payload["scheduler"]["name"] = plan_contract["capability"]["normalized_job_request"]["name"]
+        native_job = plan_contract["capability"]["normalized_job_request"]
+        payload["scheduler"]["name"] = native_job["name"]
+        payload["scheduler"]["resources"] = {
+            "pinned_gpu": native_job["pinned_gpu"],
+        }
+        # Placement is independent of native scientific parameters. In particular,
+        # explicit Local must not disappear into an ambient remote selection.
+        placement = native_request if isinstance(native_request, dict) else {}
+        for key in ("execution_target_id", "execution_policy"):
+            if key in placement:
+                payload["scheduler"][key] = copy.deepcopy(placement[key])
+        if "pinned_gpu" in placement:
+            payload["scheduler"]["resources"]["pinned_gpu"] = placement["pinned_gpu"]
+        if native_job.get("execution_target_id") is None:
+            from biomodstack_local_resources import GIB, applied_local_policy
+            from services.gpu_config import read_scheduler_config
+            policy = applied_local_policy()
+            cpu_share = read_scheduler_config().get("global", {}).get("cpu_threads_per_job")
+            cpu_threads = (max(1, min(policy.cpu_threads, int(cpu_share)))
+                           if cpu_share is not None else policy.cpu_threads)
+            # Match the existing standalone local execution envelope, rather
+            # than the generic Plan fallback of one thread and one GiB.
+            payload["scheduler"]["resources"].update(
+                cpu_threads=cpu_threads, dram_gib=policy.memory_bytes / GIB,
+            )
     payload["scheduler"]["params"] = {
         **payload["parameters"], "workflow_adapter": payload["adapter_id"],
     }
@@ -559,7 +612,7 @@ async def prepare_workflow_setup_launch(
     preparation = await prepare_workflow(session, revision.resource_id, {
         "input_dataset_revision_ids": [],
         "launch_authority": await protein_setup_launch_authority(session, authority),
-    }, normalize_native_job=True)
+    }, normalize_native_job=not native)  # Native Plan already pins model-owned normalized params.
     if preparation.validation_status != "valid":
         raise ValidationFailure(preparation.validation_receipt_json)
     preparation_id = preparation.resource_id

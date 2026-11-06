@@ -71,6 +71,11 @@ def prepare_filter_stages(job, output_root):
     owner = _owner(job)
     if owner is None:
         return None
+    if owner == 'protein_local_redesign':
+        # The Redesign/Resequence workflow has no RFD3 stage any more (it was removed from the workflow) and
+        # publishes no filter-stage record, so there is nothing to account. Requiring the roster and
+        # run/filter_stages/*.json refused every completed Resequence result, local and remote.
+        return None
     from services.rf_filter_task_roster import authority
     roster = authority(job, owner)
     root = Path(output_root)

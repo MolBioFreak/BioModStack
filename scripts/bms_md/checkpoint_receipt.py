@@ -11,7 +11,7 @@ from typing import Any
 from .native_config import final_stage_name, compatibility_key
 
 _STEP = re.compile(r"(?:^|\s)step\s*=\s*(\d+)", re.IGNORECASE)
-_TIME = re.compile(r"(?:^|\s)t\s*=\s*([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?\d+)?)")
+_TIME = re.compile(r"(?:^|\s)t\s*=\s*([-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)")
 
 
 def _digest(value: Any) -> str:

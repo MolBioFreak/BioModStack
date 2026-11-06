@@ -192,3 +192,69 @@ def test_cpu_mdrun_does_not_require_visible_gpu(tmp_path):
                                   ntomp=1, gpu_offload="none", pin="off", checkpoint=tmp_path / "absent.cpt")
     assert "-gpu_id" not in command
     assert command[command.index("-nb") + 1] == "cpu"
+
+@pytest.mark.parametrize("offload", ["full", "full_forces", "auto", "none"])
+@pytest.mark.parametrize("compiled", [False, True])
+def test_native_integrator_placement_not_stage_name(tmp_path, monkeypatch, native_double, offload, compiled):
+    import copy
+    import io
+    from scripts.bms_md import native_pipeline
+    cfg = config(tmp_path)
+    cfg["execution"]["gpu_offload"] = offload
+    cfg["stages"] = [{"name": "not_a_minimization_name", "mdp": {"integrator": "md", "nsteps": 0}}]
+    if compiled:
+        tpr = tmp_path / "original.tpr"; tpr.write_bytes(b"exact compiled physics")
+        cfg.update(input={"tpr": str(tpr)}, stages=[])
+    original = copy.deepcopy(cfg)
+    dumps = []
+    class Dump:
+        def __init__(self, command):
+            dumps.append(command)
+            self.stdout = io.StringIO("integrator = steep\nnsteps = 0\n" if command[2] == "-s" else "step = 0\nt = 0\n")
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def wait(self): return 0
+    monkeypatch.setattr(native_pipeline.subprocess, "Popen", lambda command, **kw: Dump(command))
+    manifest = json.loads(pipeline.run_gromacs_job(tmp_path / "unused", tmp_path, _prepared_config=cfg).read_text())
+    mdrun = next(c for c in native_double if c[1] == "mdrun" and "-version" not in c)
+    assert mdrun[mdrun.index("-nb") + 1] == "cpu"
+    assert "-gpu_id" not in mdrun
+    assert cfg == original
+    assert len([c for c in dumps if c[2] == "-s"]) == 1
+    assert manifest["native_endpoints"][manifest["final_stage"]]["native_tpr"]["integrator"] == "steep"
+    assert bool([c for c in native_double if c[1] == "grompp"]) is not compiled
+
+
+def test_compiled_unknown_integrator_retains_requested_offload(tmp_path, monkeypatch, native_double):
+    from scripts.bms_md import native_pipeline
+    cfg = config(tmp_path)
+    tpr = tmp_path / "source.tpr"; tpr.write_bytes(b"inert native TPR")
+    cfg.update(input={"tpr": str(tpr)}, stages=[])
+    cfg["execution"]["gpu_offload"] = "full"
+    def unavailable(*args, **kwargs):
+        raise OSError("metadata unavailable")
+    monkeypatch.setattr(native_pipeline.subprocess, "Popen", unavailable)
+    manifest = json.loads(pipeline.run_gromacs_job(tmp_path / "unused", tmp_path, _prepared_config=cfg).read_text())
+    command = next(c for c in native_double if c[1] == "mdrun" and "-version" not in c)
+    assert command[command.index("-nb") + 1] == "gpu"
+    assert manifest["status"] == "completed" and manifest["publication_errors"]
+    assert not any(c[1] == "grompp" for c in native_double)
+
+
+def test_legacy_guided_native_dispatch_preserves_authored_stages(tmp_path, monkeypatch, native_double):
+    import copy
+    cfg = config(tmp_path)
+    coordinates, topology = Path(cfg["input"]["coordinates"]), Path(cfg["input"]["topology"])
+    cfg["input"] = {"structure": str(coordinates)}
+    cfg["chemistry"] = {"profile_id": "gmx_amber99sb_ildn_tip3p_smoke_v1", "resolved_preparation": {"force_field": "amber99sb-ildn", "water_model": "tip3p"}}
+    cfg["preparation"] = {"box_type": "dodecahedron", "padding_nm": 1.0, "salt_molar": 0.15, "neutralize": True}
+    original = copy.deepcopy(cfg)
+    seen = []
+    def prepare(config, **kwargs):
+        seen.append(copy.deepcopy(config))
+        return coordinates, topology, [coordinates, topology]
+    monkeypatch.setattr(pipeline, "_prepare_system", prepare)
+    monkeypatch.setattr(pipeline, "_consume_preparation_bundle", lambda *a: pytest.fail("legacy recipe must not use Amber bundle"))
+    pipeline.run_gromacs_job(tmp_path / "unused", tmp_path, _prepared_config=cfg)
+    assert seen == [original] and cfg == original
+    assert [Path(c[c.index("-f") + 1]).stem for c in native_double if c[1] == "grompp"] == ["warmup", "sample"]

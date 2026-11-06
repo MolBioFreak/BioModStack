@@ -370,8 +370,9 @@ workflow STRUCTURE_PREDICTION {
 workflow {
     // Validate inputs
     def esmComplexComponents = params.esmf_complex_components ?: params.complex_components ?: []
-    if (!params.sequence_input && !(params.pred_method == 'esmfold2' && esmComplexComponents instanceof Collection && !esmComplexComponents.isEmpty())) {
-        error("--sequence_input is required. ESMFold2 complex jobs may instead provide --complex_components.")
+    def hasEsmComplexInput = (esmComplexComponents instanceof Collection && !esmComplexComponents.isEmpty()) || params.esmf_complex_components_file
+    if (!params.sequence_input && !(params.pred_method == 'esmfold2' && hasEsmComplexInput)) {
+        error("--sequence_input is required. ESMFold2 complex jobs may instead provide --complex_components or --esmf_complex_components_file.")
     }
 
     if (!(params.pred_method in ['boltz', 'protenix', 'esmfold2', 'boltz_protenix'])) {

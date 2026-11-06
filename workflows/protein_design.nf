@@ -500,17 +500,37 @@ PY
 
 
 
+// Resolve placement through the existing portable owner before Nextflow stages paths.
+def rfd3GenerationSources(requestPath) {
+    def source = new JsonSlurper().parse(file(requestPath)).source
+    if (!source) return []
+    def selected = source.path.toString()
+    if (System.getenv('BMS_PORTABLE_INPUT_BINDINGS')) {
+        def resolver = new ProcessBuilder('python3', "${params.code_root}/scripts/lib/portable_inputs.py",
+            'resolve', selected).start()
+        def output = resolver.inputStream.text.trim()
+        def error = resolver.errorStream.text
+        if (resolver.waitFor() != 0 || !output) {
+            throw new IllegalArgumentException("RFD3 portable input binding failed: ${error}")
+        }
+        selected = output
+    }
+    return [file(selected)]
+}
+
 process PrepareGeneralRFD3Input {
     label 'pyrosetta_tools'
     stageInMode 'copy'
-    publishDir "${params.out_dir}/collected/rfd3_generation", mode: 'copy', pattern: 'rfd3_generation_*json'
+    publishDir "${params.out_dir}/collected/rfd3_generation", mode: 'copy', pattern: '{rfd3_generation_*json,rfd3_sources}'
 
     input:
     path request_json
+    path staged_sources
 
     output:
-    tuple val('generation_0'), path('rfd3_generation_native_input.json'), path(request_json), emit: input_json
+    tuple val('generation_0'), path('rfd3_generation_native_input.json'), path({ [request_json, 'rfd3_sources'] }), emit: input_json
     path 'rfd3_generation_preparation_receipt.json', emit: receipt
+    path 'rfd3_sources', emit: sources
 
     script:
     """
@@ -522,6 +542,8 @@ process PrepareGeneralRFD3Input {
       --expected-num-designs '${params.rfd3_generation_num_designs}' \
       --expected-seed '${params.rfd3_generation_seed}' \
       --expected-dump-trajectories '${params.rfd3_generation_dump_trajectories}' \
+      --source-dir rfd3_sources \
+      ${staged_sources ? "--staged-source '${staged_sources instanceof List ? staged_sources[0] : staged_sources}'" : ''} \
       --output-native rfd3_generation_native_input.json \
       --output-receipt rfd3_generation_preparation_receipt.json
     """
@@ -533,21 +555,20 @@ process BuildGeneralRFD3ResultManifest {
     publishDir "${params.out_dir}/collected/rfd3_generation", mode: 'copy', pattern: 'rfd3_generation_result_manifest.json'
 
     input:
-    tuple path(cif_files), path(json_files)
+    path native_outputs
     path request_json
 
     output:
     path 'rfd3_generation_result_manifest.json', emit: manifest
 
     script:
-    def cifArgs = cif_files.collect { item -> "--cif-file '${item}'" }.join(' ')
-    def jsonArgs = json_files.collect { item -> "--json-file '${item}'" }.join(' ')
+
     """
     set -euo pipefail
     python3 -u '${params.code_root}/scripts/rfd3_generation/build_result_manifest.py' \
       --request '${request_json}' \
-      ${cifArgs} \
-      ${jsonArgs} \
+      --native-output-dir '${native_outputs}' \
+      --execution-status completed \
       --storage-prefix run/rfd3 \
       --output rfd3_generation_result_manifest.json
     """
@@ -715,10 +736,11 @@ workflow PROTEIN_DESIGN {
 
             if (generalRfd3Generation) {
                 def generationRequest = Channel.value(file(params.rfd3_generation_request_path))
-                PrepareGeneralRFD3Input(generationRequest)
+                def stagedSources = Channel.value(rfd3GenerationSources(params.rfd3_generation_request_path))
+                PrepareGeneralRFD3Input(generationRequest, stagedSources)
                 RunRFD3(PrepareGeneralRFD3Input.out.input_json)
                 BuildGeneralRFD3ResultManifest(
-                    RunRFD3.out.structures_metadata,
+                    RunRFD3.out.native_outputs,
                     Channel.value(file(params.rfd3_generation_request_path)),
                 )
             } else {

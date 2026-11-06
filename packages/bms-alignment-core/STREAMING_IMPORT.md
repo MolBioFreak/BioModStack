@@ -1,0 +1,7 @@
+# Streaming Project bundle import
+
+For large retained artifacts, use `AlignmentClient.import_project_bundle_streaming(project_id, directory, replay_key=...)` or `bms-alignment api --url URL import-project PROJECT DIRECTORY --replay-key KEY --stream`. The original JSON import method and route remain available for older clients and servers; streaming requires a server implementing `/api/family-msa/projects/{project_id}/imports/stream`.
+
+The streaming request contains an eight-byte unsigned big-endian metadata length, UTF-8 JSON `{ "replay_key": ..., "manifest": ... }`, then the raw bytes of each manifest file in descriptor order. The SDK sends a Content-Length and reads files in 1 MiB chunks. The server stages the upload in its runtime temporary directory, verifies the complete manifest and each file incrementally, then retains the selected artifacts through the existing Project custody store. Replay identities are shared with JSON import. A failed transaction can leave unreferenced content-addressed blobs, as with existing custody.
+
+Artifact body memory is bounded by transfer chunks, but manifest and Project inventory JSON are held in memory. Temporary storage must accommodate the uploaded bundle; custody installation also requires storage. Upstream HTTP infrastructure may impose its own limits or buffering. Legacy JSON import and bundle export still buffer artifact data and are not suitable for the same large-file memory envelope.

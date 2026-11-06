@@ -94,7 +94,7 @@ const active = { schema_version: 1, enabled: true, model_id: 'fampnn', params: {
 
 it('keeps OFF compact and puts primary sampling ahead of collapsed native expert groups without dropping any settings', async () => {
     useReal = Boolean(realInventories);
-    await mount(<ProteinModificationTemplate onBack={() => {}} />); await openSettings();
+    await mount(<ProteinModificationTemplate onBack={() => {}} initialValues={{ sequence_design: { schema_version: 1, enabled: false, model_id: 'fampnn', params: {} } }} />); await openSettings();
     const panel = document.querySelector('[aria-label="General generation sequence design"]')!;
     const retained = panel.querySelector<HTMLDetailsElement>('[data-general-retained-settings]')!;
     expect(retained.open).toBe(false);
@@ -126,17 +126,20 @@ it('keeps OFF compact and puts primary sampling ahead of collapsed native expert
 
 it.each(['rfd3', 'disco', 'laproteina'])('%s uses section navigation, defaults off and submits only active designer settings through the real helper', async generator => {
     await mount(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator }} />);
-    expect(control('Sequence designer').value).toBe('fampnn'); expect((control('Enable sequence design') as HTMLInputElement).checked).toBe(false);
-    expect(control('Sequence designer').closest('[hidden]')).not.toBeNull();
-    await click('Generate candidates'); expect(job()).not.toHaveProperty('sequence_design');
-    await openSettings(); expect(control('Sequence designer').closest('[hidden]')).toBeNull();
-    await toggle('Enable sequence design'); await edit('fampnn_seed', '0'); await edit('fampnn_psce_threshold', ''); await toggle('fampnn_repack_last');
+    expect((control('Enable optional operations') as HTMLInputElement).checked).toBe(false);
+    expect(control('Enable optional operations').closest('[hidden]')).not.toBeNull();
+    await click('Generate candidates'); expect(job().sequence_design).toMatchObject({ schema_version: 2, enabled: false });
+    await openSettings(); expect(control('Enable optional operations').closest('[hidden]')).toBeNull();
+    await toggle('Enable optional operations'); await click('Add Sequence design'); await click('Add fampnn call');
+    await edit('fampnn_seed', '7'); await edit('fampnn_seed', '0'); await edit('fampnn_psce_threshold', ''); await toggle('fampnn_repack_last');
     await click('Generate candidates');
-    // Clearing this NativeSetting emits an explicit empty string (also verified
-    // on the frozen baseline); cloning an explicit null is a separate case.
-    expect(job().sequence_design).toMatchObject({ ...active, params: { ...active.params, fampnn_psce_threshold: '' } });
+    const envelope = job().sequence_design;
+    expect(envelope).toMatchObject({ schema_version: 2, enabled: true });
+    const call = envelope.round_plan.stages[0].models[0];
+    expect(call).toMatchObject({ model_id: 'fampnn', mode: 'design', params: { fampnn_seed: 0, fampnn_psce_threshold: '', fampnn_repack_last: false } });
+    expect(call.invocation_id).toBeTruthy();
     expect(job().params).not.toHaveProperty('sequence_design'); expect(job()).not.toHaveProperty('sequence_design_drafts');
-    expect(job().sequence_design.params).not.toHaveProperty('input_pdb'); expect(job().sequence_design.params).not.toHaveProperty('design_chain'); expect(job().sequence_design.params).not.toHaveProperty('antibody_only_fixture');
+    expect(call.params).not.toHaveProperty('input_pdb'); expect(call.params).not.toHaveProperty('design_chain'); expect(call.params).not.toHaveProperty('antibody_only_fixture');
     expect(job().params.generator).toBe(generator);
 });
 
@@ -182,8 +185,9 @@ it('response.sequence_design survives the real JobSubmission clone and template 
     await click('Template Manager');
     const input = document.querySelector<HTMLInputElement>('input[placeholder="e.g., My Boltz Config"]')!;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Saved sequence fixture'); input.dispatchEvent(new Event('input', { bubbles: true })); });
-    await click('Save Template'); expect(saved[0].params.sequence_design).toMatchObject(active);
-    expect(saved[0].params.sequence_design_drafts.fampnn.params).toMatchObject(active.params);
+    await click('Save Template'); expect(saved[0].params.editor_state.sequence_design).toMatchObject(active);
+    expect(saved[0].params.native_job_request.sequence_design).toMatchObject(active);
+    expect(saved[0].params.editor_state.sequence_design_drafts.fampnn.params).toMatchObject(active.params);
     await click('Load'); await openSettings(); await click('Generate candidates'); expect(job().sequence_design).toMatchObject(active);
 });
 
@@ -194,12 +198,12 @@ it('Project hydration occurs before reporting and preserves all generator/design
     project.save.mockImplementation(async (_p, _s, request) => { project.value = { ...project.value, generation: 2, draft: JSON.parse(JSON.stringify(request.draft)) }; return project.value; });
     const entry = '/submit?template=protein_modification_experimental&project_id=project-fixture&setup_context_id=setup-fixture';
     await mount(<JobSubmission />, entry); await openSettings(); await edit('Sequence designer', 'proteinmpnn'); await edit('mpnn_omitAAs', ''); await click('Save draft');
-    expect(project.value.draft.sequence_design_drafts).toMatchObject(sequence_design_drafts);
-    expect(project.value.draft.de_novo_drafts['de_novo_design:disco:unconditional'].sequence_design_drafts).toEqual(sequence_design_drafts);
+    expect(project.value.draft.editor_state.sequence_design_drafts).toMatchObject(sequence_design_drafts);
+    expect(project.value.draft.editor_state.de_novo_drafts['de_novo_design:disco:unconditional'].sequence_design_drafts).toEqual(sequence_design_drafts);
     await unmount(); await mount(<JobSubmission />, entry); await openSettings(); expect(control('Sequence designer').value).toBe('proteinmpnn'); expect(control('mpnn_omitAAs').value).toBe('');
     await edit('Engine', 'disco'); await openSettings(); expect(control('Sequence designer').value).toBe('proteinmpnn');
     await edit('Sequence designer', 'caliby_experimental'); expect(control('num_workers').value).toBe('0');
-    await click('Save draft'); expect(project.value.draft.sequence_design.input_settings).toEqual({ fixed_pos_seq: '', symmetry_pos: '' });
+    await click('Save draft'); expect(project.value.draft.editor_state.sequence_design.input_settings).toEqual({ fixed_pos_seq: '', symmetry_pos: '' });
     expect(posts.some(row => row.url === '/api/jobs')).toBe(false);
 });
 
@@ -212,7 +216,7 @@ it('failed discovery leaves saved native values and populated inactive drafts in
 
 it.runIf(Boolean(realInventories))('actual API inventories expose every applicable native global and Conformer field through the mounted parent', async () => {
     useReal = true;
-    await mount(<ProteinModificationTemplate onBack={() => {}} />); await openSettings();
+    await mount(<ProteinModificationTemplate onBack={() => {}} initialValues={{ sequence_design: { schema_version: 1, enabled: false, model_id: 'fampnn', params: {} } }} />); await openSettings();
     for (const id of ['proteinmpnn', 'fampnn', 'caliby_experimental'] as const) {
         await edit('Sequence designer', id); const inventory = await fetchGeneralSequenceInventory(id);
         const retained = document.querySelector('[data-general-retained-settings] summary') as HTMLElement;

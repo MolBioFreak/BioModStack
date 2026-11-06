@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { api } from '../../src/lib/api';
 import { AnalyticsDashboard } from '../../src/components/AnalyticsDashboard';
 import { ResultsViewer } from '../../src/components/ResultsViewer';
@@ -409,3 +409,35 @@ it.each(['boltz_cp_experimental', 'protenix'])('%s retained legacy scores remain
     expect(calls.some(c => c.url.startsWith('/api/analytics/'))).toBe(false);
     expect(profilePlot().data[0].y).toEqual([80,90]);
 });
+
+it('Overview is the StructurePredictionWorkspace: ranked samples, compact viewer, tiles and profile follow in-page selection', async () => {
+    const points = designs.map((d, i) => ({ id: d.id, name: d.name, contract_revision: 1, source_job_id: 'job', cohort_key: 'v1:p:job', publication_state: null,
+        metrics: { plddt: 90 - i, ptm: 0.8, ranking_score: i ? 0.9 : 0.5 },
+        metric_states: { plddt: { state: 'ok', value: 90 - i, reason_code: null }, ptm: { state: 'ok', value: 0.8, reason_code: null }, ranking_score: { state: 'ok', value: i ? 0.9 : 0.5, reason_code: null } },
+        metric_sources: Object.fromEntries(['plddt', 'ptm', 'ranking_score'].map(k => [k, { candidate_id: d.id, document_id: 'primary', artifact_sha256: 'a'.repeat(64) }])),
+        metric_descriptors: Object.fromEntries(['plddt', 'ptm', 'ranking_score'].map(k => [k, { metric_id: k, source: 'canonical_artifact', scope: k === 'plddt' ? 'model_atom_mean' : 'overall', unit: k === 'plddt' ? 'percent' : 'dimensionless', direction: 'higher', producer_version: 'fixture', derivation_version: 'fixture' }])) }));
+    scalarTransport(points);
+    await mount(<MemoryRouter initialEntries={['/designs/job']}><Routes><Route path="/designs/:jobId" element={<><ResultsViewer /><LocationProbe /></>} /></Routes></MemoryRouter>);
+    await flush();
+    const workspace = () => tree!.root.findByProps({ 'aria-label': 'Structure prediction workspace' });
+    expect(text(workspace())).toContain('Samples · ranked by producer score');
+    const rows = () => workspace().findAllByType('tr').filter(r => r.props['aria-selected'] !== undefined);
+    // Producer score orders the second saved sample first; the first saved sample stays selected until changed.
+    expect(rows().map(r => r.props.title)).toEqual(['sample 1', 'sample 0']);
+    expect(rows().find(r => r.props['aria-selected'])!.props.title).toBe('sample 0');
+    const engine = () => tree!.root.findAll(n => n.type === 'div' && !!n.props['data-native-url']);
+    expect(engine().map(n => n.props['data-native-url'])).toEqual(['/api/designs/candidate/pdb']);
+    expect(profilePlot().data[0].y).toEqual([90]);
+    await act(async () => rows()[0].props.onClick()); await flush();
+    expect(location.search).toContain('design_id=other');
+    expect(tree!.root.findAllByProps({ 'aria-label': 'Structure prediction workspace' })).toHaveLength(1);
+    expect(engine().map(n => n.props['data-native-url'])).toEqual(['/api/designs/other/pdb']);
+    expect(profilePlot().data[0].y).toEqual([42]);
+    expect(text(tree!.root.findByProps({ 'aria-label': 'Selected prediction confidence' }))).toContain('rank 1 of 2');
+    await act(async () => tree!.root.findAllByType('button').find(n => text(n).startsWith('Open in Structure'))!.props.onClick()); await flush();
+    expect(tree!.root.findAllByProps({ 'aria-label': 'Structure prediction workspace' })).toHaveLength(0);
+    expect(tree!.root.findAllByProps({ 'aria-label': 'Selected prediction' })[0].props.value).toBe('other');
+    expect(calls.filter(c => c.method !== 'get').every(c => /plotly-metrics|designs\/query/.test(c.url))).toBe(true);
+});
+let location = { search: '' };
+function LocationProbe() { location = useLocation(); return null; }

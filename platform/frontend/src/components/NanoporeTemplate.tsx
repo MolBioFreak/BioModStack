@@ -28,7 +28,6 @@ import {
     fetchMolBioSequenceRevisions,
     fetchNucleotideSequences,
     issueMolBioNgsReceipt,
-    previewMolBioSequenceImport,
     submitOntNgsJob,
     prepareOntNgsJob,
     type OntNgsPreparedReview,
@@ -36,20 +35,24 @@ import {
     submitPooledReferenceAssignment,
     preparePooledReferenceAssignment,
     type MolBioSequenceImportCommitResponse,
-    type MolBioSequenceImportError,
-    type MolBioSequenceImportPayload,
-    type MolBioSequenceImportPreviewRecord,
     type MolBioSequenceRevision,
     type NucleotideSequenceListItem,
     type PooledReferenceAssignmentSubmitRequest,
+    fetchOntBasecallDevices,
 } from '../lib/api';
 import { useGlobalExperimentContext } from './experiments/GlobalExperimentContext';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { NanoporeWorkflowChooser, type WorkflowKey } from './ngs/NanoporeWorkflowChooser';
 import { buildNanoporeOperatorStageParams } from '../lib/nanoporeLaunchPayload';
+import { isNanoporeWorkflowKey } from '../lib/nanoporeWorkflow';
+import { Pod5Upload } from './ngs/Pod5Upload';
+import { RawSignalPod5Input } from './ngs/RawSignalPod5Input';
+import { ReferenceSequenceInputs } from './ngs/ReferenceSequenceInputs';
+import { BarcodeSampleSheet } from './ngs/BarcodeSampleSheet';
+import { describeModification, modificationCatalog, modificationModelIds, modifiedBasesBlocker, parseModifiedBases, serializeModifiedBases, toggleModification } from '../lib/doradoModifiedBases';
 
-const TASK_FLOW_PANEL = 'rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_75%,#000)] p-5 shadow-[0_18px_45px_rgba(0,0,0,0.32)]';
-const TASK_FLOW_CARD = 'rounded-xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-tertiary)_70%,#000)] p-4';
+const TASK_FLOW_PANEL = 'rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 shadow-[var(--shadow-card)]';
+const TASK_FLOW_CARD = 'min-w-0 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4';
 const TASK_FLOW_LABEL = 'text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--text-secondary)]';
 
 
@@ -59,7 +62,6 @@ const TASK_FLOW_LABEL = 'text-[11px] font-bold uppercase tracking-[0.14em] text-
 type DoradoModel = 'sup' | 'hac' | 'fast';
 type DoradoMolecule = 'dna' | 'rna';
 type DoradoMode = 'simplex' | 'duplex';
-type ModifiedBases = '6mA' | '5mC_5hmC' | 'none';
 type AssemblyTool = 'flye' | 'canu';
 type FlyeReadQuality = 'nano-hq' | 'nano-corr' | 'nano-raw';
 type MinimapPreset = 'map-ont' | 'map-hifi' | 'map-pb' | 'sr';
@@ -104,16 +106,11 @@ interface NanoporeTemplateProps {
 // Constants
 // ============================================================================
 const DORADO_MODELS: Record<DoradoModel, { label: string; description: string }> = {
-    sup: { label: 'Super Accurate (SUP)', description: 'Highest accuracy; best for methylation.' },
+    sup: { label: 'Super Accurate (SUP)', description: 'Highest basecalling accuracy; slower.' },
     hac: { label: 'High Accuracy (HAC)', description: 'Balanced speed/accuracy.' },
     fast: { label: 'Fast', description: 'Fastest; lower accuracy.' },
 };
 
-const MODIFIED_BASES_OPTIONS: Record<ModifiedBases, { label: string; description: string }> = {
-    '6mA': { label: '6mA only', description: 'Adenine methylation.' },
-    '5mC_5hmC': { label: '5mC + 5hmC', description: 'Cytosine + hydroxymethyl-cytosine.' },
-    none: { label: 'No modification detection', description: 'No modification tags.' },
-};
 
 const QSCORE_LABELS: Record<number, string> = {
     5: 'Very permissive',
@@ -421,194 +418,16 @@ function revisionLabel(revision: MolBioSequenceRevision): string {
     return `r${revision.revision_number} · ${revision.is_current ? 'current' : 'historical'}`;
 }
 
-interface RawDnaImportRow {
-    id: string;
-    name: string;
-    sequence: string;
-    topology: 'circular' | 'linear';
-}
-
-function createRawDnaImportRow(index: number): RawDnaImportRow {
-    return { id: `raw-dna-${index}-${Date.now()}`, name: '', sequence: '', topology: 'circular' };
-}
-
 function ImportedMolBioRecords({ records }: { records: MolBioSequenceImportCommitResponse['records'] }) {
     const { contextHref } = useGlobalExperimentContext();
     if (!records.length) return null;
     return <div data-testid="molbio-import-committed-records" className="mt-3 space-y-2 text-xs">
-        <p>All imported records are saved in the shared MolBio library. Open each desired revision in the MolBio viewer and explicitly attach it to the Experiment. No record was automatically attached or selected for launch.</p>
+        <p>All imported records are saved in the shared Molecular Tools library. Open each desired revision in Molecular Tools and explicitly attach it to the Experiment. No record was automatically attached or selected for launch.</p>
         <ul>{records.map((record, index) => <li key={`${record.sequence_id}:${record.revision_id}:${index}`}>
             {record.name} · {record.sequence_id} · {record.revision_id || 'revision ID not returned'} · {' '}
-            <Link to={contextHref('/designer', { molbio_sequence_id: record.sequence_id, molbio_revision_id: record.revision_id ?? null })} className="underline">{record.revision_id ? 'Open exact revision in MolBio viewer' : 'Open MolBio library'}</Link>
+            <Link to={contextHref('/designer', { molbio_sequence_id: record.sequence_id, molbio_revision_id: record.revision_id ?? null })} className="underline">{record.revision_id ? 'Open exact revision in Molecular Tools' : 'Open Molecular Tools library'}</Link>
         </li>)}</ul>
     </div>;
-}
-
-function MolBioSequenceImportPanel() {
-    const queryClient = useQueryClient();
-    const [format, setFormat] = useState<'fasta' | 'genbank' | 'raw_dna'>('fasta');
-    const [topologyDefault, setTopologyDefault] = useState<'circular' | 'linear'>('circular');
-    const [sourceText, setSourceText] = useState('');
-    const [rawRows, setRawRows] = useState<RawDnaImportRow[]>(() => [createRawDnaImportRow(0)]);
-    const [previewPayload, setPreviewPayload] = useState<MolBioSequenceImportPayload | null>(null);
-    const [previewRecords, setPreviewRecords] = useState<Array<MolBioSequenceImportPreviewRecord & { errors: string[] }>>([]);
-    const [previewErrors, setPreviewErrors] = useState<MolBioSequenceImportError[]>([]);
-    const [message, setMessage] = useState('');
-    const [committedRecords, setCommittedRecords] = useState<MolBioSequenceImportCommitResponse['records']>([]);
-
-    const buildPayload = (): MolBioSequenceImportPayload => {
-        if (format === 'raw_dna') {
-            const rawRowsPayload = rawRows
-                .filter((row) => row.name.trim() && row.sequence.replace(/\s/g, '').trim())
-                .map((row) => ({
-                    name: row.name.trim(),
-                    sequence: row.sequence.replace(/\s/g, '').toUpperCase(),
-                    topology: row.topology,
-                }));
-            if (rawRowsPayload.length === 0) throw new Error('Add at least one named raw-DNA row before preview.');
-            return {
-                origin_surface: 'ngs',
-                source_format: 'raw_dna',
-                raw_rows: rawRowsPayload,
-                topology_default: topologyDefault,
-                idempotency_key: newIdempotencyKey('molbio-sequence-import'),
-            };
-        }
-
-        if (!sourceText.trim()) {
-            throw new Error(`Provide ${format === 'fasta' ? 'FASTA' : 'GenBank'} text before preview.`);
-        }
-        return {
-            origin_surface: 'ngs',
-            source_format: format,
-            source_text: sourceText,
-            topology_default: topologyDefault,
-            idempotency_key: newIdempotencyKey('molbio-sequence-import'),
-        };
-    };
-
-    const previewMutation = useMutation({
-        mutationFn: (payload: MolBioSequenceImportPayload) => previewMolBioSequenceImport(payload),
-        onSuccess: (response, payload) => {
-            const errors = response.data.errors || [];
-            setPreviewPayload(payload);
-            setPreviewRecords(response.data.records.map((record) => ({
-                ...record,
-                errors: errors
-                    .filter((error) => error.record_ordinal === record.record_ordinal)
-                    .map((error) => error.message),
-            })));
-            setPreviewErrors(errors.filter((error) => error.record_ordinal == null));
-            setMessage('Preview ready. Review every independent record before commit.');
-        },
-        onError: (error: unknown) => {
-            setPreviewPayload(null);
-            setPreviewRecords([]);
-            setPreviewErrors([]);
-            setMessage(extractApiErrorMessage(error));
-        },
-    });
-
-    const commitMutation = useMutation({
-        mutationFn: () => {
-            if (!previewPayload) throw new Error('Preview the import before committing it.');
-            return commitMolBioSequenceImport(previewPayload);
-        },
-        onSuccess: (response) => {
-            setMessage(`Committed ${response.data.records.length} saved sequence record(s).`);
-            setCommittedRecords(response.data.records);
-            setPreviewPayload(null);
-            setPreviewRecords([]);
-            setPreviewErrors([]);
-            queryClient.invalidateQueries({ queryKey: ['molbio-ngs-sequences'] });
-            queryClient.invalidateQueries({ queryKey: ['molbio-ngs-revisions'] });
-        },
-        onError: (error: unknown) => setMessage(extractApiErrorMessage(error)),
-    });
-
-    const handlePreview = () => {
-        setMessage('');
-        try {
-            previewMutation.mutate(buildPayload());
-        } catch (error: unknown) {
-            setMessage(error instanceof Error ? error.message : 'Unable to build import preview.');
-        }
-    };
-
-    return (
-        <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/40 p-3" data-testid="molbio-sequence-import-panel">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                    <h3 className="text-sm font-semibold text-[var(--text-primary)]">Import saved MolBio sequence</h3>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Preview checks your sequences without saving them. Commit saves the imported sequences and revisions.</p>
-                </div>
-                <div className="flex gap-2">
-                    <select value={format} onChange={(event) => setFormat(event.target.value as typeof format)} className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-xs text-[var(--text-primary)]">
-                        <option value="fasta">FASTA text</option>
-                        <option value="genbank">GenBank text</option>
-                        <option value="raw_dna">Explicit raw-DNA rows</option>
-                    </select>
-                    <select value={topologyDefault} onChange={(event) => setTopologyDefault(event.target.value as typeof topologyDefault)} className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-xs text-[var(--text-primary)]" aria-label="Import topology default">
-                        <option value="circular">Default circular</option>
-                        <option value="linear">Default linear</option>
-                    </select>
-                </div>
-            </div>
-
-            {format !== 'raw_dna' ? (
-                <div className="mt-2">
-                    <textarea value={sourceText} onChange={(event) => setSourceText(event.target.value)} placeholder={format === 'fasta' ? '>construct-a\nATGC…' : 'LOCUS       construct-a…'} rows={4} className="w-full rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 font-mono text-xs text-[var(--text-primary)]" />
-                </div>
-            ) : (
-                <div className="mt-2 space-y-2">
-                    {rawRows.map((row, index) => (
-                        <div key={row.id} className="grid grid-cols-1 gap-2 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2 md:grid-cols-[minmax(10rem,0.25fr)_minmax(0,1fr)_8rem_auto]">
-                            <input value={row.name} onChange={(event) => setRawRows((previous) => previous.map((candidate) => candidate.id === row.id ? { ...candidate, name: event.target.value } : candidate))} placeholder={`Record ${index + 1} name`} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-sm text-[var(--text-primary)]" />
-                            <input value={row.sequence} onChange={(event) => setRawRows((previous) => previous.map((candidate) => candidate.id === row.id ? { ...candidate, sequence: event.target.value.replace(/[^ACGTNacgtn\s]/g, '') } : candidate))} placeholder="ATGC…" className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 font-mono text-sm text-[var(--text-primary)]" />
-                            <select value={row.topology} onChange={(event) => setRawRows((previous) => previous.map((candidate) => candidate.id === row.id ? { ...candidate, topology: event.target.value as RawDnaImportRow['topology'] } : candidate))} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-sm text-[var(--text-primary)]">
-                                <option value="circular">Circular</option>
-                                <option value="linear">Linear</option>
-                            </select>
-                            <button type="button" onClick={() => setRawRows((previous) => previous.length > 1 ? previous.filter((candidate) => candidate.id !== row.id) : previous)} disabled={rawRows.length <= 1} className="rounded border border-[var(--border-primary)] px-2 py-1.5 text-xs text-[var(--text-secondary)] disabled:cursor-not-allowed disabled:opacity-40">Remove</button>
-                        </div>
-                    ))}
-                    <button type="button" onClick={() => setRawRows((previous) => [...previous, createRawDnaImportRow(previous.length)])} className="rounded border border-[var(--border-primary)] px-2 py-1.5 text-xs text-[var(--text-primary)]">Add raw-DNA row</button>
-                </div>
-            )}
-
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-                <button type="button" onClick={handlePreview} disabled={previewMutation.isPending || commitMutation.isPending} className="rounded border border-[var(--accent-secondary)] bg-[color-mix(in_srgb,var(--accent-secondary)_12%,transparent)] px-3 py-1.5 text-xs text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40">
-                    {previewMutation.isPending ? 'Previewing…' : 'Preview import'}
-                </button>
-                <button type="button" onClick={() => commitMutation.mutate()} disabled={!previewPayload || previewRecords.some((record) => record.errors.length > 0) || previewErrors.length > 0 || previewMutation.isPending || commitMutation.isPending} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40">
-                    {commitMutation.isPending ? 'Committing…' : 'Commit preview'}
-                </button>
-                {message && <span className="text-xs text-[var(--text-secondary)]">{message}</span>}
-            </div>
-
-            <ImportedMolBioRecords records={committedRecords} />
-            {(previewRecords.length > 0 || previewErrors.length > 0) && (
-                <div className="mt-3 overflow-x-auto rounded border border-[var(--border-primary)]" data-testid="molbio-import-preview-records">
-                    <table className="w-full min-w-[720px] text-left text-xs">
-                        <thead className="bg-[var(--bg-secondary)] uppercase tracking-wide text-[var(--text-secondary)]">
-                            <tr><th className="px-2 py-1.5">Independent record</th><th className="px-2 py-1.5">Digest</th><th className="px-2 py-1.5">Topology</th><th className="px-2 py-1.5">Errors</th></tr>
-                        </thead>
-                        <tbody className="divide-y divide-[var(--border-primary)]">
-                            {previewRecords.map((record, index) => (
-                                <tr key={`${record.name}-${index}`}>
-                                    <td className="px-2 py-1.5 text-[var(--text-primary)]">{record.name}</td>
-                                    <td className="px-2 py-1.5 font-mono text-[var(--text-secondary)]">{record.canonical_digest || '—'}</td>
-                                    <td className="px-2 py-1.5 text-[var(--text-secondary)]">{record.topology || '—'}</td>
-                                    <td className="px-2 py-1.5 text-rose-400">{record.errors.length > 0 ? record.errors.join(' · ') : 'None'}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                    {previewErrors.length > 0 && <div className="border-t border-[var(--border-primary)] px-2 py-1.5 text-xs text-rose-400">{previewErrors.map((error) => error.message).join(' · ')}</div>}
-                </div>
-            )}
-        </section>
-    );
 }
 
 interface PooledTargetDraft {
@@ -773,7 +592,7 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse, e
             <div className="flex flex-wrap items-center gap-2">
                 <button type="button" onClick={() => setTargets((previous) => previous.length < 96 ? [...previous, createPooledTarget(previous.length)] : previous)} disabled={targets.length >= 96} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-primary)] disabled:opacity-40">Add target</button>
                 <button type="button" onClick={() => setTargets((previous) => previous.length > 2 ? previous.slice(0, -1) : previous)} disabled={targets.length <= 2} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-secondary)] disabled:opacity-40">Remove last target</button>
-                <button type="button" onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending} className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white disabled:cursor-not-allowed disabled:opacity-40">{submitMutation.isPending ? 'Submitting pooled assignment…' : 'Submit pooled assignment'}</button>
+                <button type="button" onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending} className="rounded bg-[var(--accent-primary)] px-3 py-1.5 text-xs text-[var(--text-on-accent)] disabled:cursor-not-allowed disabled:opacity-40">{submitMutation.isPending ? 'Submitting pooled assignment…' : 'Submit pooled assignment'}</button>
                 {message && <span className="text-xs text-[var(--text-secondary)]">{message}</span>}
             </div>
         </section>
@@ -806,6 +625,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     });
     const [selectedMolbioSequenceId, setSelectedMolbioSequenceId] = useState(molbioSequenceId);
     const [selectedMolbioRevisionId, setSelectedMolbioRevisionId] = useState(molbioRevisionId);
+    const [showOptionalReference, setShowOptionalReference] = useState(false);
     const molbioRevisionPairError = Boolean(selectedMolbioSequenceId) !== Boolean(selectedMolbioRevisionId)
         ? 'Exact molecular sequence and revision IDs must be supplied together.'
         : null;
@@ -822,20 +642,23 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [jobName, setJobName] = useState(initialValues?.jobName as string || '');
     const [inputSource, setInputSource] = useState<InputSource>(initialValues?.inputSource as InputSource || 'pod5');
     const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowKey>(() => {
-        if (typeof initialValues?.selectedWorkflow === 'string') return initialValues.selectedWorkflow as WorkflowKey;
+        if (isNanoporeWorkflowKey(initialValues?.selectedWorkflow)) return initialValues.selectedWorkflow;
         if (initialValues?.selectedWorkflow === 'constructScreening' || initialValues?.ontWorkflowId === 'ont_construct_screening') return 'constructScreening';
         if (initialValues?.selectedWorkflow === 'fastqQc' || initialValues?.ontWorkflowId === 'ont_fastq_qc') return 'fastqQc';
         if (initialValues?.runAssembly === true || initialValues?.ontWorkflowId === 'wf_clone_validation') return 'clone';
-        if (initialValues?.inputSource === 'bam') return 'bamQc';
+        if (initialValues?.ontWorkflowId === 'ont_basecall_dna') return 'dna';
+        if (initialValues?.ontWorkflowId === 'ont_methylation_analysis') return 'modified';
+        if (initialValues?.inputSource === 'bam') return 'plasmidQc';
         if (initialValues?.inputSource === 'fastq') return 'plasmidQc';
         if (initialValues?.doradoMolecule === 'rna') return 'rna';
-        if (initialValues?.modifiedBases && initialValues.modifiedBases !== 'none') return 'modified';
-        if (initialValues?.barcodeKit) return 'barcode';
-        if (initialValues?.doradoMode === 'duplex') return 'duplex';
+        if (initialValues?.runModkit === true) return 'modified';
         return 'dna';
     });
-    const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
+    const [workflowNoticeDismissed, setWorkflowNoticeDismissed] = useState(false);
+    const workflowRequiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'modified';
     const [pod5Dir, setPod5Dir] = useState(initialValues?.pod5Dir as string || '');
+    const [pod5Uploading, setPod5Uploading] = useState(false);
+    const [rawSignalOrigin, setRawSignalOrigin] = useState(false);
     const [bamPath, setBamPath] = useState(initialValues?.bamPath as string || '');
     const [bamForceRealign, setBamForceRealign] = useState<boolean>(
         (initialValues?.bamForceRealign as boolean | undefined)
@@ -901,7 +724,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // State: Basecalling Config
     // ============================================================================
     const [doradoModel, setDoradoModel] = useState<DoradoModel>(initialValues?.doradoModel as DoradoModel || 'sup');
-    const [doradoMolecule, setDoradoMolecule] = useState<DoradoMolecule>(initialValues?.doradoMolecule as DoradoMolecule || 'dna');
+    const [doradoMolecule, setDoradoMolecule] = useState<DoradoMolecule>(initialValues?.doradoMolecule as DoradoMolecule || (selectedWorkflow === 'rna' ? 'rna' : 'dna'));
     const [doradoMode, setDoradoMode] = useState<DoradoMode>(initialValues?.doradoMode as DoradoMode || 'simplex');
     // Absence is distinct from an explicit historical/operator declaration.
     const [wfCloneBasecallerModel, setWfCloneBasecallerModel] = useState<string | undefined>(
@@ -913,9 +736,13 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         ? pinnedBasecallerModel : cloneModelSchema.default;
     const declaredCloneModel = wfCloneBasecallerModel ?? recommendedCloneModel;
     const [duplexPairs, setDuplexPairs] = useState(initialValues?.duplexPairs as string || '');
-    const [barcodeKit, setBarcodeKit] = useState<'' | 'SQK-RBK114-96'>(initialValues?.barcodeKit as '' | 'SQK-RBK114-96' || '');
+    const [barcodeKit, setBarcodeKit] = useState<'' | 'SQK-RBK114-96'>((initialValues?.barcodeKit as '' | 'SQK-RBK114-96' | undefined) ?? '');
     const [sampleSheet, setSampleSheet] = useState(initialValues?.sampleSheet as string || '');
-    const [modifiedBases, setModifiedBases] = useState<ModifiedBases>(initialValues?.modifiedBases as ModifiedBases || 'none');
+    const [sampleSheetBlocker, setSampleSheetBlocker] = useState('');
+    const [selectedModifications, setSelectedModifications] = useState<string[]>(() => parseModifiedBases(initialValues?.modifiedBases as string | undefined));
+    const modifiedBases = serializeModifiedBases(selectedModifications);
+    const setModifiedBases = (value: string) => setSelectedModifications(parseModifiedBases(value));
+    const modificationOptions = modificationCatalog(doradoMolecule, doradoModel);
 
     // ============================================================================
     // State: QC Settings
@@ -939,7 +766,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [runFastqQc, setRunFastqQc] = useState<boolean>(
         (initialValues?.runFastqQc as boolean | undefined)
         ?? (initialValues?.runMultimerQc as boolean | undefined)
-        ?? true
+        ?? (selectedWorkflow !== 'dna')
     );
     // Only initialization reads saved values. Reference/config refreshes never replace edits.
     const savedExpectedSize = initialValues && Object.prototype.hasOwnProperty.call(initialValues, 'expectedPlasmidSize')
@@ -1043,6 +870,16 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const validBatchSize = batchSize === null || (Number.isInteger(batchSize) && batchSize >= 0);
     const [emitSummary, setEmitSummary] = useState(initialValues?.emitSummary !== false);
     const [emitMoves, setEmitMoves] = useState(initialValues?.emitMoves !== false);
+    const basecallDevicesQuery = useQuery({ queryKey: ['ont-basecall-devices', executionTargetId], queryFn: () => fetchOntBasecallDevices(executionTargetId), staleTime: 300_000 });
+    const [doradoDevice, setDoradoDevice] = useState<string>(String(initialValues?.doradoDevice ?? ''));
+    const effectiveDoradoDevice = doradoDevice || basecallDevicesQuery.data?.default || (executionTargetId ? 'cuda:0' : '');
+    const doradoDeviceOptions = [...(basecallDevicesQuery.data?.options ?? [
+        { value: 'cpu', label: 'CPU' }, { value: 'cuda:0', label: 'CUDA (scheduler-assigned GPU)' },
+    ])];
+    if (effectiveDoradoDevice && !doradoDeviceOptions.some(option => option.value === effectiveDoradoDevice)) {
+        doradoDeviceOptions.push({ value: effectiveDoradoDevice, label: `${effectiveDoradoDevice} (selected)` });
+    }
+    const requiresReference = workflowRequiresReference || (selectedWorkflow === 'dna' && (inputSource === 'fastq' || runModkit || runFastqQc));
     const [modkitFilterThreshold, setModkitFilterThreshold] = useState<number | null>(
         (initialValues?.modkitFilterThreshold as number | null | undefined) ?? null
     );
@@ -1138,7 +975,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         selectedManagedReferenceRevisionId,
     ]);
 
-    const usesExpectedPlasmidSize = ['clone', 'plasmidQc', 'constructScreening', 'fastqQc', 'bamQc'].includes(selectedWorkflow);
+    const usesExpectedPlasmidSize = ['dna', 'clone', 'plasmidQc', 'constructScreening', 'fastqQc'].includes(selectedWorkflow);
     const hasValidExpectedPlasmidSize = autoExpectedPlasmidSize || isIntegerInRange(Number(expectedPlasmidSize), 1, FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP);
     const hasValidFastqNumericControls = useMemo(() => (
         hasValidExpectedPlasmidSize
@@ -1165,7 +1002,20 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             })
             .filter((value): value is string => Boolean(value)),
     ), [exactStateRevisionQuery.data?.members]);
-    const allMolbioSequences = molbioSequencesQuery.data || [];
+    const missingSequenceIds = [...new Set([...exactStateMolecularRevisionKeys].map(key => key.split(':')[0]))]
+        .filter(id => !(molbioSequencesQuery.data ?? []).some(sequence => sequence.id === id)).sort();
+    const projectSequenceSummaries = useQuery({
+        queryKey: ['molbio-ngs-sequences', 'exact-project-members', exactDomainExperimentId, exactStateRevisionId, missingSequenceIds.join(',')],
+        queryFn: async () => {
+            const result: NucleotideSequenceListItem[] = [];
+            for (let index = 0; index < missingSequenceIds.length; index += 128) {
+                result.push(...(await fetchNucleotideSequences({ sequence_ids: missingSequenceIds.slice(index,index+128).join(','), limit: 500 })).data);
+            }
+            return result;
+        },
+        enabled: Boolean(exactDomainExperimentId && missingSequenceIds.length), retry: false,
+    });
+    const allMolbioSequences = [...(molbioSequencesQuery.data ?? []), ...(projectSequenceSummaries.data ?? [])];
     const allMolbioRevisions = molbioRevisionsQuery.data || [];
     const molbioSequences = exactDomainExperimentId
         ? allMolbioSequences.filter((sequence) => [...exactStateMolecularRevisionKeys].some((key) => key.startsWith(`${sequence.id}:`)))
@@ -1209,10 +1059,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         selectedReferenceIsExactStateMember,
         usesMolBioReceiptLane,
     ]);
-    const methylationEnabled = modifiedBases !== 'none';
-    const canRunModkit = selectedWorkflow === 'modified' && methylationEnabled;
-    const fastqQcSettingAvailable = selectedWorkflow === 'plasmidQc'
-        || selectedWorkflow === 'bamQc'
+    const canRunModkit = ['modified', 'plasmidQc', 'dna', 'clone', 'constructScreening'].includes(selectedWorkflow);
+    const fastqQcSettingAvailable = selectedWorkflow === 'dna' || selectedWorkflow === 'plasmidQc'
         || selectedWorkflow === 'fastqQc'
         || ((selectedWorkflow === 'clone' || selectedWorkflow === 'constructScreening') && inputSource === 'fastq');
     const cloneValidationControlsActive = selectedWorkflow === 'clone'
@@ -1228,15 +1076,20 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         const blockers: string[] = [];
         if (selectedWorkflow === 'pooledAssignment') blockers.push('Use the pooled assignment panel to submit this workflow.');
         if (!jobName.trim()) blockers.push('Enter a job name.');
-        if (!executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1) blockers.push('Select one GPU or Scheduler auto before submitting this NGS job.');
+        if (effectiveDoradoDevice !== 'cpu' && !executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1) blockers.push('Select one GPU or Scheduler auto before submitting this NGS job.');
         if (inputSource === 'pod5' && !pod5Dir.trim()) blockers.push('Please specify a POD5 data directory.');
+        if (inputSource === 'pod5' && pod5Uploading) blockers.push('Wait for the POD5 upload to finish.');
+        if (inputSource === 'pod5' && barcodeKit && sampleSheetBlocker) blockers.push(sampleSheetBlocker);
         if (inputSource === 'pod5' && doradoMolecule === 'rna' && doradoMode === 'duplex') blockers.push('RNA duplex is unsupported by the locked Dorado runtime.');
         if (inputSource === 'pod5' && doradoMode === 'duplex' && !duplexPairs.trim()) blockers.push('Duplex basecalling requires a confined read-pairs file.');
         if (inputSource === 'pod5' && doradoMode === 'duplex' && barcodeKit) blockers.push('Barcode classification and duplex cannot be combined in the locked runtime.');
-        if (inputSource === 'pod5' && modifiedBases !== 'none' && (doradoMolecule !== 'dna' || doradoModel !== 'hac' || doradoMode !== 'simplex')) blockers.push('Modified-base calling requires DNA HAC simplex.');
+        const modificationBlocker = inputSource === 'pod5' ? modifiedBasesBlocker(selectedModifications, doradoMolecule, doradoModel, doradoMode) : null;
+        if (modificationBlocker) blockers.push(modificationBlocker);
+        if (inputSource === 'pod5' && canRunModkit && runModkit && modifiedBases === 'none') blockers.push('Choose a modification model before generating methylation tables.');
+        if (inputSource === 'fastq' && canRunModkit && runModkit) blockers.push('FASTQ has no MM/ML modification probabilities. Disable methylation tables or select tagged BAM/POD5.');
         if (inputSource === 'bam' && !bamPath.trim()) blockers.push('Please specify a BAM file path.');
         if (inputSource === 'fastq' && !fastqPath.trim()) blockers.push('Please specify a FASTQ file path.');
-        if (inputSource === 'fastq' && !['clone', 'plasmidQc', 'constructScreening', 'fastqQc', 'pooledAssignment'].includes(selectedWorkflow)) blockers.push('The selected workflow does not accept FASTQ input.');
+        if (inputSource === 'fastq' && !['dna', 'clone', 'plasmidQc', 'constructScreening', 'fastqQc', 'pooledAssignment'].includes(selectedWorkflow)) blockers.push('The selected workflow does not accept FASTQ input.');
         if (molbioRevisionPairError) blockers.push(molbioRevisionPairError);
         if (managedReferenceBlocker) blockers.push(managedReferenceBlocker);
         if (usesExpectedPlasmidSize && runFastqQc && !hasValidExpectedPlasmidSize) blockers.push('Expected plasmid size must be Auto or an integer within the displayed bounds.');
@@ -1255,9 +1108,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         ? 'CONSTRUCT SCREENING'
         : selectedWorkflow === 'plasmidQc'
             ? 'PLASMID QC'
-            : selectedWorkflow === 'bamQc'
-                ? 'BAM QC'
-                : selectedWorkflow === 'fastqQc'
+            : selectedWorkflow === 'fastqQc'
                     ? 'ONT FASTQ QC'
                     : selectedWorkflow === 'clone'
                         ? 'CLONE VALIDATION'
@@ -1268,8 +1119,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             ? 'ALIGNED READS'
             : 'ALREADY BASECALLED';
     const reviewModelLabel = inputSource === 'pod5' ? doradoModel.toUpperCase() : 'N/A';
-    const reviewGpuLabel = inputSource === 'fastq'
-        ? 'CPU ONLY'
+    const reviewGpuLabel = inputSource === 'fastq' || effectiveDoradoDevice === 'cpu'
+        ? (executionTargetId ? 'WORKER CPU' : 'LOCAL CPU')
         : executionTargetId ? 'WORKER SCHEDULER' : pinnedGpus.length === 1 ? `GPU ${pinnedGpus[0]}` : 'AUTO GPU';
     const reviewReferenceLabel = requiresReference ? (reviewReferenceReady ? 'REFERENCE READY' : 'REFERENCE REQUIRED') : 'REFERENCE OPTIONAL';
     const handleValidate = () => {
@@ -1338,7 +1189,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             ? 'ont_construct_screening'
             : selectedWorkflow === 'fastqQc'
                 ? 'ont_fastq_qc'
-                : selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc'
+                : selectedWorkflow === 'plasmidQc'
             ? 'ont_plasmid_qc'
             : selectedWorkflow === 'rna'
                 ? 'ont_basecall_rna'
@@ -1349,7 +1200,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         return {
             name: jobName,
             ...prepareExecutionPlacement({ execution_target_id: executionTargetId, execution_policy: initialReturnPolicy }),
-            pinned_gpu: !executionTargetId && inputSource !== 'fastq' && pinnedGpus.length === 1 ? pinnedGpus[0] : null,
+            pinned_gpu: effectiveDoradoDevice !== 'cpu' && !executionTargetId && inputSource !== 'fastq' && pinnedGpus.length === 1 ? pinnedGpus[0] : null,
             params: {
                 ...(molbioNgsReceiptId && { molbio_ngs_receipt_id: molbioNgsReceiptId }),
                 ...(comparisonPanelReceiptId && { ngs_comparison_panel_receipt_id: comparisonPanelReceiptId }),
@@ -1373,6 +1224,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     trim_adapters: trimAdapters,
                     emit_summary: emitSummary,
                     emit_moves: doradoMode === 'simplex' ? emitMoves : false,
+                    ...(effectiveDoradoDevice && { dorado_device: effectiveDoradoDevice }),
                     ...(batchSize !== null && { dorado_batch_size: batchSize }),
                 }),
                 ...(inputSource === 'bam' && {
@@ -1411,7 +1263,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     wf_clone_expected_identity: wfCloneExpectedIdentity,
                     ...(wfCloneSample.trim() && { wf_clone_sample: wfCloneSample.trim() }),
                 }),
-                ...((selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc') && {
+                ...((selectedWorkflow === 'dna' || selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc') && {
                     samtools_consensus_config: samtoolsConsensusConfig,
                     enable_rotating_reference_frames: enableRotatingReferenceFrames,
                     rotation_scan_step_bp: rotationScanStepBp,
@@ -1625,14 +1477,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             setBarcodeKit('');
             return;
         }
-        if (workflow === 'bamQc') {
-            setInputSource('bam');
-            setRunAssembly(false);
-            setRunFastqQc(false);
-            setRunModkit(false);
-            setBarcodeKit('');
-            return;
-        }
         if (workflow === 'pooledAssignment') {
             setInputSource('fastq');
             setRunAssembly(false);
@@ -1654,26 +1498,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             return;
         }
         setDoradoMolecule('dna');
-        if (workflow === 'duplex') {
-            setTrimAdapters(true);
-            setDoradoMode('duplex');
-            setModifiedBases('none');
-            setBarcodeKit('');
-            setRunModkit(false);
-            return;
-        }
         setDoradoMode('simplex');
         if (workflow === 'modified') {
-            setDoradoModel('hac');
-            setModifiedBases('5mC_5hmC');
+            setModifiedBases('5mC_5hmC 6mA');
             setBarcodeKit('');
             setRunModkit(true);
-            return;
-        }
-        if (workflow === 'barcode') {
-            setModifiedBases('none');
-            setBarcodeKit('SQK-RBK114-96');
-            setRunModkit(false);
             return;
         }
         setModifiedBases('none');
@@ -1684,40 +1513,88 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // ============================================================================
     // Render
     // ============================================================================
+    // BLOW5/SLOW5 is offered wherever POD5 is: it is restored to POD5 before Dorado.
+    const RAW_SIGNAL = { key: 'blow5' as const, label: 'BLOW5/SLOW5 raw signal' };
+    const inputOptions: Array<{ key: InputSource | 'blow5'; label: string }> = selectedWorkflow === 'dna' || selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening'
+        ? [{ key: 'pod5' as const, label: 'POD5 raw reads' }, RAW_SIGNAL, { key: 'bam' as const, label: 'Existing BAM' }, { key: 'fastq' as const, label: 'FASTQ reads' }]
+        : selectedWorkflow === 'modified'
+            ? [{ key: 'pod5' as const, label: 'POD5 raw reads' }, RAW_SIGNAL, { key: 'bam' as const, label: 'Existing BAM with MM/ML tags' }]
+            : selectedWorkflow === 'pooledAssignment' || selectedWorkflow === 'fastqQc'
+                ? [{ key: 'fastq' as const, label: 'FASTQ reads' }]
+                : [{ key: 'pod5' as const, label: 'POD5 raw reads' }, RAW_SIGNAL];
+    const selectedInputKey: InputSource | 'blow5' = inputSource === 'pod5' && rawSignalOrigin ? 'blow5' : inputSource;
     return (
-        <div className="nanopore-template mx-auto max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_25%,#000)] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.38)] lg:p-6">
+        <div className="nanopore-template mx-auto w-full max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4 text-[var(--text-primary)] shadow-[var(--shadow-card)] lg:p-6">
             {review && review.key === requestKey && <ExecutionPlanApproval preview={review.prepared.preview} finish={review.finish} />}
-            <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} />
-            <ExecutionPolicyControl initialPolicy={initialReturnPolicy} onChange={setReturnPolicy} />
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                     <button
                         onClick={onBack}
+                        aria-label="Back to NGS runs"
                         className="p-2 hover:bg-[var(--bg-tertiary)] rounded-lg transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                     >
                         <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
                             <path fillRule="evenodd" d="M17 10a.75.75 0 01-.75.75H5.612l4.158 3.96a.75.75 0 11-1.04 1.08l-5.5-5.25a.75.75 0 010-1.08l5.5-5.25a.75.75 0 111.04 1.08L5.612 9.25H16.25A.75.75 0 0117 10z" clipRule="evenodd" />
                         </svg>
                     </button>
-                    <div className="text-[var(--accent-secondary)]">
+                    <div className="text-[var(--text-action)]">
                         <NanoporeIcon />
                     </div>
                     <div>
-                        <h1 className="text-2xl font-bold text-[var(--text-primary)]">Nanopore Sequencing</h1>
+                        <h2 className="text-2xl font-bold text-[var(--text-primary)]">Data analysis</h2>
                     </div>
                 </div>
             </div>
-
             {/* Operator-first workflow chooser: do not make users infer a workflow from low-level switches. */}
+            {initialValues?.workflowUnrecognized === true && !workflowNoticeDismissed && (
+                <div role="status" className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_45%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-sm text-[var(--text-primary)]">
+                    This saved job used workflow <code>{String(initialValues.ontWorkflowId || 'unknown')}</code>, which this version does not recognize. The form below shows the closest available workflow; check the selection before submitting.
+                </div>
+            )}
             <NanoporeWorkflowChooser
                 selectedWorkflow={selectedWorkflow}
-                onSelect={selectWorkflow}
+                onSelect={(workflow) => { setWorkflowNoticeDismissed(true); selectWorkflow(workflow); }}
             />
 
+            <details className="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3" open={executionTargetId ? true : undefined}>
+                <summary className="cursor-pointer text-sm font-medium">Compute location · {executionTargetId ? 'Remote worker selected' : 'Local'}</summary>
+                <div className="mt-3">
+                    <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} />
+                        {inputSource === 'pod5' && (
+                            <div>
+                                <label className="text-xs text-[var(--text-secondary)] mb-1 block" htmlFor="dorado-device">Basecalling device</label>
+                                <select
+                                    id="dorado-device"
+                                    aria-label="Basecalling device"
+                                    value={effectiveDoradoDevice}
+                                    onChange={(e) => setDoradoDevice(e.target.value)}
+                                    className="w-48 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-1.5 text-[var(--text-primary)] text-sm"
+                                >
+                                    {doradoDeviceOptions.map((option) => (
+                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                </select>
+                                <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                    {executionTargetId ? 'Device applies to the selected worker, not this controller. CUDA is assigned by its scheduler; availability is reported at execution.' : basecallDevicesQuery.data && !basecallDevicesQuery.data.cuda_available
+                                        ? 'No CUDA device was observed on the controller. The selected device remains explicit; native execution reports availability.'
+                                        : 'CPU works anywhere but is much slower than a CUDA GPU.'}
+                                </p>
+                            </div>
+                        )}
+
+                    {executionTargetId && <ExecutionPolicyControl initialPolicy={initialReturnPolicy} onChange={setReturnPolicy} />}
+                </div>
+            </details>
+
+            {selectedWorkflow === 'pooledAssignment' ? (
+                <PooledReferenceAssignmentPanel executionTargetId={executionTargetId} executionPolicy={initialReturnPolicy}
+                    fastqPath={fastqPath} sequences={molbioSequences}
+                    onFastqBrowse={() => openPathPicker({ field: 'fastqPath', title: 'Select FASTQ File', mode: 'file', filter: 'fastq' })} />
+            ) : <>
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
             <section className={TASK_FLOW_PANEL} data-testid="ngs-job-input-section" aria-labelledby="ngs-job-input-heading">
-                <h2 id="ngs-job-input-heading" className={`${TASK_FLOW_LABEL} mb-3`}>1 · Job and input</h2>
+                <h2 id="ngs-job-input-heading" className={`${TASK_FLOW_LABEL} mb-3`}>Job and input</h2>
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <div className={TASK_FLOW_CARD}>
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Job Name *</label>
@@ -1730,10 +1607,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     />
                     {executionTargetId ? (
                         <p className="mt-4 text-xs text-[var(--text-secondary)]">Worker scheduler owns GPU assignment; controller GPU pins are not sent. Existing POD5, FASTQ and supported BAM computations can run on the selected worker. Instrument acquisition and control remain local.</p>
-                    ) : inputSource === 'fastq' ? (
+                    ) : inputSource === 'fastq' || effectiveDoradoDevice === 'cpu' ? (
                         <div className="mt-4 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/60 px-3 py-2" data-testid="ngs-gpu-cpu-only">
                             <div className="text-sm font-medium text-[var(--text-secondary)]">GPU assignment</div>
-                            <p className="mt-1 text-xs text-[var(--text-secondary)]">CPU only for FASTQ input. GPU pinning is not applicable.</p>
+                            <p className="mt-1 text-xs text-[var(--text-secondary)]">CPU execution selected. GPU pinning is not applicable.</p>
                         </div>
                     ) : (
                     <label className="mt-4 block text-sm font-medium text-[var(--text-secondary)]">
@@ -1750,37 +1627,28 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         </select>
                     </label>
                     )}
-                    {!executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1 && <p role="alert" className="mt-2 text-xs text-amber-200">This saved job contains multiple GPU pins. Select one GPU or Scheduler auto before submitting this NGS job.</p>}
+                    {effectiveDoradoDevice !== 'cpu' && !executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1 && <p role="alert" className="mt-2 text-xs text-[var(--warning)]">This saved job contains multiple GPU pins. Select one GPU or Scheduler auto before submitting this NGS job.</p>}
                 </div>
 
             {/* Data Source */}
             <div className={TASK_FLOW_CARD}>
-                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Primary Input *</label>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
-                    {(selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening'
-                        ? [
-                            { key: 'pod5' as const, label: 'POD5 Raw Reads' },
-                            { key: 'bam' as const, label: 'Existing BAM' },
-                            { key: 'fastq' as const, label: 'FASTQ Analysis' },
-                        ]
-                        : selectedWorkflow === 'modified'
-                            ? [{ key: 'pod5' as const, label: 'POD5 Raw Reads' }, { key: 'bam' as const, label: 'Existing BAM with MM/ML tags' }]
-                            : selectedWorkflow === 'pooledAssignment' || selectedWorkflow === 'fastqQc'
-                                ? [{ key: 'fastq' as const, label: 'FASTQ Analysis' }]
-                                : selectedWorkflow === 'bamQc'
-                                    ? [{ key: 'bam' as const, label: 'Existing BAM' }]
-                                    : [{ key: 'pod5' as const, label: 'POD5 Raw Reads' }]
-                    ).map((source) => (
+                <p className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Primary input *</p>
+                <p className="mb-3 text-xs text-[var(--text-secondary)]">BLOW5/SLOW5 is validated, indexed and restored to POD5 here before Dorado basecalling. FASTQ contains bases and quality scores, not MM/ML modification probabilities; tandem modkit needs tagged BAM or modified-base calls from POD5.</p>
+                <div className="flex flex-wrap gap-2 mb-3">
+                    {inputOptions.length === 1 ? <p className="text-sm text-[var(--text-primary)]">{inputOptions[0].label}</p> : inputOptions.map((source) => (
                         <button
                             key={source.key}
                             type="button"
-                            onClick={() => setInputSource(source.key)}
-                            aria-pressed={inputSource === source.key}
-                            className={`px-3 py-2 rounded border text-sm text-left transition-colors ${inputSource === source.key
+                            onClick={() => {
+                                if (source.key === 'blow5') { setRawSignalOrigin(true); setInputSource('pod5'); setPod5Dir(''); }
+                                else { if (rawSignalOrigin) setPod5Dir(''); setRawSignalOrigin(false); setInputSource(source.key); }
+                            }}
+                            aria-pressed={selectedInputKey === source.key}
+                            className={`min-w-0 flex-1 basis-32 px-3 py-2 rounded border text-sm text-left transition-colors ${selectedInputKey === source.key
                                 ? ''
                                 : 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
                                 }`}
-                            style={inputSource === source.key ? {
+                            style={selectedInputKey === source.key ? {
                                 borderColor: 'var(--accent-secondary)',
                                 backgroundColor: 'color-mix(in srgb, var(--accent-secondary) 12%, transparent)',
                                 color: 'var(--text-primary)',
@@ -1791,10 +1659,17 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     ))}
                 </div>
 
-                {inputSource === 'pod5' && (
+                {inputSource === 'pod5' && rawSignalOrigin && (
                     <>
-                        <div className="flex items-center gap-2">
-                            <div className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 min-h-10">
+                        {pod5Dir && <p className="text-xs text-[var(--text-secondary)]">Restored POD5: <span className="font-mono break-all text-[var(--text-primary)]">{formatPathDisplay(pod5Dir)}</span></p>}
+                        <RawSignalPod5Input domainExperimentId={exactDomainExperimentId} onPod5Directory={setPod5Dir} onBusyChange={setPod5Uploading} />
+                    </>
+                )}
+
+                {inputSource === 'pod5' && !rawSignalOrigin && (
+                    <>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <div className="min-w-0 flex-1 basis-40 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 min-h-10">
                                 {pod5Dir ? (
                                     <span className="text-[var(--text-primary)] font-mono text-sm break-all">{formatPathDisplay(pod5Dir)}</span>
                                 ) : (
@@ -1802,13 +1677,18 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 )}
                             </div>
                             <button
+                                type="button"
+                                disabled={pod5Uploading}
+                                aria-label="Browse POD5 folder"
                                 onClick={() => openPathPicker({ field: 'pod5Dir', title: 'Select POD5 Directory', mode: 'directory', filter: 'unknown' })}
                                 className="px-3 py-2 rounded border border-[var(--border-primary)] text-[var(--text-primary)] text-sm hover:bg-[var(--bg-tertiary)] transition-colors"
                             >
-                                Browse
+                                Browse folder
                             </button>
                             {pod5Dir && (
                                 <button
+                                    type="button"
+                                    disabled={pod5Uploading}
                                     onClick={() => setPod5Dir('')}
                                     className="px-3 py-2 rounded border border-[var(--border-primary)] text-[var(--text-secondary)] text-sm hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
                                 >
@@ -1816,6 +1696,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 </button>
                             )}
                         </div>
+                        <Pod5Upload selectedDirectory={pod5Dir} onSelectDirectory={setPod5Dir} onBusyChange={setPod5Uploading} />
                     </>
                 )}
 
@@ -1883,30 +1764,27 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
 
             {/* Shared MolBio and NGS reference library */}
             <section className={TASK_FLOW_PANEL} data-testid="immutable-molbio-reference-panel" data-ngs-section="reference" aria-labelledby="ngs-reference-heading">
-                <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>2 · Reference / sample</h2>
-                {selectedWorkflow === 'pooledAssignment' ? (
-                    <PooledReferenceAssignmentPanel
-                        executionTargetId={executionTargetId}
-                        executionPolicy={initialReturnPolicy}
-                        fastqPath={fastqPath}
-                        sequences={molbioSequences}
-                        onFastqBrowse={() => openPathPicker({ field: 'fastqPath', title: 'Select FASTQ File', mode: 'file', filter: 'fastq' })}
-                    />
-                ) : (
-                    <>
+                <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>Reference sequence</h2>
+                {!requiresReference && !showOptionalReference && !selectedMolbioSequenceId && !selectedMolbioRevisionId && !selectedManagedReferenceRevisionId ? (
+                    <div className="space-y-3 text-sm text-[var(--text-secondary)]">
+                        <p>No reference needed for basecalling.</p>
+                        <button type="button" onClick={() => setShowOptionalReference(true)} className="rounded border border-[var(--border-primary)] px-3 py-2 text-[var(--text-primary)]">Add optional reference</button>
+                    </div>
+                ) : <>
                     {!requiresReference && <button type="button" onClick={() => {
                         setSelectedMolbioSequenceId(''); setSelectedMolbioRevisionId('');
                         setSelectedManagedReferenceRevisionId(''); setApprovedComparisonPanelId('');
+                        setShowOptionalReference(false);
                     }}>No reference — basecalling only</button>}
                     <div className="mb-3">
-                        <h3 className="text-sm font-semibold text-[var(--text-primary)]">Shared Experiment reference</h3>
-                        <p className="mt-1 text-xs text-[var(--text-secondary)]">{requiresReference ? 'Choose a saved reference revision attached to this Experiment.' : 'Reference-free basecalling is supported. Optionally choose an attached reference for alignment; Experiment and state grouping are retained.'}</p>
+                        <h3 className="text-sm font-semibold text-[var(--text-primary)]">{requiresReference ? 'This analysis needs a reference sequence' : 'Optional reference sequence'}</h3>
+                        <p className="mt-1 text-xs text-[var(--text-secondary)]">{requiresReference ? 'Pick a sequence already in this Project, or add one below: paste it, upload FASTA/GenBank/CSV files, or choose saved sequences from Molecular Tools.' : 'Basecalling works without a reference. Add one if you also want reads aligned and checked against it.'}</p>
                         {requiresReference && exactDomainExperimentId && molbioSequences.length === 0 && !molbioSequencesQuery.isLoading && !exactStateRevisionQuery.isLoading && (
-                            <p role="alert" className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">No shared reference is attached to this scientific-state revision. Return to the Experiment’s Molecular Inputs section to add one or more references.</p>
+                            <p role="alert" className="mt-2 rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-2 text-xs text-[var(--warning)]">This Project has no reference sequences yet. Add one or several below.</p>
                         )}
                     </div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                        <label className="text-xs text-[var(--text-secondary)]">Experiment reference sequence
+                        <label className="text-xs text-[var(--text-secondary)]">Project sequence
                             <select
                                 value={selectedMolbioSequenceId}
                                 onChange={(event) => {
@@ -1917,11 +1795,11 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-2 text-sm text-[var(--text-primary)]"
                                 data-testid="molbio-sequence-selector"
                             >
-                                <option value="">Select attached reference…</option>
+                                <option value="">Select a Project sequence…</option>
                                 {molbioSequences.map((sequence) => <option key={sequence.id} value={sequence.id}>{sequence.name}</option>)}
                             </select>
                         </label>
-                        <label className="text-xs text-[var(--text-secondary)]">Saved revision
+                        <label className="text-xs text-[var(--text-secondary)]">Version
                             <select
                                 value={selectedMolbioRevisionId}
                                 onChange={(event) => setSelectedMolbioRevisionId(event.target.value)}
@@ -1929,12 +1807,13 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-2 text-sm text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
                                 data-testid="molbio-revision-selector"
                             >
-                                <option value="">Select exact revision…</option>
+                                <option value="">Select a version…</option>
                                 {molbioRevisions.map((revision) => <option key={revision.id} value={revision.id}>{revisionLabel(revision)}</option>)}
                             </select>
                         </label>
                     </div>
-                    {molbioRevisionsQuery.isError && <p className="mt-2 text-xs text-rose-400">Unable to load revisions for this sequence.</p>}
+                    {projectSequenceSummaries.isError && <p role="alert" className="mt-2 text-xs text-[var(--text-error)]">Some Project sequences could not be loaded. <button type="button" onClick={() => void projectSequenceSummaries.refetch()}>Retry Project sequences</button></p>}
+                    {molbioRevisionsQuery.isError && <p className="mt-2 text-xs text-[var(--error)]">Unable to load revisions for this sequence.</p>}
                     {selectedMolbioSequence && selectedMolbioRevision && (
                         <div className="mt-3 grid grid-cols-2 gap-2 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/50 p-3 text-xs md:grid-cols-5" data-testid="molbio-revision-summary">
                             <div><div className="text-[var(--text-secondary)]">Sequence</div><div className="mt-1 text-[var(--text-primary)]">{selectedMolbioSequence.name}</div></div>
@@ -1944,7 +1823,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             <div><div className="text-[var(--text-secondary)]">Topology / state</div><div className="mt-1 text-[var(--text-primary)]">{selectedMolbioRevision.topology} · {selectedMolbioRevision.is_current ? 'current' : 'historical'}</div></div>
                         </div>
                     )}
-                    {selectedMolbioSequenceId && ['plasmidQc', 'constructScreening', 'fastqQc', 'bamQc'].includes(selectedWorkflow) && (
+                    {selectedMolbioSequenceId && ['plasmidQc', 'constructScreening', 'fastqQc'].includes(selectedWorkflow) && (
                         <div className="mt-3 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/40 p-3">
                             <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">Approved comparison panel (optional)</label>
                             <select value={approvedComparisonPanelId} onChange={(event) => setApprovedComparisonPanelId(event.target.value)} className="w-full rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]">
@@ -1956,13 +1835,19 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         </div>
                     )}
                     <div className="mt-3">
-                        <MolBioSequenceImportPanel key={`${exactDomainExperimentId}:${exactStateRevisionId}`} />
+                        <ReferenceSequenceInputs key={exactDomainExperimentId} onAdded={(records, nextStateId) => {
+                            if (nextStateId) experimentContext.setStateRevisionId(nextStateId);
+                            if (records.length === 1 && nextStateId && records[0].revision_id) {
+                                setSelectedMolbioSequenceId(records[0].sequence_id);
+                                setSelectedMolbioRevisionId(records[0].revision_id);
+                                setApprovedComparisonPanelId('');
+                            }
+                        }} />
                     </div>
-                    </>
-                )}
+                </>}
             </section>
             {/* Historical Domain-managed references remain visible only when reopening an older job. */}
-            {Boolean(initialValues?.ngsReferenceRevisionId) && selectedWorkflow !== 'pooledAssignment' && (
+            {Boolean(initialValues?.ngsReferenceRevisionId) && (
             <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-1 space-y-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                     <div><label className="block text-sm font-medium text-[var(--text-secondary)]">Historical Domain-managed reference</label><p className="mt-1 text-xs text-[var(--text-secondary)]">Read-only compatibility for a job created before the shared MolBio and NGS reference library.</p></div>
@@ -1980,7 +1865,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     <div>Reference resource ID: <span className="font-mono break-all">{selectedManagedReference?.resource.id || 'not selected'}</span></div><div>Reference revision ID: <span className="font-mono break-all">{selectedManagedReference?.revision.id || 'not selected'}</span></div>
                     <div className="md:col-span-2">Canonical FASTA SHA-256: <span className="font-mono break-all">{selectedManagedReference?.revision.canonical_fasta_sha256 || 'not selected'}</span></div>
                 </div>
-                {usesMolBioReceiptLane ? <p className="rounded border border-cyan-500/40 bg-cyan-500/10 p-3 text-xs text-cyan-100">MolBio one-time receipt handoff is active for {selectedMolbioSequenceId}. Managed-reference authority cannot be mixed with this receipt/comparison-panel lane.</p> : managedReferenceBlocker ? <p role="alert" className="rounded border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100">Managed launch disabled: {managedReferenceBlocker}</p> : null}
+                {usesMolBioReceiptLane ? <p className="rounded border border-[color-mix(in_srgb,var(--accent-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)] p-3 text-xs text-[var(--accent-primary)]">MolBio one-time receipt handoff is active for {selectedMolbioSequenceId}. Managed-reference authority cannot be mixed with this receipt/comparison-panel lane.</p> : managedReferenceBlocker ? <p role="alert" className="rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] p-3 text-xs text-[var(--warning)]">Managed launch disabled: {managedReferenceBlocker}</p> : null}
                 {referenceTab === 'managed' && <div className="space-y-2">
                     <select value={selectedManagedReferenceRevisionId} onChange={(event) => setSelectedManagedReferenceRevisionId(event.target.value)} disabled={usesMolBioReceiptLane} className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-sm disabled:opacity-50">
                         <option value="">Select immutable managed revision…</option>{selectedManagedReferenceRevisionId && !selectedManagedReference && <option value={selectedManagedReferenceRevisionId}>{selectedManagedReferenceRevisionId} · selected revision not loaded</option>}{managedReferenceOptions.map(({ resource, revision }) => <option key={revision.id} value={revision.id}>{resource.name} · rev {revision.revision_number} · {revision.id}{exactStateReferenceRevisionIds.has(revision.id) ? ' · selected-state member' : ' · not in selected state'}</option>)}
@@ -2003,67 +1888,55 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     <input value={newFastaName} onChange={(event) => setNewFastaName(event.target.value)} placeholder="Managed reference and sequence name" className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm" /><textarea value={newFastaSeq} onChange={(event) => setNewFastaSeq(event.target.value)} placeholder="Raw nucleotide sequence (declared DNA or RNA; server validated)" rows={4} className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm font-mono" />
                     <button type="button" onClick={() => createManagedReferenceMutation.mutate(`>${newFastaName.trim()}\n${newFastaSeq}`)} disabled={!availability.canMutateDomain || usesMolBioReceiptLane || createManagedReferenceMutation.isPending || !newFastaName.trim() || !newFastaSeq.trim()} title={!availability.canMutateDomain ? availability.reason : undefined} className="px-3 py-2 rounded border disabled:opacity-40">{createManagedReferenceMutation.isPending ? 'Saving shared MolBio records…' : 'Save to shared MolBio'}</button>
                 </div>}
-                {referenceTab === 'legacy' && <div className="space-y-2 rounded border border-amber-500/40 p-3">
-                    <p className="text-xs text-amber-100">Import an older browser-saved reference into MolBio before using it.</p><button type="button" onClick={() => { const hints = readLegacyReferenceImportHints(); setLegacyReferenceHints(hints); setLegacyHintsLoaded(true); setSelectedLegacyReferenceId(hints[0]?.id ?? ''); setReferenceLibraryNotice(hints.length ? `Loaded ${hints.length} untrusted browser hint(s).` : 'No legacy browser reference hints were found.'); }} className="px-3 py-2 rounded border text-sm">Read legacy browser hints</button>
-                    {legacyHintsLoaded && legacyReferenceHints.length > 0 && <><select value={selectedLegacyReferenceId} onChange={(event) => setSelectedLegacyReferenceId(event.target.value)} className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm">{legacyReferenceHints.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · untrusted {entry.source} hint</option>)}</select>{selectedLegacyReference && <div className="text-xs"><div>Hint ID: <span className="font-mono">{selectedLegacyReference.id}</span></div>{selectedLegacyReference.source === 'path' && <div className="text-amber-200">Path-only hint: paste the original FASTA; a path is not sequence content.</div>}</div>}<button type="button" onClick={() => selectedLegacyReference && importLegacyReferenceMutation.mutate(selectedLegacyReference)} disabled={!selectedLegacyReference || !availability.canMutateDomain || usesMolBioReceiptLane || importLegacyReferenceMutation.isPending} title={!availability.canMutateDomain ? availability.reason : undefined} className="px-3 py-2 rounded border disabled:opacity-40">{importLegacyReferenceMutation.isPending ? 'Importing…' : 'Save browser hint to shared MolBio'}</button></>}
+                {referenceTab === 'legacy' && <div className="space-y-2 rounded border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] p-3">
+                    <p className="text-xs text-[var(--warning)]">Import an older browser-saved reference into MolBio before using it.</p><button type="button" onClick={() => { const hints = readLegacyReferenceImportHints(); setLegacyReferenceHints(hints); setLegacyHintsLoaded(true); setSelectedLegacyReferenceId(hints[0]?.id ?? ''); setReferenceLibraryNotice(hints.length ? `Loaded ${hints.length} untrusted browser hint(s).` : 'No legacy browser reference hints were found.'); }} className="px-3 py-2 rounded border text-sm">Read legacy browser hints</button>
+                    {legacyHintsLoaded && legacyReferenceHints.length > 0 && <><select value={selectedLegacyReferenceId} onChange={(event) => setSelectedLegacyReferenceId(event.target.value)} className="w-full bg-[var(--bg-tertiary)] border rounded px-3 py-2 text-sm">{legacyReferenceHints.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · untrusted {entry.source} hint</option>)}</select>{selectedLegacyReference && <div className="text-xs"><div>Hint ID: <span className="font-mono">{selectedLegacyReference.id}</span></div>{selectedLegacyReference.source === 'path' && <div className="text-[var(--warning)]">Path-only hint: paste the original FASTA; a path is not sequence content.</div>}</div>}<button type="button" onClick={() => selectedLegacyReference && importLegacyReferenceMutation.mutate(selectedLegacyReference)} disabled={!selectedLegacyReference || !availability.canMutateDomain || usesMolBioReceiptLane || importLegacyReferenceMutation.isPending} title={!availability.canMutateDomain ? availability.reason : undefined} className="px-3 py-2 rounded border disabled:opacity-40">{importLegacyReferenceMutation.isPending ? 'Importing…' : 'Save browser hint to shared MolBio'}</button></>}
                 </div>}
                 <ImportedMolBioRecords records={referenceImportContext === `${exactDomainExperimentId}:${exactStateRevisionId}` ? importedReferenceRecords : []} />
-                {referenceMoleculeType === 'rna' && referenceTab !== 'managed' && <p className="text-xs">RNA records use the shared RNA writer and preserve topology. The declared RNA alphabet canonicalizes T to U. Records are saved independently; any partial completion is listed. Open the shared MolBio viewer to choose and attach the saved revision explicitly.</p>}
+                {referenceMoleculeType === 'rna' && referenceTab !== 'managed' && <p className="text-xs">RNA records use the shared RNA writer and preserve topology. The declared RNA alphabet canonicalizes T to U. Records are saved independently; any partial completion is listed. Open Molecular Tools to choose and attach the saved revision explicitly.</p>}
                 {referenceLibraryNotice && <p role="status" className="text-xs text-[var(--text-secondary)]">{referenceLibraryNotice}</p>}
             </div>
             )}
 
-                <section className={TASK_FLOW_PANEL} data-testid="ngs-basecalling-section" aria-labelledby="ngs-basecalling-heading">
-                    <h2 id="ngs-basecalling-heading" className={`${TASK_FLOW_LABEL} mb-3`}>3 · Basecalling and quality</h2>
+                {(inputSource !== 'fastq' || cloneValidationControlsActive) && <section className={TASK_FLOW_PANEL} data-testid="ngs-basecalling-section" aria-labelledby="ngs-basecalling-heading">
+                    <h2 id="ngs-basecalling-heading" className={`${TASK_FLOW_LABEL} mb-3`}>{inputSource === 'pod5' ? 'Basecalling and quality' : inputSource === 'bam' ? 'Alignment quality' : 'Consensus profile'}</h2>
                     <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {inputSource === 'fastq' && (
-                <div className={`${TASK_FLOW_CARD} xl:col-span-2`}>
-                    <div className="text-sm font-semibold text-[var(--text-primary)]">Already basecalled</div>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Basecalling is not applicable to FASTQ input.</p>
-                </div>
-            )}
             {/* Locked P4 molecule, mode, and multiplexing controls */}
             {inputSource === 'pod5' && (
                 <div className={`${TASK_FLOW_CARD} space-y-3`}>
-                    <div className="text-sm font-semibold text-[var(--text-primary)]">Runtime settings</div>
+                    <div className="text-sm font-semibold text-[var(--text-primary)]">Read setup</div>
                     <div className="grid grid-cols-2 gap-3">
-                        <label className="text-sm text-[var(--text-secondary)]">Molecule
-                            <select value={doradoMolecule} onChange={(event) => {
-                                const value = event.target.value as DoradoMolecule;
-                                setDoradoMolecule(value);
-                                if (value === 'rna') { setDoradoMode('simplex'); setModifiedBases('none'); setBarcodeKit(''); setTrimAdapters(true); setRunAssembly(false); }
-                            }} className="block w-full mt-1 bg-[var(--bg-tertiary)] rounded p-2">
-                                <option value="dna">DNA — R10.4.1 E8.2 5 kHz</option>
-                                <option value="rna">RNA004 — 4 kHz</option>
+                        <div className="text-sm text-[var(--text-secondary)]">Molecule
+                            <p className="mt-2 text-[var(--text-primary)]">{doradoMolecule === 'rna' ? 'RNA004 · 4 kHz' : 'DNA · R10.4.1 E8.2 · 5 kHz'}</p>
+                        </div>
+                        {doradoMolecule === 'dna' ? <label className="text-sm text-[var(--text-secondary)]">Strand mode
+                            <select aria-label="Strand mode" value={doradoMode} onChange={(event) => { const value = event.target.value as DoradoMode; setDoradoMode(value); if (value === 'duplex') setTrimAdapters(true); }} className="block w-full mt-1 bg-[var(--bg-tertiary)] rounded p-2">
+                                <option value="simplex">One strand (simplex)</option>
+                                <option value="duplex" disabled={modifiedBases !== 'none' || Boolean(barcodeKit)}>Paired strands (duplex)</option>
                             </select>
-                        </label>
-                        <label className="text-sm text-[var(--text-secondary)]">Basecalling mode
-                            <select value={doradoMode} onChange={(event) => { const value = event.target.value as DoradoMode; setDoradoMode(value); if (value === 'duplex') { setBarcodeKit(''); setModifiedBases('none'); setTrimAdapters(true); } }} className="block w-full mt-1 bg-[var(--bg-tertiary)] rounded p-2">
-                                <option value="simplex">Simplex</option>
-                                <option value="duplex" disabled={doradoMolecule === 'rna'}>Duplex (explicit pairs)</option>
-                            </select>
-                        </label>
+                        </label> : <div className="text-sm text-[var(--text-secondary)]">Strand mode<p className="mt-2 text-[var(--text-primary)]">One strand (simplex)</p></div>}
                     </div>
                     {doradoMode === 'duplex' && (
-                        <input value={duplexPairs} onChange={(event) => setDuplexPairs(event.target.value)} placeholder="Confined duplex pairs file" className="w-full bg-[var(--bg-tertiary)] rounded p-2" />
+                        <label className="block text-sm text-[var(--text-secondary)]">Read pairs file<input aria-label="Read pairs file" value={duplexPairs} onChange={(event) => setDuplexPairs(event.target.value)} placeholder="Select the file matching template and complement reads" className="mt-1 w-full bg-[var(--bg-tertiary)] rounded p-2" /></label>
                     )}
-                    {doradoMolecule === 'dna' && doradoMode === 'simplex' && (
+                    {selectedWorkflow === 'dna' && doradoMolecule === 'dna' && doradoMode === 'simplex' && (
                         <div className="grid grid-cols-2 gap-3">
-                            <select value={barcodeKit} onChange={(event) => {
+                            <label className="text-sm text-[var(--text-secondary)]">Barcoding<select aria-label="Barcoding" value={barcodeKit} onChange={(event) => {
                                 const value = event.target.value as '' | 'SQK-RBK114-96';
                                 setBarcodeKit(value);
                                 if (value) { setModifiedBases('none'); setRunModkit(false); setRunAssembly(false); }
                                 else setSampleSheet('');
-                            }} disabled={modifiedBases !== 'none'} className="bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40">
-                                <option value="">No barcode classification</option>
+                            }} disabled={modifiedBases !== 'none'} className="mt-1 block w-full bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40">
+                                <option value="">No barcoding</option>
                                 <option value="SQK-RBK114-96">SQK-RBK114-96</option>
-                            </select>
-                            <input value={sampleSheet} onChange={(event) => setSampleSheet(event.target.value)} disabled={!barcodeKit} placeholder="Optional confined sample sheet" className="bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40" />
+                            </select></label>
+                            {barcodeKit && <div className="col-span-2"><BarcodeSampleSheet path={sampleSheet} kit={barcodeKit} onChange={setSampleSheet} onBlocker={setSampleSheetBlocker} /></div>}
                         </div>
                     )}
-                    <div className="text-xs text-[var(--text-secondary)]">Current source pin: Dorado {doradoLock.dorado.version}; model <code>{pinnedBasecallerModel}</code>. Quality is operator-selected. The server resolves the runtime identity; remote execution review shows effective settings, not proof of execution.
+                    {(modifiedBases !== 'none' || barcodeKit) && <p className="text-xs text-[var(--text-secondary)]">Paired-strand calling cannot be combined with modification calling or barcoding in this installation.</p>}
+                    <details className="text-xs text-[var(--text-secondary)]"><summary className="cursor-pointer">Model and runtime details</summary><div className="mt-2">Dorado {doradoLock.dorado.version}; model <code>{pinnedBasecallerModel}</code>.
                         {doradoMode === 'duplex' && <> Stereo model: <code>{doradoLock.models.stereo.id}</code>.</>}
-                        {modifiedBases !== 'none' && <> Modification model: <code>{doradoLock.models.modified_bases[modifiedBases].id}</code>.</>}</div>
+                        {selectedModifications.length > 0 && <> Modification models: {modificationModelIds(selectedModifications, doradoMolecule, doradoModel).map(id => <code key={id} className="mr-1">{id}</code>)}.</>}</div></details>
                 </div>
             )}
 
@@ -2076,7 +1949,9 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             <button
                                 key={key}
                                 onClick={() => setDoradoModel(key)}
-                                className={`p-3 rounded-lg border-2 transition-all text-left ${doradoModel === key
+                                aria-label={model.label}
+                                aria-pressed={doradoModel === key}
+                                className={`p-3 rounded-lg border-2 transition-all text-left disabled:opacity-40 disabled:cursor-not-allowed ${doradoModel === key
                                     ? ''
                                     : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)] bg-[var(--bg-tertiary)]/60'
                                     }`}
@@ -2093,30 +1968,119 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                 </div>
             )}
 
-            {/* Methylation Detection */}
+            {/* Modification calling: every pinned Dorado model for the selected basecaller */}
             {inputSource === 'pod5' && (
                 <div className={TASK_FLOW_CARD}>
-                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-3">Modified Base Detection</label>
-                    <div className="grid grid-cols-2 gap-3">
-                        {(Object.entries(MODIFIED_BASES_OPTIONS) as [ModifiedBases, typeof MODIFIED_BASES_OPTIONS[ModifiedBases]][]).map(([key, opt]) => (
-                            <button
-                                key={key}
-                                onClick={() => { setModifiedBases(key); if (key !== 'none') { setBarcodeKit(''); setSampleSheet(''); } }}
-                                disabled={key !== 'none' && (doradoMolecule !== 'dna' || doradoModel !== 'hac' || doradoMode !== 'simplex' || Boolean(barcodeKit))}
-                                className={`p-3 rounded-lg border-2 transition-all text-left disabled:opacity-40 disabled:cursor-not-allowed ${modifiedBases === key
-                                    ? ''
-                                    : 'border-[var(--border-primary)] hover:border-[var(--border-secondary)] bg-[var(--bg-tertiary)]/60'
-                                    }`}
-                                style={modifiedBases === key ? {
-                                    borderColor: 'var(--accent-secondary)',
-                                    backgroundColor: 'color-mix(in srgb, var(--accent-secondary) 12%, transparent)',
-                                } : undefined}
-                            >
-                                <div className="font-medium text-[var(--text-primary)] text-sm">{opt.label}</div>
-                                <div className="text-xs text-[var(--text-secondary)] mt-1">{opt.description}</div>
-                            </button>
-                        ))}
-                    </div>
+                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-3">Modification calling</label>
+                    <p className="mb-3 text-xs text-[var(--text-secondary)]">{selectedWorkflow === 'modified' ? 'Choose which modifications to call before analysis.' : 'Optional. Call modified bases while basecalling; turn on Generate methylation tables below for per-site results.'}</p>
+                    {modificationOptions.length === 0 ? (
+                        <p className="text-xs text-[var(--text-secondary)]">No modification models exist for {doradoMolecule.toUpperCase()} {DORADO_MODELS[doradoModel].label} basecalling. Choose High Accuracy or Super Accurate.</p>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-2" role="group" aria-label="Modification models">
+                            {modificationOptions.map(option => {
+                                const checked = selectedModifications.includes(option.modification);
+                                const unavailable = doradoMode !== 'simplex' || Boolean(barcodeKit);
+                                return (
+                                    <label key={option.id} className={`flex items-start gap-2 p-2 rounded-lg border text-left ${checked ? 'border-[var(--accent-secondary)]' : 'border-[var(--border-primary)]'} ${unavailable ? 'opacity-40' : 'cursor-pointer'}`}>
+                                        <input
+                                            type="checkbox"
+                                            aria-label={option.modification}
+                                            checked={checked}
+                                            disabled={unavailable}
+                                            onChange={() => {
+                                                setSelectedModifications(current => toggleModification(current, modificationOptions, option.modification));
+                                                setBarcodeKit(''); setSampleSheet('');
+                                            }}
+                                            className="mt-0.5"
+                                        />
+                                        <span>
+                                            <span className="block text-sm font-medium text-[var(--text-primary)]">{option.modification.replace(/_/g, ' + ')}</span>
+                                            <span className="block text-xs text-[var(--text-secondary)]">{describeModification(option)}</span>
+                                        </span>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                    )}
+                    <p className="mt-3 text-xs text-[var(--text-secondary)]">Dorado runs one modification model per canonical base; choosing another model for the same base replaces it. Modification calling requires one-strand calling and no inline barcoding.</p>
+                </div>
+            )}
+
+            {/* Methylation tables (modkit) — every DNA and plasmid method, from POD5/BLOW5 or tagged BAM */}
+            {canRunModkit && (
+                <div className={`${TASK_FLOW_CARD} space-y-3`} data-testid="ngs-methylation-card">
+                    <div className="text-sm font-semibold text-[var(--text-primary)]">Methylation</div>
+                            <label className="flex items-center gap-3 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={runModkit}
+                                    onChange={(e) => setRunModkit(e.target.checked)}
+                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
+                                />
+                                <div>
+                                    <span className="text-sm text-[var(--text-primary)]">Generate methylation tables</span>
+                                    <p className="text-xs text-[var(--text-secondary)]">
+                                        {inputSource === 'fastq' ? 'FASTQ cannot supply modification probabilities; use tagged BAM or POD5, or disable this stage.' : inputSource === 'bam' ? 'Summarize the existing modification calls.' : 'Align and summarize the newly called modifications.'}
+                                    </p>
+                                </div>
+                            </label>
+
+                        {runModkit && (
+                            <div className="space-y-2">
+                                <label className="text-xs text-[var(--text-secondary)] mb-1 block">
+                                    modkit filter threshold ({modkitFilterThreshold != null ? modkitFilterThreshold.toFixed(2) : 'auto'})
+                                </label>
+                                <div className="flex flex-wrap gap-2">
+                                    {[
+                                        { key: 'auto', label: 'Auto (Recommended)', value: null },
+                                        { key: 'balanced', label: 'Balanced 0.50', value: 0.5 },
+                                        { key: 'strict', label: 'Strict 0.70', value: 0.7 },
+                                        { key: 'very-strict', label: 'Very strict 0.85', value: 0.85 },
+                                    ].map((opt) => (
+                                        <button
+                                            key={opt.key}
+                                            type="button"
+                                            onClick={() => setModkitFilterThreshold(opt.value)}
+                                            className={`px-2 py-1 rounded border text-xs transition-colors ${modkitFilterThreshold === opt.value
+                                                ? 'text-[var(--text-primary)]'
+                                                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                                                }`}
+                                            style={{
+                                                borderColor: 'var(--border-primary)',
+                                                backgroundColor: modkitFilterThreshold === opt.value ? 'var(--bg-secondary)' : 'transparent',
+                                            }}
+                                        >
+                                            {opt.label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <label className="text-[10px] text-[var(--text-secondary)]">Custom:</label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="1"
+                                        step="0.01"
+                                        value={modkitFilterThreshold ?? ''}
+                                        onChange={(e) => {
+                                            if (e.target.value === '') {
+                                                setModkitFilterThreshold(null);
+                                                return;
+                                            }
+                                            const value = Number.parseFloat(e.target.value);
+                                            if (Number.isFinite(value)) {
+                                                setModkitFilterThreshold(Math.max(0, Math.min(1, value)));
+                                            }
+                                        }}
+                                        placeholder="auto"
+                                        className="w-24 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1 text-[var(--text-primary)] text-xs"
+                                    />
+                                </div>
+                                <div className="text-[10px] text-[var(--text-secondary)]">
+                                    Auto threshold; strict lowers false positives.
+                                </div>
+                            </div>
+                        )}
                 </div>
             )}
 
@@ -2146,7 +2110,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             {inputSource === 'pod5' && (
                 <div className={TASK_FLOW_CARD}>
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
-                        Basecall Quality Filter — <span className="text-[var(--accent-secondary)] font-semibold">Q{minQscore}</span>
+                        Basecall Quality Filter — <span className="text-[var(--text-action)] font-semibold">Q{minQscore}</span>
                         <span className="ml-2 text-xs font-normal text-[var(--text-secondary)]">{getQscoreLabel(minQscore)}</span>
                     </label>
                     <input
@@ -2172,7 +2136,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             {inputSource === 'bam' && (
                 <div className={TASK_FLOW_CARD}>
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
-                        Alignment Quality Filter — <span className="text-[var(--accent-secondary)] font-semibold">MAPQ {'>='} {bamMinMapq}</span>
+                        Alignment Quality Filter — <span className="text-[var(--text-action)] font-semibold">MAPQ {'>='} {bamMinMapq}</span>
                     </label>
                     <input
                         type="range"
@@ -2193,15 +2157,14 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                 </div>
             )}
                     </div>
-                </section>
+                </section>}
 
             <section className={TASK_FLOW_PANEL} data-testid="ngs-analysis-section" aria-labelledby="ngs-analysis-heading">
-                <h2 id="ngs-analysis-heading" className={`${TASK_FLOW_LABEL} mb-3`}>4 · Analysis and advanced controls</h2>
+                <h2 id="ngs-analysis-heading" className={`${TASK_FLOW_LABEL} mb-3`}>Analysis settings</h2>
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             {/* Analysis Toggles — mode-aware: only relevant options shown */}
             <div className={`${TASK_FLOW_CARD} space-y-3`}>
                 <div className="text-sm font-semibold text-[var(--text-primary)]">Analysis options</div>
-                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Analysis Options</label>
 
                 {/* Trim adapters — POD5 only */}
                 {inputSource === 'pod5' && (
@@ -2211,28 +2174,10 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             checked={trimAdapters}
                             onChange={(e) => setTrimAdapters(e.target.checked)}
                             disabled={doradoMolecule === 'rna' || doradoMode === 'duplex'}
-                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">Trim adapters{doradoMolecule === 'rna' ? ' (required for RNA)' : doradoMode === 'duplex' ? ' (fixed by duplex mode)' : ''}</span>
-                        </div>
-                    </label>
-                )}
-
-                {/* Modkit — POD5 or BAM */}
-                {canRunModkit && (
-                    <label className="flex items-center gap-3 cursor-pointer">
-                        <input
-                            type="checkbox"
-                            checked={runModkit}
-                            onChange={(e) => setRunModkit(e.target.checked)}
-                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
-                        />
-                        <div>
-                            <span className="text-sm text-[var(--text-primary)]">Run modkit analysis</span>
-                            <p className="text-xs text-[var(--text-secondary)]">
-                                {inputSource === 'bam' ? 'Summarize MM/ML tags.' : 'Generate methylation tables.'}
-                            </p>
                         </div>
                     </label>
                 )}
@@ -2244,7 +2189,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             type="checkbox"
                             checked={bamForceRealign}
                             onChange={(e) => setBamForceRealign(e.target.checked)}
-                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">Force BAM realignment (Dorado aligner)</span>
@@ -2263,7 +2208,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 if (selectedWorkflow === 'constructScreening') setRunAssembly(e.target.checked);
                             }}
                             disabled={selectedWorkflow === 'clone'}
-                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)] disabled:cursor-not-allowed"
+                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)] disabled:cursor-not-allowed"
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">Consensus assembly (wf-clone-validation)</span>
@@ -2295,7 +2240,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             type="checkbox"
                             checked={runFastqQc}
                             onChange={(e) => setRunFastqQc(e.target.checked)}
-                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">FASTQ plasmid QC</span>
@@ -2367,7 +2312,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 type="checkbox"
                                 checked={fastqMinimap2AllowSecondary}
                                 onChange={(e) => setFastqMinimap2AllowSecondary(e.target.checked)}
-                                className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                                className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                             />
                             <span className="text-xs text-[var(--text-secondary)]">Keep secondary alignments</span>
                         </label>
@@ -2378,7 +2323,6 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
 
             {/* Advanced Options */}
             <div className={`${TASK_FLOW_CARD} ${cloneValidationControlsActive && !barcodeKit ? 'xl:col-span-2' : 'xl:col-span-1'}`}>
-                <div className="mb-3 text-sm font-semibold text-[var(--text-primary)]">Advanced controls</div>
                 <button
                     type="button"
                     onClick={() => setShowAdvanced(!showAdvanced)}
@@ -2415,7 +2359,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                     type="checkbox"
                                     checked={emitSummary}
                                     onChange={(e) => setEmitSummary(e.target.checked)}
-                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                                 />
                                 <span className="text-sm text-[var(--text-primary)]">Emit sequencing summary TSV</span>
                             </label>
@@ -2430,66 +2374,10 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                     checked={doradoMode === 'simplex' && emitMoves}
                                     disabled={doradoMode === 'duplex'}
                                     onChange={(e) => setEmitMoves(e.target.checked)}
-                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                                 />
                                 <span className="text-sm text-[var(--text-primary)]">Emit move tags for aligned signal views</span>
                             </label>
-                        )}
-                        {runModkit && canRunModkit && (
-                            <div className="space-y-2">
-                                <label className="text-xs text-[var(--text-secondary)] mb-1 block">
-                                    modkit filter threshold ({modkitFilterThreshold != null ? modkitFilterThreshold.toFixed(2) : 'auto'})
-                                </label>
-                                <div className="flex flex-wrap gap-2">
-                                    {[
-                                        { key: 'auto', label: 'Auto (Recommended)', value: null },
-                                        { key: 'balanced', label: 'Balanced 0.50', value: 0.5 },
-                                        { key: 'strict', label: 'Strict 0.70', value: 0.7 },
-                                        { key: 'very-strict', label: 'Very strict 0.85', value: 0.85 },
-                                    ].map((opt) => (
-                                        <button
-                                            key={opt.key}
-                                            type="button"
-                                            onClick={() => setModkitFilterThreshold(opt.value)}
-                                            className={`px-2 py-1 rounded border text-xs transition-colors ${modkitFilterThreshold === opt.value
-                                                ? 'text-[var(--text-primary)]'
-                                                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                                }`}
-                                            style={{
-                                                borderColor: 'var(--border-primary)',
-                                                backgroundColor: modkitFilterThreshold === opt.value ? 'var(--bg-secondary)' : 'transparent',
-                                            }}
-                                        >
-                                            {opt.label}
-                                        </button>
-                                    ))}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <label className="text-[10px] text-[var(--text-secondary)]">Custom:</label>
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        max="1"
-                                        step="0.01"
-                                        value={modkitFilterThreshold ?? ''}
-                                        onChange={(e) => {
-                                            if (e.target.value === '') {
-                                                setModkitFilterThreshold(null);
-                                                return;
-                                            }
-                                            const value = Number.parseFloat(e.target.value);
-                                            if (Number.isFinite(value)) {
-                                                setModkitFilterThreshold(Math.max(0, Math.min(1, value)));
-                                            }
-                                        }}
-                                        placeholder="auto"
-                                        className="w-24 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1 text-[var(--text-primary)] text-xs"
-                                    />
-                                </div>
-                                <div className="text-[10px] text-[var(--text-secondary)]">
-                                    Auto threshold; strict lowers false positives.
-                                </div>
-                            </div>
                         )}
                         {inputSource === 'fastq' && runFastqQc && (
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
@@ -2546,11 +2434,11 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 </div>
                             </div>
                         )}
-                        {(selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc') && (
+                        {(selectedWorkflow === 'dna' || selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc') && (
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Plasmid dimer QC</div>
                                 <label className="flex items-center gap-2 cursor-pointer">
-                                    <input type="checkbox" checked={enableRotatingReferenceFrames} onChange={(e) => setEnableRotatingReferenceFrames(e.target.checked)} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)]" />
+                                    <input type="checkbox" checked={enableRotatingReferenceFrames} onChange={(e) => setEnableRotatingReferenceFrames(e.target.checked)} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)]" />
                                     <span className="text-xs text-[var(--text-secondary)]">Evaluate circular-reference rotations</span>
                                 </label>
                                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -2670,11 +2558,11 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                         <input type="number" min={0} max={10} value={wfClonePrimerMismatch} onChange={(e) => setWfClonePrimerMismatch(coerceIntegerInput(e.target.value, 2, 0, 10))} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm" />
                                     </label>
                                     <label className="flex items-center gap-2 cursor-pointer">
-                                        <input type="checkbox" checked={wfCloneNonUniformCoverage} onChange={(e) => setWfCloneNonUniformCoverage(e.target.checked)} disabled={assemblyTool !== 'flye'} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)] disabled:opacity-40" />
+                                        <input type="checkbox" checked={wfCloneNonUniformCoverage} onChange={(e) => setWfCloneNonUniformCoverage(e.target.checked)} disabled={assemblyTool !== 'flye'} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)] disabled:opacity-40" />
                                         <span className="text-xs text-[var(--text-secondary)]">Non-uniform coverage / Flye metagenome mode</span>
                                     </label>
                                     <label className="flex items-center gap-2 cursor-pointer">
-                                        <input type="checkbox" checked={wfCloneCanuFast} onChange={(e) => setWfCloneCanuFast(e.target.checked)} disabled={assemblyTool !== 'canu'} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)] disabled:opacity-40" />
+                                        <input type="checkbox" checked={wfCloneCanuFast} onChange={(e) => setWfCloneCanuFast(e.target.checked)} disabled={assemblyTool !== 'canu'} className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)] disabled:opacity-40" />
                                         <span className="text-xs text-[var(--text-secondary)]">Canu fast mode (may reduce contiguity)</span>
                                     </label>
                                     <label className="flex items-center gap-2 cursor-pointer md:col-span-2">
@@ -2682,7 +2570,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                             type="checkbox"
                                             checked={wfCloneLargeConstruct}
                                             onChange={(e) => setWfCloneLargeConstruct(e.target.checked)}
-                                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--text-action)] focus:ring-[var(--accent-secondary)]"
                                         />
                                         <span className="text-xs text-[var(--text-secondary)]">Enable large construct mode</span>
                                     </label>
@@ -2701,40 +2589,40 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     <div className="font-semibold text-[var(--text-primary)]">Review and submit <span className="ml-2 text-xs font-normal text-[var(--text-secondary)]">{jobName || 'unnamed job'}</span></div>
                     <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-bold uppercase tracking-[0.12em]">
                         <span data-testid="ngs-review-workflow" className="text-violet-200">WORKFLOW · {reviewWorkflowLabel}</span>
-                        <span data-testid="ngs-review-input" className={reviewInputReady ? 'text-emerald-300' : 'text-amber-200'}>● {reviewInputReady ? 'INPUT READY' : 'INPUT REQUIRED'} · {inputSource.toUpperCase()}</span>
-                        <span data-testid="ngs-review-mode" className="text-cyan-200">MODE · {reviewModeLabel}</span>
+                        <span data-testid="ngs-review-input" className={reviewInputReady ? 'text-[var(--success)]' : 'text-[var(--warning)]'}>● {reviewInputReady ? 'INPUT READY' : 'INPUT REQUIRED'} · {inputSource.toUpperCase()}</span>
+                        <span data-testid="ngs-review-mode" className="text-[var(--accent-primary)]">MODE · {reviewModeLabel}</span>
                         <span data-testid="ngs-review-model" className="text-[var(--text-secondary)]">QUALITY · {reviewModelLabel}</span>
-                        <span data-testid="ngs-review-gpu" className="text-emerald-300">GPU · {reviewGpuLabel}</span>
-                        <span data-testid="ngs-review-reference" className={reviewReferenceReady ? 'text-emerald-300' : 'text-amber-200'}>{reviewReferenceLabel}</span>
+                        <span data-testid="ngs-review-gpu" className="text-[var(--success)]">COMPUTE · {reviewGpuLabel}</span>
+                        <span data-testid="ngs-review-reference" className={reviewReferenceReady ? 'text-[var(--success)]' : 'text-[var(--warning)]'}>{reviewReferenceLabel}</span>
                     </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                    <span className={`hidden rounded-full px-2 py-1 text-xs font-semibold sm:inline-flex ${canSubmit ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-200'}`}>{canSubmit ? 'Ready' : 'Needs input'}</span>
+                    <span className={`hidden rounded-full px-2 py-1 text-xs font-semibold sm:inline-flex ${canSubmit ? 'bg-[color-mix(in_srgb,var(--success)_15%,transparent)] text-[var(--success)]' : 'bg-[color-mix(in_srgb,var(--warning)_15%,transparent)] text-[var(--warning)]'}`}>{canSubmit ? 'Ready' : 'Needs input'}</span>
                     <button type="button" onClick={handleValidate} className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-xs font-semibold text-[var(--text-primary)] hover:border-[var(--accent-secondary)]">Validate</button>
-                    {selectedWorkflow !== 'pooledAssignment' && (
-                        <button
+                    <button
                             type="button"
                             onClick={handleSubmit}
                             disabled={!canSubmit || submissionPending}
                             title={reviewBlocker || undefined}
-                            className={`rounded-lg px-4 py-2 text-xs font-semibold transition-all ${canSubmit && !submissionPending ? 'text-[var(--text-primary)] shadow-lg' : 'cursor-not-allowed bg-[var(--bg-secondary)] text-[var(--text-secondary)]'}`}
-                            style={canSubmit && !submissionPending ? { backgroundColor: 'var(--accent-secondary)', boxShadow: '0 10px 20px color-mix(in srgb, var(--accent-secondary) 30%, transparent)' } : undefined}
+                            className={`rounded-lg px-4 py-2 text-xs font-semibold transition-all ${canSubmit && !submissionPending ? 'text-[var(--text-on-accent)] shadow-lg' : 'cursor-not-allowed bg-[var(--bg-secondary)] text-[var(--text-secondary)]'}`}
+                            style={canSubmit && !submissionPending ? { backgroundColor: 'var(--accent-primary)', boxShadow: '0 10px 20px color-mix(in srgb, var(--accent-secondary) 30%, transparent)' } : undefined}
                         >
                             {submissionPending ? 'Submitting…' : 'Review and submit'}
                         </button>
-                    )}
                 </div>
             </div>
 
             {/* Error Display */}
             {error && (
-                <div role="alert" className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-400">
+                <div role="alert" className="bg-[color-mix(in_srgb,var(--error)_10%,transparent)] border border-[color-mix(in_srgb,var(--error)_30%,transparent)] rounded-lg p-3 text-sm text-[var(--error)]">
                     {error}
                 </div>
             )}
             {!canSubmit && reviewBlocker && (
                 <p className="text-right text-xs text-[var(--text-secondary)]">Run disabled: {reviewBlocker}</p>
             )}
+
+            </>}
 
             {pathPicker && (
                 <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2812,7 +2700,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                                         : 'border-transparent opacity-50 cursor-default'
                                                     }`}
                                             >
-                                                <svg className={`w-4 h-4 flex-shrink-0 ${isDirectory ? 'text-[var(--accent-secondary)]' : 'text-[var(--text-secondary)]'}`} viewBox="0 0 20 20" fill="currentColor">
+                                                <svg className={`w-4 h-4 flex-shrink-0 ${isDirectory ? 'text-[var(--text-action)]' : 'text-[var(--text-secondary)]'}`} viewBox="0 0 20 20" fill="currentColor">
                                                     {isDirectory ? (
                                                         <path d="M2 5.25A2.25 2.25 0 014.25 3h3.38a2.25 2.25 0 011.59.66l.47.47a.75.75 0 00.53.22h5.5A2.25 2.25 0 0118 6.6v7.15A2.25 2.25 0 0115.75 16H4.25A2.25 2.25 0 012 13.75v-8.5z" />
                                                     ) : (

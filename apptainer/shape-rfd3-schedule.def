@@ -1,0 +1,25 @@
+Bootstrap: localimage
+From: {{ BASE_IMAGE }}
+
+# System-owned BASE_IMAGE must be the exact selected immutable SIF.
+# Record its full SHA256 and output identity in the release build evidence.
+# No dependency installation, checkpoint download or Shape reinstallation.
+%files
+    scripts/rfd3_generation/install_schedule_return.py /opt/bms_schedule/install_schedule_return.py
+
+%post
+    PYTHONDONTWRITEBYTECODE=1 python3 /opt/bms_schedule/install_schedule_return.py
+
+%test
+    PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+import hashlib
+from pathlib import Path
+import torch
+import rfd3.model.inference_sampler as native
+assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest() == "b27da5ee1341255cf351e2cd55f2de046a3e9a8b5a4df65fd831b3639240f86d"
+sampler = native.SampleDiffusionWithMotif()
+lengths = [len(sampler._construct_inference_noise_schedule("cpu", None if t is None else torch.tensor([float(t)]))) for t in (None, 0, 2, 10)]
+assert lengths == [200, 1, 48, 70], lengths
+print("native CPU default-config schedule lengths:", lengths)
+assert native.ConditionalDiffusionSampler._registry["shape"].__name__ == "ShapeGuidedDiffusionSampler"
+PY

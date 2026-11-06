@@ -199,6 +199,8 @@ def prepare_receipt(job, root: Path, path: Path):
         except SystemExit as exc:
             raise ValueError('invalid execution argv') from exc
         component_effective = json.loads(effective['complex_components_json'] or '[]')
+        if isinstance(component_effective, dict):
+            component_effective = component_effective.get('components', component_effective.get('sequences', []))
         if effective.get('complex_components_file'):
             raise ValueError('unreceipted component file input')
         _esm_sources(original, effective, component_effective, payload['sources'],

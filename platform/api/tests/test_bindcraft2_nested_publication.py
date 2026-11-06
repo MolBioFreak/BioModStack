@@ -1,4 +1,5 @@
 """Actual BMS materialization layout, hand-authored outputs; NOT native execution."""
+import copy
 import hashlib
 import json
 import shutil
@@ -153,14 +154,18 @@ async def test_flat_historical_receipt_reopens_without_inventory_migration(tmp_p
             await session.flush()
             await publish_native_results(job, root, session)
             publication, receipt = await read_published_native_results(job, session)
-            old = {key: value for key, value in receipt.items() if key not in ('campaign_root', 'inventory_version')}
+            # Historical producers persisted the sealed receipt, not enriched readback handles.
+            persisted = copy.deepcopy(job.provenance['bindcraft2_native_publication'])
+            old = {key: value for key, value in persisted.items() if key not in ('campaign_root', 'inventory_version')}
             assert old['files'] == _inventory(root, publication, legacy=True)
             job.provenance = {'bindcraft2_native_publication': old}
             # Files which were never registered by the old publisher must not
             # rewrite or invalidate its sealed historical receipt on readback.
             ancillary(root)
             await session.commit()
-            assert (await read_published_native_results(job, session))[1] == old
+            reopened = (await read_published_native_results(job, session))[1]
+            assert {key: value for key, value in reopened.items() if key != 'native_documents'} == old
+            assert reopened['native_documents'] == receipt['native_documents']
             assert await publish_native_results(job, root, session) == 1
             assert job.provenance['bindcraft2_native_publication'] == old
     finally:
@@ -181,7 +186,7 @@ async def test_explicit_campaign_root_preserves_owned_root_and_containment(tmp_p
             job = Job(id='explicit', name='explicit', model_id='bindcraft2', mode='campaign', params={}, output_dir=str(root))
             session.add(job)
             await session.flush()
-            with pytest.raises(PublicationError, match='persisted job output'):
+            with pytest.raises(ValueError, match='Native publication root differs from Job owner'):
                 await publish_native_results(job, native, session)
             with pytest.raises(PublicationError, match='escapes'):
                 await publish_native_results(job, root, session, campaign_root=tmp_path)
@@ -245,7 +250,10 @@ async def test_native_lifecycle_preserves_source_root_without_inheriting_validat
             session.add(parent)
             await session.flush()
             await publish_native_results(parent, parent_root, session)
+            parent_sealed = copy.deepcopy(parent.provenance['bindcraft2_native_publication'])
             _, parent_receipt = await read_published_native_results(parent, session)
+            assert parent_receipt['native_documents']
+            assert all(doc['job_id'] == parent.id for doc in parent_receipt['native_documents'])
             original = parent_receipt['candidates'][0]
             source_design = await session.get(Design, original['design_id'])
             source_design.conf_score = 0.9  # unrelated prior analysis must not be inherited
@@ -263,7 +271,7 @@ async def test_native_lifecycle_preserves_source_root_without_inheriting_validat
             assert projected.origin_job_id == ('child' if changed else 'parent')
             assert projected.conf_score is None
             assert projected.provenance['source_job_id'] == parent.id
-            assert parent.provenance['bindcraft2_native_publication'] == parent_receipt
+            assert parent.provenance['bindcraft2_native_publication'] == parent_sealed
             assert await publish_native_results(child, child_root, session) == 1
             await session.commit()
         # Parent files / original worker need not be available to reopen a child.

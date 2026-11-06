@@ -38,7 +38,7 @@ interface MolecularInputModalProps {
     }) => void;
     onLoadDemo: (demo: SequenceData) => void;
     onAddPrimerToCurrentSequence: (primer: Primer) => void;
-    onOpenPrimerAsConstruct: (primer: { name: string; sequence: string; description?: string }) => void;
+    onOpenPrimerAsConstruct: (primer: { name: string; sequence: string; sequenceType?: 'dna' | 'rna'; description?: string }) => void;
     hasOpenSequence: boolean;
     currentSequenceData?: SequenceData | null;
     demos: SequenceData[];
@@ -670,6 +670,7 @@ export function MolecularInputModal({
                                                             onOpenPrimerAsConstruct({
                                                                 name: primer.name,
                                                                 sequence: primer.sequence,
+                                                                sequenceType: primer.sequence_type,
                                                                 description: primer.description ?? undefined,
                                                             });
                                                             onClose();

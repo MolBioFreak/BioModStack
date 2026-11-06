@@ -968,7 +968,7 @@ def wait_for_unit_invocation(
     )
 
 
-def _list_workflow_unit_names(lane: str) -> list[str]:
+def _list_workflow_unit_names(lane: str, *, live_only: bool = False) -> list[str]:
     normalized_lane = normalize_lane(lane)
     pattern = f"{UNIT_PREFIX}-{normalized_lane}-job-*.service"
     completed = _systemctl_user(
@@ -987,6 +987,12 @@ def _list_workflow_unit_names(lane: str) -> list[str]:
         if not fields:
             continue
         candidate = fields[0]
+        # list-units columns: UNIT LOAD ACTIVE SUB DESCRIPTION. Failed and
+        # inactive units stay listed until collected, and each one used to cost
+        # a separate `systemctl show`. Live discovery still verifies every
+        # remaining unit through show_unit_properties.
+        if live_only and len(fields) >= 3 and fields[2] not in {"active", "activating", "reloading"}:
+            continue
         try:
             assert_unit_lane(candidate, normalized_lane)
         except LaneMismatchError as exc:
@@ -999,7 +1005,7 @@ def discover_active_workflow_units(lane: str) -> dict[str, str]:
     """Discover new jobs only through exact systemd unit names and properties."""
     normalized_lane = normalize_lane(lane)
     discovered: dict[str, str] = {}
-    for unit_name in _list_workflow_unit_names(normalized_lane):
+    for unit_name in _list_workflow_unit_names(normalized_lane, live_only=True):
         properties = show_unit_properties(unit_name, normalized_lane)
         if properties.active_state not in {"active", "activating", "reloading"}:
             continue

@@ -294,8 +294,45 @@ def validate_collection_receipt(
     return receipt
 
 
+def retain_source_snapshots(provenance: dict[str, Any], output_dir: Path) -> dict[str, Any]:
+    """Retain declared source evidence independently of appendable replica data.
+
+    The portable-input owner supplies relocated provenance; paths are never
+    inferred from a producer workspace. Historical absent metadata is optional.
+    Both full ensemble and consumed derivative retain their distinct identities.
+    """
+    retained = {key: value for key, value in provenance.items()
+                if key not in {"snapshot", "original_snapshot"}}
+    snapshot = provenance.get("snapshot") or {}
+    original = provenance.get("original_snapshot") or {}
+    records = []
+    if snapshot.get("structure"):
+        records.append(("snapshot", "structure", snapshot["structure"],
+                        snapshot.get("structure_sha256"), snapshot.get("structure_bytes")))
+    if original.get("path"):
+        records.append(("original_snapshot", "original_structure", original["path"],
+                        original.get("sha256"), original.get("bytes")))
+    for field, name, path, digest, size in records:
+        source = Path(path)
+        suffix = source.suffix.lower()
+        relative = Path("inputs") / f"{name}{suffix}"
+        publish_file_immutable(source, output_dir / relative,
+                               expected_size=size, expected_sha256=digest)
+        actual = {"path": relative.as_posix(), "sha256": _sha256(output_dir / relative),
+                  "bytes": (output_dir / relative).stat().st_size}
+        if field == "snapshot":
+            retained[field] = {"structure": actual["path"], "structure_sha256": actual["sha256"],
+                               "structure_bytes": actual["bytes"]}
+        else:
+            retained[field] = actual
+    if records:
+        publish_json_immutable(retained, output_dir / "retained_source.json")
+    return retained
+
+
 def collect_children(
     child_status_path: Path, output_dir: Path, *, spawn_receipt: Path | None = None,
+    source_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     status = json.loads(child_status_path.read_text(encoding="utf-8"))
     receipt = (
@@ -368,6 +405,8 @@ def collect_children(
     }
     if aggregate["lineage"]["failed_children"] or aggregate["lineage"]["cancelled_children"]:
         aggregate["status"] = "partial_failure"
+    if source_provenance is not None:
+        retain_source_snapshots(source_provenance, output_dir)
     publish_json_immutable(aggregate, output_dir / "manifest.json")
     if use_runtime:
         for child_dir, source_manifest in zip(child_dirs, source_manifests, strict=True):
@@ -386,9 +425,13 @@ def main() -> None:
     parser.add_argument("--child-status", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--spawn-receipt", type=Path)
+    parser.add_argument("--source-provenance", type=Path,
+                        help="Optional relocated md_source_provenance JSON (retained source evidence)")
     args = parser.parse_args()
 
-    collect_children(args.child_status, args.output_dir, spawn_receipt=args.spawn_receipt)
+    collect_children(args.child_status, args.output_dir, spawn_receipt=args.spawn_receipt,
+                     source_provenance=json.loads(args.source_provenance.read_text())
+                     if args.source_provenance else None)
     print(args.output_dir / "manifest.json")
 
 

@@ -46,7 +46,7 @@ def prepared(tmp_path, monkeypatch, local_transport):
     connection = SimpleNamespace(remote_root=str(tmp_path / 'worker'))
     kwargs = dict(connection=connection, entries=entries, operation_id=str(uuid.uuid4()),
         progress=cache._noop, check_fence=cache._noop,
-        selection=SimpleNamespace(kind='workflow_pack', workflow_id='structure_prediction'),
+        selection=SimpleNamespace(kind='workflow_pack', workflow_id='structure_prediction', component_ids=None),
         backend=None, source_identity=cache.current_source_identity(repo))
     yield SimpleNamespace(kwargs=kwargs, groups=groups, calls=local_transport[0],
                           uploads=local_transport[1], repo=repo)

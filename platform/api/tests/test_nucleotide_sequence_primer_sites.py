@@ -265,3 +265,87 @@ def test_put_rejects_linearization_of_existing_origin_wrapping_primer(
 
     assert response.status_code == 400, response.text
     assert "primer" in response.json()["detail"].lower()
+
+
+def test_exact_sequence_summary_filter_includes_selected_records_beyond_the_first_page(sequence_client):
+    ids = []
+    for name in ["AAA", "ZZZ"]:
+        response = sequence_client.post("/api/sequences/", json={"name": name, "sequence": "ACGT", "sequence_type": "dna"})
+        assert response.status_code == 200
+        ids.append(response.json()["id"])
+    response = sequence_client.get("/api/sequences/", params={"sequence_ids": ids[1], "limit": 1, "sort_by": "name", "sort_desc": False})
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [ids[1]]
+    assert "sequence" not in response.json()[0]
+    both = sequence_client.get("/api/sequences/", params={"sequence_ids": ",".join(ids)})
+    assert {item["id"] for item in both.json()} == set(ids)
+
+
+@pytest.mark.parametrize("value", ["", ",", "a,", " a", ",".join(["a"] * 257)])
+def test_exact_sequence_summary_filter_rejects_malformed_or_unbounded_ids(sequence_client, value):
+    assert sequence_client.get("/api/sequences/", params={"sequence_ids": value}).status_code == 422
+
+
+def test_edited_binding_is_preserved_as_unplaced_through_save_and_reload(sequence_client):
+    oligo = "ACGTTGCAAGTCCATGGTAC"
+    primer = _primer(sequence=oligo, start=0, end=0, sites=[], tm=62.03,
+                     binding_status="needs_review", binding_warning="Template changed; review binding.")
+    response = sequence_client.post("/api/sequences/", json={
+        "name": "Edited primer", "sequence": "TTTTACGTTGCAAGTCCATGGTATGGGG",
+        "primers": [primer],
+    })
+    assert response.status_code == 200, response.text
+    fetched = sequence_client.get(f"/api/sequences/{response.json()['id']}")
+    actual = fetched.json()["primers"][0]
+    assert actual["sequence"] == oligo
+    assert actual["binding_status"] == "needs_review"
+    assert actual["binding_warning"] == primer["binding_warning"]
+    assert (actual["start"], actual["end"], actual["sites"], actual["tm"]) == (0, 0, [], None)
+
+
+def test_unplaced_primer_cannot_claim_coordinates(sequence_client):
+    response = sequence_client.post("/api/sequences/", json={
+        "name": "Inconsistent unplaced primer", "sequence": "ACGTACGT",
+        "primers": [_primer(binding_status="needs_review")],
+    })
+    assert response.status_code == 400
+    assert "must not retain binding coordinates" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("send_primers", [False, True])
+def test_sequence_substitution_revalidates_primer_even_with_legal_coordinates(sequence_client, send_primers):
+    oligo = "ACGTTGCAAGTCCATGGTAC"
+    primer = _primer(sequence=oligo, start=4, end=24, tm=62.03,
+                     sites=[{"start": 4, "end": 24, "strand": 1}])
+    created = sequence_client.post("/api/sequences/", json={
+        "name": "3-prime edit", "sequence": "TTTT"+oligo+"GGGG", "primers": [primer],
+    })
+    assert created.status_code == 200
+    payload = {"sequence": "TTTTACGTTGCAAGTCCATGGTATGGGG"}
+    if send_primers:
+        payload["primers"] = [primer]
+    updated = sequence_client.put(f"/api/sequences/{created.json()['id']}", json=payload)
+    assert updated.status_code == 200, updated.text
+    actual = updated.json()["primers"][0]
+    assert actual["sequence"] == oligo
+    assert actual["binding_status"] == "needs_review"
+    assert (actual["start"], actual["end"], actual["sites"], actual["tm"]) == (0, 0, [], None)
+
+
+def test_circular_reverse_complemented_primer_can_be_saved_and_reopened(sequence_client):
+    original = _primer(sequence="AAAA", start=8, end=2, strand=1,
+                       sites=[{"start": 8, "end": 10, "strand": 1}, {"start": 0, "end": 2, "strand": 1}])
+    created = sequence_client.post("/api/sequences/", json={
+        "name": "Circular RC", "sequence": "AACCGGTTAA", "is_circular": True, "primers": [original],
+    })
+    assert created.status_code == 200
+    transformed = {**original, "strand": -1, "sites": [
+        {"start": 8, "end": 10, "strand": -1}, {"start": 0, "end": 2, "strand": -1},
+    ]}
+    updated = sequence_client.put(f"/api/sequences/{created.json()['id']}", json={
+        "sequence": "TTAACCGGTT", "primers": [transformed],
+    })
+    assert updated.status_code == 200, updated.text
+    fetched = sequence_client.get(f"/api/sequences/{created.json()['id']}").json()["primers"][0]
+    assert (fetched["start"], fetched["end"], fetched["strand"], fetched["binding_status"]) == (8, 2, -1, None)
+    assert [{k: s[k] for k in ("start", "end", "strand")} for s in fetched["sites"]] == transformed["sites"]

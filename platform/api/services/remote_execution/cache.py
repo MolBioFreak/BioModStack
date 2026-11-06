@@ -623,7 +623,7 @@ def _independent_dependencies(selection):
     from model_registry import (model_runtime_dependencies, model_image_dependencies,
                                 workflow_pack_dependencies)
     if selection.kind == 'workflow_pack':
-        return workflow_pack_dependencies(selection.workflow_id)
+        return workflow_pack_dependencies(selection.workflow_id, selection.component_ids)
     return (model_image_dependencies(selection.model_id) if selection.kind == 'image'
             else model_runtime_dependencies(selection.model_id))
 
@@ -637,6 +637,10 @@ def workflow_pack_weight_layouts(selection, entries):
     """
     from model_registry import workflow_pack_weight_groups
     groups = workflow_pack_weight_groups(selection.workflow_id)
+    if selection.component_ids is not None:
+        # Never publish a partial combined layout as a complete consumer layout.
+        selected = {ref.relative_path for ref in _independent_dependencies(selection) if ref.kind == "weights"}
+        groups = {name: members for name, members in groups.items() if set(members) <= selected}
     return {name: tuple(entry for entry in entries if any(
         entry.remote_destination == 'weights/' + member or
         entry.remote_destination.startswith('weights/' + member + '/')
@@ -650,24 +654,35 @@ def _declared_runtime_records(path, prefix, publication, *, resolved=None, model
 
 def independent_plan(selection, *, dependencies=None, publication=None):
     """Resolve only reviewed registry dependencies; no Job or biological inputs."""
-    from paths import get_container_dir, get_weights_root
+    from paths import get_container_dir, get_weights_root, get_data_root
     entries = []
     resolved = {}
     refs = _independent_dependencies(selection) if dependencies is None else dependencies
+    from model_registry import workflow_pack_weight_owners
+    weight_owners = (workflow_pack_weight_owners(selection.workflow_id)
+                     if selection.kind == 'workflow_pack' else None)
     publication = hf_assets.publication_index() or {} if publication is None else publication
     for ref in {(r.kind, r.relative_path): r for r in refs}.values():
+        model_id = (weight_owners.get(ref.relative_path) if weight_owners is not None
+                    else getattr(selection, 'model_id', None))
         if selection.kind == 'image' and ref.kind != 'image':
             continue
-        root = (get_container_dir() if ref.kind == 'image' else get_weights_root()).resolve()
+        root = {'image': get_container_dir, 'weights': get_weights_root,
+                'runtime_data': get_data_root}[ref.kind]().resolve()
         # Preserve installation selection authority before resolving legacy aliases.
-        path = (image_reference(ref.relative_path, root)[0].resolve() if ref.kind == 'image'
-                else root / ref.relative_path)
+        if ref.kind == 'weights':
+            from paths import resolve_weight_dependency
+            path = resolve_weight_dependency(ref.relative_path, root)
+        else:
+            path = (image_reference(ref.relative_path, root)[0].resolve() if ref.kind == 'image'
+                    else root / ref.relative_path)
         from .bundle import _selected_weight_members
-        selected = (_selected_weight_members(path, selection.model_id, resolved=resolved) if ref.kind == 'weights' and path.exists() else None)
+        selected = (_selected_weight_members(path, model_id, resolved=resolved) if ref.kind == 'weights' and path.exists() else None)
         if ((path.is_symlink() and selected is None) or (ref.kind != 'image' and not path.resolve().is_relative_to(root))):
             raise ValueError('Independent runtime asset is not a contained regular asset')
-        prefix = ('containers/' if ref.kind == 'image' else 'weights/') + ref.relative_path
-        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved, model_id=selection.model_id):
+        prefix = {'image': 'containers/', 'weights': 'weights/',
+                  'runtime_data': 'data/'}[ref.kind] + ref.relative_path
+        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved, model_id=model_id):
             suffix = record.relative_path[len(prefix):].lstrip('/')
             local = resolved.get(('runtime-source', record.relative_path)) or (path / suffix if suffix else path)
             if record.link_target is None and local.is_symlink():
@@ -772,7 +787,8 @@ def independent_preview(selection, target, *, compiled_plan=None):
     else:
         try:
             refs = _independent_dependencies(selection)
-            dependencies = [dict(name=('containers/' if r.kind == 'image' else 'weights/') + r.relative_path,
+            dependencies = [dict(name={'image': 'containers/', 'weights': 'weights/',
+                                      'runtime_data': 'data/'}[r.kind] + r.relative_path,
                                  kind=r.kind) for r in refs]
         except ValueError:
             blockers = ['binding_unavailable: Use the typed workflow form to prepare its selected dependencies; '
@@ -846,6 +862,11 @@ def independent_preview(selection, target, *, compiled_plan=None):
     states = [dict(row, state=known.get((row['name'], row['sha256'], row['size_bytes']), 'unknown'))
               for row in artifacts]
     objects = {(e.role == 'image', e.sha256, e.size_bytes) for e in entries if e.link_target is None}
+    # Cache.weights and managed installation hardlink the 0444 CAS body.
+    # Other immutable modes have one cached copy per digest/mode, shared by
+    # every destination and persistent consumer sublayout. Links are metadata.
+    projections = {(e.sha256, e.size_bytes, e.mode & 0o555) for e in entries
+                   if e.role != 'image' and e.link_target is None and e.mode & 0o555 != 0o444}
     missing = {(e.role == 'image', e.sha256, e.size_bytes) for e, row in zip(entries, states, strict=True)
                if row['state'] != 'verified' and e.link_target is None}
     return ProvisionPreview(selection=selection, preview_sha256=digest,
@@ -857,9 +878,8 @@ def independent_preview(selection, target, *, compiled_plan=None):
         plan_sha256=plan.plan_sha256 if plan else None,
         asset_states=states, inventory_state=inventory_state,
         transfer_bytes=sum(size for _, _, size in missing),
-        # Conservative space estimate: one immutable cache object plus each
-        # non-image installed destination. Images are never copied into releases.
-        storage_bytes=sum(size for _, _, size in objects) + sum(e.size_bytes for e in entries if e.role != 'image' and e.link_target is None)), entries
+        # Persistent payload estimate, not transient upload/scratch or metadata.
+        storage_bytes=sum(size for _, _, size in objects) + sum(size for _, size, _ in projections)), entries
 
 
 def _workflow_source_archive(directory, source_identity):

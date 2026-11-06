@@ -4,6 +4,7 @@ from tests.molbio_ngs_managed_fixture import initialize_managed_domain
 
 import hashlib
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -122,7 +123,7 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
     from services.molbio_ngs_references import (
         append_reference_revision,
         archive_reference,
-        create_reference_from_molbio_revision,
+        create_reference,
         get_reference_resource,
         get_reference_revision,
         read_reference_artifact_bytes,
@@ -154,6 +155,14 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
     results_root.mkdir()
     manifest_path.parent.mkdir(parents=True)
     monkeypatch.setenv("BMS_MOLBIO_NGS_REFERENCE_ROOT", str(reference_root))
+    # Launch snapshots and FASTQ custody are published under the inputs root;
+    # never write fixture snapshots into the host's real data directory.
+    launch_inputs = tmp_path / "inputs"
+    launch_inputs.mkdir()
+    import services.molbio_ngs_references as _references
+    import services.ont_submission_trust as _submission_trust
+    for _owner in (_references, _submission_trust):
+        monkeypatch.setattr(_owner, "get_inputs_dir", lambda: launch_inputs)
     import services.job_result_roots as job_result_roots
     import services.sequence_qc_manifest as sequence_qc_manifest
 
@@ -245,16 +254,23 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
             idempotency_key="phase2b-sample-create",
             created_by="fixture",
         )
-        reference, reference_revision_1 = await create_reference_from_molbio_revision(
+        # The retired from-MolBio route built exactly this FASTA/provenance pair;
+        # the surviving owner is create_reference with explicit source bytes.
+        record_name = re.sub(r"[^A-Za-z0-9_.:-]+", "_", reference_spec["name"].strip()).strip("_") or "reference"
+        reference, reference_revision_1 = await create_reference(
             domain_session,
-            molbio_session,
             global_domain_experiment_id=domain_spec["id"],
-            sequence_id=molecular_spec["id"],
-            molecular_revision_id=molecular_spec["historical_revision_id"],
             name=reference_spec["name"],
+            raw_fasta=f">{record_name}\n{sequence}\n".encode("ascii"),
             molecule_type=reference_spec["molecule_type"],
             topology=reference_spec["topology"],
             coordinate_contract=reference_spec["coordinate_contract"],
+            source_provenance={
+                "kind": "molbio_molecular_revision",
+                "sequence_id": molecular_spec["id"],
+                "molecular_revision_id": molecular_spec["historical_revision_id"],
+                "molecular_revision_sha256": sequence_sha256,
+            },
             idempotency_key="phase2b-reference-create",
             created_by="fixture",
         )
@@ -333,7 +349,7 @@ async def test_phase2b_sample_reference_state_survive_restart_and_reopen(
         from schemas import JobCreate, JobResponse, JobStatus
         from typing import cast
 
-        reads_path = tmp_path / "managed-reference-launch.fastq"
+        reads_path = launch_inputs / "managed-reference-launch.fastq"
         reads_path.write_text("@read-1\nACGT\n+\nIIII\n", encoding="ascii")
         captured_launch: dict[str, object] = {}
 

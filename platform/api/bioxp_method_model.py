@@ -7,6 +7,26 @@ SCHEMA = 'bms.bioxp-method.v1'
 EXPRESSION_OPS = ('literal', 'param', 'arg', 'loop_index', 'loop_item', 'add', 'sub', 'mul', 'div', 'eq', 'ne', 'lt', 'le', 'gt', 'ge', 'and', 'or', 'not')
 
 
+def liquid_detection_schema():
+    mm = lambda title: {'type': ['number', 'string'], 'title': title, 'minimum': 0, 'maximum': 20}
+    return {'type': 'object', 'additionalProperties': False, 'title': 'Liquid detection',
+        'description': ('Find each channel\'s liquid surface before aspirating. Defaults: first draw from each source well, '
+                        'by level, 1 mm below the surface, stop 1 mm above calibrated low. A listed well with no liquid pauses the run.'),
+        'properties': {
+            'when': {'enum': ['first_draw', 'every_draw', 'off'], 'default': 'first_draw'},
+            'mode': {'enum': ['by_level', 'together', 'one_at_a_time', 'on_contact'], 'default': 'by_level'},
+            'on_contact_delay_ms': {'type': 'integer', 'minimum': 0, 'maximum': 5000, 'default': 0},
+            'mismatch_response': {'enum': ['pause', 'proceed', 'fail'], 'default': 'pause'},
+            'mismatch_tolerance_mm': mm('Mismatch allowance (mm)'),
+            'mismatch_tolerance_percent': {'type': ['number', 'string'], 'minimum': 0, 'maximum': 100, 'default': 15},
+            'expected': {'type': 'boolean', 'default': True, 'title': 'Liquid expected (missing liquid pauses the run)'},
+            'submerge_mm': mm('Depth below surface (mm)'), 'follow_mm': mm('Follow down while aspirating (mm)'),
+            'floor_clearance_mm': mm('Stop above calibrated low (mm)'), 'level_tolerance_mm': mm('Same level within (mm)'),
+            'search_speed_native': {'type': 'integer', 'minimum': 1, 'default': 300},
+            'start_mode': {'enum': [0, 1], 'default': 0},
+            'sensing': {'enum': ['hybrid', 'pressure', 'capacitive'], 'default': 'hybrid'}}}
+
+
 def validate_method(raw):
     """Persistence validation only: incomplete/unknown scientific fields survive."""
     if not isinstance(raw, dict) or raw.get('schema') != SCHEMA:
@@ -38,6 +58,7 @@ def method_schema():
     expression = {'type': 'object', 'required': ['version', 'op'], 'properties': {
         'version': {'const': 1}, 'op': {'enum': list(EXPRESSION_OPS)}, 'id': {'type': 'string'},
         'value': {}, 'type': {'enum': ['number'], 'description': 'Explicit numeric literal kind; raw spelling persists until compilation'}, 'unit': {'type': 'string'}, 'args': {'type': 'array', 'items': {'$ref': '#/$defs/value'}}}}
+    from bioxp_method_deck import deck_schema
     return {'$schema': 'https://json-schema.org/draft/2020-12/schema', '$id': SCHEMA,
         'type': 'object', 'required': ['schema', 'steps'], 'properties': {
             'schema': {'const': SCHEMA}, 'name': {'type': 'string'}, 'description': {'type': 'string'},
@@ -45,7 +66,7 @@ def method_schema():
             'procedures': {'type': 'array', 'items': {'type': 'object', 'required': ['id', 'steps'], 'properties': {
                 'id': {'type': 'string'}, 'parameters': {'type': 'array', 'items': {'$ref': '#/$defs/parameter'}},
                 'steps': {'type': 'array', 'items': {'$ref': '#/$defs/node'}}}}},
-            'steps': {'type': 'array', 'items': {'$ref': '#/$defs/node'}}, 'deck_plan': {'type': 'object'},
+            'steps': {'type': 'array', 'items': {'$ref': '#/$defs/node'}}, 'deck_plan': deck_schema(),
             'tip_policy': {}, 'editor_state': {}},
         '$defs': {'expression': expression, 'value': {'description': 'Raw JSON or {expr: versioned typed AST}; no executable text'},
             'parameter': {'type': 'object', 'required': ['id', 'type'], 'properties': {
@@ -131,6 +152,11 @@ def method_catalog():
     transfer_schema = deepcopy(native['transfer'])
     transfer_defs = transfer_schema.pop('$defs', {})
     transfer_defs['TransferEndpoint']['properties']['labware_id'] = {'type': 'string', 'description': 'Stable logical vessel identity; not a native positioning field'}
+    transfer_defs['TransferEndpoint']['properties']['material_id'] = {'type': 'string', 'description': (
+        'Name a starting-deck material instead of station/location_id/wells. The compiler fills only omitted '
+        'fields from deck_plan assignments; explicit fields are kept.')}
+    transfer_defs['TransferEndpoint']['anyOf'] = [
+        {'required': transfer_defs['TransferEndpoint'].pop('required')}, {'required': ['material_id']}]
     transfer_schema.get('properties', {}).pop('operation', None)
     transfer_schema['required'] = [k for k in transfer_schema.get('required', []) if k != 'operation']
     class_transfer = deepcopy(transfer_schema)
@@ -140,7 +166,8 @@ def method_catalog():
     class_transfer['required'] = [k for k in class_transfer['required'] if k not in {'aspirate_speed', 'dispense_speed'}] + ['liquid', 'recipe']
     class_transfer['properties'].pop('dispense_speed', None)
     recipe_editor = deepcopy(next(a['inputs'] for a in actions if a['action'] == 'liquid_recipe'))
-    class_transfer['properties'].update(liquid=liquid_selection_schema(), recipe=recipe_editor['properties']['recipe'])
+    class_transfer['properties'].update(liquid=liquid_selection_schema(), recipe=recipe_editor['properties']['recipe'],
+                                        liquid_detection=liquid_detection_schema())
     class_transfer['properties']['recipe']['required'] = [k for k in class_transfer['properties']['recipe']['required']
         if k not in {'mode', 'channels', 'before_leading_air', 'before_liquid', 'after_liquid', 'before_dispense', 'after_dispense'}]
     for entry in actions:
@@ -159,16 +186,22 @@ def method_catalog():
             'status': {'authorable': True, 'emitted': True, 'registered': True, 'connected_tested': False, 'physically_qualified': False},
             'effects': 'Explicit repeated-single transfers are not true multi aliquots; true multi uses complete native recipe'})
     actions.append({'action': 'tip_eject', 'inputs': {'type': 'object', 'required': ['channels'],
-        'properties': {'channels': {'const': [0, 1, 2, 3]}}, 'additionalProperties': False},
+        'properties': {'channels': {'type': 'array', 'items': {'enum': [0, 1, 2, 3]}, 'minItems': 1, 'uniqueItems': True}}, 'additionalProperties': False},
         'status': {'authorable': True, 'emitted': True, 'registered': True},
-        'effects': 'Existing all-channel source ejection; selected-channel diagnostic remains separate'})
+        'effects': 'Ejects the listed channels where the head is; precede it with a move to the waste bin (location 6), as the OEM ET command does. [0,1,2,3] is the existing all-channel eject'})
     pickup = deepcopy(schema['$defs']['ManualLoadTip'])
     pickup['properties'].pop('operation', None)
     pickup['required'] = [k for k in pickup.get('required', []) if k != 'operation']
-    pickup['properties']['channels'] = {'const': [0, 1, 2, 3]}
+    pickup['properties'].pop('keep_channels', None)
+    pickup['properties']['channels'] = {'type': 'array', 'items': {'enum': [0, 1, 2, 3]}, 'minItems': 1, 'maxItems': 4,
+        'uniqueItems': True, 'description': 'Channels that keep tips; the others are released back into the rack after a short lift'}
     actions.append({'action': 'tip_pickup', 'inputs': pickup,
-        'status': {'authorable': True, 'emitted': True, 'registered': True}, 'effects': 'Source group-of-four pickup'})
+        'status': {'authorable': True, 'emitted': True, 'registered': True},
+        'effects': 'Group-of-four pickup; unneeded tips go straight back into their rack wells'})
     for entry in actions:
+        if entry['action'] == 'move':
+            entry['inputs']['properties']['movement'] = {'enum': ['full', 'fast'], 'title': 'Movement',
+                'description': 'Omitted is full (move, stop and report each). Consecutive fast moves run as one sequence at travel height; position_flag is not used.'}
         if entry['action'] in {'plate_move', 'move_cover', 'plate_catch', 'plate_release', 'plate_press', 'gripper_catch', 'gripper_release', 'gripper_press'}:
             entry['inputs']['properties']['labware_id'] = {'type': 'string', 'description': 'Stable logical identity; retained as metadata, not a controller setting'}
         if entry['action'] in {'cavro_application', 'liquid_recipe', 'fluid_search', 'pipette_settings', 'pressure_stream'}:

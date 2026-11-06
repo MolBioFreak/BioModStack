@@ -17,6 +17,7 @@ process RunProtonPottsMPNNDesign {
 
     script:
     def image = System.getenv('BMS_SELECTED_IMAGE_PROTONPOTTSMPNN_SIF') ?: params.protonpottsmpnn_container_path ?: System.getenv('BMS_PROTONPOTTSMPNN_CONTAINER_PATH') ?: "${params.container_dir}/protonpottsmpnn.sif"
+    def launcher = System.getenv('BMS_CONTAINER_EXECUTABLE') ?: 'apptainer'
     def device = params.protonpottsmpnn_device ?: 'cpu'
     def cuda = device.toString().startsWith('cuda')
     def acceleration = cuda ? "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${params.gpu_id}" : '--env CUDA_VISIBLE_DEVICES='
@@ -26,7 +27,7 @@ process RunProtonPottsMPNNDesign {
     def library = "${params.code_root}/scripts/lib"
     """
     set -euo pipefail
-    apptainer exec --no-home ${acceleration} \
+    '${launcher}' exec --no-home ${acceleration} \
       --bind "\$PWD:\$PWD" \
       --bind '${runner}:/probe/run_protonpottsmpnn_design.py' \
       --bind '${library}:/probe/lib:ro' \

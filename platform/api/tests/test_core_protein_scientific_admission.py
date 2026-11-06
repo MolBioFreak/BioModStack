@@ -18,7 +18,7 @@ KEY = contract.REVISION_KEY
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("invalid", ["second_sequence", "settings", None])
+@pytest.mark.parametrize("invalid", ["second_sequence", "second_sequence_pattern", "settings", None])
 async def test_marked_variants_all_validate_before_any_row_mutation(admission, monkeypatch, invalid):
     """New explicit no-MSA batch intent; never a migration of saved local-MSA settings."""
     # A registry-owned sequence rule makes the second generated request fail
@@ -34,7 +34,8 @@ async def test_marked_variants_all_validate_before_any_row_mutation(admission, m
                       "use_msa": False, "seed": 0,
                       "boltz_recycling_steps": -1 if invalid == "settings" else 1,
                       "mutagenesis_variants": [{"name": "one", "sequence": "ACDE"},
-                                              {"name": "two", "sequence": None if invalid == "second_sequence" else "FGHI"}]}
+                                              {"name": "two", "sequence": None if invalid == "second_sequence"
+                                                   else "FGHZ" if invalid == "second_sequence_pattern" else "FGHI"}]}
     if invalid:
         def no_add(*args, **kwargs):
             raise AssertionError("Job row mutation before all variant validation")
@@ -43,10 +44,13 @@ async def test_marked_variants_all_validate_before_any_row_mutation(admission, m
             await jobs._create_job(payload, BackgroundTasks(), admission)
         assert exc.value.status_code == 422
         # Both invalid branches must reach the variant validator, not an MSA gate.
-        expected_error = (
-            "sequence does not match required pattern" if invalid == "second_sequence"
-            else "boltz_recycling_steps must be >= 1.0"
-        )
+        # model_registry.validate_job_params (a3971bd) rejects a non-string with the
+        # typed-wire message before the pattern rule; a string outside the pattern
+        # still gets the pattern message. Both stay covered.
+        expected_error = {
+            "second_sequence": "sequence requires typed text",
+            "second_sequence_pattern": "sequence does not match required pattern",
+        }.get(invalid, "boltz_recycling_steps must be >= 1.0")
         assert exc.value.detail == {"validation_errors": [expected_error]}
         assert not admission.new
         assert list((await admission.execute(select(Job))).scalars()) == []
@@ -192,7 +196,12 @@ def test_resume_preserves_known_overrides_and_legacy_extra_policy():
     payload = {"from_stage": "validation", "name_suffix": "retry",
                "param_overrides": {"sequence": "ACDE", "nested": [{"ordinary": None}]}}
     parsed = jobs.ResumeJobRequest.model_validate({**payload, "ignored_extra": {"items": [1, None]}})
-    assert parsed.model_dump() == {**payload, "execution_target_id": None}
+    # ResumeJobRequest also carries the checkpoint/placement/policy fields (a3971bd);
+    # all of them stay at their inert defaults when the caller supplies none.
+    assert parsed.model_dump() == {
+        **payload, "execution_target_id": None, "checkpoint_id": None, "checkpoint_sha256": None,
+        "checkpoint_decision": None, "launch_context_id": None,
+        "execution_policy": {"remote_result_policy": "manual"}}
     assert "execution_target_id" not in parsed.model_fields_set
 
 

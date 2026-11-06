@@ -1,4 +1,6 @@
 import React, { act, useEffect } from 'react';
+import { createHash } from 'node:crypto';
+import { isolateDeNovoTransport } from './deNovoTransport';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -28,9 +30,9 @@ vi.mock('../../src/lib/api', async (original) => ({
 }));
 import { api, EXECUTION_TARGET_STORAGE_KEY } from '../../src/lib/api';
 import ShapeBlueprintTemplate from '../../src/components/ShapeBlueprintTemplate';
-import ProteinLocalRedesignTemplate from '../../src/components/ProteinLocalRedesignTemplate';
 import { StructurePredictionTemplate } from '../../src/components/StructurePredictionTemplate';
 import { prepareDeNovoContinuation } from '../../src/lib/deNovoContinuation';
+import recipes from './fixtures/deNovoContinuationRecipes.json';
 import { fetchSystemStatus } from '../../src/lib/api';
 
 // Synthetic UI-only geometry metadata and minimal PDB, never submitted or persisted.
@@ -51,6 +53,7 @@ const definition = { engine: 'proteinmpnn', initial_values: { temperature: 0.1, 
 let root: Root | undefined;
 let client: QueryClient;
 let container: HTMLDivElement;
+let restoreTransport: () => void;
 const flush = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 15)); }); };
 async function waitForViewer() {
     for (let attempt = 0; attempt < 40 && !container.querySelector('[data-testid="molecule"]'); attempt++) await flush();
@@ -76,13 +79,14 @@ async function edit(node: HTMLInputElement | HTMLTextAreaElement | HTMLSelectEle
     });
 }
 function field(label: string) {
-    const direct = container.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`);
+    const direct = container.querySelector<HTMLInputElement | HTMLSelectElement>(`input[aria-label="${label}"],select[aria-label="${label}"]`);
     if (direct) return direct;
     const owner = [...container.querySelectorAll('label')].find(node => node.textContent?.startsWith(label));
     const input = owner?.querySelector<HTMLInputElement | HTMLSelectElement>('input,select');
     if (!input) throw new Error(`Missing field ${label}`); return input;
 }
 beforeEach(() => {
+    restoreTransport = isolateDeNovoTransport();
     vi.clearAllMocks(); sessionStorage.clear();
     mocks.targets.mockResolvedValue({ data: [] });
     mocks.geometries.mockResolvedValue({ data: { geometries: [geometry('first'), geometry('second')] } });
@@ -93,23 +97,7 @@ beforeEach(() => {
         return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsText(this); });
     } });
 });
-afterEach(async () => { await unmount(); vi.unstubAllGlobals(); document.body.replaceChildren(); });
-
-it('preserves explicitly cleared insertion bounds through serialized draft reopen', async () => {
-    const changed = vi.fn();
-    await mount(<ProteinLocalRedesignTemplate embedded onBack={vi.fn()} onDraftChange={changed}
-        initialValues={{ redesign_mode: 'minimal_insertion', insertion_min_length: 3, insertion_max_length: 6 }} />);
-    await click('Sampling');
-    await edit(field('Minimum inserted length'), '');
-    await edit(field('Maximum inserted length'), '');
-    const draft = JSON.parse(JSON.stringify(changed.mock.lastCall![0]));
-    expect(draft).toMatchObject({ insertion_min_length: '', insertion_max_length: '' });
-    await unmount();
-    await mount(<ProteinLocalRedesignTemplate embedded onBack={vi.fn()} onDraftChange={changed} initialValues={draft} />);
-    expect(field('Minimum inserted length').value).toBe('');
-    expect(field('Maximum inserted length').value).toBe('');
-    expect(mocks.submit).not.toHaveBeenCalled();
-});
+afterEach(async () => { await unmount(); vi.unstubAllGlobals(); document.body.replaceChildren(); restoreTransport(); });
 
 it('keeps the real geometry controls and active preview mounted across sections, reporting a complete restorable draft', async () => {
     const changed = vi.fn();
@@ -118,10 +106,10 @@ it('keeps the real geometry controls and active preview mounted across sections,
     const upload = field('Geometry file');
     await edit(field('Geometry'), 'second');
     const preview = container.querySelector('[data-testid="mesh"]');
-    await click('Generation');
+    await click('RFD3');
     await edit(field('Deterministic seed'), '0');
     await edit(field('Target length'), '140');
-    await click('Optional next steps');
+    await click('Sequence design');
     await edit(field('Sequence policy'), 'skip');
     await edit(field('Job name'), '');
     await click('Geometry');
@@ -135,7 +123,7 @@ it('keeps the real geometry controls and active preview mounted across sections,
         shape_geometry_sha256: geometry('second').geometry_sha256, shape_length_policy: { mode: 'fixed', min: 140, max: 140 } });
     const policy = container.querySelector('[data-testid="policy"]')!;
     expect(policy.compareDocumentPosition(container.querySelector('[aria-label="Execution target"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(preview!.compareDocumentPosition(policy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(preview!.closest('.grid')?.contains(policy)).toBe(true); // Existing side-by-side workbench, not the retired vertical layout.
     await unmount();
     await mount(<ShapeBlueprintTemplate embedded initialValues={draft} onDraftChange={changed} />);
     expect(field('Geometry').value).toBe('second'); expect(field('Job name').value).toBe('');
@@ -174,7 +162,7 @@ it('prepares and submits the exact current Shape request, keeping retry identity
     try {
         await mount(<ShapeBlueprintTemplate initialValues={{ shape_sequence_policy: 'skip' }} />);
         expect(posts).toEqual([]); expect(mocks.submit).not.toHaveBeenCalled();
-        await click('Generation'); await edit(field('Target length'), '140');
+        await click('RFD3'); await edit(field('Target length'), '140');
         const panel = () => container.querySelector('[aria-label="Unsaved workflow provisioning"]')!;
         const previewCurrent = async () => {
             const node = [...panel().querySelectorAll('button')].find(b => b.textContent === 'Preview artifact downloads')!;
@@ -190,7 +178,7 @@ it('prepares and submits the exact current Shape request, keeping retry identity
         expect(execution_target_id).toBe(target.id); expect(execution_policy).toBeTruthy();
         const submitted = mocks.submit.mock.lastCall![0];
         expect(submitted.client_request_id).toBe(prepared.client_request_id);
-        await click('Optional next steps'); await click('Generation');
+        await click('Sequence design'); await click('RFD3');
         await click('Launch Shape Blueprint'); await flush();
         expect(mocks.submit.mock.lastCall![0]).toEqual(submitted);
         await edit(field('Target length'), '160');
@@ -200,52 +188,8 @@ it('prepares and submits the exact current Shape request, keeping retry identity
         const family = container.querySelector('[aria-label="Independent dependency preparation"]')!;
         const familyButton = [...family.querySelectorAll('button')].find(b => b.textContent === 'Preview artifact downloads')!;
         await act(async () => familyButton.click()); await flush();
-        expect(posts.at(-1)!.body).toEqual({ kind: 'model', model_id: 'protein_modification_experimental' });
+        expect(posts.at(-1)!.body).toEqual({ kind: 'workflow_pack', workflow_id: 'de_novo_design' });
     } finally { api.defaults.adapter = adapter; }
-});
-
-it('preserves Redesign real pasted-source controls, viewer, ranges and blank seed across presentation toggles and remount', async () => {
-    const changed = vi.fn();
-    await mount(<ProteinLocalRedesignTemplate embedded onBack={vi.fn()} onDraftChange={changed} runDetails={<div data-testid="policy">Policy</div>} />);
-    expect(container.querySelector('h1')).toBeNull();
-    const paste = container.querySelector<HTMLTextAreaElement>('[placeholder="ATOM ... or data_entry"]')!;
-    await edit(paste, pdb); await click('Use pasted structure in Mol*'); await waitForViewer();
-    const preview = container.querySelector('[data-testid="molecule"]');
-    expect(preview, container.textContent ?? '').not.toBeNull();
-    await edit(field('Range string'), 'A1');
-    await click('Sampling'); await edit(field('Seed'), '0');
-    await click('Optional next steps'); await click('Source and regions');
-    expect(container.querySelector('[placeholder="ATOM ... or data_entry"]')).toBe(paste);
-    expect(container.querySelector('[data-testid="molecule"]')).toBe(preview);
-    expect(mocks.moleculeMount).toHaveBeenCalledTimes(1);
-    await click('Hide 3D'); await click('Show 3D');
-    expect(mocks.moleculeMount).toHaveBeenCalledTimes(1);
-    await click('Sampling'); await edit(field('Seed'), ''); await edit(field('Job name'), '');
-    const draft = changed.mock.lastCall![0];
-    expect(draft).toMatchObject({ seed: null, job_name: '', redesign_ranges: 'A1', dump_trajectories: false, context_chains: [] });
-    expect(draft._redesign_source_text).toContain('ATOM');
-    expect(draft._redesign_source.file).toBeUndefined();
-    await unmount(); await mount(<ProteinLocalRedesignTemplate embedded initialValues={draft} onBack={vi.fn()} onDraftChange={changed} />);
-    await waitForViewer();
-    expect(field('Range string').value).toBe('A1'); expect(field('Job name').value).toBe('');
-    expect(field('Seed').value).toBe(''); expect(container.querySelector('[data-testid="molecule"]')).not.toBeNull();
-    expect(mocks.submit).not.toHaveBeenCalled();
-});
-
-it('does not emit Redesign defaults before saved hydration and preserves explicit clears during late source load', async () => {
-    let read!: (value: unknown) => void;
-    vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { read = resolve; })));
-    const changed = vi.fn(); const back = vi.fn();
-    await mount(<ProteinLocalRedesignTemplate onBack={back} initialValues={{ input_structure: 'saved.pdb',
-        job_name: '', seed: 0, partial_t: 0, dump_trajectories: false, context_chains: [], redesign_ranges: 'A1',
-        interactive_gating: false, fix_fixed_sidechains: false, region_padding: 0 }} onDraftChange={changed} />);
-    expect(changed.mock.calls[0][0]).toMatchObject({ job_name: '', seed: 0, partial_t: 0, dump_trajectories: false,
-        interactive_gating: false, fix_fixed_sidechains: false, region_padding: 0, redesign_ranges: 'A1' });
-    await edit(field('Range string'), '');
-    await act(async () => read({ ok: true, blob: async () => new Blob([pdb]) })); await waitForViewer();
-    expect(field('Range string').value).toBe('');
-    expect(changed.mock.lastCall![0]).toMatchObject({ redesign_ranges: '', context_chains: [], seed: 0 });
-    await click('Back'); expect(back).toHaveBeenCalledTimes(1);
 });
 
 // These lifecycle cases use the real continuation and submission helpers and
@@ -255,7 +199,7 @@ const source = { job_id: 'returned-parent', request_id: 'native-request', candid
 const retained = { ...source, path: 'inputs/retained/selected.pdb', expected_sha256: '7'.repeat(64) };
 const selectedMaterialization = {
     path: retained.path, format: 'pdb', sha256: retained.expected_sha256, model_number: 1,
-    source_structure: retained,
+    source_structure: retained, native_recipe: recipes.legacyMulti,
     author_residues: [
         { model_number: 1, auth_asym_id: 'A', auth_seq_id: 1, residue_name: 'ALA' },
         { model_number: 1, auth_asym_id: 'A', auth_seq_id: 2, residue_name: 'GLY' },
@@ -308,23 +252,23 @@ it('prediction selects exact author/model sequence, clears and reselects ancestr
     expect(chooser().textContent).not.toContain('DNA');
     expect(chooser().value).toBe('');
     await edit(chooser(), '2:authorB');
-    expect(changed.mock.lastCall![0]).toMatchObject({ sequence: 'MK', primary_chain_id: 'authorB', source_structure: { ...retained, model_number: 2 } });
+    expect(changed.mock.lastCall![0].editor_state).toMatchObject({ sequence: 'MK', primary_chain_id: 'authorB', source_structure: { ...retained, model_number: 2 } });
     await click('Clear selected source');
-    expect(changed.mock.lastCall![0].source_structure).toBeUndefined();
-    expect(changed.mock.lastCall![0].sequence).toBe('');
+    expect(changed.mock.lastCall![0].editor_state.source_structure).toBeUndefined();
+    expect(changed.mock.lastCall![0].editor_state.sequence).toBe('');
     const cleared = JSON.parse(JSON.stringify(changed.mock.lastCall![0]));
     await unmount();
-    await mount(<StructurePredictionTemplate onBack={vi.fn()} initialValues={cleared} onDraftChange={changed} onOpenTemplateManager={save} />);
+    await mount(<StructurePredictionTemplate onBack={vi.fn()} initialValues={cleared.editor_state} onDraftChange={changed} onOpenTemplateManager={save} />);
     await edit(chooser(), '1:A');
-    expect(changed.mock.lastCall![0]).toMatchObject({ sequence: 'AG', source_structure: { ...retained, model_number: 1 } });
+    expect(changed.mock.lastCall![0].editor_state).toMatchObject({ sequence: 'AG', source_structure: { ...retained, model_number: 1 } });
     const sequenceInput = [...container.querySelectorAll<HTMLTextAreaElement>('textarea')].find(n => n.value === 'AG')!;
     expect(sequenceInput).toBeTruthy(); await edit(sequenceInput, 'AGM');
     const esmfold = [...container.querySelectorAll<HTMLButtonElement>('button')].find(n => n.querySelector('span')?.textContent === 'ESMFold2')!;
     expect(esmfold).toBeTruthy(); await act(async () => esmfold.click());
-    expect(changed.mock.lastCall![0]).toMatchObject({ pred_method: 'esmfold2', sequence: 'AGM', source_structure: { ...retained, model_number: 1 } });
+    expect(changed.mock.lastCall![0].editor_state).toMatchObject({ pred_method: 'esmfold2', sequence: 'AGM', source_structure: { ...retained, model_number: 1 } });
     await click('Save Template');
     const saved = JSON.parse(JSON.stringify(save.mock.lastCall![0].currentParams));
-    expect(saved).toEqual(changed.mock.lastCall![0]);
+    expect(saved).toEqual(changed.mock.lastCall![0].editor_state);
     await unmount();
     await mount(<StructurePredictionTemplate onBack={vi.fn()} initialValues={saved} onDraftChange={changed} />);
     await click('Launch Prediction'); await flush();
@@ -338,71 +282,50 @@ it('prediction selects exact author/model sequence, clears and reselects ancestr
     await unmount();
     await mount(<StructurePredictionTemplate onBack={vi.fn()} initialValues={{ ...request.params, source_structure: request.source_structure,
         pred_method: 'esmfold2', job_name: 'cloned prediction' }} onDraftChange={changed} />);
-    expect(changed.mock.lastCall![0]).toMatchObject({ sequence: 'AGM', source_structure: request.source_structure });
+    expect(changed.mock.lastCall![0].editor_state).toMatchObject({ sequence: 'AGM', source_structure: request.source_structure });
     expect(posts.filter(p => p.url === '/api/jobs')).toHaveLength(1);
 });
 
-it.each(['native', 'validated'] as const)('selected %s Redesign submits retained path, placement and native settings through serialized reopen', async depth => {
-    const posts = await selectedTransport(); const changed = vi.fn();
-    const prepared = await prepareDeNovoContinuation(source, 'redesign');
-    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={{ ...prepared, execution_depth: depth,
-        redesign_ranges: 'A1', select_unfixed_sequence: 'A1', seq_method: 'mpnn', pinned_gpu: 0,
-        seed: 0, partial_t: 0, dump_trajectories: false, interactive_gating: false, region_padding: 0,
-        fix_fixed_sidechains: false, seqs_per_design: 2 }} onDraftChange={changed} />);
-    await waitForViewer();
-    expect(posts.filter(p => p.url === '/api/jobs')).toEqual([]);
-    const draft = JSON.parse(JSON.stringify(changed.mock.lastCall![0]));
-    expect(draft).toMatchObject({ source_structure: retained, _source_prepared: selectedMaterialization, seed: 0, partial_t: 0, dump_trajectories: false });
-    await unmount();
-    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={draft} onDraftChange={changed} />);
-    await waitForViewer();
-    const launch = depth === 'native' ? 'Launch Native RFD3' : 'Launch RFD3 + Sequence + Validation';
-    await click(launch); await flush();
-    let request = posts.filter(p => p.url === '/api/jobs').at(-1)?.body;
-    expect(request, container.textContent ?? '').toMatchObject({ source_structure: { ...retained, model_number: 1 }, execution_target_id: null,
-        model_id: depth === 'native' ? 'protein_local_redesign' : 'protein_modification_experimental', mode: depth === 'native' ? 'local_redesign' : 'region_redesign' });
-    expect(request.params).toMatchObject(depth === 'native' ? { input_structure: retained.path, seed: 0, partial_t: 0, dump_trajectories: false }
-        : { input_pdb: retained.path, seqs_per_design: 2, fix_fixed_sidechains: false, interactive_gating: false, region_padding: 0 });
-    expect(request.params.source_structure).toBeUndefined(); expect(request.parent_job_id).toBeFalsy();
-    await click('Vast · chosen'); await flush();
-    await click(launch); await flush();
-    let approval: HTMLButtonElement | undefined;
-    for (let attempt = 0; attempt < 40 && !approval; attempt++) {
-        await flush();
-        approval = [...document.querySelectorAll<HTMLButtonElement>('button')].find(n => n.textContent === 'Approve and submit');
-    }
-    expect(approval, container.textContent ?? '').toBeTruthy();
-    await act(async () => approval!.click()); await flush();
-    request = posts.filter(p => p.url === '/api/jobs').at(-1)?.body;
-    expect(request.execution_target_id).toBe('vast:chosen');
-    expect(request.source_structure).toEqual({ ...retained, model_number: 1 });
-    expect(request.execution_plan_approval).toBe('a'.repeat(64));
-    await click('Local'); await flush(); await click(launch); await flush();
-    expect(posts.filter(p => p.url === '/api/jobs').at(-1)?.body.execution_target_id).toBeNull();
-});
-
-it.each([[null], [''], [[]]])('exact Redesign preserves an explicit cleared design role (%j) instead of selecting the first chain', async cleared => {
-    await selectedTransport(); const changed = vi.fn();
-    const prepared = await prepareDeNovoContinuation(source, 'redesign');
-    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={{ ...prepared, design_chains: cleared, context_chains: [] }} onDraftChange={changed} />);
-    await waitForViewer();
-    expect(changed.mock.lastCall![0].design_chains).toEqual([]);
-    expect(changed.mock.lastCall![0].context_chains).toEqual([]);
-});
-
-it('Redesign clear ignores a late selected-source read and replacement drops old ancestry', async () => {
-    await selectedTransport(); const changed = vi.fn();
-    let finish!: (value: unknown) => void;
-    vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { finish = resolve; })));
-    const prepared = await prepareDeNovoContinuation(source, 'redesign');
-    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={prepared} onDraftChange={changed} />);
-    await click('Clear source');
-    expect(container.textContent).not.toContain('Parsing structure');
-    await act(async () => finish({ ok: true, blob: async () => new Blob([pdb]) })); await flush();
-    expect(container.querySelector('[data-testid="molecule"]')).toBeNull();
-    expect(changed.mock.lastCall![0].source_structure).toBeUndefined();
-    await edit(container.querySelector<HTMLTextAreaElement>('[placeholder="ATOM ... or data_entry"]')!, pdb);
-    await click('Use pasted structure in Mol*'); await waitForViewer();
-    expect(changed.mock.lastCall![0].source_structure).toBeUndefined();
-    expect(changed.mock.lastCall![0]._source_prepared).toBeUndefined();
-});
+// Retained browser counterexample's exact native CIF (historical UI fixture,
+// SHA a1916e81afe2cb0511e68fc3af3c39a8801a665f14fa11ae4fe176a2dfebc5d5).
+const retainedEnsembleCif = `data_ensemble
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.auth_seq_id
+_atom_site.auth_asym_id
+_atom_site.pdbx_PDB_model_num
+ATOM 1 C CA A GLY A ? 1 B 1.000 2.000 3.000 0.5 20.0 12 A 1${' '}
+ATOM 1 C CA A GLY A ? 1 B 9.000 2.000 3.000 0.5 20.0 12 A 2${' '}
+#
+loop_
+_ma_qa_metric.id
+_ma_qa_metric.name
+_ma_qa_metric.type
+_ma_qa_metric.mode
+1 pLDDT pLDDT local
+#
+loop_
+_ma_qa_metric_local.model_id
+_ma_qa_metric_local.label_asym_id
+_ma_qa_metric_local.label_seq_id
+_ma_qa_metric_local.label_comp_id
+_ma_qa_metric_local.metric_id
+_ma_qa_metric_local.metric_value
+1 A 1 GLY 1 0
+#
+`;

@@ -1,6 +1,7 @@
 """Synthetic local filesystem tests; never launch containers or access services."""
 import errno
 import hashlib
+import json
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -49,6 +50,69 @@ def derive(store):
     identity = shared.verify_image(image, digest)
     with lifecycle.transaction(root), shared._file(image) as (fd, _, _):
         return views._derive(root, digest, fd, identity, extract)
+
+
+@pytest.mark.parametrize('extra_files', [0, 1024])
+def test_cold_publication_batches_durability_after_freeze(store, monkeypatch, extra_files):
+    root, digest, _, image = store
+    destination = views.derived_path(root, digest)
+    events = []
+    fsync, syncfs, rename = os.fsync, views._sync_filesystem, os.rename
+
+    def measured_fsync(fd):
+        target = Path(os.readlink(f'/proc/self/fd/{fd}'))
+        assert 'rootfs' not in target.parts, 'per-inode synchronous flush'
+        events.append(('fsync', target))
+        return fsync(fd)
+
+    def measured_syncfs(fd):
+        stage = Path(os.readlink(f'/proc/self/fd/{fd}'))
+        assert not destination.exists()
+        manifest = json.loads((stage / 'manifest.json').read_text())
+        assert views._inventory(stage / 'rootfs') == manifest['frozen']
+        events.append(('syncfs', stage))
+        return syncfs(fd)  # exercise real Linux durability syscall
+
+    def measured_rename(src, dst, **kwargs):
+        if dst == destination.name:
+            assert sum(kind == 'syncfs' for kind, _ in events) == 1
+            events.append(('publish', destination))
+        return rename(src, dst, **kwargs)
+
+    monkeypatch.setattr(os, 'fsync', measured_fsync)
+    monkeypatch.setattr(views, '_sync_filesystem', measured_syncfs)
+    monkeypatch.setattr(os, 'rename', measured_rename)
+    def many_files(fd, destination):
+        extract(fd, destination)
+        for index in range(extra_files):
+            (destination / 'bin' / f'member-{index}').write_bytes(b'extracted bytes')
+    identity = shared.verify_image(image, digest)
+    with lifecycle.transaction(root), shared._file(image) as (fd, _, _):
+        path, manifest = views._derive(root, digest, fd, identity, many_files)
+    assert views.verify_derivation(path, shared.verify_image(image, digest))[1] == manifest
+    index = next(i for i, (kind, _) in enumerate(events) if kind == 'publish')
+    assert events[index + 1] == ('fsync', destination.parent)
+    assert sum(kind == 'syncfs' for kind, _ in events) == 1
+    derive(store)
+    assert sum(kind == 'syncfs' for kind, _ in events) == 1  # warm reuse
+
+
+def test_syncfs_failure_preserves_unpublished_cleanup(store, monkeypatch):
+    root, digest, _, _ = store
+    def failed(fd):
+        raise OSError(errno.EIO, 'injected writeback error')
+    monkeypatch.setattr(views, '_sync_filesystem', failed)
+    with pytest.raises(OSError, match='injected writeback error'):
+        derive(store)
+    path = views.derived_path(root, digest)
+    assert not path.exists()
+    assert not list(path.parent.glob('.derive-*'))
+
+
+def test_syncfs_reports_kernel_errno():
+    with pytest.raises(OSError) as error:
+        views._sync_filesystem(-1)
+    assert error.value.errno == errno.EBADF
 
 
 @pytest.fixture

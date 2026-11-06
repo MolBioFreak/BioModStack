@@ -20,6 +20,7 @@ from services.bioxp.operator_requests import (
     OperatorAdmissionRequest,
     OperatorAssessmentRequest,
     OperatorDeckMoveInputsV1,
+    OperatorDeckRecordRequestV1,
     OperatorDeckMoveToWellInputsV2,
     OperatorEmptyInputsV2,
     OperatorInterruptRequestV1,
@@ -27,6 +28,8 @@ from services.bioxp.operator_requests import (
     OperatorMoveStepsInputsV2,
     OperatorMoveXYInputsV2,
     OperatorReportExportRequestV1,
+    OperatorXYMoveSequenceInputsV2,
+    OperatorXYRetargetInputsV2,
     OperatorYMoveAbsoluteInputsV2,
     OperatorYMoveStepsInputsV2,
     PipetteApplicationPlanRequest,
@@ -158,6 +161,7 @@ async def operator_updates(
 
 _V2_NORMAL_INPUT_TYPES = {
     "meta.activate_motion": OperatorEmptyInputsV2,
+    "meta.deactivate_motion": OperatorEmptyInputsV2,
     "meta.recover_motion_non_homing": OperatorEmptyInputsV2,
     "oem.x.manual_panel_home": OperatorEmptyInputsV2,
     "oem.x.move_steps": OperatorMoveStepsInputsV2,
@@ -175,6 +179,8 @@ _V2_NORMAL_INPUT_TYPES = {
     "oem.deck.collect_authority": OperatorEmptyInputsV2,
     "oem.deck.move_to_location": OperatorDeckMoveInputsV1,
     "oem.deck.move_to_well": OperatorDeckMoveToWellInputsV2,
+    "oem.xy.move_sequence": OperatorXYMoveSequenceInputsV2,
+    "oem.xy.retarget": OperatorXYRetargetInputsV2,
 }
 
 
@@ -237,6 +243,29 @@ async def interrupt_operator_action_v1(
         path_params={"action_id": action_id},
         json_data=_robot_request_body(request),
     ))
+
+
+@router.get("/operator-controls/deck/state", response_model=None)
+async def operator_deck_state(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> Any:
+    """Robot's canonical deck record (plates, covers, head) and its provider fallback."""
+    return await _query(runtime, "operator_deck_state", require_fresh=False)
+
+
+@router.get("/operator-controls/tip-trays", response_model=None)
+async def operator_tip_trays(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> Any:
+    return await _query(runtime, "operator_tip_trays", require_fresh=False)
+
+
+@router.post("/operator-controls/deck/record", response_model=None,
+             dependencies=[Depends(require_bioxp_mutation_access)])
+async def operator_deck_record(request: OperatorDeckRecordRequestV1,
+                               runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> Any:
+    """Correct where the robot believes plates/covers are and which tips are loaded. No motion."""
+    body = request.model_dump(exclude={"expected_connection_generation"}, exclude_none=True, mode="json")
+    body["schema_version"] = "bioxp.operator_deck_record_request.v1"
+    return await _relay(runtime.connection.request_active_query(
+        "operator_deck_record", expected_generation=request.expected_connection_generation,
+        require_fresh=False, json_data=body))
 
 
 @router.get("/operator-controls/v2/requests/{key}", response_model=None)

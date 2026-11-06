@@ -5,7 +5,8 @@
 The tracked `prediction-cli-cp-topology.patch` only exposes the existing native
 Python `run_predict(cp_topology=...)` parameter through Click, forwards it, and
 corrects the CP-rank help text. Choices are `2d` and `1d`; default remains `2d`.
-No inference defaults, outputs, confidence behavior, or calculations are patched.
+The CLI patch changes no inference defaults or calculations. Separate writer
+association patches described below repair output ownership, not model numerics.
 BMS uses `cp_topology`; Nextflow uses `bcp_cp_topology`; native CLI uses
 `predict --cp_topology`.
 
@@ -39,6 +40,35 @@ byte-unchanged across both intervals. There is no upstream dependency lockfile.
 Upstream warns that 1D confidence at CP > 1 diverges from serial. That warning and
 confidence outputs remain untouched. It is an evidence limitation, not a new
 BMS execution restriction.
+
+## Writer ownership and input fidelity
+
+`dp-local-writer.patch` repairs both 1D and 2D prediction dispatch: CP tensor
+axes are replicated for writing while placement 0 (DP) remains sharded. The
+writer receives DP-local records and scalar scores; gathering the DP axis with
+`full_tensor()` incorrectly associates arrays from another replica. The existing
+local writer sample/rank patch remains necessary. Neither patch changes logits,
+recycling, confidence formulas, RNG, precision, sampling, or CP topology.
+
+CPU Gloo qualification exercises real PyTorch DTensors on eight processes,
+DP2/CP4 for both mesh topologies, including multiple samples and pair arrays.
+This is tensor ownership evidence, not distributed model inference parity.
+
+The pinned `docs/boltz2_cp_prediction.md` is older than the installed 1D merge:
+it still says only square CP and no confidence support. Installed dispatch
+explicitly supports 1D and warns of confidence pairformer divergence at CP>1.
+The general framework documentation targets numerical parity; neither document
+specifies a justified numerical correction for this warning. Keep native
+confidence enabled and retain the warning. CP>1 numerical equivalence remains
+unqualified; do not clamp, synthesize scores, silently use CP1, or lower quality.
+
+Generated polymer composition must carry native `cyclic` and `modifications`
+(position is one-based, CCD code unchanged). These are compiler-owned fields.
+For path-only ligand components, `scripts/fold_cp_input.py` reads a single
+MOL/SDF/MOL2 molecule with RDKit and passes isomeric SMILES to the native parser.
+Charge/stereochemistry are retained; file coordinates are not a template or
+restraint. Explicit SMILES/CCD remain authoritative and unchanged. Raw native
+YAML/CCD routes remain supported. No additional model chemistry is invented.
 
 ## Build and native qualification
 

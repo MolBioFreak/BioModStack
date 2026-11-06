@@ -55,20 +55,109 @@ def save(root, progress):
     root.provenance = {**(root.provenance or {}), PROGRESS: deepcopy(progress)}
 
 
+async def refresh_children(session, root_id, retained):
+    """Recover atomic Job insertions before interpreting dependency progress."""
+    children = await session.scalars(select(Job).where(
+        Job.provenance[STEP]['root_job_id'].as_string() == root_id).execution_options(populate_existing=True))
+    for child in children:
+        step = retained['steps'].get(child.provenance[STEP]['step_id'])
+        if step is not None:
+            step.update(job_id=child.id, state=child.status)
+            step.pop('error', None)
+
+
+def round_state(retained):
+    states = {s['state'] for s in retained['steps'].values() if not s.get('superseded_by')}
+    dependencies = {d['state'] for d in retained.get('dependencies', {}).values()}
+    if retained['errors'] or 'error' in states or 'publication_error' in dependencies:
+        return 'needs_retry'
+    if 'review_required' in states:
+        return 'review_required'
+    if states - {'completed', 'failed', 'cancelled'} or dependencies & {'awaiting_predecessor', 'awaiting_publication'}:
+        return 'running'
+    return 'completed_with_errors' if states & {'failed', 'cancelled'} else 'completed'
+
+
+async def submit_step(session, experiments, step, *, destination, context):
+    """One ordinary Job/Project submission boundary for initial and selected rounds."""
+    from routers.jobs import submit_selected_child_jobs
+    tasks = BackgroundTasks()
+    try:
+        if step['metadata'].get('route') == 'md_native':
+            from routers.molecular_dynamics import _launch_native_md_job
+            from services.md.starting_structures import MdLaunchRequest
+            launch = MdLaunchRequest.model_validate(step['metadata']['md_launch_request'])
+            if (launch.intent.execution_target_id and
+                    step['metadata'].get('approved_md_preview_digest') != launch.preview_digest):
+                return {'state': 'review_required', 'review': {
+                    'code': 'md_native_preview_approval_required',
+                    'preview_digest': launch.preview_digest}}, tasks
+            child = await _launch_native_md_job(launch, session,
+                round_step=BinderRoundStepReference.model_validate(step['request']['binder_round_step']),
+                destination_launch_context_id=destination, experiment_session=experiments)
+            return {'state': child.status, 'job_id': child.id}, tasks
+        if step['metadata'].get('route') == 'boltz_api':
+            from services.boltz_api_jobs import queue_boltz_api_job
+            metadata = step['metadata']
+            if not metadata.get('approved_estimate_fingerprint'):
+                return {'state': 'review_required', 'review': {
+                    'code': 'boltz_api_estimate_approval_required',
+                    'model': metadata['provider_model'], 'provider_input': metadata['provider_input']}}, tasks
+            child = await queue_boltz_api_job(session, name=step['request']['name'],
+                client_request_id=metadata['step_id'], model=metadata['provider_model'],
+                provider_input=metadata['provider_input'],
+                approved_estimate_fingerprint=metadata['approved_estimate_fingerprint'],
+                local_round_step=metadata)
+            return {'state': child.status, 'job_id': child.id}, tasks
+        response = await submit_selected_child_jobs(
+            [JobCreate.model_validate(step['request'])], tasks, session, experiments,
+            destination_launch_context_id=destination,
+            idempotency_key=step['metadata']['step_id'], response_context=context)
+        outcome = {'state': 'queued', 'job_id': response[0].id}
+    except HTTPException as exc:
+        if exc.status_code == 409 and isinstance(exc.detail, dict) and exc.detail.get('code') == 'remote_prepared_job_review_required':
+            outcome = {'state': 'review_required', 'review': exc.detail}
+            prepared = exc.detail.get('job_request') or exc.detail.get('job_requests', [None])[0]
+            if prepared:
+                outcome['request'] = prepared
+        else:
+            await session.rollback()
+            outcome = {'state': 'error', 'error': str(exc.detail)}
+    except asyncio.CancelledError:
+        await session.rollback()
+        await experiments.rollback()
+        raise
+    except Exception as exc:
+        logger.exception('Round submission failed for %s', context)
+        await session.rollback()
+        outcome = {'state': 'error', 'error': str(exc)}
+    return outcome, tasks
+
+
+def requested_envelope(provenance):
+    # Disabled editor companions do not override an enabled authored operation.
+    entries = [(SequenceDesignRequest, provenance.get(SEQUENCE_REQUEST)),
+               (BinderRoundRequest, provenance.get(REQUEST))]
+    return next((entry for entry in entries if entry[1] and entry[1].get('enabled')),
+                next((entry for entry in entries if entry[1] is not None), (None, None)))
+
+
 async def read_round(session, root_id, *, round_id=None):
     root = await session.get(Job, root_id)
     if root is None:
         raise HTTPException(404, 'Binder round Job not found')
     result = progress_of(root)
     provenance = root.provenance or {}
-    envelope = provenance.get(SEQUENCE_REQUEST) or provenance.get(REQUEST)
+    request_type, envelope = requested_envelope(provenance)
     if envelope is None:
         result['state'] = 'not_requested'
     elif not envelope['enabled']:
         result['state'] = 'generation_only'
+    elif root.status in {'failed', 'cancelled'} and not result['steps']:
+        result.update(state=root.status, outcome='no_follow_on')
     result.update(job_id=root.id, binder_round=provenance.get(REQUEST),
                   sequence_design=provenance.get(SEQUENCE_REQUEST),
-                  kind='general_sequence_design' if SEQUENCE_REQUEST in provenance else 'binder')
+                  kind='general_sequence_design' if request_type is SequenceDesignRequest else 'binder')
     # Observational readback only, including cancellation/failure before a
     # scheduler tick. Never materialize, submit or compute in GET.
     children = await session.scalars(select(Job).where(Job.provenance[STEP]['root_job_id'].as_string() == root_id))
@@ -119,7 +208,88 @@ async def bind_step(session, request, preallocated_id=None, *, project_bound=Fal
     return step['metadata'], preallocated_id if isinstance(preallocated_id, str) else reference.step_id, None
 
 
-async def _plan(session, root, progress, request, *, retry=False):
+async def _plan_invocations(session, root, progress, request):
+    """Initial outputs enter the same invocation compiler as selected outputs."""
+    from schemas import SelectedRoundRequest, ExecutionPolicy
+    from services import binder_selected_round as selected
+    if 'request' not in progress:
+        submitted = SelectedRoundRequest(operation='round', source_job_id=root.id,
+            idempotency_key='initial', round_plan=request.round_plan,
+            execution_target_id=root.execution_target_id,
+            launch_context_id=(root.provenance or {}).get('launch_context_id'),
+            execution_policy=ExecutionPolicy.from_params(root.params))
+        progress.update(round_id='initial:' + root.id, source_job_id=root.id, root_job_id=root.id,
+            submitted_request=submitted.model_dump(mode='json'),
+            request=selected.normalize(submitted).model_dump(mode='json'),
+            selection={'candidate_refs': [], 'resolved': []}, resolved_outputs={})
+    # Publication failures are observations on this source, not empty success.
+    dependency = progress.setdefault('dependencies', {}).setdefault('initial-publication', {})
+    if dependency.get('state') in {'resolved_outputs', 'valid_empty'} and not progress['errors']:
+        await selected.plan(session, root, progress)
+        return
+    try:
+        refs = await selected.output_refs(session, root)
+    except FileNotFoundError:
+        dependency['state'] = 'awaiting_publication'
+        return
+    except (ValueError, OSError, HTTPException) as exc:
+        dependency.update(state='publication_error', error=str(exc))
+        return
+    dependency.update(state='resolved_outputs' if refs else 'valid_empty')
+    dependency.pop('error', None)
+    rows = progress['selection']['resolved']
+    for ref in refs:
+        key = selected.digest(ref)
+        if any(row['ref'] == ref for row in rows):
+            continue
+        try:
+            rows.append(await selected.resolve_ref(session, root, ref, output_format='native'))
+            progress['selection']['candidate_refs'].append(ref)
+            progress['errors'].pop(key, None)
+        except (ValueError, OSError, HTTPException) as exc:
+            progress['errors'][key] = str(exc)
+    await selected.plan(session, root, progress)
+
+
+async def plan_authored_envelopes(session, root, progress, *, retry=False):
+    """Compile each enabled envelope from the original sources, never each other.
+
+    Steps remain in the existing round ledger/submission owner. Only compiler
+    observations are branch-local; the general branch retains historical IDs.
+    """
+    provenance = root.provenance or {}
+    enabled = [(key, cls, provenance.get(key)) for key, cls in
+               ((SEQUENCE_REQUEST, SequenceDesignRequest), (REQUEST, BinderRoundRequest))
+               if (provenance.get(key) or {}).get('enabled')]
+    if len(enabled) < 2:
+        for _, cls, envelope in enabled:
+            await _plan(session, root, progress, cls.model_validate(envelope), retry=retry)
+        return
+    branches = progress.setdefault('authored_branches', {})
+    for key, cls, envelope in enabled:
+        # Pre-composition retained work belongs to the formerly selected general
+        # envelope. Keep its IDs, snapshots, retries and publication observations.
+        local = branches.get(key)
+        if local is None:
+            local = ({k: deepcopy(v) for k, v in progress.items()
+                      if k not in {'steps', 'state', 'authored_branches', 'selected_rounds'}}
+                     if key == SEQUENCE_REQUEST else {'errors': {}, 'dependencies': {}})
+        local['steps'] = {sid: step for sid, step in progress['steps'].items()
+                          if step['metadata'].get('authored_envelope', SEQUENCE_REQUEST) == key}
+        await _plan(session, root, local, cls.model_validate(envelope), retry=retry,
+                    branch=key if key == REQUEST else None)
+        for step in local['steps'].values():
+            step['metadata']['authored_envelope'] = key
+        progress['steps'].update(local.pop('steps'))
+        branches[key] = local
+    for field in ('errors', 'dependencies'):
+        progress[field] = {key + ':' + item: value for key, branch in branches.items()
+                           for item, value in branch.get(field, {}).items()}
+
+
+async def _plan(session, root, progress, request, *, retry=False, branch=None):
+    if isinstance(request, SequenceDesignRequest) and request.schema_version == 2:
+        return await _plan_invocations(session, root, progress, request)
     from services.binder_diagnostic_selection import declared_targets
     from services.binder_round_inputs import candidate_roles, requires_design, design_request, prediction_request
     from routers.jobs import normalize_job_request
@@ -130,7 +300,7 @@ async def _plan(session, root, progress, request, *, retry=False):
             Job.provenance[STEP]['root_job_id'].as_string() == root.id,
             Job.provenance[STEP]['stage'].as_string() == 'sequence_design', Job.status == 'completed')):
         metadata = child.provenance[STEP]
-        if metadata.get('round_id'):
+        if metadata.get('round_id') or (branch and metadata.get('authored_envelope') != branch):
             continue
         for design in await session.scalars(select(Design).where(Design.job_id == child.id).order_by(Design.id)):
             sources.append((child, design, metadata['backbone_design_id'], metadata))
@@ -167,7 +337,8 @@ async def _plan(session, root, progress, request, *, retry=False):
                     base_request = None
                     binding = {}
                     for sample in range(samples):
-                        step_id = identity(root.id, stage, design.id, target_source, sample,
+                        step_id = identity(root.id if branch is None else root.id + ':' + branch,
+                                stage, design.id, target_source, sample,
                                 model_id=settings.model_id if multi else None)
                         error_key = step_id if multi else design.id
                         if error_key in progress['errors'] and not retry:
@@ -214,11 +385,33 @@ async def _plan(session, root, progress, request, *, retry=False):
             progress['errors'][design.id] = str(exc.detail if isinstance(exc, HTTPException) else exc)
 
 
+async def refresh_md_retry(session, replacement):
+    if replacement['metadata'].get('route') != 'md_native':
+        return
+    from routers.molecular_dynamics import _compile_native_preview, _native_md_job_request
+    from services.md.starting_structures import MdLaunchRequest
+    launch = MdLaunchRequest.model_validate(replacement['metadata']['md_launch_request'])
+    launch.intent.name = replacement['request']['name']
+    launch.intent.launch_context_id = None
+    preview, resolved, resolver = await _compile_native_preview(launch.intent, session)
+    try:
+        launch.preview_digest = preview.preview_digest
+        request = _native_md_job_request(launch, preview, resolved, md_input_resolver=resolver)
+        request.binder_round_step = BinderRoundStepReference.model_validate(replacement['request']['binder_round_step'])
+        replacement['request'] = request.model_dump(mode='json')
+        replacement['metadata']['md_launch_request'] = launch.model_dump(mode='json')
+        replacement['metadata']['md_preview'] = preview.model_dump(mode='json')
+        # Existing remote review remains explicit; a replacement is a new attempt.
+        replacement['metadata'].pop('approved_md_preview_digest', None)
+    finally:
+        if resolved is not None:
+            resolved.close()
+
+
 async def reconcile_round(session, experiment_session, root_id, *, retry=False):
     """Recovery tick; generation completion and native result rows are immutable."""
-    from routers.jobs import submit_selected_child_jobs
     root = await lock_root(session, root_id)
-    envelope = (root.provenance or {}).get(SEQUENCE_REQUEST) or (root.provenance or {}).get(REQUEST)
+    request_type, envelope = requested_envelope(root.provenance or {})
     if envelope is None:
         await session.rollback()
         return await read_round(session, root_id)
@@ -226,6 +419,7 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
     if not retry and progress['state'] in {'completed', 'completed_with_errors', 'cancelled', 'generation_only'}:
         await session.rollback()
         return await read_round(session, root_id)
+    await refresh_children(session, root_id, progress)
     if retry:
         # Explicit retries create new ordinary Jobs from the retained settings;
         # failed/cancelled observations and their source generation stay intact.
@@ -245,16 +439,16 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
                 execution_plan_approval=None, binder_round_step={'root_job_id': root_id, 'step_id': new_id})
             for key in ('workflow_adapter', '_global_resource_admission', '_global_dispatch_authority'):
                 replacement['request']['params'].pop(key, None)
+            await refresh_md_retry(session, replacement)
             progress['steps'][new_id] = replacement
             old['superseded_by'] = new_id
     if not envelope['enabled'] or root.status != 'completed':
         progress['state'] = 'generation_only' if not envelope['enabled'] else (
-            'cancelled' if root.status == 'cancelled' else 'waiting_generation')
+            root.status if root.status in {'failed', 'cancelled'} else 'waiting_generation')
         save(root, progress)
         await session.commit()
         return await read_round(session, root_id)
-    request_type = SequenceDesignRequest if SEQUENCE_REQUEST in (root.provenance or {}) else BinderRoundRequest
-    await _plan(session, root, progress, request_type.model_validate(envelope), retry=retry)
+    await plan_authored_envelopes(session, root, progress, retry=retry)
     save(root, progress)
     # Retained input snapshots and requested settings survive a failed submit or
     # cancellation. The existing submission owner is responsible for commits.
@@ -271,34 +465,12 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
             save(root, progress)
             await session.commit()
             continue
-        if root.status != 'completed' or step['state'] == 'review_required' or (step['state'] == 'error' and not retry):
+        if step.get('superseded_by') or root.status != 'completed' or step['state'] == 'review_required' or (step['state'] == 'error' and not retry):
             await session.rollback()
             continue
-        tasks = BackgroundTasks()
-        try:
-            responses = await submit_selected_child_jobs(
-                [JobCreate.model_validate(step['request'])], tasks, session, experiment_session,
-                destination_launch_context_id=(root.provenance or {}).get('launch_context_id'),
-                idempotency_key=step_id,
-                response_context={'root_job_id': root_id, 'binder_round_step_id': step_id})
-            outcome = {'state': 'queued', 'job_id': responses[0].id}
-        except HTTPException as exc:
-            if exc.status_code == 409 and isinstance(exc.detail, dict) and exc.detail.get('code') == 'remote_prepared_job_review_required':
-                outcome = {'state': 'review_required', 'review': exc.detail}
-                retained = exc.detail.get('job_request') or exc.detail.get('job_requests', [None])[0]
-                if retained:
-                    outcome['request'] = retained
-            else:
-                outcome = {'state': 'error', 'error': str(exc.detail)}
-                await session.rollback()
-        except asyncio.CancelledError:
-            await session.rollback()
-            await experiment_session.rollback()
-            raise
-        except Exception as exc:
-            logger.exception('Binder round submission failed for %s', step_id)
-            outcome = {'state': 'error', 'error': str(exc)}
-            await session.rollback()
+        outcome, tasks = await submit_step(session, experiment_session, step,
+            destination=(root.provenance or {}).get('launch_context_id'),
+            context={'root_job_id': root_id, 'binder_round_step_id': step_id})
         root = await lock_root(session, root_id)
         progress = progress_of(root)
         progress['steps'][step_id].update(outcome)
@@ -309,26 +481,105 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
         await tasks()
     root = await lock_root(session, root_id)
     progress = progress_of(root)
-    states = {item['state'] for item in progress['steps'].values() if not item.get('superseded_by')}
-    if progress['errors'] or 'error' in states:
-        progress['state'] = 'needs_retry'
-    elif 'review_required' in states:
-        progress['state'] = 'review_required'
-    elif states & {'prepared', 'queued', 'running', 'awaiting_input'}:
-        progress['state'] = 'running'
-    elif states & {'failed', 'cancelled'}:
-        progress['state'] = 'completed_with_errors'
-    else:
-        progress['state'] = 'completed'
+    await refresh_children(session, root_id, progress)
+    await plan_authored_envelopes(session, root, progress, retry=retry)
+    progress['state'] = round_state(progress)
     save(root, progress)
     await session.commit()
     return await read_round(session, root_id)
 
 
+async def reconcile_selected(session, experiments, root_id, round_id, *, retry=False):
+    from services import binder_round as rounds
+    from services.binder_selected_round import KEY, plan, read_selected, output_refs
+    root = await lock_root(session, root_id)
+    progress = rounds.progress_of(root)
+    retained = next((r for r in progress.get(KEY, []) if r['round_id'] == round_id), None)
+    if retained is None:
+        raise HTTPException(404, 'Selected round not found')
+    if not retry and retained['state'] in {'completed', 'completed_with_errors'}:
+        await session.rollback()
+        root = await session.get(Job, root_id)
+        return (await read_selected(session, root, round_id=round_id))[0]
+    await rounds.refresh_children(session, root_id, retained)
+    if retry:
+        retained.pop('outputs_retained', None)
+        retained['errors'] = {}
+        for old_id, step in list(retained['steps'].items()):
+            child = await session.get(Job, step['job_id']) if step.get('job_id') else None
+            if step.get('superseded_by') or child is None or child.status not in {'failed', 'cancelled'}:
+                continue
+            identity = str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms:selected-round:retry:' + old_id))
+            replacement = deepcopy(step)
+            replacement.update(state='prepared', job_id=None, outputs=[])
+            for key in ('review', 'error'):
+                replacement.pop(key, None)
+            replacement['metadata'].update(step_id=identity, retry_of_step_id=old_id, retry_of_job_id=child.id)
+            replacement['request'].update(name=f'binder-round-{identity}', launch_context_id=None,
+                execution_plan_approval=None, binder_round_step={'root_job_id': root_id, 'step_id': identity})
+            for key in ('workflow_adapter', '_global_resource_admission', '_global_dispatch_authority'):
+                replacement['request']['params'].pop(key, None)
+            await refresh_md_retry(session, replacement)
+            step['superseded_by'] = identity
+            retained['steps'][identity] = replacement
+    await plan(session, root, retained)
+    rounds.save(root, progress)
+    await session.commit()
+    for identity in list(retained['steps']):
+        root = await rounds.lock_root(session, root_id)
+        progress = rounds.progress_of(root)
+        retained = next(r for r in progress[KEY] if r['round_id'] == round_id)
+        step = retained['steps'][identity]
+        child = await session.scalar(select(Job).where(Job.provenance[rounds.STEP]['root_job_id'].as_string() == root_id,
+            Job.provenance[rounds.STEP]['step_id'].as_string() == identity))
+        if child:
+            step.update(job_id=child.id, state=child.status)
+            rounds.save(root, progress)
+            await session.commit()
+            continue
+        if step.get('superseded_by') or step['state'] == 'review_required' or (step['state'] == 'error' and not retry):
+            await session.rollback()
+            continue
+        outcome, tasks = await rounds.submit_step(session, experiments, step,
+            destination=retained['request']['launch_context_id'],
+            context={'operation': 'round', 'root_job_id': root_id, 'round_id': round_id,
+                     'binder_round_step_id': identity, 'source_job_id': retained['source_job_id']})
+        root = await rounds.lock_root(session, root_id)
+        progress = rounds.progress_of(root)
+        retained = next(r for r in progress[KEY] if r['round_id'] == round_id)
+        retained['steps'][identity].update(outcome)
+        rounds.save(root, progress)
+        await session.commit()
+        await tasks()
+    root = await rounds.lock_root(session, root_id)
+    progress = rounds.progress_of(root)
+    retained = next(r for r in progress[KEY] if r['round_id'] == round_id)
+    await rounds.refresh_children(session, root_id, retained)
+    # A predecessor may have completed during submission. Retain its newly
+    # expanded successors now; prepared children remain scheduler-recoverable.
+    await plan(session, root, retained)
+    retained['state'] = rounds.round_state(retained)
+    if retained['state'] in {'completed', 'completed_with_errors'}:
+        # Freeze leaf output references too, so terminal GET never needs source
+        # bytes. Missing leaf publication is an observation, not a new gate.
+        for step in retained['steps'].values():
+            if not step.get('job_id') or step.get('outputs'):
+                continue
+            child = await session.get(Job, step['job_id'])
+            try:
+                step['outputs'] = await output_refs(session, child)
+            except (ValueError, OSError, HTTPException) as exc:
+                step['publication_error'] = str(exc.detail if isinstance(exc, HTTPException) else exc)
+        retained['outputs_retained'] = True
+    rounds.save(root, progress)
+    await session.commit()
+    return (await read_selected(session, root, round_id=round_id))[0]
+
+
 async def recover_rounds(session_factory, experiment_session_factory):
     """Existing scheduler recovery, including remote-return completion."""
     from sqlalchemy import func, or_
-    from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+    from services.analysis_autorun import recently_settled, schedule_viewer_minimum_analyses_for_job
     async with session_factory() as session:
         roots = list(await session.scalars(select(Job.id).where(
             Job.status == 'completed', or_(
@@ -339,6 +590,8 @@ async def recover_rounds(session_factory, experiment_session_factory):
         predictions = list(await session.scalars(select(Job.id).where(
             Job.status == 'completed', Job.provenance[STEP]['stage'].as_string() == 'prediction')))
     for child_id in predictions:
+        if recently_settled(child_id):
+            continue
         try:
             schedule_viewer_minimum_analyses_for_job(child_id)
         except Exception:

@@ -2087,7 +2087,8 @@ def _design_to_response(
         data["binder_length"] = None
 
     capabilities = set(contract.viewer_capabilities)
-    if job is not None and job.model_id in ('boltz', 'boltz2', 'boltz_cp_experimental'):
+    if job is not None and job.model_id in ('boltz', 'boltz2', 'boltz_cp_experimental',
+                                            'protenix', 'esmfold2', 'esmfold2_experimental', 'biohub_esmfold2'):
         # A prediction is not a FAMPNN coordinate product. Preserve persisted
         # upstream sequence/mutation evidence; a missing sidecar says nothing
         # about its validity. Filename matches cannot establish producer identity.
@@ -2152,6 +2153,14 @@ def _design_to_response(
     if design.producer_model_id:
         provenance["producer_model_id"] = design.producer_model_id
     data["provenance"] = provenance or None
+    if data.get("artifact_class") == "rfd3_general_generation" and isinstance(data.get("chain_metrics"), dict):
+        # Earlier RFD3 imports duplicated these candidate-level values here.
+        # Their original metrics/acceptance remain in native provenance; do not
+        # present them as chains or rewrite retained rows during a read.
+        data["chain_metrics"] = {
+            key: value for key, value in data["chain_metrics"].items()
+            if key not in {"residue_count", "chain_count", "accepted"} or isinstance(value, dict)
+        } or None
     return DesignResponse.model_validate(data)
 
 
@@ -2512,6 +2521,27 @@ async def _native_design_list(query, native, output, limit, offset, model_counts
     return DesignList(designs=responses, total=len(matching), model_counts=model_counts, scientific=scientific)
 
 
+async def _resolve_core_protein_documents(designs, responses, session):
+    """Contract revision and spatial document for a page of designs.
+
+    One Job read per Job for the revision and one publication verification per
+    Job for the documents, rather than both once per design.
+    """
+    from services.analysis_registry import scientific_contract_revisions
+    revisions = await scientific_contract_revisions(designs, session)
+    for design, response in zip(designs, responses):
+        response.core_protein_scientific_contract = (revisions.get(design.job_id)
+            or (1 if response.native_sample and response.scientific_structure_document else None))
+    pending = [(design, response) for design, response in zip(designs, responses)
+               if response.core_protein_scientific_contract == 1
+               and not response.native_sample]
+    if pending:
+        from services.core_protein_scientific_contract import scientific_documents
+        resolved = await scientific_documents([design for design, _response in pending], session)
+        for design, response in pending:
+            response.scientific_structure_document = resolved.get(design.id)
+
+
 @router.get("", response_model=DesignList)
 async def list_designs(
     native: Optional[str] = None,
@@ -2833,11 +2863,7 @@ async def list_designs(
     for design, response in zip(designs, responses):
         if design.id in bc2_documents:
             response.scientific_structure_document = bc2_documents[design.id]
-        response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
-            or (1 if response.native_sample and response.scientific_structure_document else None))
-        if response.core_protein_scientific_contract == 1 and not response.native_sample:
-            from services.core_protein_scientific_contract import scientific_document
-            response.scientific_structure_document = await scientific_document(design, session)
+    await _resolve_core_protein_documents(designs, responses, session)
     _enrich_design_responses_from_sources(responses)
     
     return DesignList(
@@ -3177,9 +3203,10 @@ async def get_native_comparison_document(job_id: str, artifact_id: str,
 
 @router.get("/native/{job_id}/{artifact_id}/residue-metrics", response_model=Union[ScientificViewerMetric, ScientificResidueMetric])
 async def get_native_residue_metrics(job_id: str, artifact_id: str,
-        session: AsyncSession = Depends(get_session), target_state: Optional[str] = None):
+        session: AsyncSession = Depends(get_session), target_state: Optional[str] = None,
+        model_number: Optional[int] = None):
     from services.bindcraft2_scientific_consumer import native_artifact_metric
-    return await native_artifact_metric(session, job_id, artifact_id, 'residue_plddt', target_state=target_state)
+    return await native_artifact_metric(session, job_id, artifact_id, 'residue_plddt', target_state=target_state, model_number=model_number)
 
 
 @router.get("/native/{job_id}/{artifact_id}/chain-metrics", response_model=ScientificViewerMetric)
@@ -3386,11 +3413,7 @@ async def get_designs_for_job(
     for design, response in zip(designs, responses):
         if design.id in bc2_documents:
             response.scientific_structure_document = bc2_documents[design.id]
-        response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
-            or (1 if response.native_sample and response.scientific_structure_document else None))
-        if response.core_protein_scientific_contract == 1 and not response.native_sample:
-            from services.core_protein_scientific_contract import scientific_document
-            response.scientific_structure_document = await scientific_document(design, session)
+    await _resolve_core_protein_documents(designs, responses, session)
     _enrich_design_responses_from_sources(responses)
     
     return DesignList(
@@ -3567,15 +3590,19 @@ async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depen
             # for PAE and never inferred from a launch/save flag.
             structure_key = Path(keys['structure'])
             keys['pde'] = (structure_key.parent / f'pde_{structure_key.stem}.npz').as_posix()
-        elif job and revision_for_job(job) == 1 and job.model_id == 'protenix':
-            from services.protenix_scientific_consumer import verified_native_design
+        elif job and revision_for_job(job) == 1 and job.model_id in ('protenix', 'esmfold2', 'esmfold2_experimental'):
+            if job.model_id == 'protenix':
+                from services.protenix_scientific_consumer import verified_native_design
+            else:
+                from services.esmfold2_scientific_consumer import verified_native_design
             selected = await verified_native_design(design, session)
-            native_snapshots = {role: (selected['artifacts'][role], selected['snapshots'][role])
-                                for role in ('structure', 'metrics', 'pae')}
-            producer = 'protenix'
+            native_snapshots = {role: (artifact, selected['snapshots'][role])
+                                for role, artifact in selected['artifacts'].items()
+                                if role in selected['snapshots']}
+            producer = 'protenix' if job.model_id == 'protenix' else 'esmfold2'
             root = selected['publication_root']
-            keys = {role: Path(selected['artifacts'][role]['path']).relative_to(root).as_posix()
-                    for role in ('structure', 'metrics', 'pae')}
+            keys = {role: Path(artifact['path']).relative_to(root).as_posix()
+                    for role, (artifact, _) in native_snapshots.items()}
         else:
             found = retained_cp_paths(design, job)
             if found is None:
@@ -3588,8 +3615,10 @@ async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depen
                 entries.append(dict(role=role, filename=Path(key).name, retained=True,
                     artifact_sha256=artifact['sha256'], size_bytes=len(content),
                     scope='original_native_artifact',
-                    download_url='/api/files/download/' + quote(relative, safe='/') if relative else None,
-                    download_reason=None if relative else 'outside_existing_download_owner'))
+                    download_url=('/api/files/download/' + quote(relative, safe='/') if relative else
+                        f'/api/designs/{design_id}/confidence-artifacts/{quote(role, safe="")}/download'
+                        if native_snapshots is not None else None),
+                    download_reason=None if relative or native_snapshots is not None else 'outside_existing_download_owner'))
             except (ValueError, OSError):
                 entries.append(dict(role=role, filename=Path(key).name, retained=False,
                     scope='original_native_artifact', download_url=None, download_reason='not_retained'))
@@ -3598,6 +3627,38 @@ async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depen
             saved_write_full_pae=(job.params or {}).get('write_full_pae'))
     except (ValueError, TypeError, KeyError, OSError):
         return dict(design_id=design_id, status='unavailable', reason='native_inventory_unverified', artifacts=[])
+
+
+@router.get("/{design_id}/confidence-artifacts/{role}/download")
+async def download_confidence_artifact(design_id: str, role: str, session: AsyncSession = Depends(get_session)):
+    """Download exact verified snapshots, never an arbitrary imported path.
+
+    Reuse native custody verification at download time, including external
+    imports. Returning the verified bytes avoids a path reopen/TOCTOU window.
+    """
+    from fastapi.responses import Response
+    from urllib.parse import quote
+    design = await session.get(Design, design_id)
+    job = await session.get(Job, design.job_id) if design is not None else None
+    if job is None or revision_for_job(job) != 1:
+        raise HTTPException(status_code=404, detail='Native artifact not found')
+    if job.model_id == 'protenix':
+        from services.protenix_scientific_consumer import verified_native_design
+    elif job.model_id in ('esmfold2', 'esmfold2_experimental'):
+        from services.esmfold2_scientific_consumer import verified_native_design
+    else:
+        raise HTTPException(status_code=404, detail='Native artifact not found')
+    try:
+        selected = await verified_native_design(design, session)
+        artifact = selected['artifacts'][role]
+        content = selected['snapshots'][role]
+    except (ValueError, TypeError, KeyError, OSError):
+        raise HTTPException(status_code=404, detail='Native artifact unavailable or unverified')
+    filename = quote(Path(artifact['path']).name, safe='')
+    return Response(content=content, media_type='application/octet-stream', headers={
+        'Content-Disposition': "attachment; filename*=UTF-8''" + filename,
+        'ETag': '"' + artifact['sha256'] + '"',
+    })
 
 
 @router.get("/{design_id}/pae", response_model=Union[PAEData, ScientificViewerMetric])

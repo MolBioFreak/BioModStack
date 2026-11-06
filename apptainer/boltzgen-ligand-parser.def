@@ -1,0 +1,27 @@
+Bootstrap: localimage
+From: {{ base_image }}
+
+# Build from the installed 617e549 BoltzGen 0.2.0 image; no dependency changes.
+# Qualified base SHA256: a62b63635a53f18f3bbb66585817bdd0425f58799696b2a1c19124bd6023a672
+# Run from repository root with --build-arg base_image=/absolute/base.sif.
+%files
+    apptainer/patches/boltzgen/ligand-only-mmcif.patch /opt/bms-patches/ligand-only-mmcif.patch
+
+%post
+    set -eu
+    original=054059f7b3ee3647776d05d50d2c7c44d551a284688137ced3ebd31f3a61d8b5
+    corrected=9ca07e896d533914e9b462b21a8caf705e4f25977eb99aa1ae7c129a38131633
+    for source in /app/boltzgen/src/boltzgen/data/parse/mmcif.py /opt/venv/lib/python3.11/site-packages/boltzgen/data/parse/mmcif.py; do
+        printf '%s  %s\n' "$original" "$source" | sha256sum --check -
+        patch --batch --forward "$source" /opt/bms-patches/ligand-only-mmcif.patch
+        printf '%s  %s\n' "$corrected" "$source" | sha256sum --check -
+    done
+    /opt/venv/bin/python -m compileall -q /opt/venv/lib/python3.11/site-packages/boltzgen/data/parse/mmcif.py
+
+%labels
+    BMSNativeBase 617e549edf70787d899f47bc39e3746d8f10ffff
+    BMSNativeRepair ligand-only-empty-polymer-sequence
+    BMSBaseImageSHA256 a62b63635a53f18f3bbb66585817bdd0425f58799696b2a1c19124bd6023a672
+
+%test
+    /opt/venv/bin/python -c 'from boltzgen.data.parse.mmcif import mmcif_from_block; import inspect; assert "eps_loop is not None and eps_loop.length()" in inspect.getsource(mmcif_from_block)'

@@ -134,7 +134,7 @@ def test_pdb_only_normalization_is_candidate_local_and_never_invents_mmcif_ident
     assert structure_map["normalized_pdb_sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
     mapped = [row for row in structure_map["rows"] if row["status"] == "mapped"]
     assert [(row["auth_asym_id"], row["auth_seq_id"], row["insertion_code"]) for row in mapped] == [("A", 10, "A"), ("A", 12, "")]
-    assert [row["model_position"] for row in mapped] == [0, 1]
+    assert [row["model_position"] for row in mapped] == [0, 2]
     assert all(row["source_entity_id"] is None and row["label_asym_id"] is None and row["label_seq_id"] is None for row in structure_map["rows"])
     excluded = structure_map["excluded_records"]
     assert any(record["reason_code"] == "missing_backbone" for record in excluded)

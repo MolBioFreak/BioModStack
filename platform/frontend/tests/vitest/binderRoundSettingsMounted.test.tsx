@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
-import { BinderRoundSettings } from '../../src/components/BinderRoundSettings';
+import { BinderRoundSettings, InitialInvocationSettings } from '../../src/components/BinderRoundSettings';
 import { AntibodyDenovoTemplate } from '../../src/components/AntibodyDenovoTemplate';
 import { JobSubmission } from '../../src/components/JobSubmission';
 import { initialRoundSteps } from '../../src/lib/binderShell';
@@ -235,4 +235,47 @@ it('complete RFantibody parent requests a round without running historical seque
     expect(submitted[0].params).not.toHaveProperty('binder_round');
     expect(submitted[0].params.run_structure_validation).toBe(false);
     expect(submitted[0].params.seq_designer).toBe('none');
+});
+
+it('shared invocation editor retains OFF drafts, repeated calls, native modes and explicit local placement across reopen', async () => {
+    let latest: any = { enabled: false, stages: [] }, envelope: any;
+    function Form() {
+        const [draft, setDraft] = React.useState(latest);
+        return <InitialInvocationSettings draft={draft} onChange={(value, wire) => { latest = value; envelope = wire; setDraft(value); }} />;
+    }
+    await mount(<Form />);
+    await click('Add Sequence design');
+    await click('Add proteinmpnn call');
+    await edit('mpnn_temperature', '0.71');
+    await click('Add proteinmpnn call');
+    expect(latest.stages[0].stage.models).toHaveLength(2);
+    const [first, second] = latest.stages[0].stage.models;
+    expect(first.invocation_id).not.toBe(second.invocation_id);
+    expect(first.params.mpnn_temperature).toBe(0.71);
+    expect(second.params).toEqual({});
+    const placement = document.querySelectorAll<HTMLInputElement>('section[aria-label^="Invocation "] input[type="checkbox"]');
+    const firstSection = document.querySelector(`section[aria-label="Invocation ${first.invocation_id}"]`)!;
+    const explicit = [...firstSection.querySelectorAll('label')].find(label => label.textContent?.includes('Explicit placement'))!.querySelector('input')!;
+    await act(async () => explicit.click()); await settle();
+    expect(latest.stages[0].stage.models[0].execution_target_id).toBeNull();
+    expect(Object.hasOwn(latest.stages[0].stage.models[1], 'execution_target_id')).toBe(false);
+    await toggle('Enable optional operations');
+    expect(envelope.enabled).toBe(true);
+    expect(envelope.round_plan.schema_version).toBe(2);
+    const firstId = latest.stages[0].stage.models[0].invocation_id;
+    await toggle(`Enable invocation ${firstId}`);
+    expect(envelope.round_plan.stages[0].models).toHaveLength(1);
+    expect(latest.stages[0].stage.models).toHaveLength(2);
+    await toggle(`Enable invocation ${firstId}`);
+    expect(envelope.round_plan.stages[0].models).toHaveLength(2);
+    expect(envelope.round_plan.stages[0].models[0].invocation_id).toBe(firstId);
+    await toggle('Enable optional operations');
+    const retained = structuredClone(latest);
+    await unmount(); await mount(<Form />);
+    expect(latest).toEqual(retained);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Enable optional operations"]')!.checked).toBe(false);
+    expect(envelope.enabled).toBe(false);
+    expect(envelope).not.toHaveProperty('binder_round');
+    expect(envelope.round_plan.stages[0].models).toHaveLength(2);
+    expect(submitted).toHaveLength(0);
 });

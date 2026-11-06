@@ -311,6 +311,7 @@ vi.mock('../../src/components/SequenceManagerModal', () => ({ SequenceManagerMod
 vi.mock('../../src/components/TemplateManagerModal', () => ({ TemplateManagerModal: () => null }));
 import { JobSubmission } from '../../src/components/JobSubmission';
 import { prepareDeNovoContinuation } from '../../src/lib/deNovoContinuation';
+import recipes from './fixtures/deNovoContinuationRecipes.json';
 
 it('prediction handoff uses native author/model residue identity, not display-PDB chain truncation or nucleic acids', async () => {
     const source = { job_id: 'source', design_id: 'selected', output_format: 'native' as const };
@@ -322,7 +323,7 @@ it('prediction handoff uses native author/model residue identity, not display-PD
     ];
     api.defaults.adapter = async config => {
         expect(config.url).toBe('/api/files/materialize-structure');
-        return { data: { path: retained.path, format: 'cif', source_structure: retained, author_residues: residues }, status: 200, statusText: 'OK', headers: {}, config };
+        return { data: { path: retained.path, format: 'cif', source_structure: retained, author_residues: residues, native_recipe: recipes.legacyAuthor }, status: 200, statusText: 'OK', headers: {}, config };
     };
     const draft = await prepareDeNovoContinuation(source, 'prediction');
     expect(draft).toMatchObject({ source_structure: retained, sequence: '', _continuation_chains: [{ model_number: 2, id: 'AA', sequence: 'AG' }] });
@@ -491,10 +492,11 @@ const originalAdapter = api.defaults.adapter;
 const originalUrl = window.location.href;
 let captured: Array<Record<string, any>>;
 let previews: Array<Record<string, any>>;
+let unexpected: string[];
 const approvalDigest = 'a'.repeat(64);
 beforeEach(() => {
     window.history.replaceState({}, '', '/submit');
-    captured = []; previews = [];
+    captured = []; previews = []; unexpected = [];
     // Reject every unexpected transport operation, rather than opening a socket.
     api.defaults.adapter = async config => {
         if (config.method === 'post' && config.url === '/api/jobs/execution-plan/preview') {
@@ -510,13 +512,17 @@ beforeEach(() => {
                 deferred_preparation: [], blockers: [],
             }, status: 200, statusText: 'OK', headers: {}, config };
         }
-        if (config.method !== 'post' || config.url !== '/api/jobs') throw Error(`Unexpected fixture request: ${config.method} ${config.url}`);
+        if (config.method !== 'post' || config.url !== '/api/jobs') {
+            unexpected.push(`${config.method} ${config.url}`);
+            throw Error(`Unexpected fixture request: ${config.method} ${config.url}`);
+        }
         const payload = JSON.parse(config.data);
         captured.push(payload);
         console.info('GENERIC_SEQUENCE_CAPTURE ' + JSON.stringify(payload));
         return { data: {}, status: 200, statusText: 'OK', headers: {}, config };
     };
-    vi.stubGlobal('fetch', vi.fn(() => { throw Error('Unexpected fixture fetch'); }));
+    vi.stubGlobal('fetch', vi.fn(() => { unexpected.push('fetch bypassed adapter'); throw Error('Unexpected fixture fetch'); }));
+    vi.spyOn(XMLHttpRequest.prototype, 'open').mockImplementation(() => { unexpected.push('XHR bypassed adapter'); throw Error('Unexpected fixture XHR'); });
 });
 afterEach(async () => {
     if (root) await act(async () => root!.unmount());
@@ -527,6 +533,7 @@ afterEach(async () => {
     document.body.replaceChildren();
     localStorage.clear(); sessionStorage.clear();
     vi.unstubAllGlobals(); vi.restoreAllMocks(); fixtures.targets.mockClear();
+    expect(unexpected).toEqual([]);
 });
 const button = (text: string) => {
     const found = [...document.querySelectorAll('button')].find(item => item.textContent?.trim() === text);
@@ -542,9 +549,13 @@ async function change(input: HTMLInputElement | HTMLSelectElement, value: string
     });
 }
 function field(name: string) {
-    const label = [...document.querySelectorAll('label')].find(item => item.firstChild?.textContent === name);
-    expect(label, `field ${name}`).toBeTruthy();
-    const input = label!.parentElement!.querySelector<HTMLInputElement>('input:not([type="range"])');
+    // ModelParameterField presents a friendly label and retains the native key
+    // in its Parameter key disclosure. Bind to that owner, not obsolete labels.
+    const owner = [...document.querySelectorAll('.bms-model-parameter')].find(item =>
+        item.querySelector('details > code')?.textContent === name
+        || item.querySelector('label')?.firstChild?.textContent === name);
+    expect(owner, `field ${name}`).toBeTruthy();
+    const input = owner!.querySelector<HTMLInputElement>('input:not([type="range"])');
     expect(input, `input ${name}`).toBeTruthy();
     return input!;
 }

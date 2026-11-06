@@ -167,10 +167,6 @@ def _design_surface(payload: dict[str, Any]) -> dict[str, Any]:
     return _base_surface(payload, surface_kind="protein_design", readiness=_completed(payload["metadata"].get("job_status")))
 
 
-def _rfd3_surface(payload: dict[str, Any]) -> dict[str, Any]:
-    return _base_surface(payload, surface_kind="protein_design", readiness=_completed(payload["metadata"].get("request_status")))
-
-
 def _cm_surface(payload: dict[str, Any]) -> dict[str, Any]:
     return _base_surface(payload, surface_kind="conformational_mapping", readiness=_completed(payload["metadata"].get("canonical_state")))
 
@@ -320,7 +316,7 @@ _SURFACE_BUILDERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "design": _design_surface,
     "typed_core_job_result": _design_surface,
     "native_binder_job_result": _design_surface,
-    "rfd3_local_redesign_request": _rfd3_surface,
+    "family_msa_job_result": _exact_ngs_member_surface,
     "conformational_mapping_request": _cm_surface,
     "md_result": _md_surface,
     "frustrampnn_result": _frustrampnn_surface,
@@ -354,7 +350,6 @@ _EXPLICITLY_UNSUPPORTED_COMPARISON_REASONS = {
     "design": "No registered producer-native compatibility receipt exists for arbitrary Design results.",
     "typed_core_job_result": "Typed core Job results require a family-specific compatibility adapter before comparison.",
     "native_binder_job_result": "Native campaigns and diagnostics retain their model-owned comparison semantics.",
-    "rfd3_local_redesign_request": "RFD3 whole-result candidate sets have no registered Project comparison adapter.",
     "conformational_mapping_request": "CM cross-request and cross-backend comparison requires a separate immutable compatibility authority.",
     "md_result": "MD runs have no registered Project comparison adapter with replica, units, and analysis compatibility.",
     "frustrampnn_result": "Attach an immutable FrustraMPNN comparison receipt to compare exact landscapes.",
@@ -372,7 +367,6 @@ def _comparison_projection(
     if readiness == "ready" and entity_kind in {
         "design",
         "typed_core_job_result",
-        "rfd3_local_redesign_request",
         "conformational_mapping_request",
         "md_result",
         "frustrampnn_result",
@@ -441,6 +435,9 @@ async def result_surface_for_receipt(
             "state": "review" if readiness == "ready" else "unavailable",
             "reason": None,
         }
+    if entity_kind == 'family_msa_job_result' and _metadata_payload(payload).get('retained_artifacts'):
+        details['reopen_route'] = {'template_id': 'bms.route.verified-external-entity.v1', 'path': '/alignments',
+                                   'query': {'project_id': project_id, 'receipt_id': receipt.id}}
     readiness = str(details["readiness"])
     surface_kind = str(details["surface_kind"])
     comparison, available_actions = _comparison_projection(
@@ -467,7 +464,7 @@ async def result_surface_for_receipt(
         "contract_id": str(details.get("result_contract_id") or "verified_external_entity_v1"),
         "content_digest": payload["content_digest"],
         "surface_kind": surface_kind,
-        "route": None if surface_kind == "unsupported" else _reopen_route(payload),
+        "route": None if surface_kind == "unsupported" else details['reopen_route'],
         "readiness": readiness,
         "native_summary": _typed_payload("bms.result-surface.native-summary.v1", _metadata_payload(payload)),
         "scientific_acceptance": scientific_acceptance,

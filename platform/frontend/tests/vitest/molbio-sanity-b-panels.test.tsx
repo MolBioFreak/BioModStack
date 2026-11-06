@@ -1,3 +1,4 @@
+import { primerModelOptions } from '../fixtures/primerModelOptions';
 import React, { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
@@ -29,7 +30,7 @@ let root: Root, host: HTMLDivElement, client: QueryClient;
 const seq = { name: 'editable', sequence: 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT', circular: false, sequenceType: 'dna' as const, features: [], primers: [] };
 const settings: api.PrimerTmSettings = { algorithm: 'wallace', salt_correction: 'none', primer_concentration_nM: 250, template_concentration_nM: 0, na_mM: 50, k_mM: 0, tris_mM: 0, mg_mM: 0, dntps_mM: 0, dmso_percent: 0, formamide_percent: 0, self_complementary: false };
 const noop = () => {};
-const primerProps = { sequenceData: seq, selection: null, onHighlight: noop, onAddPrimer: vi.fn(), onRemovePrimer: noop, tmOptions: null, tmSettings: settings, onTmSettingsChange: noop };
+const primerProps = { sequenceData: seq, selection: null, onHighlight: noop, onAddPrimer: vi.fn(), onRemovePrimer: noop, tmOptions: primerModelOptions, tmSettings: settings, onTmSettingsChange: noop };
 const alignment = { query_name: 'OBSOLETE', reference_aligned: 'ACGTACGT', query_aligned: 'ACGTACGT', midline: '||||||||', reference_start: 0, reference_end: 8, query_start: 0, query_end: 8, identity_pct: 100, query_coverage: 100, reference_coverage: 20, score: 16, variants: [], mode: 'placement', strand: 'forward' };
 const assembly = { sequence: 'ACGT', length: 4, circular: false, mode: 'ligation', fragments: [], golden_gate_authority: null, validation_notes: [], warnings: [], junctions: [] };
 const metric = (tm: number) => ({ tm, gc_percent: 50, algorithm: 'wallace', salt_correction: 'none', warnings: [] });
@@ -98,8 +99,8 @@ it('PCR uses editable inline bytes and topology even with a selected stored id',
  vi.mocked(api.runPcrOperation).mockResolvedValue({ product: { sequence: seq.sequence, length: seq.sequence.length }, experiment_id: 'e', experiment_revision_id: 'r' } as any);
  await render(<MemoryRouter><PCRPanel sequenceData={{ ...seq, circular: true }} sequenceId="stored-head" onHighlight={noop} tmOptions={null} tmSettings={settings} onTmSettingsChange={noop} /></MemoryRouter>);
  const inputs = host.querySelectorAll<HTMLInputElement>('input[placeholder="ATGC..."]');
- await input(inputs[0], 'ACGTACGTACGTACGT'); await input(inputs[1], 'ACGTACGTACGTACGT'); await click('Run PCR');
- expect(api.runPcrOperation).toHaveBeenCalledTimes(1);
+ await input(inputs[0], 'ACGTACGTACGTACGT'); await input(inputs[1], 'ACGTACGTACGTACGT'); await tick(); await click('Save PCR prediction');
+ expect(api.runPcrOperation).toHaveBeenCalledTimes(2);
  expect(api.runPcrOperation).toHaveBeenLastCalledWith(expect.objectContaining({ sequence: seq.sequence, name: 'editable', sequence_type: 'dna', is_circular: true, persist_experiment: true }));
  expect(vi.mocked(api.runPcrOperation).mock.calls[0][0]).not.toHaveProperty('sequence_id');
 });
@@ -207,4 +208,29 @@ it('assembly ignores late simulation after switching modes', async () => {
  await act(async () => simulate.click()); expect(api.simulateLigationAssembly).toHaveBeenCalledTimes(1);
  await click('Golden Gate'); await act(async () => pending.resolve({ data: { product: assembly } }));
  expect(host.textContent).not.toContain('Load product');
+});
+
+it('pairwise alignment blocks multiple FASTA records and invalid Unicode before submission', async () => {
+ await render(<AlignmentPanel sequenceData={seq} selection={null} onHighlight={noop} onAddFeatures={noop} />);
+ const query = host.querySelector('textarea')!;
+ await input(query, '>first\nACGT\n>second\nACGT');
+ expect(host.textContent).toContain('they will not be joined into one sequence');
+ expect(([...host.querySelectorAll('button')].find(b => b.textContent === 'Run Alignment') as HTMLButtonElement).disabled).toBe(true);
+ await input(query, 'AßC');
+ expect(host.textContent).toContain('invalid characters present: ß');
+ expect(([...host.querySelectorAll('button')].find(b => b.textContent === 'Run Alignment') as HTMLButtonElement).disabled).toBe(true);
+ expect(api.alignMolBioSequences).not.toHaveBeenCalled();
+});
+
+it('global mode explicitly uses a linear reference and reverse query coordinates are identified', async () => {
+ vi.mocked(api.alignMolBioSequences).mockResolvedValue({data: {...alignment, strand: 'reverse', query_input_start: 2, query_input_end: 10}} as any);
+ await render(<AlignmentPanel sequenceData={{...seq, circular: true}} selection={null} onHighlight={noop} onAddFeatures={noop} />);
+ const mode = [...host.querySelectorAll('select')].find(el => [...el.options].some(o => o.value === 'global'))!;
+ await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(mode, 'global'); mode.dispatchEvent(new Event('change', {bubbles: true})); });
+ expect(host.textContent).toContain('Global mode uses a linear reference');
+ await input(host.querySelector('textarea')!, 'ACGTACGT');
+ await click('Run Alignment');
+ expect(api.alignMolBioSequences).toHaveBeenCalledWith(expect.objectContaining({settings: expect.objectContaining({mode: 'global', reference_is_circular: false})}));
+ expect(host.textContent).toContain('Query positions refer to its reverse complement');
+ expect(host.textContent).toContain('Original query interval: 3-10');
 });

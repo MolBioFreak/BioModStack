@@ -66,11 +66,14 @@ beforeEach(() => {
     window.sessionStorage.clear(); window.localStorage.clear();
     api.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
         const url = config.url ?? '';
-        const body = config.data ? JSON.parse(config.data as string) : {};
+        const body = config.data instanceof FormData ? { path: config.data.get('path'), file: config.data.get('file') }
+            : config.data ? JSON.parse(config.data as string) : {};
         calls.push({ url, body, context: config.headers.get('X-BMS-Launch-Context-ID') });
         let data: unknown;
-        if (url.endsWith('/prepare')) data = await prepare(body, url.split('/').at(-2)!);
+        if (url === '/api/files/upload') data = { path: `${body.path}/${(body.file as File).name}` };
+        else if (url.endsWith('/prepare')) data = await prepare(body, url.split('/').at(-2)!);
         else if (url.endsWith('/submit')) data = { id: 'new-job' };
+        else if (url === '/api/ont/ngs/basecall-devices') data = { default: 'cuda:0', cuda_available: config.params?.execution_target_id ? null : true, options: [{ value: 'cpu', label: 'CPU' }, { value: 'cuda:0', label: 'CUDA' }, { value: 'cuda:all', label: 'All CUDA' }] };
         else if (url === '/api/execution-targets') data = [{ id: 'worker-1', name: 'Test worker', active: true, state: 'ready', capabilities: { gpu_count: 1, gpu_name: 'fixture' } }];
         else if (url === '/api/sequences/') data = [molecular];
         else if (url.includes('/state/revisions/')) data = { id: 'state-1', members: [
@@ -117,6 +120,94 @@ const submits = () => calls.filter(call => call.url.endsWith('/submit'));
 async function remoteReview() { await click('Vast · Test worker'); await click('Review and submit'); await until(() => expect(button('Approve and submit')).toBeTruthy()); }
 
 describe('ordinary NGS prepared launch through mounted consumers and real API transport', () => {
+    it.each(['plasmidQc', 'dna', 'clone', 'constructScreening'])('preserves tandem modkit settings for %s', async selectedWorkflow => {
+        await mount({ ...base, selectedWorkflow, doradoModel: 'hac', modifiedBases: '6mA',
+            runModkit: true, modkitFilterThreshold: 0, runFastqQc: true,
+            ngsReferenceRevisionId: 'reference-revision-1', doradoDevice: 'cpu' });
+        // The methylation card is visible without opening advanced controls.
+        expect(container.querySelector('[data-testid="ngs-methylation-card"]')).not.toBeNull();
+        const checkbox = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+            .find(node => node.parentElement?.textContent?.includes('Generate methylation tables'))!;
+        expect(checkbox.checked).toBe(true);
+        expect(container.querySelector<HTMLSelectElement>('#dorado-device')!.value).toBe('cpu');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params).toMatchObject({ run_modkit: true, modified_bases: '6mA',
+            modkit_filter_threshold: 0, dorado_device: 'cpu' });
+        // Assembly report and construct screening only take run_fastq_qc for FASTQ input.
+        if (selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'dna') expect(submits()[0].body.params).toMatchObject({ run_fastq_qc: true });
+        expect(submits()[0].body.pinned_gpu).toBeNull();
+    });
+    it('separates worker defaults from controller CPU and preserves explicit CPU across placement changes', async () => {
+        const original = api.defaults.adapter as (config: InternalAxiosRequestConfig) => Promise<any>;
+        const targets: unknown[] = [];
+        api.defaults.adapter = async config => {
+            if (config.url !== '/api/ont/ngs/basecall-devices') return original(config);
+            targets.push(config.params?.execution_target_id ?? null);
+            return { data: { default: config.params?.execution_target_id ? 'cuda:0' : 'cpu',
+                cuda_available: null, options: [{ value: 'cpu', label: 'CPU' }, { value: 'cuda:0', label: 'CUDA' }] },
+                status: 200, statusText: 'OK', headers: {}, config };
+        };
+        await mount();
+        await until(() => expect(container.querySelector<HTMLSelectElement>('#dorado-device')!.value).toBe('cpu'));
+        await click('Vast · Test worker');
+        await until(() => expect(container.querySelector<HTMLSelectElement>('#dorado-device')!.value).toBe('cuda:0'));
+        expect(targets).toEqual([null, 'worker-1']);
+        await input('#dorado-device', 'cpu');
+        await click('Local'); await click('Vast · Test worker');
+        expect(container.querySelector<HTMLSelectElement>('#dorado-device')!.value).toBe('cpu');
+        await click('Review and submit'); await until(() => expect(button('Approve and submit')).toBeTruthy());
+        expect(prepares()[0].body.params.dorado_device).toBe('cpu');
+        expect(prepares()[0].body.execution_target_id).toBe('worker-1');
+    });
+
+    it('resolves exact Project sequence summaries outside the first library page before launching', async () => {
+        const original = api.defaults.adapter as (config: InternalAxiosRequestConfig) => Promise<any>;
+        const lookups: string[] = [];
+        api.defaults.adapter = async (config) => {
+            if (config.url === '/api/sequences/') {
+                const ids = config.params?.sequence_ids;
+                if (ids) lookups.push(ids);
+                return {data: ids ? [molecular] : [],status:200,statusText:'OK',headers:{},config};
+            }
+            return original(config);
+        };
+        await mount({...base,molbioSequenceId:'sequence-1',molbioRevisionId:'revision-1'});
+        expect(lookups).toEqual(['sequence-1']);
+        await click('Review and submit');await until(()=>expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params.molbio_ngs_receipt_id).toBe('new-receipt');
+    });
+    it('preserves the remote return policy when switching to local and back', async () => {
+        await mount();
+        expect(container.querySelector('[aria-label="Successful remote results"]')).toBeNull();
+        await click('Vast · Test worker');
+        await input('select[aria-label="Successful remote results"]', 'automatic');
+        await click('Local');
+        expect(container.querySelector('[aria-label="Successful remote results"]')).toBeNull();
+        await click('Vast · Test worker');
+        expect(container.querySelector<HTMLSelectElement>('[aria-label="Successful remote results"]')!.value).toBe('automatic');
+        await click('Review and submit');
+        await until(() => expect(button('Approve and submit')).toBeTruthy());
+        expect(prepares()[0].body.execution_policy).toEqual({ remote_result_policy: 'automatic' });
+        await click('Approve and submit');
+        await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.execution_policy).toEqual({ remote_result_policy: 'automatic' });
+    });
+    it('uploads POD5 files through shared transport and submits their server-returned folder', async () => {
+        await mount();
+        const upload = container.querySelector<HTMLInputElement>('input[aria-label="Upload POD5 files"]')!;
+        const files = ['one.pod5', 'two.pod5'].map(name => new File(['fixture'], name));
+        Object.defineProperty(upload, 'files', { configurable: true, value: files });
+        await act(async () => upload.dispatchEvent(new Event('change', { bubbles: true })));
+        await until(() => expect(container.textContent).toContain('2 POD5 files uploaded'));
+        const uploads = calls.filter(call => call.url === '/api/files/upload');
+        expect(uploads).toHaveLength(2);
+        expect(uploads.map(call => call.body.file)).toEqual(files);
+        expect(uploads[1].body.path).toBe(uploads[0].body.path);
+        expect(uploads[0].body.path).toMatch(/^inputs\/ont-analysis\/[0-9a-f-]+$/);
+        await click('Review and submit');
+        await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params.pod5_dir).toBe(uploads[0].body.path);
+    });
     it.each([['simplex', '64 (default)'], ['duplex', '32 (default)']])('preserves the %s default when batch is omitted', async (doradoMode, placeholder) => {
         await mount({ ...base, doradoMode, duplexPairs: '/data/pairs.txt' }); await click('Show advanced controls');
         const control = container.querySelector<HTMLInputElement>('input[aria-label="Dorado batch size"]')!;
@@ -240,26 +331,126 @@ describe('ordinary NGS prepared launch through mounted consumers and real API tr
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-RBK114-96', sample_sheet: '/data/samples.csv' });
     });
+    it('offers DNA calling options once and submits modification tags without adding methylation analysis', async () => {
+        await mount();
+        expect(container.querySelector('[data-ngs-workflow-key="duplex"]')).toBeNull();
+        expect(container.querySelector('[data-ngs-workflow-key="barcode"]')).toBeNull();
+        expect(container.querySelectorAll('select[aria-label="Strand mode"]')).toHaveLength(1);
+        expect(container.querySelectorAll('select[aria-label="Barcoding"]')).toHaveLength(1);
+        const mod = (name: string) => container.querySelector<HTMLInputElement>(`input[type="checkbox"][aria-label="${name}"]`);
+        // SUP carries its own pinned modification models; select several at once.
+        await quality('sup');
+        await act(async () => mod('6mA')!.click()); await settle();
+        await act(async () => mod('5mCG_5hmCG')!.click()); await settle();
+        expect(mod('6mA')!.checked).toBe(true);
+        expect(mod('5mCG_5hmCG')!.checked).toBe(true);
+        // Dorado allows one model per canonical base: choosing 4mC_5mC replaces the CpG model.
+        await act(async () => mod('4mC_5mC')!.click()); await settle();
+        expect(mod('5mCG_5hmCG')!.checked).toBe(false);
+        expect(container.querySelector<HTMLSelectElement>('select[aria-label="Barcoding"]')?.disabled).toBe(true);
+        expect(container.textContent).toContain(doradoLock.models.modified_bases['dna_r10.4.1_e8.2_400bps_sup@v5.2.0_6mA@v1'].id);
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].url).toBe('/api/ont/ngs/ont_basecall_dna/submit');
+        expect(capturedRequest().params).toMatchObject({ dorado_quality_mode: 'sup', modified_bases: '4mC_5mC 6mA', run_modkit: false });
+    });
+    it('prepares BLOW5 raw signal in the analysis form and submits the restored POD5 directory', async () => {
+        const fixture = api.defaults.adapter as (config: InternalAxiosRequestConfig) => Promise<unknown>;
+        const rep = { representation_id: 'rep-blow5', run_id: 'run-1', observed_generation: 1, role: 'source', format: 'blow5', state: 'ready', reason_code: 'ok' };
+        api.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
+            const url = config.url ?? '';
+            const reply = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config });
+            if (url === '/api/ont/raw-signal/import') {
+                calls.push({ url, body: JSON.parse(config.data as string), context: null });
+                return reply({ run_id: 'run-1', observed_generation: 1, representation: rep, already_registered: false });
+            }
+            if (url.endsWith('/raw-signal')) return reply({ representations: [rep] });
+            if (url.endsWith('/restore-pod5')) return reply({ representation_id: 'rep-blow5', state: 'ready', directory: '/data/restored/pod5', restored_read_count: 12 });
+            return fixture(config) as never;
+        };
+        await mount();
+        await click('BLOW5/SLOW5 raw signal');
+        expect(button('Review and submit').disabled).toBe(true);
+        expect(container.querySelector('[aria-label="Browse POD5 folder"]')).toBeNull();
+        const picker = container.querySelector<HTMLInputElement>('input[aria-label="BLOW5 or SLOW5 file"]')!;
+        await act(async () => {
+            Object.defineProperty(picker, 'files', { value: [new File(['blow5'], 'reads.blow5')], configurable: true });
+            picker.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        await click('Prepare POD5 for basecalling');
+        await until(() => expect(container.textContent).toContain('POD5 restored and selected for basecalling.'));
+        const imported = calls.find(call => call.url === '/api/ont/raw-signal/import')!.body as unknown as Record<string, unknown>;
+        expect(imported).toMatchObject({ format: 'blow5', experiment_group: 'domain-1' });
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ pod5_dir: '/data/restored/pod5' });
+    });
+    it('opens optional reference controls on demand and returns to reference-free calling', async () => {
+        await mount();
+        expect(container.querySelector('[data-testid="molbio-sequence-selector"]')).toBeNull();
+        await click('Add optional reference');
+        expect(container.querySelector('[data-testid="molbio-sequence-selector"]')).not.toBeNull();
+        await input('[data-testid="molbio-sequence-selector"]', 'sequence-1');
+        await click('No reference — basecalling only');
+        expect(container.querySelector('[data-testid="molbio-sequence-selector"]')).toBeNull();
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).not.toHaveProperty('molbio_ngs_receipt_id');
+        expect(submits()[0].body).not.toHaveProperty('managed_reference');
+    });
+    it('reopens a modification-tagged DNA basecall as the same basecalling workflow', async () => {
+        const saved = normalizeNanoporeCloneState({ name: 'saved-tagged-basecall', model_id: 'nanopore', mode: 'basecall_dna', params: {
+            ont_workflow_id: 'ont_basecall_dna', pod5_dir: '/data/pod5', dorado_quality_mode: 'hac',
+            modified_bases: '5mC_5hmC', run_modkit: false,
+        } } as unknown as Job)!;
+        await mount(saved);
+        expect(container.querySelector('[data-ngs-workflow-key="dna"]')?.getAttribute('aria-pressed')).toBe('true');
+        await remoteReview();
+        expect(prepares()[0].url).toBe('/api/ont/ngs/ont_basecall_dna/prepare');
+        await click('Approve and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ modified_bases: '5mC_5hmC', run_modkit: false });
+    });
+    it('analyzes existing modification-tagged BAM without requiring another basecalling model', async () => {
+        await mount({ ...base, selectedWorkflow: 'modified', inputSource: 'bam', pod5Dir: '', bamPath: '/data/tagged.bam',
+            modifiedBases: 'none', runModkit: true, ngsReferenceRevisionId: 'reference-revision-1' });
+        expect(container.querySelector('input[aria-label="6mA"]')).toBeNull();
+        await click('Show advanced controls');
+        const tables = Array.from(container.querySelectorAll('label')).find(node => node.textContent?.includes('Generate methylation tables'))!;
+        expect(tables.querySelector<HTMLInputElement>('input')?.checked).toBe(true);
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].url).toBe('/api/ont/ngs/ont_methylation_analysis/submit');
+        expect(capturedRequest().params).toMatchObject({ bam_path: '/data/tagged.bam', run_modkit: true });
+        expect(capturedRequest().params).not.toHaveProperty('modified_bases');
+    });
+    it('blocks incomplete methylation analysis instead of silently dropping the requested tables', async () => {
+        await mount({ ...base, selectedWorkflow: 'modified', doradoModel: 'hac', modifiedBases: '6mA',
+            runModkit: true, ngsReferenceRevisionId: 'reference-revision-1' });
+        await act(async () => container.querySelector<HTMLInputElement>('input[aria-label="6mA"]')!.click());
+        await settle();
+        expect(button('Review and submit').disabled).toBe(true);
+        expect(container.textContent).toContain('Choose a modification model before generating methylation tables.');
+        expect(submits()).toHaveLength(0);
+        await act(async () => container.querySelector<HTMLInputElement>('input[aria-label="6mA"]')!.click());
+        await settle(); await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ modified_bases: '6mA', run_modkit: true });
+    });
     it('retains explicit duplex settings and stereo source identity', async () => {
-        await mount({ ...base, selectedWorkflow: 'duplex', doradoMode: 'duplex', duplexPairs: '/data/pairs.txt' });
+        await mount({ ...base, selectedWorkflow: 'dna', doradoMode: 'duplex', duplexPairs: '/data/pairs.txt' });
         expect(container.textContent).toContain(doradoLock.models.stereo.id);
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ dorado_basecall_mode: 'duplex', duplex_pairs: '/data/pairs.txt', emit_moves: false });
     });
     it.each(['5mC_5hmC', '6mA'])('preserves the native modification branch %s', async modification => {
         await mount({ ...base, selectedWorkflow: 'modified', doradoModel: 'hac', modifiedBases: modification, runModkit: true, ngsReferenceRevisionId: 'reference-revision-1' });
-        expect(container.textContent).toContain(doradoLock.models.modified_bases[modification as '5mC_5hmC' | '6mA'].id);
+        expect(container.textContent).toContain(`dna_r10.4.1_e8.2_400bps_hac@v6.0.0_${modification}@v1`);
         await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
         expect(capturedRequest().params).toMatchObject({ modified_bases: modification, dorado_quality_mode: 'hac', run_modkit: true });
     });
 
-    it('keeps Local reference-free, grouping context and all 11 choices; no remote preparation', async () => {
+    it('keeps Local reference-free and retains every workflow without duplicate option cards', async () => {
         await mount({ ...base, doradoModel: 'fast', batchSize: 0, emitSummary: false, emitMoves: false });
-        expect(container.querySelectorAll('[data-ngs-workflow-key]')).toHaveLength(11);
+        expect(container.querySelectorAll('[data-ngs-workflow-key]')).toHaveLength(6);
         for (const quality of ['Super Accurate (SUP)', 'High Accuracy (HAC)', 'Fast']) {
             expect(Array.from(container.querySelectorAll('button')).some(node => node.textContent?.includes(quality))).toBe(true);
         }
-        expect(container.textContent).toContain('Reference-free basecalling is supported');
+        expect(container.textContent).toContain('No reference needed for basecalling.');
         expect(button('Local').getAttribute('aria-pressed')).toBe('true');
         await click('Review and submit');
         await until(() => expect(submits()).toHaveLength(1));

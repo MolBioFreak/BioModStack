@@ -38,7 +38,7 @@ def target(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('mode', ['protein_binder', 'peptide_binder', 'nanobody_binder'])
+@pytest.mark.parametrize('mode', ['protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'])
 async def test_native_template_save_reopen_update_preserves_exact_science(admission, target, mode):
     from routers import models, user_templates
     from services.boltzgen_request_compatibility import parameter_contract

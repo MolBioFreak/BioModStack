@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { BioXpServiceRestart } from './BioXpServiceRestart';
+import { BioXpMovePreparation, useBioXpMovePreparation } from './BioXpMovePreparation';
 
 import {
+    useBioXpTipTrays,
     bioXpDeckRecoveryResolution,
     bioXpErrorPresentation,
     bioXpErrorText,
@@ -27,6 +29,8 @@ import {
     type BioXpOperatorActionV2Request,
     type BioXpDeckDestinationV1,
     type BioXpDeckSubmission,
+    type BioXpXYTarget,
+    BIOXP_XY_SEQUENCE_MAX_TARGETS,
 
     type BioXpOperatorDashboardXAxis,
 
@@ -41,11 +45,13 @@ import { BioXpHistoryReceiptCard, BioXpHistoryPager, useBioXpHistoryPagination }
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
 import { BioXpCalibrationAnalysis } from './BioXpCalibrationAnalysis';
 import { BioXpPressureCapture } from './BioXpPressureCapture';
-import { BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
+import { BioXpPipetteAdvancedTools, BioXpPipetteControlPanel, BioXpSoftwareTipType } from './BioXpPipetteControlPanel';
+import { BioXpPipetteCalibration } from './BioXpPipetteCalibration';
 import { BioXpCalibrationSettings } from './BioXpCalibrationSettings';
 import { BioXpPipetteSettings } from './BioXpPipetteSettings';
-import { BioXpWellPipettingPanel } from './BioXpWellPipettingPanel';
-import { BioXpWorkflowEditor } from './BioXpWorkflowEditor';
+import { BioXpWellPipettingPanel, PIPETTE_SECTIONS, type PipetteSection } from './BioXpWellPipettingPanel';
+import { BioXpMethodsWorkspace } from './BioXpMethodsWorkspace';
+import { BioXpWorkflowMutationProvider } from './BioXpWorkflowMutationOwner';
 import { BioXpLiveDeck } from './BioXpLiveDeck';
 import { deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
 import { BioXpAxisRow, BioXpAxisTelemetry, BioXpStepSlider, BioXpStepPresets, repairManualJogDistances } from './BioXpRobotPresentation';
@@ -53,9 +59,11 @@ import { BioXpStatusStrip } from './BioXpStatusStrip';
 import { RepairManualViewer, RepairManualFields } from './repairManualViewers';
 import { repairManualLatestRequest } from '../lib/repairManualFeedback';
 import './BioXpRobotControls.css';
-import { BioXpWorkflowControls } from './BioXpWorkflowControls';
 import { BioXpMovementFailureEvidence } from './BioXpMovementFailureEvidence';
 import { BioXpTransferControls } from './BioXpTransferControls';
+import { BioXpDeckRecordPanel } from './BioXpDeckRecordPanel';
+import { BioXpMotionToggle } from './BioXpMotionToggle';
+import { occupancyByTray } from '../lib/bioxpDeckRecord';
 import { BioXpOperatorReports } from './BioXpOperatorReports';
 
 
@@ -66,7 +74,8 @@ function DeckSubmissionRow({ item, generation, active, onSelect, onTerminal }: {
     const documentVisible = useBioXpDocumentVisible();
     const current = active && item.request.expected_connection_generation === generation;
     const commandId = item.receipt?.command_id ?? item.commandId;
-    const query = useBioXpOperatorReceiptV2(commandId ?? null, item.request.expected_connection_generation, current && documentVisible && item.receipt?.terminal !== true);
+    const lane = item.request.action_id === 'oem.xy.move_sequence' || item.request.action_id === 'oem.xy.retarget';
+    const query = useBioXpOperatorReceiptV2(commandId ?? null, item.request.expected_connection_generation, current && documentVisible && item.receipt?.terminal !== true, lane ? 500 : undefined);
     const receipt = query.data?.action_id === item.request.action_id ? query.data : item.receipt;
     useEffect(() => {
         if (current && !query.error && query.data?.terminal && query.data.action_id === item.request.action_id)
@@ -78,9 +87,9 @@ function DeckSubmissionRow({ item, generation, active, onSelect, onTerminal }: {
         : item.state === 'not_sent' ? 'not sent / connection changed'
         : item.state === 'rejected' ? 'not accepted' : `robot ${receipt?.status ?? 'accepted'}`;
     const captured = item.request;
-    const destinationLabel = captured.action_id === 'oem.deck.move_to_well'
-        ? `${deckStations.find(station => station.locationId === captured.inputs.location_id)?.label ?? String(captured.inputs.location_id)} · ${String(captured.inputs.well)}`
-        : `${captured.inputs.target}${captured.inputs.camera_offset === true ? ' + camera offset' : ''}`;
+    const destinationLabel = captured.action_id === 'oem.xy.move_sequence' ? `Fast lane: ${captured.inputs.targets.map(deckLaneTargetLabel).join(' → ')}`
+        : captured.action_id === 'oem.xy.retarget' ? `Retarget: ${deckLaneTargetLabel(captured.inputs.target)}`
+        : deckLaneTargetLabel(captured.inputs);
     return <p data-request-key={item.request.idempotency_key}>
         {destinationLabel} · {label}
         {' · '}{item.request.idempotency_key}
@@ -178,7 +187,14 @@ const CANONICAL_DECK_ACTION_IDS = new Set([
     'oem.deck.move_to_well',
     'oem.deck._mov_execution',
     'oem.deck._finite_operation',
+    'oem.xy.move_sequence',
+    'oem.xy.retarget',
 ]);
+
+type DeckMoveMode = 'full' | 'fast' | 'retarget';
+const deckLaneTargetLabel = (target: BioXpXYTarget) => 'target' in target ? `${target.target}${target.camera_offset === true ? ' + camera offset' : ''}`
+    : 'location_id' in target ? `${deckStations.find(station => station.locationId === target.location_id)?.label ?? String(target.location_id)} · ${String(target.well)}`
+        : `X ${target.x} · Y ${target.y}`;
 
 
 const integerMinimum = (input: BioXpOperatorInputSpec | undefined): number | undefined => {
@@ -319,16 +335,16 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     }, [generation]);
     const [historyOpen, setHistoryOpen] = useState(false);
     const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(8);
-    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [pipetteSection, setPipetteSection] = useState<PipetteSection>('Move & pipette');
     const [reportsOpen, setReportsOpen] = useState(false);
-    const [workflowOpen, setWorkflowOpen] = useState(false);
-    const [workflowVisible, setWorkflowVisible] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [cameraOpen, setCameraOpen] = useState(true);
     const [controlTab, setControlTab] = useState<ControlTab>(initialTab);
     const operationalVisible = documentVisible && controlTab !== 'workflows';
     const robotVisible = documentVisible && controlTab === 'robot';
     const liveDeckVisible = documentVisible && controlTab === 'live-deck';
+    // Same query as the deck record panel; shades recorded tips on the live map.
+    const liveTipTrays = useBioXpTipTrays(generation, linkConnected && liveDeckVisible);
     const controlsVisible = operationalVisible && controlTab !== 'live-deck';
     const [pipettesOpened, setPipettesOpened] = useState(initialTab === 'pipettes');
     const [workflowsOpened, setWorkflowsOpened] = useState(initialTab === 'workflows');
@@ -366,7 +382,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const [yCommandId, setYCommandId] = useState<string | null>(null);
     const [zHomeCommandId, setZHomeCommandId] = useState<string | null>(null);
     const [lifecycleCommandId, setLifecycleCommandId] = useState<string | null>(null);
-    const [lifecycleActionId, setLifecycleActionId] = useState<'meta.activate_motion' | 'meta.recover_motion_non_homing' | null>(null);
+    const [lifecycleActionId, setLifecycleActionId] = useState<'meta.activate_motion' | 'meta.deactivate_motion' | 'meta.recover_motion_non_homing' | null>(null);
     const [lifecycleOwnershipGeneration, setLifecycleOwnershipGeneration] = useState<number | null>(null);
     const [lifecycleDashboardBaselineAt, setLifecycleDashboardBaselineAt] = useState<number | null>(null);
     const [yPendingActionId, setYPendingActionId] = useState<string | null>(null);
@@ -382,6 +398,9 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     const currentLifecycleActionId = lifecycleGenerationCurrent ? lifecycleActionId : null;
     const [deckTarget, setDeckTarget] = useState('');
     const [deckCameraOffset, setDeckCameraOffset] = useState(false);
+    const [deckMoveMode, setDeckMoveMode] = useState<DeckMoveMode>('full');
+    // Unsent local clicks only: Fast lane appends, Retarget keeps the newest.
+    const [deckLanePending, setDeckLanePending] = useState<{ generation: number; targets: BioXpXYTarget[] } | null>(null);
     const [deckSelectionCatalog, setDeckSelectionCatalog] = useState<{
         generation: number; options: BioXpDeckDestinationV1[];
     } | null>(null);
@@ -529,6 +548,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         setLifecycleDashboardBaselineAt(null);
         setYPendingActionId(null);
         setDeckCommandId(null);
+        setDeckLanePending(null);
         setYMutationGeneration(null);
         setZHomeMutationGeneration(null);
         setLifecycleMutationGeneration(null);
@@ -796,8 +816,9 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         mutation.mutate({ actionId, connectionGeneration: generation, ownershipGeneration, inputs });
     };
 
-    const invokeLifecycleAction = (actionId: 'meta.activate_motion' | 'meta.recover_motion_non_homing') => {
-        if (v2ActionDisabledReason(actionId) !== null) return;
+    const invokeLifecycleAction = (actionId: 'meta.activate_motion' | 'meta.deactivate_motion' | 'meta.recover_motion_non_homing') => {
+        // Motion Off is never held back by sensor or catalog state; the robot decides.
+        if (actionId !== 'meta.deactivate_motion' && v2ActionDisabledReason(actionId) !== null) return;
         const envelope = v2NormalEnvelope();
         if (!envelope) return;
         const releaseSubmission = reserveNormalSubmission();
@@ -824,6 +845,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     };
     const claimTransport = () => invokeLifecycleAction('meta.activate_motion');
     const recoverMotionNonHoming = () => invokeLifecycleAction('meta.recover_motion_non_homing');
+    // Motion Off: host switch that refuses new moves; sends nothing to controllers.
+    const motionOff = () => invokeLifecycleAction('meta.deactivate_motion');
 
     const operatorPathForControl = (axis: Axis, operation: Operation): string | null => {
         if (operation === 'move-negative' || operation === 'move-positive') return '/motion/oem/manual/relative';
@@ -987,7 +1010,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         });
     };
     const submitDeckV2 = (request: BioXpOperatorActionV2Request) => {
-        if (!v2AuthorityCoherent || !['oem.deck.move_to_location', 'oem.deck.move_to_well'].includes(request.action_id)) return false;
+        if (!v2AuthorityCoherent || !['oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.xy.move_sequence', 'oem.xy.retarget'].includes(request.action_id)) return false;
         const captured = invokeDeckAction.submit(request);
         if (captured) setDeckMutationGeneration(generation);
         return captured;
@@ -1083,6 +1106,87 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             expected_board_epoch_by_board: deckWellAction?.expected_board_epoch_by_board ?? {},
             inputs: { location_id: locationId, well, position_flag: 1 },
         }, { station: station?.id ?? String(locationId), wells: [well] });
+    };
+    // Fast lane and Retarget: clicks queue locally; one lane request is in flight at a time.
+    const laneActionId = deckMoveMode === 'fast' ? 'oem.xy.move_sequence' as const : 'oem.xy.retarget' as const;
+    const laneAction = v2NormalActionById(laneActionId);
+    type LaneSubmission = BioXpDeckSubmission & { request: Extract<BioXpDeckSubmission['request'], { action_id: 'oem.xy.move_sequence' | 'oem.xy.retarget' }> };
+    const laneSubmission = [...invokeDeckAction.submissions].reverse().find((item): item is LaneSubmission => item.request.expected_connection_generation === generation
+        && (item.request.action_id === 'oem.xy.move_sequence' || item.request.action_id === 'oem.xy.retarget'));
+    const laneInFlight = laneSubmission != null && (laneSubmission.state === 'submitting' || laneSubmission.state === 'uncertain'
+        || (laneSubmission.state === 'accepted' && laneSubmission.receipt?.terminal !== true));
+    const lanePending = deckLanePending?.generation === generation ? deckLanePending.targets : [];
+    const laneDisabledReason = (target?: string): string | null => {
+        if (!v2AuthorityCoherent) return 'Robot action catalog is unavailable.';
+        if (laneAction == null) return `Robot ${deckMoveMode === 'fast' ? 'fast lane' : 'retarget'} movement is unavailable.`;
+        if (laneAction.enabled !== true) return laneAction.disabled_reason ?? 'Robot action unavailable.';
+        if (target === undefined) return null;
+        const destination = deckDestinationFor(target);
+        if (!destination) return 'This destination is not in the robot catalog.';
+        return destination.enabled === true ? null : destination.disabled_reason ?? 'Selected robot destination is unavailable.';
+    };
+    const queueLaneTarget = (target: BioXpXYTarget, selection: BioXpDeckSelection) => {
+        setDeckLanePending(current => ({ generation, targets: deckMoveMode === 'retarget' ? [target]
+            : [...(current?.generation === generation ? current.targets : []), target] }));
+        setLiveDeckIntent({ generation, selection });
+    };
+    const clickDeckStation = (target: string) => {
+        if (deckMoveMode === 'full') return invokeNamedDeckMove(target, false);
+        const destination = deckDestinationFor(target);
+        if (laneDisabledReason(target) !== null || !destination) return;
+        const station = deckStations.find(item => item.id === destination.target || destination.aliases.includes(item.id));
+        queueLaneTarget({ target: destination.target, camera_offset: destination.camera_offset_option === true && deckCameraOffset },
+            { station: station?.id ?? destination.target, wells: [] });
+    };
+    const clickDeckWell = (locationId: number, well: string) => {
+        if (deckMoveMode === 'full') return invokeWellDeckMove(locationId, well);
+        if (laneDisabledReason() !== null) return;
+        queueLaneTarget({ location_id: locationId, well }, { station: deckStations.find(item => item.locationId === locationId)?.id ?? String(locationId), wells: [well] });
+    };
+    useEffect(() => {
+        if (lanePending.length === 0 || laneInFlight) return;
+        const envelope = v2NormalEnvelope();
+        if (!envelope) return;
+        const sent = deckMoveMode === 'retarget' ? lanePending.slice(-1) : lanePending.slice(0, BIOXP_XY_SEQUENCE_MAX_TARGETS);
+        const actionId = deckMoveMode === 'retarget' ? 'oem.xy.retarget' as const : 'oem.xy.move_sequence' as const;
+        const epochs = v2NormalActionById(actionId)?.expected_board_epoch_by_board ?? {};
+        if (!submitDeckV2(actionId === 'oem.xy.retarget'
+            ? { ...envelope, action_id: actionId, expected_board_epoch_by_board: epochs, inputs: { target: sent[0] } }
+            : { ...envelope, action_id: actionId, expected_board_epoch_by_board: epochs, inputs: { targets: sent } })) return;
+        // Clicks made meanwhile stay queued for the next request.
+        setDeckLanePending(current => current?.generation !== generation ? current
+            : { generation, targets: actionId === 'oem.xy.retarget' ? current.targets.filter(t => t !== sent[0]) : current.targets.slice(sent.length) });
+    }, [deckLanePending, laneInFlight, generation, deckMoveMode, v2AuthorityCoherent, currentDashboardV2?.ownership_generation, invokeDeckAction.isPending, invokeDeckAction.submissions]);
+    const laneStatus = deckMoveMode === 'full' ? null : [
+        laneSubmission && laneInFlight ? `Active: ${laneSubmission.request.action_id === 'oem.xy.move_sequence'
+            ? laneSubmission.request.inputs.targets.map(deckLaneTargetLabel).join(' → ') : deckLaneTargetLabel(laneSubmission.request.inputs.target)}` : null,
+        lanePending.length ? `Queued: ${lanePending.map(deckLaneTargetLabel).join(' → ')}` : null,
+        laneSubmission?.state === 'rejected' || laneSubmission?.state === 'not_sent'
+            ? `Last request refused: ${bioXpErrorText(laneSubmission.error)}` : null,
+    ].filter(Boolean).join(' · ') || 'None queued';
+    const chooseDeckMoveMode = (mode: DeckMoveMode) => { setDeckMoveMode(mode); setDeckLanePending(null); };
+    const mapStationDisabledReason = (target: string) => deckMoveMode === 'full' ? stationDisabledReason(target) : laneDisabledReason(target);
+    const mapWellDisabledReason = deckMoveMode === 'full' ? wellDisabledReason : laneDisabledReason();
+    // Operator-confirmed preparation for a blocked live deck move (popup; nothing runs before Proceed).
+    // Z is in the axes list; X and Y report through their own axis rows.
+    const referencedState = (value: unknown) => typeof value === 'string' && ['referenced', 'homed'].includes(value);
+    const axisReferenced = (name: 'x' | 'y' | 'z') => name === 'x' ? referencedState(xReference)
+        : name === 'y' ? referencedState(yAxisV2?.reference_state)
+        : referencedState(dashboard?.axes?.find(axis => axis.axis === 'z')?.reference);
+    const movePreparation = useBioXpMovePreparation(() => [
+        { id: 'enable', label: 'Enable controllers', done: () => dashboard?.motion?.enabled === true, submit: () => invokeLifecycleAction('meta.activate_motion'), blocked: () => v2ActionDisabledReason('meta.activate_motion') },
+        { id: 'home_z', label: 'Home Z (raise the head)', done: () => axisReferenced('z'), submit: () => runControl('z', 'home'), blocked: () => zHomeDisabledReason },
+        { id: 'home_xy', label: 'Home X and Y', done: () => axisReferenced('x') && axisReferenced('y'), submit: invokeXYHome, blocked: () => xyHomeDisabledReason },
+    ], dashboard, () => { void operatorCatalog.refetch(); });
+    const requestBlockedMove = (intent: { station: string } | { locationId: number; well: string }) => {
+        if ('station' in intent) {
+            const destination = deckDestinationFor(intent.station);
+            const label = deckStations.find(s => s.id === intent.station)?.label ?? destination?.label ?? intent.station;
+            movePreparation.request({ label, run: () => clickDeckStation(intent.station), ready: () => mapStationDisabledReason(intent.station) });
+        } else {
+            const label = `${deckStations.find(s => s.locationId === intent.locationId)?.label ?? `location ${intent.locationId}`} · ${intent.well}`;
+            movePreparation.request({ label, run: () => clickDeckWell(intent.locationId, intent.well), ready: () => mapWellDisabledReason });
+        }
     };
     const invokeYMoveSteps = (steps: number) => {
         const envelope = v2NormalEnvelope();
@@ -1207,6 +1311,9 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         {tab === 'robot' ? 'Robot controls' : tab === 'pipettes' ? 'Pipettes' : tab === 'workflows' ? 'Workflows' : 'Live deck movement'}
                     </button>)}
                 </div>
+                <BioXpMotionToggle enabled={motionControlsAvailable} reason={dashboard?.motion.reason} connected={linkConnected}
+                    onDisabledReason={v2ActionDisabledReason('meta.activate_motion')} pending={invokeLifecycleActionMutation.isPending}
+                    onOn={claimTransport} onOff={motionOff} />
                 <div title="Cancels software waiters, not motor motion. Motors may continue. This is not a physical emergency stop. Use Stop for motors." aria-label="Stop controls" className="bx-stops">
                     {(['x', 'y', 'z'] as const).map(axis => <button key={axis} type="button"
                         disabled={!linkConnected || generation <= 0 || interruptPending(`oem.${axis}.stop`)}
@@ -1221,7 +1328,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
             </header>
             <BioXpStatusStrip connected={displayConnected} data={displayTelemetry} stale={showingLastKnown}
                 connectedLabel={connectedLabel} motionControlsAvailable={motionControlsAvailable} motionLabel={motionLabel}
-                observedAt={connection?.observed_at} hardwareFresh={connection?.hardware_fresh} ownershipLabel={ownershipLabel}
+                observedAt={connection?.observed_at} hardwareFresh={connection?.hardware_fresh} hardwareObservedAt={connection?.hardware_observed_at} ownershipLabel={ownershipLabel}
                 connectionControls={<><button
                             type="button"
                             disabled={!configured || linkHealthy || connect.isPending || disconnect.isPending}
@@ -1288,14 +1395,11 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                     {linkConnected && componentStop.error && <p role="alert">Component Stop: {bioXpErrorText(componentStop.error)}</p>}
             </div>
             <div role="tabpanel" id="control-panel-workflows" aria-labelledby="control-tab-workflows" hidden={controlTab !== 'workflows'}>
-                {workflowsOpened && <BioXpWorkflowEditor visible={documentVisible && controlTab === 'workflows'} generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />}
-                {workflowsOpened && <>
-            <details onToggle={event => { setWorkflowVisible(event.currentTarget.open); if (event.currentTarget.open) setWorkflowOpen(true); }}>
-                <summary className="cursor-pointer text-lg font-semibold">Prepared request files</summary>
-                {workflowOpen && <BioXpWorkflowControls key={generation} generation={generation} connected={active}
-                    controlsEnabled={robotControlReady} visible={documentVisible && controlTab === 'workflows' && workflowVisible} />}
-            </details>
-                </>}
+                {workflowsOpened && <BioXpWorkflowMutationProvider><section className="w-full space-y-4" aria-label="BioXP workflows workspace">
+                    <header className="flex items-baseline gap-3"><h2 className="text-lg font-semibold">Workflows</h2>
+                        <span className="text-xs text-content-secondary">Editing never moves the robot.</span></header>
+                    <BioXpMethodsWorkspace visible={documentVisible && controlTab === 'workflows'} generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />
+                </section></BioXpWorkflowMutationProvider>}
             </div>
             <div role="tabpanel" id="control-panel-live-deck" aria-labelledby="control-tab-live-deck" hidden={controlTab !== 'live-deck'}>
                 {liveDeckOpened && <>
@@ -1306,11 +1410,12 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         dashboard={catalogV2Query.data?.dashboard} stale={showingLastKnown || !linkHealthy}
                         selection={liveDeckIntent?.generation === generation ? liveDeckIntent.selection : { station: '', wells: [] }}
                         selectedDestination={selectedDeckDestination}
-                        onMoveToStation={target => invokeNamedDeckMove(target, false)} onMoveToWell={invokeWellDeckMove}
+                        onMoveToStation={clickDeckStation} onMoveToWell={clickDeckWell}
+                        onBlockedMove={requestBlockedMove} preparation={<BioXpMovePreparation state={movePreparation} />}
                         stationDisabledReason={target => {
-                            const reason = stationDisabledReason(target);
+                            const reason = mapStationDisabledReason(target);
                             return reason === null ? null : bioXpDeckReadinessText(reason);
-                        }} wellDisabledReason={wellDisabledReason === null ? null : bioXpDeckReadinessText(wellDisabledReason)}
+                        }} wellDisabledReason={mapWellDisabledReason === null ? null : bioXpDeckReadinessText(mapWellDisabledReason)}
                         doorControls={<div data-testid="live-deck-door-controls" className="space-y-2">
                     <h3 className="font-semibold">Thermal door</h3>
                     <div className="flex gap-2">
@@ -1337,6 +1442,15 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                                 connectionGeneration={active ? generation : null} mutationEnabled={linkConnected && status?.mutation_access?.enabled === true} /></div>
                         </details>}
                         movementControls={<div className="space-y-3 text-sm">
+                    <div className="flex gap-2" role="group" aria-label="Movement mode">
+                        {([['full', 'Full report'], ['fast', 'Fast lane'], ['retarget', 'Retarget']] as const).map(([mode, label]) =>
+                            <button key={mode} type="button" aria-pressed={deckMoveMode === mode} onClick={() => chooseDeckMoveMode(mode)}
+                                className="flex-1 rounded border px-3 py-2 text-sm font-semibold"
+                                style={{ borderColor: deckMoveMode === mode ? 'var(--accent-primary, #0f766e)' : 'var(--border-primary)', background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+                                {label}
+                            </button>)}
+                    </div>
+                    {laneStatus !== null && <p role="status" data-testid="deck-lane-status" className="break-words text-xs">{laneStatus}</p>}
                     <label className="block">
                         Robot destination
                         <select value={selectedDeckDestination?.target ?? ''}
@@ -1428,6 +1542,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
 
                         </div>}
                         transferControls={visible => <BioXpTransferControls visible={visible} key={`${generation}:${active}`} generation={generation} connected={linkConnected} />}
+                        deckRecord={<BioXpDeckRecordPanel generation={generation} connected={linkConnected} visible={liveDeckVisible} compact />}
+                        tipOccupancy={occupancyByTray(liveTipTrays.data)}
                     />
                     {error && <p role="alert" className="mt-3 rounded border border-red-600 p-3 text-sm" style={{ color: 'var(--text-primary)' }}>{bioXpErrorText(error)}</p>}
                 </>}
@@ -1706,21 +1822,34 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                     connected={robotControlReady && operatorCatalog.data !== undefined}
                     pipettes={operatorCatalog.data?.dashboard.pipettes ?? undefined}
                     freshness={operatorCatalog.data?.dashboard.snapshot.freshness}
-                    actions={catalog?.actions}
-                    catalogLoading={operatorCatalog.isLoading}
-                    invokePending={invokeOperatorAction.isPending}
-                    invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)}
                 />
-                <BioXpWellPipettingPanel visible={documentVisible && controlTab === 'pipettes'} generation={generation} connected={linkConnected}
-                    destinations={selectionAction?.destination_options ?? []}
-                    positionTableRevision={selectionAction?.position_table_revision} />
-                <BioXpCalibrationAnalysis visible={documentVisible && controlTab === 'pipettes'} connected={linkConnected} generation={generation} />
-                <BioXpPressureCapture visible={documentVisible && controlTab === 'pipettes'} connected={linkConnected} generation={generation} />
-                <section className="mt-4 rounded border border-slate-700 p-3">
-                    <button type="button" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(open => !open)}>Settings & calibration</button>
-                    <BioXpPipetteSettings visible={settingsOpen && documentVisible && controlTab === 'pipettes'} key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />
-                    <BioXpCalibrationSettings visible={settingsOpen && documentVisible && controlTab === 'pipettes'} key={`calibration:${generation}:${active}`} generation={generation} connected={linkConnected} />
-                </section>
+                <div role="tablist" aria-label="Pipette sections" className="mt-4 flex flex-wrap gap-2">
+                    {PIPETTE_SECTIONS.map(name => <button key={name} type="button" role="tab" aria-selected={pipetteSection === name} aria-pressed={pipetteSection === name}
+                        onClick={() => setPipetteSection(name)} className={`rounded border px-3 py-1 text-sm ${pipetteSection === name ? 'border-cyan-400 bg-cyan-900 text-white' : 'border-slate-700 bg-slate-900 text-slate-300'}`}>{name}</button>)}
+                </div>
+                <div className="mt-3 rounded border border-slate-700 p-4">
+                    {pipetteSection === 'Tips' && <div className="mb-3"><BioXpSoftwareTipType connected={robotControlReady && operatorCatalog.data !== undefined}
+                        pipettes={operatorCatalog.data?.dashboard.pipettes ?? undefined} actions={catalog?.actions} catalogLoading={operatorCatalog.isLoading}
+                        invokePending={invokeOperatorAction.isPending} invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)} /></div>}
+                    {pipetteSection === 'Calibration' && <div className="mb-4 space-y-4">
+                        <BioXpPipetteCalibration visible={documentVisible && controlTab === 'pipettes'} generation={generation} connected={linkConnected}
+                            destinations={selectionAction?.destination_options ?? []} />
+                        <details className="rounded border border-slate-700 p-3"><summary className="cursor-pointer font-semibold">Station heights</summary>
+                            <BioXpPipetteSettings visible={documentVisible && controlTab === 'pipettes'} key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />
+                            <BioXpCalibrationSettings visible={documentVisible && controlTab === 'pipettes'} key={`calibration:${generation}:${active}`} generation={generation} connected={linkConnected} />
+                        </details>
+                    </div>}
+                    <BioXpWellPipettingPanel visible={documentVisible && controlTab === 'pipettes'} generation={generation} connected={linkConnected} section={pipetteSection}
+                        destinations={selectionAction?.destination_options ?? []}
+                        positionTableRevision={selectionAction?.position_table_revision} />
+                    {pipetteSection === 'Advanced' && <div className="mt-4 space-y-4">
+                        <BioXpPipetteAdvancedTools visible={documentVisible && controlTab === 'pipettes'} generation={generation}
+                            connected={robotControlReady && operatorCatalog.data !== undefined} actions={catalog?.actions} catalogLoading={operatorCatalog.isLoading}
+                            invokePending={invokeOperatorAction.isPending} invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)} />
+                        <BioXpCalibrationAnalysis visible={documentVisible && controlTab === 'pipettes'} connected={linkConnected} generation={generation} />
+                        <BioXpPressureCapture visible={documentVisible && controlTab === 'pipettes'} connected={linkConnected} generation={generation} />
+                    </div>}
+                </div>
                 </>}
             </div>
             <section aria-label="Latest command" className="bx-ui bx-last"><strong>Last command</strong>

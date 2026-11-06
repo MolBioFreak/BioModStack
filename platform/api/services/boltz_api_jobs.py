@@ -94,6 +94,7 @@ def _validate_idempotent_replay(
     model: str,
     provider_input: dict[str, Any],
     approved_estimate_fingerprint: str,
+    local_round_step: dict[str, Any] | None = None,
 ) -> Job:
     existing_params = dict(existing.params or {})
     if (
@@ -102,6 +103,7 @@ def _validate_idempotent_replay(
         or existing_params.get("provider_model") != model
         or existing_params.get("provider_input") != provider_input
         or existing_params.get("approved_estimate_fingerprint") != approved_estimate_fingerprint
+        or (existing.provenance or {}).get("binder_round_step") != local_round_step
     ):
         raise BoltzApiJobError(
             "BOLTZ_API_IDEMPOTENCY_CONFLICT",
@@ -469,6 +471,7 @@ async def queue_boltz_api_job(
     model: str,
     provider_input: dict[str, Any],
     approved_estimate_fingerprint: str,
+    local_round_step: dict[str, Any] | None = None,
 ) -> Job:
     job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"biomodstack:boltz-api:{client_request_id}"))
     existing = await session.get(Job, job_id)
@@ -479,6 +482,7 @@ async def queue_boltz_api_job(
             model=model,
             provider_input=provider_input,
             approved_estimate_fingerprint=approved_estimate_fingerprint,
+            local_round_step=local_round_step,
         )
 
     estimate, current_fingerprint = await estimate_boltz_api_cost(model=model, provider_input=provider_input)
@@ -516,6 +520,10 @@ async def queue_boltz_api_job(
         ),
         max_retries=3,
         retry_count=0,
+        # Local custody is inserted atomically but never enters provider_input.
+        provenance={"binder_round_step": local_round_step} if local_round_step is not None else None,
+        lineage_root_job_id=local_round_step.get("root_job_id") if local_round_step else None,
+        selection_source_job_id=local_round_step.get("source_job_id") if local_round_step else None,
     )
     session.add(job)
     try:
@@ -531,6 +539,7 @@ async def queue_boltz_api_job(
             model=model,
             provider_input=provider_input,
             approved_estimate_fingerprint=approved_estimate_fingerprint,
+            local_round_step=local_round_step,
         )
     await session.refresh(job)
     return job

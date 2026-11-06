@@ -13,6 +13,17 @@ from pathlib import Path
 import shutil
 
 CONTRACT = json.loads(Path(__file__).with_name('boltzgen_native_source.json').read_text())
+# The local ligand parser candidate changes this source file only. Keep both
+# exact native inventories readable; old results/images are not invalidated.
+LIGAND_PARSER_SOURCE = 'opt/venv/lib/python3.11/site-packages/boltzgen/data/parse/mmcif.py'
+LIGAND_PARSER_SHA256 = '9ca07e896d533914e9b462b21a8caf705e4f25977eb99aa1ae7c129a38131633'
+_LIGAND_FILES = {**CONTRACT['files'], LIGAND_PARSER_SOURCE: LIGAND_PARSER_SHA256}
+LIGAND_PARSER_CONTRACT = {
+    **CONTRACT, 'files': _LIGAND_FILES,
+    'source_sha256': hashlib.sha256(json.dumps(_LIGAND_FILES, sort_keys=True,
+                                             separators=(',', ':')).encode()).hexdigest(),
+}
+CONTRACTS = (CONTRACT, LIGAND_PARSER_CONTRACT)
 KEYS = ('design_ptm', 'affinity_probability', 'filter_rmsd')
 
 PROTOCOLS = ('protein-anything', 'protein-small_molecule', 'peptide-anything',
@@ -197,9 +208,9 @@ def observe_source(cli=None, *, root=Path('/')):
 
 
 def supported(identity):
-    return isinstance(identity, dict) and identity == {
-        'schema': 1, 'state': 'ok', 'reason_code': None, **CONTRACT,
-    }
+    return isinstance(identity, dict) and any(identity == {
+        'schema': 1, 'state': 'ok', 'reason_code': None, **contract,
+    } for contract in CONTRACTS)
 
 
 def retain_source(path, output_dir, candidate, dialect, producer_identity=None, *, native_id=None):

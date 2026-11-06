@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "upstream_url": "https://github.com/RosettaCommons/atomworks-studio.git",
+  "upstream_commit": "04fe5fbd03fea8b7d49a767156d7d33bd10e5d13",
+  "upstream_version": "0.0.5",
+  "patches": [
+    {
+      "file": "0001-s03-editor-repairs.patch",
+      "sha256": "3ad8eb8df90e263f191339c9969e8371735ad4d352826679ab4514e13beee5b0"
+    }
+  ],
+  "files": {
+    "docs/INTEGRATIONS.md": {
+      "before": "1bf8fb14aa0c31871d02e909622905b7c050de35fd217b2a32faa3b268707832",
+      "after": "f01f915507f5b21a65952ff2d1a0e21143249af83194d72ec58c48f95da3919f"
+    },
+    "packages/api/annotation_studio/main.py": {
+      "before": "a1873d620f33afe15150e1bce231774770c609f7b564b883ac28fa7eca3886e0",
+      "after": "580d4a648cee337615a9ecd7801a9d8336ea25011ad6e1410d8b69387955aefe"
+    },
+    "packages/editing/atomworks_studio_editing/document.py": {
+      "before": "b0a2c39eb95872fca7d84b07514f8a7c14e8f0cfd0d80ec24b620df280293f42",
+      "after": "d0a9cb407aaf5fdfd34df95f6add61551461104a180f4ac61d18ace2a66caf4a"
+    },
+    "packages/web/index.html": {
+      "before": "5166a24b93a259fc5c4e7c6e68910a94fcd03750dbc2dff0d18eb6906a63b312",
+      "after": "04755ef5e46f43c457d225f4821a3a2835917642006d39afc239c2118d593661"
+    },
+    "packages/web/src/main.ts": {
+      "before": "f9475c1bc21a2d9c3365743216b393902b56c871930a4b496e9271245fc2b364",
+      "after": "c723000c563e0f7f1f80b2a2de57aa106d2b8f1ebad9b48b098be339f41324c1"
+    },
+    "packages/web/src/studio/annotation-controller.ts": {
+      "before": "20f8ed6630095e273a2105058bc2431c6b5a10a9bb18bbeae59c4edde979e1c9",
+      "after": "f651eee2e8bfccf411a84d566d74ea3fbac7cbd7ea3d4df393a5611be6b3ca97"
+    },
+    "packages/web/src/studio/condition-controller.ts": {
+      "before": "b605ac26261ef839637061262e1bec25c1d00c4dcf80b91780fd411f37816f21",
+      "after": "f6ed2b930cd97276865d53b907eefe3ccde4aebbd75af67ed7528637cc65e24c"
+    },
+    "packages/web/src/studio/sequence-controller.ts": {
+      "before": "81bd9ad28edc4ad5843a9d926728704ffd10dcd75af8022acbb0f3235f34ed79",
+      "after": "e5fc4c2ee0c58afb7d587fd1fcfc824fffec2d4ed94e1bbc61ef55f6068f047f"
+    },
+    "packages/web/src/types.ts": {
+      "before": "dbdc095343156f9ea12e244cbe207ea7452f3dd90b589fc35ed69bb6e8fe57ea",
+      "after": "7f729d668faa6cd82045857534b063bd3d34449e3c799ab41ae0a81f496f7c0e"
+    },
+    "packages/web/src/viewers/molstar.ts": {
+      "before": "ecfc3d33a011ee3fc1ca77f671babb35d335281676d694a45000c975a63097b8",
+      "after": "720188f9828dbb50a0481c625cd892dc7078abba97a4a844b8e3b70aa17821c0"
+    },
+    "packages/web/tests/bms-s03-before.mjs": {
+      "before": null,
+      "after": "c768634654d3a309fcb57ecd749a16f7533615b2d3e23489df1286a250a83643"
+    },
+    "packages/web/tests/bms-s03-browser.mjs": {
+      "before": null,
+      "after": "5a0e042fdd64931e550ce459c5f0b4dc7b0e04ab2020d497385fd58e846fc68f"
+    },
+    "packages/web/tests/bms-s03-regressions.mjs": {
+      "before": null,
+      "after": "82ff395d9dd5bf434795204cb83ebc0b674af9f8002c24fe7fba5f950f9316c7"
+    },
+    "packages/web/tests/editor-qol.mjs": {
+      "before": "838d87b0c4f411fa94ec978d49c8048fef1f04ca20101323896d2662b587bb49",
+      "after": "fb6ea5dc7afddd5255f1fa367bcfe7466d2e2ffe2fa0ddf2255b9b369e98be6c"
+    },
+    "tests/test_bms_s03.py": {
+      "before": null,
+      "after": "53871ac786323a54cbc664aef436beed1b128530fbfde7b34e8327aea465e434"
+    }
+  },
+  "build_inputs": {
+    "pyproject.toml": "a1e73aecf79c7486fcf2c897751e891fb8c1d7496416cb6ba1f3d4d7e961e215",
+    "uv.lock": "b9055a7b7713fbe5659b54fa90ef090c558e40821c68bd3070b4658c3bbf5faf",
+    "package.json": "3e2c3f4155c9974db0f6e97f78272ffedfb7a2326bf2db990a8735e8646ab9c4",
+    "pnpm-lock.yaml": "a848075d0ff2704ae07743001b478a2ebda2965e50c2156cbd8a1a27b3e434ef",
+    "pnpm-workspace.yaml": "da88cf62df45cf508bf479bec381cad092c422af4fe3b935475e4bbb78e2438b",
+    "rust-toolchain.toml": "e7a841183d2b2884f0a7fd7093c422ed1562a390b3f0ae3bc08569dd29660e2d",
+    "packages/web/package.json": "ce1b909e8987183da972950b8de0795f4b3c32a60cfaa377cbbfeb11e541308a",
+    "packages/core/Cargo.toml": "28397c9f2bceea1969703791a3b5e111812566a184a94b9306c1f19aefd9bcbe",
+    "packages/web/vendor/patinae-viewer-0.5.1-studio.1.tgz": "fe6fce837a87be6528c82d513feefa3c7c1a7c9617ed6c5f44be7f04af83844c"
+  }
+}

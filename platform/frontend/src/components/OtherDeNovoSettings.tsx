@@ -1,0 +1,149 @@
+import { useQuery } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
+import { api } from '../lib/api';
+import { BioXpSchemaInput } from './BioXpSchemaInput';
+import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
+import { Rfd3AdditionalConditions } from './Rfd3AdditionalConditions';
+import { NativeSettingsDisclosure } from './NativeSettingsDisclosure';
+
+export const rfd3ExecutionKeys = ['diffusion_batch_size', 'inference_sampler', 'skip_existing', 'low_memory_mode', 'cleanup_guideposts', 'cleanup_virtual_atoms', 'read_sequence_from_sequence_head', 'align_trajectory_structures', 'dump_prediction_metadata_json', 'write_full_json'] as const;
+export function retainedRfd3Settings(value: Record<string, unknown> = {}) {
+    return Object.fromEntries(rfd3ExecutionKeys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
+}
+
+// General generation owns nested conditioning and exact source selectors, not
+// flat redesign conditions. Keep this finite projection separate from execution.
+export function retainedRfd3Draft(value: Record<string, unknown> = {}) {
+    const keys = ['conditioning', 'input_structure', 'source_mapping', 'source_model', 'generation_mode', 'generation_task', 'redesign'];
+    const retained = { ...retainedRfd3Settings(value), ...Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])) };
+    // Historical region drafts enter this same editor, never the retired page.
+    // Explicit current nested values win over their legacy flat equivalents.
+    const task = value.redesign_mode;
+    if (task === 'partial_diffusion' || task === 'minimal_insertion' || task === 'native_recall') {
+        if (!Object.hasOwn(retained, 'generation_task')) retained.generation_task = task;
+        if (!Object.hasOwn(retained, 'source_model') && Object.hasOwn(value, 'model_number')) retained.source_model = value.model_number;
+        const regionKeys = ['design_chains', 'context_chains', 'redesign_ranges', 'insertion_anchor', 'insertion_min_length', 'insertion_max_length'];
+        if (task !== 'native_recall' && !Object.hasOwn(retained, 'redesign')) retained.redesign = Object.fromEntries(regionKeys.filter(key => Object.hasOwn(value, key)).map(key => [key, ['design_chains', 'context_chains'].includes(key) && typeof value[key] === 'string' ? value[key].split(/[,\s]+/).filter(Boolean) : value[key]]));
+        const conditionKeys = ['partial_t', 'select_unfixed_sequence', 'ligand', 'select_buried', 'select_exposed', 'select_partially_buried', 'ori_token', 'unindex', 'select_hotspots', 'select_hbond_donor', 'select_hbond_acceptor', 'symmetry', 'infer_ori_strategy', 'plddt_enhanced', 'is_non_loopy', 'redesign_motif_sidechains', 'extra', 'dialect', 'length', ...(task === 'native_recall' ? ['contig', 'select_fixed_atoms'] : [])];
+        retained.conditioning = { ...Object.fromEntries(conditionKeys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])), ...(retained.conditioning as Record<string, unknown> ?? {}) };
+    }
+    return retained;
+}
+export function useRfd3GenerationBounds(enabled: boolean) {
+    return useQuery({ queryKey: ['other-denovo-settings', 'rfd3', 'unconditional_monomer'], enabled,
+        queryFn: async () => (await api.get<{ generation: Record<string, Schema> }>('/api/models/protein_modification_experimental/generation-settings', { params: { mode: 'de_novo_design', generator: 'rfd3', task: 'unconditional_monomer' } })).data,
+        staleTime: 60_000, retry: false }).data?.generation;
+}
+
+/** Presentation groups only. Types and scientific defaults come from the current model owner. */
+export function OtherDeNovoSettings({ model, task, value, onChange, sourceConditions = false, generalConditions = false, primaryOverrideFields = [], selectedPreset, requestParams = {} }: {
+    sourceConditions?: boolean; generalConditions?: boolean;
+    primaryOverrideFields?: string[]; selectedPreset?: string; requestParams?: Record<string, unknown>;
+    model: 'rfd3' | 'laproteina' | 'disco'; task: string; value: Record<string, unknown>;
+    onChange: (value: Record<string, unknown>) => void;
+}) {
+    const inventory = useQuery({ queryKey: ['other-denovo-settings', model, task], queryFn: async () => (await api.get<{
+        conditioning?: Record<string, Schema>;
+        parameter_schema?: Schema; execution?: Record<string, Schema & { authority?: string; default_source?: string }>;
+        profiles?: Record<string, { ld: string; ae: string; task: string }>;
+        native_profile_defaults?: { source_revision?: string; composition?: string; profiles?: Record<string, Record<string, unknown>> };
+        native_profile_reference?: { source_revision: string; composition: string; variants: Record<string, Record<string, { path: string; value: unknown }>> };
+    }>('/api/models/protein_modification_experimental/generation-settings', { params: { mode: 'de_novo_design', generator: model, task } })).data, staleTime: 60_000, retry: false });
+    const key = `pcad_${model}_settings_json`;
+    const settings = model === 'rfd3' ? value : value[key];
+    const object = settings && typeof settings === 'object' && !Array.isArray(settings) ? settings as Record<string, unknown> : {};
+    const samplerIdentity = JSON.stringify([model, task, Object.hasOwn(value, 'inference_sampler'), value.inference_sampler]);
+    const samplerState = useRef({ identity: samplerIdentity, retainEmpty: Object.hasOwn(value, 'inference_sampler') });
+    useEffect(() => {
+        if (samplerState.current.identity !== samplerIdentity) {
+            samplerState.current = { identity: samplerIdentity, retainEmpty: Object.hasOwn(value, 'inference_sampler') };
+        }
+    }, [samplerIdentity, value]);
+    // Display metadata is private to this editor; it is never a requested value.
+    const root: Schema = structuredClone(inventory.data?.parameter_schema ?? { type: 'object', properties: inventory.data?.execution ?? {} });
+    const profile = model === 'laproteina' && selectedPreset ? inventory.data?.native_profile_defaults?.profiles?.[selectedPreset] : undefined;
+    let legacySettings = requestParams[`${model}_settings`];
+    if (typeof legacySettings === 'string') { try { legacySettings = JSON.parse(legacySettings); } catch { legacySettings = undefined; } }
+    const legacyObject = legacySettings && typeof legacySettings === 'object' && !Array.isArray(legacySettings) ? legacySettings as Record<string, unknown> : {};
+    const selector = (name: string, fallback: string) => {
+        for (const [source, key] of [[object, name], [legacyObject, name], [requestParams, `disco_${name}`], [requestParams, `pcad_disco_${name}`]] as const) {
+            if (Object.hasOwn(source, key)) return source[key];
+        }
+        return fallback;
+    };
+    const discoSelection = `${selector('experiment', 'designable')}/${selector('effort', 'fast')}`;
+    const discoReference = model === 'disco' ? inventory.data?.native_profile_reference?.variants[discoSelection] : undefined;
+    // Project only source-qualified leaves into schema metadata, not a synthetic
+    // effective object. The shared renderer edits the sparse object separately.
+    if (discoReference) for (const [field, typeName] of [['noisy_guidance', 'NoisyGuidance'], ['sequence_sampling', 'SequenceSampling']]) {
+        const definition = root.$defs?.[typeName];
+        for (const [name, child] of Object.entries(definition?.properties ?? {})) {
+            const reference = discoReference[`${field}.${name}`];
+            if (reference) Object.assign(child, { default: reference.value, default_source: `DISCO ${inventory.data?.native_profile_reference?.source_revision} · ${reference.path} · upstream reference, not effective configuration` });
+        }
+    }
+    const patch = (field: string, next: unknown) => {
+        const updated = { ...object }; if (next === undefined) delete updated[field]; else updated[field] = next;
+        onChange(model === 'rfd3' ? updated : { ...value, [key]: updated });
+    };
+    const group = (field: string) => model === 'rfd3'
+        ? field === 'inference_sampler' ? 'Sampler and classifier-free guidance' : 'Execution and native outputs'
+        : model === 'laproteina'
+            ? field.startsWith('bb_ca_') ? 'Backbone sampler' : field.startsWith('local_latents_') ? 'Local latent sampler' : /motif|contig|segment|atom_selection/.test(field) ? 'Motif overrides' : 'Sampling and outputs'
+            : field === 'noisy_guidance' ? 'Cross-modal guidance' : field === 'sequence_sampling' ? 'Sequence sampling' : /confidence|output|duplicates/.test(field) ? 'Confidence and outputs' : 'Diffusion and seeds';
+    const groups = new Map<string, [string, Schema][]>();
+    for (const [field, schema] of Object.entries(root.properties ?? {})) {
+        if (model === 'rfd3' && field === 'dump_trajectories') continue; // Existing primary control.
+        if (primaryOverrideFields.includes(field)) continue; // The active-value control owns the same override.
+        const typedSchema = model === 'rfd3' && field === 'inference_sampler' ? { ...schema, properties: Object.fromEntries(Object.entries(schema.properties ?? {}).map(([name, leaf]) => [name, { anyOf: [leaf.type === 'string_array' ? { ...leaf, type: 'array', items: { type: 'string' } } : leaf, { type: 'null', title: 'Native checkpoint fallback (null)' }], title: leaf.title, description: leaf.description }])) } : schema;
+        const label = group(field); groups.set(label, [...(groups.get(label) ?? []), [field, typedSchema]]);
+    }
+    return <section aria-label={`${model} native settings`} className="space-y-3">
+        <p className="text-sm">Unchanged settings use the selected profile.</p>
+        {model === 'disco' && discoReference ? <p className="text-xs">Upstream reference for {discoSelection} · {inventory.data?.native_profile_reference?.composition} · revision {inventory.data?.native_profile_reference?.source_revision}. This is not effective configuration; BMS and user overrides take precedence.</p> : model === 'laproteina' && profile ? <p className="text-xs">Upstream reference for {selectedPreset} · {inventory.data?.native_profile_defaults?.composition} · revision {inventory.data?.native_profile_defaults?.source_revision}. This is not effective configuration; BMS and user overrides take precedence.</p> : model !== 'rfd3' && <p className="text-xs">Profile reference values are not reported for this selection.</p>}
+        {model !== 'rfd3' && Object.keys(object).length > 0 && <p className="text-sm">Explicit overrides take precedence over primary controls where applicable.</p>}
+        {inventory.error && <p role="status">Settings discovery failed: {inventory.error.message}. Retained values are unchanged.</p>}
+        {settings != null && (typeof settings !== 'object' || Array.isArray(settings)) && <p role="status">Retained non-object settings: {JSON.stringify(settings)}. Edit a setting only to deliberately replace this value.</p>}
+        {[...groups].map(([title, fields]) => <NativeSettingsDisclosure key={title} summary={title}>{() => <div className="space-y-3">{fields.map(([field, schema]) => {
+            const definition = inventory.data?.execution?.[field];
+            const hasOverride = Object.hasOwn(object, field);
+            const flatKey = `${model}_${field}`;
+            const alias = Object.hasOwn(requestParams, flatKey) ? flatKey : `pcad_${flatKey}`;
+            const legacyNative = Object.hasOwn(legacyObject, field);
+            const hasFlat = model !== 'rfd3' && Object.hasOwn(requestParams, alias);
+            const hasLegacy = model !== 'rfd3' && (legacyNative || hasFlat);
+            let legacyValue = legacyNative ? legacyObject[field] : requestParams[alias];
+            // The compiler projects DISCO's flat comma-separated shorthand into an array.
+            if (!legacyNative && model === 'disco' && field === 'seeds' && typeof legacyValue === 'string') {
+                const tokens = legacyValue.split(',').map(token => token.trim()).filter(Boolean);
+                if (tokens.every(token => /^[+-]?\d+$/.test(token))) legacyValue = tokens.map(Number);
+            }
+            const sourceDefault = definition?.default_source && Object.hasOwn(definition, 'default') && ['boolean', 'integer', 'number', 'string'].includes(String(definition.type));
+            const hasProfileReference = !!profile && Object.hasOwn(profile, field);
+            const discoLeaf = discoReference?.[field];
+            const sampler = model === 'rfd3' && field === 'inference_sampler';
+            const nestedReference = model === 'disco' && ['noisy_guidance', 'sequence_sampling'].includes(field) && !!discoReference;
+            const shown = hasOverride ? object[field] : hasLegacy ? legacyValue : sampler || nestedReference ? {} : hasProfileReference ? profile![field] : discoLeaf ? discoLeaf.value : sourceDefault ? definition!.default : undefined;
+            return <div key={field} data-native-setting={field} title={`Parameter key: ${field}`}>
+                {definition?.authority === 'profile' ? <p>{definition.title ?? field}: {JSON.stringify(hasOverride ? object[field] : definition.default)} · profile-owned; retained explicit value is unchanged.</p> : <BioXpSchemaInput label={model === 'rfd3' ? field : schema.title ?? field} nativeLabels useSchemaTitles schema={schema} rootSchema={root} showInherited={sampler || nestedReference} value={shown} onChange={next => {
+                    const result = sampler && next && typeof next === 'object' && !Array.isArray(next) && Object.keys(next).length === 0 && !samplerState.current.retainEmpty ? undefined : next;
+                    if (sampler) samplerState.current.identity = JSON.stringify([model, task, result !== undefined, result]);
+                    patch(field, result);
+                }} fallback={() => <p>Retained {field}: {JSON.stringify(object[field])}</p>} />}
+                {definition?.default_source && <p className="text-xs">Inherited reference: {JSON.stringify(definition.default)} · {definition.default_source}</p>}
+                {hasProfileReference && <p className="text-xs">Upstream profile reference: {JSON.stringify(profile![field])}</p>}
+                {discoLeaf && <p className="text-xs">Upstream YAML reference: {discoLeaf.path} = {JSON.stringify(discoLeaf.value)}</p>}
+                {discoReference && Object.entries(discoReference).filter(([name]) => name.startsWith(`${field}.`)).map(([name, leaf]) => <p className="text-xs" key={name}>Upstream YAML reference: {leaf.path} = {JSON.stringify(leaf.value)}</p>)}
+                <p className="text-xs">{hasOverride ? 'Custom override' : hasLegacy ? `Retained override: ${legacyNative ? `${model}_settings` : alias} · ${JSON.stringify(legacyValue)}` : nestedReference ? 'Default · upstream leaf references; not effective configuration' : hasProfileReference || discoLeaf ? 'Default · Upstream reference; not an override' : sourceDefault ? 'Default · Inherited reference; not an override' : 'Inherited value not reported'}</p>
+                {hasOverride && definition?.authority !== 'profile' && <button type="button" onClick={() => patch(field, undefined)}>{hasLegacy ? 'Use retained override' : 'Use default'}</button>}
+            </div>;
+        })}</div>}</NativeSettingsDisclosure>)}
+        {sourceConditions && !generalConditions && inventory.data?.conditioning && <Rfd3AdditionalConditions definitions={inventory.data.conditioning} value={value} onChange={onChange} />}
+        {generalConditions && model === 'rfd3' && inventory.data?.conditioning && <>
+            {Object.hasOwn(value, 'conditioning') && (value.conditioning === null || typeof value.conditioning !== 'object' || Array.isArray(value.conditioning)) && <p role="status">Retained conditioning: {JSON.stringify(value.conditioning)}. Editing a condition replaces this value.</p>}
+            <Rfd3AdditionalConditions general definitions={inventory.data.conditioning} value={value.conditioning && typeof value.conditioning === 'object' && !Array.isArray(value.conditioning) ? value.conditioning as Record<string, unknown> : {}} onChange={conditioning => onChange({ ...value, conditioning })} />
+            {Object.hasOwn(value, 'conditioning') && <button type="button" onClick={() => { const next = { ...value }; delete next.conditioning; onChange(next); }}>Omit conditioning</button>}
+        </>}
+        {model === 'laproteina' && inventory.data?.profiles && <details><summary>Native checkpoint pairs (generation, not evaluation)</summary>{Object.entries(inventory.data.profiles).map(([name, profile]) => <p key={name}>{name} · {profile.task} · {profile.ld} / {profile.ae}</p>)}</details>}
+    </section>;
+}

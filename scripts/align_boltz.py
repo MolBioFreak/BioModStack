@@ -252,6 +252,9 @@ def align_structures(args):
                 "boltz_pde": round(data.get("complex_pde", 0), 2),
             }
 
+        if 'bms_native_source' in data:
+            out_json['bms_native_source'] = data['bms_native_source']
+
         if not src_pae.exists():
             raise FileNotFoundError(f"Boltz PAE NPZ not found for {boltz_path.name}: expected {src_pae}")
         copied_pae = copy_optional_file(src_pae, dst_pae)
@@ -322,7 +325,15 @@ def main():
     tasks = []
     for boltz_file in args.boltz_dir.glob("*_boltzpred.pdb"):
         # Extract the base name by removing _boltzpred suffix
-        base_name = boltz_file.stem.replace("_boltzpred", "")
+        base_name = boltz_file.stem.removesuffix("_boltzpred")
+        confidence_path = args.boltz_dir / f"{boltz_file.stem}.json"
+        if confidence_path.is_file():
+            try:
+                identity = json.loads(confidence_path.read_text()).get("bms_native_source", {})
+                if isinstance(identity, dict) and identity.get("source_id"):
+                    base_name = identity["source_id"]
+            except (OSError, ValueError, AttributeError) as exc:
+                logger.warning("Could not read native sample association from %s: %s", confidence_path, exc)
         
         if base_name not in design_files:
             logger.warning(f"No design file for {base_name}, skipping {boltz_file.name}")

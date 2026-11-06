@@ -1,6 +1,6 @@
 """Logical occurrence preparation before physical child lowering."""
 from copy import deepcopy
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from bioxp_method_liquids import resolve_liquid_settings, record_liquid_application
 from bioxp_method_simulation import channel_wells, plan_tip_policy
 
@@ -293,6 +293,128 @@ def liquid_resolution(inputs, dependencies):
     return resolution
 
 
+def _dec(value):
+    try:
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _plain(value):
+    text = format(value.normalize(), 'f')
+    return text
+
+
+def conditioned_single(inputs):
+    """A single transfer whose class (or request) carries a conditioning volume.
+
+    Native Recipe holds conditioning only in its multi block, so such a transfer
+    runs as one aliquot with the conditioning returned to the source first
+    (Tecan 399156 p6: the 1 uL contact dispense includes 4.575 uL conditioning).
+    """
+    recipe, liquid = inputs.get('recipe'), inputs.get('liquid')
+    if not isinstance(recipe, dict) or not isinstance(liquid, dict) or recipe.get('mode', 'single') != 'single':
+        return False
+    requested = liquid.get('requested') if isinstance(liquid.get('requested'), dict) else {}
+    cls = liquid.get('liquid_class') if isinstance(liquid.get('liquid_class'), dict) else {}
+    explicit = 'conditioning_volume_ul' in requested
+    amount = _dec(requested.get('conditioning_volume_ul', (cls.get('settings') or {}).get('conditioning_volume_ul')))
+    if amount is None or amount < 0 or (amount == 0 and not explicit):
+        return False  # an explicit 0 still needs the receiving block so the class value is replaced
+    # Receiving multi block; the class conditioning volume lands in it via RECIPE_FIELDS.
+    recipe['multi'] = {'sample_count': 1, 'conditioning_before': [], 'conditioning_after': [],
+                       'excess_volume_ul': 0, 'excess': None, 'reaspiration': None,
+                       'dispense_to_reaspiration_delay_ms': None, 'aliquots': []}
+    return True
+
+
+def apply_conditioning(recipe, volume):
+    """Finish a conditioned single transfer as a native one-aliquot multi recipe."""
+    multi = recipe['multi']
+    conditioning = _dec(multi.get('conditioning_volume_ul'))
+    sample = _dec(volume)
+    if conditioning is None or sample is None:
+        raise ValueError('Conditioned transfer needs a volume and a conditioning volume')
+    segments = recipe.get('dispense_segments') or []
+    if not segments:
+        raise ValueError('This transfer still needs dispense segments (volume and speed); set it in the step\'s advanced recipe fields.')
+    multi.setdefault('conditioning_back_to_source_count', 1 if conditioning > 0 else 0)
+    multi.setdefault('conditioning_speed_ul_s', deepcopy(segments[0]['speed_ul_s']))
+    multi['sample_volume_ul'] = deepcopy(volume)
+    multi['aliquots'] = [{'before': [], 'segments': deepcopy(segments), 'after': []}]
+    recipe['mode'] = 'multi'
+    recipe['dispense_segments'] = []
+    # Aspirated liquid = sample + conditioning; commanded displacement adds the
+    # conditioning on top of the class's corrected sample volume.
+    returned = conditioning * Decimal(multi['conditioning_back_to_source_count'])
+    recipe['target_liquid_ul'] = _plain(sample + returned)
+    commanded = _dec(recipe.get('commanded_aspiration_ul'))
+    if commanded is not None:
+        recipe['commanded_aspiration_ul'] = _plain(commanded + returned)
+    recipe.setdefault('liquid_settings', {})['conditioning_default'] = {
+        'conditioning_ul': _plain(conditioning), 'returns_to_source': multi['conditioning_back_to_source_count'],
+        'basis': 'single transfer run as one native aliquot after conditioning back to source (Tecan 399156 p6 1 uL contact method); editable'}
+
+
+def scale_class_volume(recipe, volume, class_target):
+    """A class measured at a different volume: scale its corrected aspiration.
+
+    The class ratio (corrected / target) is kept, e.g. 1.175/1 for 0.5 uL gives
+    0.5875 uL. Only class-supplied values are scaled; the record says so.
+    """
+    resolution = (recipe.get('liquid_settings') or {}).get('bms_resolution') or {}
+    fields = resolution.get('fields') or {}
+    def from_class(field):
+        record = fields.get(field) or {}
+        return not (record.get('requested') or {}).get('present')
+    target = _dec(volume)
+    measured = _dec(class_target)
+    corrected = _dec(recipe.get('commanded_aspiration_ul'))
+    if None in (target, measured, corrected) or measured <= 0 or target == measured or not from_class('commanded_corrected_aspiration_ul'):
+        return
+    ratio = corrected / measured
+    scaled = (target * ratio).quantize(Decimal('0.0001'))
+    recipe['commanded_aspiration_ul'] = _plain(scaled)
+    segments = recipe.get('dispense_segments') or []
+    if len(segments) == 1 and from_class('dispense_segments') and _dec(segments[0].get('volume_ul')) == corrected:
+        segments[0]['volume_ul'] = _plain(scaled)
+    recipe.setdefault('liquid_settings', {})['volume_scaling'] = {
+        'class_target_ul': _plain(measured), 'step_volume_ul': _plain(target), 'ratio': _plain(ratio.quantize(Decimal('0.0001'))),
+        'commanded_aspiration_ul': _plain(scaled), 'basis': 'class corrected/target ratio applied to the step volume; editable'}
+
+
+def default_transfer_timeout(recipe):
+    """Unset command timeout: twice the expected plunger time plus 1 s, at least 2 s.
+
+    Expected time sums each stroke's volume over its speed plus the aspiration
+    delay. Stays unset when any needed speed is unknown; an authored value wins.
+    """
+    if 'timeout_ms' in recipe:
+        return
+    def number(value):
+        try:
+            result = Decimal(str(value))
+            return result if result.is_finite() and result > 0 else None
+        except (InvalidOperation, ValueError):
+            return None
+    strokes = [(recipe.get('commanded_aspiration_ul') or recipe.get('target_liquid_ul'), recipe.get('aspiration_speed_ul_s'))]
+    strokes += [(phase.get('volume_ul'), phase.get('speed_ul_s')) for phase in (recipe.get('leading_air'), recipe.get('trailing_air')) if isinstance(phase, dict)]
+    strokes += [(seg.get('volume_ul'), seg.get('speed_ul_s')) for seg in recipe.get('dispense_segments') or [] if isinstance(seg, dict)]
+    seconds = Decimal(0)
+    for volume, speed in strokes:
+        volume, speed = number(volume), number(speed)
+        if volume is None or speed is None:
+            return
+        seconds += volume / speed
+    expected_ms = seconds * 1000 + (number(recipe.get('aspiration_delay_ms')) or 0)
+    timeout = max(2000, int((expected_ms * 2 + 1000).to_integral_value(rounding='ROUND_CEILING')))
+    recipe['timeout_ms'] = timeout
+    recipe.setdefault('liquid_settings', {})['timeout_default'] = {
+        'value_ms': timeout, 'expected_ms': format(expected_ms.quantize(Decimal('1')), 'f'),
+        'basis': 'default: 2 x expected plunger time + 1 s, minimum 2 s; editable'}
+
+
 def prepare_class_transfer(inputs):
     """Bind authored transfer quantities; no inferred recipe science or defaults."""
     recipe = inputs.get('recipe')
@@ -301,7 +423,16 @@ def prepare_class_transfer(inputs):
     # A multi Transfer's amount is the per-destination sample intent. Its
     # total target/corrected aspiration and conditioning remain authored.
     mode = recipe.get('mode', 'single')
+    if 'channels' not in inputs:
+        raise ValueError('Transfer has no plunger channels yet; choose them under Plunger channels in the step editor')
     bindings = {'mode': mode, 'channels': inputs['channels']}
+    # Structural parts only: no extra positioning hooks, no final empty, no multi block.
+    # Scientific values (speeds, segments, timeout) still come from the class or the author.
+    for key in ('before_leading_air', 'before_liquid', 'after_liquid', 'before_dispense', 'after_dispense', 'final_empty_before'):
+        recipe.setdefault(key, [])
+    recipe.setdefault('final_empty_speed_ul_s', None)
+    if mode != 'multi':
+        recipe.setdefault('multi', None)
     if mode == 'multi':
         multi = recipe.get('multi')
         if not isinstance(multi, dict):
@@ -323,23 +454,67 @@ def prepare_class_transfer(inputs):
         raise ValueError('Class Transfer uses ordered recipe segment speeds; remove legacy dispense_speed explicitly')
 
 
-def positioned_transfer_recipes(inputs):
-    """Position around a resolved recipe; the native owner alone expands strokes."""
+Z_STEPS_PER_MM = Decimal('2015.748')  # robot tip_length.Z_STEPS_PER_MM (51200 / 25.4)
+LIQUID_DETECTION_DEFAULTS = {'when': 'first_draw', 'mode': 'by_level', 'expected': True,
+    'submerge_mm': '1', 'follow_mm': '0', 'floor_clearance_mm': '1', 'level_tolerance_mm': '0.5',
+    'search_speed_native': 300, 'start_mode': 0, 'sensing': 'pressure', 'on_contact_delay_ms': 0,
+    'mismatch_response': 'pause', 'mismatch_tolerance_mm': '1', 'mismatch_tolerance_percent': '15'}
+
+
+def liquid_detection_settings(value):
+    """Transfer liquid detection, mm in the editor and steps on the robot."""
+    settings = {**LIQUID_DETECTION_DEFAULTS, **(value or {})}
+    unknown = set(settings) - set(LIQUID_DETECTION_DEFAULTS)
+    if unknown:
+        raise ValueError(f'Unsupported liquid detection settings: {sorted(unknown)}')
+    if settings['when'] not in ('off', 'first_draw', 'every_draw'):
+        raise ValueError('liquid detection: when must be off, first_draw or every_draw')
+    if settings['mode'] not in ('by_level', 'together', 'one_at_a_time', 'on_contact'):
+        raise ValueError('liquid detection: mode must be by_level, together, one_at_a_time or on_contact')
+    if settings['mismatch_response'] not in ('proceed', 'pause', 'fail'):
+        raise ValueError('liquid detection: mismatch_response must be proceed, pause or fail')
+    steps = {}
+    for key in ('submerge_mm', 'follow_mm', 'floor_clearance_mm', 'level_tolerance_mm'):
+        mm = Decimal(str(settings[key]))
+        if mm < 0 or mm > 20:
+            raise ValueError(f'liquid detection: {key} must be between 0 and 20 mm')
+        steps[key.replace('_mm', '_steps')] = int((mm * Z_STEPS_PER_MM).to_integral_value())
+    return settings, steps
+
+
+def positioned_transfer_recipes(inputs, detected_wells=None):
+    """Position around a resolved recipe; the native owner alone expands strokes.
+
+    detected_wells carries (location_id, well) pairs already searched in this run,
+    so first-draw detection runs once per source well across the whole method.
+    """
     from bioxp_workflow_authoring import native_intent
     allowed = {'source', 'destination', 'channels', 'volume_ul', 'aspirate_speed', 'recipe',
                'source_position_flag', 'destination_position_flag',
-               'source_lift_height_steps', 'destination_lift_height_steps'}
+               'source_lift_height_steps', 'destination_lift_height_steps', 'liquid_detection',
+               'source_liquid_channels', 'source_expected_ul', 'source_vessel_geometry', 'source_plate_type'}
     if set(inputs) - allowed:
         raise ValueError(f'Unsupported class Transfer fields: {sorted(set(inputs) - allowed)}')
     source, destination = inputs['source'], inputs['destination']
     for endpoint in (source, destination):
         if set(endpoint) - {'station', 'location_id', 'wells'}:
             raise ValueError('Unsupported Transfer endpoint fields')
+    names = {'source_position_flag': 'source move height', 'destination_position_flag': 'destination move height',
+             'source_lift_height_steps': 'source lift height', 'destination_lift_height_steps': 'destination lift height'}
+    missing = [label for key, label in names.items() if key not in inputs]
+    if missing:
+        raise ValueError(f'Transfer still needs: {", ".join(missing)} (set the move and lift heights in the step editor)')
     multi = inputs['recipe'].get('mode') == 'multi'
     samples = len(inputs['recipe'].get('multi', {}).get('aliquots', [])) if multi else 1
     if not source['wells'] or not samples or len(source['wells']) * samples != len(destination['wells']):
         raise ValueError('Transfer requires one destination reference per source and authored aliquot' if multi
                          else 'Transfer requires equal nonempty reference-well pairs')
+    # Transfers saved before liquid detection keep their calibrated lowering; new
+    # transfers carry liquid_detection (an empty object means the defaults).
+    detection, detection_steps = liquid_detection_settings(inputs['liquid_detection']) if 'liquid_detection' in inputs \
+        else liquid_detection_settings({'when': 'off'})
+    if detected_wells is None:
+        detected_wells = set()
     recipes = []
     for pair, sw in enumerate(source['wells']):
         destinations = destination['wells'][pair * samples:(pair + 1) * samples]
@@ -356,7 +531,31 @@ def positioned_transfer_recipes(inputs):
         recipe['before_leading_air'] = [position('move', 'source', sw)] + recipe.get('before_leading_air', [])
         # Search precedes ordinary calibrated lowering; authored retraction and
         # post-dispense motions precede ordinary lifts. Never reorder the arrays.
-        recipe['before_liquid'] = recipe.get('before_liquid', []) + [position('lower', 'source', sw)]
+        key = (int(source['location_id']), str(sw).upper())
+        detect = detection['when'] == 'every_draw' or (detection['when'] == 'first_draw' and key not in detected_wells)
+        if detect and recipe.get('aspiration_tracking') is None:
+            # The search replaces the calibrated lower: Z stops on each channel's surface.
+            detected_wells.add(key)
+            planned = inputs.get('source_liquid_channels')
+            expected_ul = (inputs.get('source_expected_ul') or [None] * (pair + 1))[pair]
+            geometry = inputs.get('source_vessel_geometry') or {}
+            check = {'expected_ul': expected_ul, 'table': geometry.get('height_to_volume'),
+                     'gap_mm': geometry.get('calibrated_low_gap_mm'),
+                     'tolerance_mm': float(detection['mismatch_tolerance_mm']),
+                     'tolerance_fraction': float(detection['mismatch_tolerance_percent']) / 100,
+                     'response': detection['mismatch_response']} if expected_ul else None
+            recipe['liquid_detection'] = {'location_id': key[0], 'expected': bool(detection['expected']),
+                'on_contact_delay_ms': int(detection['on_contact_delay_ms']),
+                **({'volume_check': check} if check else {}),
+                **({'expected_channels': planned[pair]} if detection['expected'] and planned else {}),
+                'mode': detection['mode'], 'start_mode': detection['start_mode'],
+                'search_speed_native': detection['search_speed_native'], 'sensing': detection['sensing'],
+                'detection_id': f'pair-{pair}-{key[1]}', **detection_steps,
+                # Source plate profile, so the robot can apply a saved plate-type depth offset.
+                **({'plate_type': str(inputs['source_plate_type'])} if inputs.get('source_plate_type') else {})}
+            recipe['before_liquid'] = recipe.get('before_liquid', [])
+        else:
+            recipe['before_liquid'] = recipe.get('before_liquid', []) + [position('lower', 'source', sw)]
         recipe['after_liquid'] = recipe.get('after_liquid', []) + [position('lift', 'source', sw)]
         if multi:
             m = recipe['multi']
@@ -393,6 +592,16 @@ def prepare_occurrences(occurrences, method, dependencies):
     issues.extend(deck_issues)
     profiles = {p['id']: p for p in dependencies.get('labware_profiles', [])}
     labware = deepcopy(deck.get('labware', []))
+    # Wells holding liquid during the run: starting deck assignments, then every dispense.
+    planned_labware = {str(a.get('labware_id')) for a in deck.get('assignments', [])}
+    filled = {(str(a.get('labware_id')), str(a.get('well', '')).upper()) for a in deck.get('assignments', [])}
+    well_ul = {}
+    for a in deck.get('assignments', []):
+        try:
+            k = (str(a.get('labware_id')), str(a.get('well', '')).upper())
+            well_ul[k] = well_ul.get(k, 0.0) + float(a['volume_ul'])
+        except (KeyError, TypeError, ValueError):
+            pass
     expanded = []
     count = sum(len(o['inputs'].get('transfers', [])) if o['action'] in ('distribute', 'consolidate') and o['inputs'].get('mode') == 'repeated_single' else 1 for o in occurrences)
     if count > 10000:
@@ -430,9 +639,21 @@ def prepare_occurrences(occurrences, method, dependencies):
         if not isinstance(inputs, dict):
             raise ValueError('Action inputs must be an object')
         try:
+            from bioxp_method_deck import resolve_occurrence_materials
+            materials = resolve_occurrence_materials(row, method, dependencies)
+            if materials:
+                row['material_endpoints'] = materials
             if row['action'] == 'transfer' and 'liquid' in inputs:
                 prepare_class_transfer(inputs)
+            conditioned = row['action'] == 'transfer' and 'liquid' in inputs and conditioned_single(inputs)
+            class_entry = (inputs.get('liquid') or {}).get('liquid_class') if isinstance(inputs.get('liquid'), dict) else None
+            measured = ((class_entry or {}).get('context') or {}).get('target_volume_ul') if isinstance(class_entry, dict) else None
             resolution = liquid_resolution(inputs, dependencies)
+            if row['action'] == 'transfer' and resolution:
+                scale_class_volume(inputs['recipe'], inputs.get('volume_ul'), measured)
+                if conditioned:
+                    apply_conditioning(inputs['recipe'], inputs.get('volume_ul'))
+                default_transfer_timeout(inputs['recipe'])
         except ValueError as exc:
             failures.append({'code': 'representation_error', 'category': 'representation', 'message': str(exc),
                 'path': row.get('path', ''), 'step_id': row.get('step_id'), 'occurrence_id': row['occurrence_id']})
@@ -491,6 +712,45 @@ def prepare_occurrences(occurrences, method, dependencies):
                         effect.setdefault('air_ul', None)
                     effect['dispense_segments'] = deepcopy(recipe.get('dispense_segments'))
                     effect['final_empty_tip'] = recipe.get('final_empty_speed_ul_s') is not None
+        if row['action'] == 'transfer' and isinstance(inputs.get('liquid_detection'), dict) and inputs.get('channel_transfers'):
+            # Per pair: channels whose source well holds liquid per the plan. Labware the
+            # plan says nothing about keeps "every channel expected".
+            by_pair = {}
+            for effect in inputs['channel_transfers']:
+                src = effect.get('source') or {}
+                vessel = str(src.get('labware_id'))
+                held = vessel not in planned_labware or (vessel, str(src.get('well', '')).upper()) in filled
+                channels = by_pair.setdefault(effect.get('pair_index', 0), [])
+                if held and effect['channel'] not in channels:
+                    channels.append(effect['channel'])
+            inputs['source_liquid_channels'] = [sorted(by_pair.get(i, [])) for i in range(len(inputs['source']['wells']))]
+            # Expected volume in each source well at this draw (plan amounts +/- earlier transfers).
+            expected = {}
+            for effect in inputs['channel_transfers']:
+                src = effect.get('source') or {}
+                k = (str(src.get('labware_id')), str(src.get('well', '')).upper())
+                if k in well_ul:
+                    expected.setdefault(effect.get('pair_index', 0), {})[str(effect['channel'])] = round(well_ul[k], 3)
+            inputs['source_expected_ul'] = [expected.get(i) for i in range(len(inputs['source']['wells']))]
+            vessel = next((x for x in labware if x.get('id') == (inputs['channel_transfers'][0].get('source') or {}).get('labware_id')), {})
+            if vessel.get('profile_id'):
+                inputs['source_plate_type'] = str(vessel['profile_id'])
+            geometry = profiles.get(vessel.get('profile_id'), {}).get('vessel_geometry')
+            if isinstance(geometry, dict):
+                inputs['source_vessel_geometry'] = {k: geometry.get(k) for k in ('height_to_volume', 'calibrated_low_gap_mm')}
+        for effect in inputs.get('channel_transfers', []) if row['action'] == 'transfer' else []:
+            dst, src = effect.get('destination') or {}, effect.get('source') or {}
+            filled.add((str(dst.get('labware_id')), str(dst.get('well', '')).upper()))
+            try:
+                moved = float(effect.get('volume_ul'))
+            except (TypeError, ValueError):
+                continue
+            s_key = (str(src.get('labware_id')), str(src.get('well', '')).upper())
+            d_key = (str(dst.get('labware_id')), str(dst.get('well', '')).upper())
+            if s_key in well_ul:
+                well_ul[s_key] = max(0.0, well_ul[s_key] - moved)
+            if d_key in well_ul or d_key[0] in planned_labware:
+                well_ul[d_key] = well_ul.get(d_key, 0.0) + moved
         result.append(row)
         if row['action'] == 'plate_move' and 'labware_id' in inputs:
             for vessel in labware:
@@ -583,4 +843,5 @@ def initial_state(method, explicit):
                 vessel['volume_ul'] = None
     for key, value in planned_vessels.items():
         state.setdefault('vessels', {}).setdefault(key, value)
-    return state
+    from bioxp_method_deck import seed_state
+    return seed_state(method, state)

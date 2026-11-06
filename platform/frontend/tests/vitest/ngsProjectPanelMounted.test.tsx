@@ -55,7 +55,7 @@ afterEach(() => {
     container.remove();
 });
 
-async function renderHub(presentation: 'inline' | 'launcher-dialog' = 'inline') {
+async function renderHub(presentation: 'inline' | 'launcher-dialog' | 'viewer' = 'inline') {
     await act(async () => {
         root.render(<QueryClientProvider client={queryClient}><NgsMolBioProjectHub presentation={presentation} /></QueryClientProvider>);
         await Promise.resolve();
@@ -80,4 +80,21 @@ describe('NGS/MolBio Project context bridge', () => {
         expect(container.textContent).not.toContain('Create governed link');
     });
 
+});
+
+
+it('uses one compact Project row in the viewer and keeps linked data behind an expandable disclosure', async () => {
+    await renderHub('viewer');
+    expect(container.querySelectorAll('a')).toHaveLength(1);
+    expect(container.textContent).toContain('No Project selected');
+    expect(container.textContent).not.toContain('Choose an NGS/MolBio Project');
+    expect(container.querySelector('details')).toBeNull();
+    contextState.current = {workspaceId:'p',globalExperimentId:'e',domainExperimentId:'d',stateRevisionId:'s',selectedDomainExperiment:{domain_experiment_id:'d'},selectedWorkspace:{name:'Plasmids'}};
+    await renderHub('viewer');
+    const details=container.querySelector('details')!;
+    expect(details.open).toBe(false);
+    await act(()=>details.querySelector('summary')!.click());
+    expect(details.open).toBe(true);
+    expect(details.querySelector('[data-testid="domain-experiment-workspace"]')).not.toBeNull();
+    expect(container.querySelector('a')!.getAttribute('href')).toContain('state_revision_id=s');
 });

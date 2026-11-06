@@ -1,3 +1,4 @@
+import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, pullRemoteJobDiagnostics, type Job, type RemoteDiagnosticsRecord } from '../lib/api';
 import { remotePullError } from './remoteResultsState';
@@ -86,7 +87,7 @@ export function RemoteDiagnosticsPrompt({ job }: { job: DiagnosticsJob }) {
             {archive.error && <p role="alert">{remotePullError(archive.error)}</p>}
             {archive.data && <><p>Attempt {job.remote_attempt_id}, generation {archive.data.generation}</p>
                 <ul className="max-h-64 overflow-auto">{archive.data.artifacts.map(file => <li key={file.relative_path}>
-                    <a href={file.download_url} download className="text-cyan-300 underline">{file.relative_path}</a> ({file.size_bytes} bytes)
+                    <a href={resolveApiResourceUrl(file.download_url)} download className="text-cyan-300 underline">{file.relative_path}</a> ({file.size_bytes} bytes)
                 </li>)}</ul></>}
         </details>}
         {state.state !== 'returned' && <button type="button" onClick={pull} disabled={busy} aria-busy={busy} className="mt-2 rounded bg-amber-600/30 px-3 py-1 text-xs text-amber-100 disabled:opacity-50">

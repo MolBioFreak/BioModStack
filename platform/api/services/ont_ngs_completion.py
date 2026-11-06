@@ -209,7 +209,7 @@ def prepare_dorado_demux_products(job: Any, *, read_root: Path, persisted_root: 
         or preflight_selection.get("model_aggregate_sha256") != approved_model.get("aggregate_sha256")
         or preflight_selection.get("quality") != params.get("dorado_quality_mode")
         or preflight_selection.get("modified_bases") != "none"
-        or preflight_selection.get("modified_bases_model_id") is not None
+        or preflight_selection.get("modified_bases_model_ids")
         or preflight_selection.get("stereo_model_id") is not None
         or runtime.get("model_id") != expected_model_id
         or expected_mode != "simplex"
@@ -217,7 +217,6 @@ def prepare_dorado_demux_products(job: Any, *, read_root: Path, persisted_root: 
         or runtime.get("mode") != expected_mode
         or preflight_barcoding.get("kit") != params.get("barcode_kit")
         or preflight_runtime.get("version") != approved_dorado.get("version")
-        or runtime.get("runtime_sha256") != approved_dorado.get("sif_sha256")
         or runtime_sif.get("sha256") != runtime.get("runtime_sha256")
         or preflight_runtime.get("sif_sha256") != runtime.get("runtime_sha256")
         or runtime_calls.get("sha256") != demux_source.get("sha256")

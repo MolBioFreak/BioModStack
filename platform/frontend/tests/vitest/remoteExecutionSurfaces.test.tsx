@@ -148,6 +148,45 @@ afterEach(() => {
 });
 
 describe('remote execution operator surfaces', () => {
+    it.each([false, true])('removes only an absent worker and retains selection on error=%s', async (fail) => {
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const stale = { ...persistedDiscoveredTarget, state: 'inactive', can_remove_from_list: true,
+            active_job_ids: ['old-job'], name: 'Absent Florida' };
+        let removed = false;
+        const posts: string[] = [];
+        window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, stale.id);
+        api.defaults.adapter = async config => {
+            if (config.url === '/api/execution-targets') return response(removed ? [readyTarget] : [stale, readyTarget]);
+            if (config.method === 'post') {
+                posts.push(config.url!);
+                expect(config.url).toBe('/api/execution-targets/vast%3A456/dismiss');
+                if (fail) throw new Error('Discover again');
+                removed = true;
+                return response(stale);
+            }
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div'); document.body.append(container);
+        const root = createRoot(container);
+        const flush = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(30); }); };
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>));
+            await flush();
+            const buttons = [...container.querySelectorAll('button')].filter(b => b.textContent === 'Remove from list');
+            expect(buttons).toHaveLength(1);
+            expect(buttons[0].title).toContain('Job history is retained');
+            expect(container.textContent).not.toContain('Attach worker');
+            await act(async () => buttons[0].click()); await flush();
+            expect(posts).toEqual(['/api/execution-targets/vast%3A456/dismiss']);
+            expect(container.textContent?.includes('Absent Florida')).toBe(fail);
+            expect(container.textContent).toContain('Remote 4090');
+            if (fail) expect(container.textContent).toContain('Remove failed');
+            expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBe(stale.id);
+        } finally {
+            await act(async () => root.unmount()); client.clear(); vi.useRealTimers();
+        }
+    });
     it('keeps verified attachment manageable after runtime failure without selecting science', async () => {
         vi.useFakeTimers();
         const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -270,7 +309,7 @@ describe('remote execution operator surfaces', () => {
             }
             target = { ...target, state: 'ready', active: true, setup: { phase: 'ready', message: 'Worker runtime verified' } };
             await flush(5_020);
-            expect(container.textContent).toContain('Remote analytics available');
+            expect(container.textContent).toContain('Readyidle');
             expect(container.textContent).toContain('Detach');
             expect(container.textContent).toContain('Vast · Remote A6000');
             expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
@@ -447,13 +486,13 @@ describe('remote execution operator surfaces', () => {
         const vastButton = buttons.find((button) => button.textContent?.trim() === 'Discover running Vast');
         expect(hardwareButton).toBeTruthy();
         expect(vastButton).toBeTruthy();
-        expect(hardwareButton?.parentElement).toBe(vastButton?.parentElement);
+        // Hardware discovery stays with local controls; Vast discovery heads the worker fleet.
         expect(hardwareButton?.className).toContain('px-2.5 py-1.5 text-[10px]');
-        expect(vastButton?.className).toContain('px-2.5 py-1.5 text-[10px]');
+        expect(vastButton?.closest('[data-bms-worker-fleet]')).not.toBeNull();
 
         await act(async () => {
             hardwareButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-            await new Promise((resolve) => setTimeout(resolve, 0));
+            await new Promise((resolve) => setTimeout(resolve, 60));
         });
 
         expect(requests).toContain('POST /api/gpu/hardware/discover');
@@ -461,7 +500,7 @@ describe('remote execution operator surfaces', () => {
 
         await act(async () => {
             vastButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-            await new Promise((resolve) => setTimeout(resolve, 0));
+            await new Promise((resolve) => setTimeout(resolve, 60));
         });
 
         expect(requests).toContain('POST /api/execution-targets/providers/vast/refresh');
@@ -503,11 +542,10 @@ describe('remote execution operator surfaces', () => {
             .find((button) => button.textContent?.trim() === 'Attach worker');
         await act(async () => {
             attachButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-            await new Promise((resolve) => setTimeout(resolve, 0));
+            await new Promise((resolve) => setTimeout(resolve, 60));
         });
         expect(requests).toContain('POST /api/execution-targets/activate');
-        expect(container.textContent).toContain('Ready');
-        expect(container.textContent).toContain('Remote analytics available');
+        expect(container.textContent).toContain('Readyidle');
         expect(container.textContent).toContain('Detach');
 
         await act(async () => root.unmount());
@@ -592,7 +630,7 @@ describe('remote execution operator surfaces', () => {
             await submitCmRequest({ ...cm, ...placement });
             await submitOntNgsJob('wf-clone', { ...ngs, ...placement });
             expect(post.mock.calls.map(([url, body]) => [url, body])).toEqual([
-                ['/api/shape-blueprint/requests', { ...shape, ...expectedPlacement }],
+                ['/api/shape-blueprint/requests', { ...shape, launch_context_id: null, ...expectedPlacement }],
                 ['/api/conformational-mapping/requests', { ...cm, ...expectedPlacement }],
                 ['/api/ont/ngs/wf-clone/submit', { ...ngs, ...expectedPlacement }],
             ]);
@@ -640,7 +678,7 @@ describe('remote execution operator surfaces', () => {
             expect(document.body.textContent).toContain('Review remote execution plan');
         });
         expect(calls).toEqual([
-            { url: '/api/shape-blueprint/requests', data: original },
+            { url: '/api/shape-blueprint/requests', data: { ...original, launch_context_id: null } },
             { url: '/api/jobs/execution-plan/preview', data: prepared },
         ]);
         // Changes made while reviewing cannot alter the submitted snapshot or destination.
@@ -651,7 +689,7 @@ describe('remote execution operator surfaces', () => {
         const outcome = await completed;
         if (approve) {
             expect('value' in outcome && outcome.value.data.job_id).toBe('retained-job');
-            expect(calls[2]).toEqual({ url: '/api/shape-blueprint/requests', data: { ...original, execution_plan_approval: 'd'.repeat(64) } });
+            expect(calls[2]).toEqual({ url: '/api/shape-blueprint/requests', data: { ...original, launch_context_id: null, execution_plan_approval: 'd'.repeat(64) } });
             expect(calls).toHaveLength(3);
         } else {
             expect('error' in outcome && outcome.error.message).toBe('Execution-plan approval cancelled');
@@ -808,9 +846,9 @@ describe('remote execution operator surfaces', () => {
             await Promise.resolve();
         });
 
-        expect(container.textContent).toContain('Read-only remote telemetry');
+        expect(container.querySelector('[title^="Read-only"]')).not.toBeNull();
         expect(container.textContent).toContain('Remote GPU 0');
-        expect(container.textContent).toContain('12,000 MB used');
+        expect(container.textContent).toContain('VRAM 11.7 / 24 GiB');
         expect(container.textContent).not.toContain('Fan speed');
         expect(container.textContent).not.toContain('Power limit');
 

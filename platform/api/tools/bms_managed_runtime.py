@@ -709,7 +709,7 @@ def install(root, manifest, expected_boot, cache):
 def container_environment(worker_root, release, backend):
     if backend not in {'apptainer', 'udocker'}:
         raise ValueError('unsupported_container_backend')
-    tools = worker_root / 'tools/udocker-1.3.17-bms2'
+    tools = worker_root / 'tools/udocker-1.3.17-bms3'
     env = dict(BMS_CONTAINER_BACKEND=backend,
                BMS_SHARED_WEIGHTS_MODE='cow' if backend == 'udocker' else 'ro',
                BMS_RUNTIME_IMAGE_STORE=str(worker_root / 'cache/runtime-images'),

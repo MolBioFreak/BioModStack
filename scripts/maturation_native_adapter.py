@@ -94,7 +94,11 @@ def instrument_source(producer, relative_path, data):
             break
     lines = text.splitlines(keepends=True)
     lines.insert(insertion, 'import maturation_native_adapter as _bms\n')
-    return ''.join(lines)
+    result = ''.join(lines)
+    if producer == 'fampnn' and relative_path != 'fampnn/data/protein.py':
+        from fampnn_native_runtime import instrument
+        return instrument(relative_path, result)
+    return result
 
 
 def identity_protein(cls, *, bms_identity, **kwargs):

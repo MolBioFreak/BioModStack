@@ -235,10 +235,9 @@ def resolve_job_result_contract(job: Any) -> dict[str, Any]:
     ).model_dump(mode="json")
 
 
-def _source_archive_records(archive_path: Path, digest: str) -> list[RemoteFileRecord]:
-    """Inventory actual archived bytes without allocating an extracted hash tree."""
-    records = [_record_file(archive_path, 'source/' + archive_path.name, 'source',
-                            staged_sha256=digest)]
+def _source_archive_members(archive_path: Path) -> tuple[RemoteFileRecord, ...]:
+    """Read each member once when the existing archive owner builds a revision."""
+    records = []
     with tarfile.open(archive_path, 'r|*') as archive:
         for member in archive:
             path = PurePosixPath(member.name)
@@ -249,7 +248,19 @@ def _source_archive_records(archive_path: Path, digest: str) -> list[RemoteFileR
                     sha = hashlib.file_digest(stream, 'sha256').hexdigest()
                 records.append(RemoteFileRecord(relative_path='source/' + path.as_posix(),
                     size_bytes=member.size, sha256=sha, role='source', mode=member.mode & 0o555))
-    return records
+    return tuple(records)
+
+
+def _source_archive_records(archive_path: Path, digest: str) -> list[RemoteFileRecord]:
+    # Staging already checks the cached archive's exact bytes. Its member
+    # inventory shares that identity; warm requests need not decompress again.
+    members = next((rows for sha, rows in tuple(_SOURCE_ARCHIVE_DIGESTS.values())
+                    if sha == digest), None)
+    if members is None:
+        members = _source_archive_members(archive_path)
+    return [_record_file(archive_path, 'source/' + archive_path.name, 'source',
+                         staged_sha256=digest),
+            *(row.model_copy() for row in members)]
 
 
 def _safe_extract(archive_path: Path, destination: Path) -> None:
@@ -343,8 +354,12 @@ def _records_for_source(
         # Native weight snapshots (including HF internal aliases) travel as
         # concrete files. Only the manifest-bound path above may escape the
         # selected tree into acquisition storage; never serialize host targets.
+        from scripts.lib.portable_inputs import file_stamp
         root = source.resolve(strict=True)
         records = []
+        # Invocation-local concrete identity, not logical pathname: native HF
+        # aliases and hardlinks keep all rows without rereading the same body.
+        inventory = runtime_sources if runtime_sources is not None else {}
         def visit(native, name, ancestry):
             concrete = native.resolve(strict=True)
             if concrete != root and not concrete.is_relative_to(root):
@@ -355,7 +370,13 @@ def _records_for_source(
                 for child in sorted(concrete.iterdir()):
                     visit(child, name + '/' + child.name, ancestry | {concrete})
             else:
-                records.append(_record_file(concrete, name, role))
+                stamp = file_stamp(concrete)
+                key = ('runtime-file', stamp)
+                record = _record_file(concrete, name, role,
+                                      staged_sha256=inventory.get(key))
+                if file_stamp(concrete) == stamp:
+                    inventory[key] = record.sha256
+                records.append(record)
                 if runtime_sources is not None:
                     runtime_sources[("runtime-source", name)] = concrete
         visit(source, prefix.rstrip('/'), set())
@@ -510,17 +531,20 @@ def _published_runtime_records(source: Path, prefix: str, *, publication=None, r
                 {IMAGE_SELECTORS[name][0]: str(source)})
             if source != path.resolve():
                 return None
-        rows = published_asset_rows(logical, index=publication, resolved=resolved)
         if digest is not None:
-            rows = [r for r in rows or [] if r['sha256'] == digest]
-            if not rows:
-                info = path.stat(follow_symlinks=False)
-                if not stat.S_ISREG(info.st_mode):
-                    raise RemoteBundleError('Selected runtime image is not regular')
-                rows = [dict(name=logical, sha256=digest, size_bytes=info.st_size,
-                             mode=stat.S_IMODE(info.st_mode))]
-        elif rows and any(Path(r.get('source', str(path.resolve()))) != source for r in rows):
-            return None
+            # The managed selector already owns the immutable image identity.
+            # Do not re-inventory an unrelated publication (or an older image
+            # published under this name) before using that declaration. Upload
+            # and worker receiving still verify the actual selected bytes.
+            info = path.stat(follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode):
+                raise RemoteBundleError('Selected runtime image is not regular')
+            rows = [dict(name=logical, sha256=digest, size_bytes=info.st_size,
+                         mode=stat.S_IMODE(info.st_mode))]
+        else:
+            rows = published_asset_rows(logical, index=publication, resolved=resolved)
+            if rows and any(Path(r.get('source', str(path.resolve()))) != source for r in rows):
+                return None
     else:
         return None
     if rows is None:
@@ -530,7 +554,7 @@ def _published_runtime_records(source: Path, prefix: str, *, publication=None, r
         link_target=r.get('target')) for r in rows]
 
 
-def _selected_weight_members(source: Path, model_id: str, *, resolved=None):
+def _selected_weight_members(source: Path, model_id: str | None, *, resolved=None):
     """Resolve only exact registry-manifest layouts to their acquisition bodies.
 
     Native names survive transport. A controller link target is never a worker
@@ -545,7 +569,40 @@ def _selected_weight_members(source: Path, model_id: str, *, resolved=None):
     # Resolve a selected directory alias, but keep a leaf's native name until
     # the manifest authenticates its acquisition referent.
     source = source.resolve(strict=True) if source.is_dir() else source.parent.resolve(strict=True) / source.name
-    for dependency, entries in _layouts(model_acquisition_plan(model_id)):
+    if not source.is_relative_to(weights / 'layouts'):
+        return None
+    # A pack (or a downstream selected component) can consume a layout owned
+    # by a different model. Match its exact declared layout digest, not an
+    # inferred model name or arbitrary symlink destination. Cache metadata only
+    # within this inventory operation; byte custody remains _verify_tree's.
+    def declared_layouts():
+        layout_parts = source.relative_to(weights / 'layouts').parts
+        if layout_parts and layout_parts[0] in {
+                'huggingface', 'complexa-evaluators', 'laproteina-evaluators'}:
+            from model_registry import evaluator_acquisition_layouts
+            key = ('selected-evaluator-layouts',)
+            layouts = resolved.get(key) if resolved is not None else None
+            if layouts is None:
+                layouts = evaluator_acquisition_layouts()
+                if resolved is not None:
+                    resolved[key] = layouts
+            yield from layouts
+
+        def owned(owner):
+            key = ('acquisition-layouts', owner)
+            layouts = resolved.get(key) if resolved is not None else None
+            if layouts is None:
+                layouts = list(_layouts(model_acquisition_plan(owner, include_optional=True)))
+                if resolved is not None:
+                    resolved[key] = layouts
+            return layouts
+        if model_id:
+            yield from owned(model_id)
+        from model_registry import get_registry
+        for model in get_registry().list_models():
+            if model.id != model_id:
+                yield from owned(model.id)
+    for dependency, entries in declared_layouts():
         digest = hashlib.sha256(json.dumps({'dependency': dependency, 'members': sorted(
             entries, key=lambda e: e['member_path'])}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         root = weights / 'layouts' / dependency['relative_path'] / digest
@@ -583,14 +640,16 @@ def _runtime_records(source: Path, prefix: str, *, publication=None, resolved=No
                 result.append(_record_file(path, relative, 'runtime',
                     staged_sha256=members.get(name, {}).get('sha256')))
         return result
-    if prefix.startswith(('runtime/weights/', 'weights/')) and model_id is not None:
+    if prefix.startswith(('runtime/weights/', 'weights/')):
         selected = _selected_weight_members(source, model_id, resolved=resolved)
         if selected is not None:
             records = []
             for suffix, (concrete, row) in sorted(selected.items()):
                 name = prefix + ('/' + suffix if suffix else '')
                 records.append(RemoteFileRecord(relative_path=name, role='runtime',
-                    sha256=row['sha256'], size_bytes=row['size'], mode=0o400))
+                    # Ordinary immutable weights share the worker CAS's 0444
+                    # projection. Canonical image/acquisition donors stay intact.
+                    sha256=row['sha256'], size_bytes=row['size'], mode=0o444))
                 if resolved is not None:
                     resolved[('runtime-source', name)] = concrete
             return records
@@ -681,8 +740,15 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
                         path = Path(rows[0]['source'])
             else:
                 path = Path(str(selected)).expanduser()
+        elif selected:
+            path = Path(str(selected)).expanduser()
+        elif relative and dependency.kind == 'weights':
+            # Same locator independent_plan uses: a plain path wins, otherwise the one
+            # pinned layout generation (e.g. complexa-evaluators/, huggingface/).
+            from paths import resolve_weight_dependency
+            path = resolve_weight_dependency(relative, root)
         else:
-            path = Path(str(selected)).expanduser() if selected else root / relative if relative else None
+            path = root / relative if relative else None
         if dependency.selector_subpath is not None:
             member = PurePosixPath(dependency.selector_subpath)
             declared = PurePosixPath(relative) if relative else None
@@ -787,7 +853,7 @@ def _input_assets(
         system_roots.add(Path(params["runtime_image_store"]).resolve())
     destinations = {"work_dir", "out_dir", "out", "data_root", "code_root",
                     "weights_root", "container_dir", "msa_cache_dir", "cm_api_runtime_dir",
-                    "runtime_image_store", "wf_clone_nxf_home",
+                    "runtime_image_store", "wf_clone_nxf_home", "md_source_provenance",
                     *(flag for flag, _ in IMAGE_SELECTORS.values())}
     if native_invocation.model_id == 'bindcraft2':
         # The prepared tree is one native input. Its campaign destination is
@@ -1054,6 +1120,16 @@ def _rewrite_maturation_pdb_paths(value: str, path_map: dict[str, str]) -> str:
     return ','.join(_rewrite(part.strip(), path_map) for part in value.split(','))
 
 
+def _rewrite_md_source_provenance(value: str, path_map: dict[str, str]) -> str:
+    """Relocate the two executable snapshot leaves, not observational strings."""
+    document = json.loads(value)
+    for section, field in (('snapshot', 'structure'), ('original_snapshot', 'path')):
+        snapshot = document.get(section)
+        if isinstance(snapshot, dict) and isinstance(snapshot.get(field), str):
+            snapshot[field] = _rewrite(snapshot[field], path_map)
+    return json.dumps(document, separators=(',', ':'))
+
+
 def _relocate_ngs_clone_lock(params, *, staging_root, remote_runtime, remote_source,
                              nextflow_executable, expected_lock_sha256):
     """Project only host-owned lock locations; retain every scientific identity."""
@@ -1204,6 +1280,26 @@ def _input_records(path: Path, prefix: str, *, native_invocation: NativeInvocati
     if unmatched:
         raise RemoteBundleError("Compiler-generated input disappeared during recording")
     return records
+
+
+def _file_backed_nextflow_parameters(command):
+    """Transport large native parameter strings without Linux's per-argument limit.
+
+    Nextflow's existing JSON params-file reader preserves string values, including
+    serialized scientific settings. Do not decode/reduce their molecular content.
+    """
+    placed, parameters = [], {}
+    index = 0
+    while index < len(command):
+        value = command[index]
+        if (value.startswith('--') and index + 1 < len(command)
+                and len(command[index + 1].encode('utf-8')) >= 65536):
+            parameters[value[2:]] = command[index + 1]
+            index += 2
+        else:
+            placed.append(value)
+            index += 1
+    return placed, parameters
 
 
 def _write_portable_bindings(*, staging_root: Path, remote_attempt: str,
@@ -1403,7 +1499,14 @@ def _relocate_python_runtime(source: Path, destination: Path, remote_destination
     return destination
 
 
-_SOURCE_ARCHIVE_DIGESTS: dict[str, str] = {}
+# Execution projection is distinct from the full scientific Git revision/tree.
+# Keep the policy at this single archive owner; historical envelopes retain
+# their bound archive records and need not adopt a newer projection.
+SOURCE_MEMBERSHIP_POLICY = 'bms.execution-source.v1'
+_SOURCE_ARCHIVE_PATHS = ('.', ':(exclude,glob)artifacts/android/*.apk')
+
+# Digest and member inventory have one process-owned, revision-keyed lifetime.
+_SOURCE_ARCHIVE_DIGESTS: dict[str, tuple[str, tuple[RemoteFileRecord, ...]]] = {}
 
 
 def _prune_source_archives(cache_root: Path) -> None:
@@ -1441,22 +1544,25 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
         fcntl.flock(lock, fcntl.LOCK_EX)
         # The expected digest is held by this process, not loaded from a
         # writable sidecar. After a restart regenerate from the Git object.
-        expected = _SOURCE_ARCHIVE_DIGESTS.get(key)
+        cached = _SOURCE_ARCHIVE_DIGESTS.get(key)
+        expected = cached[0] if cached is not None else None
         if archive.is_symlink() or (archive.exists() and not archive.is_file()):
             raise RemoteBundleError('Unsafe cached source archive')
         if not archive.exists() or not expected:
             temporary = cache_root / ('.archive-' + uuid.uuid4().hex)
             try:
                 with temporary.open('xb') as output:
-                    subprocess.run(['git', 'archive', '--format=tar.gz', '-6', revision],
+                    subprocess.run(['git', 'archive', '--format=tar.gz', '-6', revision,
+                                    '--', *_SOURCE_ARCHIVE_PATHS],
                                    cwd=repo_root, check=True, stdout=output,
                                    stderr=subprocess.PIPE, timeout=300)
                     output.flush()
                     os.fsync(output.fileno())
                 expected = _sha256_file(temporary)
+                members = _source_archive_members(temporary)
                 temporary.chmod(0o444)
                 os.replace(temporary, archive)
-                _SOURCE_ARCHIVE_DIGESTS[key] = expected
+                _SOURCE_ARCHIVE_DIGESTS[key] = (expected, members)
             finally:
                 temporary.unlink(missing_ok=True)
         staged = source_root / '.bms-source.tar.gz'
@@ -1467,7 +1573,11 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
         # Each publisher needs a private inode: sibling staging links/unlinks
         # and cache recency updates otherwise change its HF generation identity.
         # Keep the broker's byte and metadata checks intact.
-        shutil.copy2(archive, staged)
+        from scripts.lib.runtime_image_views import allocate_private_file
+        descriptor = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, 'rb') as donor, staged.open('xb') as private:
+            allocate_private_file(donor.fileno(), private.fileno(), os.fstat(donor.fileno()))
+        shutil.copystat(archive, staged, follow_symlinks=False)
         os.utime(archive, None, follow_symlinks=False)
         _prune_source_archives(cache_root)
     # Only the shared archive/copy needs serialization. Extraction writes into
@@ -1523,6 +1633,22 @@ def retained_ont_lock_bytes(source: SourceIdentity) -> bytes:
         except (KeyError, StopIteration, SyntaxError, NameError, AttributeError,
                 TypeError, ValueError, tarfile.TarError) as exc:
             raise RemoteBundleError('Historical Dorado lock is unavailable or malformed') from exc
+
+
+def _private_weight_copy_upper_bound(metadata, weight_entries):
+    """Largest selected per-task body allocation, not a concurrent job peak."""
+    by_id = {row.logical_id: row for row in metadata.dependencies}
+    peaks, processes = [], {}
+    for component in (*metadata.static_components, *metadata.dynamic_templates):
+        processes.setdefault(component.authority, set()).update(component.dependency_ids)
+    for dependency_ids in processes.values():
+        paths = [by_id[key].relative_path for key in dependency_ids
+                 if by_id[key].kind == 'weights']
+        bodies = {(row['sha256'], row['mode']): int(row['size_bytes']) for row in weight_entries
+                  if 'target' not in row and (None in paths or any(path is not None and (
+                      row['name'] == path or str(row['name']).startswith(path + '/')) for path in paths))}
+        peaks.append(sum(bodies.values()))
+    return max(peaks, default=0)
 
 
 def prepare_remote_bundle(
@@ -1684,7 +1810,9 @@ def prepare_remote_bundle(
         if _is_runtime_image(path, relative):
             # Preserve semantic aliases, but transfer/publish only one object per digest.
             source = path.resolve()
-            record = _record_file(source, f"runtime/{relative}", "runtime")
+            record, = _runtime_records(source, f"runtime/{relative}",
+                                       publication=publication, resolved=resolved,
+                                       model_id=str(job.model_id))
             runtime_hashes[relative] = record.sha256
             shared = f"{remote_root}/cache/runtime-images/objects/sha256/{record.sha256}/runtime.sif"
             previous = images.get(record.sha256)
@@ -1898,6 +2026,12 @@ def prepare_remote_bundle(
             path_map[command[command.index(flag) + 1]] = destination
     nextflow_executable = str(command[0]) if command else ""
     translated_command = [_rewrite(str(value), path_map) for value in command]
+    if job.model_id == 'molecular_dynamics':
+        for flag in ('--md_source_provenance_json',):
+            if flag in command:
+                position = command.index(flag) + 1
+                translated_command[position] = _rewrite_md_source_provenance(
+                    str(command[position]), path_map)
     if job.model_id == 'bindcraft2' and '--bc2_campaign_dir' in command:
         # The same local prefix names both prepared inputs and native output.
         # Only the compilation argument follows the transported input mapping.
@@ -1911,6 +2045,14 @@ def prepare_remote_bundle(
         position = command.index('--blind_pose_candidate_pdbs') + 1
         translated_command[position] = _rewrite_maturation_pdb_paths(str(command[position]), path_map)
     if translated_command and Path(nextflow_executable).name == "nextflow":
+        translated_command, large_parameters = _file_backed_nextflow_parameters(translated_command)
+        if large_parameters:
+            parameter_file = staging_root / 'large-native-parameters.json'
+            parameter_file.write_text(json.dumps(large_parameters, ensure_ascii=True) + '\n')
+            parameter_destination = f'{remote_attempt}/bundle/inputs/{parameter_file.name}'
+            input_records.append(_record_file(parameter_file, f'inputs/{parameter_file.name}', 'input'))
+            input_transfers.append(TransferPlan(parameter_file, parameter_destination))
+            translated_command.extend(['-params-file', parameter_destination])
         translated_command[0] = binding["paths"]["nextflow"] if binding else f"{remote_root}/runner/nextflow"
     elif translated_command and Path(nextflow_executable).name in {"python", "python3"}:
         translated_command[0] = f"{support_root}/venv/bin/python"
@@ -1926,7 +2068,7 @@ def prepare_remote_bundle(
         # The normal worker authenticates this small manifest as a regular bundle file.
         # This stdlib-only boundary verifies immutable objects and all semantic aliases
         # before exec; no SIF or external symlink is smuggled through file records.
-        translated_command = [binding["paths"]["python"] if binding else "python3",
+        translated_command = [binding["paths"]["python"] if binding else f"{support_root}/venv/bin/python",
                               f"{remote_source}/platform/api/tools/bms_artifact_cache.py",
                               "--root", f"{remote_root}/cache/artifacts/v1",
                               "--execute-runtime", manifest_destination,
@@ -1950,6 +2092,17 @@ def prepare_remote_bundle(
         # Cached source/runtime/images are installation capacity, not new
         # per-job scratch. Their lifecycle/provisioning owner handles misses.
         scratch_bytes=sum(row.size_bytes for row in input_records if row.link_target is None))
+    # Diagnostic upper bound, not a new capacity/admission gate: FICLONE support
+    # is known only at task allocation. The task launcher reports actual copy
+    # bytes separately. Persistent CAS accounting intentionally excludes these.
+    if (binding or {}).get('environment', {}).get('BMS_CONTAINER_BACKEND') == 'udocker':
+        private_weight_bytes = _private_weight_copy_upper_bound(native_invocation.execution_plan.metadata, weight_entries)
+        resources['scratch_estimates'] = {
+            'input_bytes': resources['required']['scratch_bytes'],
+            'private_weights_per_task_copy_upper_bound_bytes': private_weight_bytes,
+            'scope': 'per-task selected weight projection; not job peak or persistent storage',
+            'allocation_observation': 'BMS_PRIVATE_INPUT_ALLOCATION in task stderr',
+        }
     import sys
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
@@ -1993,6 +2146,21 @@ def prepare_remote_bundle(
 
     if binding:
         effective_environment.update(binding["environment"])
+    from services.native_generation_sources import selected_model
+    if selected_model(job) == 'rfd4_proteina':
+        # The ordinary cache_root owner reads XDG_CACHE_HOME. Keep mutable JIT
+        # files worker-local across attempts, after selected binding overrides.
+        effective_environment.setdefault('XDG_CACHE_HOME', f'{remote_root}/cache')
+        from services.rfd4_proteina import resolve_oracle_runtime
+        # Inventory/worker CAS owners have already resolved the selected bytes.
+        # Do not recursively rewrite retained request provenance/controller state.
+        oracle_assets = {relative: runtime_path_map[str(path)] for path, relative in runtime_assets
+                         if str(path) in runtime_path_map}
+        native_mode = job.mode if job.model_id == 'rfd4_proteina' else 'generate'
+        effective_environment['BMS_RFD4_ORACLE_RUNTIME'] = json.dumps(
+            resolve_oracle_runtime(native_mode, effective_params, resolved_assets=oracle_assets), sort_keys=True)
+    # Envelope-bound execution membership, not an assertion of a full Git tree.
+    effective_environment['BMS_SOURCE_MEMBERSHIP_POLICY'] = SOURCE_MEMBERSHIP_POLICY
 
     if clone_placement:
         # Keep the selected bridge (including udocker's CLI adapter), not the
@@ -2039,6 +2207,20 @@ def prepare_remote_bundle(
             attempt_id=attempt_id, target_id=target.id,
             lease_id=assignment['lease_id'],
             resources={**resources, 'gpu_id': job.assigned_gpu})
+        if job.model_id == 'molecular_dynamics':
+            # The callback owner consumes typed parent params, independently of
+            # root argv. Keep the immutable selected plan unchanged while binding
+            # only executable MD snapshot leaves in this worker placement copy.
+            from copy import deepcopy
+            placed = deepcopy(context['parent']['params'])
+            if isinstance(placed.get('md_source_provenance'), dict):
+                placed['md_source_provenance'] = json.loads(_rewrite_md_source_provenance(
+                    json.dumps(placed['md_source_provenance']), path_map))
+            spec = placed.get('md_job_spec')
+            if isinstance(spec, dict) and isinstance(spec.get('input'), dict):
+                if isinstance(spec['input'].get('structure'), str):
+                    spec['input']['structure'] = _rewrite(spec['input']['structure'], path_map)
+            context['parent']['params'] = placed
         context['resource_lock_path'] = resource_lock
         context.update(ledger_path=f'{remote_attempt}/component-runtime.sqlite',
                        root_state_path=f'{remote_attempt}/component-state.json',

@@ -28,6 +28,117 @@ _ACTIVE_JOB_STATUSES = {
 }
 
 
+def visible_job_clause():
+    """Public Job surfaces only; never apply to claims, recovery or path custody."""
+    from sqlalchemy import func
+    return func.coalesce(Job.params["permanent_delete_cleanup"].as_boolean(), False).is_(False)
+
+
+def checkpoint_continuation_predicates(job: Job) -> tuple:
+    """Use in the local Continue UPDATE, after native checkpoint validation.
+
+    Match both the captured queue/params and absence of current cancel intent;
+    a fresh read of a cancelling row must not authorize continuation either.
+    """
+    from sqlalchemy import func
+    return (
+        Job.id == job.id, Job.status == "awaiting_input", Job.awaiting_input.is_(True),
+        Job.queue_status == job.queue_status, Job.queue_status != "cancelling",
+        Job.params == job.params,
+        func.coalesce(Job.params["cancellation_receipt"]["state"].as_string(), "").notin_(("requested", "completed")),
+        Job.awaiting_payload == job.awaiting_payload, Job.provenance == job.provenance,
+    )
+
+
+async def retain_permanent_delete_cleanup(session: AsyncSession, job: Job) -> bool:
+    """Retain the SAME cancelled Job as hidden cleanup custody, not new work.
+
+    The delete route removes user records but must exclude this row and its
+    output paths from physical deletion when True. List/detail routes hide the
+    params marker. The existing reconciler drains this owner, then removes
+    its unused output paths and the hidden row.
+    """
+    from services.remote_execution.claims import outstanding_claim_clause
+    await session.refresh(job)
+    if not job.execution_target_id:
+        return False
+    outstanding = await session.scalar(select(Job.id).where(Job.id == job.id, outstanding_claim_clause()))
+    receipt = (job.params or {}).get("cancellation_receipt") or {}
+    if not outstanding and receipt.get("remote_stop_verified") is True:
+        return False
+    params = dict(job.params or {})
+    params["permanent_delete_cleanup"] = True
+    changed = await session.execute(update(Job).where(
+        Job.id == job.id, Job.status == job.status, Job.params == job.params,
+        Job.provenance == job.provenance, Job.remote_attempt_id == job.remote_attempt_id,
+    ).values(params=params, parent_job_id=None, status="cancelled", queue_status="cancelled",
+             awaiting_input=False, awaiting_stage=None, awaiting_payload={}).execution_options(synchronize_session=False))
+    if changed.rowcount != 1:
+        raise HTTPException(status_code=409, detail="Deletion owner changed during cleanup handoff")
+    await session.refresh(job)
+    return True
+
+
+async def cleanup_permanent_delete_outputs(session: AsyncSession, job: Job) -> None:
+    """Reuse the permanent route's directory planner, protecting overlapping custody.
+
+    Leave this Job in the transaction until filesystem cleanup succeeds so a
+    controller interruption or filesystem error is retried by reconciliation.
+    Project artifact custody is independent and is never part of Job deletion.
+    """
+    from pathlib import Path
+    import shutil
+    from routers.jobs import _load_remaining_output_dir_refs, _plan_output_dir_cleanup
+    from experiment_operations import _controlled_root
+    from services.scientific_artifacts.writer import artifact_root
+
+    refs = await _load_remaining_output_dir_refs(session, {str(job.id)})
+    candidates, _ = _plan_output_dir_cleanup([job.output_dir, job.child_output_dir], refs)
+    protected = [Path(path) for path in refs]
+    protected.extend((_controlled_root("BMS_EXPERIMENT_ARTIFACT_ROOT", "experiment-artifacts").resolve(),
+                      artifact_root().resolve()))
+    for raw in candidates:
+        path = Path(raw)
+        if any(path == other or path in other.parents or other in path.parents for other in protected):
+            continue
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            pass
+
+
+async def finalize_permanent_delete_cleanup(session: AsyncSession, job_id: str) -> bool:
+    """Finish requested deletion only after the existing cancellation owner drains.
+
+    The existing attempt guard excludes concurrent local transfers; the writer
+    transaction keeps output references stable through cleanup and row removal.
+    No new stop proof or user-facing admission condition is introduced.
+    """
+    from database import Design
+    from services.remote_execution.claims import outstanding_claim_clause
+    from services.remote_execution.executor import _controller_attempt_guard
+
+    with _controller_attempt_guard(job_id) as owned:
+        if not owned:
+            return False
+        # Acquire SQLite's writer fence before loading references or touching bytes.
+        result = await session.execute(update(Job).where(
+            Job.id == job_id, Job.params["permanent_delete_cleanup"].as_boolean().is_(True),
+            Job.status == "cancelled", Job.remote_state == "cancelled",
+            Job.params["cancellation_receipt"]["state"].as_string() == "completed",
+            ~outstanding_claim_clause(),
+        ).values(queue_status="cancelled").execution_options(synchronize_session=False))
+        if result.rowcount != 1:
+            await session.rollback()
+            return False
+        job = await session.get(Job, job_id, populate_existing=True)
+        await cleanup_permanent_delete_outputs(session, job)
+        await session.execute(Design.__table__.delete().where(Design.job_id == job_id))
+        await session.delete(job)
+        await session.commit()
+        return True
+
+
 async def get_md_owned_job_ids(session: AsyncSession) -> set[str]:
     roots = set((await session.scalars(select(MdRun.job_id))).all())
     if not roots:
@@ -315,11 +426,6 @@ async def cancel_job_lineage(
             from services.nextflow import _observe_local_terminal_binder_results
 
             await _observe_local_terminal_binder_results(session, str(job.id), job.output_dir)
-
-    from services.rfd3_local_redesign import terminalize_cancelled_request_for_job
-
-    for job in [*cancellable, *already_cancelled]:
-        await terminalize_cancelled_request_for_job(session, job_id=str(job.id))
 
     if before_terminal_commit is not None:
         await before_terminal_commit()

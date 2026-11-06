@@ -49,25 +49,24 @@ def test_protein_local_fampnn_batches_process_output_without_collect_group_opera
     assert "PrepProteinLocalFAMPNN.out.pdbs\n            .collect()" not in source
 
 
-def test_protein_local_redesign_shell_quotes_every_native_dynamic_argument() -> None:
-    source = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
-
+def test_region_loop_shell_quotes_current_source_and_selection_arguments() -> None:
+    source = (REPO_ROOT / "workflows/protein_local_redesign.nf").read_text()
     assert "def shellQuote(value)" in source
-    assert "--input-structure ${inputStructureArg}" in source
-    assert "--source-file ${sourceFileArg}" in source
-    assert "--source-storage-path ${sourceStorageArg}" in source
-    assert '--input-structure "${input_structure}"' not in source
-    assert '--source-file "${source_structure}"' not in source
-    assert '--source-storage-path "${params.plr_input_pdb}"' not in source
-    assert "def nativeRfd3Request = params.rfd3_request_path ? true : false" in source
-    assert "def nativeSequenceMethod = nativeRfd3Request ? 'skip'" in source
-    assert "def sequenceMethod = nativeRfd3Request ? 'skip'" in source
-    assert "Native RFD3 local redesign does not accept resume inputs" in source
-    assert "Native RFD3 local redesign does not accept interactive gating" in source
-
-    module_source = (REPO_ROOT / "modules" / "rfd3.nf").read_text(encoding="utf-8")
-    assert "def nativeRequest = params.rfd3_request_path ? true : false" in module_source
-    assert "params.rfd3_request_path && params.plr_redesign_mode" not in module_source
+    for argument in (
+        "--input-pdb ${shellQuote(source_pdb)}",
+        "--model-seeds ${shellQuote(params.protenix_seeds ?: '42')}",
+        "--manifest ${shellQuote(params.plr_region_manifest)}",
+        "--fixed_positions ${shellQuote(params.plr_fixed_positions)}",
+        "--designable_positions ${shellQuote(params.plr_designable_positions)}",
+        "--design_chains ${shellQuote(params.plr_design_chains)}",
+        "--fixed-positions ${shellQuote(params.plr_fixed_positions)}",
+        "--designable-positions ${shellQuote(params.plr_designable_positions)}",
+        "--design-chains ${shellQuote(params.plr_design_chains)}",
+    ):
+        assert argument in source
+    # Generation no longer belongs to the Resequence workflow.
+    assert "rfd3_local_redesign/prepare" not in source
+    assert "rfd3_local_redesign/build_result_manifest.py" not in source
 
 MIGRATED_SYMBOLS = (
     "OLIGO_DESIGNER",
@@ -140,29 +139,64 @@ def _included_symbols(symbol_block: str) -> list[str]:
     return symbols
 
 
-def test_nextflow_include_targets_and_symbols_resolve() -> None:
+def _include_errors(source_files: list[Path], root: Path) -> tuple[list[str], list[str]]:
     missing_targets: list[str] = []
     missing_symbols: list[str] = []
-
-    for source_file in _nextflow_files():
-        source_text = source_file.read_text(encoding="utf-8", errors="ignore")
+    for source_file in source_files:
+        source_text = source_file.read_text(encoding="utf-8")
         for match in INCLUDE_RE.finditer(source_text):
             include_source = match.group("source")
             target_file = _resolve_include(source_file, include_source)
             if target_file is None:
-                missing_targets.append(f"{source_file.relative_to(REPO_ROOT)} -> {include_source}")
+                missing_targets.append(f"{source_file.relative_to(root)} -> {include_source}")
                 continue
-
-            target_text = target_file.read_text(encoding="utf-8", errors="ignore")
+            target_text = target_file.read_text(encoding="utf-8")
+            # Ignore commented declarations; this remains a bounded declaration
+            # inventory, not a replacement for the Nextflow/Groovy parser.
+            target_text = re.sub(r"(?m)^[ \t]*(?:/\*.*?\*/|//[^\n]*)", "", target_text, flags=re.S)
             for symbol in _included_symbols(match.group("symbols")):
-                declaration = rf"\b(workflow|process)\s+{re.escape(symbol)}\s*\{{"
+                name = re.escape(symbol)
+                declaration = rf"(?m)^\s*(?:(?:workflow|process)\s+{name}\s*\{{|def\s+{name}\s*\([^)]*\)\s*\{{)"
                 if not re.search(declaration, target_text):
                     missing_symbols.append(
-                        f"{source_file.relative_to(REPO_ROOT)} imports {symbol} from {target_file.relative_to(REPO_ROOT)}"
+                        f"{source_file.relative_to(root)} imports {symbol} from {target_file.relative_to(root)}"
                     )
+    return missing_targets, missing_symbols
 
-    assert missing_targets == []
-    assert missing_symbols == []
+
+def test_nextflow_include_targets_and_symbols_resolve() -> None:
+    assert _include_errors(_nextflow_files(), REPO_ROOT) == ([], [])
+
+
+def test_include_scanner_accepts_functions_processes_workflows_and_aliases(tmp_path: Path) -> None:
+    target = tmp_path / "owner.nf"
+    target.write_text(
+        "def helper(value) { return value }\n"
+        'process Run { output: path "predictions/*.pdb" }\n'
+        "workflow FLOW { }\n"
+    )
+    source = tmp_path / "entry.nf"
+    source.write_text("include { helper as renamed; Run; FLOW } from './owner'\n")
+    assert _include_errors([source], tmp_path) == ([], [])
+
+
+def test_include_scanner_rejects_missing_target(tmp_path: Path) -> None:
+    source = tmp_path / "entry.nf"
+    source.write_text("include { helper } from './missing'\n")
+    assert _include_errors([source], tmp_path) == (["entry.nf -> ./missing"], [])
+
+
+def test_include_scanner_rejects_missing_or_commented_symbol(tmp_path: Path) -> None:
+    (tmp_path / "owner.nf").write_text(
+        "def helper(value) { return value }\n"
+        "// def absent(value) { return value }\n"
+        "/* workflow absent { } */\n"
+    )
+    source = tmp_path / "entry.nf"
+    source.write_text("include { helper; absent as renamed } from './owner.nf'\n")
+    assert _include_errors([source], tmp_path) == (
+        [], ["entry.nf imports absent from owner.nf"]
+    )
 
 
 def test_direct_workflow_entrypoints_exist_and_aggregate_bucket_is_absent() -> None:
@@ -244,7 +278,15 @@ def test_protein_local_validator_failure_policy_is_scoped_to_plr() -> None:
     assert "error(\"Boltz-2 produced" not in workflow_text
     assert "boltz_completion.json" in boltz_text
     assert "RunBoltz.out.completion" in workflow_text
-    assert "params.containsKey('plr_region_padding') ? params.plr_region_padding : 2" in workflow_text
-    assert "params.plr_region_padding ?: 2" not in workflow_text
-    assert "and Path('predictions', f'{candidate_id}_boltzpred.json').is_file()" in boltz_text
+    # Region preparation/padding was removed from this validation-only owner;
+    # zero-valued padding transport is covered at build_nextflow_command.
+    assert "samples = json.loads(Path('predictions/boltz_samples.manifest').read_text())['samples']" in boltz_text
+    assert "completed = sorted({row['source_id'] for row in samples if row['confidence_present']})" in boltz_text
     assert ") + '\\\\n'," in boltz_text
+
+
+def test_protein_local_boltz_batches_use_flatmap_so_group_tuple_gets_pairs() -> None:
+    source = (REPO_ROOT / "workflows" / "protein_local_redesign.nf").read_text(encoding="utf-8")
+
+    assert ".map { allPdbs -> partitionProteinLocalGpuBatches(allPdbs, params.gpus) }\n                .flatMap { batches -> batches }\n                .groupTuple()" in source
+    assert "partitionProteinLocalGpuBatches(allPdbs, params.gpus) }\n                .flatten()" not in source

@@ -281,7 +281,11 @@ export function persistTelemetryPreferences(pollIntervalMs: PollPreset, windowMi
     } catch {
         // Preferences are optional. Storage failures must not stop telemetry rendering.
     }
+    // Local and remote panels share one window choice while mounted together.
+    window.dispatchEvent(new Event(TELEMETRY_PREFERENCES_EVENT));
 }
+
+export const TELEMETRY_PREFERENCES_EVENT = 'bms-telemetry-preferences';
 
 export function parseTelemetryTimestampMs(timestamp: string): number {
     const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(timestamp) ? timestamp : `${timestamp}Z`;

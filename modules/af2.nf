@@ -27,7 +27,7 @@ process RunAF2 {
 
     script:
     """
-        python3 /dl_binder_design/af2_initial_guess/predict.py \
+        python3 /scripts/run_af2_initial_guess.py \
             -pdbdir ./ \
             -outpdbdir outputs \
             -scorefilename ${batch_id}_out.sc \

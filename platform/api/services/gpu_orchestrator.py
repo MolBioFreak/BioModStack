@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
@@ -277,7 +278,7 @@ VRAM_PROFILES = {
     'esmfold2_experimental': {'base': 22000, 'scale': 35},  # Compatibility alias
 
     'oligo_design': {'base': 7000, 'scale': 20},     # Oligo Designer (RFDpoly + NA-MPNN)
-    'nanopore': {'base': 15360, 'scale': 0},        # Dorado P4 lock: total VRAM floor, runtime also requires 8192 MiB free
+    'nanopore': {'base': 12288, 'scale': 0},        # Display estimate; packing books nanopore_vram_fraction of the card
     'default': {'base': 6000, 'scale': 25},     # Conservative fallback
 }
 
@@ -754,12 +755,9 @@ def _has_terminal_nextflow_history(history_entry: Any) -> bool:
 
 
 def _job_requires_result_output_for_terminal_history(job: Any) -> bool:
-    from services.result_state_integrity import (
-        job_expects_design_results,
-        job_expects_rfd3_local_redesign_candidates,
-    )
+    from services.result_state_integrity import job_expects_design_results
 
-    return job_expects_design_results(job) or job_expects_rfd3_local_redesign_candidates(job)
+    return job_expects_design_results(job)
 
 
 def _reconcile_terminal_history_without_process(
@@ -1001,6 +999,8 @@ def estimate_vram(model_type: str, sequence_length: int, params: Optional[Any] =
     """
     normalized_model = (model_type or "default").strip().lower()
     effective_length = max(1, _coerce_int(sequence_length, 300))
+    if normalized_model in {'family_msa_protein', 'family_msa_nucleic'}:
+        return 0  # Family alignment is CPU-only, including new attempts.
     if normalized_model == 'protonpottsmpnn':
         from services.protonpottsmpnn_design import execution_device
         if not str(execution_device(params if isinstance(params, dict) else None)).startswith('cuda'):
@@ -1885,7 +1885,10 @@ async def _adapter_transient_owner_liveness(
         )
         return _AdapterTransientOwnerLiveness.ACTIVE
 
-    if owner_state == "inactive" and not cgroup_nonempty:
+    # systemd reports "failed" for a unit whose main process was killed (for
+    # example by the cgroup OOM killer). With an empty cgroup it is as terminal
+    # as "inactive"; holding it left killed jobs "running" indefinitely.
+    if owner_state in {"inactive", "failed"} and not cgroup_nonempty:
         return _AdapterTransientOwnerLiveness.INACTIVE
 
     logger.critical(
@@ -1975,6 +1978,34 @@ def _gpu_target_fill(gpu_index: int, config: Dict[str, Any]) -> float:
     except (TypeError, ValueError):
         fill = global_fill
     return max(0.05, min(0.99, fill))
+
+
+def _nanopore_vram_fraction(config: Dict[str, Any]) -> float:
+    try:
+        value = float(config.get("global", {}).get("nanopore_vram_fraction", 0.75))
+    except (TypeError, ValueError):
+        value = 0.75
+    return max(0.25, min(0.95, value))
+
+
+def _job_required_mb(job: Any, gpu_capacity_mb: int, config: Dict[str, Any]) -> int:
+    """Packing reservation for one job on one card.
+
+    Dorado sizes its batches to the card, so CUDA basecalling books a share of
+    the host card's VRAM (operator slider, default 75%) instead of a fixed floor.
+    """
+    if getattr(job, "model_type", None) == "nanopore":
+        return max(1, int(gpu_capacity_mb * _nanopore_vram_fraction(config)))
+    return job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
+
+
+def _job_fits(job: Any, gpu_index: int, capacity: Dict[int, int], projected: Dict[int, int], config: Dict[str, Any]) -> bool:
+    required = _job_required_mb(job, capacity[gpu_index], config)
+    if getattr(job, "model_type", None) == "nanopore":
+        # The slider already is the allotment; only the card's free memory bounds it.
+        return required <= capacity[gpu_index] - projected[gpu_index]
+    available = (capacity[gpu_index] * _gpu_target_fill(gpu_index, config)) - projected[gpu_index] - _gpu_safety_margin_mb(gpu_index, config)
+    return required <= available
 
 
 def _gpu_safety_margin_mb(gpu_index: int, config: Dict[str, Any]) -> int:
@@ -2252,12 +2283,7 @@ def pack_jobs_to_gpus(
             
             # Check 4: VRAM availability (with per-GPU safety margin)
             gpu_override = _gpu_override(gpu.index, config)
-            safety_margin = _gpu_safety_margin_mb(gpu.index, config)
-            gpu_fill_target = _gpu_target_fill(gpu.index, config)
-            available = (capacity[gpu.index] * gpu_fill_target) - projected[gpu.index] - safety_margin
-            
-            required = job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
-            if required > available:
+            if not _job_fits(job, gpu.index, capacity, projected, config):
                 continue  # Doesn't fit
             
             # ═══════════════════════════════════════════════════════════════
@@ -2305,7 +2331,7 @@ def pack_jobs_to_gpus(
         # ═══════════════════════════════════════════════════════════════════
         if best_gpu is not None:
             assignments.append((job, best_gpu))
-            projected[best_gpu] += job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
+            projected[best_gpu] += _job_required_mb(job, capacity[best_gpu], config)
             projected_jobs_per_gpu[best_gpu] = projected_jobs_per_gpu.get(best_gpu, 0) + 1
             if quick_enable_tokens.get(best_gpu, 0) > 0:
                 quick_enable_tokens[best_gpu] = 0
@@ -2614,11 +2640,7 @@ def build_queue_scheduler_diagnostics(
                 reason_buckets.setdefault("requires Protenix-compatible GPU", []).append(gpu.index)
                 continue
 
-            safety_margin = _gpu_safety_margin_mb(gpu.index, config)
-            gpu_fill_target = _gpu_target_fill(gpu.index, config)
-            available = (capacity[gpu.index] * gpu_fill_target) - projected[gpu.index] - safety_margin
-            required = job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
-            if required > available:
+            if not _job_fits(job, gpu.index, capacity, projected, config):
                 reason_buckets.setdefault("VRAM fill cap reached", []).append(gpu.index)
                 continue
 
@@ -2650,7 +2672,7 @@ def build_queue_scheduler_diagnostics(
         job_diag["scheduler_candidate_gpus"] = candidate_gpu_ids
 
         assignments.append((job, best_gpu))
-        projected[best_gpu] += job.scheduler_reservation_mb if job.scheduler_reservation_mb is not None else job.vram_estimate_mb
+        projected[best_gpu] += _job_required_mb(job, capacity[best_gpu], config)
         projected_jobs_per_gpu[best_gpu] = projected_jobs_per_gpu.get(best_gpu, 0) + 1
         projected_by_model[job.model_type] = projected_by_model.get(job.model_type, 0) + 1
         if quick_enable_tokens.get(best_gpu, 0) > 0:
@@ -2675,6 +2697,12 @@ def build_queue_scheduler_diagnostics(
 # MAIN ORCHESTRATOR LOOP
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Binder-round recovery reconciles completed child Jobs and can schedule their
+# follow-on analyses. It scans completed Jobs with JSON predicates over the
+# provenance column; at the 3 s scheduling cadence that read the whole Jobs table
+# several times a minute for no benefit. One minute bounds the recovery delay.
+BINDER_RECOVERY_INTERVAL_SECONDS = 60.0
+
 class GPUOrchestrator:
     """
     Background service that manages GPU job scheduling.
@@ -2698,6 +2726,7 @@ class GPUOrchestrator:
         self._running = False
         self._task = None
         self._remote_reconciliation_tasks: dict[str, asyncio.Task] = {}
+        self._next_binder_recovery_at = 0.0
     
     async def start(self):
         """Start the orchestrator loop."""
@@ -3055,9 +3084,12 @@ class GPUOrchestrator:
                         params={**job.params},  # No gpu_id injected
                         output_dir=job.child_output_dir or job.output_dir
                     )
-                    if pending:
+                    if pending or job.model_id in {'family_msa_protein', 'family_msa_nucleic'}:
                         await session.refresh(job)
-                    if not pending or job.status not in {'awaiting_input', 'completed', 'failed', 'cancelled'}:
+                    if (not pending and job.model_id not in {'family_msa_protein', 'family_msa_nucleic'}) or (
+                        job.status not in {'awaiting_input', 'completed', 'failed', 'cancelled'}
+                        and job.queue_status != 'cancelling'
+                    ):
                         job.queue_status = "running"
                         job.assigned_gpu = None
                         job.started_at = datetime.utcnow()
@@ -3362,6 +3394,9 @@ class GPUOrchestrator:
                 job = await session.get(Job, remote_id)
                 if job is not None:
                     await reconcile_remote_job(session, job)
+                    if (job.params or {}).get("permanent_delete_cleanup") is True:
+                        from services.job_control import finalize_permanent_delete_cleanup
+                        await finalize_permanent_delete_cleanup(session, remote_id)
         except Exception as exc:
             logger.warning("[REMOTE COMPLETION] Job %s remains pending reconciliation: %s", remote_id, exc)
 
@@ -3382,18 +3417,27 @@ class GPUOrchestrator:
             from services.nextflow import maybe_trigger_mutation_seed_refinement
             from services.binder_round import recover_rounds
             from experiment_database import experiment_session_factory
-            await recover_rounds(self.db_session_factory, experiment_session_factory)
+            # Recovery scans completed Jobs and their provenance JSON. It is a
+            # recovery sweep, not a progress read: once per interval is enough,
+            # and repeating it every orchestrator cycle read the whole Jobs table
+            # several times a minute.
+            now_monotonic = time.monotonic()
+            if now_monotonic >= self._next_binder_recovery_at:
+                self._next_binder_recovery_at = now_monotonic + BINDER_RECOVERY_INTERVAL_SECONDS
+                await recover_rounds(self.db_session_factory, experiment_session_factory)
 
             # Native follow-ons remain pending after remote import releases its
             # lease. Recover only explicitly requested, unconsumed MSA batches;
             # completed historical jobs do not enter generic running finalization.
             async with self.db_session_factory() as recovery_session:
+                # Same predicate as before, in an order that lets the batch_id index and the cheap
+                # params test reject rows before the large provenance column is read on every cycle.
                 pending_batches = select(Job.batch_id).where(
-                    (Job.job_phase == 'msa_generation') |
-                    Job.provenance['mutation_seed_expansion'].as_string().is_not(None),
                     Job.batch_id.is_not(None),
                     Job.params["mutation_seed_refinement_trigger"].as_string().is_not(None),
                     func.coalesce(Job.params["_mutation_seed_refinement_triggered"].as_boolean(), False).is_(False),
+                    (Job.job_phase == 'msa_generation') |
+                    Job.provenance['mutation_seed_expansion'].as_string().is_not(None),
                 )
                 representatives = await recovery_session.execute(select(func.min(Job.id)).where(
                     Job.batch_id.in_(pending_batches),
@@ -3413,21 +3457,27 @@ class GPUOrchestrator:
                 from services.remote_execution.claims import outstanding_claim_clause
                 leased_owner = outstanding_claim_clause()
                 # Preparing claims are durable work, not scheduler-claimable jobs.
+                # The same three conditions as one OR, as a union of two selects: the queue_status
+                # index answers the first, so the large provenance column is read only for the
+                # few jobs that have a remote execution target.
+                by_queue_status = select(Job.id).where(Job.queue_status.in_(("running", "cancelling", "preparing")))
+                by_review_gate = select(Job.id).where(
+                    Job.status == "awaiting_input", Job.awaiting_input.is_(True),
+                    Job.queue_status != "cancelling",
+                    Job.awaiting_payload["component_checkpoint"].as_string().is_not(None),
+                )
+                by_remote_owner = select(Job.id).where(
+                    Job.execution_target_id.is_not(None),
+                    leased_owner
+                    | Job.params["permanent_delete_cleanup"].as_boolean().is_(True)
+                    | (Job.remote_state == "results_available")
+                    | (
+                        Job.status.in_(("failed", "cancelled"))
+                        & (Job.provenance["remote_diagnostics"]["state"].as_string() == "returning")
+                    ),
+                )
                 result = await session.execute(
-                    select(Job).where(
-                        Job.queue_status.in_(("running", "cancelling", "preparing"))
-                        | leased_owner
-                        | (
-                            Job.execution_target_id.is_not(None)
-                            & (
-                                (Job.remote_state == "results_available")
-                                | (
-                                    Job.status.in_(("failed", "cancelled"))
-                                    & (Job.provenance["remote_diagnostics"]["state"].as_string() == "returning")
-                                )
-                            )
-                        )
-                    )
+                    select(Job).where(Job.id.in_(by_queue_status.union(by_remote_owner, by_review_gate)))
                 )
                 running_jobs = result.scalars().all()
 
@@ -3442,6 +3492,25 @@ class GPUOrchestrator:
                     if task.done():
                         del self._remote_reconciliation_tasks[remote_id]
 
+                local_gates = [job for job in running_jobs if job.status == "awaiting_input"
+                               and (job.awaiting_payload or {}).get("component_checkpoint")]
+                running_jobs = [job for job in running_jobs if job not in local_gates]
+                from services.stage_review import publish_local_checkpoint_review_rows
+                for gate in local_gates:
+                    gate_id = str(gate.id)
+                    attempts = getattr(self, "_local_review_row_attempts", {})
+                    self._local_review_row_attempts = attempts
+                    now = time.monotonic()
+                    if now - attempts.get(gate_id, -60.0) < 60.0:
+                        continue
+                    attempts[gate_id] = now
+                    # Separate session: rollback of this optional projection must
+                    # not expire unrelated scheduler snapshots.
+                    try:
+                        async with self.db_session_factory() as review_session:
+                            await publish_local_checkpoint_review_rows(review_session, gate_id)
+                    except Exception:
+                        logger.exception("Job %s: review projection remains pending", gate_id)
                 if not running_jobs:
                     return
 
@@ -3699,12 +3768,9 @@ class GPUOrchestrator:
                                         reconciled += 1
                                         continue
                                 else:
-                                    from services.result_state_integrity import (
-                                        job_expects_design_results,
-                                        job_expects_rfd3_local_redesign_candidates,
-                                    )
+                                    from services.result_state_integrity import job_expects_design_results
 
-                                    if job_expects_design_results(job) or job_expects_rfd3_local_redesign_candidates(job):
+                                    if job_expects_design_results(job):
                                         job.status = "failed"
                                         job.queue_status = "failed"
                                         job.current_stage = "Result Ingestion Failed"

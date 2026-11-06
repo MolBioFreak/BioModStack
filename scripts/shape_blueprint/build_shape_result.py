@@ -147,7 +147,7 @@ def build_result(
             raise ValueError("Shape candidate ID is invalid or duplicated")
         seen.add(candidate_id)
         native_evidence = {}
-        if request.get("sequence_policy") != "skip":
+        if request.get("sequence_policy") != "skip" and request.get("sequences_per_backbone", 0) > 0:
             suite_descriptor = metadata.get("validator_evidence")
             if not isinstance(suite_descriptor, dict):
                 raise ValueError("sequence candidate lacks native validator suite")

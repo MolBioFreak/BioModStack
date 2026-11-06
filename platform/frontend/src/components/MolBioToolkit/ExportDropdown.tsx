@@ -5,6 +5,8 @@
 import { useState, useRef, useEffect, useLayoutEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
 import type { HistoryEntry } from './hooks/useSequenceHistory';
+import { hasStickyDigestEnds } from '../../lib/retainedDigestFragment';
+import type { RestrictionDigestFragment } from '../../lib/restrictionAnalysis';
 import {
     buildPrimersTsv,
     canonicalizeExportablePrimer,
@@ -15,6 +17,7 @@ interface ExportDropdownProps {
         name: string;
         description?: string;
         sequence: string;
+        digestFragment?: RestrictionDigestFragment;
         features?: Array<{
             name: string;
             type: string;
@@ -37,6 +40,8 @@ interface ExportDropdownProps {
             strand: 1 | -1;
             tm?: number;
             gc_percent?: number;
+            binding_status?: 'needs_review';
+            binding_warning?: string;
             sites?: Array<{
                 start: number;
                 end: number;
@@ -47,6 +52,8 @@ interface ExportDropdownProps {
         sequenceType?: 'dna' | 'rna' | 'protein';
     };
     historyJournal?: HistoryEntry[];
+    onExportToProject?: () => void;
+    projectExportDisabled?: boolean;
     className?: string;
 }
 
@@ -67,7 +74,7 @@ function formatNotes(feature: NonNullable<ExportDropdownProps['sequenceData']['f
     };
 }
 
-export function ExportDropdown({ sequenceData, historyJournal = [], className }: ExportDropdownProps) {
+export function ExportDropdown({ sequenceData, historyJournal = [], className, onExportToProject, projectExportDisabled = false }: ExportDropdownProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [exportError, setExportError] = useState<string | null>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -123,6 +130,12 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className }:
     const exportAs = async (format: 'genbank' | 'fasta' | 'json' | 'features_tsv' | 'primers_tsv' | 'history_txt') => {
         setExportError(null);
         try {
+            if ((format === 'fasta' || format === 'genbank') && hasStickyDigestEnds(sequenceData.digestFragment)) {
+                throw new Error('This fragment has physical sticky ends. FASTA and this GenBank exporter cannot preserve both strands and end chemistry. Export Toolkit JSON or reopen the saved digest instead.');
+            }
+            if (format === 'genbank' && sequenceData.primers?.some(primer => primer.binding_status === 'needs_review')) {
+                throw new Error('Review primer bindings before GenBank export, or export JSON/primer TSV to retain unplaced oligos.');
+            }
             let content: string;
             let extension: string;
 
@@ -229,6 +242,7 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className }:
                 <div ref={popupRef} id={popupId} role="group" aria-label="Export formats"
                     style={{ ...position, maxWidth: 'calc(100vw - 16px)', maxHeight: 'calc(100vh - 16px)' }}
                     className="fixed w-56 overflow-y-auto bg-slate-700 border border-slate-600 rounded shadow-lg z-[100]">
+                    {onExportToProject && <button type="button" disabled={projectExportDisabled} onClick={() => { setIsOpen(false); onExportToProject(); }} className="w-full border-b border-slate-600 px-3 py-2 text-left text-sm font-semibold text-cyan-300 hover:bg-slate-600 disabled:opacity-50" title={projectExportDisabled ? 'Save this sequence before exporting it to a Project' : 'Add this saved sequence and optional history to a Project'}>Export to Project…</button>}
                     <button
                         onClick={() => exportAs('genbank')}
                         className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-slate-600 transition-colors"

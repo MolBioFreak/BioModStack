@@ -6,6 +6,7 @@ import { BioXpNumericInput } from './BioXpNumericInput';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
 
 export const BioXpSchemaVariantContext = createContext<{ selection: (label: string) => number | undefined; change: (label: string, index: number) => boolean } | null>(null);
+export const BioXpSchemaControlContext = createContext<((field: { label: string; schema: Schema; value: unknown; path: ReadonlyArray<string | number>; onChange: (value: unknown) => void }) => React.ReactNode | undefined) | null>(null);
 const classes = 'mt-1 w-full rounded border border-slate-700 bg-slate-900 p-2';
 const objectValue = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const typeOf = (value: unknown) => value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
@@ -77,13 +78,15 @@ function matches(schema: Schema, value: unknown, root: Schema): boolean {
 }
 
 /** Schema-driven presentation, not an admission/validation authority. */
-export function BioXpSchemaInput({ label, schema, value, onChange, fallback, rootSchema = schema, rawDraft = false }: {
-    label: string; schema: Schema; rootSchema?: Schema; rawDraft?: boolean; value: unknown; onChange: (value: unknown) => void;
+export function BioXpSchemaInput({ label, schema, value, onChange, fallback, rootSchema = schema, rawDraft = false, nativeLabels = false, showInherited = false, useSchemaTitles = false, path = [] }: {
+    label: string; schema: Schema; rootSchema?: Schema; rawDraft?: boolean; nativeLabels?: boolean; showInherited?: boolean; useSchemaTitles?: boolean; value: unknown; onChange: (value: unknown) => void;
     fallback: (label: string, value: unknown, onChange: (value: unknown) => void) => React.ReactNode;
+    path?: ReadonlyArray<string | number>;
 }) {
     const [newKey, setNewKey] = useState('');
     const variantOwner = useContext(BioXpSchemaVariantContext);
-    const display = (name: string) => rawDraft ? name.replace(/^(Inputs|Node|Structure|Repeat|Condition|Arguments) [^.\[]+/, '$1').replaceAll('_', ' ') : name;
+    const controlOwner = useContext(BioXpSchemaControlContext);
+    const display = (name: string) => useSchemaTitles && name === label && resolve(schema, rootSchema).title ? resolve(schema, rootSchema).title! : rawDraft ? name.replace(/^(Inputs|Node|Structure|Repeat|Condition|Arguments) [^.\[]+/, '$1').replaceAll('_', ' ') : name;
     // Object unions can share a type and start empty. Keep an explicit choice
     // while authoring; persisted unique field names identify it on reopen.
     const retainedVariants = useRef<Record<number, unknown>>({});
@@ -110,7 +113,13 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
     };
     const active = choices[selected];
     const kind = active.type ?? (active.properties ? 'object' : active.items ? 'array' : undefined);
+    // Native schemas use ordered heterogeneous tuples (for example metric
+    // name/cutoff pairs). Keep each position's schema instead of treating it as
+    // an untyped homogeneous array. Existing non-tuple controls are unchanged.
+    const prefixItems = Array.isArray(active.prefixItems) ? active.prefixItems as Schema[] : [];
+    const itemSchema = (index: number) => prefixItems[index] ?? active.items ?? {};
     const enums = active.enum ?? (Object.hasOwn(active, 'const') ? [active.const] : undefined);
+    const customControl = controlOwner?.({ label, schema: { ...resolved, ...active }, value, onChange, path });
     const fields = active.properties ?? {};
     const update = (name: string, next: unknown) => {
         const result = { ...(objectValue(value) ? value : {}) };
@@ -122,21 +131,27 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
     return <fieldset className="bioxp-schema-field min-w-0 space-y-2 rounded border border-slate-700 p-2">
         <legend>{display(label)}</legend>
         {rawDraft && ['string', 'number', 'integer', 'boolean'].includes(String(kind)) && !enums && <button type="button" aria-label={`Use expression for ${label}`} onClick={() => onChange({ expr: { version: 1, op: 'literal', value } })}>Use expression for {display(label)}</button>}
-        {schema.description && <p className="text-xs text-slate-400">{schema.description}</p>}
-        {choices.length > 1 && <label>Variant<select aria-label={`${label} variant`} className={classes} value={selected} onChange={event => { const index = Number(event.target.value); if (variantOwner?.change(label, index)) return; retainedVariants.current[selected] = structuredClone(value); setChosenVariant(index); const initial = variantValue(index), restored = retainedVariants.current[index]; if (objectValue(value) && objectValue(initial)) { const next = { ...value }; for (const key of Object.keys(choices[selected].properties ?? {})) if (!Object.hasOwn(choices[index].properties ?? {}, key)) delete next[key]; const prior = objectValue(restored) ? restored : {}; onChange({ ...prior, ...next, ...initial }); } else onChange(restored === undefined ? initial : structuredClone(restored)); }}>
-            {choices.map((choice, index) => <option key={index} value={index}>{choice.title ?? String(choice.type ?? `Variant ${index + 1}`)}</option>)}
+        {(useSchemaTitles ? resolved.description : schema.description) && <p className="text-xs text-slate-400">{useSchemaTitles ? resolved.description : schema.description}</p>}
+        {choices.length > 1 && <label>{useSchemaTitles ? 'Value choice' : 'Variant'}<select aria-label={`${label} variant`} className={classes} value={selected} onChange={event => { const index = Number(event.target.value); if (variantOwner?.change(label, index)) return; retainedVariants.current[selected] = structuredClone(value); setChosenVariant(index); const initial = variantValue(index), restored = retainedVariants.current[index]; if (objectValue(value) && objectValue(initial)) { const next = { ...value }; for (const key of Object.keys(choices[selected].properties ?? {})) if (!Object.hasOwn(choices[index].properties ?? {}, key)) delete next[key]; const prior = objectValue(restored) ? restored : {}; onChange({ ...prior, ...next, ...initial }); } else onChange(restored === undefined ? initial : structuredClone(restored)); }}>
+            {choices.map((choice, index) => {
+                const tags = Object.values(choice.properties ?? {}).map(child => resolve(child, rootSchema)).filter(child => Object.hasOwn(child, 'const')).map(child => String(child.const));
+                return <option key={index} value={index}>{useSchemaTitles && choice.type === 'null' && resolved['x-null-label'] ? String(resolved['x-null-label']) : nativeLabels && tags.length ? tags.join(' / ') : choice.title ?? String(choice.type ?? `Variant ${index + 1}`)}</option>;
+            })}
         </select></label>}
-        {enums ? <label>{display(label)}<select aria-label={label} className={classes} value={enums.findIndex(item => JSON.stringify(item) === JSON.stringify(value))} onChange={event => onChange(structuredClone(enums[Number(event.target.value)]))}>
+        {customControl !== undefined ? customControl : enums ? <label>{display(label)}<select aria-label={label} className={classes} value={enums.findIndex(item => JSON.stringify(item) === JSON.stringify(value))} onChange={event => onChange(structuredClone(enums[Number(event.target.value)]))}>
             <option value={-1}>Select…</option>{enums.map((item, index) => <option key={index} value={index}>{typeof item === 'string' ? item : JSON.stringify(item)}</option>)}
         </select></label> : kind === 'object' && objectValue(value) ? <>
             {[...new Set([...Object.keys(fields), ...Object.keys(value)])].map(name => {
                 const child = resolve(fields[name] ?? (objectValue(active.additionalProperties) ? active.additionalProperties as Schema : {}), rootSchema);
+                const reference = [child, ...(child.anyOf ?? []), ...(child.oneOf ?? [])].map(item => resolve(item, rootSchema)).find(item => Object.hasOwn(item, 'default') && item.default_source);
+                const inherited = showInherited && value[name] === undefined && reference !== undefined;
                 return <div key={name}>
-                    <label>{display(`${label}.${name}`)}{active.required?.includes(name) ? ' *' : ''}<select aria-label={`${label}.${name} presence`} className={classes} value={value[name] === undefined ? 'omitted' : 'value'} onChange={event => update(name, event.target.value === 'omitted' ? undefined : initialValue(child))}>
+                    <label>{useSchemaTitles && child.title ? child.title : display(`${label}.${name}`)}{active.required?.includes(name) ? ' *' : ''}<select aria-label={`${label}.${name} presence`} className={classes} value={value[name] === undefined ? 'omitted' : 'value'} onChange={event => update(name, event.target.value === 'omitted' ? undefined : initialValue(child))}>
                         <option value="omitted">{rawDraft ? 'Unspecified (preserved)' : `Omit (service default${Object.hasOwn(child, 'default') ? `: ${JSON.stringify(child.default)}` : ''})`}</option><option value="value">Explicit value</option>
                     </select></label>
                     {rawDraft && value[name] === undefined && Object.hasOwn(child, 'source_default') && <button type="button" aria-label={`Use source value for ${label}.${name}`} onClick={() => update(name, structuredClone(child.source_default))}>Use source value: {JSON.stringify(child.source_default)}</button>}
-                    {value[name] !== undefined && <BioXpSchemaInput label={`${label}.${name}`} schema={child} rootSchema={rootSchema} rawDraft={rawDraft} value={value[name]} onChange={next => update(name, next)} fallback={fallback} />}
+                    {inherited && <p className="text-xs text-slate-400">Inherited reference: {JSON.stringify(reference.default)} · {String(reference.default_source)}. Not an override.</p>}
+                    {(value[name] !== undefined || inherited) && <BioXpSchemaInput label={`${label}.${name}`} schema={child} rootSchema={rootSchema} rawDraft={rawDraft} nativeLabels={nativeLabels} useSchemaTitles={useSchemaTitles} showInherited={showInherited} value={inherited ? reference.default : value[name]} path={[...path, name]} onChange={next => update(name, next)} fallback={fallback} />}
                 </div>;
             })}
             {active.additionalProperties !== false && <>
@@ -145,11 +160,11 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
             </>}
         </> : kind === 'array' && Array.isArray(value) ? <>
             <p className="text-xs text-slate-400">Items: {active.minItems ?? 'unbounded'} to {active.maxItems ?? 'unbounded'}</p>
-            {value.map((item, index) => <div key={index}><BioXpSchemaInput label={`${label}[${index}]`} schema={active.items ?? {}} rootSchema={rootSchema} rawDraft={rawDraft} value={item} onChange={next => onChange(value.map((old, i) => i === index ? next : old))} fallback={fallback} />
+            {value.map((item, index) => <div key={index}><BioXpSchemaInput label={`${label}[${index}]`} schema={itemSchema(index)} rootSchema={rootSchema} rawDraft={rawDraft} nativeLabels={nativeLabels} useSchemaTitles={useSchemaTitles} value={item} path={[...path, index]} onChange={next => onChange(value.map((old, i) => i === index ? next : old))} fallback={fallback} />
                 <button type="button" onClick={() => onChange(value.filter((_, i) => i !== index))}>Remove {display(label)}[{index}]</button></div>)}
-            <button type="button" aria-label={`Add ${label} item`} onClick={() => onChange([...value, initialValue(active.items ?? {})])}>Add {display(label)} item</button>
+            <button type="button" aria-label={`Add ${label} item`} onClick={() => onChange([...value, initialValue(itemSchema(value.length))])}>Add {display(label)} item</button>
         </> : kind === 'boolean' ? <label>{display(label)}<input aria-label={label} type="checkbox" checked={value === true} onChange={event => onChange(event.target.checked)} /></label>
-            : kind === 'null' ? <p>Explicit null</p>
+            : kind === 'null' ? <p>{useSchemaTitles && (resolved['x-null-label'] || active.title) ? String(resolved['x-null-label'] || active.title) : 'Explicit null'}</p>
                 : kind === 'string' || kind === 'number' || kind === 'integer' ? <>
                     <label>{display(label)}{kind === 'string' || rawDraft ? <input aria-label={label} className={classes} type="text" minLength={active.minLength} maxLength={active.maxLength} value={String(value ?? '')} onChange={event => onChange(event.target.value)} />
                         : <BioXpNumericInput aria-label={label} className={classes} step={kind === 'integer' ? 1 : 'any'} min={active.minimum ?? active.exclusiveMinimum} max={active.maximum ?? active.exclusiveMaximum} value={value} onValueChange={onChange} />}</label>

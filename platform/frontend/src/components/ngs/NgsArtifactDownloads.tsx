@@ -9,7 +9,7 @@ export function NgsArtifactDownloads({ jobId }: { jobId: string }) {
         {query.isError && <p role="alert">{describeNgsError(query.error, 'Job-scoped downloads could not be loaded.')} <button type="button" onClick={() => void query.refetch()}>Retry downloads</button></p>}
         {query.data?.artifacts.map((artifact, index) => <div key={artifact.artifact_id || `${artifact.source}:${artifact.kind}:${index}`} className="text-xs">
             {artifact.state === 'present' && artifact.url
-                ? <a href={artifact.url} className="text-sky-300 underline">{artifact.filename || `${artifact.source} · ${artifact.kind}`}</a>
+                ? <a href={artifact.url} className="text-[var(--accent-primary)] underline">{artifact.filename || `${artifact.source} · ${artifact.kind}`}</a>
                 : <span>{artifact.filename || artifact.kind}: {artifact.unavailable_reason || artifact.state}</span>}
         </div>)}
     </div>;

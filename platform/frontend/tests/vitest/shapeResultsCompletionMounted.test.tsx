@@ -7,7 +7,6 @@ import { api, type Design, type Job } from '../../src/lib/api';
 import { ResultsViewer } from '../../src/components/ResultsViewer';
 import { JobSubmission } from '../../src/components/JobSubmission';
 import { ProteinModificationTemplate } from '../../src/components/ProteinModificationTemplate';
-import { ProteinLocalRedesignTemplate } from '../../src/components/ProteinLocalRedesignTemplate';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
 import { AnalyticsDashboard } from '../../src/components/AnalyticsDashboard';
 import { StructureWorkbench } from '../../src/structureViewer/StructureWorkbench';
@@ -144,7 +143,6 @@ it.each(['standalone', 'context'])('selected native document reaches the mounted
     ]);
     expect(calls.filter(call => call.url === '/api/files/materialize-structure').map(call => call.context)).toEqual(destination === 'context' ? ['deliberate-context', 'deliberate-context'] : [undefined, undefined]);
     expect(mounted!.root.findByType(ProteinModificationTemplate).props.initialValues).toMatchObject({ input_structure: 'inputs/exact-derived.pdb', source_structure: { design_id: 'id-0', document: { artifact_id: 'source-0' } }, _source_native_prepared: { format: 'cif' } });
-    expect(mounted!.root.findByType(ProteinLocalRedesignTemplate).props.initialValues).toMatchObject({ input_structure: 'inputs/exact-derived.pdb' });
     expect(calls.some(call => call.url === '/api/jobs' && call.body)).toBe(false);
 });
 

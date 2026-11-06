@@ -30,6 +30,14 @@ from services.remote_execution import executor as ex, targets
 from tools import bms_remote_worker as worker
 
 
+async def holds_claim(session):
+    # Continuations are admitted through the per-Job shared VRAM claim (7edd030); the legacy
+    # target lease pointer is deliberately left untouched, so the claim owner is the Job.
+    from services.remote_execution.claims import job_has_claim
+    job = await session.get(Job, 'job', populate_existing=True)
+    return job_has_claim(await session.get(ExecutionTarget, 'target', populate_existing=True), job)
+
+
 @pytest_asyncio.fixture
 async def lane(tmp_path, monkeypatch):
     root = Path(__file__).resolve().parents[3]
@@ -92,8 +100,12 @@ async def lane(tmp_path, monkeypatch):
         source_tree='b'*40, execution_envelope_sha256='c'*64, lease_acquired_at=epoch.isoformat(),
         component_context_identity={k: context[k] for k in ('attempt_id', 'root_job_id', 'target_id', 'lease_id')})
     async with factory() as session:
+        # Continuations reserve capacity through the target-scoped VRAM packer (7edd030), which
+        # needs a complete inventory, the GPU count and live telemetry; the fixture supplies them.
         session.add(ExecutionTarget(id='target', provider='vast', provider_instance_id='1', active=True,
-            state='ready', leased_job_id=None, lease_acquired_at=None))
+            state='ready', leased_job_id=None, lease_acquired_at=None, capabilities={'gpu_count': 1},
+            provider_metadata={'inventory': {'status': 'complete', 'present': True, 'running': True,
+                'checked_at': datetime.utcnow().isoformat()}}))
         session.add(Job(id='job', name='job', model_id='antibody_design', mode='denovo', params={},
             status='awaiting_input', queue_status='completed', awaiting_input=True, awaiting_stage='post_fampnn',
             awaiting_payload={'component_checkpoint': checkpoint, 'component_checkpoints': [checkpoint]},
@@ -106,6 +118,10 @@ async def lane(tmp_path, monkeypatch):
         return await session.get(ExecutionTarget, 'target', populate_existing=True)
     async def capacity(*args, **kwargs):
         return deepcopy(admission)
+    async def gpu_telemetry(target):
+        return dict(available=True, gpus=[dict(index=0, uuid='GPU-original', memory_total_mb=48000,
+            memory_used_mb=0, utilization=0)])
+    monkeypatch.setattr(targets, 'remote_target_telemetry', gpu_telemetry)
     monkeypatch.setattr(targets, 'get_ready_target', ready)
     monkeypatch.setattr(targets, 'admit_target_resources', capacity)
     monkeypatch.setattr(ex, '_connection_for_attempt', lambda *_: (None, str(attempt)))
@@ -126,6 +142,10 @@ async def lane(tmp_path, monkeypatch):
     monkeypatch.setattr(nextflow, 'compile_nextflow_invocation', native)
     spawns = []
     def spawn(*args, **kwargs):
+        # subprocess.Popen is process-global: the VRAM packer's nvidia-smi probe (7edd030) also reaches
+        # it. Only the worker's own supervisor launch is modelled; anything else keeps the real Popen.
+        if not (args and isinstance(args[0], (list, tuple)) and 'supervise' in args[0]):
+            return real_popen(*args, **kwargs)
         # Model a live supervisor identity; real lock/claim duplicate execution
         # is independently exercised by the process test below.
         spawns.append(args)
@@ -247,7 +267,7 @@ async def test_rejected_http_continuation_is_correctable_and_releases_reservatio
         job = await session.get(Job, 'job')
         assert job.provenance['remote_checkpoint_operation']['binding']['operation_id'] != first
         assert job.provenance['remote_execution_receipt']['generation'] == 1
-        assert (await session.get(ExecutionTarget, 'target')).leased_job_id == 'job'
+        assert await holds_claim(session)
     assert len(lane.spawns) == 1
 
 
@@ -291,7 +311,7 @@ async def test_durable_same_operation_recovers_crash_boundaries(lane, monkeypatc
         job = await session.get(Job, 'job')
         intent = deepcopy(job.provenance['remote_checkpoint_operation'])
         assert job.provenance['remote_execution_receipt']['generation'] == 0
-        assert (await session.get(ExecutionTarget, 'target')).leased_job_id == 'job'
+        assert await holds_claim(session)
     assert (await resume(lane, {'continue': True})).status_code == 409
     # Fresh independent physical DB connection simulates restarted poller.
     async with lane.factory() as session:
@@ -389,7 +409,7 @@ async def test_cancel_intent_redelivers_original_attempt_and_never_releases_succ
     async with lane.factory() as session:
         assert not await ex.reconcile_remote_job(session, await session.get(Job, 'job'))
     async with lane.factory() as session:
-        assert (await session.get(ExecutionTarget, 'target')).leased_job_id == 'job'
+        assert await holds_claim(session)
         assert (await session.get(Job, 'job')).queue_status == 'cancelled'
     if race == 'local-writer': lane.local_barrier.return_value = False
     async with lane.factory() as session:
@@ -513,7 +533,7 @@ async def test_recovered_prepared_launch_rechecks_current_resources(lane, monkey
         required_scratch_bytes=0, gpu_ids=[0], minimum_gpu_memory_mb=0)]
     assert len(runs) == (0 if change else 1)
     async with lane.factory() as session:
-        assert (await session.get(ExecutionTarget, 'target')).leased_job_id == 'job'
+        assert await holds_claim(session)
 
 
 @pytest.mark.asyncio

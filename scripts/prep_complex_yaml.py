@@ -55,9 +55,9 @@ def generate_complex_yaml(
     }
     
     # MSA handling
-    if use_msa and msa_path:
+    if msa_path:
         protein_entity['protein']['msa'] = msa_path
-    else:
+    elif not use_msa:
         protein_entity['protein']['msa'] = 'empty'
     
     sequences.append(protein_entity)
@@ -103,6 +103,7 @@ def main():
                         help='Chain ID for DNA')
     parser.add_argument('--rna-id', default='C',
                         help='Chain ID for RNA')
+    parser.add_argument('--use-msa', action='store_true', help='Preserve native automatic MSA intent')
     parser.add_argument('--msa-path', default=None,
                         help='Path to pre-computed MSA file')
     parser.add_argument('--output', '-o', required=True,
@@ -122,7 +123,7 @@ def main():
         protein_id=args.protein_id,
         dna_id=args.dna_id,
         rna_id=args.rna_id,
-        use_msa=bool(args.msa_path),
+        use_msa=args.use_msa or bool(args.msa_path),
         msa_path=args.msa_path,
     )
     

@@ -1,4 +1,6 @@
 import React, { act, useState } from 'react';
+import { readFileSync } from 'node:fs';
+import { restrictionSpecialCase } from '../../src/lib/restrictionSpecialCases';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DigestPanel } from '../../src/components/MolBioToolkit/panels/DigestPanel';
@@ -8,7 +10,8 @@ import type { RestrictionAnalysisBatch, RestrictionCatalogReceipt, RestrictionCa
 
 // Canonical IDs, deliberately synthetic counts/motifs: these exercise UI policy,
 // not scientific recognition or enzyme capabilities.
-const special = ['AbaSI', 'MspJI'];
+// Independent exact-ID expectation from the source ledger, not helper output.
+const special = ['AbaSI', 'AbaUMB2I', 'AoxI', 'AspBHI', 'BisI', 'BlsI', 'BmeDI', 'Dde51507I', 'EcoBLMcrX', 'EcoO157SI', 'FspEI', 'GlaI', 'GluI', 'KroI', 'LpnPI', 'MspJI', 'MteI', 'NhoI', 'PcsI', 'Pfl8569I', 'PkrI', 'PsuGI', 'RlaI', 'SgeI', 'SgrTI', 'TagI', 'YkrI'];
 const ordinary = ['EcoRI', 'BamHI', 'HindIII', 'Nt.BbvCI', 'BsaI'];
 const sequence: SequenceData = { name: 'special-case fixture', sequence: 'ACGTACGTACGT', sequenceType: 'dna', circular: true, features: [] };
 const records = [...ordinary, ...special].map(enzyme_id => ({
@@ -43,19 +46,20 @@ const noop = () => undefined;
 function expectModifiedSubstrate(text: string) {
     // Accept the actual chemical modification names, not only the generic word.
     expect(text).toMatch(/requires[^.]*\b(?:modified|methylated|hydroxymethylated)\b[^.]*cytosines/i);
-    expect(text).toMatch(/no cleavage on unmodified DNA/i);
+    expect(text).toMatch(/sequence matches alone do not establish cleavage/i);
     expect(text).toMatch(/sequence motifs only|motif[- ]only/i);
 }
 
-describe('AbaSI/MspJI explicit special-case mapping', () => {
+describe('modified-cytosine-dependent explicit special-case mapping', () => {
     let root: Root | undefined;
     let host: HTMLDivElement;
     let mapped: string[];
+    let simulated: string[];
     afterEach(async () => { if (root) await act(async () => root?.unmount()); root = undefined; host?.remove(); });
 
     async function mount({ compactLandscape = false, specialDsb = 1 } = {}) {
         host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host);
-        mapped = [];
+        mapped = []; simulated = [];
         const analysis = batch(specialDsb);
         function Harness() {
             const [ids, setIds] = useState<string[]>([]);
@@ -63,7 +67,7 @@ describe('AbaSI/MspJI explicit special-case mapping', () => {
                 onHighlight={noop} selectedEnzymes={ids} onEnzymesChange={next => { mapped = next; setIds(next); }}
                 catalog={catalog} catalogRecords={records} analysis={analysis} authorityLoading={false} authorityError={null}
                 digestSimulation={null} digestLoading={false} digestError={null} onDigestSelectionChange={noop}
-                onSimulateDigest={noop} onAnalyzeAll={async () => analysis} />;
+                onSimulateDigest={ids => { simulated = ids; }} onAnalyzeAll={async () => analysis} />;
         }
         await act(async () => root?.render(<Harness />));
     }
@@ -85,7 +89,7 @@ describe('AbaSI/MspJI explicit special-case mapping', () => {
         });
     }
 
-    it('excludes exactly the special pair from the default list and ordinary search', async () => {
+    it('excludes exactly the special category from the default list and ordinary search', async () => {
         await mount(); expect(visibleIds()).toEqual(ordinary);
         await search('EcoRI'); expect(visibleIds()).toEqual(['EcoRI']);
         for (const id of special) { await search(id); expect(visibleIds()).toEqual([]); }
@@ -127,7 +131,7 @@ describe('AbaSI/MspJI explicit special-case mapping', () => {
         { label: 'Map all 3x+', specialDsb: 3, expected: ['HindIII'] },
         { label: 'Map nicking', specialDsb: 1, expected: ['Nt.BbvCI'] },
         { label: 'Map Golden Gate', specialDsb: 1, expected: ['BsaI'] },
-    ])('$label excludes both special IDs even when native summaries fit the category', async ({ label, specialDsb, expected }) => {
+    ])('$label excludes all special IDs even when native summaries fit the category', async ({ label, specialDsb, expected }) => {
         await mount({ specialDsb }); await click(label); expect(mapped).toEqual(expected);
         await click(label); expect(mapped).toEqual([]);
         // Special-case browsing offers motif mapping, not ordinary cutter controls.
@@ -139,7 +143,15 @@ describe('AbaSI/MspJI explicit special-case mapping', () => {
     it('bulk maps only ordinary enzymes by default and includes special motifs only on explicit special-view mapping', async () => {
         await mount(); await click(`Map filtered (${ordinary.length})`); expect(mapped).toEqual(ordinary);
         await click(`Clear map (${ordinary.length})`); expect(mapped).toEqual([]);
-        await click('Special cases'); await click('Map filtered (2)'); expect(mapped).toEqual(special);
+        await click('Special cases'); await click(`Map filtered (${special.length})`); expect(mapped).toEqual(special);
+    });
+
+    it('retains explicit manual digest access for every special ID without a modification gate', async () => {
+        await mount(); await click('Special cases');
+        for (const id of special) await click('Add', host.querySelector(`[data-enzyme-name="${id}"]`)!);
+        expect(host.textContent).toContain('Special-case simulation shows motif-based geometry');
+        await click(`Run Digest (${special.length} enzymes)`);
+        expect(simulated).toEqual(special);
     });
 
     it('preserves manually mapped special enzymes when a general quick group is toggled on and off', async () => {
@@ -158,6 +170,32 @@ describe('AbaSI/MspJI explicit special-case mapping', () => {
         await click('Special cases');
         expect(counts().textContent).toMatch(/motif/i);
         expect(counts().textContent).not.toMatch(/\b\d+\s+(?:predicted\s+)?DSBs?\b/i);
+    });
+});
+
+describe('source-backed exact-ID classification', () => {
+    it('reconciles all 1,092 catalog IDs to exactly the independently listed 27 exceptions', () => {
+        const catalog = JSON.parse(readFileSync('../api/config/molbio/restriction/restriction_enzyme_catalog_v1.json', 'utf8'));
+        const ids = catalog.records.map((row: { enzyme_id: string }) => row.enzyme_id) as string[];
+        expect(ids).toHaveLength(1092);
+        expect(special).toHaveLength(27);
+        expect(ids.filter(id => restrictionSpecialCase(id))).toEqual(special);
+        expect(ids.filter(id => !restrictionSpecialCase(id))).toHaveLength(1065);
+    });
+
+    it.each(['DpnI', 'MalI', 'MspI', 'HpaII', 'McrI', 'EcoRI', 'BamHI', 'BsaI', 'GsaI', 'AbaCIII', 'RlaII', 'CviKI_1', 'Hpy99XIV_mut1', 'HpyAXVI_mut1', 'HpyAXVI_mut2', 'HpyUM032XIII_mut1', 'abasi', 'LpnPI ', 'toString', '__proto__'])('does not infer classification for %s', id => {
+        expect(restrictionSpecialCase(id)).toBeUndefined();
+    });
+
+    it('preserves substrate distinctions rather than promising cleavage of all hmC forms', () => {
+        expect(restrictionSpecialCase('AbaSI')).toMatch(/beta-glucosylated.*alpha-glucosylation strongly inhibits/);
+        for (const id of ['MspJI', 'AspBHI', 'FspEI', 'LpnPI', 'RlaI', 'SgrTI']) {
+            expect(restrictionSpecialCase(id)).toContain('glucosylation of 5hmC blocks recognition');
+        }
+        expect(restrictionSpecialCase('EcoO157SI')).toMatch(/5hmC.*5mC/);
+        expect(restrictionSpecialCase('TagI')).toContain('not glucosylated 5hmC');
+        for (const id of ['BmeDI', 'YkrI']) expect(restrictionSpecialCase(id)).toContain('Glucosylated substrates require enzyme-specific interpretation');
+        for (const id of special) expectModifiedSubstrate(restrictionSpecialCase(id)!);
     });
 });
 

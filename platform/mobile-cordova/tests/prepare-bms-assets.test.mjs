@@ -708,6 +708,16 @@ test('selection response contract accepts exact development and production recei
   assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
     receipt('production'), 'production', 'https://compute-node.taileb3a90.ts.net',
   ));
+  // The managed launcher execs `python -m uvicorn` directly (no uv/script shim).
+  const moduleDevelopment = receipt('development');
+  for (const report of moduleDevelopment.development_api_listener.listener_reports) {
+    report.argv = [report.argv[0], '-m', 'uvicorn', ...report.argv.slice(2)];
+    report.cmdline = report.argv.join(' ');
+  }
+  moduleDevelopment.api_listeners = moduleDevelopment.development_api_listener.listener_reports;
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+    moduleDevelopment, 'development', 'https://compute-node.taileb3a90.ts.net',
+  ));
   const reloadDevelopment = receipt('development');
   const reloadRoot = reloadDevelopment.development_api_listener.source_root;
   const reloadReport = reloadDevelopment.development_api_listener.listener_reports[0];

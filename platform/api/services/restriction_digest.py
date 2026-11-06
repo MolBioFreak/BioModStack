@@ -20,7 +20,7 @@ from services.restriction_analysis import (
 from services.restriction_catalog import CatalogView, RestrictionRecord
 
 DIGEST_ALGORITHM_ID = "bms-restriction-duplex-digest"
-DIGEST_ALGORITHM_VERSION = "1.0.0"
+DIGEST_ALGORITHM_VERSION = "1.1.0"
 MAX_SELECTED_ENZYMES = 64
 MAX_PHYSICAL_CUTS = 4096
 MAX_FRAGMENTS = 4097
@@ -185,7 +185,8 @@ class DigestSimulation(StrictModel):
     analysis_algorithm_version: str = ANALYSIS_ALGORITHM_VERSION
     analysis_result_sha256: str | None = None
     digest_algorithm_id: Literal["bms-restriction-duplex-digest"] = DIGEST_ALGORITHM_ID
-    digest_algorithm_version: Literal["1.0.0"] = DIGEST_ALGORITHM_VERSION
+    # Historical receipts remain readable without rewriting their immutable bytes.
+    digest_algorithm_version: Literal["1.0.0", "1.1.0"] = DIGEST_ALGORITHM_VERSION
     resource_policy: DigestResourcePolicy
     resource_policy_sha256: str | None = None
     request_sha256: str | None = None
@@ -218,7 +219,7 @@ def _segments(start: int, end: int, length: int, topology: str) -> tuple[tuple[i
     if topology == "linear":
         return ((start, end),)
     span = end - start
-    if span == length:
+    if span == length and start % length == 0:
         return ((0, length),)
     normalized = start % length
     stop = normalized + span
@@ -298,13 +299,16 @@ def _physical_cuts(analysis, sequence_length: int, topology: str) -> tuple[Physi
         first_unwrapped = (
             int(first.top_boundary_unwrapped), int(first.bottom_boundary_unwrapped),
         )
-        if any(
-            (
-                int(event.top_boundary_unwrapped),
-                int(event.bottom_boundary_unwrapped),
-            ) != first_unwrapped
-            for event in ordered[1:]
-        ):
+        def equivalent_geometry(event: Any) -> bool:
+            top, bottom = int(event.top_boundary_unwrapped), int(event.bottom_boundary_unwrapped)
+            if topology == "linear":
+                return (top, bottom) == first_unwrapped
+            # An origin-spanning recognition occurrence may derive this same
+            # physical cut one winding later than another contributing enzyme.
+            return ((top - first_unwrapped[0]) % sequence_length == 0
+                    and bottom - top == first_unwrapped[1] - first_unwrapped[0])
+
+        if any(not equivalent_geometry(event) for event in ordered[1:]):
             raise DigestGeometryError(
                 "unsupported_crossing_cleavage_geometry",
                 "deduplicated cleavage contributors disagree on unwrapped geometry",
@@ -432,7 +436,7 @@ def _fragment(
         bottom_end_winding=end_bottom // length if source_topology == "circular" else 0,
         wraps_origin=(
             source_topology == "circular"
-            and (topology == "linear" or end_top > length or start_top != 0)
+            and start_top % length + (end_top - start_top) > length
         ),
         left_end=left, right_end=right, lineage_cleavage_group_ids=lineage,
         contributing_enzyme_ids=enzyme_ids,
@@ -475,7 +479,7 @@ def _construct_fragments(sequence: str, topology: str, cuts: tuple[PhysicalCleav
                 sequence=sequence, source_topology=topology, index=index,
                 start_top=start_top, end_top=end_top, start_bottom=start_bottom, end_bottom=end_bottom,
                 left=left_end, right=right_end,
-                lineage=tuple(cut.contributor_group_id for cut in adjacent),
+                lineage=tuple(dict.fromkeys(cut.contributor_group_id for cut in adjacent)),
                 enzyme_ids=tuple(sorted({enzyme for cut in adjacent for enzyme in cut.contributing_enzyme_ids}, key=str.casefold)),
                 topology="linear",
             ))
@@ -496,7 +500,7 @@ def _construct_fragments(sequence: str, topology: str, cuts: tuple[PhysicalCleav
                 start_bottom=left_cut.bottom_boundary_unwrapped, end_bottom=end_bottom,
                 left=_cut_end(sequence, topology, left_cut, "left"),
                 right=_cut_end(sequence, topology, right_cut, "right"),
-                lineage=tuple(cut.contributor_group_id for cut in adjacent),
+                lineage=tuple(dict.fromkeys(cut.contributor_group_id for cut in adjacent)),
                 enzyme_ids=tuple(sorted({enzyme for cut in adjacent for enzyme in cut.contributing_enzyme_ids}, key=str.casefold)),
                 topology="linear",
             ))
@@ -592,7 +596,13 @@ def _simulate_normalized_digest_canonical(
         "resource_policy": policy, "resource_policy_sha256": policy_sha,
         "request_sha256": request_sha, "occurrences": occurrences,
         "cleavages": cuts, "fragments": fragments,
-        "warnings": tuple(analysis.warnings), "limitations": (),
+        "warnings": tuple(analysis.warnings) + tuple(
+            f"{enzyme}: requires methylated adenine at its GATC site; ordinary unmethylated PCR products are not substrates."
+            for enzyme in selected_ids if enzyme in {"DpnI", "MalI"}
+        ),
+        "limitations": (
+            "Sequence-based geometry for a fully double-stranded DNA substrate. Methylation, reaction conditions, enzyme activity and digestion efficiency are not evaluated.",
+        ),
     }
     result = DigestSimulation.model_validate(payload)
     if persisted_identity:

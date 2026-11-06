@@ -185,6 +185,56 @@ def get_weights_root() -> Path:
     return Path(str(_runtime_paths()["weights_root"]))
 
 
+def default_weight_location(relative_path: str, weights_root: Path | str | None = None) -> Path:
+    """Default runtime binding for a weights dependency.
+
+    Acquired weights live in immutable layout generations, not under their plain
+    name. The plain path keeps precedence when it exists. Otherwise the layout is
+    used only when exactly one generation is present; with none or several the
+    historical plain path is returned unchanged, so selection is never guessed.
+    """
+    root = Path(weights_root) if weights_root is not None else get_weights_root()
+    plain = root / relative_path
+    if plain.exists():
+        return plain
+    layouts = root / "layouts" / relative_path
+    try:
+        generations = [p for p in layouts.iterdir()
+                       if p.is_dir() and len(p.name) == 64 and all(c in "0123456789abcdef" for c in p.name)]
+    except OSError:
+        return plain
+    return generations[0] if len(generations) == 1 else plain
+
+
+def resolve_weight_dependency(relative_path: str, weights_root: Path | str | None = None) -> Path:
+    """Locate a declared weights dependency, following its pinned layout generation.
+
+    A plain path keeps precedence. Otherwise the longest declared prefix that has
+    exactly one immutable generation under ``layouts/`` supplies the file or
+    directory, so a per-file reference such as ``complexa/complexa.ckpt`` (or a
+    member the plain ``caliby`` tree lacks) resolves through its layout the way a
+    launch does. Zero or several generations return the plain path unchanged:
+    selection is never guessed.
+    """
+    root = Path(weights_root) if weights_root is not None else get_weights_root()
+    plain = root / relative_path
+    if plain.exists():
+        return plain
+    parts = Path(relative_path).parts
+    for count in range(len(parts), 0, -1):
+        try:
+            generations = [p for p in (root / "layouts" / Path(*parts[:count])).iterdir()
+                           if p.is_dir() and len(p.name) == 64 and all(c in "0123456789abcdef" for c in p.name)]
+        except OSError:
+            continue
+        if len(generations) != 1:
+            continue
+        candidate = generations[0].joinpath(*parts[count:])
+        if candidate.exists():
+            return candidate
+    return plain
+
+
 def get_colabfold_db() -> Path:
     return Path(str(_runtime_paths()["colabfold_db"]))
 

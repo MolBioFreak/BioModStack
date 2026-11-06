@@ -1,0 +1,98 @@
+--- a/src/boltz/distributed/model/models/boltz2.py
++++ b/src/boltz/distributed/model/models/boltz2.py
+@@ -116,6 +116,19 @@
+ from boltz.distributed.utils import update_exhaustive_strides
+ from boltz.model.models.boltz2 import Boltz2 as SerialBoltz2
+ from boltz.model.optim.scheduler import AlphaFoldLRScheduler
++
++
++def _writer_dp_local(value):
++    """Gather context axes only; keep the data-parallel record/sample axis local.
++
++    Mesh dimension 0 is DP in both native topologies. full_tensor() also
++    gathers DP and therefore misassociates writer-local records on DP rank >0.
++    Redistributing only CP placements preserves native values and sample order.
++    """
++    if not isinstance(value, DTensor):
++        return value
++    placements = (value.placements[0],) + (Replicate(),) * (len(value.placements) - 1)
++    return value.redistribute(placements=placements).to_local()
+ 
+ 
+ def _ensure_numpy_compatible_dtype(t: torch.Tensor) -> torch.Tensor:
+@@ -1234,11 +1247,11 @@
+ 
+             if self.confidence_prediction:
+                 # Per-token and per-pair confidence outputs are sharded across
+-                # CP ranks. Use full_tensor() to reassemble the global tensor
++                # CP ranks. Gather CP only, retaining the DP-local sample axis
+                 # for the writer (predict path only, not hot).
+                 for key in ["pde", "plddt"]:
+                     val = out[key]
+-                    val = val.full_tensor() if isinstance(val, DTensor) else val
++                    val = _writer_dp_local(val)
+                     pred_dict[key] = _ensure_numpy_compatible_dtype(val)
+ 
+                 # Scalar metrics — already (Shard(0), Replicate(), Replicate()),
+@@ -1264,9 +1277,9 @@
+                     pred_dict["confidence_score"] = cplddt
+ 
+                 if self.alpha_pae > 0 and "pae" in out:
+-                    # pae is sharded across CP — needs full_tensor() to reassemble.
++                    # Gather PAE across CP, without gathering other DP records.
+                     val = out["pae"]
+-                    val = val.full_tensor() if isinstance(val, DTensor) else val
++                    val = _writer_dp_local(val)
+                     pred_dict["pae"] = _ensure_numpy_compatible_dtype(val)
+ 
+                     # ptm, iptm, *_iptm are globally reduced scalars with
+--- a/src/boltz/distributed/model/models/boltz2_1d.py
++++ b/src/boltz/distributed/model/models/boltz2_1d.py
+@@ -117,6 +117,19 @@
+ SCALAR_PLACEMENTS_1D = (Shard(0), Replicate())
+ 
+ 
++def _writer_dp_local(value):
++    """Gather context axes only; keep the data-parallel record/sample axis local.
++
++    Mesh dimension 0 is DP in both native topologies. full_tensor() also
++    gathers DP and therefore misassociates writer-local records on DP rank >0.
++    Redistributing only CP placements preserves native values and sample order.
++    """
++    if not isinstance(value, DTensor):
++        return value
++    placements = (value.placements[0],) + (Replicate(),) * (len(value.placements) - 1)
++    return value.redistribute(placements=placements).to_local()
++
++
+ def _ensure_numpy_compatible_dtype(t: torch.Tensor) -> torch.Tensor:
+     """Promote tensor dtype to at least float32 for NumPy compatibility."""
+     return t.to(dtype=torch.promote_types(t.dtype, torch.float32))
+@@ -1114,15 +1127,15 @@
+             )
+             pred_dict: dict[str, Any] = {"exception": False}
+ 
+-            coords = out["sample_atom_coords"].full_tensor()
+-            mask = batch["atom_pad_mask"].full_tensor()
++            coords = _writer_dp_local(out["sample_atom_coords"])
++            mask = _writer_dp_local(batch["atom_pad_mask"])
+             pred_dict["coords"] = _ensure_numpy_compatible_dtype(coords)
+             pred_dict["masks"] = mask
+ 
+             if self.confidence_prediction:
+                 for key in ["pde", "plddt"]:
+                     val = out[key]
+-                    val = val.full_tensor() if isinstance(val, DTensor) else val
++                    val = _writer_dp_local(val)
+                     pred_dict[key] = _ensure_numpy_compatible_dtype(val)
+ 
+                 for key in [
+@@ -1146,7 +1159,7 @@
+ 
+                 if self.alpha_pae > 0 and "pae" in out:
+                     val = out["pae"]
+-                    val = val.full_tensor() if isinstance(val, DTensor) else val
++                    val = _writer_dp_local(val)
+                     pred_dict["pae"] = _ensure_numpy_compatible_dtype(val)
+ 
+                     for key in ["ptm", "iptm", "ligand_iptm", "protein_iptm"]:

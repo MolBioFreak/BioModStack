@@ -9,6 +9,7 @@ const atom = (n: number) => `ATOM      1  CA  ALA A${String(n).padStart(4)}     
 const pdb = [atom(1), atom(2), atom(3), 'END', ''].join('\n');
 let host: HTMLDivElement, root: Root, client: QueryClient;
 let value: { path: string; contig: string; segmentOrder: string };
+let externalPatch: (patch: Record<string, unknown>) => void;
 let post: ReturnType<typeof vi.spyOn>;
 let fetchMock: ReturnType<typeof vi.fn>;
 const button = (name: string) => [...host.querySelectorAll('button')].find(node => node.textContent?.trim() === name)!;
@@ -18,7 +19,7 @@ async function settle(condition: () => boolean = () => true) {
 }
 async function click(name: string) { expect(button(name), name).toBeTruthy(); await act(async () => button(name).click()); await settle(); }
 async function mount(initial = { path: '', contig: '5/A1/2/A3/5', segmentOrder: 'A' }) {
-    function Harness() { const [state, setState] = useState(initial); value = state; return <QueryClientProvider client={client}><LaProteinaMotifInput {...state} onChange={patch => setState(previous => ({ ...previous, ...patch }))} /></QueryClientProvider>; }
+    function Harness() { const [state, setState] = useState(initial); externalPatch = patch => setState(previous => ({ ...previous, ...patch })); value = state; return <QueryClientProvider client={client}><LaProteinaMotifInput {...state} onChange={patch => setState(previous => ({ ...previous, ...patch }))} /></QueryClientProvider>; }
     await act(async () => root.render(<Harness />)); await settle();
 }
 async function select() {
@@ -64,12 +65,55 @@ it('ignores a late motif upload after explicit clear', async () => {
     await act(async () => resolve({ data: { path: 'inputs/stale.pdb' } })); await settle();
     expect(value.path).toBe(''); expect(host.querySelector('[title="A1 (ALA)"]')).toBeNull();
 });
+it('external A→B→A contig drafts cannot revive an old motif adoption', async () => {
+    let resolve!: (value: any) => void; post.mockReturnValue(new Promise(yes => { resolve = yes; }));
+    await mount(); await select(); await click('Use selected residues');
+    const original = value.contig;
+    await act(async () => externalPatch({ contig: '5/A1/2/A3/6' }));
+    await act(async () => externalPatch({ contig: original }));
+    await act(async () => resolve({ data: { path: 'inputs/stale-A.pdb' } })); await settle();
+    expect(value.path).toBe('');
+    expect(value.contig).toBe(original);
+});
 it('ignores source acquisition completing after clear', async () => {
     let resolve!: (value: any) => void; fetchMock.mockReturnValue(new Promise(yes => { resolve = yes; }));
     await mount(); await click('Presets'); await settle(() => !!button('Local structure')); await click('Local structure'); await click('Clear motif input');
     await act(async () => resolve({ ok: true, text: async () => pdb })); await settle();
     expect(value.path).toBe(''); expect(host.querySelector('[title="A1 (ALA)"]')).toBeNull();
 });
+it('catalog key and four extraction scopes stay separate from custom source, checkpoint and explicit atom spec', async () => {
+    let retained: any;
+    const catalog = { '1YCR_AA': { contig_string: '10-40/B19-27/10-40', motif_pdb_path: 'motif_benchmark_pdb_files/1ycr_aa.pdb', motif_only: true, motif_min_length: 40, motif_max_length: 100, segment_order: 'A', atom_selection_mode: 'all_atom' } };
+    function Harness() {
+        const [state, setState] = useState<any>({ path: 'inputs/manual-exact.pdb', contig: 'A1-2', segmentOrder: 'B,A', taskName: 'manual-key', atomSelectionMode: 'ca', atomSpec: 'A1: [CB]' }); retained = state;
+        return <QueryClientProvider client={client}><LaProteinaMotifInput {...state} taskCatalog={catalog} onTaskChange={taskName => setState((s: any) => ({ ...s, taskName }))} onAtomSelectionModeChange={atomSelectionMode => setState((s: any) => ({ ...s, atomSelectionMode }))} onChange={patch => setState((s: any) => ({ ...s, ...patch }))} /></QueryClientProvider>;
+    }
+    await act(async () => root.render(<Harness />)); await settle();
+    const original = structuredClone(retained);
+    const edit = async (label: string, next: string) => {
+        const control = host.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!;
+        await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control), 'value')!.set!.call(control, next); control.dispatchEvent(new Event(control.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); });
+    };
+    await edit('La native motif task', '1YCR_AA');
+    expect(retained).toEqual({ ...original, taskName: '1YCR_AA' });
+    expect(host.textContent).toContain('Custom motif PDB takes precedence');
+    expect(host.textContent).toContain('10-40/B19-27/10-40');
+    for (const scope of ['all_atom', 'ca', 'bb3o', 'tip_atoms']) {
+        await edit('La motif extraction scope', scope);
+        expect(retained).toEqual({ ...original, taskName: '1YCR_AA', atomSelectionMode: scope });
+        expect(host.textContent).toContain('Explicit motif atom specification takes precedence');
+    }
+    await click('Clear atom specification (native null)');
+    expect(retained.atomSpec).toBeNull();
+    expect(retained.path).toBe(original.path);
+    expect(retained.contig).toBe(original.contig);
+    expect(retained.segmentOrder).toBe(original.segmentOrder);
+    expect(host.textContent).toContain('contig-based extraction');
+    await edit('La motif extraction scope', '');
+    expect(retained.atomSelectionMode).toBeUndefined();
+    expect(post).not.toHaveBeenCalled();
+});
+
 it('reopens exact retained paths and preserves manual contig and order verbatim', async () => {
     const initial = { path: 'inputs/manual-exact.pdb', contig: ' custom/contig ', segmentOrder: ' B,A ' };
     await mount(initial); await settle(() => !!host.querySelector('[title="A1 (ALA)"]'));

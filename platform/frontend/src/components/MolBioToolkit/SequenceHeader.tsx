@@ -4,6 +4,7 @@
 
 import { useMemo } from 'react';
 import { ExportDropdown } from './ExportDropdown';
+import { isSequenceAnnotation } from './featureCatalog';
 import type { HistoryEntry } from './hooks/useSequenceHistory';
 import type { SequenceData } from './types';
 import { sequenceUnitLabel, displayStrandSymbol, type NucleotideDisplayStrand } from './utils/nucleotides';
@@ -13,6 +14,9 @@ type ViewMode = 'linear' | 'circular' | 'both';
 interface SequenceHeaderProps {
     sequenceData: SequenceData;
     onSave?: () => void;
+    onFocusViewer?: () => void;
+    onExportToProject?: () => void;
+    projectExportDisabled?: boolean;
     onUndo?: () => void;
     onRedo?: () => void;
     onAutoAnnotate?: () => void;
@@ -29,13 +33,12 @@ interface SequenceHeaderProps {
     showGCTrack?: boolean;
     onGCTrackToggle?: () => void;
     onOpenLibrary?: () => void;
-    isViewerFullscreen?: boolean;
-    onToggleFullscreen?: () => void;
     isLibraryPanelCollapsed?: boolean;
     isToolPanelCollapsed?: boolean;
     onToggleLibraryPanel?: () => void;
     onToggleToolPanel?: () => void;
     historyJournal?: HistoryEntry[];
+    onShare?: () => void;
 }
 
 function calculateGC(sequence: string): number {
@@ -47,6 +50,9 @@ function calculateGC(sequence: string): number {
 export function SequenceHeader({
     sequenceData,
     onSave,
+    onFocusViewer,
+    onExportToProject,
+    projectExportDisabled,
     onUndo,
     onRedo,
     onAutoAnnotate,
@@ -63,19 +69,18 @@ export function SequenceHeader({
     showGCTrack = true,
     onGCTrackToggle,
     onOpenLibrary,
-    isViewerFullscreen = false,
-    onToggleFullscreen,
     isLibraryPanelCollapsed = false,
     isToolPanelCollapsed = false,
     onToggleLibraryPanel,
     onToggleToolPanel,
     historyJournal = [],
+    onShare,
 }: SequenceHeaderProps) {
     const gcContent = useMemo(() => calculateGC(sequenceData.sequence), [sequenceData.sequence]);
     const unitLabel = sequenceUnitLabel(sequenceData.sequenceType === 'rna' ? 'rna' : 'dna');
     const moleculeLabel = sequenceData.moleculeLabel || sequenceData.sequenceType.toUpperCase();
     return (
-        <div className="sequence-header bg-slate-800 border-b border-slate-700">
+        <div className="sequence-header shrink-0 bg-slate-800 border-b border-slate-700">
             <div className="px-3 py-2 space-y-2">
                 <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                     {/* Left: Sequence info */}
@@ -98,7 +103,7 @@ export function SequenceHeader({
                             <span>•</span>
                             <span>GC: {gcContent}%</span>
                             <span>•</span>
-                            <span>{sequenceData.features.length} features</span>
+                            <span>{sequenceData.features.filter(isSequenceAnnotation).length} features</span>
                             {sequenceData.primers && sequenceData.primers.length > 0 && (
                                 <>
                                     <span>•</span>
@@ -234,8 +239,27 @@ export function SequenceHeader({
                     </div>
                 )}
 
+                {onShare && (
+                    <button
+                        type="button"
+                        onClick={onShare}
+                        className="flex items-center gap-1 px-2 py-1.5 hover:bg-slate-700 rounded text-sm text-slate-300 transition-colors"
+                        title="Share a temporary read-only link"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12s-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                        </svg>
+                        Share
+                    </button>
+                )}
+                {onFocusViewer && <button type="button" onClick={onFocusViewer} title="Focus Viewer"
+                    className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]">Focus Viewer</button>}
+                {onExportToProject && <button type="button" onClick={onExportToProject} disabled={projectExportDisabled}
+                    className="rounded border border-[var(--border-primary)] px-2 py-1.5 text-sm text-[var(--text-primary)] disabled:opacity-50"
+                    title="Save the sequence before attaching its exact revision">Add to Project</button>}
+
                 {/* Export */}
-                <ExportDropdown sequenceData={sequenceData} historyJournal={historyJournal} />
+                <ExportDropdown sequenceData={sequenceData} historyJournal={historyJournal} onExportToProject={onExportToProject} projectExportDisabled={projectExportDisabled} />
 
                 {/* Save */}
                 {onSave && (
@@ -290,23 +314,6 @@ export function SequenceHeader({
                             })}
                         </div>
                     </div>
-                )}
-
-                {sequenceData.circular && onToggleFullscreen && (
-                    <button
-                        type="button"
-                        onClick={onToggleFullscreen}
-                        className={`flex items-center gap-1 rounded px-2 py-1.5 text-sm transition-colors border-r border-slate-600 mr-2 pr-3 ${isViewerFullscreen
-                                ? 'text-blue-300 hover:bg-slate-700'
-                                : 'text-slate-300 hover:bg-slate-700'
-                            }`}
-                        title={isViewerFullscreen ? 'Exit focused plasmid view' : 'Focus Viewer'}
-                    >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isViewerFullscreen ? 'M9 9H5v4m10-4h4v4M9 15H5v-4m10 4h4v-4' : 'M8 3H5a2 2 0 00-2 2v3m14-5h2a2 2 0 012 2v3M8 21H5a2 2 0 01-2-2v-3m14 5h2a2 2 0 002-2v-3'} />
-                        </svg>
-                        {isViewerFullscreen ? 'Exit Focus' : 'Focus Viewer'}
-                    </button>
                 )}
 
                 {/* Analytics Track Toggle */}

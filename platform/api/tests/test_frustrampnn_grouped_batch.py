@@ -112,7 +112,7 @@ def test_grouped_runner_executes_one_predict_batch_command_and_finalizes_each_te
             "schema_version": 1,
             "method_identity": "frustrampnn.FrustraMPNN.predict_batch",
             "upstream_sequential_semantics": grouped.UPSTREAM_SEQUENTIAL_SEMANTICS,
-            "model_load_count": 1,
+            "model_load_count": 0 if fail_all else 1,
             "record_count": 2,
             "records": [
                 {
@@ -192,7 +192,7 @@ def test_grouped_runner_executes_one_predict_batch_command_and_finalizes_each_te
         if fail_all else [("alpha", "succeeded"), ("beta", "failed")]
     )
     assert result["record_count"] == 2
-    assert result["model_load_count"] == 1
+    assert result["model_load_count"] == (0 if fail_all else 1)
     assert governed.is_file()
     receipt = json.loads(governed.read_bytes())
     assert receipt["schema_name"] == "bms.frustrampnn.grouped-batch-terminal.v1"

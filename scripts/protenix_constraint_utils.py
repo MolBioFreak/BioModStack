@@ -40,9 +40,13 @@ def load_structure(path: Path, structure_id: str = "structure"):
 def select_single_model(structure, model_number: int | None):
     if model_number is None:
         return next(structure.get_models())
+    # Author MODEL serials take precedence over Biopython's zero-based order.
+    # Otherwise MODEL 2 appearing first can steal an explicit MODEL 1 request.
     for model in structure:
-        serial_num = getattr(model, "serial_num", None)
-        if serial_num == model_number or model.id == model_number or model.id == (model_number - 1):
+        if getattr(model, "serial_num", None) == model_number:
+            return model
+    for model in structure:
+        if model.id == model_number or model.id == (model_number - 1):
             return model
     raise ValueError(f"Requested target model {model_number} not found")
 
@@ -56,6 +60,7 @@ def infer_target_pocket_residues(
     max_residues: int = 24,
     neighbor_radius: float = 10.0,
     ion_distance: float = 4.5,
+    residue_positions: dict[tuple[str, int, str], int] | None = None,
 ) -> list[tuple[str, int]]:
     structure = load_structure(target_pdb, "reference_target")
     model = select_single_model(structure, model_number)
@@ -89,7 +94,13 @@ def infer_target_pocket_residues(
                 continue
             if "CA" not in residue:
                 continue
-            sequence_position += 1
+            if residue_positions is not None:
+                position = residue_positions.get((chain.id.strip() or "_", int(residue.id[1]), residue.id[2].strip()))
+                if position is None:
+                    continue
+                sequence_position = position
+            else:
+                sequence_position += 1
             ca = residue["CA"].coord
             atom_coords = []
             for atom in residue:
@@ -176,27 +187,25 @@ def add_pocket_constraint(
     if entry.get("constraint") and not replace_existing:
         return False
 
-    entity_by_chain: dict[str, int] = {}
-    protein_entity_index = 0
+    entity_by_chain: dict[str, tuple[int, int]] = {}
     sequences = entry.get("sequences", [])
     if not isinstance(sequences, list):
         return False
 
-    for wrapper in sequences:
+    for entity_index, wrapper in enumerate(sequences, start=1):
         if not isinstance(wrapper, dict):
             continue
         chain = wrapper.get("proteinChain")
         if not isinstance(chain, dict):
             continue
-        protein_entity_index += 1
         ids = chain.get("id")
         if isinstance(ids, list):
-            for chain_id in ids:
+            for copy_index, chain_id in enumerate(ids, start=1):
                 token = str(chain_id).strip()
                 if token:
-                    entity_by_chain[token] = protein_entity_index
+                    entity_by_chain[token] = (entity_index, copy_index)
         elif isinstance(ids, str) and ids.strip():
-            entity_by_chain[ids.strip()] = protein_entity_index
+            entity_by_chain[ids.strip()] = (entity_index, 1)
 
     binder_entity = next((entity_by_chain[chain_id] for chain_id in binder_chain_ids if chain_id in entity_by_chain), None)
     if binder_entity is None:
@@ -207,14 +216,14 @@ def add_pocket_constraint(
         entity = entity_by_chain.get(chain_id)
         if entity is None:
             continue
-        contact_residues.append({"entity": entity, "copy": 1, "position": int(position)})
+        contact_residues.append({"entity": entity[0], "copy": entity[1], "position": int(position)})
 
     if not contact_residues:
         return False
 
     entry["constraint"] = {
         "pocket": {
-            "binder_chain": {"entity": binder_entity, "copy": 1},
+            "binder_chain": {"entity": binder_entity[0], "copy": binder_entity[1]},
             "contact_residues": contact_residues,
             "max_distance": float(pocket_max_distance),
         }

@@ -127,7 +127,10 @@ def _stop_processes(processes: Sequence[Any], timeout: float = 10) -> bool:
     return quiet
 
 # Kept as the shared public interface for root, child and nested consumers.
-from scripts.lib.container_runtime import nextflow_container_config as task_container_config
+try:
+    from scripts.lib.container_runtime import nextflow_container_config as task_container_config
+except ImportError:  # inside a task container another `scripts` package can shadow the repo's
+    from container_runtime import nextflow_container_config as task_container_config
 
 
 def wf_clone_container_config(lock_path: str | Path, assembly_tool: str = "flye") -> str:
@@ -151,7 +154,8 @@ def wf_clone_container_config(lock_path: str | Path, assembly_tool: str = "flye"
 
 
 def native_resource_config(plan: dict, resources: dict, lock_path: str, source_root: Path,
-                           container_runtime: Mapping[str, str] | None = None) -> str:
+                           container_runtime: Mapping[str, str] | None = None,
+                           bind_paths: Sequence[str | Path] = ()) -> str:
     """Bind compiled static tasks to one inherited process-lifetime compute slot.
 
     Native setup expressions are retained, including task-input closures. Dynamic
@@ -200,15 +204,41 @@ def native_resource_config(plan: dict, resources: dict, lock_path: str, source_r
         if len(setup) > 1:
             raise ValueError('ambiguous compiled native setup authority')
         expression = setup[0] if setup else "''"
+        # Publish the existing selected-component closure beside .command.sh,
+        # before the container starts. Broad label binds otherwise make PRoot
+        # clone unrelated weights from the job union for every task. This is
+        # placement metadata, never an installer or an admission condition.
+        import json
+        dependency_map = {row['logical_id']: row for row in plan['metadata'].get('dependencies', [])}
+        weights = [dependency_map[key] for sibling in plan['metadata']['static_components']
+                   if sibling['authority'] == component['authority']
+                   for key in sibling.get('dependency_ids', [])
+                   if key in dependency_map and dependency_map[key]['kind'] == 'weights']
+        selection = (sorted({row['relative_path'] for row in weights})
+                     if 'dependencies' in plan['metadata'] and all(row.get('relative_path') for row in weights) else None)
+        placement = ("printf '%s\\n' " + shlex.quote(json.dumps(selection)) + " > .bms-task-weights\n"
+                     if 'dependencies' in plan['metadata'] else '')
         cpu = component['resources_json'].get('cpus', {})
         lines += [f'  withName: {groovy(name)} {{']
         if name == 'MD_GROMACS_REPLICA' and cpu.get('parameter') == 'md_config.execution.ntmpi * md_config.execution.ntomp':
             lines += [f'    cpus = {int(cpu["value"])}']
         lines += ['    beforeScript = {',
                   f'      def nativeSetup = {expression}',
-                  f'      return {groovy(acquire)} + (nativeSetup instanceof Closure ? nativeSetup.call() : nativeSetup)',
+                  f'      return {groovy(acquire + placement)} + (nativeSetup instanceof Closure ? nativeSetup.call() : nativeSetup)',
                   '    }', '  }']
-    return '\n'.join([*lines, '}', task_container_config(container_runtime), ''])
+    # Nextflow launches apptainer tasks with `env -`; without an explicit
+    # whitelist the attempt context never reaches native scripts, so they cannot
+    # reach the attempt journal (generated-MSA requests, stage reports).
+    whitelist = "apptainer.envWhitelist = 'BMS_COMPONENT_CONTEXT,BMS_COMPONENT_JOB_ID,BMS_COMPONENT_OUTPUT_DIR'"
+    # Tasks also need the attempt's artifact root at the same path (the journal
+    # resolves it). The env-based bind list is wiped by the same `env -`, so bind
+    # through the generated config; the value is shell-quoted for Nextflow's script.
+    binds = ','.join(f'{path}:{path}' for path in dict.fromkeys(str(Path(p)) for p in bind_paths))
+    # The udocker/bms-container backend (remote workers) enables Nextflow's `singularity` scope and
+    # disables `apptainer`, so the bind must be written to both scopes; only the enabled one applies.
+    run_options = '\n'.join(f"{scope}.runOptions = {groovy('--bind ' + shlex.quote(binds))}"
+                            for scope in ('apptainer', 'singularity')) if binds else ''
+    return '\n'.join([*lines, '}', whitelist, run_options, task_container_config(container_runtime), ''])
 
 
 def resource_bound_command(command, invocation, context, run_dir) -> list[str]:
@@ -236,7 +266,9 @@ def resource_bound_command(command, invocation, context, run_dir) -> list[str]:
     plan = invocation.execution_plan.to_dict() if invocation is not None else context['execution_plan']
     config = Path(run_dir) / 'component-resources.config'
     config.write_text(native_resource_config(plan, resources, context['resource_lock_path'],
-                                           Path(context['working_directory'])))
+                                           Path(context['working_directory']),
+                                           bind_paths=[context['artifact_root'],
+                                                       Path(context['ledger_path']).parent]))
     placed = list(command)
     if invocation is not None:
         source = Path(context['working_directory'])
@@ -422,6 +454,81 @@ def resume_md_workflow(context_path: Path, *, operation_id: str, pause_operation
         resources=resources, checkpoints=supplied, compiler_context=context)
 
 
+class LocalExternalServiceResponder:
+    """Answer declared controller services for a local attempt.
+
+    Remote attempts get the same data from the controller reconciler over SSH;
+    here the attempt owner is already the controller host, so it calls the same
+    provider-agnostic preparation and acceptance code and writes into the same
+    ledger. Provider choice, credentials and retry timing stay in the shared
+    MSA modules; nothing here names a provider.
+    """
+
+    def __init__(self, runtime):
+        import threading
+        self.runtime = runtime
+        self.stop_event = threading.Event()
+        self.thread = None
+        self.retry_at = 0.0
+
+    def poll(self) -> None:
+        import threading
+        import time
+        if self.runtime.target_id != 'local' or self.stop_event.is_set():
+            return
+        if self.thread is not None and self.thread.is_alive():
+            return
+        if time.monotonic() < self.retry_at:
+            return
+        pending = self.runtime.pending_external_services()
+        if not pending:
+            return
+        self.thread = threading.Thread(target=self._serve, args=(pending[0],), daemon=True,
+                                       name='local-external-service')
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+
+    def _serve(self, request: dict) -> None:
+        import shutil
+        import time
+        from biomodstack_msa_api import ClientConfig, PendingMSA, preparation_stop_scope
+        from services.model_msa_handoff import (accept_generated_msa, generated_msa_service_supported,
+                                                prepare_generated_msa)
+        runtime, request_id = self.runtime, request['request_id']
+        if not generated_msa_service_supported(request['service']):
+            runtime.fail_external_service(request_id)
+            return
+        root = runtime.artifact_root / 'external-services'
+        staging = root / ('.staging-' + request_id)
+        try:
+            shutil.rmtree(staging, ignore_errors=True)
+            staging.mkdir(parents=True)
+            with preparation_stop_scope(self.stop_event):
+                sha = prepare_generated_msa(request, staging / 'prepared')
+            destination = root / request_id / sha
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if not destination.exists():
+                os.replace(staging / 'prepared', destination)
+            accept_generated_msa(runtime, request_id, sha)
+        except PendingMSA as exc:
+            delay = max(1.0, float((exc.operation or {}).get('retry_after_seconds', ClientConfig().poll_seconds)))
+            self.retry_at = time.monotonic() + delay
+        except BaseException as exc:
+            message = f'generated MSA preparation failed: {type(exc).__name__}: {str(exc)[:500]}'
+            print('[component_adapter] ' + message, file=sys.stderr, flush=True)
+            try:  # the ledger keeps only a fixed message; keep the cause beside it
+                root.mkdir(parents=True, exist_ok=True)
+                (root / (request_id + '.failure.txt')).write_text(message + '\n')
+            except OSError:
+                pass
+            if not self.stop_event.is_set():
+                runtime.fail_external_service(request_id)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
+
 def run_component_workflow(context_path: Path) -> int:
     """Pump native root and serialized children on the same selected worker.
 
@@ -487,6 +594,7 @@ def run_component_workflow(context_path: Path) -> int:
     processes = []
     root = None
     active = []
+    responder = LocalExternalServiceResponder(runtime)
     stopping = False
     old_handlers = {}
 
@@ -615,6 +723,7 @@ def run_component_workflow(context_path: Path) -> int:
                         reason="native workflow collectors finished" if state == "completed" else "native workflow failed or children remain queued")
                 return 0 if state == "completed" else 1
 
+            responder.poll()
             pending = runtime.pending()
             if active:
                 # Only descend into the active parent's declared children;
@@ -674,6 +783,7 @@ def run_component_workflow(context_path: Path) -> int:
                     reason="component owner interrupted; durable claims retained")
         raise
     finally:
+        responder.stop()
         for signum, handler in old_handlers.items():
             signal.signal(signum, handler)
 

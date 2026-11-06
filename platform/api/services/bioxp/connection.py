@@ -602,7 +602,7 @@ class BioXpConnectionService:
             "operator_control_catalog_v2", "operator_dashboard_v2",
             "operator_action_receipt_v2", "operator_command_status_v2",
             "operator_command_identity",
-            "protocol_jobs", "protocol_job", "calibration_settings", "calibration_run",
+            "protocol_jobs", "protocol_job", "calibration_settings", "calibration_run", "tip_offsets", "lld_profiles", "depth_offsets",
         }
         # Only the parameter-free dashboard/catalog representations are cached.
         cacheable = route_name in {"operator_control_catalog_v2", "operator_dashboard_v2"} and not params and not path_params
@@ -984,6 +984,28 @@ class BioXpConnectionService:
             name="bioxp-active-connection-probe",
         )
 
+    async def _initial_hardware_read(self) -> None:
+        """One query-only hardware read per new connection, so the first status is not empty.
+
+        Sent with automatic=true: the robot skips it while an operator action is running
+        and never recovers or activates anything for it.
+        """
+        async with self._transition_lock:
+            client, generation = self._client, self._generation
+            if client is None or self._active_target is None:
+                return
+            lease = self._acquire_lease_locked(generation, require_fresh=False)
+        try:
+            await client.request("collect_hardware_snapshot", json_data={"automatic": True})
+        except Exception:
+            return
+        finally:
+            await self._release_lease(lease)
+        try:
+            await self._active_status_probe()
+        except ConnectionStateError:
+            return
+
     def _stop_active_probe_locked(self) -> None:
         task = self._active_probe_task
         self._active_probe_task = None
@@ -994,6 +1016,7 @@ class BioXpConnectionService:
     async def _active_probe_loop(self) -> None:
         assert self.active_probe_interval_seconds is not None
         try:
+            await self._initial_hardware_read()
             while True:
                 await asyncio.sleep(self.active_probe_interval_seconds)
                 await self._active_status_probe()

@@ -266,6 +266,36 @@ async def _domain_payload(
     return project, domain, json.loads(revision.canonical_payload)
 
 
+async def _retain_manual_alignment(experiment_session, core_session, external):
+    """Retain copies beside an immutable reference, including historical saves.
+
+    The receipt is never rewritten. Custody uses deterministic resource identities
+    and an append-only audit event, with every artifact checked against its digest.
+    """
+    if external.entity_kind != 'family_msa_job_result':
+        return
+    acknowledgement = json.loads(external.acknowledgement_json)
+    if acknowledgement['metadata'].get('retained_artifacts'):
+        return
+    from experiment_models import ExperimentArtifact
+    from services.family_msa.publication import retain_job_artifact, manual_result_inventory
+    retained = manual_result_inventory(external.id, external.workspace_id, acknowledgement['metadata'])
+    added = False
+    for entry in retained:
+        if await experiment_session.get(ExperimentArtifact, entry['resource_id']) is None:
+            added = True
+        await retain_job_artifact(core_session, experiment_session,
+            job_id=external.entity_id, artifact_id=entry['source_artifact_id'],
+            workspace_id=external.workspace_id, lifecycle_owner_id=external.id,
+            resource_id=entry['resource_id'], logical_role=entry['role'],
+            schema_name='bms.family-msa.native-artifact', schema_version='1')
+    if added:
+        add_audit_event(experiment_session, workspace_id=external.workspace_id,
+            resource_id=external.id, event_type='family_msa_artifacts_retained', generation=0,
+            payload={'source_digest': external.content_digest, 'retained_artifacts': retained})
+    await experiment_session.flush()
+
+
 async def attach_verified_entity(
     experiment_session: AsyncSession,
     core_session: AsyncSession,
@@ -326,6 +356,7 @@ async def attach_verified_entity(
         acknowledgement=source_receipt,
         verification_authority=adapter.adapter_id,
     )
+    await _retain_manual_alignment(experiment_session, core_session, external)
     normalized_request = {
         "schema": "bms.global.attachment-request.v1",
         "project_id": project_id,
@@ -605,6 +636,67 @@ async def reverify_source_receipt(
     return receipt
 
 
+async def retain_native_result(core_session, experiment_session, receipt, *,
+                               workspace_id, lifecycle_owner_id, attempt_id):
+    """Transfer a verified native publication into existing Project blob custody.
+
+    Only immutable native artifacts are copied; numerical data stay in their
+    native files. Receipt entries keep original logical paths and producer IDs.
+    """
+    import uuid
+    from database import Job, JobArtifact
+    from services.family_msa.publication import retain_job_artifact
+    job = await core_session.get(Job, receipt['entity_id'])
+    artifacts = list(await core_session.scalars(select(JobArtifact).where(
+        JobArtifact.owner_job_id == job.id,
+        JobArtifact.attempt == (job.retry_count or 0)).order_by(JobArtifact.logical_path)))
+    retained = []
+    for source in artifacts:
+        resource_id = str(uuid.uuid5(uuid.NAMESPACE_URL,
+            f"bms:native-result:{workspace_id}:{attempt_id}:{source.id}"))
+        artifact = await retain_job_artifact(core_session, experiment_session,
+            job_id=job.id, artifact_id=source.id, workspace_id=workspace_id,
+            lifecycle_owner_id=lifecycle_owner_id, resource_id=resource_id,
+            logical_role='native_result', schema_name='bms.native-result.artifact', schema_version='1',
+            native_publication=True)
+        retained.append({'source_artifact_id': source.id, 'resource_id': artifact.resource_id,
+                         'logical_path': source.logical_path, 'sha256': artifact.blob_sha256,
+                         'media_type': source.media_type, 'bytes': source.bytes})
+    receipt['metadata']['retained_artifacts'] = retained
+    receipt['metadata']['retained_owner_id'] = lifecycle_owner_id
+
+
+async def retained_native_result(experiment_session, *, workspace_id, receipt_id):
+    """Cold-open Project-owned native files without consulting any producer row.
+
+    HTTP owners still authorize the workspace. This owner checks receipt and
+    artifact scope and verifies blob bytes through the existing custody store.
+    """
+    from experiment_models import ExperimentArtifact, ExperimentResource, ExperimentExternalEntityReceipt
+    from services.family_msa.publication import retained_path, CustodyError
+    receipt = await experiment_session.get(ExperimentExternalEntityReceipt, receipt_id)
+    if receipt is None or receipt.workspace_id != workspace_id:
+        raise CustodyError('Project result receipt not found')
+    from services.global_experiments.result_surfaces import _acknowledgement, _validate_persisted_authority
+    acknowledgement = _acknowledgement(receipt)
+    _validate_persisted_authority(receipt, acknowledgement)
+    entries = acknowledgement.get('metadata', {}).get('retained_artifacts')
+    if acknowledgement.get('entity_kind') != 'native_binder_job_result' or not entries:
+        raise CustodyError('Project result has no independently retained native artifacts')
+    if len({entry['resource_id'] for entry in entries}) != len(entries):
+        raise CustodyError('Project result inventory repeats an artifact')
+    files = []
+    for entry in entries:
+        artifact = await experiment_session.get(ExperimentArtifact, entry['resource_id'])
+        resource = await experiment_session.get(ExperimentResource, entry['resource_id'])
+        if (artifact is None or resource is None or resource.workspace_id != workspace_id
+                or resource.lifecycle_owner_id != acknowledgement['metadata']['retained_owner_id']
+                or artifact.blob_sha256 != entry['sha256'] or artifact.logical_key != entry['logical_path']):
+            raise CustodyError('Project native result artifact disagrees with its receipt')
+        files.append((entry, await retained_path(experiment_session, artifact)))
+    return acknowledgement, files
+
+
 async def verify_and_link_terminal_outputs(
     experiment_session: AsyncSession,
     core_session: AsyncSession,
@@ -633,6 +725,22 @@ async def verify_and_link_terminal_outputs(
 
     workflow_payload = json.loads(revision.canonical_payload)
     adapter_id = str(workflow_payload.get("adapter_id") or "")
+    # Launch and result adapters have distinct owners. Use the immutable Plan's
+    # native result reader rather than requiring a Design-backed launch receipt.
+    from experiment_services import load_workflow_plan_authority
+    plan = await load_workflow_plan_authority(experiment_session, workflow.aggregate_id, required=False)
+    result_ids = plan[1]["capability"].get("result_adapter_ids") if plan is not None else None
+    if result_ids is None:
+        # Historical normalized Plans omitted result routing. Their existing
+        # setup snapshot still pins it; never consult mutable catalog defaults.
+        from experiment_models import ExperimentWorkflowSetupContext
+        setup = await experiment_session.scalar(select(ExperimentWorkflowSetupContext).where(
+            ExperimentWorkflowSetupContext.workflow_id == workflow.aggregate_id))
+        if setup is not None:
+            result_ids = json.loads(setup.capability_contract_json)["capability"].get("result_adapter_ids", [])
+    native_result_ids = [value for value in result_ids or [] if value.startswith(("bms.native-binder.", "bms.family-msa.", "bms.md.result-reference."))]
+    if len(native_result_ids) == 1:
+        adapter_id = native_result_ids[0]
     adapter = registry.get(adapter_id)
     try:
         binding = json.loads(attempt.external_binding_receipt_json or "{}")
@@ -647,6 +755,31 @@ async def verify_and_link_terminal_outputs(
     source_receipt = await adapter.verify(core_session, str(entity_id))
     if source_receipt.get("verifier_id") != adapter_id:
         raise ValidationFailure("terminal output verifier identity disagrees with workflow intent")
+    if adapter_id.startswith("bms.family-msa."):
+        # PM owns the retained copies; retrying the same attempt reuses stable IDs.
+        # This transaction is independent of native Job completion/deletion.
+        import uuid
+        from services.family_msa.publication import retain_job_artifact
+        metadata = source_receipt["metadata"]
+        entries = [(metadata["manifest_artifact_id"], "result_manifest")]
+        entries += [(item["id"], item["role"]) for item in metadata["artifacts"]]
+        retained = []
+        for artifact_id, role in entries:
+            resource_id = str(uuid.uuid5(uuid.NAMESPACE_URL,
+                f"bms:family-msa:{attempt.workspace_id}:{attempt.resource_id}:{artifact_id}"))
+            artifact = await retain_job_artifact(core_session, experiment_session,
+                job_id=str(entity_id), artifact_id=artifact_id,
+                workspace_id=attempt.workspace_id, lifecycle_owner_id=domain.aggregate_id,
+                resource_id=resource_id, logical_role=role,
+                schema_name="bms.family-msa.native-artifact", schema_version="1")
+            retained.append({"source_artifact_id": artifact_id, "resource_id": artifact.resource_id, "role": role})
+        metadata["retained_artifacts"] = retained
+    if source_receipt.get("entity_kind") == "native_binder_job_result" and source_receipt["metadata"].get("model_id") in {
+            "protein_modification_experimental", "rfd4_proteina", "complexa", "laproteina",
+            "proteinmpnn", "fampnn", "caliby_experimental", "ligandmpnn", "protonpottsmpnn"}:
+        await retain_native_result(core_session, experiment_session, source_receipt,
+            workspace_id=attempt.workspace_id, lifecycle_owner_id=domain.aggregate_id,
+            attempt_id=attempt.resource_id)
     external = await register_external_entity_receipt(
         experiment_session,
         workspace_id=attempt.workspace_id,

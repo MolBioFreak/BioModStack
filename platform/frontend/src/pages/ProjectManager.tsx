@@ -1,3 +1,4 @@
+import ProjectAlignments from '../components/alignments/ProjectAlignments';
 import { isAxiosError } from 'axios';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
@@ -12,6 +13,8 @@ import {
     projectResultHref,
     isPermissionError,
     issuePreparedLaunchContext,
+    getProject,
+    archiveProject,
     listNgsMolBioProjectLinks,
     listDomainWorkflowPlanRevisions,
     prepareDomainWorkflowPlanRevision,
@@ -36,6 +39,8 @@ import { ProjectCandidateOverview, useProjectCandidateData } from '../components
 import { RunPanel } from '../components/project-manager/RunPanel';
 import { VirtualFolderPanel, type FolderKind } from '../components/project-manager/VirtualFolderPanel';
 import { focusIdFromReadModel, globalExperimentForNode } from '../components/project-manager/projectManagerState';
+import { NativeProjectTools } from '../components/project-manager/NativeProjectTools';
+import { RetainedNativeResult } from '../components/project-manager/RetainedNativeResult';
 import { ProteinProjectWorkspace } from '../components/project-manager/protein/ProteinProjectWorkspace';
 import { NewProjectExperimentDialog } from '../components/project-manager/ProjectWorkflowSetup';
 
@@ -95,7 +100,7 @@ function nativeProjectContext(summary: ProjectManagerReadModel): { globalExperim
         ? domainNodes.find((node) => node.subject_id === selectedDomainId)
         : focusedDomains.length === 1
             ? focusedDomains[0]
-            : undefined;
+            : domainNodes.length === 1 ? domainNodes[0] : undefined;
     if (!domain?.subject_id || !domain.parent_node_key) return null;
     const globalExperiment = summary.tree.nodes.find((node) => node.node_key === domain.parent_node_key && node.node_type === 'global_experiment');
     if (!globalExperiment?.subject_id) return null;
@@ -111,14 +116,32 @@ function selectedDomainIsProtein(summary: ProjectManagerReadModel): boolean {
         || payloadSchema === 'bms.protein-in-silico-experiment.v1';
 }
 
-function NativeProjectDataPanel({ summary, stateRevisionId }: { summary: ProjectManagerReadModel; stateRevisionId: string | null }) {
+export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExperiment, onCreateWorkspace, onSelectNode, actionsDisabled = false }: {
+    summary: ProjectManagerReadModel;
+    stateRevisionId: string | null;
+    actionsDisabled?: boolean;
+    onCreateExperiment: () => void;
+    onCreateWorkspace: () => void;
+    onSelectNode: (nodeKey: string, nodeType: string, subjectId: string | null) => void;
+}) {
     const context = useMemo(() => nativeProjectContext(summary), [summary]);
-    const isNativeProject = summary.project.project_scope === 'ngs_molbio_local';
+    const selectedPayload = summary.selection.summary?.domain_payload;
+    // Only alignment workflow domains skip the DNA workspace. Older v1 NGS/MolBio
+    // domains are still DNA workspaces; an alignment one is recognised by its
+    // Project setup task, which reopens under /alignments.
+    const alignmentSetupDomain = summary.selection.node_type === 'domain_experiment'
+        && selectedPayload !== null && typeof selectedPayload === 'object' && !Array.isArray(selectedPayload)
+        && selectedPayload.schema === 'bms.ngs-molbio-experiment.v1'
+        && (summary.tasks ?? []).some(task => task.global_experiment_id === context?.globalExperimentId && task.reopen_route.startsWith('/alignments'));
+    const nonNativeDomain = alignmentSetupDomain
+        || ['bms.family-msa.family_msa_protein.adapter.v1', 'bms.family-msa.family_msa_nucleic.adapter.v1'].includes(String(summary.selection.summary?.adapter_id));
+    const isNativeProject = summary.project.project_scope === 'ngs_molbio_local' || context !== null;
     const stateQuery = useQuery({
         queryKey: ['project-manager', 'native-domain-state', context?.domainExperimentId ?? null],
         queryFn: () => fetchMolBioNgsDomainState(context?.domainExperimentId as string),
-        enabled: isNativeProject && context !== null,
-        retry: false,
+        enabled: isNativeProject && context !== null && !nonNativeDomain,
+        retry: (count, error) => count < 5 && (error as { status?: number }).status === 404,
+        retryDelay: 1000,
     });
     const selectedStateRevisionId = stateRevisionId ?? stateQuery.data?.current_state_revision_id ?? null;
     const projectHubQuery = useQuery({
@@ -130,13 +153,35 @@ function NativeProjectDataPanel({ summary, stateRevisionId }: { summary: Project
             selectedStateRevisionId as string,
             signal,
         ),
-        enabled: isNativeProject && context !== null && selectedStateRevisionId !== null,
+        enabled: isNativeProject && context !== null && selectedStateRevisionId !== null && !nonNativeDomain,
         retry: false,
     });
 
     if (!isNativeProject) return null;
+    if (nonNativeDomain) return <section aria-label="Workflow results" className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-5"><h2 className="font-semibold text-content">Workflow results</h2><p className="mt-2 text-sm text-content-secondary">Alignment results are listed below.</p></section>;
     if (!context) {
-        return <section role="status" className="border-b border-warning/40 bg-warning/10 px-4 py-3 text-xs text-content-secondary"><span className="font-semibold text-warning">DNA sequence workspace unavailable.</span> Select the Project's NGS/MolBio Domain Experiment to restore its exact workspace context.</section>;
+        const experiments = summary.tree.nodes.filter((node) => node.node_type === 'global_experiment');
+        const workspaces = summary.tree.nodes.filter((node) => node.node_type === 'domain_experiment');
+        const selectedExperiment = globalExperimentForNode(summary, summary.selection.node_key);
+        return (
+            <section className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-5" aria-label="Project workspace setup">
+                <h2 className="text-base font-semibold text-content">{workspaces.length ? 'Choose a workspace' : 'Set up this project'}</h2>
+                <p className="mt-2 text-sm text-content-secondary">{workspaces.length
+                    ? 'Select the workspace whose DNA sequences and NGS data you want to open.'
+                    : experiments.length
+                        ? 'Select an experiment and add its NGS/MolBio workspace to organize DNA sequences and NGS data.'
+                        : 'Create an experiment, then add its NGS/MolBio workspace to organize DNA sequences and NGS data.'}</p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                    {summary.allowed_actions.includes('create_global_experiment') && <button type="button" disabled={actionsDisabled} onClick={onCreateExperiment} className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white">New experiment</button>}
+                    {selectedExperiment && <button type="button" disabled={actionsDisabled} onClick={onCreateWorkspace} className="rounded-lg border border-accent px-3 py-2 text-sm text-accent">Add NGS/MolBio workspace</button>}
+                    {(workspaces.length ? workspaces : experiments).map((node) => <button key={node.node_key} type="button" disabled={actionsDisabled} onClick={() => onSelectNode(node.node_key, node.node_type, node.subject_id)} className="rounded-lg border border-border-primary px-3 py-2 text-sm text-content">Open {node.label}</button>)}
+                </div>
+            </section>
+        );
+    }
+    if (stateQuery.isSuccess && stateQuery.data.current_state_revision_id === null) {
+        const params = new URLSearchParams({ workspace_id: summary.project.id, global_experiment_id: context!.globalExperimentId, domain_experiment_id: context!.domainExperimentId, action: 'add-plasmid' });
+        return <section className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-5" aria-label="Empty DNA sequence workspace"><h2 className="font-semibold text-content">No DNA sequences attached yet</h2><p className="mt-2 text-sm text-content-secondary">Import or save a DNA sequence in MolBio, then use Add to Project. You can also attach a saved sequence with Attach existing record above.</p><Link to={`/designer?${params}`} className="mt-3 inline-block rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white">Open MolBio to add DNA sequences</Link></section>;
     }
     if (stateQuery.isPending || (selectedStateRevisionId !== null && projectHubQuery.isPending)) {
         return <section aria-busy="true" className="border-b border-border-primary bg-surface-secondary px-4 py-3 text-xs text-content-secondary">Loading Project DNA sequences…</section>;
@@ -191,6 +236,10 @@ function ProjectsIndex() {
         else next.set('scope', nextScope);
         setSearchParams(next);
     };
+    const deleteProject = useMutation({
+        mutationFn: async (id: string) => { const current = await getProject(id); return archiveProject(id, current.head_generation); },
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project-manager', 'projects'] }),
+    });
     const projectsQuery = useInfiniteQuery({
         queryKey: ['project-manager', 'projects', apiScope, query.trim(), statusFilter, archiveFilter],
         initialPageParam: undefined as string | undefined,
@@ -235,6 +284,7 @@ function ProjectsIndex() {
                         <button key={value} type="button" role="tab" aria-selected={scope === value} onClick={() => selectScope(value)} className={`rounded-lg px-4 py-2 text-sm font-semibold focus:ring-2 focus:ring-accent ${scope === value ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>{label}</button>
                     ))}
                 </div>
+                {deleteProject.isError && <p role="alert" className="mt-4 text-sm text-[var(--text-error)]">{projectManagerErrorMessage(deleteProject.error)}</p>}
                 <section aria-label="Project discovery controls" className="mt-3 grid gap-3 rounded-xl border border-border-primary bg-surface-secondary p-3 md:grid-cols-[minmax(12rem,1fr)_auto_auto_auto]">
                     <input aria-label="Search Projects" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, objective, owner, or tag" className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-sm text-content" />
                     <select aria-label="Project status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content"><option value="all">All statuses</option><option value="draft">Draft</option><option value="active">Active</option><option value="on_hold">On hold</option><option value="completed">Completed</option></select>
@@ -254,7 +304,8 @@ function ProjectsIndex() {
                             const activeCount = typeof project.active_experiment_count === 'number' ? project.active_experiment_count : typeof payload.active_experiment_count === 'number' ? payload.active_experiment_count : null;
                             const failureCount = typeof project.unresolved_failure_count === 'number' ? project.unresolved_failure_count : typeof payload.unresolved_failure_count === 'number' ? payload.unresolved_failure_count : null;
                             return (
-                                <Link data-project-card key={project.id} to={`/projects/${encodeURIComponent(project.id)}`} className="group rounded-2xl border border-border-primary bg-surface-secondary p-5 shadow-sm outline-none transition hover:-translate-y-0.5 hover:border-accent hover:shadow-xl focus:ring-2 focus:ring-accent">
+                                <article key={project.id} className="relative rounded-2xl border border-border-primary bg-surface-secondary shadow-sm transition hover:-translate-y-0.5 hover:border-accent hover:shadow-xl">
+                                <Link data-project-card to={`/projects/${encodeURIComponent(project.id)}`} className="group block rounded-2xl p-5 outline-none focus:ring-2 focus:ring-accent">
                                     <div className="flex flex-wrap items-start justify-between gap-2"><div className="flex flex-wrap gap-2"><span className="rounded-full border border-border-primary px-2 py-1 text-xs font-semibold text-content-secondary">{projectScope === 'ngs_molbio_local' ? 'NGS/MolBio' : 'Global'}</span>{projectScope === 'ngs_molbio_local' ? <LocalProjectAssociationBadge project={project} /> : null}</div><span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-muted">{project.status}</span></div>
                                     <h2 className="mt-4 text-lg font-semibold text-content group-hover:text-accent">{project.name}</h2>
                                     <p className="mt-2 line-clamp-3 text-xs leading-5 text-content-secondary">{typeof payload.research_objective === 'string' ? payload.research_objective : project.description || 'No research objective recorded.'}</p>
@@ -262,6 +313,8 @@ function ProjectsIndex() {
                                     <p className="mt-4 text-[10px] text-content-muted">Updated {new Date(project.updated_at).toLocaleString()}</p>
                                     <span className="mt-3 inline-flex text-sm font-semibold text-accent">Open Project</span>
                                 </Link>
+                                {project.lifecycle_state !== 'archived' && <div className="px-5 pb-4"><button type="button" disabled={deleteProject.isPending} aria-label={`Delete Project ${project.name}`} onClick={() => { if (window.confirm(`Delete Project “${project.name}” from active Projects? It will be archived so its sequences, data and history remain recoverable.`)) deleteProject.mutate(project.id); }} className="rounded border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-error)]">Delete Project</button></div>}
+                                </article>
                             );
                         })}
                         {projectsQuery.hasNextPage ? (
@@ -494,7 +547,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             returnQuery.set('selected', summary.selection.node_key);
             const returnUri = `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`;
             const context = await getProjectResultContext(projectId, globalExperimentId, domainExperimentId, returnUri);
-            return projectResultHref(surface.route, context);
+            return projectResultHref(surface.route, context, surface);
         },
         onSuccess: (route) => navigate(route),
     });
@@ -734,7 +787,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 });
                 const context = await getProjectResultContext(projectId, globalExperimentId, domainExperimentId,
                     `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`);
-                return { kind: 'route' as const, route: projectResultHref(surface.route, context) };
+                return { kind: 'route' as const, route: projectResultHref(surface.route, context, surface) };
             }
             throw new Error(`Unsupported server-issued run action: ${action}`);
         },
@@ -856,6 +909,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     {busy && <span role="status" className="text-[10px] font-medium text-accent">Refreshing…</span>}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                    {summary.project.project_scope === 'ngs_molbio_local' && <NativeProjectTools key={projectId} projectId={projectId} projectName={summary.project.name} context={nativeProjectContext(summary)} disabled={!selectionReady} />}
                     {summary.project.project_scope === 'global' && <details ref={creationRef} className="relative">
                         <summary className="cursor-pointer rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">New experiment</summary>
                         <div className="absolute right-0 z-40 mt-2 w-72 max-w-[85vw] space-y-2 rounded-lg border border-border-primary bg-surface-secondary p-3 shadow-xl">
@@ -917,7 +971,8 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 )}
                 {projectTreeVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
                 <main className="flex min-h-0 min-w-0 flex-col md:overflow-y-auto">
-                    <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} />
+                    <ProjectAlignments key={projectId} projectId={projectId}/>
+                    <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} onCreateExperiment={() => setDialogMode('create_global')} onCreateWorkspace={() => setDialogMode('create_domain')} onSelectNode={setSelection} actionsDisabled={!selectionReady} />
                     {loadingCandidateOverview && <p role="status" className="p-6 text-sm text-content-secondary">Loading candidate sources and validation results… <button type="button" onClick={() => switchProjectView('records')} className="text-accent underline">Open records now</button></p>}
                     {showCandidates && candidates.data && <ProjectCandidateOverview data={candidates.data} onOpenRecords={() => switchProjectView('records')} />}
                     {!isStandaloneNativeProject && !showCandidates && !loadingCandidateOverview && (
@@ -985,6 +1040,8 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
 export function ProjectManager() {
     const { projectId, experimentId, domainId } = useParams<{ projectId?: string; experimentId?: string; domainId?: string }>();
     const [searchParams] = useSearchParams();
+    const retainedReceipt = searchParams.get('native_receipt');
+    if (projectId && retainedReceipt) return <RetainedNativeResult key={`${projectId}:${retainedReceipt}`} projectId={projectId} receiptId={retainedReceipt} returnUri={searchParams.get('return_uri')} />;
     if (projectId && experimentId && domainId && searchParams.get('workspace') === 'protein') {
         return <ProteinProjectWorkspace projectId={projectId} globalExperimentId={experimentId} domainExperimentId={domainId} />;
     }

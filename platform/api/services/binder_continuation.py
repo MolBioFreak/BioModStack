@@ -21,8 +21,9 @@ async def resolve_root(session: AsyncSession, source_job_id: str) -> tuple[Job, 
     while current.id not in visited:
         visited.add(current.id)
         params = current.params or {}
+        step = (current.provenance or {}).get('binder_round_step') or {}
         root_id = (current.lineage_root_job_id or params.get('lineage_root_job_id')
-                   or params.get('iteration_source_root_job_id'))
+                   or params.get('iteration_source_root_job_id') or step.get('root_job_id'))
         source_id = (current.selection_source_job_id or current.source_stage_job_id
                      or params.get('selection_source_job_id') or params.get('source_stage_job_id')
                      or params.get('iteration_source_job_id'))
@@ -285,15 +286,15 @@ def _snapshot_selection(source: Job, root: Job, designs: list[Design], *,
         model = (item.get('selected_document') or {}).get('model')
         if model is None:
             continue
-        from services.binder_source_materialization import materialize_source_bytes
+        from services.binder_source_materialization import materialize_source_bytes, structure_suffix
         from paths import resolve_allowed_path
         original = Path(item.get('native_source_structure_path') or item['selection_pdb_path'])
         derivative = directory / ('model-' + str(item.get('selection_id') or item['design_id']))
         derivative.mkdir()
-        prepared = materialize_source_bytes(original.read_bytes(), original.suffix, derivative,
+        prepared = materialize_source_bytes(original.read_bytes(), structure_suffix(original), derivative,
                                              output_format=output_format, model_number=model)
         item['native_source_structure_path'] = str(original)
-        item['native_source_structure_sha256'] = hashlib.sha256(original.read_bytes()).hexdigest()
+        item['native_source_structure_sha256'] = prepared['original_sha256']
         item['selection_pdb_path'] = str(resolve_allowed_path(prepared['path']))
         item['selection_structure_sha256'] = prepared['sha256']
         item['selected_model'] = model

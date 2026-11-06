@@ -68,11 +68,12 @@ def compile_installed(placement, model='boltz2', mode='predict'):
             continue
         root = roots['weights' if dependency.kind == 'weights' else 'containers']
         path = root / dependency.relative_path
-        if dependency.kind == 'weights':
+        if dependency.kind == 'weights' and dependency.relative_path != 'openfold3/of3-p2-155k.pt':
             path.mkdir(parents=True, exist_ok=True)
             path = path / 'transport-fixture.bin'
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b'explicit offline runtime transport double')
+        if not path.is_file():
+            path.write_bytes(b'explicit offline runtime transport double')
     return invocation
 
 

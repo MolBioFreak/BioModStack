@@ -808,7 +808,9 @@ class BioModStackPanel(Adw.Application):
         self.runtime_target_combo.append("prod", "Prod only")
         self.runtime_target_combo.append("dev", "Dev only")
         self.runtime_target_combo.append("both", "Both")
-        self.runtime_target_combo.set_active_id("prod")
+        self.runtime_target_combo.set_active_id(
+            "dev" if operator_runtime_mode(project_root=PROJECT_ROOT) == DEV_RUNTIME_MODE else "prod"
+        )
         button_box.append(self.runtime_target_combo)
 
         # Open UI button
@@ -1001,7 +1003,7 @@ class BioModStackPanel(Adw.Application):
         show_notification("Opening UI", "Launching the BioModStack shell...")
         runtime_mode = operator_runtime_mode(project_root=PROJECT_ROOT)
         subprocess.Popen(
-            build_launch_ui_command(project_root=PROJECT_ROOT, runtime_mode=runtime_mode),
+            build_launch_ui_command(project_root=PROJECT_ROOT, runtime_mode=runtime_mode, surface=None),
             env=self._script_env(),
         )
 
@@ -1188,7 +1190,14 @@ class BioModStackPanel(Adw.Application):
     def _script_env(self) -> dict:
         env = os.environ.copy()
         for key in list(env):
-            if key.startswith("BMS_") or key == "COMPOSE_PROJECT_NAME":
+            # Installation and container-client selectors survive desktop
+            # launches. Lane, image and credential overrides stay configured.
+            if (key.startswith("BMS_") and key not in {
+                "BMS_PYTHON_ROOT", "BMS_FRONTEND_ROOT", "BMS_FRONTEND_NODE",
+                "BMS_MICROMAMBA_BIN", "BMS_MICROMAMBA_ROOT_PREFIX",
+                "BMS_PLANNOTATE_ENV", "BMS_PLANNOTATE_BIN",
+                "BMS_CONTAINER_RUNTIME", "BMS_ONT_CONTAINER_RUNTIME",
+            }) or key == "COMPOSE_PROJECT_NAME":
                 env.pop(key, None)
         return env
     

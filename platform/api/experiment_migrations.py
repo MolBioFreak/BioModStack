@@ -55,7 +55,11 @@ MIGRATION_V20_VERSION = 20
 MIGRATION_V20_NAME = "domain_parent_global_revision_authority"
 MIGRATION_V21_VERSION = 21
 MIGRATION_V21_NAME = "project_workflow_setup_context_authority"
-LATEST_MIGRATION_VERSION = MIGRATION_V21_VERSION
+MIGRATION_V22_VERSION = 22
+MIGRATION_V22_NAME = "native_model_workflow_setup_routes"
+MIGRATION_V23_VERSION = 23
+MIGRATION_V23_NAME = "family_msa_workflow_setup_routes"
+LATEST_MIGRATION_VERSION = MIGRATION_V23_VERSION
 MIGRATION_V2_CHECKSUM = "db24d1ef056e560f10eb2fe9f8ef4dac0d4e4dbe90fd0a49efed88f0d111935c"
 MIGRATION_V3_CHECKSUM = "46f1a1d28a02334e87d628070e2bd9c6d78e158caa23d583951fdc582e7b11d2"
 MIGRATION_V4_CHECKSUM = "ec2966efee9129f8890019bee0d569de2cdf8d2a9fc4bb2e05138839880f375b"
@@ -2256,6 +2260,39 @@ END;
 '''.strip()
 MIGRATION_V21_CHECKSUM = hashlib.sha256(MIGRATION_V21_SQL.encode("utf-8")).hexdigest()
 
+# Rebuild only the editable setup table; retain every row and immutable contract.
+# V21's checksum remains unchanged for existing installations.
+_V22_SETUP_SQL = MIGRATION_V21_SQL.replace(
+    "setup_destination LIKE '/submit?template=%'",
+    "(setup_destination LIKE '/submit?template=%' OR setup_destination LIKE '/submit?model=%')",
+)
+_V22_CREATE, _V22_OWNERS = _V22_SETUP_SQL.split("CREATE INDEX", 1)
+MIGRATION_V22_SQL = (
+    _V22_CREATE.replace("CREATE TABLE workflow_setup_contexts", "CREATE TABLE workflow_setup_contexts_v22")
+    + "\nINSERT INTO workflow_setup_contexts_v22 SELECT * FROM workflow_setup_contexts;\n"
+    + "DROP TABLE workflow_setup_contexts;\n"
+    + "ALTER TABLE workflow_setup_contexts_v22 RENAME TO workflow_setup_contexts;\n"
+    + "CREATE INDEX" + _V22_OWNERS
+)
+MIGRATION_V22_CHECKSUM = hashlib.sha256(MIGRATION_V22_SQL.encode("utf-8")).hexdigest()
+
+# Preserve historical checksums while permitting only the two new routes.
+_V23_SETUP_SQL = _V22_SETUP_SQL.replace(
+    "setup_destination LIKE '/submit?model=%')",
+    "setup_destination LIKE '/submit?model=%' OR "
+    "setup_destination IN ('/alignments?model=family_msa_protein&mode=family_msa', "
+    "'/alignments?model=family_msa_nucleic&mode=family_msa'))",
+)
+_V23_CREATE, _V23_OWNERS = _V23_SETUP_SQL.split("CREATE INDEX", 1)
+MIGRATION_V23_SQL = (
+    _V23_CREATE.replace("CREATE TABLE workflow_setup_contexts", "CREATE TABLE workflow_setup_contexts_v23")
+    + "\nINSERT INTO workflow_setup_contexts_v23 SELECT * FROM workflow_setup_contexts;\n"
+    + "DROP TABLE workflow_setup_contexts;\n"
+    + "ALTER TABLE workflow_setup_contexts_v23 RENAME TO workflow_setup_contexts;\n"
+    + "CREATE INDEX" + _V23_OWNERS
+)
+MIGRATION_V23_CHECKSUM = hashlib.sha256(MIGRATION_V23_SQL.encode("utf-8")).hexdigest()
+
 _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_resource_owner_same_workspace_insert",
     "trg_experiment_resource_owner_same_workspace_update",
@@ -2526,10 +2563,12 @@ def _accepted_migration_ledgers() -> tuple[list[tuple[int, str, str]], ...]:
     v19 = (MIGRATION_V19_VERSION, MIGRATION_V19_NAME, _migration_v19_checksum())
     v20 = (MIGRATION_V20_VERSION, MIGRATION_V20_NAME, _migration_v20_checksum())
     v21 = (MIGRATION_V21_VERSION, MIGRATION_V21_NAME, _migration_v21_checksum())
+    v22 = (MIGRATION_V22_VERSION, MIGRATION_V22_NAME, MIGRATION_V22_CHECKSUM)
+    v23 = (MIGRATION_V23_VERSION, MIGRATION_V23_NAME, MIGRATION_V23_CHECKSUM)
     v1 = (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)
     return (
-        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21],
-        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21],
+        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23],
+        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23],
     )
 
 
@@ -2704,6 +2743,14 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
             _migration_v21_checksum(), "Project-owned editable workflow setup context authority",
             MIGRATION_V21_SQL,
         )
+        _apply_additive_migration(
+            expected, MIGRATION_V22_VERSION, MIGRATION_V22_NAME,
+            MIGRATION_V22_CHECKSUM, "Native model workflow setup routes", MIGRATION_V22_SQL,
+        )
+        _apply_additive_migration(
+            expected, MIGRATION_V23_VERSION, MIGRATION_V23_NAME,
+            MIGRATION_V23_CHECKSUM, "Family MSA workflow setup routes", MIGRATION_V23_SQL,
+        )
         manifest = _schema_definition_manifest(expected)
         if legacy_lineage:
             for table_name, definition in _LEGACY_FINAL_TABLE_SQL.items():
@@ -2716,8 +2763,10 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
         expected.close()
 
 
-def attest_schema(connection: sqlite3.Connection) -> dict[str, object]:
-    """Verify the exact ledger and complete migration-owned SQLite definitions."""
+def attest_schema(
+    connection: sqlite3.Connection, *, verify_data: bool = True
+) -> dict[str, object]:
+    """Verify schema/ledger and, by default, historical foreign-key integrity."""
     missing_tables: list[str] = []
     missing_columns: dict[str, list[str]] = {}
     for table, columns in _REQUIRED_SCHEMA_COLUMNS.items():
@@ -2742,7 +2791,10 @@ def attest_schema(connection: sqlite3.Connection) -> dict[str, object]:
         for row in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
     }
     missing_triggers = sorted(set(_MIGRATION_TRIGGER_NAMES) - actual_triggers)
-    foreign_key_errors = [list(row) for row in connection.execute("PRAGMA foreign_key_check")]
+    foreign_key_errors = (
+        [list(row) for row in connection.execute("PRAGMA foreign_key_check")]
+        if verify_data else None
+    )
     ledger = [
         (int(row[0]), str(row[1]), str(row[2]))
         for row in connection.execute(
@@ -2794,6 +2846,7 @@ def attest_schema(connection: sqlite3.Connection) -> dict[str, object]:
         "missing_indexes": missing_indexes,
         "missing_triggers": missing_triggers,
         "foreign_key_errors": foreign_key_errors,
+        "data_integrity_checked": verify_data,
         "migration_ledger": [list(row) for row in ledger],
         "migration_ledger_valid": ledger_valid,
         "definition_errors": definition_errors,
@@ -3701,7 +3754,8 @@ def _apply_domain_parent_revision_authority_upgrade(connection: sqlite3.Connecti
         raise
 
 
-def run_all(db_path: str | Path) -> None:
+def run_all(db_path: str | Path, *, verify_data: bool = True) -> None:
+    """Migrate and attest; schema-only reopen still fully audits actual upgrades."""
     _verify_frozen_migration_sources()
     path = Path(db_path).expanduser().resolve()
     connection = _connect(path)
@@ -3742,6 +3796,7 @@ def run_all(db_path: str | Path) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
+        migrated = rows not in _accepted_migration_ledgers()
         if not rows:
             connection.executescript(MIGRATION_SQL)
             connection.execute(
@@ -3935,16 +3990,31 @@ def run_all(db_path: str | Path) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
+        if rows in tuple(ledger[:-2] for ledger in _accepted_migration_ledgers()):
+            _apply_additive_migration(
+                connection, MIGRATION_V22_VERSION, MIGRATION_V22_NAME,
+                MIGRATION_V22_CHECKSUM, "Native model workflow setup routes", MIGRATION_V22_SQL,
+            )
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in tuple(ledger[:-1] for ledger in _accepted_migration_ledgers()):
+            _apply_additive_migration(
+                connection, MIGRATION_V23_VERSION, MIGRATION_V23_NAME,
+                MIGRATION_V23_CHECKSUM, "Family MSA workflow setup routes", MIGRATION_V23_SQL,
+            )
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
         if rows not in _accepted_migration_ledgers():
             raise RuntimeError(f"experiment migration ledger mismatch: {rows!r}")
         connection.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_experiment_run_events_idempotency "
             "ON run_events(workflow_run_id, idempotency_key)"
         )
-        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
-        if violations:
-            raise sqlite3.IntegrityError(f"experiment foreign-key violations: {violations!r}")
-        attestation = attest_schema(connection)
+        attestation = attest_schema(connection, verify_data=verify_data or migrated)
         if not attestation["ok"]:
             raise sqlite3.IntegrityError(f"experiment schema attestation failed: {attestation!r}")
     except Exception:

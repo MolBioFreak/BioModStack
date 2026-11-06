@@ -8,7 +8,10 @@ const mock = vi.hoisted(() => ({
     commit: vi.fn(), createSequence: vi.fn(), preview: vi.fn(), domain: 'domain-1', state: 'state-1', summaries: vi.fn(), reference: vi.fn(), sample: vi.fn(), stateDetail: vi.fn(),
     fullReferences: vi.fn(), fullHistory: vi.fn(), fullSamples: vi.fn(), control: vi.fn(),
 }));
-vi.mock('../../src/lib/api', () => ({
+vi.mock('../../src/lib/api', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/lib/api')>();
+    return {
+    prepareExecutionPlacement: actual.prepareExecutionPlacement,
     fetchMolBioNgsSummaries: mock.summaries,
     fetchExecutionTargets: vi.fn().mockResolvedValue({ data: [] }),
     fetchMolBioNgsReferenceRevision: mock.reference,
@@ -23,6 +26,7 @@ vi.mock('../../src/lib/api', () => ({
     fetchOntProtocolOptions: vi.fn(),
     fetchOntInstrumentRuns: vi.fn().mockResolvedValue([]),
     fetchOntExternalPod5Candidates: vi.fn().mockResolvedValue({ candidates: [] }),
+    fetchOntRawSignalRetention: vi.fn().mockResolvedValue({ policy: 'keep_pod5' }), saveOntRawSignalRetention: vi.fn(),
     fetchOntInstrumentRunGeneration: vi.fn(), fetchOntRawSignalCapabilities: vi.fn(), fetchOntRawSignalWaveform: vi.fn(),
     requestOntBlow5Preparation: mock.control, requestOntRawSignalWaveform: mock.control,
     registerOntExternalPod5Candidate: mock.control, requestMk1dReconnect: mock.control,
@@ -31,7 +35,8 @@ vi.mock('../../src/lib/api', () => ({
     fetchFiles: vi.fn(), importMolBioNgsBrowserReference: mock.control,
     issueMolBioNgsReceipt: mock.control, previewMolBioSequenceImport: mock.preview,
     submitOntNgsJob: mock.control, submitPooledReferenceAssignment: mock.control,
-}));
+    };
+});
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
     useGlobalExperimentContext: () => ({ workspaceId: 'workspace-1', globalExperimentId: 'global-1',
         selectedDomainExperiment: { domain_experiment_id: mock.domain }, stateRevisionId: mock.state,
@@ -225,9 +230,10 @@ it('the visible shared preview/commit panel retains all returned exact revisions
     const panel = container.querySelector('[data-testid="molbio-sequence-import-panel"]')!;
     await inputValue(panel.querySelector('textarea')!, '>A\nACGT\n>B\nTGCA\n');
     await inputValue(panel.querySelector('[aria-label="Import topology default"]')!, 'linear');
-    await act(async () => button('Preview import').click());
-    await until(() => expect(button('Commit preview').disabled).toBe(false));
-    await act(async () => button('Commit preview').click());
+    await act(async () => panel.querySelector<HTMLInputElement>('input[type=checkbox]')!.click());
+    await act(async () => button('Check sequences').click());
+    await until(() => expect(button('Save sequences to MolBio').disabled).toBe(false));
+    await act(async () => button('Save sequences to MolBio').click());
     await until(() => expect(panel.querySelectorAll('[data-testid="molbio-import-committed-records"] a')).toHaveLength(2));
     expect(mock.commit).toHaveBeenCalledWith(expect.objectContaining({ origin_surface: 'ngs', topology_default: 'linear' }));
     expect(referenceSelect().value).toBe('r1');

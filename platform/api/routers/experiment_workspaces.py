@@ -224,6 +224,12 @@ class DatasetRevisionSaveRequest(StrictRequestModel):
     expected_head_generation: int = Field(ge=0)
 
 
+class DatasetRevisionDeriveRequest(StrictRequestModel):
+    parent_revision_id: str
+    ordinals: list[Annotated[int, Field(strict=True, ge=0)]]
+    expected_head_generation: int = Field(ge=0)
+
+
 class PrepareRequest(StrictRequestModel):
     input_dataset_revision_ids: list[str] = Field(default_factory=list)
 
@@ -769,6 +775,26 @@ async def save_dataset_revision_route(
             payload.payload,
             expected_head_generation=payload.expected_head_generation,
         )
+        await session.commit()
+        return _revision_json(revision)
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
+@router.post("/{workspace_id}/datasets/{dataset_id}/revisions/derive", status_code=status.HTTP_201_CREATED)
+async def derive_dataset_revision_route(
+    workspace_id: str, dataset_id: str, payload: DatasetRevisionDeriveRequest,
+    request: Request, session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    from experiment_services import derive_dataset_revision
+    try:
+        await _require_mutation_owner(request, session, resource_id=dataset_id)
+        head = await session.get(ExperimentAggregateHead, dataset_id)
+        if head is None or head.workspace_id != workspace_id or head.aggregate_kind != "dataset":
+            raise NotFound(f"dataset not found: {dataset_id}")
+        revision = await derive_dataset_revision(session, dataset_id, payload.parent_revision_id,
+            payload.ordinals, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return _revision_json(revision)
     except ExperimentServiceError as exc:

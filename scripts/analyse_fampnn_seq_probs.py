@@ -91,16 +91,21 @@ def _mutation_delta_candidates(
     chain_index: int,
     residue_index: int,
     min_log_odds_delta: float,
+    alphabet: str = AA_ALPHABET,
 ) -> List[Dict[str, Any]]:
-    if sampled_aa_index < 0 or sampled_aa_index >= min(len(normalized_row), len(AA_ALPHABET)):
+    if sampled_aa_index < 0 or sampled_aa_index >= min(len(normalized_row), len(alphabet)):
         return []
-    from_prob = max(float(normalized_row[sampled_aa_index]), EPS)
-    from_aa = AA_ALPHABET[sampled_aa_index]
+    if alphabet.endswith("X") and (alphabet[sampled_aa_index] == "X" or normalized_row[sampled_aa_index] == 0):
+        return []
+    from_prob = float(normalized_row[sampled_aa_index]) if alphabet.endswith("X") else max(float(normalized_row[sampled_aa_index]), EPS)
+    from_aa = alphabet[sampled_aa_index]
     candidates: List[Dict[str, Any]] = []
-    for to_aa_index, to_aa in enumerate(AA_ALPHABET):
+    for to_aa_index, to_aa in enumerate(alphabet):
         if to_aa_index == sampled_aa_index or to_aa_index >= len(normalized_row):
             continue
-        to_prob = max(float(normalized_row[to_aa_index]), EPS)
+        if alphabet.endswith("X") and (to_aa == "X" or normalized_row[to_aa_index] == 0):
+            continue
+        to_prob = float(normalized_row[to_aa_index]) if alphabet.endswith("X") else max(float(normalized_row[to_aa_index]), EPS)
         log_odds_delta = math.log(to_prob) - math.log(from_prob)
         if log_odds_delta < min_log_odds_delta:
             continue
@@ -280,6 +285,21 @@ def _resolve_policy(policy: dict, input_name: str, identities: List[str]):
     return summary, authorized, mutations
 
 
+def _native_probability_row(values, aa_index):
+    """Native softmax row interpretation shared by strict and optional evidence."""
+    total = math.fsum(values)
+    if not math.isfinite(total):
+        raise ValueError('seq_probs: row total nonfinite')
+    if total > 0 and abs(total - 1.0) > 1e-6:
+        raise ValueError('seq_probs: probability row total outside 1e-6 tolerance')
+    if total == 0:
+        return None
+    normalized = [v / total for v in values]
+    p = normalized[aa_index]
+    entropy = -math.fsum(v * math.log(v) for v in normalized if v > 0)
+    return normalized, p, entropy, math.log(p) if p > 0 else None
+
+
 def _analyze_strict(path, payload, policy, source_pdb_dir, mutation_top_n, mutation_min_log_odds_delta,
                     sample_bytes, policy_bytes, candidate_pdb_dir):
     if np is None:
@@ -353,23 +373,13 @@ def _analyze_strict(path, payload, policy, source_pdb_dir, mutation_top_n, mutat
     sampled, entropies, logs = [], [], []
     for i, identity in enumerate(identities):
         values = probs[i].astype(float).tolist()
-        total = math.fsum(values)
-        if not math.isfinite(total):
-            raise ValueError('seq_probs: row total nonfinite')
-        # Pinned fampnn_denoiser.py emits F.softmax(seq_logits, dim=-1).
-        # Allow only float32 summation roundoff (absolute tolerance 1e-6).
-        # Zero-total rows retain their separate unscored semantics.
-        if total > 0 and abs(total - 1.0) > 1e-6:
-            raise ValueError('seq_probs: probability row total outside 1e-6 tolerance')
-        scored = bool(present[i] and total > 0)
+        row = _native_probability_row(values, int(pred[i]))
+        scored = bool(present[i] and row is not None)
         selected = identity in selected_ids
         p = entropy = logp = None
         reason = 'absent' if not present[i] else 'zero_total'
         if scored:
-            normalized = [v / total for v in values]
-            p = normalized[int(pred[i])]
-            entropy = -math.fsum(v * math.log(v) for v in normalized if v > 0)
-            logp = math.log(p) if p > 0 else None
+            normalized, p, entropy, logp = row
             reason = None if p > 0 else 'zero_probability'
             if selected:
                 sampled.append(p)
@@ -483,44 +493,47 @@ def analyze_sample_pkl(path: Path, *, mutation_top_n: int = 25, mutation_min_log
     if not isinstance(payload, dict):
         return {**base, "missing": ["dict_payload"]}
 
-    seq_probs_raw = payload.get("seq_probs")
-    pred_raw = payload.get("pred_aatype")
-    if seq_probs_raw is None:
-        return {**base, "missing": ["seq_probs"]}
-    if pred_raw is None:
-        return {**base, "missing": ["pred_aatype"]}
-
-    probs_arr = _to_array(seq_probs_raw)
-    pred_arr = _to_array(pred_raw)
+    if np is None:
+        return {**base, "missing": ["numpy"]}
+    # The unmarked native PKL has the same pinned axes and masks. Invalid
+    # optional evidence stays unavailable; it must not reject a design job.
     try:
-        probs = probs_arr.reshape((-1, probs_arr.shape[-1]))
-        pred = pred_arr.reshape(-1)
-    except Exception as exc:
-        return {**base, "missing": ["array_shape"], "error": str(exc)}
-
-    length = min(len(probs), len(pred))
-    if length == 0:
-        return {**base, "missing": ["empty_seq_probs"]}
-
-    seq_mask = _as_bool_mask(payload.get("seq_mask"), length)
-    residue_index = _as_int_list(payload.get("residue_index"), length, default_start=1)
-    chain_index = _as_int_list(payload.get("chain_index"), length, default_start=0)
+        pred_arr = np.asarray(payload.get("pred_aatype"))
+        if pred_arr.ndim != 1:
+            raise ValueError("pred_aatype: expected native residue axis")
+        length = len(pred_arr)
+        pred = _strict_array(payload, "pred_aatype", (length,), integer=True)
+        probs = _strict_array(payload, "seq_probs", (length, len(STRICT_ALPHABET)))
+        seq_mask = _strict_array(payload, "seq_mask", (length,), mask=True)
+        fixed = _strict_array(payload, "aatype_override_mask", (length,), mask=True)
+        residue_index = _strict_array(payload, "residue_index", (length,), integer=True)
+        chain_index = _strict_array(payload, "chain_index", (length,), integer=True)
+        if np.any(probs < 0) or np.any(pred < 0) or np.any(pred >= len(STRICT_ALPHABET)):
+            raise ValueError("invalid native probability/token values")
+    except (ValueError, TypeError, AttributeError) as exc:
+        return {**base, "missing": ["native_array_contract"], "error": str(exc)}
+    base.update(dialect=STRICT_DIALECT, alphabet=STRICT_ALPHABET,
+                total_residue_count=length, designed_residue_count=int(((seq_mask == 1) & (fixed == 0)).sum()),
+                summary_denominator="scored_designed_residues")
 
     sampled_probs: List[float] = []
     entropies: List[float] = []
     low_confidence_positions: List[Dict[str, Any]] = []
     mutation_candidates: List[Dict[str, Any]] = []
     for idx in range(length):
-        if not seq_mask[idx]:
+        if not seq_mask[idx] or fixed[idx]:
             continue
         row = [float(x) for x in probs[idx].tolist()]
         aa_index = int(pred[idx])
         if aa_index < 0 or aa_index >= len(row):
             continue
-        row_total = sum(max(x, 0.0) for x in row)
-        normalized_row = [max(x, 0.0) / row_total for x in row] if row_total > 0 else row
-        sampled_prob = max(float(normalized_row[aa_index]), EPS)
-        entropy = _entropy(normalized_row)
+        try:
+            native_row = _native_probability_row(row, aa_index)
+        except ValueError as exc:
+            return {**base, "missing": ["native_probability_contract"], "error": str(exc)}
+        if native_row is None:
+            continue
+        normalized_row, sampled_prob, entropy, _ = native_row
         sampled_probs.append(sampled_prob)
         entropies.append(entropy)
         mutation_candidates.extend(
@@ -530,6 +543,7 @@ def analyze_sample_pkl(path: Path, *, mutation_top_n: int = 25, mutation_min_log
                 chain_index=chain_index[idx],
                 residue_index=residue_index[idx],
                 min_log_odds_delta=mutation_min_log_odds_delta,
+                alphabet=STRICT_ALPHABET,
             )
         )
         if sampled_prob < 0.5 or entropy > 1.5:
@@ -538,7 +552,7 @@ def analyze_sample_pkl(path: Path, *, mutation_top_n: int = 25, mutation_min_log
                     "chain_index": chain_index[idx],
                     "residue_index": residue_index[idx],
                     "aa_index": aa_index,
-                    "aa": AA_ALPHABET[aa_index] if aa_index < len(AA_ALPHABET) else str(aa_index),
+                    "aa": STRICT_ALPHABET[aa_index],
                     "sampled_prob": _round(sampled_prob),
                     "entropy": _round(entropy),
                 }
@@ -547,7 +561,8 @@ def analyze_sample_pkl(path: Path, *, mutation_top_n: int = 25, mutation_min_log
     if not sampled_probs:
         return {**base, "missing": ["designed_residue_probabilities"]}
 
-    log_probs = [math.log(max(p, EPS)) for p in sampled_probs]
+    log_probs = [math.log(p) if p > 0 else None for p in sampled_probs]
+    valid_logs = all(p is not None for p in log_probs)
     mutation_candidates.sort(key=lambda row: float(row.get("log_odds_delta") or 0.0), reverse=True)
     top_mutations = mutation_candidates[: max(int(mutation_top_n), 0)]
     result = {
@@ -555,11 +570,12 @@ def analyze_sample_pkl(path: Path, *, mutation_top_n: int = 25, mutation_min_log
         "fampnn_seq_probs_available": True,
         "missing": [],
         "total_residue_count": length,
-        "designed_residue_count": len(sampled_probs),
+        "scored_designed_residue_count": len(sampled_probs),
         "fampnn_mean_sampled_prob": _round(sum(sampled_probs) / len(sampled_probs)),
         "fampnn_min_sampled_prob": _round(min(sampled_probs)),
-        "fampnn_mean_sampled_log_prob": _round(sum(log_probs) / len(log_probs)),
-        "fampnn_total_sampled_log_prob": _round(sum(log_probs)),
+        "fampnn_mean_sampled_log_prob": math.fsum(log_probs) / len(log_probs) if valid_logs else None,
+        "fampnn_total_sampled_log_prob": math.fsum(log_probs) if valid_logs else None,
+        "sampled_log_prob_reason": None if valid_logs else "zero_probability",
         "fampnn_mean_entropy": _round(sum(entropies) / len(entropies)),
         "fampnn_max_entropy": _round(max(entropies)),
         "fampnn_low_confidence_positions": low_confidence_positions,

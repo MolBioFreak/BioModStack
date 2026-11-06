@@ -6,6 +6,7 @@ export function projectHubDNASequencesToConstructShelf(model: ProjectHubReadMode
         const isCircular = sequence.topology?.toLowerCase() !== 'linear';
         return {
             id: sequence.sequence_id,
+            ...(sequence.editable_projection_available === false ? {revision_id: sequence.revision_id} : {}),
             reopen_href: sequence.reopen_href,
             name: sequence.name,
             description: sequence.description || null,
@@ -20,7 +21,7 @@ export function projectHubDNASequencesToConstructShelf(model: ProjectHubReadMode
             organism: sequence.organism_host_context,
             accession: null,
             source_file: null,
-            entity_kind: 'molecular_sequence',
+            entity_kind: sequence.editable_projection_available === false ? 'molecular_revision' : 'molecular_sequence',
             topology: isCircular ? 'circular' : 'linear',
             created_at: '',
             updated_at: null,

@@ -70,8 +70,6 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
             'platform/api/config/models/protein_modification_experimental.yaml',
             'platform/api/config/models/protein_local_redesign.yaml',
             'platform/frontend/src/components/ProteinModificationTemplate.tsx',
-            'platform/frontend/src/components/ProteinLocalRedesignTemplate.tsx',
-            'platform/frontend/src/components/RFD3LocalRedesignResultsPane.tsx',
             'platform/frontend/src/components/RFD3GenerationResultsPane.tsx',
             'workflows/protein_cad_experimental.nf',
             'workflows/protein_local_redesign.nf',

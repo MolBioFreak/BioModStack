@@ -9,12 +9,15 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BioXpMethodDeckWorkbench } from '../../src/components/BioXpMethodDeckWorkbench';
 import { insertMethodAction, plateBoundEndpoint, groupCanvasSteps, canUngroupCanvasNode, methodCarryLinks, duplicateCanvasNode } from '../../src/lib/bioxpMethodCanvas';
 import type { MethodValue, MethodCompile } from '../../src/lib/bioxpMethods';
-import catalog from '../fixtures/bioxp_method_deck_catalog.json';
+import deckCatalog from '../fixtures/bioxp_method_deck_catalog.json';
+// Plate/cover destinations come from the real API owner, not a hand-kept copy.
+const custody = JSON.parse(spawnSync(process.env.BMS_TEST_PYTHON!, ['-c', 'import json;from bioxp_method_custody import custody_suggestions;print(json.dumps(custody_suggestions()))'], { cwd: '../api', encoding: 'utf8' }).stdout);
+const catalog = { ...deckCatalog, authoring: { ...((deckCatalog as any).authoring ?? {}), custody } };
 const discovery = process.env.BIOXP_METHOD_MODEL_CONTRACT ? JSON.parse(readFileSync(process.env.BIOXP_METHOD_MODEL_CONTRACT, 'utf8')) : null;
 let host: HTMLDivElement, root: Root, current: MethodValue, values: MethodValue;
 let client: QueryClient, oldAdapter: typeof api.defaults.adapter;
 async function mount(initial: MethodValue, preview?: MethodCompile, initialBindings: MethodValue = {}, actionProperties?: (node: MethodValue, change: (node: MethodValue) => void) => React.ReactNode) {
-    function Owner() { const [method, setMethod] = useState(initial), [bindings, setBindings] = useState(initialBindings); current = method; values = bindings; return <BioXpMethodDeckWorkbench method={method} onChange={setMethod} bindings={bindings} onBindingsChange={setBindings} catalog={discovery?.catalog ?? catalog} rootSchema={discovery?.schema.method ?? {}} preview={preview} actionProperties={actionProperties} />; }
+    function Owner() { const [method, setMethod] = useState(initial), [bindings, setBindings] = useState(initialBindings); current = method; values = bindings; return <BioXpMethodDeckWorkbench method={method} onChange={setMethod} bindings={bindings} onBindingsChange={setBindings} catalog={discovery?.catalog ?? catalog} rootSchema={discovery?.schema.method ?? {}} recordedAlignment={-1} preview={preview} actionProperties={actionProperties} />; }
     root = createRoot(host); await act(async () => root.render(<QueryClientProvider client={client}><Owner /></QueryClientProvider>));
 }
 async function click(label: string) { const button = [...host.querySelectorAll<HTMLButtonElement>('button,[role=button]')].find(b => b.textContent === label || b.getAttribute('aria-label') === label)!; expect(button, label).toBeTruthy(); await act(async () => button.dispatchEvent(new MouseEvent('click', { bubbles: true }))); }
@@ -24,6 +27,8 @@ const plan = { labware: [{ id: 'plate', name: 'Reaction plate', station: 'LOC_MS
 const transfer = { source: { station: 'LOC_RC', location_id: 3, wells: ['A1'] }, destination: { station: 'LOC_MS', location_id: 0, wells: ['A1'], labware_id: 'plate', retained: null }, volume_ul: '002.5000', channels: [0], aspirate_speed: '030.00', dispense_speed: '040.00', source_position_flag: '0', destination_position_flag: '0', source_lift_height_steps: null, destination_lift_height_steps: null };
 beforeEach(() => {
     vi.stubGlobal('crypto', webcrypto);
+    // jsdom has no scrolling implementation; keep the real editor focus path.
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false } } });
     oldAdapter = api.defaults.adapter;
     // The integrated class selector reads the workspace library even before a class is chosen.
@@ -36,7 +41,7 @@ beforeEach(() => {
     };
     host = document.createElement('div'); document.body.append(host);
 });
-afterEach(async () => { if (root) await act(async () => root.unmount()); client.clear(); api.defaults.adapter = oldAdapter; host.remove(); vi.unstubAllGlobals(); });
+afterEach(async () => { if (root) await act(async () => root.unmount()); client.clear(); api.defaults.adapter = oldAdapter; host.remove(); vi.unstubAllGlobals(); Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView'); });
 
 it('inserts after processing and inside nested repeats without changing retained structure', () => {
     const nodes = [{ step_id: 'repeat', type: 'repeat', count: 0, future: null, steps: [{ step_id: 'hold', action: 'thermal_hold', inputs: { duration_s: '00.500' } }] }];
@@ -70,10 +75,41 @@ it('connects real deck wells into one ordered action and opens that same connect
     await click('Connect wells'); await well('LOC_RC', 'A2'); await click('Cancel connection'); expect(current.steps).toHaveLength(2);
 });
 
+it('keeps all planned barcodes and samples visible with thin connection strokes drawn above stations, without changing the method', async () => {
+    const rows = [...'ABCDEFGH'];
+    const labware = [{ id: 'rc', station: 'LOC_RC', name: 'Barcodes', profile_id: '' },
+        { id: 'oc', station: 'LOC_OC', name: 'Reaction plate', profile_id: '' },
+        ...[1, 2, 3].map(n => ({ id: `strip${n}`, station: `LOC_STRIP${n}`, name: `Strip ${n}`, profile_id: '' }))];
+    const assignments = [
+        ...[1, 2, 3, 5, 6, 7, 9, 10, 11].flatMap(c => rows.map(row => ({ id: `rc-${row}${c}`, labware_id: 'rc', well: `${row}${c}`, material_id: 'barcode', volume_ul: '5' }))),
+        ...[1, 2, 3].flatMap(n => rows.map(row => ({ id: `s${n}-${row}`, labware_id: `strip${n}`, well: `${row}1`, material_id: 'sample', volume_ul: '9' }))),
+    ];
+    const initial = { schema: 'bms.bioxp-method.v1', deck_plan: { labware, assignments, materials: [
+        { id: 'barcode', name: 'Rapid barcode', kind: 'reagent', description: '' },
+        { id: 'sample', name: 'Planned sample', kind: 'sample', description: '' },
+    ] }, steps: [{ step_id: 'add', type: 'action', action: 'transfer', label: 'Add barcode', inputs: {
+        ...transfer, destination: { station: 'LOC_OC', location_id: 1, wells: ['A1'], labware_id: 'oc' },
+    } }] };
+    await mount(initial);
+    expect(host.querySelectorAll('.bwd-well.has-contents[data-station="LOC_RC"]')).toHaveLength(72);
+    expect(host.querySelectorAll('.bwd-well.has-contents[data-station^="LOC_STRIP"]')).toHaveLength(24);
+    expect(host.querySelectorAll('.bwd-well.has-contents[data-station="LOC_OC"]')).toHaveLength(0);
+    const connection = host.querySelector('[aria-label="Ordered liquid connections"]')!;
+    // Long links drawn under plates read as ending at the wrong plate; draw them above.
+    for (const resource of host.querySelectorAll('.bwd-resource')) {
+        expect(resource.compareDocumentPosition(connection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(host.querySelectorAll('g.bioxp-method-plate')).toHaveLength(5);
+    await click('Next stage');
+    await click('Edit connection Add barcode');
+    expect(host.querySelector('[aria-label="On-deck editor"]')?.hasAttribute('hidden')).toBe(false);
+    expect(current).toEqual(initial);
+});
+
 it('on-edge edits retain parameter references and independent duplicate bindings through cold serialized reopen', async () => {
     const reference = { expr: { version: 1, op: 'param', id: 'addition', extension: null } };
     await mount({ parameters: [{ id: 'addition', type: 'object' }], deck_plan: plan, steps: [{ step_id: 'add', type: 'action', action: 'transfer', inputs: reference }] }, undefined, { addition: transfer });
-    await click('Edit connection add'); await input('Volume per channel (µL)', '003.7500'); await click('Duplicate step'); await input('Volume per channel (µL)', '004.1250');
+    await click('Next stage'); await click('Edit connection add'); await input('Volume per channel (µL)', '003.7500'); await click('Duplicate step'); await input('Volume per channel (µL)', '004.1250');
     expect(values.addition).toEqual({ ...transfer, volume_ul: '003.7500' });
     const copy = (current.steps as MethodValue[])[1]; expect((copy.inputs as any).expr.id).not.toBe('addition'); expect(values[(copy.inputs as any).expr.id]).toEqual({ ...transfer, volume_ul: '004.1250' });
     expect((current.steps as MethodValue[])[0].inputs).toEqual(reference);
@@ -126,7 +162,7 @@ it.runIf(!!discovery && !!process.env.BMS_TEST_PYTHON)('uses actual compiled occ
     const nativeTransfer = structuredClone(transfer); delete (nativeTransfer.destination as Partial<typeof transfer.destination>).retained;
     const original = { schema: 'bms.bioxp-method.v1', name: 'Software-only receiving', deck_plan: plan, steps: [{ step_id: 'carry', type: 'action', action: 'plate_move', inputs: { labware_id: 'plate', plate_id: 'PL_POOL', target_location: 'LOC_TC' } }, { step_id: 'add', type: 'action', action: 'transfer', inputs: nativeTransfer }] };
     const before = compile(original); expect(before.document, JSON.stringify(before.issues)).toBeTruthy();
-    await mount(original, before); await click('Edit connection add');
+    await mount(original, before); await click('Next stage'); await click('Next stage'); await click('Edit connection add');
     const occurrence = before.provenance!.find(p => p.step_id === 'carry')!;
     await input('Endpoint placement context', String(occurrence.occurrence_id));
     expect((current.steps as any[])[1].inputs.destination.location_id).toBe(0);
@@ -177,11 +213,15 @@ it('projects distinct outgoing and return carry links without asserting conditio
     const links = methodCarryLinks(method, {}, plan, actualCatalog);
     expect(links.map(l => [l.source, l.destination])).toEqual([['LOC_MS', 'LOC_TC'], ['LOC_TC', 'LOC_MS']]);
     expect(methodCarryLinks({ steps: [{ step_id: 'scope', type: 'if', condition: {}, then: method.steps }, make('later', 'LOC_TC')] }, {}, plan, actualCatalog).every(l => l.source === undefined)).toBe(true);
-    await mount(method); await click('Edit plate carry Reaction plate');
+    await mount(method); await click('Next stage'); await click('Edit plate carry Reaction plate');
     expect(host.querySelector('[aria-label="On-deck editor"] [aria-label="Plate to carry"]')).toBeTruthy();
     expect(current).toEqual(method);
     expect(host.querySelectorAll('[data-carry-from="LOC_MS"][data-carry-to="LOC_TC"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-carry-from="LOC_TC"][data-carry-to="LOC_MS"]')).toHaveLength(0);
+    await click('Next stage');
+    expect(host.querySelectorAll('[data-carry-from="LOC_MS"][data-carry-to="LOC_TC"]')).toHaveLength(0);
     expect(host.querySelectorAll('[data-carry-from="LOC_TC"][data-carry-to="LOC_MS"]')).toHaveLength(1);
+    expect(current).toEqual(method);
 });
 
 it('adds a carry through pointer drag without panning, retargeting or adding on cancellation', async () => {
@@ -236,6 +276,94 @@ it.runIf(!!discovery && !!process.env.BMS_TEST_PYTHON)('compiles UI-created repe
     const cold = JSON.parse(JSON.stringify(current)); await act(async () => root.unmount()); await mount(cold);
     await click('Select step 2'); expect((host.querySelector('[aria-label="Repeat count"]') as HTMLInputElement).value).toBe('02');
     await input('Repeat count', '0'); expect(compile().provenance.map((p: any) => p.step_id)).toEqual(['before', 'after']);
+});
+
+it.runIf(!!discovery && !!process.env.BMS_TEST_PYTHON)('pages all 24 transfers together and shows outgoing/return plate placement without changing the draft', async () => {
+    const nativeTransfer = structuredClone(transfer); delete (nativeTransfer.destination as Partial<typeof transfer.destination>).retained;
+    const localPlan = { ...plan, labware: [{ ...plan.labware[0], station: 'LOC_OC' }] };
+    const additions = [1, 2, 3].map(column => ({ step_id: `barcode-${column}`, type: 'action', action: 'transfer', label: `Barcode column ${column}`, inputs: {
+        ...nativeTransfer, source: { station: 'LOC_RC', location_id: 3, wells: [...'ABCDEFGH'].map(r => `${r}${column}`) },
+        destination: { station: 'LOC_OC', location_id: 1, labware_id: 'plate', wells: [...'ABCDEFGH'].map(r => `${r}${column}`) },
+    } }));
+    const original = { schema: 'bms.bioxp-method.v1', name: 'Stage display receiving', deck_plan: localPlan, editor_state: { workflow_pages: [
+        { id: 'barcodes', label: 'Add 24 barcodes', step_ids: additions.map(s => s.step_id) },
+    ] }, steps: [...additions,
+        { step_id: 'carry', type: 'action', action: 'plate_move', inputs: { labware_id: 'plate', plate_id: 'PL_POOL', target_location: 'LOC_TC' } },
+        { step_id: 'return', type: 'action', action: 'plate_move', inputs: { labware_id: 'plate', plate_id: 'PL_POOL', target_location: 'LOC_OC' } },
+    ] };
+    const wire = spawnSync(process.env.BMS_TEST_PYTHON!, ['-c', 'import json,sys;from bioxp_method_compiler import compile_method;print(json.dumps(compile_method(json.load(sys.stdin))))'], { cwd: '../api', encoding: 'utf8', input: JSON.stringify({ method: original }) });
+    expect(wire.status, wire.stderr).toBe(0);
+    const compiled: MethodCompile = JSON.parse(wire.stdout); expect(compiled.document, JSON.stringify(compiled.issues)).toBeTruthy();
+    await mount(original, compiled);
+    const stage = () => host.querySelector<HTMLSelectElement>('[aria-label="Workflow stage"]')!;
+    expect(stage().options).toHaveLength(4);
+    expect(host.querySelectorAll('.bioxp-method-link')).toHaveLength(0);
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Previous stage"]')!.disabled).toBe(true);
+    await click('Next stage');
+    expect(stage().value).toBe('barcodes');
+    expect(host.querySelectorAll('.bioxp-method-link')).toHaveLength(24);
+    expect(host.querySelector('[aria-label="Stage summary"]')!.textContent).toContain('24 transfers');
+    expect(host.querySelectorAll('.bwd-well.is-stage-active[data-station="LOC_RC"]')).toHaveLength(24);
+    expect(host.querySelector('[data-labware="plate"]')!.getAttribute('data-display-station')).toBe('LOC_OC');
+    const optional = [...host.querySelectorAll('details')].find(d => d.querySelector(':scope > summary')?.textContent === 'Execution text (optional)')!;
+    expect(optional).toBeTruthy(); expect(optional.open).toBe(false);
+    await click('Next stage');
+    expect(host.querySelectorAll('.bioxp-method-link')).toHaveLength(0);
+    expect(host.querySelectorAll('[data-carry-from="LOC_OC"][data-carry-to="LOC_TC"]')).toHaveLength(1);
+    expect(host.querySelector('[data-labware="plate"]')!.getAttribute('data-display-station')).toBe('LOC_TC');
+    await click('Next stage');
+    expect(host.querySelector('[data-labware="plate"]')!.getAttribute('data-display-station')).toBe('LOC_OC');
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Next stage"]')!.disabled).toBe(true);
+    await click('Previous stage');
+    expect(host.querySelector('[data-labware="plate"]')!.getAttribute('data-display-station')).toBe('LOC_TC');
+    expect(current).toEqual(original);
+});
+
+it.runIf(!!process.env.BIOXP_WELL_INPUT && !!process.env.BIOXP_WELL_COMPILED)('shows every barcode and output well from the real saved four-channel passes, with exact text and unchanged inputs', async () => {
+    const snapshot = JSON.parse(readFileSync(process.env.BIOXP_WELL_INPUT!, 'utf8'));
+    const compiled = JSON.parse(readFileSync(process.env.BIOXP_WELL_COMPILED!, 'utf8'));
+    await mount(snapshot.method, compiled, snapshot.bindings);
+    await input('Workflow stage', 'barcodes');
+    expect(host.querySelectorAll('.bwd-well.is-stage-active[data-station="LOC_RC"]')).toHaveLength(24);
+    expect(host.querySelectorAll('.bwd-well.is-stage-active[data-station="LOC_OC"]')).toHaveLength(24);
+    expect(host.querySelectorAll('[data-transfer-channel]')).toHaveLength(24);
+    expect(host.querySelector('[data-station="LOC_RC"][data-well="H3"] title')!.textContent).toContain('P4');
+    const text = (host.querySelector('[aria-label="Execution text"]') as HTMLTextAreaElement).value;
+    expect(text).toContain('P4 Reagent chiller H3');
+    expect(text).toContain('P4 Output chiller H3');
+    await input('Workflow stage', 'pool');
+    expect(host.querySelectorAll('[data-transfer-channel]')).toHaveLength(24);
+    expect([...host.querySelectorAll('[data-transfer-channel]')].every(e => e.getAttribute('data-transfer-channel') === '0')).toBe(true);
+    const poolText = (host.querySelector('[aria-label="Execution text"]') as HTMLTextAreaElement).value;
+    expect(poolText).toContain('return unused tip to rack');
+    expect(poolText).toContain('eject tips into the waste bin (P1)');
+    expect(poolText).not.toContain('missing-tip');
+    // Stage contents follow the plan: pooled tubes are filled, sources/destinations are marked.
+    expect(host.querySelectorAll('.bwd-well.has-contents[data-station="LOC_STRIP4"]')).toHaveLength(3);
+    expect(host.querySelectorAll('.bwd-well.is-stage-source[data-station="LOC_OC"]')).toHaveLength(24);
+    expect(host.querySelectorAll('.bwd-well.is-stage-destination[data-station="LOC_STRIP4"]')).toHaveLength(3);
+    expect(host.querySelector('[aria-label="Run hazards on this stage"]')).toBeNull();
+    // The method strip follows the stage: its first step is selected, no editor opens.
+    const poolFirst = snapshot.method.editor_state.workflow_pages.find((p: any) => p.id === 'pool').step_ids[0];
+    const poolPath = `/steps/${snapshot.method.steps.findIndex((s: any) => s.step_id === poolFirst)}`;
+    expect(host.querySelector('.bioxp-method-sequence button[aria-pressed="true"]')!.getAttribute('data-method-path')).toBe(poolPath);
+    expect(host.querySelector('[aria-label="On-deck editor"]')!.hasAttribute('hidden')).toBe(true);
+    await input('Workflow stage', 'barcodes');
+    expect(host.querySelectorAll('.bwd-well.has-contents[data-station="LOC_OC"]')).toHaveLength(24);
+    expect(host.querySelectorAll('.bwd-well.is-stage-source[data-station="LOC_RC"]')).toHaveLength(24);
+    expect(host.querySelectorAll('.bwd-well.is-stage-destination[data-station="LOC_OC"]')).toHaveLength(24);
+    await input('Workflow stage', 'load-cycler');
+    // Door open, plate in, door closed. Only the two chiller covers exist; none moves here.
+    expect([...host.querySelectorAll('.bioxp-stage-custody-list li')].map(li => li.getAttribute('value'))).toEqual(['1', '2', '3']);
+    expect(host.querySelectorAll('.bioxp-stage-cover-move')).toHaveLength(0);
+    expect([...host.querySelectorAll('.bioxp-cover-state')].map(e => `${e.getAttribute('data-cover')}@${e.getAttribute('data-cover-at')}`).sort()).toEqual(['OUTPUT_COVER@LOC_OC_COVER_STORAGE', 'REAGENT_COVER@LOC_RC_COVER_STORAGE']);
+    expect(host.querySelector('[data-station="LOC_BSCS"]')).toBeNull();
+    expect(host.querySelector('.bioxp-door-state')!.getAttribute('data-door')).toBe('closed');
+    expect(host.querySelectorAll('.bwd-well.has-contents[data-station="LOC_TC"]')).toHaveLength(24);
+    await click('Full workflow');
+    const full = (host.querySelector('[aria-label="Execution text"]') as HTMLTextAreaElement).value;
+    expect(JSON.parse(full.split('Exact compiled protocol JSON:\n')[1])).toEqual(compiled.document);
+    expect(current).toEqual(snapshot.method); expect(values).toEqual(snapshot.bindings);
 });
 
 it('copies only the explicitly authored native plate association into a newly requested carry', async () => {

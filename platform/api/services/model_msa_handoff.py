@@ -65,15 +65,24 @@ from biomodstack_msa_handoff import validate_a3m
 def generated_msa_service_supported(service) -> bool:
     """Read-only resolver for the generated native consumer actually connected."""
     get = service.get if isinstance(service, dict) else lambda key: getattr(service, key, None)
-    return (get('logical_id') == 'protenix:generated_msa'
-            and get('state') == 'planned_from_generated_candidates'
+    consumers = {
+        'protenix:generated_msa': {
+            'modules/antibody_batch.nf:BatchProtenixValidation',
+            'modules/protenix.nf:ProtenixFromComplex',
+            'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble',
+            'modules/confornets_experimental.nf:RunConforNets',
+            'modules/conformational_mapping_confornets.nf:RunCanonicalConforNets'},
+        'shape:boltz2:generated_msa': {'modules/shape_blueprint.nf:RunShapeBoltzValidator'},
+        'shape:protenix_v2:generated_msa': {'modules/shape_blueprint.nf:RunShapeProtenixValidator'},
+    }
+    return (get('state') == 'planned_from_generated_candidates'
             and get('provider') in {'colabfold_api', 'neurosnap_api'}
-            and bool({'modules/antibody_batch.nf:BatchProtenixValidation',
-                      'modules/protenix.nf:ProtenixFromComplex',
-                      'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble',
-                      'modules/confornets_experimental.nf:RunConforNets',
-                      'modules/conformational_mapping_confornets.nf:RunCanonicalConforNets'}
-                     .intersection((get('authority') or '').split('; '))))
+            and bool(consumers.get(get('logical_id') or '', set()).intersection(
+                (get('authority') or '').split('; '))))
+
+
+def _generated_policy_model(service):
+    return 'boltz2' if service['logical_id'] == 'shape:boltz2:generated_msa' else 'protenix'
 
 
 def generated_protenix_request(payload: list) -> list:
@@ -113,7 +122,8 @@ def prepare_generated_msa(request: dict, destination: Path) -> str:
     with tempfile.TemporaryDirectory(dir=destination.parent, prefix='.generated-roster-') as scratch:
         input_json = Path(scratch) / 'input.json'
         input_json.write_bytes(canonical_bytes(payload))
-        manifest = prepare_protenix_inputs(None, input_json, destination, service['settings_json'])
+        manifest = prepare_protenix_inputs(None, input_json, destination, service['settings_json'],
+                                           policy_model=_generated_policy_model(service))
     manifest['external_service_request_id'] = identity
     path = destination / 'msa-inputs.json'
     path.write_text(json.dumps(manifest, sort_keys=True, indent=2))
@@ -133,7 +143,7 @@ def accept_generated_msa(runtime, request_id: str, manifest_sha256: str) -> dict
     manifest_path = source / 'msa-inputs.json'
     manifest = json.loads(manifest_path.read_bytes())
     if (manifest.get('external_service_request_id') != request_id
-            or manifest.get('settings') != apply_msa_policy('protenix', request['service']['settings_json'])
+            or manifest.get('settings') != apply_msa_policy(_generated_policy_model(request['service']), request['service']['settings_json'])
             or manifest.get('model_input') != request['native_input']):
         raise ValueError('Generated MSA roster/settings/request binding conflicts')
     hydrate_prepared_protenix_task(request['native_input'], source, manifest_sha256)
@@ -351,6 +361,9 @@ def prepare_esmfold2_msa(params: dict, destination: Path) -> dict:
         components = json.loads(raw)
     if isinstance(components, str):
         components = json.loads(components)
+    document = components if isinstance(components, dict) else None
+    if document is not None:
+        components = document.get('components', document.get('sequences', []))
     if effective.get('pdb_sequence_path') or effective.get('esmf_pdb_sequence_path'):
         raise ValueError('Hosted ESMFold2 MSA requires explicit protein sequences, not a PDB sequence source')
     missing = []
@@ -362,8 +375,10 @@ def prepare_esmfold2_msa(params: dict, destination: Path) -> dict:
         for component in components:
             if component.get('type', 'protein') not in {'protein', 'peptide'}:
                 continue
-            if not component.get('msa_path'):
+            if not component.get('msa_path') and 'msa' not in component:
                 identity = component.get('id')
+                if isinstance(identity, list) and identity and all(isinstance(value, str) and value for value in identity):
+                    identity = str(identity)  # same component scope as the ESM runner
                 if not isinstance(identity, str) or not identity:
                     raise ValueError('Hosted ESMFold2 MSA requires explicit unique component IDs')
                 missing.append(('component:' + identity, component))
@@ -398,6 +413,10 @@ def prepare_esmfold2_msa(params: dict, destination: Path) -> dict:
         for key in ('esmf_complex_components_json', 'complex_components_json', 'esmf_complex_components'):
             effective.pop(key, None)
         effective['complex_components'] = components
+        if document is not None:
+            for key in ('covalent_bonds', 'distogram_conditioning'):
+                if key in document:
+                    effective.setdefault(key, document[key])
     else:
         effective['msa_path'] = missing[0][1]['msa_path']
     effective['esmf_msa_preparation'] = {
@@ -499,15 +518,18 @@ def _boltz_roster(params):
 def _boltz_task_proteins(task, params):
     """The native task's ordered protein/peptide chains and supplied MSA policy."""
     if 'components' in task:
+        from scripts.lib.boltz_fidelity import component_copies
         proteins = []
-        for index, component in enumerate(task['components']):
+        for index, component in enumerate(component_copies(task['components'])):
             kind = component.get('type', 'protein')
             if kind not in {'protein', 'peptide'}:
                 continue
             sequence = component.get('sequence', '').upper()
             chain_id = component.get('id', 'A')
-            # Exact native complex peptide policy; never search these chains.
-            msa = 'empty' if kind == 'peptide' and len(sequence) < 30 else component.get('msa_path')
+            # Explicit native empty/path/blank takes precedence over legacy
+            # peptide defaults, exactly as the native YAML preparation owner.
+            msa = (component['msa'] if 'msa' in component else
+                   component.get('msa_path') or ('empty' if kind == 'peptide' and len(sequence) < 30 else None))
             proteins.append({'id': chain_id if isinstance(chain_id, list) else [chain_id],
                              'sequence': sequence, 'msa': msa, 'component_index': index})
         return proteins

@@ -66,11 +66,19 @@ async def invalidate_vast_inventory(session: AsyncSession) -> None:
     """Invalidate current knowledge, never historical presence or attempt evidence."""
     global _empty_inventory_checked_at
     _empty_inventory_checked_at = None
-    for row in (await session.scalars(select(ExecutionTarget).where(ExecutionTarget.provider == "vast"))).all():
-        metadata = dict(row.provider_metadata or {})
-        metadata["inventory"] = {**metadata.get("inventory", {}), "status": "unknown"}
-        row.provider_metadata = metadata
-    await session.commit()
+    metadata = ExecutionTarget.provider_metadata
+    # Only the small inventory object changes. Historical workers keep tens of MB of
+    # attempt evidence in the same JSON column, so it is patched in SQL, one row per
+    # transaction, rather than loaded and re-serialized on the event loop.
+    pending = (await session.scalars(select(ExecutionTarget.id).where(
+        ExecutionTarget.provider == "vast",
+        func.coalesce(func.json_extract(metadata, "$.inventory.status"), "") != "unknown"))).all()
+    for identifier in pending:
+        await session.execute(update(ExecutionTarget).where(ExecutionTarget.id == identifier).values(
+            provider_metadata=func.json_set(metadata, "$.inventory", func.json_patch(
+                func.coalesce(func.json_extract(metadata, "$.inventory"), "{}"), '{"status":"unknown"}')),
+        ).execution_options(synchronize_session=False))
+        await session.commit()
 
 
 async def run_vast_inventory_refresh(session_factory, stop: asyncio.Event, *, wait=None) -> None:
@@ -177,6 +185,7 @@ def _target_response(target: Any, *, details: bool = False) -> ExecutionTargetRe
         artifact_inventory=observed_artifact_inventory(target, compact=not details),
         setup=(target.provider_metadata or {}).get("setup"),
         preload=preload,
+        can_remove_from_list=_can_remove_from_list(target),
         active_job_ids=active_job_ids,
         job_progress=job_progress,
         progress=job_progress[0] if job_progress else None,
@@ -367,6 +376,11 @@ async def _status_rows(session, *, identifier=None, order=False):
     if order:
         query = query.where(or_(ExecutionTarget.active.is_(True), ~target_idle_clause(),
                                 ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True)))
+        query = query.where(or_(
+            func.coalesce(ExecutionTarget.provider_metadata["dismissed_from_list"].as_boolean(), False).is_(False),
+            ExecutionTarget.active.is_(True),
+            ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True),
+        ))
         query = query.order_by(ExecutionTarget.active.desc(), ExecutionTarget.updated_at.desc())
     return [_status_row(row) for row in (await session.execute(query)).mappings()]
 
@@ -563,13 +577,16 @@ async def _refresh_vast_targets(session: AsyncSession) -> ExecutionTargetInvento
         return inventory
     now = datetime.utcnow()
     present_ids = {target_id("vast", instance.provider_instance_id) for instance in inventory.instances}
-    for row in (await session.scalars(select(ExecutionTarget).where(ExecutionTarget.provider == "vast"))).all():
-        if row.id not in present_ids:
-            row.provider_metadata = {**dict(row.provider_metadata or {}), "inventory": {
-                "status": "complete", "present": False, "running": False, "checked_at": now.isoformat()}}
-            row.active = False
-            row.state = "inactive"
-            row.last_error = "Absent from complete owned Vast inventory"
+    absent = {"status": "complete", "present": False, "running": False, "checked_at": now.isoformat()}
+    for identifier in (await session.scalars(select(ExecutionTarget.id).where(ExecutionTarget.provider == "vast"))).all():
+        if identifier in present_ids:
+            continue
+        # Same values as before, written without loading the row's historical evidence.
+        await session.execute(update(ExecutionTarget).where(ExecutionTarget.id == identifier).values(
+            provider_metadata=func.json_set(ExecutionTarget.provider_metadata, "$.inventory", func.json(json.dumps(absent))),
+            active=False, state="inactive", last_error="Absent from complete owned Vast inventory",
+        ).execution_options(synchronize_session=False))
+        await session.commit()
     _empty_inventory_checked_at = now
     for instance in inventory.instances:
         identifier = target_id("vast", instance.provider_instance_id)
@@ -1058,6 +1075,36 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
     await session.commit()
     await session.refresh(target)
     return _target_response(target)
+
+
+def _can_remove_from_list(target) -> bool:
+    inventory = (target.provider_metadata or {}).get("inventory", {})
+    return (not target.active and target.state == "inactive"
+            and inventory_fresh(target) and inventory.get("present") is False)
+
+
+async def dismiss_target(session: AsyncSession, execution_target_id: str) -> ExecutionTargetResponse:
+    """Hide a confirmed absent worker; retain Jobs, claims and historical lookup.
+
+    This is not detach, cancellation or a provider delete. Rediscovered owned
+    instances are always visible regardless of a previous dismissal.
+    """
+    now = datetime.utcnow()
+    inventory = ExecutionTarget.provider_metadata["inventory"]
+    changed = await session.execute(update(ExecutionTarget).where(
+        ExecutionTarget.id == execution_target_id, ExecutionTarget.active.is_(False),
+        ExecutionTarget.state == "inactive", inventory["status"].as_string() == "complete",
+        inventory["present"].as_boolean().is_(False),
+        inventory["checked_at"].as_string() >= (now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
+        inventory["checked_at"].as_string() <= now.isoformat(),
+    ).values(provider_metadata=func.json_set(
+        ExecutionTarget.provider_metadata, "$.dismissed_from_list", func.json("true")
+    )).execution_options(synchronize_session=False))
+    if changed.rowcount != 1:
+        await session.rollback()
+        raise ExecutionTargetError("Only a worker confirmed absent from current provider inventory can be removed; discover again")
+    await session.commit()
+    return _target_response(await get_target(session, execution_target_id))
 
 
 async def deactivate_target(

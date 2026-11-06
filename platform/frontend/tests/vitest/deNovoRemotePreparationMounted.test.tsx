@@ -117,7 +117,7 @@ it.each([
   expect(JSON.stringify(changed.mock.lastCall?.[0])).toBe(draft);
 });
 
-it.each(['rfd3_iteration', 'region_redesign', 'shape_blueprint'])('prepares %s with no source or geometry through the actual leaf', async modification_mode => {
+it.each(['shape_blueprint'])('prepares %s with no source or geometry through the actual leaf', async modification_mode => {
   const changed = vi.fn();
   await mount(<ProteinModificationTemplate onBack={() => {}} onDraftChange={changed} initialValues={{ modification_mode }} />);
   expect(posts).toEqual([]);
@@ -131,20 +131,27 @@ it('connects global Workflow → De Novo to the telemetry target, not the stored
   sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, other.id);
   await mount(<RemotePreloadPanel target={ready} jobs={[]} onChanged={async () => {}} />);
   await act(async () => { const details = [...host.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent?.includes('Prepare worker'))!; details.open = true; details.dispatchEvent(new Event('toggle')); await settle(); });
-  await edit('Preparation workflow', family.model_id);
+  await edit('Preparation workflow', 'protein_modification_experimental');
   expect(posts).toEqual([]);
-  await prepareFamily();
+  const panel = host.querySelector('[aria-label="Independent worker provisioning"]')!;
+  expect(panel.textContent).toContain('All supported De Novo generator');
+  await click('Prepare entire workflow', panel);
+  expect(posts).toEqual([
+    { url: '/api/execution-targets/vast%3A123/provision/preview', body: family },
+    { url: '/api/execution-targets/vast%3A123/provision', body: { ...family, preview_sha256: 'b'.repeat(64) } },
+  ]);
   expect(sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBe(other.id);
 });
 
 it.each(['rfd3', 'disco', 'laproteina'])('keeps %s exact requested science separate and unchanged by family preparation', async generator => {
-  await mount(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator }} />);
+  await mount(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator, ...(generator === 'rfd3' ? {} : { target_lengths: '125' }) }} />);
   if (generator === 'rfd3') { await edit('Minimum length', '111'); await edit('Seed', '17'); }
   const exact = () => host.querySelector('[aria-label="Unsaved workflow provisioning"]')!;
   await click('Preview artifact downloads', exact());
   const requested = structuredClone(posts[0].body);
   expect(requested.kind).toBe('workflow');
   expect(requested.workflow_request.params.generator).toBe(generator);
+  if (generator !== 'rfd3') expect(requested.workflow_request.params.target_lengths).toBe('125');
   if (generator === 'rfd3') expect(requested.workflow_request.params).toMatchObject({ min_length: 111, seed: 17 });
   await prepareFamily();
   await click('Preview artifact downloads', exact());

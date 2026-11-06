@@ -256,3 +256,28 @@ it('respects only parent action admission, not missing pose/geometry, and preser
     await render({ wellDisabledReason: null, stationDisabledReason: () => null });
     await key('Select Waste bin', 'Enter'); await key('Magnetic station A1', ' '); expect(station).toHaveBeenCalledTimes(1); expect(well).toHaveBeenCalledTimes(1);
 });
+
+it('puts the deck record and the Move plate / cover card above door and movement controls', async () => {
+    await render({ deckRecord: <div>Record slot</div> });
+    const aside = el('Live movement controls');
+    const text = aside.textContent!;
+    expect(text.indexOf('Record slot')).toBeLessThan(text.indexOf('Move plate / cover'));
+    expect(text.indexOf('Move plate / cover')).toBeLessThan(text.indexOf('Door slot'));
+    expect(el('Move plate / cover').textContent).toContain('Transfer slot');
+    expect([...host.querySelectorAll('summary')].map(s => s.textContent)).not.toContain('Plate and cover handling');
+    expect(api.post).not.toHaveBeenCalled();
+});
+
+it('shades tip racks from recorded occupancy and keeps every well position', async () => {
+    const occupancy = Array.from({ length: 96 }, (_, i) => i < 8);
+    await render({ tipOccupancy: { 1: occupancy } });
+    const rack = (tray: string) => [...host.querySelectorAll(`[data-station="${tray}"][data-well]`)];
+    expect(rack('TECANRACK1')).toHaveLength(96);
+    expect(host.querySelectorAll('[data-station="TECANRACK1"] .bwd-tip')).toHaveLength(8);
+    expect(host.querySelector('[data-station="TECANRACK1"][data-well="A1"] .bwd-tip.is-recorded')).not.toBeNull();
+    expect(host.querySelector('[data-station="TECANRACK1"][data-well="B1"] .bwd-tip')).toBeNull();
+    // No observation for rack 2: unchanged default drawing.
+    expect(host.querySelectorAll('[data-station="TECANRACK2"] .bwd-tip')).toHaveLength(96);
+    expect(host.querySelector('[data-station="TECANRACK1"][data-well="B1"] .bwd-ring')!.getAttribute('cx'))
+        .toBe(host.querySelector('[data-station="TECANRACK1"][data-well="B1"] .bwd-core')!.getAttribute('cx'));
+});

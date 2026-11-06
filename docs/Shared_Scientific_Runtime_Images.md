@@ -55,7 +55,7 @@ Publish a complete lane selection with:
 python scripts/publish_runtime_images.py --store-root PATH --lane development --manifest FILE
 ```
 
-The JSON maps supported keys (`BMS_NGS_RUNTIME_SIF`, `BMS_CM_CONFORNETS_CONTAINER_PATH`, `BMS_PROTENIX_CONTAINER_PATH`, `BMS_FRUSTRAMPNN_SIF`, `BMS_FOLD_CP_CONTAINER_PATH`) to `{ "source": "...", "sha256": "..." }`. A transaction records versioned retained lane releases in `references/state.json` before updating `references/development.env` or `production.env`. Valid legacy projections are retained during migration; unknown legacy references fail closed. Old generations remain protected until explicitly unretained. This is deliberate retention, not automatic indefinite backup copying: each digest still has one object.
+The JSON maps supported keys (`BMS_NGS_RUNTIME_SIF`, `BMS_CM_CONFORNETS_CONTAINER_PATH`, `BMS_PROTENIX_CONTAINER_PATH`, `BMS_FRUSTRAMPNN_SIF`, `BMS_FOLD_CP_CONTAINER_PATH`, and any semantic selector of the form `BMS_RUNTIME_IMAGE_<NAME>_SIF`, e.g. `BMS_RUNTIME_IMAGE_BOLTZ2_SIF` for `boltz2.sif`) to `{ "source": "...", "sha256": "..." }`. A transaction records versioned retained lane releases in `references/state.json` before updating `references/development.env` or `production.env`. Valid legacy projections are retained during migration; unknown legacy references fail closed. Old generations remain protected until explicitly unretained. This is deliberate retention, not automatic indefinite backup copying: each digest still has one object.
 
 Managed Development API/adapter units consume the selected store's Development reference projection. Runtime-specific settings explicitly selected by a supported caller are resolved at execution rather than prematurely freezing Nextflow defaults. Publication alone never restarts services, migrates production, removes originals or proves live adoption.
 
@@ -157,7 +157,16 @@ One `.rootfs-<digest>` envelope lives beside the SIF object under
 `objects/sha256`, not inside its immutable 0500 directory. Publication never
 chmods or replaces the canonical source SIF or its parent. Extraction occurs in
 an exact `.derive-<digest>-<uuid>` stage under the existing lifecycle fence; the
-completed, fsynced envelope is atomically renamed into place. Its manifest binds
+completed envelope is atomically renamed into place. After all extracted
+inodes have their write bits removed and checked, one Linux `syncfs` on the
+staging filesystem flushes their bytes and mode/directory metadata together;
+there is no synchronous flush per extracted inode. Manifest fsync and the
+post-rename parent fsync remain. An envelope-directory fsync alone would not
+make descendant bytes durable. The filesystem-wide barrier can also wait for
+unrelated dirty writes on that filesystem and propagates writeback errors,
+just as publication must not ignore failed durability. No permissions, integrity
+checks, private-view isolation, or warm reuse semantics are relaxed.
+Its manifest binds
 source identity, tree content hashes, symlink targets, internal hardlink groups,
 and original/frozen modes. Special device/FIFO/socket entries and external
 hardlinks fail closed. Frozen files/directories have write bits removed and

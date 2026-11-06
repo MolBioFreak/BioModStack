@@ -1434,13 +1434,41 @@ async def register_external_move_bam_candidate(
     return _source_public(winner)
 
 
+async def _track_basecall_calls_bam(session: AsyncSession, source_job_id: str | None) -> str:
+    """Track a completed basecall job's own move-tagged calls.bam as its input file.
+
+    The job-owned path checks in register_move_source still apply; this only
+    records the job's published BAM so it can be selected without an upload.
+    """
+    if source_job_id is None:
+        raise OntSignalError("a completed source job authority is required")
+    job = await session.get(Job, source_job_id)
+    if job is None or job.status != "completed":
+        raise OntSignalError("completed source job authority is required")
+    root = _lexical_absolute_path(job.child_output_dir or job.output_dir)
+    if root is None:
+        raise OntSignalError("completed source job has no canonical owned output root")
+    directory = root / "basecall"
+    input_file_id = f"ont-job-calls-{uuid.uuid5(uuid.NAMESPACE_URL, str(job.id)).hex[:24]}"
+    await session.execute(
+        sqlite_insert(InputFile)
+        .values(id=input_file_id, filename="calls.bam", file_type="bam", directory=str(directory),
+                size_bytes=None, uploaded_at=_now())
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    tracked = await session.get(InputFile, input_file_id)
+    if tracked is None or tracked.directory != str(directory) or tracked.filename != "calls.bam":
+        raise OntSignalError("basecall calls.bam tracking authority diverged")
+    return input_file_id
+
+
 async def register_move_source(
     session: AsyncSession,
     *,
     run_id: str,
     observed_generation: int,
     raw_representation_id: str,
-    input_file_id: str,
+    input_file_id: str | None,
     molecule_type: str,
     source_job_id: str | None,
     external_registration_receipt_id: str | None,
@@ -1468,6 +1496,8 @@ async def register_move_source(
     receipts = representation.validation_receipts if isinstance(representation.validation_receipts, dict) else {}
     if representation.format != "blow5" or representation.state != "ready" or receipts.get("adjacent_index") is not True:
         raise OntSignalError("ready indexed BLOW5 authority is required")
+    if input_file_id is None:
+        input_file_id = await _track_basecall_calls_bam(session, source_job_id)
     tracked = await session.get(InputFile, input_file_id)
     if tracked is None:
         raise KeyError("tracked move-table input not found")
@@ -1614,7 +1644,7 @@ async def _validated_failed_external_move_source(
     predecessor_move_source_id: str,
 ) -> tuple[
     OntMoveTableSource,
-    OntExternalMoveBamRegistrationReceipt,
+    OntExternalMoveBamRegistrationReceipt | None,
     OntRawSignalRepresentation,
 ]:
     predecessor = await session.get(OntMoveTableSource, predecessor_move_source_id)
@@ -1628,15 +1658,29 @@ async def _validated_failed_external_move_source(
             predecessor.validated_at is None
             and not _is_exact_preserved_retry_exhaustion(predecessor)
         )
-        or predecessor.source_job_id is not None
-        or predecessor.external_registration_receipt_id is None
+        or (predecessor.source_job_id is None) == (predecessor.external_registration_receipt_id is None)
         or predecessor.claim_token is not None
         or predecessor.lease_expires_at is not None
         or predecessor.attempt_number < 1
     ):
         raise OntSignalError(
-            "fresh attempts require an unclaimed terminal failed external move source"
+            "fresh attempts require an unclaimed terminal failed move source"
         )
+    if predecessor.source_job_id is not None:
+        # A basecall job's own calls.bam: re-validate the same retained artifact.
+        representation = await session.get(OntRawSignalRepresentation, predecessor.raw_representation_id)
+        tracked = await session.get(InputFile, predecessor.input_file_id)
+        source_receipt = predecessor.validation_receipt if isinstance(predecessor.validation_receipt, dict) else {}
+        if (
+            representation is None or tracked is None
+            or representation.run_id != predecessor.run_id
+            or representation.observed_generation != predecessor.observed_generation
+            or source_receipt.get("raw_manifest_sha256") != representation.manifest_sha256
+            or tracked.file_type != "bam"
+            or tracked.size_bytes not in (None, predecessor.artifact_size_bytes)
+        ):
+            raise OntSignalError("retained job move-source authority diverged")
+        return predecessor, None, representation
     receipt = await session.get(
         OntExternalMoveBamRegistrationReceipt,
         predecessor.external_registration_receipt_id,
@@ -1692,6 +1736,7 @@ def _fresh_move_source_attempt_receipt(
         "external_registration_receipt_id": (
             predecessor.external_registration_receipt_id
         ),
+        **({"source_job_id": predecessor.source_job_id} if predecessor.source_job_id else {}),
     }
 
 
@@ -1707,7 +1752,7 @@ def _validate_fresh_move_source_attempt_winner(
         or winner.observed_generation != predecessor.observed_generation
         or winner.raw_representation_id != predecessor.raw_representation_id
         or winner.input_file_id != predecessor.input_file_id
-        or winner.source_job_id is not None
+        or winner.source_job_id != predecessor.source_job_id
         or winner.external_registration_receipt_id
         != predecessor.external_registration_receipt_id
         or winner.artifact_sha256 != predecessor.artifact_sha256
@@ -1784,7 +1829,7 @@ async def request_fresh_external_move_source_attempt(
             observed_generation=predecessor.observed_generation,
             raw_representation_id=predecessor.raw_representation_id,
             input_file_id=predecessor.input_file_id,
-            source_job_id=None,
+            source_job_id=predecessor.source_job_id,
             external_registration_receipt_id=(
                 predecessor.external_registration_receipt_id
             ),

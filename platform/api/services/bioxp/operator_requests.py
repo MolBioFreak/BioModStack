@@ -141,6 +141,35 @@ class OperatorDeckMoveToWellInputsV2(BaseModel):
     position_flag: Annotated[StrictInt, Field(ge=0, le=2)]
 
 
+class OperatorXYNamedTargetV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    target: str = Field(min_length=1, max_length=160, pattern=r"^[A-Z0-9][A-Z0-9_]*$")
+    camera_offset: StrictBool
+
+
+class OperatorXYWellTargetV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    location_id: StrictInt
+    well: str | StrictInt
+
+
+OperatorXYTargetV2 = OperatorXYNamedTargetV2 | OperatorXYWellTargetV2 | OperatorMoveXYInputsV2
+
+
+class OperatorXYMoveSequenceInputsV2(BaseModel):
+    """Fast lane: ordered targets; the robot owns resolution, Z clearance and execution."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    targets: list[OperatorXYTargetV2] = Field(min_length=1, max_length=64)
+
+
+class OperatorXYRetargetInputsV2(BaseModel):
+    """Live-deck retarget: the newest destination replaces the current one."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    target: OperatorXYTargetV2
+
+
 def _canonical_board_epoch_map(value: dict[str, int]) -> dict[str, int]:
     if any(not key.isdecimal() or str(int(key)) != key for key in value):
         raise ValueError("board epoch keys must be canonical nonnegative decimal board IDs")
@@ -222,3 +251,23 @@ class OperatorReportExportRequestV1(BaseModel):
     action: str | None = None
     channel: StrictInt | None = Field(default=None, ge=0, le=3)
     limit: StrictInt = Field(default=1000, ge=1, le=100000)
+
+
+class OperatorDeckRecordTipTrayV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    tray: StrictInt = Field(ge=1, le=5, description="OEM/load_tip tray 1-5 (5 = tip hotel)")
+    tips: Literal["full", "empty"] | list[str] | None = Field(None, description="'full', 'empty' or the wells that hold tips")
+    tip_type: Literal[10, 50, 200] | None = Field(None, description="Tip size the rack holds, in uL")
+
+
+class OperatorDeckRecordRequestV1(BaseModel):
+    """Record-only correction of the robot's deck record. Moves nothing."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_connection_generation: StrictInt = Field(ge=0)
+    record_id: str | None = Field(None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$",
+                                  description="Optional; the robot generates one when omitted")
+    reason: str | None = Field(None, min_length=1, max_length=500)
+    movable_objects: dict[str, str] | None = Field(None, description="ClassMachineStatus object name -> deck location name")
+    tip_trays: list[OperatorDeckRecordTipTrayV1] | None = None
+    gantry: str | None = Field(None, min_length=1, max_length=64,
+                               description="What the gripper holds: 'empty' or a ClassMachineStatus object name")

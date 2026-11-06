@@ -1,0 +1,11 @@
+# Experimental inline JBrowse adapter
+
+The adapter is registered in AlignmentPage as the default viewer. It embeds a workspace-locked, locally built `react-msaview` 9.8.0 bundle and the alignment once into an opaque `allow-scripts` srcdoc. The host never sends alignment rows or selection to an iframe via postMessage. Frame-to-parent selection is checked against source, random token and document coordinates; it is not an authentication boundary against malicious bundled viewer code.
+
+FASTA uses internal unique row keys; the original label and stable row ID are passed separately as viewer row data. Controls are escaped for single-line display. The viewer may truncate long labels in its fixed-width gutter. The row selector outside the frame provides another way to inspect labels and IDs.
+
+`pnpm install --frozen-lockfile` installs the workspace dependencies; `pnpm dev` and `pnpm build` build this isolated package first without reinstalling. The generated `dist/viewer.js` is not committed; the main frontend embeds it at build time. Deployment builders need pnpm and access to the locked dependencies through a registry or configured cache. When invoking Vite directly, first run `pnpm --filter @bms/jbrowse-viewer build` from `platform/frontend`. Dependency/license closure remains to be reviewed.
+
+This is not a complete privacy/security qualification. CSP blocks fetch, remote images, workers and forms in the initial document; it does not reliably prevent an already executing malicious library from navigating its own frame to a data-bearing URL. Bundled code, browser extensions, host XSS, parent CSP inheritance, browser versions, additional leak channels, production deployment and supply chain remain unqualified. The host must therefore trust and review the pinned bundle; do not use private data or claim that CSP confines arbitrary malicious viewer code. Display labels are synthetic; incoming selection restoration, shared annotations, performance and broad coordinate coverage remain unimplemented or unverified.
+
+For the bounded synthetic Chromium probe see `../../tests/browser/inline-viewer/README.md`.

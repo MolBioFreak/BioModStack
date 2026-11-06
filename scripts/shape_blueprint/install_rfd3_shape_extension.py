@@ -9,7 +9,8 @@ from pathlib import Path
 
 BASE_SHA256 = "e64fd42242422fa40ee0112a031911f462b13403b3f8d46ae49879d569b9314f"
 LEGACY_PATCHED_SHA256 = "5f1cf2938bbb7365ec37c83ffa01e15d85a4c0f674c11242c84cce08ba2b0b7d"
-PATCHED_SHA256 = "bea19f55bc545963dd8834b6d7b22d5f7b6fd3ad9425e4cd3900cd7aa040a5ab"
+PREVIOUS_PATCHED_SHA256 = "bea19f55bc545963dd8834b6d7b22d5f7b6fd3ad9425e4cd3900cd7aa040a5ab"
+PATCHED_SHA256 = "b27da5ee1341255cf351e2cd55f2de046a3e9a8b5a4df65fd831b3639240f86d"
 DEFAULT_TARGET = Path("/usr/local/lib/python3.12/dist-packages/rfd3/model/inference_sampler.py")
 
 
@@ -21,9 +22,14 @@ def _replace_once(text: str, old: str, new: str, *, label: str) -> str:
 
 
 def patch_sampler_source(source: bytes) -> bytes:
+    corrected_return = b"        return noise_schedule if partial_t is not None else t_hat\n"
+    if hashlib.sha256(source).hexdigest() == "fcc9d94bf92f0fcbb2f91a305e89985696016b2a2786db12ba5790240b53191a":
+        source = source.replace(corrected_return, b"        return t_hat\n", 1)
     digest = hashlib.sha256(source).hexdigest()
     if digest == PATCHED_SHA256:
         return source
+    if digest == PREVIOUS_PATCHED_SHA256:
+        return source.replace(b"        return t_hat\n", corrected_return, 1)
     if digest not in {BASE_SHA256, LEGACY_PATCHED_SHA256}:
         raise RuntimeError(
             "unsupported RFD3 sampler source: expected audited pristine or legacy Shape source, "
@@ -98,7 +104,7 @@ def patch_sampler_source(source: bytes) -> bytes:
         + "            if exists(outs.get(\"sequence_logits_I\")):\n",
         label="native EDM derivative update",
     )
-    return text.encode("utf-8")
+    return text.encode("utf-8").replace(b"        return t_hat\n", corrected_return, 1)
 
 
 def install(target: Path = DEFAULT_TARGET) -> str:

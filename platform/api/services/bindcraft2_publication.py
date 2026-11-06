@@ -7,6 +7,7 @@ or that a native retained row is selectable by legacy Design consumers.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import mimetypes
 import stat
@@ -390,6 +391,14 @@ async def publish_native_results(job: Job, root: Path, session, *, commit: bool 
     return len(receipt["candidates"])
 
 
+def _read_native_inventory(root: Path, *, legacy: bool) -> tuple[NativePublication, dict]:
+    """Read-only file work; no session or ORM state may cross this boundary."""
+    observations = {}
+    publication = read_native_publication(root, observations=observations)
+    inventory = _inventory(root, publication, legacy=legacy, observations=observations)
+    return publication, inventory
+
+
 async def read_published_native_results(job: Job, session) -> tuple[NativePublication, dict]:
     """Reopen only if every registered artifact still matches the sealed receipt."""
     if job.model_id != "bindcraft2":
@@ -412,9 +421,10 @@ async def read_published_native_results(job: Job, session) -> tuple[NativePublic
                   if a.logical_path.startswith("bindcraft2/native/")}
     if set(registered) != set(receipt["files"]):
         raise PublicationError("BC2 registered artifact inventory changed")
-    observations = {}
-    publication = read_native_publication(root, observations=observations)
-    inventory = _inventory(root, publication, legacy="inventory_version" not in receipt, observations=observations)
+    # Await at the same ordered point; cancellation can leave only read-only
+    # filesystem work running, never session access or publication writes.
+    publication, inventory = await asyncio.to_thread(
+        _read_native_inventory, root, legacy="inventory_version" not in receipt)
     if inventory != receipt["files"]:
         raise PublicationError("BC2 published bytes or native inventory changed")
     if _summary(publication) != receipt["arms"]:

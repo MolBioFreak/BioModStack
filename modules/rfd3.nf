@@ -20,8 +20,7 @@ process RunRFD3 {
     label 'gpu'
     tag "B${batch_id}"
 
-    publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_results/*.cif.gz", saveAs: { fn -> fn.replace('rfd3_results/', '') }
-    publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_results/*.json", saveAs: { fn -> fn.replace('rfd3_results/', '') }
+    publishDir "${params.out_dir}/run", mode: 'copy', pattern: "rfd3_results", saveAs: { ignored -> 'rfd3' }
     publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_trajectories", saveAs: { ignored -> 'trajectories' }
     publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_*.log"
     publishDir "${params.out_dir}/run/rfd3", mode: 'copy', pattern: "rfd3_metadata_*.jsonl"
@@ -34,11 +33,13 @@ process RunRFD3 {
     tuple val(batch_id), path(input_json), path(runtime_source)
 
     output:
-    path ("rfd3_results/*.cif.gz"), emit: structures
-    path ("rfd3_results/*.json"), emit: metadata
-    tuple path("rfd3_results/*.cif.gz"), path("rfd3_results/*.json"), emit: structures_metadata
+    path ("rfd3_results/*.cif.gz"), emit: structures, optional: params.rfd3_generation_request_path ? true : false
+    path ("rfd3_results/*.json"), emit: metadata, optional: params.rfd3_generation_request_path ? true : false
+    tuple path("rfd3_results/*.cif.gz"), path("rfd3_results/*.json"), emit: structures_metadata, optional: params.rfd3_generation_request_path ? true : false
+    path "rfd3_results", emit: native_outputs
+    path "rfd3_generation_result_manifest.json", emit: generation_manifest, optional: true
     path "rfd3_trajectories", emit: trajectories
-    path ("rfd3_metadata_${batch_id}.jsonl"), emit: producer_metadata_index, topic: metadata_ch_fold
+    path ("rfd3_metadata_${batch_id}.jsonl"), emit: producer_metadata_index, optional: params.rfd3_generation_request_path ? true : false, topic: metadata_ch_fold
     path "rfd3_${batch_id}.log", emit: producer_log
 
     script:
@@ -49,25 +50,20 @@ process RunRFD3 {
     def num_designs = generalGenerationRequest
         ? params.rfd3_generation_num_designs
         : (localRedesignRequest ? (params.plr_num_designs ?: 1) : (params.rfd3_batches_per_design ?: 1))
-    def seedValue = generalGenerationRequest ? params.rfd3_generation_seed : params.plr_seed
-    def seed = seedValue == null ? 'null' : seedValue
-    def dumpTrajectories = generalGenerationRequest
-        ? params.rfd3_generation_dump_trajectories == true
-        : params.plr_dump_trajectories == true
-    def writeFullJson = true
-    def executionConfig = nativeRequest
-        ? "diffusion_batch_size=1 seed=${seed} dump_trajectories=${dumpTrajectories} output_full_json=${writeFullJson}"
-        : extra_config
+    // Both native requests are staged beside the task inputs; their controller paths
+    // live under the results root, which the container does not mount.
+    def requestPath = new File((generalGenerationRequest ? params.rfd3_generation_request_path : params.rfd3_request_path).toString()).name
+    def nativeCommand = nativeRequest
+        ? "python3 /scripts/rfd3_generation/run_native.py --request '${requestPath}' --inputs '${input_json}' --out-dir rfd3_results"
+        : "rfd3 inputs=${input_json} out_dir=rfd3_results n_batches=${num_designs} ${extra_config}"
 
     """
     echo "Running RFdiffusion3 for batch ${batch_id}"
     
-    rfd3 \\
-        inputs=${input_json} \\
-        out_dir=rfd3_results \\
-        n_batches=${num_designs} \\
-        ${executionConfig} \\
-        2>&1 | tee rfd3_${batch_id}.log
+    set +e
+    ${nativeCommand} 2>&1 | tee rfd3_${batch_id}.log
+    native_status=\${PIPESTATUS[0]}
+    set -e
 
     for trajectory in rfd3_results/*_denoised_model_*.cif.gz rfd3_results/*_noisy_model_*.cif.gz; do
         [ -f "\$trajectory" ] || continue
@@ -79,7 +75,22 @@ process RunRFD3 {
         --input_dir rfd3_results \\
         --converter rfd3 \\
         --input_ext json \\
-        -o rfd3_metadata_${batch_id}.jsonl
+        -o rfd3_metadata_${batch_id}.jsonl || {
+            converter_status=\$?
+            if [ "\$native_status" -eq 0 ]; then native_status=\$converter_status; fi
+        }
+    ${generalGenerationRequest ? """
+    execution_status=completed
+    if [ "\$native_status" -ne 0 ]; then execution_status=failed; fi
+    python3 /scripts/rfd3_generation/build_result_manifest.py \\
+        --request '${requestPath}' --native-output-dir rfd3_results \\
+        --execution-status "\$execution_status" --storage-prefix run/rfd3 \\
+        --output rfd3_generation_result_manifest.json || {
+            manifest_status=\$?
+            if [ "\$native_status" -eq 0 ]; then native_status=\$manifest_status; fi
+        }
+    """ : ''}
+    exit "\$native_status"
     """
 }
 

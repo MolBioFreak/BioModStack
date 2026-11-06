@@ -2,8 +2,19 @@
 
 This implements byte acquisition/materialization, **not** release approval,
 scientific qualification, license acceptance, SIF construction, or activation.
-No production model YAML approvals were added. Upstream inventory remains
+Model YAML acquisition metadata covers pinned `rfd4-proteina`, `laproteina`, `complexa`, `caliby`
+layouts and the selected Foundry RF3 checkpoint. Each entry carries the exact source URL, SHA-256,
+size, license and redirect policy that produced the installed generation. Other upstream inventory remains
 candidate metadata until reviewed by the release/license owners.
+
+Selected Complexa/La evaluator manifests remain in the existing
+`scripts/bms_complexa/assets.json:selected_oracle_sources` authority. The native runtime receiver
+projects their exact immutable HF and evaluator-only MPNN layouts, then transports only selected
+members through the ordinary worker CAS. `complexa-evaluators` and `laproteina-evaluators` keep
+the native CA/vanilla distinction without creating competing generator generations. Ordinary
+model-wide acquisition plans are unchanged; these declarations do not implicitly acquire every
+optional evaluator. HF `refs/main` is derived invocation-private cache metadata, not a downloaded
+checkpoint or a declaration that model inference succeeded.
 
 ## Registry integration contract
 

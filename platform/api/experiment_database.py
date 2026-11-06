@@ -64,7 +64,7 @@ async def init_experiment_db() -> None:
     path = _sqlite_path_from_url(get_experiment_db_url())
     if path is None:
         raise RuntimeError("global experiment persistence currently requires a SQLite URL")
-    await asyncio.to_thread(run_all, path)
+    await asyncio.to_thread(run_all, path, verify_data=False)
 
 
 async def get_experiment_session():

@@ -38,11 +38,32 @@ def prep_receipt(source, output, pairs):
     antibody = read_export(output)
     if antibody is not None:
         receipt['antibody'] = antibody
+    metadata = Path(source).with_suffix('.json')
+    if metadata.is_file():
+        try:
+            metadata_payload = json.loads(metadata.read_text())
+        except (ValueError, OSError):
+            metadata_payload = {}  # unrelated optional metadata was not an admission gate
+        local = metadata_payload.get('protein_local_redesign', {}) if isinstance(metadata_payload, dict) else {}
+        if isinstance(local, dict) and local.get('source_mapping') is not None:
+            receipt['local_redesign_source_mapping'] = local['source_mapping']
     return receipt
 
 
 def resolve_declaration(declaration, receipts, prepared_dir):
     """Validate all actual prepared inputs before any native model execution."""
+    if isinstance(declaration, dict) and 'inputs' in declaration:
+        result = None
+        for name, receipt in receipts.items():
+            # Collection declarations select the staged PDB's own identities,
+            # not an upstream coordinate-redesign source namespace.
+            receipt = {k: v for k, v in receipt.items() if k != 'local_redesign_source_mapping'}
+            resolved = resolve_declaration(declaration['inputs'][name], {name: receipt}, prepared_dir)
+            if result is None:
+                result = resolved
+            else:
+                result['inputs'].update(resolved['inputs'])
+        return result
     if isinstance(declaration, dict) and 'materialization' in declaration:
         if (declaration.get('owner'), declaration.get('declaration')) != ('antibody_denovo', 'authorized_sequence_design_region'):
             raise ValueError('unsupported deferred antibody declaration')
@@ -93,6 +114,12 @@ def resolve_declaration(declaration, receipts, prepared_dir):
                 or observed != set(receipt['prepared_domain'])):
             raise ValueError('incomplete PrepFAMPNN residue provenance')
         mapping = dict(pairs)
+        if receipt.get('local_redesign_source_mapping') is not None:
+            author_to_native = {
+                f"{a['source']['chain']}:{a['source']['residue']}:{a['source']['insertion_code']}":
+                f"{a['native']['chain']}:{a['native']['residue']}:{a['native']['insertion_code']}"
+                for a in receipt['local_redesign_source_mapping']['atoms']}
+            mapping = {author: mapping[native] for author, native in author_to_native.items()}
         def project(key):
             values = declaration[key]
             if values is None and key.endswith('_override'):

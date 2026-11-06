@@ -242,7 +242,7 @@ def _terminal_state(job: Any) -> tuple[str, str | None]:
         if isinstance(cancellation, dict) and cancellation.get("state") == "completed":
             return "cancelled", "API cancellation receipt"
         return "failed", "CANCELLED_WITHOUT_API_RECEIPT"
-    if status == "completed" or status == "awaiting_input":
+    if status == "completed" or status == "awaiting_input" or bool(getattr(job, "awaiting_input", False)):
         return "completed", "job finalization completed"
     if status == "failed":
         return "failed", str(getattr(job, "error_message", "") or "workflow failed")[:2000]

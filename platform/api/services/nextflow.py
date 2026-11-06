@@ -72,13 +72,20 @@ async def publish_terminal_job_changes(
         raise ValueError("terminal publication snapshot does not cover every Job column")
     if any(field not in columns for field in changes):
         raise ValueError("terminal publication contains an unknown Job column")
+    # A gate the workflow opened itself leaves the row running with awaiting_input set; the only
+    # change allowed through for that shape is the move to awaiting_input.
+    gate_to_review = (
+        snapshot.get("awaiting_input") is True
+        and bool(snapshot.get("awaiting_stage"))
+        and changes.get("status") == "awaiting_input"
+    )
     if (
         snapshot.get("status") != "running"
         or snapshot.get("queue_status") != "running"
         or snapshot.get("paused") is not False
-        or snapshot.get("awaiting_input") is not False
-        or snapshot.get("awaiting_stage") not in (None, "")
-        or snapshot.get("awaiting_payload") not in (None, {})
+        or (snapshot.get("awaiting_input") is not False and not gate_to_review)
+        or (snapshot.get("awaiting_stage") not in (None, "") and not gate_to_review)
+        or (snapshot.get("awaiting_payload") not in (None, {}) and not gate_to_review)
     ):
         return 0
     predicates = [Job.id == job_id]
@@ -507,6 +514,7 @@ from services.caliby_native import SUPPORTED_MODES as CALIBY_NATIVE_MODES
 from services.ligandmpnn_design import MODES as LIGANDMPNN_DESIGN_MODES
 
 MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
+    ('laproteina', 'evaluate'): 'workflows/laproteina_evaluation.nf',
     ('protonpottsmpnn', 'redesign'): 'workflows/protonpottsmpnn_design.nf',
     **{('bindcraft2', native_mode): 'workflows/bindcraft2.nf'
        for native_mode in ('campaign', *BC2_NATIVE_ACTIONS)},
@@ -515,7 +523,7 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     **{('caliby_experimental', native_mode): 'workflows/caliby_native.nf'
        for native_mode in CALIBY_NATIVE_MODES},
     **{('boltzgen', generation_mode): 'workflows/boltzgen_generation.nf'
-       for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder')},
+       for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking')},
     **{('ppiflow', generation_mode): 'workflows/ppiflow_generation.nf'
        for generation_mode in ('protein_binder', 'antibody_binder', 'nanobody_binder')},
     **{pair: 'workflows/protein_sequence_design.nf' for pair in PUBLIC_SEQUENCE_MODES},
@@ -601,6 +609,16 @@ def resolve_nextflow_entrypoint(
     normalized_mode = str(mode or "").strip()
     if normalized_model_id.lower() == "bind" + "craft":
         raise ValueError("This retired workflow has been permanently removed")
+
+    selected_generator = ((params or {}).get('generator')
+        if normalized_model_id == 'protein_modification_experimental' and normalized_mode == 'de_novo_design'
+        else normalized_model_id)
+    if normalized_model_id == 'laproteina' and normalized_mode == 'evaluate':
+        return 'workflows/laproteina_evaluation.nf'
+    if selected_generator in {'rfd4_proteina', 'complexa'}:
+        if normalized_model_id == selected_generator and normalized_mode not in {'generate', 'evaluate'}:
+            raise ValueError(f'Unsupported {selected_generator} mode: {normalized_mode}')
+        return f'workflows/{selected_generator}.nf'
 
     if normalized_model_id in {"boltzgen", "ppiflow"}:
         # Initial generation has its own typed native path. Historical seeded
@@ -958,6 +976,7 @@ def _write_sequence_batch_payloads(
     params: Dict[str, Any],
     complex_components: Optional[List[Dict[str, Any]]],
     write_input=None,
+    task_chemistry=None,
 ) -> Tuple[Optional[Path], Optional[Path], Optional[List[Dict[str, Any]]]]:
     from component_runtime import durable_write
     write_input = write_input or durable_write
@@ -990,12 +1009,15 @@ def _write_sequence_batch_payloads(
             if str(component.get("type") or "").strip().lower() in {"protein", "peptide"}
         ]
 
-        if len(protein_components) == 1:
-            used_ids = {
-                str(component.get("id") or "").strip()
-                for component in normalized_components
-                if str(component.get("id") or "").strip()
-            }
+        if len(protein_components) == 1 and not any(
+            params.get(key) for key in ('sequence_batch_component_id', 'binder_chains', 'primary_chain_id')
+        ):
+            used_ids = set()
+            for component in normalized_components:
+                identities = component.get('id') or []
+                identities = identities if isinstance(identities, list) else [identities]
+                used_ids.update(str(value).strip() for value in identities if str(value).strip())
+                used_ids.update(component.get('copy_ids') or [])
             implicit_component_id = ""
             for candidate_ord in range(ord("A"), ord("Z") + 1):
                 candidate = chr(candidate_ord)
@@ -1041,11 +1063,22 @@ def _write_sequence_batch_payloads(
             variant_name = sanitize_filename(f"{entry['name']}")
             variant_components: List[Dict[str, Any]] = []
             replaced = False
+            invalidated_annotations = {}
             for component in normalized_components:
                 copied = dict(component)
-                component_id = str(copied.get("id") or "").strip()
+                component_ids = copied.get('id') or []
+                component_ids = component_ids if isinstance(component_ids, list) else [component_ids]
+                component_ids = [str(value).strip() for value in component_ids] + list(copied.get('copy_ids') or [])
                 component_type = str(copied.get("type") or "").strip().lower()
-                if component_id == replace_component_id and component_type in {"protein", "peptide"}:
+                if replace_component_id in component_ids and component_type in {"protein", "peptide"}:
+                    if copied.get('sequence') != entry['sequence']:
+                        # These records describe the old sequence, not the new
+                        # variant. Keep their original values in the manifest
+                        # for provenance, without feeding stale conditioning.
+                        for key in ('modifications', 'msa', 'msa_path', 'unpairedMsa', 'pairedMsa',
+                                    'unpairedMsaPath', 'pairedMsaPath', 'templatesPath'):
+                            if key in copied:
+                                invalidated_annotations[key] = copied.pop(key)
                     copied["sequence"] = entry["sequence"]
                     replaced = True
                 variant_components.append(copied)
@@ -1056,6 +1089,7 @@ def _write_sequence_batch_payloads(
             variant_payload = {
                 "name": variant_name,
                 "components": variant_components,
+                **(task_chemistry or {}),
             }
             variant_path = complex_batch_dir / f"{index:03d}_{variant_name}.json"
             write_input(variant_path, json.dumps(variant_payload, indent=2).encode('utf-8'))
@@ -1065,6 +1099,8 @@ def _write_sequence_batch_payloads(
                     "label": entry["label"],
                     "sequence": entry["sequence"],
                     "complex_json": str(variant_path),
+                    "replaced_component_id": replace_component_id,
+                    "invalidated_sequence_annotations": invalidated_annotations,
                 }
             )
         sequence_batch_json_path = out_root / "sequence_batch_manifest.json"
@@ -1192,29 +1228,30 @@ def _build_boltz_cp_sequence_entry(
             protein_payload["msa"] = str(component["msa_path"])
         elif not use_msa:
             protein_payload["msa"] = "empty"
+        for key in ("cyclic", "modifications"):
+            if key in component:
+                protein_payload[key] = component[key]
         return {"protein": protein_payload}
 
     if component_type == "dna":
         sequence = _normalize_boltz_cp_sequence(component.get("sequence"))
         if not sequence:
             raise ValueError(f"Boltz-CP DNA component {component_id[0]!r} is missing a sequence")
-        return {
-            "dna": {
-                "id": component_id,
-                "sequence": sequence,
-            }
-        }
+        payload = {"id": component_id, "sequence": sequence}
+        for key in ("cyclic", "modifications"):
+            if key in component:
+                payload[key] = component[key]
+        return {"dna": payload}
 
     if component_type == "rna":
         sequence = _normalize_boltz_cp_sequence(component.get("sequence"))
         if not sequence:
             raise ValueError(f"Boltz-CP RNA component {component_id[0]!r} is missing a sequence")
-        return {
-            "rna": {
-                "id": component_id,
-                "sequence": sequence,
-            }
-        }
+        payload = {"id": component_id, "sequence": sequence}
+        for key in ("cyclic", "modifications"):
+            if key in component:
+                payload[key] = component[key]
+        return {"rna": payload}
 
     if component_type in {"ligand", "small_molecule"}:
         ligand_payload: Dict[str, Any] = {"id": component_id}
@@ -2428,6 +2465,14 @@ async def _pin_local_invocation_images(session, job, invocation):
         if not task.cancelled():
             task.exception()
         raise
+    from services.native_generation_sources import selected_model
+    if selected_model(job) == 'rfd4_proteina':
+        from services.rfd4_proteina import resolve_oracle_runtime
+        native_mode = job.mode if job.model_id == 'rfd4_proteina' else 'generate'
+        oracle_runtime = resolve_oracle_runtime(native_mode, invocation.native_parameters,
+            image_environment=receipt['environment'])
+        receipt = {**receipt, 'environment': {**receipt['environment'],
+            'BMS_RFD4_ORACLE_RUNTIME': json.dumps(oracle_runtime, sort_keys=True)}}
     provenance = dict(job.provenance or {})
     retained = dict(provenance.get('runtime_image_references') or {})
     retained[invocation.execution_plan.plan_sha256] = receipt
@@ -2583,8 +2628,21 @@ def component_checkpoint_resources(invocation, context, resource_admission=None)
     # Only new native input bytes need space; retained runtime/images are installed.
     scratch = sum(len(item.payload) for item in invocation.generated_inputs
                   if not (Path(context['artifact_root']) / item.relative_path).exists())
-    resources = selected_plan_target_resources(SimpleNamespace(id=context['target_id']),
-        invocation.execution_plan, gpu_ids=previous['gpu_ids'], scratch_bytes=scratch)
+    plan = invocation.execution_plan
+    metadata = plan['metadata'] if isinstance(plan, dict) else plan.metadata
+    static, dynamic = ((metadata['static_components'], metadata['dynamic_templates']) if isinstance(metadata, dict)
+                       else (metadata.static_components, metadata.dynamic_templates))
+    if not (static or dynamic):
+        # The workflow has nothing left to compute (the final review gate only publishes the chosen designs).
+        # There is no new native requirement to project, so the continuation keeps the budget the attempt was
+        # already admitted with; the launch-time projection still refuses a plan with no declarations.
+        from copy import deepcopy
+        resources = deepcopy(previous)
+        resources.pop('admission', None)
+        resources.update(components=[], required=dict(previous['required'], scratch_bytes=scratch))
+    else:
+        resources = selected_plan_target_resources(SimpleNamespace(id=context['target_id']),
+            invocation.execution_plan, gpu_ids=previous['gpu_ids'], scratch_bytes=scratch)
     if context['target_id'] == 'local':
         from biomodstack_local_resources import applied_local_policy, detect_local_capacity
         import shutil
@@ -2683,6 +2741,13 @@ def _local_component_checkpoints(context_path):
     if state is None or state['state'] != 'paused' or not state.get('quiescent'):
         return []
     return component_checkpoint_projection(runtime)
+
+
+async def _publish_local_review_rows(session, job_id):
+    """Publish optional local review rows through the fenced projection owner."""
+    from services.stage_review import publish_local_checkpoint_review_rows
+
+    return await publish_local_checkpoint_review_rows(session, job_id)
 
 
 async def _project_local_components(job, session, context_path):
@@ -2849,16 +2914,8 @@ async def launch_nextflow_job(
             from services.conformational_mapping.persistence import (
                 terminalize_failed_request_for_job,
             )
-            from services.rfd3_local_redesign import (
-                terminalize_failed_request_for_job as terminalize_failed_rfd3_request_for_job,
-            )
 
             await terminalize_failed_request_for_job(failure_session, job_id=job_id)
-            await terminalize_failed_rfd3_request_for_job(
-                failure_session,
-                job_id=job_id,
-                exit_code=exit_code,
-            )
         await failure_session.commit()
         if not rowcount:
             logger.info(stale_log_message, job_id)
@@ -2871,9 +2928,15 @@ async def launch_nextflow_job(
         await launch_msa_batch_job(job_id, params, output_dir)
         return
 
+    if model_id in {'family_msa_protein', 'family_msa_nucleic'} and transient_runner:
+        from services.family_msa.execution import run_owned_job
+        await run_owned_job(job_id, params, output_dir, async_session)
+        return
+
     # Use a mutable launch-params copy so retries can downshift Protenix safely.
     from services.msa_policy import apply_msa_policy
-    launch_params: Dict[str, Any] = apply_msa_policy(model_id, params)
+    launch_params: Dict[str, Any] = (dict(params) if model_id in {'family_msa_protein', 'family_msa_nucleic'}
+                                     else apply_msa_policy(model_id, params))
 
     structure_validator = str(launch_params.get("structure_validator", "")).strip().lower()
     uses_protenix_validation = _is_protenix_job(model_id, launch_params) or structure_validator == "protenix"
@@ -2906,7 +2969,7 @@ async def launch_nextflow_job(
             checkpoint_resume = ((job.provenance or {}).get('component_md_resume')
                 or (job.provenance or {}).get('component_checkpoint_resume') or component_retry)
             if checkpoint_resume or (
-                    model_id == 'boltzgen' and job.mode in {'protein_binder', 'peptide_binder', 'nanobody_binder'}
+                    model_id == 'boltzgen' and job.mode in {'protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'}
                     and launch_params.get('boltzgen_yaml_config')):
                 # Public generation was already resolved and snapshotted by
                 # admission. Do not redownload/reannotate the original scaffold.
@@ -2954,13 +3017,7 @@ async def launch_nextflow_job(
         if needs_running_transition:
             job.status = JobStatus.RUNNING.value
             job.started_at = datetime.utcnow()
-        is_native_rfd3 = str(getattr(job, "model_id", model_id) or model_id).strip().lower() == "protein_local_redesign"
-        if is_native_rfd3:
-            from services.rfd3_local_redesign import start_request_for_job
-
-            if not await start_request_for_job(session, job_id=str(job.id)):
-                raise RuntimeError("RFD3 local-redesign request is not ready for launch")
-        if needs_running_transition or is_native_rfd3:
+        if needs_running_transition:
             await session.commit()
         
         # Re-check cancellation status right before spawning (minimize race window)
@@ -2988,7 +3045,7 @@ async def launch_nextflow_job(
             and launch_workflow_id == "ont_fastq_qc"
             and launch_input_mode == "fastq"
         )
-        if model_id not in {"conformational_mapping", "frustrampnn"} and not is_fastq_only_ont_launch:
+        if model_id not in {"conformational_mapping", "frustrampnn", "family_msa_protein", "family_msa_nucleic"} and not is_fastq_only_ont_launch:
             dynamic_gpu_cpus = await _resolve_dynamic_gpu_cpu_share(session, job, launch_params)
         if dynamic_gpu_cpus is not None:
             launch_params["cpus_per_gpu"] = dynamic_gpu_cpus
@@ -3013,7 +3070,7 @@ async def launch_nextflow_job(
                 msa_params = {**launch_params, **prepared_invocation.native_parameters}
             # Provider work is controller-owned; transfer is independent of
             # result-return policy. Only prepared artifact fields bind science.
-            prepared_params = launch_params if checkpoint_resume else await _prepare_launch_msa_on_controller(
+            prepared_params = launch_params if checkpoint_resume or model_id in {'family_msa_protein', 'family_msa_nucleic'} else await _prepare_launch_msa_on_controller(
                 session, job, model_id, msa_params, Path(output_dir) / 'prepared-msa', remote_launch_authority,
                 native_invocation=prepared_invocation)
             if model_id in {'esmfold2', 'esmfold2_experimental'} and 'esmf_msa_preparation' in prepared_params:
@@ -3872,16 +3929,8 @@ async def launch_nextflow_job(
                         from services.conformational_mapping.persistence import (
                             terminalize_failed_request_for_job,
                         )
-                        from services.rfd3_local_redesign import (
-                            terminalize_failed_request_for_job as terminalize_failed_rfd3_request_for_job,
-                        )
 
                         await terminalize_failed_request_for_job(session, job_id=job_id)
-                        await terminalize_failed_rfd3_request_for_job(
-                            session,
-                            job_id=job_id,
-                            exit_code=exit_code,
-                        )
                     if published_rowcount:
                         await _observe_local_terminal_binder_results(session, job_id, output_dir)
                     await session.commit()
@@ -3895,6 +3944,11 @@ async def launch_nextflow_job(
                         session.expire_all()
                         await reconcile_md_analysis_parent_if_current(md_analysis_parent_id, session)
                         await session.commit()
+                try:
+                    await _publish_local_review_rows(session, job_id)
+                except Exception:
+                    logger.exception("Job %s: review rows for its local gate were not published; the gate stays open", job_id)
+                    await session.rollback()
                 _running_units.pop(job_id, None)
                 
         except Exception as e:
@@ -4241,6 +4295,33 @@ pickle.dump(invocation, sys.stdout.buffer)
     return _bind_ont_runtime(invocation, params)
 
 
+def _shape_selected_gpu_memory_gib(job):
+    """Project this placement's observation; never observe the host for a worker."""
+    from services.shape_requests import selected_gpu_memory_gib
+    assigned = getattr(job, 'assigned_gpu', None)
+    selected = [] if assigned is None else [assigned]
+    if getattr(job, 'execution_target_id', None):
+        assignment = (job.provenance or {}).get('remote_execution_assignment') or {}
+        if assignment.get('execution_target_id') != job.execution_target_id:
+            return None
+        selected = assignment.get('gpu_indices') or selected
+        snapshot = assignment.get('admission_snapshot') or {}
+        observation = snapshot.get('telemetry') or {'gpus': [
+            {'index': item.get('gpu_index'), 'memory_total_mb': item.get('memory_total_mb')}
+            for item in snapshot.get('devices', [])]}
+    else:
+        if not selected:
+            return None
+        from routers.gpu import get_gpu_stats
+        try:
+            observation = {'gpus': [{'index': gpu.index, 'memory_total_mb': gpu.memory_total_mb}
+                                    for gpu in get_gpu_stats()]}
+        except Exception:
+            logger.warning('Shape selected-GPU observation unavailable', exc_info=True)
+            return None
+    return selected_gpu_memory_gib(observation, selected)
+
+
 @overload
 def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: Literal[True]) -> 'NativeInvocationPreview': ...
 
@@ -4273,6 +4354,11 @@ def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: b
     # would change its legacy scientific transport flags.
     requested_json = canonical_bytes(dict(job.params or {}) if requested is None else requested)
     prepared = workflow_params(job, params)
+    if (job.model_id, job.mode) == ('protein_modification_experimental', 'shape_blueprint'):
+        if prepared.get('shape_gpu_memory_gib') is None:
+            capacity = _shape_selected_gpu_memory_gib(job)
+            if capacity is not None:
+                prepared['shape_gpu_memory_gib'] = capacity
     if job.model_id == 'nanopore':
         from services.ont_ngs_contract import replay_expected_plasmid_size
         prepared = replay_expected_plasmid_size(prepared, job.provenance, mode=job.mode)
@@ -4428,7 +4514,12 @@ async def compile_native_workflow_provision_request(workflow_request, http_reque
     native_parameters: dict[str, Any] = {'input_bindings': normalized.input_bindings}
     if normalized.model_id == 'molecular_dynamics':
         from paths import get_md_preparation_runtime_lock
-        native_parameters['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
+        from scripts.bms_md.chemistry.prepare import preparation_owner
+        cfg = normalized.effective_params.get('md_config', {})
+        owner = preparation_owner(cfg)
+        native_parameters['md_preparation_owner'] = owner or 'prepared'
+        if owner == 'amber':
+            native_parameters['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
     plan = build_selected_execution_plan(
         model_id=normalized.model_id, mode=normalized.mode, entrypoint=normalized.entrypoint,
         requested=normalized.requested_params, effective=normalized.effective_params,
@@ -5138,6 +5229,10 @@ def compile_component_checkpoint_continuation(context, checkpoint, decision):
             raise ValueError('Retained continuation requires native model/mode identity in the runtime edge')
         parent.update(model_id=previous['model_id'], mode=previous['mode'], params=previous['native_parameters'])
     params = deepcopy(parent["params"])
+    # The compiler binds out_dir from the generation's own directory. A saved parent out_dir would be passed
+    # through a second time, win on the command line and send the continuation into the original results,
+    # where the previous generation's projection already exists.
+    params.pop("out_dir", None)
     job = SimpleNamespace(**{**parent, "params": params, "awaiting_input": True,
         "awaiting_stage": stage, "awaiting_payload": {"candidate_dir": str(root / directory)},
         "output_dir": str(root)})
@@ -5247,6 +5342,25 @@ def compile_nextflow_invocation(
                     raise ValueError('Native RFD3 generation request binding changed: ' + key)
         params = bound
         plan_input(request_path, (canonical_json(bound['rfd3_generation_request']) + '\n').encode('utf-8'))
+
+    selected_generator = (params.get('generator')
+        if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id)
+    if selected_generator in {'rfd4_proteina', 'complexa'}:
+        native_mode = mode if selected_generator == model_id else 'generate'
+        if selected_generator == 'rfd4_proteina':
+            from services.rfd4_proteina import bind_for_job
+        else:
+            from services.complexa import bind_for_job
+        params, native_inputs = bind_for_job(native_mode, params, output_dir)
+        generated_inputs.extend(native_inputs)
+        request_key = 'rfd4_request' if selected_generator == 'rfd4_proteina' else 'complexa_request'
+        native_parameters[request_key] = deepcopy(params[request_key])
+
+    if model_id == 'laproteina' and mode == 'evaluate':
+        from services.laproteina_evaluation import bind_for_job, REQUEST_FIELD
+        params, native_inputs = bind_for_job(mode, params, output_dir)
+        generated_inputs.extend(native_inputs)
+        native_parameters[REQUEST_FIELD] = deepcopy(params[REQUEST_FIELD])
 
     def bind_fampnn_declaration(command, value) -> None:
         # The same existing producer-owned biological declaration transport is
@@ -5678,7 +5792,7 @@ def compile_nextflow_invocation(
         **{('caliby_experimental', native_mode): 'protein_sequence_design'
            for native_mode in CALIBY_NATIVE_MODES},
         **{('boltzgen', generation_mode): 'boltzgen'
-           for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder')},
+           for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking')},
         **{('ppiflow', generation_mode): 'workstation_ryzen7960x'
            for generation_mode in ('protein_binder', 'antibody_binder', 'nanobody_binder')},
         ('ligandmpnn', 'interface_context'): 'ligandmpnn_interface_context',
@@ -5748,6 +5862,16 @@ def compile_nextflow_invocation(
     ):
         effective_profile = 'protein_cad_experimental'
 
+    selected_generator = (params.get('generator')
+        if model_id == 'protein_modification_experimental' and mode == 'de_novo_design' else model_id)
+    if selected_generator in {'rfd4_proteina', 'complexa'}:
+        effective_profile = 'workstation_ryzen7960x'
+        from paths import default_weight_location
+        if selected_generator == 'rfd4_proteina':
+            params.setdefault('rfd4_proteina_bundle', str(default_weight_location('rfd4-proteina', params.get('weights_root'))))
+        else:
+            params.setdefault('complexa_weights_dir', str(default_weight_location('complexa', params.get('weights_root'))))
+
     effective_profile = resolve_antibody_validation_profile(effective_profile)
 
     uses_protenix = (
@@ -5789,9 +5913,12 @@ def compile_nextflow_invocation(
 
     if model_id == 'molecular_dynamics' and mode == 'simulate':
         from paths import get_md_preparation_runtime_lock
-        # Carry the same managed binding as provisioning into argv so the
-        # existing bundle path map relocates the lock, not the host fallback.
-        params['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
+        from scripts.bms_md.chemistry.prepare import preparation_owner
+        cfg = _native_plan_metadata_settings(model_id, params)['md_config']
+        owner = preparation_owner(cfg)
+        params['md_preparation_owner'] = owner or 'prepared'
+        if owner == 'amber':
+            params['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
 
     if model_id == 'molecular_dynamics' and params.get('md_job_config'):
         params = dict(params)
@@ -6062,7 +6189,7 @@ def compile_nextflow_invocation(
             native_parameters[key] = value
         return finish_command(cmd)
 
-    if model_id == 'boltzgen' and mode in {'protein_binder', 'peptide_binder', 'nanobody_binder'}:
+    if model_id == 'boltzgen' and mode in {'protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'}:
         from services.boltzgen_request_compatibility import parameter_contract, normalize_boltzgen_generation_request
         fields = parameter_contract(mode)
         accepted = {field['name'] for field in fields}
@@ -6173,7 +6300,7 @@ def compile_nextflow_invocation(
         }
         # Selected-source identity uses the same typed params document rather
         # than falling through to the scalar-only runtime argv transport.
-        settings_keys = science_keys | {'iteration_source_design_ids'}
+        settings_keys = science_keys | {'iteration_source_design_ids', 'native_sources'}
         settings = {key: value for key, value in params.items() if key in settings_keys}
         settings_path = Path(output_dir) / '.sequence-design-settings.json'
         plan_input(settings_path, json.dumps(settings, allow_nan=False, sort_keys=True).encode('utf-8'))
@@ -6442,6 +6569,31 @@ def compile_nextflow_invocation(
         'nampnn_seed': 'nampnn_seed',
     }
     
+    # Validation remains native-model-owned; ensemble transport must not apply
+    # Protenix's PTM dialect to Boltz records. Preserve the shared document and
+    # stage managed FILE selections when Protenix is an actual consumer.
+    if model_id == 'protenix':
+        from scripts.protenix_chemistry import validate_chemistry
+        validate_chemistry(params)
+    if model_id == 'protenix' or params.get('pred_method') == 'boltz_protenix':
+        from services.protenix_chemistry import stage_component_files
+        params = stage_component_files(params, output_dir=output_dir, write_input=plan_input)
+    task_chemistry = {}
+    if model_id in {'esmfold2', 'esmfold2_experimental'} and isinstance(params.get('complex_components'), dict):
+        document = params['complex_components']
+        params['complex_components'] = document.get('components', document.get('sequences', []))
+        for key in ('covalent_bonds', 'distogram_conditioning'):
+            if key in document:
+                params.setdefault(key, document[key])
+    if model_id == 'protenix' or params.get('complex_components'):
+        task_chemistry = {key: params.pop(key) for key in ('covalent_bonds', 'constraint', 'constraints') if key in params}
+    if model_id == 'boltz2' or params.get('pred_method') in {'boltz', 'boltz_protenix'}:
+        task_chemistry.update({key: params.pop(key) for key in ('constraints', 'templates', 'properties') if key in params})
+    if model_id in {'esmfold2', 'esmfold2_experimental'}:
+        # Keep the ESM-native numeric atom/index dialect at its own compiler.
+        for key in ('covalent_bonds', 'distogram_conditioning'):
+            if key in params or 'esmf_' + key in params:
+                task_chemistry[key] = params.pop(key, params.pop('esmf_' + key, None))
     # Handle complex_components specially - write JSON file for BoltzFromComplex process
     complex_components = params.pop('complex_components', None)
     sequence_batch_json_path, complex_batch_dir, complex_components = _write_sequence_batch_payloads(
@@ -6449,6 +6601,7 @@ def compile_nextflow_invocation(
         params=params,
         complex_components=complex_components,
         write_input=plan_input,
+        task_chemistry=task_chemistry,
     )
     
     # Model-specific param preprocessing: Route ntp_type and ligand_smiles to correct targets
@@ -6514,9 +6667,11 @@ def compile_nextflow_invocation(
             params['rfd_mode'] = 'ppiflow_generator'
         params.setdefault('stage_family', 'ppiflow')
         params.setdefault('stage_mode', 'generator_backbone_refine')
-    elif model_id == 'protein_local_redesign' or (
-        model_id == 'protein_modification_experimental' and mode == 'region_redesign'
-    ):
+    elif model_id == 'protein_modification_experimental' and mode == 'region_redesign':
+        # Controller-owned source custody is retained on the Job, not passed as
+        # scientific CLI arguments or exposed to the native loop processes.
+        for custody_key in ('resequence_sources', 'resequence_preparation'):
+            params.pop(custody_key, None)
         protein_local_mappings = {
             'input_structure': 'plr_input_pdb',
             'input_pdb': 'plr_input_pdb',
@@ -6560,6 +6715,9 @@ def compile_nextflow_invocation(
             'sequence_input_pdbs': 'plr_sequence_input_pdbs',
             'validation_input_pdbs': 'plr_validation_input_pdbs',
             'region_manifest': 'plr_region_manifest',
+            'fixed_positions': 'plr_fixed_positions',
+            'designer_template': 'plr_designer_template',
+            'designable_positions': 'plr_designable_positions',
             'final_candidate_dir': 'plr_final_candidate_dir',
         }
         for src_key, dest_key in protein_local_mappings.items():
@@ -6586,28 +6744,6 @@ def compile_nextflow_invocation(
 
         if 'plr_num_designs' in params and 'rfd_num_designs' not in params:
             params['rfd_num_designs'] = params['plr_num_designs']
-        if model_id == 'protein_local_redesign':
-            params['rfd3_batches_per_design'] = params.get('plr_num_designs', 1)
-            params['plr_write_full_json'] = True
-            params['plr_seq_method'] = 'skip'
-            params['seq_method'] = 'skip'
-            params['plr_run_boltz_validation'] = False
-            for disabled_key in (
-                'plr_fix_fixed_sidechains',
-                'seqs_per_design',
-                'boltz_sampling_steps',
-                'boltz_recycling_steps',
-                'interactive_gating',
-                'interactive_gate_stage',
-                'interactive_gate_continue',
-                'plr_backbone_input_pdbs',
-                'plr_sequence_input_pdbs',
-                'plr_validation_input_pdbs',
-                'plr_region_manifest',
-                'plr_final_candidate_dir',
-            ):
-                params.pop(disabled_key, None)
-            params['interactive_gating'] = False
         if 'plr_seq_method' in params and 'seq_method' not in params:
             params['seq_method'] = params['plr_seq_method']
         if not params.get('rfd_mode'):
@@ -6635,6 +6771,11 @@ def compile_nextflow_invocation(
         and str(params.get('generator') or '').strip().lower()
         in {'disco', 'laproteina'}
     ):
+        from scripts.lib.protein_cad_settings import settings_projection
+        params.update(settings_projection(params))
+        params.pop('laproteina_settings', None)
+        params.pop('disco_settings', None)
+        params.pop('disco_jobs', None)
         protein_cad_mappings = {
             'backend': 'pcad_backend',
             'design_task': 'pcad_task',
@@ -6671,6 +6812,28 @@ def compile_nextflow_invocation(
                 if dest_key not in params:
                     params[dest_key] = params[src_key]
                 params.pop(src_key, None)
+
+        # Managed browser aliases are controller names, not task-relative files.
+        # Preserve historical absolute/path-only inputs and native FILE_ literals.
+        from paths import get_allowed_roots, resolve_allowed_path
+        disco_jobs = params.get('pcad_disco_jobs_json')
+        if params.get('pcad_backend') == 'disco' and isinstance(disco_jobs, str):
+            disco_jobs = json.loads(disco_jobs)
+        active_disco_paths = (('pcad_disco_jobs_source_path',) if disco_jobs is not None
+                              else ('pcad_disco_input_json_path',) if params.get('pcad_disco_input_json_path')
+                              else ('pcad_disco_ligand_sdf',) if params.get('pcad_task') == 'ligand_conditioned'
+                              else ())
+        for key in active_disco_paths if params.get('pcad_backend') == 'disco' else ():
+            value = params.get(key)
+            if isinstance(value, str) and value.lstrip('/').split('/')[0] in get_allowed_roots():
+                params[key] = str(resolve_allowed_path(value))
+
+        if params.get('pcad_backend') == 'laproteina':
+            from paths import default_weight_location
+            default = default_weight_location('laproteina', params.get('weights_root'))
+            if default != Path(str(params.get('weights_root') or get_weights_root())) / 'laproteina':
+                for key in ('pcad_laproteina_checkpoint_dir', 'pcad_laproteina_data_path'):
+                    params.setdefault(key, str(default))
 
         if 'pcad_num_designs' in params and 'rfd_num_designs' not in params:
             params['rfd_num_designs'] = params['pcad_num_designs']
@@ -6875,6 +7038,7 @@ def compile_nextflow_invocation(
             runner_module = importlib.util.module_from_spec(runner_spec)
             runner_spec.loader.exec_module(runner_module)
             requested = dict(params)
+            requested.update(task_chemistry)
             requested.pop('esmf_requested_settings_json', None)
             if complex_components:
                 if requested.get('msa_path') or requested.get('esmf_msa_path'):
@@ -6888,6 +7052,8 @@ def compile_nextflow_invocation(
             raw_components = requested.get('complex_components_json') or requested.get('esmf_complex_components_json')
             if raw_components:
                 components_for_validation = json.loads(raw_components)
+            if isinstance(components_for_validation, dict):
+                components_for_validation = components_for_validation.get('components', components_for_validation.get('sequences', []))
             for component in components_for_validation:
                 if isinstance(component, dict) and component.get('msa_path'):
                     paths[component['msa_path']] = component['msa_path']
@@ -6974,7 +7140,7 @@ def compile_nextflow_invocation(
         if complex_components:
             esmfold2_complex_path = Path(output_dir) / "esmfold2_complex_components.json"
             plan_input(esmfold2_complex_path,
-                json.dumps({"components": complex_components}, indent=2).encode('utf-8'))
+                json.dumps({"components": complex_components, **task_chemistry}, indent=2).encode('utf-8'))
             params['esmf_complex_components_file'] = str(esmfold2_complex_path)
             # The canonical structure launcher includes the primary protein in complex_components.
             # Passing both --esmf_sequence and a components file would duplicate chain IDs in the
@@ -7005,7 +7171,7 @@ def compile_nextflow_invocation(
     if complex_components:
         complex_json_path = Path(output_dir) / "complex_definition.json"
         plan_input(complex_json_path,
-            json.dumps({"components": complex_components}, indent=2).encode('utf-8'))
+            json.dumps({"components": complex_components, **task_chemistry}, indent=2).encode('utf-8'))
         logger.info(f"Compiled complex definition for {complex_json_path}")
         cmd.extend(["--complex_json_path", str(complex_json_path)])
         native_parameters['complex_json_path'] = str(complex_json_path)
@@ -7027,6 +7193,19 @@ def compile_nextflow_invocation(
              'boltzgen_input_pdb', 'boltzgen_ligand_pdb', 'boltzgen_dna_structure'}},
             sort_keys=True, separators=(',', ':'))
     for key, value in params.items():
+        if key in {'laproteina_evaluation_request', 'rfd4_request', 'complexa_request', 'md_source_provenance', 'md_job_spec', 'native_sources'}:
+            # Scientific objects remain typed in the native projection. The MD
+            # collector additionally consumes one JSON wire, never flattened keys.
+            native_parameters[key] = deepcopy(value)
+            if key == 'md_source_provenance' and model_id == 'molecular_dynamics' and value is not None:
+                cmd.extend(['--md_source_provenance_json',
+                    json.dumps(value, allow_nan=False, separators=(',', ':'))])
+            continue
+        if key in {'pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json'}:
+            wire = value if isinstance(value, str) else json.dumps(value, allow_nan=False, separators=(',', ':'))
+            cmd.extend([f'--{key}', wire])
+            native_parameters[key] = deepcopy(value)
+            continue
         # Physical GPU assignment is exclusively scheduler-owned.  Never pass a
         # request-supplied component override through the generic parameter lane.
         if key in {

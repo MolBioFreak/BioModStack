@@ -1,4 +1,5 @@
 import { fetchModelById } from './api';
+import { initialInvocationEnvelope, type InitialInvocationDraft } from './binderInvocationPlan';
 import type { NativeBinderParameter } from './nativeBinderAuthoring';
 import type { BioXpOperatorJsonSchema as Schema } from './bioxpClient';
 
@@ -15,7 +16,9 @@ export interface GeneralSequenceDesignRequest extends GeneralSequenceSettings {
     enabled: boolean;
     model_id: GeneralSequenceDesigner;
 }
+export type GeneralSequenceEnvelope = GeneralSequenceDesignRequest | ReturnType<typeof initialInvocationEnvelope>;
 export interface GeneralSequenceDesignDraft {
+    invocation_draft?: InitialInvocationDraft;
     sequence_design: GeneralSequenceDesignRequest;
     sequence_design_drafts: Partial<Record<GeneralSequenceDesigner, GeneralSequenceSettings>>;
 }
@@ -72,7 +75,16 @@ export async function fetchGeneralSequenceInventory(model_id: GeneralSequenceDes
 }
 
 export function hydrateGeneralSequenceDesign(values?: Record<string, UntypedApiValue>): GeneralSequenceDesignDraft {
-    const saved = values?.sequence_design as GeneralSequenceDesignRequest | undefined;
+    const envelope = values?.sequence_design as GeneralSequenceEnvelope | null | undefined;
+    if (values?.invocation_draft || envelope?.schema_version === 2 || envelope === undefined) {
+        const invocation_draft: InitialInvocationDraft = structuredClone(values?.invocation_draft ?? {
+            enabled: envelope?.enabled ?? false,
+            stages: envelope?.schema_version === 2 ? envelope.round_plan.stages.map(stage => ({ stage, enabled: true, drafts: {} })) : [],
+        });
+        return { invocation_draft, sequence_design: { schema_version: 1, enabled: false, model_id: 'fampnn', params: {} },
+            sequence_design_drafts: structuredClone(values?.sequence_design_drafts ?? {}) };
+    }
+    const saved = envelope ?? undefined;
     const sequence_design: GeneralSequenceDesignRequest = saved ? structuredClone(saved) : {
         schema_version: 1, enabled: false, model_id: 'fampnn', params: {},
     };
@@ -101,6 +113,7 @@ export function changeGeneralSequenceDesigner(draft: GeneralSequenceDesignDraft,
         sequence_design_drafts: { ...draft.sequence_design_drafts, [model_id]: settings } };
 }
 /** Only the active stage crosses Jobs/placement. Disabled authoring stays saved, not launched. */
-export function generalSequenceRequest(draft: GeneralSequenceDesignDraft): { sequence_design?: GeneralSequenceDesignRequest } {
+export function generalSequenceRequest(draft: GeneralSequenceDesignDraft): { sequence_design?: GeneralSequenceEnvelope } {
+    if (draft.invocation_draft) return { sequence_design: initialInvocationEnvelope(draft.invocation_draft) };
     return draft.sequence_design.enabled ? { sequence_design: draft.sequence_design } : {};
 }

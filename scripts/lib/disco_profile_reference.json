@@ -1,0 +1,462 @@
+{
+  "composition": "inference.yaml; experiment then effort; literal scalar YAML paths without interpolation",
+  "source_revision": "82b594f838eb61dd8c78ae3a403ccb8f00cf7abf",
+  "variants": {
+    "designable/fast": {
+      "N_cycle": {
+        "path": "model.N_cycle",
+        "value": 2
+      },
+      "N_step": {
+        "path": "sample_diffusion.N_step",
+        "value": 100
+      },
+      "deterministic": {
+        "path": "deterministic",
+        "value": true
+      },
+      "gamma0": {
+        "path": "sample_diffusion.gamma0",
+        "value": 0.8
+      },
+      "n_seq_duplicates_per_structure": {
+        "path": "n_seq_duplicates_per_structure",
+        "value": 1
+      },
+      "need_atom_confidence": {
+        "path": "need_atom_confidence",
+        "value": false
+      },
+      "noise_scale_lambda": {
+        "path": "sample_diffusion.noise_scale_lambda",
+        "value": 0.1
+      },
+      "noisy_guidance.enabled": {
+        "path": "sample_diffusion.noisy_guidance.enabled",
+        "value": true
+      },
+      "noisy_guidance.guidance_end_frac": {
+        "path": "sample_diffusion.noisy_guidance.guidance_end_frac",
+        "value": 0.8
+      },
+      "noisy_guidance.guidance_start_frac": {
+        "path": "sample_diffusion.noisy_guidance.guidance_start_frac",
+        "value": 0.3
+      },
+      "noisy_guidance.guide_seq": {
+        "path": "sample_diffusion.noisy_guidance.guide_seq",
+        "value": true
+      },
+      "noisy_guidance.omega_seq": {
+        "path": "sample_diffusion.noisy_guidance.omega_seq",
+        "value": 2.0
+      },
+      "noisy_guidance.omega_struct": {
+        "path": "sample_diffusion.noisy_guidance.omega_struct",
+        "value": 1.5
+      },
+      "noisy_guidance.rescale_phi": {
+        "path": "sample_diffusion.noisy_guidance.rescale_phi",
+        "value": 0.7
+      },
+      "noisy_guidance.uncond_seq_time": {
+        "path": "sample_diffusion.noisy_guidance.uncond_seq_time",
+        "value": 0.6
+      },
+      "noisy_guidance.uncond_struct_time": {
+        "path": "sample_diffusion.noisy_guidance.uncond_struct_time",
+        "value": 0.8
+      },
+      "num_inference_seeds": {
+        "path": "num_inference_seeds",
+        "value": null
+      },
+      "output_format": {
+        "path": "output_format",
+        "value": "unconditional_monomer_protein"
+      },
+      "rho": {
+        "path": "inference_noise_scheduler.rho",
+        "value": 7.0
+      },
+      "sequence_sampling.allow_remasking": {
+        "path": "sequence_sampling_strategy.allow_remasking",
+        "value": true
+      },
+      "sequence_sampling.entropy_adaptive_anneal_power": {
+        "path": "sequence_sampling_strategy.entropy_adaptive_anneal_power",
+        "value": 0.0
+      },
+      "sequence_sampling.entropy_adaptive_beta": {
+        "path": "sequence_sampling_strategy.entropy_adaptive_beta",
+        "value": 1.0
+      },
+      "sequence_sampling.entropy_adaptive_temp": {
+        "path": "sequence_sampling_strategy.entropy_adaptive_temp",
+        "value": true
+      },
+      "sequence_sampling.logits_temp": {
+        "path": "sequence_sampling_strategy.logits_temp",
+        "value": 0.8
+      },
+      "sequence_sampling.mask_stochasticity_strength": {
+        "path": "sequence_sampling_strategy.mask_stochasticity_strength",
+        "value": 1.0
+      },
+      "sequence_sampling.planner_name": {
+        "path": "sequence_sampling_strategy.planner_name",
+        "value": null
+      },
+      "sequence_sampling.power": {
+        "path": "sequence_sampling_strategy.sequence_noise_scheduler.power",
+        "value": 1.0
+      },
+      "sequence_sampling.score_temp": {
+        "path": "sequence_sampling_strategy.score_temp",
+        "value": 1.0
+      },
+      "sequence_sampling.score_type": {
+        "path": "sequence_sampling_strategy.score_type",
+        "value": "random"
+      },
+      "sequence_sampling.should_ensure_unmasked_stay": {
+        "path": "sequence_sampling_strategy.should_ensure_unmasked_stay",
+        "value": false
+      },
+      "sequence_sampling.switch_temp": {
+        "path": "sequence_sampling_strategy.switch_temp",
+        "value": true
+      },
+      "use_deepspeed_evo_attention": {
+        "path": "use_deepspeed_evo_attention",
+        "value": true
+      }
+    },
+    "designable/max": {
+      "N_cycle": {
+        "path": "model.N_cycle",
+        "value": 4
+      },
+      "N_step": {
+        "path": "sample_diffusion.N_step",
+        "value": 200
+      },
+      "deterministic": {
+        "path": "deterministic",
+        "value": true
+      },
+      "gamma0": {
+        "path": "sample_diffusion.gamma0",
+        "value": 0.8
+      },
+      "n_seq_duplicates_per_structure": {
+        "path": "n_seq_duplicates_per_structure",
+        "value": 1
+      },
+      "need_atom_confidence": {
+        "path": "need_atom_confidence",
+        "value": false
+      },
+      "noise_scale_lambda": {
+        "path": "sample_diffusion.noise_scale_lambda",
+        "value": 0.1
+      },
+      "noisy_guidance.enabled": {
+        "path": "sample_diffusion.noisy_guidance.enabled",
+        "value": true
+      },
+      "noisy_guidance.guidance_end_frac": {
+        "path": "sample_diffusion.noisy_guidance.guidance_end_frac",
+        "value": 0.8
+      },
+      "noisy_guidance.guidance_start_frac": {
+        "path": "sample_diffusion.noisy_guidance.guidance_start_frac",
+        "value": 0.3
+      },
+      "noisy_guidance.guide_seq": {
+        "path": "sample_diffusion.noisy_guidance.guide_seq",
+        "value": true
+      },
+      "noisy_guidance.omega_seq": {
+        "path": "sample_diffusion.noisy_guidance.omega_seq",
+        "value": 2.0
+      },
+      "noisy_guidance.omega_struct": {
+        "path": "sample_diffusion.noisy_guidance.omega_struct",
+        "value": 1.5
+      },
+      "noisy_guidance.rescale_phi": {
+        "path": "sample_diffusion.noisy_guidance.rescale_phi",
+        "value": 0.7
+      },
+      "noisy_guidance.uncond_seq_time": {
+        "path": "sample_diffusion.noisy_guidance.uncond_seq_time",
+        "value": 0.6
+      },
+      "noisy_guidance.uncond_struct_time": {
+        "path": "sample_diffusion.noisy_guidance.uncond_struct_time",
+        "value": 0.8
+      },
+      "num_inference_seeds": {
+        "path": "num_inference_seeds",
+        "value": null
+      },
+      "output_format": {
+        "path": "output_format",
+        "value": "unconditional_monomer_protein"
+      },
+      "rho": {
+        "path": "inference_noise_scheduler.rho",
+        "value": 7.0
+      },
+      "sequence_sampling.allow_remasking": {
+        "path": "sequence_sampling_strategy.allow_remasking",
+        "value": true
+      },
+      "sequence_sampling.entropy_adaptive_anneal_power": {
+        "path": "sequence_sampling_strategy.entropy_adaptive_anneal_power",
+        "value": 0.0
+      },
+      "sequence_sampling.entropy_adaptive_beta": {
+        "path": "sequence_sampling_strategy.entropy_adaptive_beta",
+        "value": 1.0
+      },
+      "sequence_sampling.entropy_adaptive_temp": {
+        "path": "sequence_sampling_strategy.entropy_adaptive_temp",
+        "value": true
+      },
+      "sequence_sampling.logits_temp": {
+        "path": "sequence_sampling_strategy.logits_temp",
+        "value": 0.8
+      },
+      "sequence_sampling.mask_stochasticity_strength": {
+        "path": "sequence_sampling_strategy.mask_stochasticity_strength",
+        "value": 1.0
+      },
+      "sequence_sampling.planner_name": {
+        "path": "sequence_sampling_strategy.planner_name",
+        "value": null
+      },
+      "sequence_sampling.power": {
+        "path": "sequence_sampling_strategy.sequence_noise_scheduler.power",
+        "value": 1.0
+      },
+      "sequence_sampling.score_temp": {
+        "path": "sequence_sampling_strategy.score_temp",
+        "value": 1.0
+      },
+      "sequence_sampling.score_type": {
+        "path": "sequence_sampling_strategy.score_type",
+        "value": "random"
+      },
+      "sequence_sampling.should_ensure_unmasked_stay": {
+        "path": "sequence_sampling_strategy.should_ensure_unmasked_stay",
+        "value": false
+      },
+      "sequence_sampling.switch_temp": {
+        "path": "sequence_sampling_strategy.switch_temp",
+        "value": true
+      },
+      "use_deepspeed_evo_attention": {
+        "path": "use_deepspeed_evo_attention",
+        "value": true
+      }
+    },
+    "diverse/fast": {
+      "N_cycle": {
+        "path": "model.N_cycle",
+        "value": 2
+      },
+      "N_step": {
+        "path": "sample_diffusion.N_step",
+        "value": 100
+      },
+      "deterministic": {
+        "path": "deterministic",
+        "value": true
+      },
+      "gamma0": {
+        "path": "sample_diffusion.gamma0",
+        "value": 1.6
+      },
+      "n_seq_duplicates_per_structure": {
+        "path": "n_seq_duplicates_per_structure",
+        "value": 1
+      },
+      "need_atom_confidence": {
+        "path": "need_atom_confidence",
+        "value": false
+      },
+      "noise_scale_lambda": {
+        "path": "sample_diffusion.noise_scale_lambda",
+        "value": 0.1
+      },
+      "noisy_guidance.enabled": {
+        "path": "sample_diffusion.noisy_guidance.enabled",
+        "value": false
+      },
+      "num_inference_seeds": {
+        "path": "num_inference_seeds",
+        "value": null
+      },
+      "output_format": {
+        "path": "output_format",
+        "value": "unconditional_monomer_protein"
+      },
+      "rho": {
+        "path": "inference_noise_scheduler.rho",
+        "value": 7.0
+      },
+      "sequence_sampling.allow_remasking": {
+        "path": "sequence_sampling_strategy.allow_remasking",
+        "value": true
+      },
+      "sequence_sampling.entropy_adaptive_anneal_power": {
+        "path": "sequence_sampling_strategy.entropy_adaptive_anneal_power",
+        "value": 0.0
+      },
+      "sequence_sampling.entropy_adaptive_beta": {
+        "path": "sequence_sampling_strategy.entropy_adaptive_beta",
+        "value": 1.0
+      },
+      "sequence_sampling.entropy_adaptive_temp": {
+        "path": "sequence_sampling_strategy.entropy_adaptive_temp",
+        "value": false
+      },
+      "sequence_sampling.logits_temp": {
+        "path": "sequence_sampling_strategy.logits_temp",
+        "value": 0.8
+      },
+      "sequence_sampling.mask_stochasticity_strength": {
+        "path": "sequence_sampling_strategy.mask_stochasticity_strength",
+        "value": 1.0
+      },
+      "sequence_sampling.planner_name": {
+        "path": "sequence_sampling_strategy.planner_name",
+        "value": null
+      },
+      "sequence_sampling.power": {
+        "path": "sequence_sampling_strategy.sequence_noise_scheduler.power",
+        "value": 1.5
+      },
+      "sequence_sampling.score_temp": {
+        "path": "sequence_sampling_strategy.score_temp",
+        "value": 1.0
+      },
+      "sequence_sampling.score_type": {
+        "path": "sequence_sampling_strategy.score_type",
+        "value": "random"
+      },
+      "sequence_sampling.should_ensure_unmasked_stay": {
+        "path": "sequence_sampling_strategy.should_ensure_unmasked_stay",
+        "value": false
+      },
+      "sequence_sampling.switch_temp": {
+        "path": "sequence_sampling_strategy.switch_temp",
+        "value": true
+      },
+      "use_deepspeed_evo_attention": {
+        "path": "use_deepspeed_evo_attention",
+        "value": true
+      }
+    },
+    "diverse/max": {
+      "N_cycle": {
+        "path": "model.N_cycle",
+        "value": 4
+      },
+      "N_step": {
+        "path": "sample_diffusion.N_step",
+        "value": 200
+      },
+      "deterministic": {
+        "path": "deterministic",
+        "value": true
+      },
+      "gamma0": {
+        "path": "sample_diffusion.gamma0",
+        "value": 1.6
+      },
+      "n_seq_duplicates_per_structure": {
+        "path": "n_seq_duplicates_per_structure",
+        "value": 1
+      },
+      "need_atom_confidence": {
+        "path": "need_atom_confidence",
+        "value": false
+      },
+      "noise_scale_lambda": {
+        "path": "sample_diffusion.noise_scale_lambda",
+        "value": 0.1
+      },
+      "noisy_guidance.enabled": {
+        "path": "sample_diffusion.noisy_guidance.enabled",
+        "value": false
+      },
+      "num_inference_seeds": {
+        "path": "num_inference_seeds",
+        "value": null
+      },
+      "output_format": {
+        "path": "output_format",
+        "value": "unconditional_monomer_protein"
+      },
+      "rho": {
+        "path": "inference_noise_scheduler.rho",
+        "value": 7.0
+      },
+      "sequence_sampling.allow_remasking": {
+        "path": "sequence_sampling_strategy.allow_remasking",
+        "value": true
+      },
+      "sequence_sampling.entropy_adaptive_anneal_power": {
+        "path": "sequence_sampling_strategy.entropy_adaptive_anneal_power",
+        "value": 0.0
+      },
+      "sequence_sampling.entropy_adaptive_beta": {
+        "path": "sequence_sampling_strategy.entropy_adaptive_beta",
+        "value": 1.0
+      },
+      "sequence_sampling.entropy_adaptive_temp": {
+        "path": "sequence_sampling_strategy.entropy_adaptive_temp",
+        "value": false
+      },
+      "sequence_sampling.logits_temp": {
+        "path": "sequence_sampling_strategy.logits_temp",
+        "value": 0.8
+      },
+      "sequence_sampling.mask_stochasticity_strength": {
+        "path": "sequence_sampling_strategy.mask_stochasticity_strength",
+        "value": 1.0
+      },
+      "sequence_sampling.planner_name": {
+        "path": "sequence_sampling_strategy.planner_name",
+        "value": null
+      },
+      "sequence_sampling.power": {
+        "path": "sequence_sampling_strategy.sequence_noise_scheduler.power",
+        "value": 1.5
+      },
+      "sequence_sampling.score_temp": {
+        "path": "sequence_sampling_strategy.score_temp",
+        "value": 1.0
+      },
+      "sequence_sampling.score_type": {
+        "path": "sequence_sampling_strategy.score_type",
+        "value": "random"
+      },
+      "sequence_sampling.should_ensure_unmasked_stay": {
+        "path": "sequence_sampling_strategy.should_ensure_unmasked_stay",
+        "value": false
+      },
+      "sequence_sampling.switch_temp": {
+        "path": "sequence_sampling_strategy.switch_temp",
+        "value": true
+      },
+      "use_deepspeed_evo_attention": {
+        "path": "use_deepspeed_evo_attention",
+        "value": true
+      }
+    }
+  }
+}

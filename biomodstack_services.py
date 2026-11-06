@@ -28,9 +28,11 @@ from biomodstack_runtime_profile import (
     DEFAULT_DEVELOPMENT_WORKFLOW_ADAPTER_PORT,
     DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT,
     DEFAULT_WEB_HOST_PORT,
+    apply_host_selectors,
     get_biomodstack_config_dir as runtime_profile_config_dir,
     install_profile_snapshot as runtime_profile_snapshot,
     load_install_profile,
+    record_host_selectors,
     save_install_profile,
     validate_runtime_port_contract,
 )
@@ -435,8 +437,21 @@ def get_user_systemd_dir(home: Path | None = None) -> Path:
     return base_home / ".config" / "systemd" / "user"
 
 
+def installed_default_runtime_mode() -> str:
+    """The installation's lane when nothing selects one explicitly.
+
+    An install profile with ``core_runtime_mode: false`` has no Production
+    container runtime; defaulting it to ``container`` sent unqualified restarts
+    to storage that was never provisioned.
+    """
+    profile = load_install_profile()
+    if profile.get("core_runtime_mode") is False:
+        return DEV_RUNTIME_MODE
+    return DEFAULT_RUNTIME_MODE
+
+
 def resolve_runtime_mode(runtime_mode: str | None = None) -> str:
-    mode = (runtime_mode or os.getenv("BMS_RUNTIME_MODE") or DEFAULT_RUNTIME_MODE).strip().lower()
+    mode = (runtime_mode or os.getenv("BMS_RUNTIME_MODE") or installed_default_runtime_mode()).strip().lower()
     if mode not in VALID_RUNTIME_MODES:
         raise ServiceManagerError(
             f"Unknown BioModStack runtime mode '{mode}'. Expected one of: {', '.join(sorted(VALID_RUNTIME_MODES))}"
@@ -1347,6 +1362,52 @@ def _runtime_reference_directive(store: Path, lane: str) -> str:
     return f"EnvironmentFile={systemd_value(reference)}" if required else ""
 
 
+STUDIO_SERVICE = 'biomodstack-atomworks-studio.service'
+
+
+def studio_development_units(root: Path) -> tuple[dict[str, str], str]:
+    """Optional CPU editor descriptor, consumed by the existing unit installer.
+
+    No descriptor means byte-identical legacy units. This is Development-only;
+    no model registry entry, service scheduler or Production runtime is added.
+    """
+    path = runtime_profile_config_dir() / 'atomworks-studio-development.json'
+    if not path.exists():
+        return {}, ''
+    descriptor = json.loads(path.read_text())
+    if descriptor.get('schema_version') != 'bms.atomworks-studio-runtime.v1':
+        raise ServiceManagerError('unsupported Studio runtime descriptor')
+    python, env, sessions = (Path(descriptor[key]) for key in ('python', 'environment_file', 'sessions'))
+    if not all(p.is_absolute() for p in (python, env, sessions)):
+        raise ServiceManagerError('Studio runtime paths must be absolute')
+    port = descriptor['port']
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ServiceManagerError('Studio runtime port is invalid')
+    unit = dedent(f'''\
+        [Unit]
+        Description=BioModStack isolated CPU AtomWorks Studio
+        PartOf={DEV_TARGET_UNIT}
+        After=network.target
+
+        [Service]
+        Type=simple
+        UMask=0077
+        EnvironmentFile={systemd_value(env)}
+        Environment=PYTHONDONTWRITEBYTECODE=1
+        WorkingDirectory={systemd_value(root)}
+        ExecStartPre=/usr/bin/mkdir -p {systemd_exec_arg(sessions)}
+        ExecStart={systemd_exec_arg(python)} -B -m uvicorn atomworks_studio_service:create_app --factory --app-dir {systemd_exec_arg(root / 'scripts')} --host 127.0.0.1 --port {port} --no-access-log
+        Restart=on-failure
+        RestartSec=5
+        TimeoutStopSec=20
+        KillMode=control-group
+
+        [Install]
+        WantedBy={DEV_TARGET_UNIT}
+        ''')
+    return {STUDIO_SERVICE: unit}, f'EnvironmentFile={systemd_value(env)}'
+
+
 def render_user_units(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, str]:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
@@ -1365,6 +1426,20 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     python_root_directive = (
         "Environment=" + systemd_value(f"BMS_PYTHON_ROOT={python_environment['root']}")
         if python_environment is not None else ""
+    )
+    # Preserve annotation installation selectors in the managed API, including
+    # subsequent desktop starts. Scientific search settings remain API-owned.
+    annotation_environment = "\n        ".join(
+        "Environment=" + systemd_value(f"{key}={os.environ[key]}")
+        for key in (
+            "BMS_MICROMAMBA_BIN", "BMS_MICROMAMBA_ROOT_PREFIX",
+            "BMS_PLANNOTATE_ENV", "BMS_PLANNOTATE_BIN",
+        ) if os.environ.get(key)
+    )
+    from biomodstack_runtime_profile import asset_publication_environment
+    publication_environment = "\n        ".join(
+        "Environment=" + systemd_value(f"{key}={value}")
+        for key, value in asset_publication_environment().items()
     )
     from biomodstack_local_resources import configured_local_policy
     local_policy = configured_local_policy()
@@ -1468,6 +1543,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
             Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={runtime_image_store}")}
             Environment=BMS_RUNTIME_IMAGE_LANE=production
+            {publication_environment}
             {_runtime_reference_directive(runtime_image_store, 'production')}
             Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_PORT={PRODUCTION_WORKFLOW_ADAPTER_PORT}")}
             Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
@@ -1607,6 +1683,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     ont_runtime_environment = "\n        ".join(
         "Environment=" + systemd_value(f"{key}={value}")
         for key, value in {
+            "BMS_CONTAINER_RUNTIME": os.environ.get("BMS_CONTAINER_RUNTIME", ont_container_runtime),
             "BMS_ONT_CONTAINER_RUNTIME": ont_container_runtime,
             "BMS_ONT_SLOW5TOOLS_IMAGE": ont_runtime_image,
             "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST": ont_runtime_digest,
@@ -1616,6 +1693,9 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             "BMS_ONT_SQUIGULATOR_IMAGE_DIGEST": ont_squigulator_digest,
             "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE": ont_comparison_image,
             "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST": ont_comparison_digest,
+            # Basecalling device for the API (launch params) and adapter (Nextflow).
+            **({"BMS_ONT_DORADO_DEVICE": os.environ["BMS_ONT_DORADO_DEVICE"].strip()}
+               if os.environ.get("BMS_ONT_DORADO_DEVICE", "").strip() else {}),
         }.items()
     )
     ont_staging_root = os.environ.get(
@@ -1743,6 +1823,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         {("Environment=" + systemd_value(f"BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}")) if dev_ngs_runtime_sif else ""}
         Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={runtime_image_store}")}
         Environment=BMS_RUNTIME_IMAGE_LANE=development
+        {publication_environment}
         {_runtime_reference_directive(runtime_image_store, 'development')}
         {ont_runtime_environment}
         Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
@@ -1786,6 +1867,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}")}
         Environment={systemd_value(f"BMS_CM_API_RUNTIME_DIR={support_payload_root}")}
         {python_root_directive}
+        {annotation_environment}
         Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(DEVELOPMENT_LANE)}")}
         Environment={systemd_value(f"BMS_FRONTEND_HEALTH_URL=http://127.0.0.1:{dev_web_host_port}/")}
@@ -1808,6 +1890,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         {("Environment=" + systemd_value(f"BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}")) if dev_ngs_runtime_sif else ""}
         Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={runtime_image_store}")}
         Environment=BMS_RUNTIME_IMAGE_LANE=development
+        {publication_environment}
         {_runtime_reference_directive(runtime_image_store, 'development')}
         Environment={systemd_value(f"BMS_WEIGHTS={dev_weights_root}")}
         Environment={systemd_value(f"BMS_COLABFOLD_DB={dev_colabfold_db}")}
@@ -1888,7 +1971,13 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         """
     )
 
+    studio_units, studio_environment = studio_development_units(root)
+    if studio_units:
+        api_unit = api_unit.replace('[Unit]\n', f'[Unit]\nWants={STUDIO_SERVICE}\nAfter={STUDIO_SERVICE}\n', 1)
+        api_unit = api_unit.replace('[Service]\n', f'[Service]\n{studio_environment}\n', 1)
+        target_unit = target_unit.replace('[Unit]\n', f'[Unit]\nWants={STUDIO_SERVICE}\n', 1)
     return {
+        **studio_units,
         DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE: development_workflow_adapter_unit,
         TELEMETRY_SERVICE: telemetry_unit,
         WORKFLOW_PARENT_SLICE: render_workflow_parent_slice(),
@@ -1910,6 +1999,9 @@ def install_user_units(
     root = (project_root or get_project_root()).resolve()
     target_dir = (systemd_dir or get_user_systemd_dir()).resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
+    # Regenerated units must keep this host's provisioned selections even when
+    # the caller's shell never sourced the installation environment.
+    apply_host_selectors()
     if resolve_runtime_mode(runtime_mode) == DEV_RUNTIME_MODE:
         ensure_development_proxy_identity()
         # Retire only the old candidate's raw-image pins. The generated release
@@ -1939,7 +2031,10 @@ def install_user_units(
             legacy_guard.write_text(retained, encoding="utf-8")
 
     written_paths: list[Path] = []
-    for unit_name, content in render_user_units(root, runtime_mode=runtime_mode).items():
+    rendered = render_user_units(root, runtime_mode=runtime_mode)
+    if systemd_dir is None:
+        record_host_selectors()
+    for unit_name, content in rendered.items():
         path = target_dir / unit_name
         if not path.exists() or path.read_text(encoding="utf-8") != content:
             path.write_text(content, encoding="utf-8")
@@ -1978,8 +2073,38 @@ def ensure_user_units(project_root: Path | None = None, runtime_mode: str | None
     DEVELOPMENT_WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
     PRODUCTION_WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
     CORE_RUNTIME_LOG.touch(exist_ok=True)
-    install_user_units(project_root=project_root, runtime_mode=runtime_mode)
-    daemon_reload(project_root=project_root)
+    written = install_user_units(project_root=project_root, runtime_mode=runtime_mode)
+    names = [path.name for path in written if path.suffix in {".service", ".target", ".slice", ".timer"}]
+    if DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE not in names:
+        names.append(DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE)
+    if units_need_daemon_reload(names, project_root=project_root):
+        daemon_reload(project_root=project_root)
+
+
+def units_need_daemon_reload(unit_names: list[str], project_root: Path | None = None) -> bool:
+    """Ask systemd whether any managed unit or drop-in changed on disk.
+
+    A daemon-reload re-reads every user unit and costs seconds on a loaded
+    host; every restart used to issue one even when nothing had changed.
+    systemd tracks edits itself (NeedDaemonReload), including drop-ins written
+    by other owners such as the Tailnet selector policy. A unit systemd has
+    never loaded reports LoadState=not-found and also requires a reload.
+    """
+    if not unit_names:
+        return False
+    try:
+        result = run_systemctl(
+            "show", "--property=Id,LoadState,NeedDaemonReload", *unit_names,
+            check=False, project_root=project_root,
+        )
+    except (FileNotFoundError, OSError):
+        return True
+    if result.returncode != 0:
+        return True
+    for line in result.stdout.splitlines():
+        if line in ("NeedDaemonReload=yes", "LoadState=not-found"):
+            return True
+    return False
 
 
 def ensure_target_enabled(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
@@ -2001,6 +2126,18 @@ def ensure_mobile_update_publisher_running(
         MOBILE_UPDATE_PUBLISHER_HEALTH_URL,
         timeout_seconds=DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS,
     )
+
+
+def _mobile_update_publisher_revision() -> str | None:
+    """Revision the running publisher reports, or None when it is not answering."""
+    try:
+        with urllib.request.urlopen(MOBILE_UPDATE_PUBLISHER_HEALTH_URL, timeout=2) as response:
+            payload = json.load(response)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return None
+    build = payload.get("build") if isinstance(payload, dict) else None
+    revision = build.get("revision") if isinstance(build, dict) else None
+    return revision if isinstance(revision, str) else None
 
 
 def service_is_active(service_name: str, project_root: Path | None = None) -> bool:
@@ -2577,6 +2714,15 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
     frontend_url = runtime_frontend_url(mode, project_root=root)
     wait_timeout_seconds = runtime_http_wait_timeout_seconds(mode)
     assert_runtime_listener_preflight(root, mode)
+    if mode == DEV_RUNTIME_MODE:
+        # Rewrite the adapter's Tailnet selector drop-in before the reload so
+        # the adapter starts once on the new revision (see the function).
+        import biomodstack_tailnet
+
+        try:
+            biomodstack_tailnet.refresh_installed_adapter_control_policy(root)
+        except biomodstack_tailnet.TailnetEnvironmentError:
+            pass  # Not the canonical Development checkout: the oneshot owns it.
     ensure_user_units(root, runtime_mode=mode)
 
     if mode == DEV_RUNTIME_MODE:
@@ -2590,6 +2736,12 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
             cleanup_legacy_listener("api", root, runtime_mode=mode)
             services_to_start.append(API_SERVICE)
         services_to_start.append(FRONTEND_SERVICE)
+        # An operator restart is deliberate: clear systemd's crash-loop counter so
+        # back-to-back deploys do not trip StartLimitBurst on the adapter or API.
+        run_systemctl(
+            "reset-failed", DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE, *services_to_start,
+            check=False, project_root=root,
+        )
         run_systemctl("start", *services_to_start, DEV_TARGET_UNIT, project_root=root)
         wait_for_http(
             workflow_adapter_health_url_for_lane(DEVELOPMENT_LANE),
@@ -2597,7 +2749,12 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
         )
         wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
-        ensure_mobile_update_publisher_running(root, restart=True)
+        # Restart the publisher only when it serves another revision. Each
+        # restart also pulls in the global Tailnet oneshot, whose listener
+        # ownership check runs a privileged helper container (median 17 s).
+        ensure_mobile_update_publisher_running(
+            root, restart=_mobile_update_publisher_revision() != git_build_identity(root)["revision"],
+        )
         return
 
     ensure_target_enabled(root, runtime_mode=mode)
@@ -2609,6 +2766,7 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
         check=False,
         project_root=root,
     )
+    run_systemctl("reset-failed", *runtime_service_names(mode), check=False, project_root=root)
     run_systemctl("start", TELEMETRY_SERVICE, *runtime_service_names(mode), TARGET_UNIT, project_root=root)
     wait_for_http(
         workflow_adapter_health_url_for_lane(PRODUCTION_LANE),

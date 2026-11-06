@@ -44,6 +44,8 @@ from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_ch
 from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.structure_utils import load_structure
 
+from services.plr_validator_scores import apply_validator_scores
+
 REVIEWABLE_STAGES = {"post_rfantibody", "post_boltzgen", "post_ppiflow_generator", "post_fampnn", "post_caliby", "post_structure_validation"}
 STRUCTURE_PATTERNS = ("*.pdb", "*.cif", "*.mmcif")
 METRIC_PATTERNS = ("*.json", "*.csv", "*.tsv")
@@ -1034,7 +1036,75 @@ def _rfantibody_review_metadata_refresh_required(
     return False
 
 
-async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool = False) -> int:
+def _resequence_gate_score_root(job: Job, stage: str, payload: Optional[dict] = None) -> Optional[Path]:
+    """Result root holding validation/<validator>/ output when this gate is a Resequence structure-validation gate."""
+    if stage != "post_structure_validation" or not _is_protein_local_redesign_job(job, payload):
+        return None
+    retained = (payload or job.awaiting_payload or {}).get("validation_root")
+    return resolve_review_path(retained, job.output_dir) if retained else resolve_output_dir(job_result_output_dir(job))
+
+
+def _apply_resequence_gate_scores(row: Design, job: Job, root: Optional[Path]) -> bool:
+    """Display-only: copy the validators' own scores onto a gate row. Missing or unreadable files change nothing."""
+    if root is None:
+        return False
+    validators = (job.params or {}).get("structure_validators")
+    return apply_validator_scores(
+        row, root, row.name or Path(str(row.pdb_path)).stem,
+        validators if isinstance(validators, (list, tuple)) else ())
+
+
+async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool = False, *, candidate_dir=None, validation_root=None) -> int:
+    """Project a component gate only while its exact persisted owner still exists.
+
+    The first DML is a CAS, not an ORM payload flush. Its writer lock covers
+    metadata repair and Design publication, including historical-ID reuse.
+    Legacy non-component review callers retain their existing behavior.
+    """
+    from sqlalchemy import update
+
+    payload = dict(job.awaiting_payload or {})
+    if not payload.get("component_checkpoint"):
+        return await _ensure_stage_review_rows_owned(session, job, force)
+    if payload.get("component_checkpoint"):
+        if not job.awaiting_input or job.status != "awaiting_input" or job.queue_status == "cancelling":
+            return 0
+        repaired = dict(payload)
+        if candidate_dir is not None:
+            repaired["candidate_dir"] = str(candidate_dir)
+        if validation_root is not None:
+            repaired["validation_root"] = str(validation_root)
+        with session.no_autoflush:
+            claimed = await session.execute(update(Job).where(
+                Job.id == job.id, Job.status == "awaiting_input",
+                Job.awaiting_input.is_(True), Job.queue_status == job.queue_status,
+                Job.queue_status != "cancelling", Job.awaiting_stage == job.awaiting_stage,
+                Job.awaiting_payload == payload, Job.params == job.params,
+            ).values(awaiting_payload=repaired).execution_options(synchronize_session=False))
+        if claimed.rowcount != 1:
+            await session.rollback()
+            return 0
+        await session.refresh(job)
+    count = await _ensure_stage_review_rows_owned(session, job, force)
+    await session.commit()
+    return count
+
+
+async def publish_local_checkpoint_review_rows(session: AsyncSession, job_id: str) -> int:
+    """Best-effort caller entry point; never pre-commit a candidate_dir marker."""
+    job = await session.get(Job, job_id, populate_existing=True)
+    if job is None or not job.awaiting_input or job.execution_target_id or not job.output_dir:
+        return 0
+    checkpoint = (job.awaiting_payload or {}).get("component_checkpoint") or {}
+    folders = sorted({(Path(job.output_dir) / item["relative_path"]).parent
+                      for item in checkpoint.get("artifacts", [])
+                      if item.get("schema") == "bms.stage-review.candidate.v1"})
+    if len(folders) != 1:
+        return 0
+    return await ensure_stage_review_rows(session, job, candidate_dir=folders[0])
+
+
+async def _ensure_stage_review_rows_owned(session: AsyncSession, job: Job, force: bool = False) -> int:
     stage = str(job.awaiting_stage or "").strip().lower()
     if stage not in REVIEWABLE_STAGES:
         return 0
@@ -1259,6 +1329,19 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
             )
             and not force
         ):
+            score_root = _resequence_gate_score_root(job, stage, repaired_payload)
+            if score_root is not None:
+                scored = False
+                for existing_row in (await session.execute(
+                    select(Design).where(Design.job_id == job.id, Design.source_stage == stage)
+                )).scalars():
+                    before = (existing_row.plddt_overall, existing_row.ptm, existing_row.conf_score,
+                              existing_row.confidence_metrics)
+                    _apply_resequence_gate_scores(existing_row, job, score_root)
+                    scored = scored or before != (existing_row.plddt_overall, existing_row.ptm,
+                                                  existing_row.conf_score, existing_row.confidence_metrics)
+                if scored:
+                    await session.commit()
             return existing_count
 
     await session.execute(
@@ -1282,6 +1365,7 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
     job_context = _job_stage_context(job)
     lineage_cache: dict[str, Optional[Design]] = {}
     rows: list[Design] = []
+    score_root = _resequence_gate_score_root(job, stage, repaired_payload)
 
     for artifact_group, structure_path in expected_files:
         design_name = structure_path.stem
@@ -1486,6 +1570,7 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
             lineage.get("source_design"),
             structure_path=structure_path,
         )
+        _apply_resequence_gate_scores(review_row, job, score_root)
 
     session.add_all(rows)
     await session.flush()

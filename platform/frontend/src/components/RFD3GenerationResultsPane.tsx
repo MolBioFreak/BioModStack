@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import MolstarViewer from './MolstarViewer';
+import { DeNovoRepeatSettings } from './DeNovoRepeatSettings';
 import { continuationHref, inspectedResultState, rememberInspectedResult } from '../lib/deNovoContinuation';
 import { useQuery } from '@tanstack/react-query';
 
@@ -37,18 +38,23 @@ export function NativeCandidatePagination({ page, total, onPage }: { page: numbe
 }
 
 export function RFD3GenerationResultsContent({ result }: { result: RFD3GenerationReadModel }) {
+    const native = result as RFD3GenerationReadModel & { execution_status?: string; population?: Record<string, unknown> | null };
     const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(() => inspectedResultState().candidate);
     const [requestedPage, setRequestedPage] = useState(() => inspectedResultState().page);
     const setPage = (page: number) => { setRequestedPage(page); rememberInspectedResult(selectedCandidateId, page); };
     const page = Math.min(requestedPage, Math.max(1, Math.ceil(result.candidates.length / 10)));
+    const candidateLabel = (candidate: RFD3GenerationReadModel['candidates'][number]) => `Candidate ${result.candidates.indexOf(candidate) + 1}`;
     const visibleCandidates = result.candidates.slice((page - 1) * 10, page * 10);
     const selectedCandidate = selectedCandidateId === null ? result.candidates[0]
         : result.candidates.find((candidate) => candidate.candidate_id === selectedCandidateId);
     return (
         <div className="space-y-5" data-bms-result-pane="rfd3-generation">
+            <DeNovoRepeatSettings jobId={result.job_id} />
             <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-5">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Native RFD3 de novo generation</div>
                 <h2 className="mt-1 text-2xl font-semibold text-white">Generation summary</h2>
+                {native.execution_status && <p role="status">Native execution: {native.execution_status}</p>}
+                {native.population && <details><summary>Native population and unpaired artifacts</summary><pre>{JSON.stringify(native.population, null, 2)}</pre></details>}
                 <div className="mt-4 grid gap-3 sm:grid-cols-3">
                     <SummaryCard label="Requested" value={result.counts.requested} />
                     <SummaryCard label="Generated" value={result.counts.generated} />
@@ -72,7 +78,7 @@ export function RFD3GenerationResultsContent({ result }: { result: RFD3Generatio
                         <tbody className="divide-y divide-slate-800">
                             {visibleCandidates.map((candidate) => (
                                 <tr key={candidate.candidate_id} className="text-slate-300">
-                                    <td className="px-4 py-3 font-mono text-emerald-200"><button type="button" aria-pressed={candidate === selectedCandidate} onClick={() => { setSelectedCandidateId(candidate.candidate_id); rememberInspectedResult(candidate.candidate_id, page); }}>{candidate.candidate_id}</button></td>
+                                    <td className="px-4 py-3 font-mono text-emerald-200"><button type="button" aria-pressed={candidate === selectedCandidate} onClick={() => { setSelectedCandidateId(candidate.candidate_id); rememberInspectedResult(candidate.candidate_id, page); }}>{candidateLabel(candidate)}</button></td>
                                     <td className="px-4 py-3">{candidate.status}</td>
                                     <td className="px-4 py-3">{candidate.length}</td>
                                     <td className="px-4 py-3">{formatNumber(candidate.radius)}</td>
@@ -85,11 +91,12 @@ export function RFD3GenerationResultsContent({ result }: { result: RFD3Generatio
                     </table>
                 </div>
                 {selectedCandidate && <div className="border-t border-slate-800 p-5">
-                    <h3 className="mb-3 text-lg font-semibold text-white">{selectedCandidate.candidate_id}</h3>
+                    <h3 className="mb-3 text-lg font-semibold text-white">{candidateLabel(selectedCandidate)}</h3>
+                    <details className="mb-3 text-sm"><summary>Candidate details</summary><label>Exact candidate identifier<input className="block w-full" aria-label="Exact candidate identifier" readOnly value={selectedCandidate.candidate_id} onFocus={event => event.target.select()} /></label></details>
                     {selectedCandidate.source_structure && <div className="mb-3 flex flex-wrap gap-4 text-sm text-cyan-300">
                         {(['redesign', 'sequence', 'prediction'] as const).map((destination, index) => <a key={destination} href={continuationHref(selectedCandidate.source_structure!, destination)}>{['Redesign', 'Design sequence', 'Predict structure'][index]}</a>)}
                     </div>}
-                    <MolstarViewer structureUrl={selectedCandidate.structure_url} format="cif" label={selectedCandidate.candidate_id} artifactJobId={result.job_id} height={500} />
+                    <MolstarViewer structureUrl={selectedCandidate.structure_url} format="cif" label={candidateLabel(selectedCandidate)} artifactJobId={result.job_id} height={500} />
                 </div>}
                 {selectedCandidateId !== null && !selectedCandidate && <p role="alert" className="p-6 text-sm text-amber-200">Selected candidate is unavailable. Choose another candidate.</p>}
                 {result.candidates.length === 0 && <div className="p-6 text-sm text-slate-400">No generated candidates are available.</div>}

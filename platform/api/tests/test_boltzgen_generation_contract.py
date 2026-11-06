@@ -100,11 +100,10 @@ def test_mode_specific_sources_and_historical_requests():
     assert normalize('nanobody_binder', {'nanobody_framework': 'XXX'})['boltzgen_nanobody_framework'] == 'XXX'
     for specs in ('[]', []):
         assert normalize('nanobody_binder', {'nanobody_scaffold_specs': specs})['boltzgen_nanobody_scaffold_specs'] == specs
-    with pytest.raises(ValueError):
-        normalize('ligand_binder', {'ligand_smiles': 'CC'})
+    assert normalize('ligand_binder', {'ligand_smiles': 'CC'})['boltzgen_protocol'] == 'protein-small_molecule'
     model = yaml.safe_load((ROOT / 'platform/api/config/models/boltzgen.yaml').read_text())
     legacy = {p['name']: p for p in model['params']}
-    assert legacy['min_plddt']['default'] == 70
+    assert legacy['min_plddt']['default'] is None
     assert legacy['scaffold_length']['default'] == '80-120'
     assert BOLTZGEN_PARAMETER_ALIASES['ligand_description'] == 'boltzgen_ligand_smiles'
     assert BOLTZGEN_PARAMETER_ALIASES['ntp_type'] == 'boltzgen_ntp_type'

@@ -12,7 +12,9 @@ spec.loader.exec_module(runner)
 args = runner.build_parser().parse_args(sys.argv[1:])
 out = Path(args.output_dir)
 out.mkdir(exist_ok=True)
-components = json.loads(args.complex_components_json or '[]')
+document = json.loads(args.complex_components_json or '[]')
+components = (document.get('components', document.get('sequences', []))
+              if isinstance(document, dict) else document)
 msa_path = args.msa_path or (components[0].get('msa_path') if components else None)
 # Exercise the real component builder and MSA loader, substituting only the
 # scientific input classes/parser endpoints. No model libraries are imported.

@@ -97,6 +97,109 @@ async def save_operation_parameters(request: OperationParametersRequest, runtime
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
 
+class TipOffsetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_connection_generation: Annotated[int, Field(strict=True, ge=0)]
+    tip_type: Literal[10, 50, 200, 201]
+    offset_steps: Annotated[int, Field(strict=True)]
+    source: str = Field(min_length=1, max_length=300)
+
+
+@router.get("/tip-offsets")
+async def read_tip_offsets(expected_connection_generation: int = Query(ge=0),
+                           runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    try:
+        return await runtime.connection.request_active_v2_query("tip_offsets", expected_generation=expected_connection_generation)
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+@router.put("/tip-offsets")
+async def save_tip_offset(request: TipOffsetRequest, runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    """Record-only: the robot stores the confirmed value; nothing moves."""
+    try:
+        return await runtime.connection.request_active(
+            "save_tip_offset", expected_generation=request.expected_connection_generation, require_fresh=False,
+            json_data=request.model_dump(mode="json", exclude={"expected_connection_generation"}))
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+class LldProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_connection_generation: Annotated[int, Field(strict=True, ge=0)]
+    filtered_tips: bool | None = None
+    tip_type: Literal[10, 50, 200] | None = None
+    kind: Literal["filtered", "unfiltered"] | None = None
+    threshold_adc: Annotated[int, Field(strict=True, ge=1, le=1000)] | None = None
+    threshold_duration_ms: Annotated[int, Field(strict=True, ge=1, le=100)] | None = None
+    speed_increments_per_second: Annotated[int, Field(strict=True, ge=100, le=1000)] | None = None
+    source: str | None = Field(default=None, max_length=300)
+
+
+@router.get("/lld-profiles")
+async def read_lld_profiles(expected_connection_generation: int = Query(ge=0),
+                            runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    try:
+        return await runtime.connection.request_active_v2_query("lld_profiles", expected_generation=expected_connection_generation)
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+@router.put("/lld-profiles")
+async def save_lld_profile(request: LldProfileRequest, runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    """Record-only: applied by the robot at the next liquid search; nothing moves."""
+    try:
+        return await runtime.connection.request_active(
+            "save_lld_profile", expected_generation=request.expected_connection_generation, require_fresh=False,
+            json_data=request.model_dump(mode="json", exclude={"expected_connection_generation"}, exclude_none=True))
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+class DepthOffsetKey(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_connection_generation: Annotated[int, Field(strict=True, ge=0)]
+    tip_type: Literal[10, 50, 200] | None = None
+    location: str | None = Field(default=None, max_length=40)
+    plate_type: str | None = Field(default=None, max_length=80)
+
+
+class DepthOffsetRequest(DepthOffsetKey):
+    offset_mm: Annotated[float, Field(ge=-15, le=15)]
+    source: str | None = Field(default=None, max_length=300)
+
+
+@router.get("/depth-offsets")
+async def read_depth_offsets(expected_connection_generation: int = Query(ge=0),
+                             runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    try:
+        return await runtime.connection.request_active_v2_query("depth_offsets", expected_generation=expected_connection_generation)
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+@router.put("/depth-offsets")
+async def save_depth_offset(request: DepthOffsetRequest, runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    """Record-only: used by the next lowering move or liquid search that matches; nothing moves."""
+    try:
+        return await runtime.connection.request_active(
+            "save_depth_offset", expected_generation=request.expected_connection_generation, require_fresh=False,
+            json_data=request.model_dump(mode="json", exclude={"expected_connection_generation"}))
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+@router.post("/depth-offsets/remove")
+async def remove_depth_offset(request: DepthOffsetKey, runtime: BioXpRuntime = Depends(get_bioxp_runtime)):
+    try:
+        return await runtime.connection.request_active(
+            "remove_depth_offset", expected_generation=request.expected_connection_generation, require_fresh=False,
+            json_data=request.model_dump(mode="json", exclude={"expected_connection_generation"}))
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
 @router.get("/calibration-settings")
 async def read_calibration_settings(
     expected_connection_generation: int = Query(ge=0),

@@ -8,9 +8,11 @@ interface JobBrowserProps {
     onSelect: (job: Job) => void;
     selectedJobId?: string | null;
     className?: string;
+    /** Native retained documents can also belong to partial/failed Jobs. */
+    status?: string | null;
 }
 
-export const JobBrowser: React.FC<JobBrowserProps> = ({ onSelect, selectedJobId, className }) => {
+export const JobBrowser: React.FC<JobBrowserProps> = ({ onSelect, selectedJobId, className, status = 'completed' }) => {
     const [search, setSearch] = useState('');
     const [debouncedSearch, setDebouncedSearch] = useState('');
     const [page, setPage] = useState(0);
@@ -26,12 +28,12 @@ export const JobBrowser: React.FC<JobBrowserProps> = ({ onSelect, selectedJobId,
     }, [search]);
 
     const { data, isLoading, isError } = useQuery({
-        queryKey: ['jobs', 'browser', debouncedSearch, page],
+        queryKey: ['jobs', 'browser', debouncedSearch, page, status],
         queryFn: ({ signal }) => fetchJobs({
             q: debouncedSearch,
             limit: PAGE_SIZE,
             offset: page * PAGE_SIZE,
-            status: 'completed', // Typically we want completed jobs for results
+            status: status ?? undefined,
             summary: true,
         }, undefined, signal)
     });

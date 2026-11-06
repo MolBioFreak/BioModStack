@@ -1,3 +1,5 @@
+import { FrustraMpnnLaunchControls } from './frustrampnn/FrustraMpnnLaunchControls';
+import type { FrustraMpnnLaunchOptions } from '../lib/frustraMpnnApi';
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import {
@@ -19,12 +21,13 @@ const errorMessage = (value: unknown): string => (
 
 export default function FrustraMpnnUploadAnalysisPanel({ onOpenJob }: Props) {
     const [file, setFile] = useState<File | null>(null);
+    const [launchOptions, setLaunchOptions] = useState<FrustraMpnnLaunchOptions>({});
     const [settings, setSettings] = useState<FrustraMpnnRequestedSettings>(CANONICAL_FRUSTRAMPNN_SETTINGS);
     const mutation = useMutation<FrustraMpnnChildReceipt, Error>({
         mutationFn: async () => {
             if (!file) throw new Error('Select a governed PDB or mmCIF structure first.');
             await validateFrustraMpnnUploadedSettings(settings, file);
-            return analyzeFrustraMpnnUpload(file, settings);
+            return analyzeFrustraMpnnUpload(file, settings, undefined, launchOptions);
         },
     });
 
@@ -49,6 +52,7 @@ export default function FrustraMpnnUploadAnalysisPanel({ onOpenJob }: Props) {
                     />
                 </label>
             </div>
+            <FrustraMpnnLaunchControls value={launchOptions} onChange={setLaunchOptions} />
             <FrustraMpnnSettingsPanel
                 value={settings}
                 onChange={setSettings}

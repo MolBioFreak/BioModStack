@@ -1,4 +1,7 @@
 import React, { act } from 'react';
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import blockedPreviewWire from '../fixtures/blocked-preparation-preview.json?raw';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -17,11 +20,10 @@ import { ExecutionPolicyControl } from '../../src/components/ExecutionPolicyCont
 import { EXECUTION_TARGET_STORAGE_KEY } from '../../src/lib/api';
 import { setDraftExecutionPolicy } from '../../src/lib/executionPolicy';
 // These alternative workflows are not mounted in the de-novo request-owner tests.
-vi.mock('../../src/components/ProteinLocalRedesignTemplate', () => ({ ProteinLocalRedesignTemplate: () => null }));
 vi.mock('../../src/components/ShapeBlueprintTemplate', () => ({ default: () => null }));
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
-const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'image', model_id: 'foldcp' }, { kind: 'model', model_id: 'esmfold2' }, { kind: 'workflow_pack', workflow_id: 'structure_prediction' }, { kind: 'workflow_pack', workflow_id: 'antibody_denovo' }];
+const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'image', model_id: 'foldcp' }, { kind: 'model', model_id: 'esmfold2' }, { kind: 'workflow_pack', workflow_id: 'structure_prediction' }, { kind: 'workflow_pack', workflow_id: 'antibody_denovo' }, { kind: 'workflow_pack', workflow_id: 'de_novo_design' }];
 const compactEmpty = { artifact_summary: { total_count: 0, verified_count: 0, total_bytes: 0, verified_bytes: 0 }, cached_artifact_count: 0 };
 const artifacts = [{ name: 'runtime/protenix.sif', sha256: 'a'.repeat(64), size_bytes: 1234 }];
 const preview = (selection: ProvisionSelection): ProvisionPreview => ({ selection, artifacts, total_bytes: 1234, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'download_only' });
@@ -60,6 +62,74 @@ beforeEach(() => {
   };
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); api.defaults.adapter = adapter; vi.restoreAllMocks(); });
+
+const nativeCatalog = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON ?? 'python', ['-c',
+  'import asyncio,json; from routers.execution_targets import provision_catalog; print(json.dumps([x.model_dump(mode="json") for x in asyncio.run(provision_catalog())]))'],
+  { cwd: resolve('../api'), encoding: 'utf8', env: { ...process.env, PYTHONPATH: '.:../..' } }));
+const component = (id: string) => {
+  const label = nativeCatalog.find((item: any) => item.workflow_id === 'structure_prediction').components.find((item: any) => item.model_id === id).label;
+  return [...container.querySelectorAll('label')].find(item => item.textContent === label)!.querySelector<HTMLInputElement>('input')!;
+};
+const toggleComponent = async (id: string) => { await act(async () => { component(id).click(); await settle(); }); };
+const mountNativeCatalog = async () => {
+  client.setQueryData(['remote-provision-catalog'], nativeCatalog);
+  await render(); await select('Preparation workflow', 'structure_prediction');
+};
+
+it('sends exact native catalog checkbox defaults, edits and full-pack through Axios preview and provision', async () => {
+  await mountNativeCatalog();
+  expect(component('protenix').checked).toBe(true);
+  expect(component('frustrampnn').checked).toBe(true);
+  expect(component('esmfold2').checked).toBe(false);
+  expect(component('boltz2').checked).toBe(false);
+  expect(component('boltz_cp_experimental').checked).toBe(false);
+  expect(posts).toEqual([]);
+  await click('Preview artifact downloads');
+  const defaults = { kind: 'workflow_pack', workflow_id: 'structure_prediction', component_ids: ['frustrampnn', 'protenix'] };
+  expect(posts[0].body).toEqual(defaults);
+  expect(button('Start provision').disabled).toBe(false);
+  await toggleComponent('esmfold2');
+  expect(button('Start provision').disabled).toBe(true);
+  expect(container.querySelector('[aria-label="Provision preview"]')).toBeNull();
+  await click('Preview artifact downloads');
+  expect(posts.at(-1)?.body).toEqual({ ...defaults, component_ids: ['esmfold2', 'frustrampnn', 'protenix'] });
+  await toggleComponent('esmfold2');
+  await click('Prepare selected components', true);
+  expect(posts.slice(-2).map(item => item.body)).toEqual([defaults, { ...defaults, preview_sha256: 'b'.repeat(64) }]);
+  // The explicit all checkbox retains the historical request, without discovery metadata.
+  await act(async () => { [...container.querySelectorAll('label')].find(item => item.textContent === 'All components (full workflow)')!.querySelector<HTMLInputElement>('input')!.click(); await settle(); });
+  await click('Prepare entire workflow');
+  expect(posts.slice(-2).map(item => item.body)).toEqual([
+    { kind: 'workflow_pack', workflow_id: 'structure_prediction' },
+    { kind: 'workflow_pack', workflow_id: 'structure_prediction', preview_sha256: 'b'.repeat(64) },
+  ]);
+  await toggleComponent('esmfold2');
+  await click('Preview artifact downloads');
+  expect(posts.at(-1)?.body).toEqual({ ...defaults, component_ids: ['boltz2', 'boltz_cp_experimental', 'frustrampnn', 'protenix'] });
+  if (process.env.BMS_PROVISION_COMPONENT_WIRE) writeFileSync(process.env.BMS_PROVISION_COMPONENT_WIRE, JSON.stringify(posts.map(item => item.body)));
+});
+
+it('keeps an explicitly cleared component choice empty without preview or transmission', async () => {
+  await mountNativeCatalog();
+  await toggleComponent('protenix'); await toggleComponent('frustrampnn');
+  expect(container.textContent).toContain('Select at least one component to prepare.');
+  expect(button('Preview artifact downloads').disabled).toBe(true);
+  expect(button('Start provision').disabled).toBe(true);
+  expect(posts).toEqual([]);
+});
+
+it.each(['late edit', 'wrong subset'])('does not start a %s component preview', async mode => {
+  await mountNativeCatalog();
+  let finish!: (value: ReturnType<typeof response>) => void;
+  const post = vi.spyOn(api, 'post').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await click('Prepare selected components');
+  if (mode === 'late edit') await toggleComponent('esmfold2');
+  await act(async () => { finish(response(preview({ kind: 'workflow_pack', workflow_id: 'structure_prediction',
+    component_ids: mode === 'late edit' ? ['frustrampnn', 'protenix'] : ['esmfold2'] }))); await settle(); });
+  expect(post).toHaveBeenCalledTimes(1);
+  expect(posts).toEqual([]);
+  expect(button('Start provision').disabled).toBe(true);
+});
 
 it('preserves the whole-workflow choice across claim arrival and release without posting', async () => {
   target = { ...target, active_job_ids: ['one', 'two'], progress: null, job_progress: [] };
@@ -167,6 +237,18 @@ it('prepares the entire workflow from one explicit click using its fresh digest,
   expect(posts).toHaveLength(2);
 });
 
+it('prepares the De Novo whole pack without using the selected request or saved Job', async () => {
+  await render();
+  await select('Preparation workflow', 'protein_modification_experimental');
+  expect(posts).toEqual([]);
+  expect(container.textContent).toContain('Optional native oracles, corpora and custom checkpoints');
+  await click('Prepare entire workflow', true);
+  expect(posts).toEqual([
+    { url: '/api/execution-targets/vast%3A123/provision/preview', body: { kind: 'workflow_pack', workflow_id: 'de_novo_design' } },
+    { url: '/api/execution-targets/vast%3A123/provision', body: { kind: 'workflow_pack', workflow_id: 'de_novo_design', preview_sha256: 'b'.repeat(64) } },
+  ]);
+});
+
 it('prepares all de novo binder dependencies in one click, without substituting a configured generator', async () => {
   await render();
   await select('Preparation workflow', 'antibody_denovo');
@@ -187,7 +269,7 @@ it('keeps whole-workflow missing-asset details visible without starting an incom
   expect(api.post).toHaveBeenCalledTimes(1);
   expect(container.querySelector('[role="alert"]')).toBeNull();
   expect(container.textContent).toContain('host_asset_unavailable: weights/boltz');
-  expect(container.textContent).toContain('Dependency bytes unknown');
+  expect(container.querySelector('[aria-label="Provision preview"] dl')?.textContent).toContain('To downloadunknown');
   expect(posts).toEqual([]);
 });
 
@@ -293,8 +375,8 @@ it('renders exact dependency estimates and blocks mutation on preview blockers',
     destination: { target_id: ready.id, remote_root: ready.remote_root }, inventory_state: 'stale',
     transfer_bytes: 1234, storage_bytes: 1234, asset_states: [{ ...artifacts[0], state: 'unknown' }], blockers: ['Critical runtime unavailable'] }));
   await click('Preview artifact downloads');
-  expect(container.textContent).toContain('Destination: vast:123 · /opt/bms');
-  expect(container.textContent).toContain('Download size: 1,234 bytes');
+  expect(container.textContent).toContain('To vast:123 · /opt/bms');
+  expect(container.querySelector('[aria-label="Provision preview"] dl')?.textContent).toContain('To download1.2 KiB');
   expect(container.textContent).toContain('Critical runtime unavailable');
   expect(button('Start provision').disabled).toBe(true);
 });
@@ -310,9 +392,10 @@ it('renders the actual blocked route wire with unknown bytes and no start', asyn
     expect(container.textContent).toContain('host_asset_unavailable');
     expect(container.textContent).toContain('containers/boltz2.sif');
     expect(container.textContent).toContain('weights/boltz');
-    expect(container.textContent).toContain('Dependency bytes unknown');
-    expect(container.textContent).toContain('Download size: unknown bytes');
-    expect(container.textContent).toContain('Storage needed: unknown bytes');
+    const estimates = container.querySelector('[aria-label="Provision preview"] dl')?.textContent;
+    expect(estimates).toContain('To downloadunknown');
+    expect(estimates).toContain('Disk neededunknown');
+    expect(estimates).toContain('Total setunknown');
     expect(container.textContent).toContain('size and SHA256 unknown');
     expect(button('Start provision').disabled).toBe(true);
     await click('Start provision');
@@ -349,7 +432,7 @@ it('retries a stopped operation only with a fresh preview of its persisted selec
 
 it('mounts in the real worker panel without Jobs; previews exact bytes then starts once with the digest', async () => {
   await render();
-  expect(container.textContent).toContain('It does not launch a job, run inference or establish scientific readiness');
+  expect(container.querySelector('[title*="It does not launch a job, run inference or establish scientific readiness"]')).not.toBeNull();
   expect(container.textContent).toContain('Installed artifacts are unknown');
   expect(container.querySelector<HTMLSelectElement>('[aria-label="Provision scope"]')?.value).toBe('workflow');
   expect(button('Start provision')).toBeUndefined();
@@ -361,12 +444,12 @@ it('mounts in the real worker panel without Jobs; previews exact bytes then star
   expect(container.textContent).not.toContain(artifacts[0].name);
   await disclose('Cache artifacts');
   expect(posts).toHaveLength(1);
-  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('1,234 bytes');
+  expect(container.querySelector('[aria-label="Provision preview"] dl')?.textContent).toContain('Total set1.2 KiB');
   expect(container.textContent).toContain(artifacts[0].name);
   expect(container.textContent).toContain(artifacts[0].sha256);
   expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).not.toContain('additional installed copy');
   expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).not.toContain('retains prior release generations');
-  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('Reuses cached assets and downloads missing files');
+  expect(container.querySelector('[aria-label="Provision preview"] dl')?.getAttribute('title')).toContain('Reuses cached assets and downloads missing files');
   expect(container.textContent).toContain('b'.repeat(64));
   await click('Start provision', true);
   expect(posts).toHaveLength(2);
@@ -423,7 +506,7 @@ it.each(['download_only', 'managed_asset_activation'] as const)('accepts %s prev
   vi.spyOn(api, 'post').mockResolvedValueOnce(response(JSON.parse(JSON.stringify({ ...preview(catalog[0]), scope }))));
   await click('Preview artifact downloads');
   expect(button('Start provision').disabled).toBe(false);
-  expect(container.textContent).toContain('no separate managed installation or native runtime probe');
+  expect(container.querySelector('[aria-label="Provision preview"] dl')?.getAttribute('title')).toContain('not a free-space check');
   await click('Start provision');
   expect(posts).toEqual([{ url: '/api/execution-targets/vast%3A123/provision', body: { ...catalog[0], preview_sha256: 'b'.repeat(64) } }]);
 });
@@ -440,8 +523,7 @@ it('restores only the persisted last receipt and displays stale/failed status wi
   target = { ...target, artifact_inventory: { operation_id: 'receipt', selection: catalog[0], artifact_count: artifacts.length, observed_at: '2026-01-01T00:00:00Z', state: 'download_verified', scope: 'last_independent_provision', scientific_ready: false } };
   await render();
   expect(container.textContent).toContain('Cache downloads verified at observation');
-  expect(container.textContent).toContain('Cache downloads only, and separate from the installed inventory below');
-  expect(container.textContent).toContain('Not scientific readiness or runtime activation');
+  expect(container.querySelector('[title*="Cache downloads only, and separate from the installed inventory below"]')?.getAttribute('title')).toContain('Not scientific readiness or runtime activation');
   await act(async () => root.render(null)); await render();
   expect(container.textContent).toContain('2026-01-01T00:00:00Z');
   target = { ...target, artifact_inventory: { ...target.artifact_inventory!, state: 'stale' } }; await render();
@@ -509,7 +591,7 @@ it('does not resurrect an approved workflow preview after a cancellation/recover
 
 it('the real de-novo typed form provisions the same unsaved request as launch and invalidates scientific edits', async () => {
   window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, target.id);
-  await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter><ProteinModificationTemplate onBack={() => {}} /></MemoryRouter></QueryClientProvider>); await settle(); });
+  await act(async () => { root.render(<QueryClientProvider client={client}><MemoryRouter><ProteinModificationTemplate onBack={() => {}} initialValues={{ generator: 'rfd3' }} /></MemoryRouter></QueryClientProvider>); await settle(); });
   await act(async () => { await settle(); });
   expect(posts).toEqual([]);
   await click('Preview artifact downloads');
@@ -578,12 +660,14 @@ it('invalidates the picker preview immediately on execution-policy and target ch
 it('shows FoldCP image-only scope without implying its weights are prepared', async () => {
   await render();
   expect(container.querySelector<HTMLSelectElement>('[aria-label="Provision scope"]')?.value).toBe('workflow');
-  await select('Provision model', 'foldcp');
-  expect(container.textContent).toContain('FoldCP (not available in this scope)');
+  await select('Provision scope', 'model');
+  // Model scope lists only models with reviewed managed assets.
+  expect([...container.querySelectorAll<HTMLOptionElement>('[aria-label="Provision model"] option')].map(o => o.value)).not.toContain('foldcp');
   expect(button('Preview artifact downloads').disabled).toBe(true);
   await select('Provision scope', 'image');
   await select('Provision model', 'foldcp');
-  expect(container.textContent).toContain('Container image only (not weights)');
+  expect(container.textContent).toContain('Container image only');
+  expect(container.textContent).toContain('Weights are not downloaded.');
   expect(button('Preview artifact downloads').disabled).toBe(false);
   expect(posts).toEqual([]);
 });
@@ -592,8 +676,9 @@ it('discovers the shared launcher workflows and full model registry without gran
   await render();
   expect(container.querySelector<HTMLSelectElement>('[aria-label="Provision scope"]')?.value).toBe('workflow');
   await select('Provision scope', 'model');
-  expect(container.textContent).toContain('Other registered model (not available in this scope)');
-  await select('Provision model', 'unsupported');
+  const offered = [...container.querySelectorAll<HTMLOptionElement>('[aria-label="Provision model"] option')].map(o => o.value);
+  expect(offered).toEqual(['', 'esmfold2', 'protenix']);
+  expect(offered).not.toContain('unsupported');
   expect(button('Preview artifact downloads').disabled).toBe(true);
   await select('Provision scope', 'workflow');
   expect(container.textContent).toContain('De Novo Binder Design');
@@ -601,8 +686,9 @@ it('discovers the shared launcher workflows and full model registry without gran
   expect(container.textContent).toContain('Molecular Dynamics');
   await select('Preparation workflow', 'molecular_dynamics');
   expect(container.querySelector('a')?.getAttribute('href')).toBe('/submit?template=molecular_dynamics');
-  expect(container.textContent).toContain('Unsaved preparation is available only where that form has “Preview artifact downloads”');
-  expect(container.textContent).toContain('use an existing job as its dependency recipe without rerunning it');
+  expect(container.textContent).toContain('prepares its dependencies from its launch form');
+  expect(container.textContent).toContain('Preview artifact downloads');
+  expect(container.textContent).toContain("Match a saved Job's dependencies");
   expect(container.textContent).not.toContain('No saved Job required');
   expect(posts).toEqual([]);
 });
@@ -631,15 +717,17 @@ it('leads with the running preparation, its verified bytes and the stop control'
   await render();
   expect(container.textContent).toContain('Downloading assets');
   expect(container.textContent).toContain('1 of 2 artifacts complete or cached');
-  expect(container.textContent).toContain('1,234 bytes complete or cached of 3,234 bytes declared');
-  expect(container.textContent).toContain('Transfer progress and rate are not reported');
+  expect(container.textContent).toContain('1.2 KiB of 3.2 KiB');
+  expect(container.querySelector('[title*="Transfer progress"], [title*="live transfer bytes and rate are not reported"]')).not.toBeNull();
   expect(container.textContent).toContain('2m 0s elapsed');
   clock.mockReturnValue(Date.parse('2026-09-20T23:57:14Z'));
   await render();
   expect(container.textContent).toContain('3m 0s elapsed');
   expect(container.textContent).not.toContain('MB/s average');
   expect(container.querySelector('[role="progressbar"]')).toBeNull();
-  expect(container.textContent!.indexOf('Downloading assets')).toBeLessThan(container.textContent!.indexOf('Provision scope'));
+  const running = container.querySelector('[aria-label="Provision operation"]')!;
+  const scope = container.querySelector('[aria-label="Provision scope"]')!;
+  expect(running.compareDocumentPosition(scope) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(button('Cancel provision')).toBeTruthy();
   expect(posts).toEqual([]);
   target = { ...target, preload: { ...target.preload!, phase: 'source_download_ready' } };
@@ -649,8 +737,10 @@ it('leads with the running preparation, its verified bytes and the stop control'
 
 it('states the preparation caveat once and keeps the technical evidence collapsed', async () => {
   await render();
-  expect(container.textContent!.split('establish scientific readiness').length - 1).toBe(1);
-  const evidence = [...container.querySelectorAll('details')].find(item => item.querySelector('summary')?.textContent?.startsWith('Evidence'))!;
+  // The caveat is kept once, as hover help, not repeated in body copy.
+  expect(container.textContent).not.toContain('establish scientific readiness');
+  expect([...container.querySelectorAll('[title*="establish scientific readiness"]')]).toHaveLength(1);
+  const evidence = [...container.querySelectorAll('details')].find(item => item.querySelector('summary')?.textContent?.startsWith('What is already on this worker'))!;
   expect(evidence.open).toBe(false);
 });
 
@@ -664,7 +754,7 @@ it('pairs a stale installed observation with the control that refreshes it', asy
     request_sha256: 'c'.repeat(64), phase: 'verifying', artifact: null, message: 'Artifact cache identities verified',
     started_at: '2026-09-20T23:54:14Z', updated_at: '2026-09-20T23:56:14Z', artifact_summary: { total_count: 1, verified_count: 1, total_bytes: 1234, verified_bytes: 1234 } };
   await render();
-  await disclose('Evidence');
+  await disclose('What is already on this worker');
   const stale = [...container.querySelectorAll('p')].find(item => item.textContent?.includes('Stale observation'))!;
   expect(stale).toBeTruthy();
   expect(stale.nextElementSibling?.textContent).toContain('Refresh installed observation');

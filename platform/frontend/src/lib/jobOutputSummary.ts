@@ -32,6 +32,12 @@ export function getJobOutputSummary(job: Job): JobOutputSummary {
         };
     }
 
+    if (!job.design_count && job.requested_design_count == null && (job.native_result_count ?? 0) > 0) {
+        // Native-only publication: count published native records, not Design rows.
+        const count = job.native_result_count ?? 0;
+        return { count, label: `${count.toLocaleString()} native result${count === 1 ? '' : 's'}` };
+    }
+
     const count = job.requested_design_count ?? job.design_count;
     return {
         count,
@@ -49,10 +55,11 @@ export function getBatchJobOutputSummary(jobs: readonly Job[]): BatchJobOutputSu
         };
     }
 
-    const count = jobs.reduce(
-        (sum, job) => sum + (job.requested_design_count ?? job.design_count),
-        0,
-    );
+    const count = jobs.reduce((sum, job) => sum + getJobOutputSummary(job).count, 0);
+    if (jobs.some((job) => getJobOutputSummary(job).label.endsWith('native result') || getJobOutputSummary(job).label.endsWith('native results'))
+        && jobs.every((job) => !job.design_count && job.requested_design_count == null)) {
+        return { count, label: `${count.toLocaleString()} native result${count === 1 ? '' : 's'}` };
+    }
     return {
         count,
         label: `${count.toLocaleString()} design${count === 1 ? '' : 's'}`,

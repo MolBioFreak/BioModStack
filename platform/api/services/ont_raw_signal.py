@@ -40,6 +40,7 @@ from database import (
     OntRawSignalLookup,
     OntRawSignalRepresentation,
 )
+from services.container_cli_environment import container_cli_environment, container_user_namespace_args
 from services.file_lease_signals import register_lease_break_listener
 from services.ont_read_metrics import publish_read_metrics_from_validation
 
@@ -47,6 +48,8 @@ from services.ont_read_metrics import publish_read_metrics_from_validation
 RepresentationPreference = Literal["auto", "pod5", "blow5"]
 BLOW5_PROFILE_ID = "bms.blow5.partitioned-zstd-svb-zd.v3"
 EXTERNAL_BLOW5_VALIDATION_PROFILE_ID = "bms.blow5.external-validation.v2"
+# Lossless SLOW5 (ASCII) -> indexed BLOW5 (binary) with slow5tools from the same pinned runtime.
+SLOW5_TO_BLOW5_PROFILE_ID = "bms.blow5.slow5-to-blow5.v1"
 BLOW5_CONTAINER_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE"
 BLOW5_CONTAINER_DIGEST_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST"
 BLOW5_CONTAINER_RUNTIME_ENV = "BMS_ONT_CONTAINER_RUNTIME"
@@ -186,11 +189,14 @@ def assert_local_raw_runtime_image(runtime: str, image: str) -> None:
             text=True,
             check=False,
             timeout=30,
-            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+            env=container_cli_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError("local raw-signal runtime image inspection failed") from exc
-    if result.returncode != 0 or result.stdout.strip() != image:
+    observed = result.stdout.strip()
+    if runtime == "podman" and re.fullmatch(r"[0-9a-f]{64}", observed):
+        observed = f"sha256:{observed}"
+    if result.returncode != 0 or observed != image:
         raise RuntimeError("local raw-signal runtime image is absent or diverged")
 
 _RAW_FORMATS = frozenset({"pod5", "slow5", "blow5"})
@@ -205,22 +211,129 @@ def live_conversion_enabled() -> bool:
     return os.getenv(LIVE_CONVERSION_ENABLED_ENV, "1").strip().lower() in {"1", "true", "yes", "on"}
 
 
+_RETENTION_POLICIES = ("pod5_and_blow5", "blow5_only")
+
+
+def retention_settings_path() -> Path:
+    """Operator choice beside the raw-signal publication tree; the env value is the install default."""
+    staging = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).expanduser()
+    return staging.parent / "ont-raw-signal-retention.json"
+
+
 def raw_signal_retention_policy() -> Literal["pod5_and_blow5", "blow5_only"]:
-    policy = os.getenv(RAW_SIGNAL_RETENTION_POLICY_ENV, "pod5_and_blow5").strip().lower()
-    if policy not in {"pod5_and_blow5", "blow5_only"}:
+    try:
+        saved = json.loads(retention_settings_path().read_text(encoding="utf-8")).get("policy")
+    except (OSError, ValueError, AttributeError):
+        saved = None
+    policy = str(saved or os.getenv(RAW_SIGNAL_RETENTION_POLICY_ENV, "pod5_and_blow5")).strip().lower()
+    if policy not in _RETENTION_POLICIES:
         raise RuntimeError(f"{RAW_SIGNAL_RETENTION_POLICY_ENV} must be pod5_and_blow5 or blow5_only")
     return policy  # type: ignore[return-value]
+
+
+def save_raw_signal_retention_policy(policy: str) -> dict[str, Any]:
+    if policy not in _RETENTION_POLICIES:
+        raise ValueError("retention policy must be pod5_and_blow5 or blow5_only")
+    path = retention_settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps({"policy": policy, "updated_at": _now().isoformat()}) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+    return retention_settings()
+
+
+def retention_settings() -> dict[str, Any]:
+    policy = raw_signal_retention_policy()
+    return {
+        "policy": policy,
+        "remove_pod5_after_verified_blow5": policy == "blow5_only",
+        "installation_default": os.getenv(RAW_SIGNAL_RETENTION_POLICY_ENV, "pod5_and_blow5").strip().lower(),
+    }
 
 
 def retention_disposition() -> str:
     if raw_signal_retention_policy() == "pod5_and_blow5":
         return "retain_pod5_and_blow5"
-    return "future_delete_after_verified_blow5_not_active_in_integrated_bms"
+    return "remove_pod5_after_verified_blow5"
 
 
 def retention_deletion_enabled() -> bool:
-    """The integrated BMS build exposes the future policy seam without deleting acquisition evidence."""
-    return False
+    return raw_signal_retention_policy() == "blow5_only"
+
+
+def _unlink_verified_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    """Remove one registered file only if it is still the exact bytes that were converted."""
+    path, root_fd, file_fd = _open_descriptor_confined_artifact_fds(artifact, authority="retained POD5")
+    parent_fd = -1
+    try:
+        digest = hashlib.sha256()
+        os.lseek(file_fd, 0, os.SEEK_SET)
+        while chunk := os.read(file_fd, 1024 * 1024):
+            digest.update(chunk)
+        if digest.hexdigest() != artifact.get("sha256"):
+            raise ValueError("retained POD5 digest diverged")
+        relative = Path(str(artifact["governed_relative_path"]))
+        parent_fd = os.dup(root_fd)
+        for component in relative.parts[:-1]:
+            next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        named = os.stat(relative.parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+        opened = os.fstat(file_fd)
+        if (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ValueError("retained POD5 name was replaced")
+        os.unlink(relative.parts[-1], dir_fd=parent_fd)
+        return {"path": str(path), "bytes": int(opened.st_size), "sha256": artifact.get("sha256")}
+    finally:
+        for descriptor in (parent_fd, file_fd, root_fd):
+            if descriptor >= 0:
+                os.close(descriptor)
+
+
+async def apply_source_retention(
+    session: AsyncSession,
+    source: OntRawSignalRepresentation,
+    blow5: OntRawSignalRepresentation,
+) -> dict[str, Any] | None:
+    """Honour the "remove POD5" choice after a POD5 conversion has published verified BLOW5.
+
+    Failures are recorded on the source and never undo the publication.
+    """
+    if (
+        raw_signal_retention_policy() != "blow5_only"
+        or source.format != "pod5"
+        or blow5.format != "blow5"
+        or blow5.state != _READY
+        or source.id not in list(blow5.parent_representation_ids or [])
+    ):
+        return None
+    receipts = dict(source.validation_receipts or {})
+    if receipts.get("source_removed"):
+        return receipts["source_removed"]
+    manifest = source.artifact_manifest if isinstance(source.artifact_manifest, dict) else {}
+    removed: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for artifact in manifest.get("artifacts") or []:
+        if not isinstance(artifact, dict) or artifact.get("kind") != "pod5":
+            continue
+        try:
+            removed.append(await asyncio.to_thread(_unlink_verified_artifact, artifact))
+        except (OSError, ValueError, KeyError) as exc:
+            errors.append(f"{artifact.get('artifact_id') or artifact.get('path')}: {type(exc).__name__}: {exc}")
+    outcome = {
+        "policy": "blow5_only",
+        "blow5_representation_id": blow5.id,
+        "removed_files": removed,
+        "removed_bytes": sum(item["bytes"] for item in removed),
+        "errors": errors,
+        "removed_at": _now().isoformat(),
+    }
+    receipts["source_removed" if removed and not errors else "source_removal_incomplete"] = outcome
+    source.validation_receipts = receipts
+    if removed and not errors:
+        source.reason_code = "pod5_removed_after_verified_blow5"
+    await session.flush()
+    return outcome
 
 
 def live_pod5_identity_snapshot(paths: list[str]) -> dict[str, dict[str, int]]:
@@ -440,9 +553,17 @@ def _descriptor_pod5_candidates(directory_fd: int, prefix: Path = Path()) -> lis
     with os.scandir(directory_fd) as entries:
         for entry in entries:
             relative = prefix / entry.name
-            info = entry.stat(follow_symlinks=False)
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue  # MinKNOW may retire an intermediate file while listing.
             if stat.S_ISDIR(info.st_mode):
-                child_fd = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+                try:
+                    child_fd = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+                except (PermissionError, FileNotFoundError):
+                    # Shared output roots also contain private vendor state
+                    # (e.g. crash dumps). It is outside this reader's authority.
+                    continue
                 try:
                     candidates.extend(_descriptor_pod5_candidates(child_fd, relative))
                 finally:
@@ -563,6 +684,7 @@ def _public_representation(record: OntRawSignalRepresentation) -> dict[str, Any]
         "parent_manifest_sha256s": list(record.parent_manifest_sha256s or []),
         "runtime_identity": dict(record.runtime_identity or {}),
         "validation_receipts": dict(record.validation_receipts or {}),
+        "source_removed": bool((record.validation_receipts or {}).get("source_removed")),
         "validation": {
             "source_identity_closed": bool((record.validation_receipts or {}).get("source_preflight")),
             "adjacent_index_validated": bool((record.validation_receipts or {}).get("adjacent_index")),
@@ -1145,21 +1267,6 @@ async def create_external_run_registration(
         if source_artifact_override is not None
         else _file_artifact(source_path, f"{run_id}:source", kind=format)
     )
-    terminal_manifest = {
-        "schema": "bms.ont.instrument-terminal-artifacts.v1",
-        "schema_version": 1,
-        "run_id": run_id,
-        "minknow_run_id_sha256": hashlib.sha256(b"").hexdigest(),
-        "terminal_state": "completed",
-        "observed_generation": 1,
-        "domain_context": domain_context,
-        "artifacts": [{
-            "kind": format,
-            "path": str(source_path),
-            "bytes": source_artifact["bytes"],
-            "sha256": source_artifact["sha256"],
-        }],
-    }
     run = OntInstrumentRun(
         id=run_id,
         position_id="external",
@@ -1183,8 +1290,8 @@ async def create_external_run_registration(
         output_files={"fastq": [], "pod5": [], "bam": []},
         handoff_ready=False,
         last_minknow_payload=marker,
-        terminal_artifact_manifest=terminal_manifest,
-        terminal_artifact_manifest_sha256=_digest(terminal_manifest),
+        # External source custody is sealed by its registration and representation
+        # manifests. It is not a MinKNOW terminal acquisition receipt.
         created_at=now,
     )
     event = OntInstrumentRunEvent(
@@ -1211,6 +1318,60 @@ async def create_external_run_registration(
         source_artifact_override=source_artifact,
     )
     return {"run_id": run_id, "observed_generation": 1, "representation": representation}
+
+
+async def import_uploaded_raw_signal(
+    session: AsyncSession, domain_session: AsyncSession, *, file_path: str,
+    format: str, index_file_path: str | None, experiment_group: str,
+    sample_id: str | None,
+) -> dict[str, Any]:
+    """Register uploaded native bytes through the existing run/source authority."""
+    from paths import get_inputs_dir, resolve_allowed_path
+
+    await _validate_external_registration_context(
+        domain_session, experiment_group=experiment_group, sample_id=sample_id,
+    )
+    if format not in _RAW_FORMATS:
+        raise ValueError("format must be pod5, slow5, or blow5")
+    pattern = r"inputs/ont-raw-signal/[0-9a-f-]{36}/[A-Za-z0-9_.-]{1,200}"
+    if re.fullmatch(pattern, file_path) is None or not file_path.endswith(f".{format}"):
+        raise ValueError("select a native raw-signal upload")
+    if (format == "blow5" and index_file_path != file_path + ".idx") or (format != "blow5" and index_file_path is not None):
+        raise ValueError("indexed BLOW5 requires its adjacent uploaded .blow5.idx")
+
+    records = []
+    artifacts = []
+    for relative, kind in [(file_path, format), *([(index_file_path, "blow5_index")] if index_file_path else [])]:
+        path = resolve_allowed_path(relative)
+        lexical = get_inputs_dir() / Path(relative).relative_to("inputs")
+        if path != Path(os.path.abspath(lexical)):
+            raise ValueError("raw-signal uploads must not traverse symlinks")
+        artifact = await asyncio.to_thread(_file_artifact, path, "upload", kind=kind)
+        identity = str(uuid5(NAMESPACE_URL, f"bms:raw-signal-upload:{relative}:{artifact['sha256']}"))
+        artifact["artifact_id"] = identity
+        await session.execute(sqlite_insert(InputFile.__table__).values(
+            id=identity, filename=path.name, file_type=kind, directory=str(path.parent),
+            size_bytes=artifact["bytes"],
+        ).on_conflict_do_nothing(index_elements=["id"]))
+        records.append(identity)
+        artifacts.append(artifact)
+
+    candidate_id = _digest({"upload": file_path, "artifacts": [a["sha256"] for a in artifacts]})
+    registration_key = _digest({"candidate_id": candidate_id, "experiment_group": experiment_group, "sample_id": sample_id})
+    replay = await _external_registration_replay(
+        session, registration_key=registration_key, candidate_id=candidate_id,
+        source_sha256=artifacts[0]["sha256"], sample_id=sample_id, experiment_group=experiment_group,
+    )
+    if replay is not None:
+        return replay
+    result = await create_external_run_registration(
+        session, domain_session=domain_session, format=format, input_file_id=records[0],
+        index_input_file_id=records[1] if len(records) == 2 else None,
+        source_fidelity="unknown", sample_id=sample_id, experiment_group=experiment_group,
+        external_registration_key=registration_key, candidate_id=candidate_id,
+        source_sha256=artifacts[0]["sha256"], source_artifact_override=artifacts[0],
+    )
+    return {**result, "already_registered": False}
 
 
 async def _validate_external_registration_context(
@@ -1605,6 +1766,7 @@ async def register_external_pod5_candidate(
         async with session.begin_nested():
             result = await create_external_run_registration(
                 session,
+                domain_session=domain_session,
                 format="pod5",
                 input_file_id=input_file_id,
                 index_input_file_id=None,
@@ -1663,9 +1825,10 @@ async def capabilities(session: AsyncSession, *, run_id: str, observed_generatio
     reps = await list_representations(session, run_id=run_id, observed_generation=observed_generation)
     ready_pod5 = next((item for item in reps if item["format"] == "pod5" and item["state"] == _READY), None)
     ready_blow5 = next((item for item in reps if item["format"] == "blow5" and item["state"] == _READY and item["validation"]["adjacent_index_validated"]), None)
-    any_pod5 = next((item for item in reps if item["format"] == "pod5"), None)
+    any_pod5 = next((item for item in reps if item["format"] == "pod5" and not item["source_removed"]), None)
+    any_convertible = any_pod5 or next((item for item in reps if item["format"] == "slow5"), None)
     blow5_state = _mode(_READY, "indexed_blow5_ready", ready_blow5["representation_id"]) if ready_blow5 else (
-        _mode(_PREPARABLE, "qualified_conversion_required", any_pod5["representation_id"]) if any_pod5 else _mode(_UNAVAILABLE, "no_pod5_or_indexed_blow5")
+        _mode(_PREPARABLE, "qualified_conversion_required", any_convertible["representation_id"]) if any_convertible else _mode(_UNAVAILABLE, "no_pod5_slow5_or_indexed_blow5")
     )
     pod5_state = _mode(_READY, "qualified_pod5_ready", ready_pod5["representation_id"]) if ready_pod5 else (
         _mode(_PREPARABLE, "pod5_identity_validation_required", any_pod5["representation_id"]) if any_pod5 else _mode(_UNAVAILABLE, "no_pod5_representation")
@@ -1707,7 +1870,7 @@ def _source_bytes(source: OntRawSignalRepresentation) -> int:
     return sum(
         int(item.get("bytes") or 0)
         for item in manifest.get("artifacts", [])
-        if isinstance(item, dict) and item.get("kind") == "pod5"
+        if isinstance(item, dict) and item.get("kind") in {"pod5", "slow5"}
     )
 
 
@@ -1910,7 +2073,8 @@ def _conversion_commands(
         ))
     validator_input_args.extend(("--fd-socket", "/stage/source-fd.sock"))
     base = [
-        snapshot["container_runtime"], "run", "--rm", "--pull=never", "--network=none", "--read-only",
+        snapshot["container_runtime"], "run", *container_user_namespace_args(snapshot["container_runtime"]),
+        "--rm", "--pull=never", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=4", "--memory=16g", "--pids-limit=256", "--ulimit", "nofile=512:512",
         "--workdir", "/stage",
@@ -2058,6 +2222,199 @@ def conversion_semantic_command(commands: dict[str, Any], groups: list[str]) -> 
         "--routing", "/stage/routing.json", "--metrics", "/stage/read-metrics.jsonl",
         "--receipt", "/stage/semantic-receipt.json",
     ]
+
+
+def _slow5_source_artifact(source: OntRawSignalRepresentation) -> dict[str, Any]:
+    manifest = source.artifact_manifest if isinstance(source.artifact_manifest, dict) else {}
+    artifacts = manifest.get("artifacts")
+    records = [
+        item for item in (artifacts if isinstance(artifacts, list) else [])
+        if isinstance(item, dict) and item.get("kind") == "slow5" and item.get("path")
+    ]
+    if len(records) != 1 or not _is_sha256(records[0].get("sha256")) or int(records[0].get("bytes") or 0) < 1:
+        raise ValueError("SLOW5 conversion requires one registered SLOW5 artifact with digest authority")
+    return records[0]
+
+
+def _slow5_conversion_commands(
+    job: OntRawSignalDerivationJob,
+    source: OntRawSignalRepresentation,
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    """Build lossless slow5tools SLOW5 -> indexed BLOW5 commands for one registered file.
+
+    The output is named by the source digest so the publication keeps the
+    single-partition layout used by POD5-derived BLOW5.
+    """
+    artifact = _slow5_source_artifact(source)
+    fingerprint = str(artifact["sha256"])
+    stage = Path(snapshot["staging_root"]) / job.id / f"attempt-{job.attempt}"
+    image_ref = _container_image_ref(snapshot)
+    common = [
+        snapshot["container_runtime"], "run", *container_user_namespace_args(snapshot["container_runtime"]),
+        "--rm", "--pull=never", "--network=none", "--read-only",
+        f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
+        "--cpus=4", "--memory=16g", "--pids-limit=256", "--ulimit", "nofile=512:512",
+        "--workdir", "/stage",
+        "--mount", f"type=bind,src={stage},dst=/stage",
+        image_ref,
+    ]
+    source_in_stage = "/stage/source/source.slow5"
+    output = f"/stage/outputs/{fingerprint}.blow5"
+    return {
+        "stage": str(stage), "outputs": str(stage / "outputs"),
+        "routing": str(stage / "routing.json"),
+        "fingerprint": fingerprint,
+        "source_artifact": dict(artifact),
+        "common": common,
+        "convert": common + [
+            "slow5tools", "view", "--to", "blow5", "-c", "zstd", "-s", "svb-zd",
+            "-t", "4", source_in_stage, "-o", output,
+        ],
+        "quickcheck": common + ["slow5tools", "quickcheck", output],
+        "index_create": common + ["slow5tools", "index", output],
+        "canonical_source": common + [
+            "slow5tools", "view", "--to", "slow5", source_in_stage, "-o", "/stage/check/source.slow5",
+        ],
+        "canonical_output": common + [
+            "slow5tools", "view", "--to", "slow5", output, "-o", "/stage/check/output.slow5",
+        ],
+    }
+
+
+def stage_slow5_source(commands: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy the registered SLOW5 into the private stage, verifying its sealed digest."""
+    artifact = commands["source_artifact"]
+    _path, root_fd, file_fd = _open_descriptor_confined_artifact_fds(
+        artifact, authority="registered SLOW5 artifact"
+    )
+    destination = Path(commands["stage"]) / "source" / "source.slow5"
+    destination_fd = -1
+    try:
+        destination_fd = os.open(
+            destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o644
+        )
+        digest = hashlib.sha256()
+        size = 0
+        os.lseek(file_fd, 0, os.SEEK_SET)
+        while chunk := os.read(file_fd, 1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+            view = memoryview(chunk)
+            while view:
+                view = view[os.write(destination_fd, view):]
+        os.fsync(destination_fd)
+        if digest.hexdigest() != artifact.get("sha256") or size != artifact.get("bytes"):
+            raise ValueError("registered SLOW5 bytes diverged from its registration manifest")
+        return {"sha256": digest.hexdigest(), "bytes": size}
+    finally:
+        for descriptor in (destination_fd, file_fd, root_fd):
+            if descriptor >= 0:
+                os.close(descriptor)
+
+
+def slow5_canonical_roundtrip(commands: Mapping[str, Any]) -> dict[str, Any]:
+    """Compare slow5tools' canonical SLOW5 rendering of the source and the produced BLOW5."""
+    check = Path(commands["stage"]) / "check"
+    digests = {}
+    for name in ("source", "output"):
+        digests[name] = hashlib.sha256((check / f"{name}.slow5").read_bytes()).hexdigest()
+    if digests["source"] != digests["output"]:
+        raise ValueError("BLOW5 does not round-trip to the source SLOW5 records")
+    return {"source_canonical_sha256": digests["source"], "output_canonical_sha256": digests["output"]}
+
+
+def slow5_output_validation_command(commands: Mapping[str, Any]) -> list[str]:
+    """Seal output modes and bind their identities into the pinned BLOW5 validator."""
+    outputs = Path(commands["outputs"])
+    fingerprint = str(commands["fingerprint"])
+    root_info = os.stat(outputs)
+    arguments: list[str] = []
+    for prefix, name in (("blow5", f"{fingerprint}.blow5"), ("index", f"{fingerprint}.blow5.idx")):
+        descriptor = os.open(outputs / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            os.fchmod(descriptor, 0o444)
+            info = os.fstat(descriptor)
+            digest = hashlib.sha256()
+            while chunk := os.read(descriptor, 1024 * 1024):
+                digest.update(chunk)
+        finally:
+            os.close(descriptor)
+        arguments += [
+            f"--expected-{prefix}-sha256", digest.hexdigest(),
+            f"--expected-{prefix}-size", str(info.st_size),
+            f"--expected-{prefix}-device", str(info.st_dev),
+            f"--expected-{prefix}-inode", str(info.st_ino),
+            f"--expected-{prefix}-mtime-ns", str(info.st_mtime_ns),
+            f"--expected-{prefix}-ctime-ns", str(info.st_ctime_ns),
+            f"--expected-{prefix}-root-device", str(root_info.st_dev),
+            f"--expected-{prefix}-root-inode", str(root_info.st_ino),
+        ]
+    return list(commands["common"]) + [
+        "python3", "/opt/bms/ont_raw_signal_validate.py", "external-blow5",
+        "--blow5", f"/stage/outputs/{fingerprint}.blow5",
+        "--index", f"/stage/outputs/{fingerprint}.blow5.idx",
+        *arguments,
+        "--metrics", "/stage/read-metrics.jsonl",
+        "--receipt", "/stage/validation-receipt.json",
+    ]
+
+
+def finalize_slow5_conversion(commands: Mapping[str, Any], roundtrip: Mapping[str, Any]) -> dict[str, Any]:
+    """Write the routing and semantic receipts publish_derivation consumes, then drop scratch copies."""
+    stage = Path(commands["stage"])
+    fingerprint = str(commands["fingerprint"])
+    validation = json.loads((stage / "validation-receipt.json").read_text(encoding="utf-8"))
+    if validation.get("status") != "passed" or validation.get("duplicate_read_ids") not in (0, False):
+        raise ValueError("produced BLOW5 did not pass validation")
+    read_ids: list[str] = []
+    samples = 0
+    with (stage / "read-metrics.jsonl").open(encoding="utf-8") as handle:
+        for line in handle:
+            row = json.loads(line)
+            read_ids.append(str(row["read_id"]))
+            samples += int(row["sample_count"])
+    read_count = int(validation["read_count"])
+    if len(read_ids) != read_count or len(set(read_ids)) != read_count or read_count < 1:
+        raise ValueError("produced BLOW5 read inventory is inconsistent")
+    routing = {
+        "schema": "bms.ont.raw-signal-routing.v1",
+        "partition_contract": "single_slow5_source_sha256",
+        "groups": {fingerprint: {
+            "blow5": f"{fingerprint}.blow5", "index": f"{fingerprint}.blow5.idx", "read_count": read_count,
+        }},
+        "read_to_group": {read_id: fingerprint for read_id in read_ids},
+    }
+    routing_bytes = json.dumps(routing, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+    (stage / "routing.json").write_bytes(routing_bytes)
+    semantic = {
+        "schema": "bms.ont.slow5-to-blow5-validation.v1",
+        "status": "passed",
+        "read_count": read_count,
+        "duplicate_read_ids": 0,
+        "partition_count": 1,
+        "partition_counts": {fingerprint: read_count},
+        "output_identities": {fingerprint: {
+            "blow5": validation["blow5_identity"], "index": validation["blow5_index_identity"],
+        }},
+        "retained_indexed_pair": True,
+        "total_signal_samples_compared": samples,
+        "signal_samples": "lossless_slow5tools_roundtrip",
+        "mapping_contract": "slow5tools_canonical_slow5_byte_identical",
+        "source_only_authority": "immutable_parent_slow5_manifest",
+        "source_sha256": fingerprint,
+        "roundtrip": dict(roundtrip),
+        "index_opened": True,
+        "indexed_lookup_count": int(validation.get("indexed_lookup_count") or 0),
+        "routing_sha256": hashlib.sha256(routing_bytes).hexdigest(),
+        "read_metrics": validation.get("read_metrics"),
+    }
+    (stage / "semantic-receipt.json").write_text(
+        json.dumps(semantic, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
+    for scratch in ("source", "check"):
+        shutil.rmtree(stage / scratch, ignore_errors=True)
+    return semantic
 
 
 def _external_blow5_artifact_records(source: OntRawSignalRepresentation) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -2210,7 +2567,8 @@ def _external_blow5_validation_commands(job: OntRawSignalDerivationJob, source: 
     stage = Path(snapshot["staging_root"]) / job.id / f"attempt-{job.attempt + 1}"
     image_ref = _container_image_ref(snapshot)
     common = [
-        snapshot["container_runtime"], "run", "--rm", "--pull=never", "--network=none", "--read-only",
+        snapshot["container_runtime"], "run", *container_user_namespace_args(snapshot["container_runtime"]),
+        "--rm", "--pull=never", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=1", "--memory=2g", "--pids-limit=64", "--ulimit", "nofile=128:128",
         "--workdir", "/stage",
@@ -2314,12 +2672,25 @@ async def request_blow5_derivation(
         raise ValueError("consumer_id must be 1-128 characters")
     run, event = await _exact_generation(session, run_id, observed_generation)
     source = await session.get(OntRawSignalRepresentation, source_representation_id)
-    if source is None or source.run_id != run_id or source.observed_generation != observed_generation or source.format not in {"pod5", "blow5"}:
-        raise ValueError("source representation is not POD5 or external BLOW5 for the exact dataset generation")
+    if source is None or source.run_id != run_id or source.observed_generation != observed_generation or source.format not in {"pod5", "slow5", "blow5"}:
+        raise ValueError("source representation is not POD5, SLOW5, or external BLOW5 for the exact dataset generation")
     _require_derivable_generation(run, event, source)
     validation_only = source.format == "blow5"
+    slow5_conversion = source.format == "slow5"
     if validation_only and source.source_kind != "external_native":
         raise ValueError("validation-only admission is limited to external BLOW5")
+    if slow5_conversion and source.source_kind != "external_native":
+        raise ValueError("SLOW5 conversion is limited to registered external SLOW5")
+    profile_id = (
+        EXTERNAL_BLOW5_VALIDATION_PROFILE_ID if validation_only
+        else SLOW5_TO_BLOW5_PROFILE_ID if slow5_conversion
+        else BLOW5_PROFILE_ID
+    )
+    operation = (
+        "external_validation" if validation_only
+        else "slow5_to_blow5_conversion" if slow5_conversion
+        else "pod5_to_blow5_conversion"
+    )
     if source.source_kind == "minknow_native" and not source.acquisition_id:
         raise ValueError("native POD5 acquisition identity is absent from the sealed MinKNOW observation")
     existing = (
@@ -2327,7 +2698,7 @@ async def request_blow5_derivation(
             OntRawSignalDerivationJob.run_id == run_id,
             OntRawSignalDerivationJob.observed_generation == observed_generation,
             OntRawSignalDerivationJob.source_representation_id == source.id,
-            OntRawSignalDerivationJob.profile_id == (EXTERNAL_BLOW5_VALIDATION_PROFILE_ID if validation_only else BLOW5_PROFILE_ID),
+            OntRawSignalDerivationJob.profile_id == profile_id,
         ))
     ).scalar_one_or_none()
     if existing is None:
@@ -2337,7 +2708,7 @@ async def request_blow5_derivation(
         existing = OntRawSignalDerivationJob(
             id=_id("ont-raw-job"), run_id=run_id, observed_generation=observed_generation,
             source_representation_id=source.id, requested_preference=preference,
-            consumer_id=consumer_id, profile_id=EXTERNAL_BLOW5_VALIDATION_PROFILE_ID if validation_only else BLOW5_PROFILE_ID,
+            consumer_id=consumer_id, profile_id=profile_id,
             state=state, reason_code=gate or ("external_blow5_validation_requested" if validation_only else "qualified_conversion_requested"),
             resource_snapshot=snapshot, attempt=0, claim_token=None,
             lease_expires_at=None, stage_receipts={}, created_at=_now(), updated_at=_now(), completed_at=_now() if gate else None,
@@ -2347,7 +2718,7 @@ async def request_blow5_derivation(
             reason_code=existing.reason_code,
             receipt={
                 "automatic_whole_run_conversion": automatic,
-                "operation": "external_validation" if validation_only else "pod5_to_blow5_conversion",
+                "operation": operation,
                 "profile_id": existing.profile_id,
                 "resource_snapshot": snapshot,
             }, created_at=_now(),
@@ -2953,7 +3324,8 @@ async def claim_next_waveform_lookup(
         ],
     }
     command = [
-        snapshot["container_runtime"], "run", "--rm", "--pull=never", "--network=none", "--read-only",
+        snapshot["container_runtime"], "run", *container_user_namespace_args(snapshot["container_runtime"]),
+        "--rm", "--pull=never", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=1", "--memory=1g", "--pids-limit=64", "--ulimit", "nofile=128:128",
         "--mount", f"type=bind,src={output_root},dst=/output",
@@ -3325,6 +3697,8 @@ async def claim_next_derivation(session: AsyncSession, *, lease_seconds: int = 3
     commands = (
         _external_blow5_validation_commands(job, source, snapshot)
         if job.profile_id == EXTERNAL_BLOW5_VALIDATION_PROFILE_ID
+        else _slow5_conversion_commands(job, source, snapshot)
+        if job.profile_id == SLOW5_TO_BLOW5_PROFILE_ID
         else _conversion_commands(job, source, snapshot, run)
     )
     return job, source, commands
@@ -3977,15 +4351,19 @@ async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJ
             semantic_receipt=semantic,
         )
         return existing
+    from_slow5 = job.profile_id == SLOW5_TO_BLOW5_PROFILE_ID
+    publication_profile_id = SLOW5_TO_BLOW5_PROFILE_ID if from_slow5 else BLOW5_PROFILE_ID
     representation = OntRawSignalRepresentation(
         id=_id("ont-raw-rep"), run_id=job.run_id, observed_generation=job.observed_generation,
-        role="derived", source_kind="pod5_to_blow5", format="blow5",
-        source_fidelity="verified_signal_and_full_common_field_contract_exact", state="ready", reason_code="partitioned_indexed_blow5_ready_native_pod5_retained",
+        role="derived", source_kind="slow5_to_blow5" if from_slow5 else "pod5_to_blow5", format="blow5",
+        source_fidelity="verified_lossless_slow5_roundtrip" if from_slow5 else "verified_signal_and_full_common_field_contract_exact",
+        state="ready",
+        reason_code="indexed_blow5_ready_native_slow5_retained" if from_slow5 else "partitioned_indexed_blow5_ready_native_pod5_retained",
         artifact_manifest=manifest, manifest_sha256=manifest_sha256,
         parent_representation_ids=[source.id], parent_manifest_sha256s=[source.manifest_sha256],
         compression={"record": "zstd", "signal": "svb-zd"},
-        runtime_identity={"profile_id": BLOW5_PROFILE_ID, "container_digest": job.resource_snapshot.get("container_digest")},
-        validation_receipts={"semantic": semantic, "adjacent_index": True}, profile_id=BLOW5_PROFILE_ID,
+        runtime_identity={"profile_id": publication_profile_id, "container_digest": job.resource_snapshot.get("container_digest")},
+        validation_receipts={"semantic": semantic, "adjacent_index": True}, profile_id=publication_profile_id,
         read_count=int(semantic["read_count"]),
         published_at=_now(), created_at=_now(),
     )
@@ -4172,6 +4550,8 @@ async def recover_expired_derivations(session: AsyncSession) -> int:
             commands = (
                 _external_blow5_validation_commands(row, source, dict(row.resource_snapshot or {}))
                 if row.profile_id == EXTERNAL_BLOW5_VALIDATION_PROFILE_ID
+                else _slow5_conversion_commands(row, source, dict(row.resource_snapshot or {}))
+                if row.profile_id == SLOW5_TO_BLOW5_PROFILE_ID
                 else _conversion_commands(
                     row,
                     source,

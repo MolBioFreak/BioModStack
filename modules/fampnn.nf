@@ -25,6 +25,7 @@ process PrepFAMPNN {
     output:
     path ("fampnn_input/*.pdb"), emit: pdbs
     path ("fampnn_input/*.fampnn_prep.json"), emit: provenance, optional: true
+    path ("fampnn_input/*.fampnn_source.json"), emit: custody, optional: true
     path ("*.csv"), emit: csv
 
     script:
@@ -135,26 +136,8 @@ process RunFAMPNN {
     path "*.log"
 
     script:
-    def typedNativeMapping = [
-        'fampnn_seed': 'seed',
-        'fampnn_presort_by_length': 'presort_by_length',
-        'fampnn_timestep_mode': 'timestep_schedule.mode',
-        'fampnn_timestep_start': 'timestep_schedule.t_start',
-        'fampnn_timestep_end': 'timestep_schedule.t_end',
-        'fampnn_scn_num_steps': 'scn_diffusion.num_steps',
-        'fampnn_scn_timestep_mode': 'scn_diffusion.timestep_schedule.mode',
-        'fampnn_scn_timestep_start': 'scn_diffusion.timestep_schedule.t_start',
-        'fampnn_scn_timestep_end': 'scn_diffusion.timestep_schedule.t_end',
-        'fampnn_scn_step_scale': 'scn_diffusion.step_scale',
-        'fampnn_scn_s_churn': 'scn_diffusion.churn_cfg.s_churn',
-        'fampnn_scn_s_noise': 'scn_diffusion.churn_cfg.s_noise',
-        'fampnn_scn_s_t_min': 'scn_diffusion.churn_cfg.s_t_min',
-        'fampnn_scn_s_t_max': 'scn_diffusion.churn_cfg.s_t_max',
-    ]
-    def typedNativeArgs = typedNativeMapping.findAll { key, nativeKey -> params.get(key) != null }.collect { key, nativeKey ->
-        "'" + (nativeKey + '=' + params.get(key).toString()).replace("'", "'\"'\"'") + "'"
-    }.join(' ')
-    def psceThreshold = params.get('sequence_design_engine') == 'fampnn' && params.containsKey('fampnn_psce_threshold') ? params.fampnn_psce_threshold : (params.fampnn_psce_threshold != null ? params.fampnn_psce_threshold : 0.3)
+    def typedNativeArgs = FampnnNativeControls.arguments(params)
+    def psceThreshold = params.containsKey('fampnn_psce_threshold') ? params.fampnn_psce_threshold : 0.3
     def checkpointPreset = (params.fampnn_checkpoint != null ? params.fampnn_checkpoint : 'fampnn_0_0.pt').toString().trim()
     def checkpointOverride = (params.fampnn_checkpoint_path != null ? params.fampnn_checkpoint_path : '').toString().trim()
     def checkpointMap = [
@@ -183,7 +166,7 @@ process RunFAMPNN {
     """ : (strictAnalysis ? "printf '%s' '${policyBase64}' | base64 --decode > fampnn_analysis_policy.json" : '')
     def bindNativePolicy = deferredAnalysis ? 'python /scripts/fampnn_policy_resolution.py --scopes fampnn_resolved_scopes.json --native-dir fampnn_output/samples --output fampnn_analysis_policy.json' : ''
     def analysisFlags = strictAnalysis ? '--core-protein-scientific-contract 1 --analysis-policy fampnn_analysis_policy.json --source-pdb-dir . --candidate-pdb-dir fampnn_output/samples' : ''
-    def nativeLauncher = strictAnalysis ? '/scripts/fampnn_native_binding.py --root /app/fampnn -- /app/fampnn/fampnn/inference/seq_design.py' : (params.get('sequence_design_engine') == 'fampnn' ? '/scripts/prep_fampnn_constraints_generic.py --native-script /app/fampnn/fampnn/inference/seq_design.py --' : '/app/fampnn/fampnn/inference/seq_design.py')
+    def nativeLauncher = strictAnalysis ? '/scripts/fampnn_native_binding.py --root /app/fampnn -- /app/fampnn/fampnn/inference/seq_design.py' : '/scripts/prep_fampnn_constraints_generic.py --native-script /app/fampnn/fampnn/inference/seq_design.py --'
     """
     # Raw config remains argv data, never shell syntax or command substitution.
     python -c 'import base64,shlex,sys; args=shlex.split(base64.b64decode(sys.argv[1]).decode()); reserved=["batch_size", "checkpoint_path", "exclude_cys", "fixed_pos_csv", "num_seqs_per_pdb", "pdb_dir", "pdb_key_list", "presort_by_length", "psce_threshold", "temperature", "seq_only", "repack_last", "timestep_schedule.num_steps", "out_dir", "seed", "timestep_schedule.mode", "timestep_schedule.t_start", "timestep_schedule.t_end", "scn_diffusion.num_steps", "scn_diffusion.timestep_schedule.mode", "scn_diffusion.timestep_schedule.t_start", "scn_diffusion.timestep_schedule.t_end", "scn_diffusion.step_scale", "scn_diffusion.churn_cfg.s_churn", "scn_diffusion.churn_cfg.s_noise", "scn_diffusion.churn_cfg.s_t_min", "scn_diffusion.churn_cfg.s_t_max"]; conflicts=[a for a in args if a.split("=",1)[0].lstrip("+~") in reserved]; sys.exit("extra_config cannot override typed/system-owned arguments: "+str(conflicts)) if sys.argv[2] == "true" and conflicts else None; sys.stdout.buffer.write((chr(0).join(args)+chr(0) if args else "").encode())' '${extraBase64}' '${params.get("sequence_design_engine") == "fampnn"}' > native_extra_args.bin
@@ -220,6 +203,7 @@ process RunFAMPNN {
         new_name=\$(echo "\$base_name" | sed 's/sample/seq_/')
         cp -L -l --remove-destination "\$file" "results/\$new_name"
         if [ -f "\$file.fa_binding.json" ]; then cp "\$file.fa_binding.json" "results/\$new_name.fa_binding"; fi
+        if [ -f "\$file.psce_scope" ]; then cp "\$file.psce_scope" "results/\$new_name.psce_scope"; fi
     done
 
     python /scripts/analyse_fampnn.py \\

@@ -442,8 +442,17 @@ def _resume_sync_rollback(root: Path, state_dir: Path, marker: dict[str, object]
         marker = _set_sync_refresh_phase(state_dir, marker, "rolling-back")
     manager = root / "scripts" / "manage_desktop_services.py"
     try:
+        # A timed-out manager can leave the correct old API finishing startup.
+        # Do not restart that now-healthy owner and repeat the same timeout.
+        already_recovered = (
+            recovering_failure
+            and _git(root, "rev-parse", "HEAD") == rollback_revision
+            and not _git(root, "status", "--porcelain")
+            and _deployed_revision(root) == rollback_revision
+        )
         _git(root, "reset", "--hard", rollback_revision)
-        _run(root, sys.executable, str(manager), "restart", "--runtime", "dev")
+        if not already_recovered:
+            _run(root, sys.executable, str(manager), "restart", "--runtime", "dev")
         rollback_deployed = _deployed_revision(root)
         if rollback_deployed != rollback_revision:
             raise RuntimeError(
@@ -480,7 +489,9 @@ def _resume_sync_rollback(root: Path, state_dir: Path, marker: dict[str, object]
         ) from rollback_error
 
 
-def recover_failed_rollback(root: Path, state_dir: Path) -> dict[str, object]:
+def recover_failed_rollback(
+    root: Path, state_dir: Path, *, forward_revision: str | None = None,
+) -> dict[str, object]:
     """Retry only the recorded rollback; leave deployment paused and its queue intact."""
     root = root.resolve()
     if not (root / ".git").exists():
@@ -505,6 +516,32 @@ def recover_failed_rollback(root: Path, state_dir: Path) -> dict[str, object]:
             active, count = _active_development_work(root)
             if active:
                 raise RuntimeError(f"rollback recovery is blocked by {count} active Development jobs")
+            if forward_revision is not None:
+                if not _is_git_object(forward_revision):
+                    raise RuntimeError("forward recovery requires an exact commit SHA")
+                _git(root, "fetch", "--quiet", "origin", "+refs/heads/test:refs/remotes/origin/test")
+                remote = _git(root, "rev-parse", "refs/remotes/origin/test")
+                if remote != forward_revision:
+                    raise RuntimeError("forward recovery revision differs from origin/test")
+                if _run(root, "git", "merge-base", "--is-ancestor", local, remote, check=False).returncode:
+                    raise RuntimeError("forward recovery must fast-forward current source")
+                successor = _git_blob(root, remote, "scripts/biomodstack_dev_sync.py")
+                if successor != Path(__file__).resolve().read_bytes():
+                    raise RuntimeError("forward recovery executor differs from committed candidate")
+                # Explicit operator recovery when the old release cannot start.
+                # Preserve prior transaction evidence and normal new-release rollback.
+                _write_json_file(state_dir / "dev-sync-prior-failed-rollback.json", marker)
+                replacement = _new_sync_refresh_marker(
+                    remote, successor, str(marker["rollback_revision"]),
+                    DEFAULT_INSTALLED_SYNC.read_bytes() if DEFAULT_INSTALLED_SYNC.is_file() else None,
+                )
+                _write_sync_refresh_marker(state_dir, replacement)
+                result = _deploy_candidate(root, state_dir, "fast-forward-deploy", local, remote,
+                                          str(marker["rollback_revision"]))
+                receipt = {"decision": "recovered-forward", "deployment_paused": True,
+                           "previous_failed_target": marker["target_revision"], **result}
+                _write_receipt(state_dir, receipt)
+                return receipt
             _resume_sync_rollback(root, state_dir, marker)
             receipt = {
                 "decision": "recovered-failed-rollback",
@@ -961,6 +998,10 @@ def main() -> int:
         "--recover-failed-rollback", action="store_true",
         help="retry the recorded failed rollback with deployment paused and no active work",
     )
+    control_group.add_argument(
+        "--recover-forward", metavar="REVISION",
+        help="explicitly recover a failed rollback by deploying the exact repaired origin/test commit",
+    )
     control_group.add_argument("--pause-deploy", action="store_true", help="pause automatic Development deployment")
     control_group.add_argument("--resume-deploy", action="store_true", help="resume automatic Development deployment and poll now")
     parser.add_argument("--root", type=Path, default=Path(os.getenv("BMS_DEV_CANONICAL_ROOT", DEFAULT_CANONICAL_ROOT)))
@@ -970,8 +1011,8 @@ def main() -> int:
     if args.allow_active_work and not args.deploy_now:
         parser.error("--allow-active-work requires --deploy-now")
     try:
-        if args.recover_failed_rollback:
-            receipt = recover_failed_rollback(args.root, args.state_dir)
+        if args.recover_failed_rollback or args.recover_forward:
+            receipt = recover_failed_rollback(args.root, args.state_dir, forward_revision=args.recover_forward)
             print(json.dumps(receipt, sort_keys=True))
             return 0
         if args.bootstrap_successor:

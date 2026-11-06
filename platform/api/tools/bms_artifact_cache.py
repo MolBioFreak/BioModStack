@@ -1037,6 +1037,58 @@ class Cache:
         return path
 
     def acquire_hf(self, value, operation_id, batch_id, source):
+        if __package__:
+            from . import bms_hf_transfer as hf
+        else:
+            import bms_hf_transfer as hf
+        try:
+            return self._acquire_hf_owned(value, operation_id, batch_id, source, hf)
+        except hf.SourceExpired:
+            return {**artifact(value), 'state': 'source_expired'}
+        except hf.TransferError:
+            raise
+        except Exception:
+            raise hf.TransferError('hf_acquisition_failed') from None
+
+    def _acquire_hf_owned(self, value, operation_id, batch_id, source, hf):
+        hf.validate_source(source)
+        # A content-owned partial survives a failed operation/batch, but never
+        # enters CAS until the usual whole-object digest and ingest checks pass.
+        item = artifact(value)
+        path = self.incoming_batch(operation_id, batch_id)
+        with directory(self.root / 'hf-partials', create=True) as partials:
+            lock = os.open(item['sha256'] + '.lock', os.O_RDWR | os.O_CREAT
+                           | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=partials)
+            try:
+                info = regular(lock)
+                if (info.st_nlink != 1 or info.st_uid != os.geteuid()
+                        or stat.S_IMODE(info.st_mode) != 0o600):
+                    raise hf.TransferError('hf_unsafe_incoming_file')
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raise hf.TransferError('hf_acquisition_busy') from None
+                with directory(path) as parent:
+                    try:
+                        os.stat(item['sha256'], dir_fd=partials, follow_symlinks=False)
+                    except FileNotFoundError:
+                        try:
+                            os.rename(item['sha256'], item['sha256'],
+                                      src_dir_fd=parent, dst_dir_fd=partials)
+                        except FileNotFoundError:
+                            pass
+                result = self._acquire_hf(value, source)
+                if result['state'] == 'downloaded':
+                    with directory(path) as parent:
+                        os.replace(item['sha256'], item['sha256'],
+                                   src_dir_fd=partials, dst_dir_fd=parent)
+                        os.fsync(parent)
+                        os.fsync(partials)
+                return result
+            finally:
+                os.close(lock)
+
+    def _acquire_hf(self, value, source):
         # The installed helper imports its authenticated peer; source imports
         # use the same file through the API tools package.
         if __package__:
@@ -1047,8 +1099,7 @@ class Cache:
         try:
             item = artifact(value)
             hf.validate_source(source)
-            path = self.incoming_batch(operation_id, batch_id)
-            with directory(path) as parent:
+            with directory(self.root / 'hf-partials') as parent:
                 fd = os.open(item['sha256'], os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
                              | os.O_NONBLOCK, 0o600, dir_fd=parent)
                 try:
@@ -1061,7 +1112,15 @@ class Cache:
                         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     except BlockingIOError:
                         raise hf.TransferError('hf_acquisition_busy') from None
-                    result = hf.download(fd, item, source)
+                    try:
+                        result = hf.download(fd, item, source)
+                    except hf.TransferError:
+                        current = os.stat(item['sha256'], dir_fd=parent, follow_symlinks=False)
+                        if (current.st_dev, current.st_ino, current.st_nlink) != (info.st_dev, info.st_ino, 1):
+                            raise hf.TransferError('hf_incoming_identity_changed') from None
+                        os.fsync(fd)
+                        os.fsync(parent)
+                        raise
                     current = os.stat(item['sha256'], dir_fd=parent, follow_symlinks=False)
                     if (current.st_dev, current.st_ino, current.st_nlink) != (info.st_dev, info.st_ino, 1):
                         raise hf.TransferError('hf_incoming_identity_changed')
@@ -1115,12 +1174,18 @@ class Cache:
                 rows = json.loads(read_document(marker))['members']
             except FileNotFoundError:
                 rows = []
+                member_prefix = '.source-member-' + item['sha256'] + '-'
+                # The archive lock owns only this archive's interrupted stages.
+                with directory(marker.parent) as staging:
+                    for stale in os.listdir(staging):
+                        if stale.startswith(member_prefix):
+                            os.unlink(stale, dir_fd=staging)
                 fd = os.open(item['sha256'], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
                 with os.fdopen(fd, 'rb') as source:
                     if not verified(source.fileno(), item):
                         raise ValueError('corrupt_source_archive')
                     source.seek(0)
-                    with tarfile.open(fileobj=source, mode='r:*') as archive:
+                    with tarfile.open(fileobj=source, mode='r|*') as archive:
                         for member in archive:
                             path = PurePosixPath(member.name)
                             if path.is_absolute() or '..' in path.parts or not (member.isfile() or member.isdir()):
@@ -1128,14 +1193,37 @@ class Cache:
                             if member.isdir():
                                 rows.append(dict(name=member.name, directory=True))
                                 continue
-                            with archive.extractfile(member) as stream:
-                                digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-                            row = dict(name=member.name, sha256=digest,
-                                       size_bytes=member.size, mode=member.mode & 0o777)
-                            with self.locked(row), self.objects(row) as objects:
-                                if self.state(objects, row) != 'cache_hit':
-                                    with archive.extractfile(member) as stream:
-                                        self._publish_copy(stream, objects, digest, row, 0o444)
+                            # The archive is already verified. Stream its member
+                            # once into an unpublished inode, then adopt that exact
+                            # hashed body under the usual content lock. Reopening a
+                            # gzip member previously repeated decompression/hash.
+                            with directory(marker.parent) as staging:
+                                temporary = member_prefix + uuid.uuid4().hex
+                                try:
+                                    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT |
+                                                 os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=staging)
+                                    with os.fdopen(fd, 'wb') as output, archive.extractfile(member) as stream:
+                                        digest, size = hashlib.sha256(), 0
+                                        while data := stream.read(CHUNK):
+                                            digest.update(data)
+                                            size += len(data)
+                                            output.write(data)
+                                        if size != member.size:
+                                            raise ValueError('size_mismatch')
+                                        output.flush()
+                                        os.fchmod(output.fileno(), 0o444)
+                                        os.fsync(output.fileno())
+                                    row = dict(name=member.name, sha256=digest.hexdigest(),
+                                               size_bytes=size, mode=member.mode & 0o777)
+                                    with self.locked(row), self.objects(row) as objects:
+                                        if self.state(objects, row) != 'cache_hit':
+                                            self.emit(row, 'publishing')
+                                            os.replace(temporary, row['sha256'],
+                                                       src_dir_fd=staging, dst_dir_fd=objects)
+                                            os.fsync(objects)
+                                finally:
+                                    try: os.unlink(temporary, dir_fd=staging)
+                                    except FileNotFoundError: pass
                             rows.append(row)
                 payload = json.dumps(dict(members=rows), sort_keys=True).encode()
                 with directory(marker.parent) as out:
@@ -1342,6 +1430,11 @@ if __name__ == '__main__':
     except Exception as exc:
         # Paths, request contents and transport URLs never enter diagnostic output.
         # Declared-budget failures report their closed-set code, never a bare type.
-        error = exc.code if isinstance(exc, RequestBudgetError) else type(exc).__name__
+        if __package__:
+            from .bms_hf_transfer import TransferError
+        else:
+            from bms_hf_transfer import TransferError
+        error = (exc.code if isinstance(exc, (RequestBudgetError, TransferError))
+                 else type(exc).__name__)
         print(json.dumps({'state': 'failed', 'error': error}), file=sys.stderr)
         raise SystemExit(1)

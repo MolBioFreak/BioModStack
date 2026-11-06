@@ -22,16 +22,19 @@ export function ThemeSelector() {
                 onClick={() => setIsOpen(!isOpen)}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
                 title="Change color scheme"
+                aria-label="Color scheme"
+                aria-expanded={isOpen}
+                aria-controls="color-scheme-options"
             >
                 {/* Color swatch preview */}
                 <div className="flex items-center gap-0.5">
                     <div
                         className="w-3 h-3 rounded-sm"
-                        style={{ backgroundColor: themeConfig.preview.bg, border: '1px solid var(--border-primary)' }}
+                        style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-primary)' }}
                     />
                     <div
                         className="w-3 h-3 rounded-sm"
-                        style={{ backgroundColor: themeConfig.preview.accent }}
+                        style={{ backgroundColor: 'var(--accent-primary)' }}
                     />
                 </div>
                 <span className="hidden sm:inline">{themeConfig.name}</span>
@@ -51,6 +54,7 @@ export function ThemeSelector() {
 
                     {/* Dropdown */}
                     <div
+                        id="color-scheme-options"
                         className="absolute right-0 top-full mt-2 w-56 max-w-[calc(100vw-1rem)] bg-[var(--bg-secondary)] border border-[var(--border-primary)] rounded-xl shadow-2xl z-50 py-2 overflow-hidden"
                         data-bms-drag-scroll-ignore="true"
                     >
@@ -62,7 +66,7 @@ export function ThemeSelector() {
                                 <button
                                     onClick={() => handleSelect('clean_light')}
                                     className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5 ${theme === 'clean_light' || theme === 'light'
-                                        ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
+                                        ? 'bg-[var(--bg-tertiary)] ring-1 ring-[var(--accent-primary)]/50 text-[var(--text-action)]'
                                         : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                                         }`}
                                 >
@@ -74,7 +78,7 @@ export function ThemeSelector() {
                                 <button
                                     onClick={() => handleSelect('black')}
                                     className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5 ${theme === 'black'
-                                        ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
+                                        ? 'bg-[var(--bg-tertiary)] ring-1 ring-[var(--accent-primary)]/50 text-[var(--text-action)]'
                                         : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                                         }`}
                                 >
@@ -95,31 +99,33 @@ export function ThemeSelector() {
                             {THEMES.map((t) => (
                                 <button
                                     key={t.id}
+                                    aria-label={`${t.name} color scheme`}
+                                    aria-pressed={theme === t.id}
                                     onClick={() => handleSelect(t.id)}
                                     className={`w-full px-3 py-2.5 text-left rounded-lg transition-all flex items-center gap-3 ${theme === t.id
-                                        ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50'
+                                        ? 'bg-[var(--bg-tertiary)] ring-1 ring-[var(--accent-primary)]/50'
                                         : 'hover:bg-[var(--bg-tertiary)]'
                                         }`}
                                 >
                                     {/* Theme color preview */}
-                                    <div className="flex items-center gap-0.5 shrink-0">
+                                    <div className="flex items-center gap-0.5 shrink-0" data-theme={t.id}>
                                         <div
                                             className="w-5 h-5 rounded"
                                             style={{
-                                                backgroundColor: t.preview.bg,
-                                                border: '1px solid rgba(255,255,255,0.1)'
+                                                backgroundColor: 'var(--bg-primary)',
+                                                border: '1px solid var(--border-primary)'
                                             }}
                                         />
                                         <div
                                             className="w-5 h-5 rounded"
-                                            style={{ backgroundColor: t.preview.accent }}
+                                            style={{ backgroundColor: 'var(--accent-primary)' }}
                                         />
                                         <div
                                             className="w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold"
                                             style={{
-                                                backgroundColor: t.preview.bg,
-                                                color: t.preview.text,
-                                                border: '1px solid rgba(255,255,255,0.1)'
+                                                backgroundColor: 'var(--bg-primary)',
+                                                color: 'var(--text-primary)',
+                                                border: '1px solid var(--border-primary)'
                                             }}
                                         >
                                             Aa
@@ -128,7 +134,7 @@ export function ThemeSelector() {
 
                                     <div className="min-w-0">
                                         <p className={`text-sm font-medium truncate ${theme === t.id
-                                            ? 'text-[var(--accent-primary)]'
+                                            ? 'text-[var(--text-action)]'
                                             : 'text-[var(--text-primary)]'
                                             }`}>
                                             {t.name}
@@ -140,7 +146,7 @@ export function ThemeSelector() {
 
                                     {/* Checkmark for selected */}
                                     {theme === t.id && (
-                                        <svg className="w-4 h-4 text-[var(--accent-primary)] ml-auto shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                        <svg className="w-4 h-4 text-[var(--text-action)] ml-auto shrink-0" fill="currentColor" viewBox="0 0 20 20">
                                             <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                                         </svg>
                                     )}

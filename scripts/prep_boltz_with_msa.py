@@ -18,58 +18,7 @@ import hashlib
 from collections import defaultdict
 from pathlib import Path
 
-# Try BioPython import
-try:
-    from Bio import SeqIO
-except ImportError:
-    print("Warning: BioPython not available. Using simplified PDB parser.")
-    SeqIO = None
-
-
-def parse_pdb_simple(pdb_path):
-    """Fallback PDB parser if BioPython not available"""
-    sequences = defaultdict(list)
-    aa_codes = {
-        'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
-        'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
-        'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
-        'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V'
-    }
-    
-    last_residue = {}
-    with open(pdb_path) as f:
-        for line in f:
-            if line.startswith('ATOM') and line[12:16].strip() == 'CA':
-                chain = line[21]
-                resname = line[17:20].strip()
-                resnum = int(line[22:26])
-                
-                if chain not in last_residue or resnum != last_residue[chain]:
-                    aa = aa_codes.get(resname, 'X')
-                    sequences[chain].append(aa)
-                    last_residue[chain] = resnum
-    
-    return {chain: ''.join(seq) for chain, seq in sequences.items()}
-
-
-def extract_chain_groups(pdb_path):
-    """Group chains by identical sequences, returns {sequence: [chain_ids]}"""
-    if SeqIO:
-        sequence_map = defaultdict(list)
-        for record in SeqIO.parse(pdb_path, 'pdb-atom'):
-            chain_id = record.annotations.get('chain', 'A')
-            sequence = str(record.seq).replace('X', '')
-            if len(sequence) > 10:
-                sequence_map[sequence].append(chain_id)
-        return sequence_map
-    else:
-        chains = parse_pdb_simple(pdb_path)
-        sequence_map = defaultdict(list)
-        for chain_id, sequence in chains.items():
-            sequence = sequence.replace('X', '')
-            if len(sequence) > 10:
-                sequence_map[sequence].append(chain_id)
-        return sequence_map
+from prep_boltz_yaml import extract_chain_groups, generate_yaml_config
 
 
 def get_msa_for_sequence(sequence, name, args):
@@ -87,57 +36,17 @@ def get_msa_for_sequence(sequence, name, args):
     local_file.write_bytes(data)
     return str(local_file.resolve())
 
-def is_nucleic_acid_sequence(sequence):
-    """Check if a sequence is DNA/RNA based on content"""
-    nucleotide_chars = set('ATGCU')
-    sequence_upper = sequence.upper().replace('X', '')
-    if not sequence_upper:
-        return None
-    nucleotide_ratio = sum(1 for c in sequence_upper if c in nucleotide_chars) / len(sequence_upper)
-    if nucleotide_ratio > 0.8:
-        # Check for U (RNA) vs T (DNA)
-        if 'U' in sequence_upper and 'T' not in sequence_upper:
-            return 'rna'
-        return 'dna'
-    return None
-
 def generate_yaml_with_msa(pdb_filename, chain_groups, msa_paths):
-    """Create YAML config with MSA paths for each chain group, detecting nucleic acids"""
-    sequences = []
-    for sequence, chain_ids in chain_groups.items():
-        mol_type = is_nucleic_acid_sequence(sequence)
-        
-        if mol_type == 'dna':
-            # DNA chains - no MSA needed
-            entry = {
-                'dna': {
-                    'id': sorted(chain_ids),
-                    'sequence': sequence
-                }
-            }
-        elif mol_type == 'rna':
-            # RNA chains - no MSA needed
-            entry = {
-                'rna': {
-                    'id': sorted(chain_ids),
-                    'sequence': sequence
-                }
-            }
-        else:
-            # Protein chain - include MSA if available
-            entry = {
-                'protein': {
-                    'id': sorted(chain_ids),
-                    'sequence': sequence
-                }
-            }
-            chain_key = f"{pdb_filename}_{chain_ids[0]}"
-            if chain_key in msa_paths and msa_paths[chain_key]:
-                entry['protein']['msa'] = msa_paths[chain_key]
-            else:
-                raise ValueError('Missing prepared protein alignment; no implicit no-MSA fallback')
-        sequences.append(entry)
-    return {'sequences': sequences}
+    result = generate_yaml_config(chain_groups)
+    for entry in result['sequences']:
+        if 'protein' not in entry:
+            continue
+        protein = entry['protein']
+        key = f"{pdb_filename}_{protein['id'][0]}"
+        if key not in msa_paths or not msa_paths[key]:
+            raise ValueError('Missing prepared protein alignment; no implicit no-MSA fallback')
+        protein['msa'] = msa_paths[key]
+    return result
 
 
 def main():
@@ -168,10 +77,11 @@ def main():
         base_name = pdb_file.replace('.pdb', '')
         chain_groups = extract_chain_groups(pdb_path)
         
-        for sequence, chain_ids in chain_groups.items():
+        for key, chain_ids in chain_groups.items():
+            kind, sequence = key[:2]
             chain_id = chain_ids[0]
             msa_name = f"{base_name}_{chain_id}"
-            if is_nucleic_acid_sequence(sequence):
+            if kind != 'protein':
                 continue
             msa_path = get_msa_for_sequence(sequence, msa_name, args)
             all_msa_paths[f"{pdb_file}_{chain_id}"] = msa_path

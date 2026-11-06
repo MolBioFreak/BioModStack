@@ -62,12 +62,12 @@ it('portal option clicks download the existing FASTA format and close without ou
 });
 
 it('common toolbar controls remain outside the collapsed secondary options and retain callbacks', async () => {
-    const save = vi.fn(); const projection = vi.fn(); const shelf = vi.fn();
-    await render(<SequenceHeader sequenceData={sequence} onSave={save} isDirty onViewModeChange={projection}
+    const save = vi.fn(); const projection = vi.fn(); const shelf = vi.fn(); const focus = vi.fn(); const project = vi.fn();
+    await render(<SequenceHeader sequenceData={sequence} onSave={save} isDirty onViewModeChange={projection} onFocusViewer={focus} onExportToProject={project}
         onToggleLibraryPanel={shelf} onToggleToolPanel={noop} onAutoAnnotate={noop}
         onDisplayStrandChange={noop} onGCTrackToggle={noop} onOpenLibrary={noop} />);
     const common = host.querySelector('[data-sequence-primary-actions]')!;
-    for (const label of ['Save', 'Export', 'Acquire', 'Linear', 'Both', 'Circular', 'Hide Shelf', 'Hide Tools']) {
+    for (const label of ['Save', 'Export', 'Acquire', 'Linear', 'Both', 'Circular', 'Hide Shelf', 'Hide Tools', 'Focus Viewer', 'Add to Project']) {
         expect(common.textContent).toContain(label);
     }
     expect(common.classList.contains('flex-wrap')).toBe(true);
@@ -75,8 +75,8 @@ it('common toolbar controls remain outside the collapsed secondary options and r
     expect(options.open).toBe(false);
     expect(options.textContent).toContain('Auto-Annotate');
     const button = (label: string) => [...common.querySelectorAll('button')].find(b => b.textContent?.trim() === label)!;
-    await click(button('Save')); await click(button('Linear')); await click(button('Hide Shelf'));
-    expect(save).toHaveBeenCalledOnce(); expect(projection).toHaveBeenCalledWith('linear'); expect(shelf).toHaveBeenCalledOnce();
+    await click(button('Save')); await click(button('Linear')); await click(button('Hide Shelf')); await click(button('Focus Viewer')); await click(button('Add to Project'));
+    expect(save).toHaveBeenCalledOnce(); expect(projection).toHaveBeenCalledWith('linear'); expect(shelf).toHaveBeenCalledOnce(); expect(focus).toHaveBeenCalledOnce(); expect(project).toHaveBeenCalledOnce();
 });
 
 it('features open for inspection, use one scroll owner, and provide named selectable color targets in add and edit', async () => {

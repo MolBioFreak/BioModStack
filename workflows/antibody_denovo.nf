@@ -853,15 +853,19 @@ process SpawnFAMPNNJobs {
         core_protein_scientific_contract: analysisContract.core_protein_scientific_contract,
         fampnn_analysis_declaration: analysisContract.declaration
     ] : [:]
-    def params_json = groovy.json.JsonOutput.toJson(analysisParams + [
-        fampnn_checkpoint: params.fampnn_checkpoint,
-        fampnn_checkpoint_path: params.fampnn_checkpoint_path,
-        fampnn_temperature: params.fampnn_temperature ?: 0.0001,
-        fampnn_num_steps: params.fampnn_num_steps ?: 500,
-        fampnn_psce_threshold: params.fampnn_psce_threshold ?: 0.15,
-        fampnn_mutation_top_n: params.fampnn_mutation_top_n,
-        fampnn_mutation_min_log_odds_delta: params.fampnn_mutation_min_log_odds_delta,
-        fampnn_constraint_mode: params.fampnn_constraint_mode,
+    // Keep the complete model-owned effective settings through child fan-out.
+    // In particular, explicit zero and nullable pSCE are not fallback requests.
+    def modelParams = params.findAll { key, value ->
+        key.toString().startsWith('fampnn_') || [
+            'antibody_design_mode', 'antibody_design_loops', 'protect_vhh_tetrad',
+            'antibody_chains', 'lock_target_chains', 'lock_antibody_framework',
+            'manual_mutation_fixed_positions_json', 'vhh_mode', 'antibody_format'
+        ].contains(key.toString())
+    }
+    if (!params.containsKey('fampnn_temperature')) modelParams.fampnn_temperature = 0.0001
+    if (!params.containsKey('fampnn_num_steps')) modelParams.fampnn_num_steps = 500
+    if (!params.containsKey('fampnn_psce_threshold')) modelParams.fampnn_psce_threshold = 0.15
+    def params_json = groovy.json.JsonOutput.toJson(modelParams + analysisParams + [
         rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom'),
         rfantibody_loop_length_ranges: params.get('rfantibody_loop_length_ranges'),
         pinned_gpus: params.pinned_gpus
@@ -2831,6 +2835,7 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
         }
 
         def structure_validator = (params.structure_validator ?: 'boltz2').toString().toLowerCase()
+        if (structure_validator == 'protenix_v2') structure_validator = 'protenix'
         if (!(structure_validator in ['boltz2', 'protenix', 'esmfold2'])) {
             log.warn("Unknown structure_validator '${structure_validator}', defaulting to boltz2")
             structure_validator = 'boltz2'
@@ -2936,32 +2941,19 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 def parent_id = params.job_id ?: "unknown_${System.currentTimeMillis()}"
                 def batch = orchestrator_batch_name
 
-                def child_params = groovy.json.JsonOutput.toJson([
+                // Preserve effective predictor settings instead of maintaining
+                // divergent child-only whitelists or replacing falsey values.
+                def child_params = groovy.json.JsonOutput.toJson(params.findAll { key, value ->
+                    ['protenix_', 'boltz_', 'esmfold2_', 'esmf_'].any { prefix -> key.toString().startsWith(prefix) }
+                } + [
+                    epitope_residues: params.epitope_residues,
                     structure_validator: structure_validator,
-                    boltz_sampling_steps: params.boltz_sampling_steps ?: 200,
-                    boltz_recycling_steps: params.boltz_recycling_steps ?: 3,
-                    boltz_num_samples: params.boltz_num_samples ?: 1,
-                    boltz_use_potentials: params.boltz_use_potentials ?: false,
-                    boltz_use_msa: false,
-                    boltz_step_scale: params.boltz_step_scale,
-                    protenix_model_weights: params.protenix_model_weights,
-                    protenix_seeds: params.protenix_seeds,
-                    protenix_n_sample: params.protenix_n_sample,
-                    protenix_n_step: params.protenix_n_step,
-                    protenix_n_cycle: params.protenix_n_cycle,
-                    protenix_use_msa: params.protenix_use_msa,
-                    protenix_msa_backend: params.protenix_msa_backend,
-                    protenix_use_template: params.protenix_use_template,
-                    protenix_enable_cache: params.protenix_enable_cache,
-                    protenix_enable_fusion: params.protenix_enable_fusion,
                     target_pdb: params.target_pdb,
                     target_model_number: params.target_model_number,
                     antibody_chains: params.antibody_chains,
                     antigen_chains: params.antigen_chains,
                     target_chains: params.antigen_chains,
                     protenix_binder_source_chains: params.protenix_binder_source_chains ?: params.antibody_chains,
-                    protenix_auto_oom_retry: params.protenix_auto_oom_retry,
-                    protenix_oom_retry_attempts: params.protenix_oom_retry_attempts,
                     msa_preset: params.msa_preset,
                     msa_use_gpu: params.msa_use_gpu,
                     msa_local_db: params.msa_local_db,
@@ -2976,10 +2968,6 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                     msa_gpu_server_wait_timeout: params.msa_gpu_server_wait_timeout,
                     msa_gpu_server_db_load_mode: params.msa_gpu_server_db_load_mode,
                     msa_gpu_server_startup_wait: params.msa_gpu_server_startup_wait,
-                    protenix_allow_cpu_msa_fallback: params.protenix_allow_cpu_msa_fallback,
-                    protenix_local_msa_timeout_seconds: params.protenix_local_msa_timeout_seconds,
-                    protenix_msa_max_seqs_per_validation_job: params.protenix_msa_max_seqs_per_validation_job,
-                    protenix_local_msa_max_seqs_per_validation_job: params.protenix_local_msa_max_seqs_per_validation_job,
                     run_thermompnn: params.run_thermompnn ?: false,
                     thermompnn_max_ddg: params.thermompnn_max_ddg,
                     run_immunogenicity_scoring: params.run_immunogenicity_scoring ?: false,

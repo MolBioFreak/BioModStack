@@ -17,6 +17,7 @@ const apiMocks = vi.hoisted(() => ({
     importMolBioNgsBrowserReference: vi.fn(),
     issueMolBioNgsReceipt: vi.fn(),
     previewMolBioSequenceImport: vi.fn(),
+    uploadFile: vi.fn(),
     submitOntNgsJob: vi.fn(),
     submitPooledReferenceAssignment: vi.fn(),
 }));
@@ -112,6 +113,28 @@ function buttonWithText(text: string) {
 }
 
 describe('mounted NGS settings to submit payload', () => {
+    it('shows only the pooled assignment form and a single FASTQ picker', async () => {
+        await renderTemplate({ selectedWorkflow: 'pooledAssignment', inputSource: 'fastq', fastqPath: '/data/pooled.fastq' });
+        expect(container.querySelectorAll('[data-testid="pooled-reference-assignment-panel"]')).toHaveLength(1);
+        expect(buttonWithText('Browse FASTQ')).not.toBeNull();
+        expect(buttonWithText('Submit pooled assignment')).not.toBeNull();
+        expect(container.querySelector('[data-testid="ngs-job-input-section"]')).toBeNull();
+        expect(container.querySelector('[data-testid="ngs-basecalling-section"]')).toBeNull();
+        expect(container.querySelector('[data-testid="ngs-analysis-section"]')).toBeNull();
+        expect(container.querySelector('[data-testid="ngs-review-bar"]')).toBeNull();
+        expect(container.textContent).not.toContain('Run disabled:');
+        expect(container.querySelector('[aria-label="Successful remote results"]')).toBeNull();
+    });
+
+    it('omits empty basecalling controls for FASTQ QC but keeps the clone consensus declaration', async () => {
+        await renderTemplate({ selectedWorkflow: 'fastqQc', inputSource: 'fastq' });
+        expect(container.querySelector('[data-testid="ngs-basecalling-section"]')).toBeNull();
+        expect(container.querySelector('[data-testid="ngs-analysis-section"]')).not.toBeNull();
+        await act(async () => container.querySelector<HTMLButtonElement>('[data-ngs-workflow-key="clone"]')!.click());
+        await flush();
+        expect(container.querySelector('[aria-label="Declared clone consensus profile"]')).not.toBeNull();
+    });
+
     it('submits visible assembly, GPU, reference, and POD5 input settings as one request', async () => {
         await renderTemplate({
             selectedWorkflow: 'constructScreening',
@@ -176,7 +199,7 @@ describe('mounted NGS settings to submit payload', () => {
         });
 
         expect(container.querySelector('[data-testid="ngs-gpu-assignment"]')).toBeNull();
-        expect(container.querySelector('[data-testid="ngs-review-gpu"]')?.textContent).toContain('CPU ONLY');
+        expect(container.querySelector('[data-testid="ngs-review-gpu"]')?.textContent).toContain('LOCAL CPU');
 
         const fastqQc = checkboxContaining('FASTQ plasmid QC');
         expect(fastqQc?.checked).toBe(true);
@@ -219,7 +242,7 @@ describe('mounted NGS settings to submit payload', () => {
             'RNA duplex is unsupported by the locked Dorado runtime.',
             'Duplex basecalling requires a confined read-pairs file.',
             'Barcode classification and duplex cannot be combined in the locked runtime.',
-            'Modified-base calling requires DNA HAC simplex.',
+            'Modified-base calling requires one-strand (simplex) basecalling.',
         ]) {
             expect(alert).toContain(blocker);
         }
@@ -237,9 +260,9 @@ describe('mounted NGS settings to submit payload', () => {
             ngsReferenceRevisionId: 'reference-revision-1',
         });
 
-        const pod5 = buttonWithText('POD5 Raw Reads');
+        const pod5 = buttonWithText('POD5 raw reads');
         const bam = buttonWithText('Existing BAM');
-        const fastq = buttonWithText('FASTQ Analysis');
+        const fastq = buttonWithText('FASTQ reads');
         expect(pod5?.getAttribute('aria-pressed')).toBe('false');
         expect(bam?.getAttribute('aria-pressed')).toBe('false');
         expect(fastq?.getAttribute('aria-pressed')).toBe('true');
@@ -262,8 +285,6 @@ describe('mounted NGS settings to submit payload', () => {
         await act(async () => container.querySelector<HTMLButtonElement>('[data-ngs-workflow-key="clone"]')?.click());
         expect(checkboxContaining('FASTQ plasmid QC')?.checked).toBe(false);
 
-        await act(async () => container.querySelector<HTMLButtonElement>('[data-ngs-workflow-key="bamQc"]')?.click());
-        expect(checkboxContaining('FASTQ plasmid QC')?.checked).toBe(false);
     });
     it('reopens persisted effective stage settings in the visible controls', async () => {
         await renderTemplate({

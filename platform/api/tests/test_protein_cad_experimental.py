@@ -112,7 +112,7 @@ def test_prep_protein_cad_request_compiles_disco_dna_job(tmp_path: Path) -> None
     payload = json.loads(compiled_input.read_text(encoding="utf-8"))
 
     assert request["backend"] == "disco"
-    assert request["disco"]["effort"] == "max"
+    assert request["disco"]["effort"] == "fast"
     assert len(payload) == 2
     assert payload[0]["name"] == "length_50_dna"
     sequences = payload[0]["sequences"]

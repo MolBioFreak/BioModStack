@@ -57,7 +57,7 @@ process AF2_BACKPROP {
     def hard_iters = params.af2_backprop_hard_iters ?: 10
     def num_recycles = params.af2_backprop_num_recycles ?: 3
     def learning_rate = params.af2_backprop_learning_rate ?: 0.1
-    def use_multimer = params.af2_backprop_use_multimer ?: true
+    def use_multimer = params.af2_backprop_use_multimer != null ? params.af2_backprop_use_multimer : true
     def num_models = params.af2_backprop_num_models ?: 1
     def loss_plddt = params.af2_backprop_loss_plddt ?: 0.1
     def loss_pae = params.af2_backprop_loss_pae ?: 0.1

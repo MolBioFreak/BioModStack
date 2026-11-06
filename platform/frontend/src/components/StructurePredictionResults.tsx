@@ -1,3 +1,4 @@
+import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import { useState, type ReactNode } from 'react';
 import { predictionDisplayLabel } from '../lib/designFriendlyLabel';
 import { useQuery } from '@tanstack/react-query';
@@ -92,17 +93,10 @@ function legacyChains(raw: unknown): Record<string, ChainMetric> {
     }));
 }
 
-function PredictionEvidence({ design, structure, fullPaeRequested, scalars }: { design: Design; structure?: ConfidenceStructure; fullPaeRequested?: boolean; scalars: ScalarEvidence }) {
-    const [inspection, setInspection] = useState<readonly AtomRef[]>([]);
-    const acceptSelection = (selection: MetricSelection) => setInspection(selection.identities.flatMap(identity => {
-        if ('first' in identity && 'second' in identity) return [identity.first, identity.second] as AtomRef[];
-        return 'authSeqId' in identity || 'labelSeqId' in identity ? [identity as AtomRef] : [];
-    }));
-    const [rowChain, setRowChain] = useState('');
-    const [columnChain, setColumnChain] = useState('');
-    const residue = useQuery({ queryKey: ['prediction-residue-confidence', design.id], queryFn: () => fetchDesignResidueMetrics(design.id).then(r => r.data), retry: false });
-    const chain = useQuery({ queryKey: ['prediction-chain-confidence', design.id], queryFn: () => fetchChainMetrics(design.id).then(r => r.data), retry: false });
-    const pae = useQuery({ queryKey: ['prediction-pae', design.id], queryFn: () => fetchPAEData(design.id).then(r => r.data), retry: false });
+/** Shared per-residue confidence owner for Overview, Charts and the Structure companion. */
+export function useConfidenceChains(design: Design, enabled = true) {
+    const residue = useQuery({ queryKey: ['prediction-residue-confidence', design.id], queryFn: () => fetchDesignResidueMetrics(design.id).then(r => r.data), retry: false, enabled });
+    const chain = useQuery({ queryKey: ['prediction-chain-confidence', design.id], queryFn: () => fetchChainMetrics(design.id).then(r => r.data), retry: false, enabled });
     const profile = confidenceProfile(residue.data, design);
     const bound = design.scientific_structure_document || design.core_protein_scientific_contract === 1 || asRecord(residue.data)?.schema_name;
     let chains: Record<string, ConfidenceChainMetric> = bound ? profile.chains : legacyChains(chain.data);
@@ -111,6 +105,19 @@ function PredictionEvidence({ design, structure, fullPaeRequested, scalars }: { 
         const unmapped = legacyChains({ unmapped: { ...legacyResidue, type: 'unknown', avg_plddt: null } });
         if (unmapped.unmapped) chains = { unmapped: { ...unmapped.unmapped, label: 'Legacy profile (chain mapping unavailable)' } };
     }
+    return { residue, chain, profile, chains };
+}
+
+function PredictionEvidence({ design, structure, fullPaeRequested, scalars }: { design: Design; structure?: ConfidenceStructure; fullPaeRequested?: boolean; scalars: ScalarEvidence }) {
+    const [inspection, setInspection] = useState<readonly AtomRef[]>([]);
+    const acceptSelection = (selection: MetricSelection) => setInspection(selection.identities.flatMap(identity => {
+        if ('first' in identity && 'second' in identity) return [identity.first, identity.second] as AtomRef[];
+        return 'authSeqId' in identity || 'labelSeqId' in identity ? [identity as AtomRef] : [];
+    }));
+    const [rowChain, setRowChain] = useState('');
+    const [columnChain, setColumnChain] = useState('');
+    const { residue, chain, profile, chains } = useConfidenceChains(design);
+    const pae = useQuery({ queryKey: ['prediction-pae', design.id], queryFn: () => fetchPAEData(design.id).then(r => r.data), retry: false });
     const nativePae = parseScientificPae(pae.data, design.scientific_structure_document, design.id);
     const nativeChain = parseScientificNativeMetric(chain.data, design.scientific_structure_document, 'chain_metrics', design.id);
     const legacy = !design.scientific_structure_document && design.core_protein_scientific_contract !== 1 && !asRecord(pae.data)?.schema_name ? asRecord(pae.data) : null;
@@ -154,7 +161,7 @@ function PredictionEvidence({ design, structure, fullPaeRequested, scalars }: { 
     </>;
 }
 
-function NativeArtifactDownloads({ design }: { design: Design }) {
+export function NativeArtifactDownloads({ design }: { design: Design }) {
     const [open, setOpen] = useState(false);
     const query = useQuery({ queryKey: ['native-confidence-artifacts', design.id],
         queryFn: () => fetchNativeConfidenceArtifacts(design.id).then(r => r.data), enabled: open, retry: false });
@@ -163,7 +170,7 @@ function NativeArtifactDownloads({ design }: { design: Design }) {
         {open && (query.isPending ? <p>Loading files…</p> : query.isError ? <p>File inventory could not be read. Structure remains available.</p>
             : query.data?.status !== 'ok' ? <p>Original confidence file inventory is unavailable for this result.</p>
             : <ul className="space-y-2">{query.data.artifacts.map(a => <li key={a.role}>{a.download_url
-                ? <a className="underline" href={a.download_url}>{a.role} · {a.filename}</a>
+                ? <a className="underline" href={resolveApiResourceUrl(a.download_url)}>{a.role} · {a.filename}</a>
                 : <span>{a.role} · {a.retained ? 'Retained; no download link available' : 'Not retained'}</span>}</li>)}</ul>)}
     </details>;
 }

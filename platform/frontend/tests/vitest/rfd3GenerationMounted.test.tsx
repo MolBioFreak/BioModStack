@@ -39,7 +39,7 @@ it('selects the exact native mmCIF in shared Molstar and retains candidate downl
     const viewer = () => JSON.parse(container.querySelector('[data-testid="viewer"]')!.textContent!);
     expect(viewer()).toMatchObject({ structureUrl: result.candidates[0].structure_url, format: 'cif', artifactJobId: result.job_id });
     await act(async () => container.querySelectorAll<HTMLButtonElement>('tbody button')[1].click());
-    expect(viewer()).toMatchObject({ structureUrl: result.candidates[1].structure_url, label: 'candidate-B', format: 'cif' });
+    expect(viewer()).toMatchObject({ structureUrl: result.candidates[1].structure_url, label: 'Candidate 2', format: 'cif' });
     expect(container.querySelectorAll('tbody button')[1].getAttribute('aria-pressed')).toBe('true');
     expect(Array.from(container.querySelectorAll('a[download]')).map((link) => link.getAttribute('href'))).toEqual(result.candidates.map((candidate) => candidate.structure_url));
     expect(container.textContent).toContain('12.00');

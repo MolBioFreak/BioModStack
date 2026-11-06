@@ -140,7 +140,7 @@ async def test_pinned_generation_drives_launch_and_retained_attempt_control(
     job = SimpleNamespace(remote_attempt_id='original', provenance={'remote_execution_receipt': receipt})
     connection, attempt_dir = ex._connection_for_attempt(target, job)
     argv = ex._worker_argv(connection, command, attempt_dir)
-    assert argv == [binding['paths']['python'], binding['paths']['runner'], command, '--attempt-dir', receipt['remote_attempt_dir']]
+    assert argv == [binding['paths']['python'], '-B', binding['paths']['runner'], command, '--attempt-dir', receipt['remote_attempt_dir']]
     assert connection.runtime_binding == binding
 
 

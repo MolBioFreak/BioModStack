@@ -100,6 +100,22 @@ def _protenix_task_identity(task: dict) -> list:
     identities = []
     for wrapper in task.get('sequences', []):
         if 'proteinChain' not in wrapper:
+            # FILE paths are placement, not chemistry. Compare the exact existing
+            # portable binding on both sides; never ignore ligand identity or
+            # mutate the sealed controller manifest/native task.
+            ligand = wrapper.get('ligand', {}).get('ligand')
+            if isinstance(ligand, str) and ligand.startswith('FILE_'):
+                import copy
+                try:
+                    from scripts.lib.portable_inputs import resolve_input_path
+                except ModuleNotFoundError as error:
+                    # Native images can own a regular top-level `scripts`
+                    # package. Direct helper execution already exposes our lib.
+                    if error.name not in {'scripts', 'scripts.lib'}:
+                        raise
+                    from lib.portable_inputs import resolve_input_path
+                wrapper = copy.deepcopy(wrapper)
+                wrapper['ligand']['ligand'] = 'FILE_' + str(resolve_input_path(ligand[5:]))
             identities.append(wrapper)
             continue
         chain = wrapper['proteinChain']
@@ -129,6 +145,13 @@ def hydrate_prepared_protenix_task(payload: list, source: Path, manifest_sha256:
                  for task_index, task in enumerate(prepared)
                  for chain_index, wrapper in enumerate(task.get('sequences', []))
                  if 'proteinChain' in wrapper}
+    inline_ids = {f'{task_index}:{chain_index}'
+                  for task_index, task in enumerate(prepared)
+                  for chain_index, wrapper in enumerate(task.get('sequences', []))
+                  if 'proteinChain' in wrapper and any(wrapper['proteinChain'].get(key) is not None
+                     for key in ('unpairedMsa', 'pairedMsa'))}
+    artifact_ids = {item['chain_id'] for item in manifest['artifacts']}
+    sequences = {key: value for key, value in sequences.items() if key not in inline_ids or key in artifact_ids}
     paths = resolve_alignments(source, manifest, sequences=sequences, settings=manifest['settings'])
     result = copy.deepcopy(payload)
     used = set()

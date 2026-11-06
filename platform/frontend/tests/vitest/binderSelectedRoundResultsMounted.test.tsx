@@ -1,3 +1,4 @@
+import '../../src/components/NativeBinderGenerationResults';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -6,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
 import { ResultsViewer } from '../../src/components/ResultsViewer';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
-import { writeBinderSelection, writeBinderNativeSources } from '../../src/lib/binderContinuation';
+import { writeBinderSelection, writeBinderNativeSources, readBinderNativeSources } from '../../src/lib/binderContinuation';
 import { declaredBinderRoleDefaults } from '../../src/lib/binderSourceRoles';
 import { submitSelectedRound, writeRoundStorage } from '../../src/lib/binderSelectedRound';
 
@@ -39,8 +40,9 @@ async function mount() {
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     await act(async () => { tree = create(<MemoryRouter initialEntries={['/designs/parent']}><QueryClientProvider client={client}><ThemeProvider><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></ThemeProvider></QueryClientProvider></MemoryRouter>); });
     const deadline = Date.now() + 10000;
-    while (!tree!.root.findAllByProps({ 'aria-label': 'Candidate data table' }).length && Date.now() < deadline) await flush();
-    expect(tree!.root.findAllByProps({ 'aria-label': 'Candidate data table' })).toHaveLength(1);
+    while (!text(tree!.root).includes('32 loaded') && Date.now() < deadline) await flush();
+    // Reopen can intentionally restore the exact-document Structure view.
+    expect(text(tree!.root)).toContain('32 loaded');
 }
 async function close() { await act(async () => tree?.unmount()); tree = undefined; client?.clear(); }
 beforeEach(() => {
@@ -99,10 +101,10 @@ it('actual Results parent serializes independent stages and preserves null/false
     await act(async () => field('fixed_positions').findByType('input').props.onChange({ target: { value: '' } }));
     await click('Back to round');
     await click('Add Sequence design');
-    await change('Stage 2 FA-MPNN', true); await change('Stage 2 ProteinMPNN', true);
+    await click('Add fampnn call'); await click('Add proteinmpnn call');
     await click('FA-MPNN settings'); await click('Clear Samples (null)'); await click('Back to round');
     await click('Add Blind prediction');
-    await change('Stage 3 Protenix', true); await change('Stage 3 Boltz-2', true);
+    await click('Add protenix call'); await click('Add boltz2 call');
     await close(); await mount(); await click('Next round (2)');
     await click('Queue round');
     const sent = calls.filter(call => call.url === '/api/binder-continuation/selected')[0].body;
@@ -117,6 +119,10 @@ it('actual Results parent serializes independent stages and preserves null/false
     expect(sent.round_plan.stages[2].input.stage_id).toBe(sent.round_plan.stages[1].id);
     expect(tree!.root.findAll(node => node.type === 'input' && /^Select Protenix output /.test(node.props['aria-label'] ?? ''))).toHaveLength(33);
     await change('Select Protenix output 33', true);
+    expect(readBinderNativeSources('parent')).toEqual([{ job_id: 'parent', artifact_id: 'native-31' }]);
+    await change('Select Protenix output 33', false);
+    expect(button('Next round (2)')).toBeTruthy();
+    await change('Select Protenix output 33', true);
     await click('Next round (3)'); await click('Queue round');
     await close(); await mount();
     expect(tree!.root.findByProps({ 'aria-label': 'Returned round' }).findAllByType('option')).toHaveLength(2);
@@ -125,6 +131,28 @@ it('actual Results parent serializes independent stages and preserves null/false
     expect(new Set(posts.map(post => post.idempotency_key)).size).toBe(3);
     expect(posts[2].selection.candidate_refs.at(-1)).toEqual({ kind: 'native_sequence', job_id: 'fixture-child', publication_ref: 'fixture-publication', native_output_id: 'sample-32' });
     expect(tree!.root.findByProps({ 'aria-label': 'Returned round' }).findAllByType('option')).toHaveLength(3);
+}, 30000);
+
+it('round ref updates preserve independent native sources, remove mirrored refs and honor explicit replacement', async () => {
+    const source = { job_id: 'parent', artifact_id: 'native-31', document: { ...doc, artifact_id: 'native-31', model: 2 } };
+    writeBinderNativeSources('parent', [source]);
+    await mount(); expect(button('Next round (1)')).toBeTruthy();
+    const update = async (refs: any[], replace = false) => {
+        await act(async () => window.dispatchEvent(new CustomEvent('bms:binder-round-selection', { detail: { jobId: 'parent', refs, replace } })));
+        await flush();
+    };
+    const mirrored = { kind: 'native_document', job_id: 'fixture-child', artifact_id: 'child-doc', model: 3 };
+    await update([mirrored]);
+    expect(button('Next round (2)')).toBeTruthy();
+    expect(readBinderNativeSources('parent')).toHaveLength(2);
+    expect(readBinderNativeSources('parent')[0]).toEqual(source);
+    await update([{ kind: 'native_sequence', job_id: 'fixture-child', publication_ref: 'fixture-publication', native_output_id: 'sequence' }]);
+    expect(button('Next round (2)')).toBeTruthy();
+    expect(readBinderNativeSources('parent')).toEqual([source]);
+    await update([]); expect(button('Next round (1)')).toBeTruthy();
+    expect(readBinderNativeSources('parent')).toEqual([source]);
+    await update([], true); expect(button('Next round (0)')).toBeTruthy();
+    expect(readBinderNativeSources('parent')).toEqual([]);
 }, 30000);
 
 it('actual native Results preserves cross-page mixed selection, exact complex/binder inspection and backend frozen ranking/final sets', async () => {
@@ -179,9 +207,8 @@ it('keeps the same idempotent intent after lost transport and reload, and preser
 
 it('protein recipe visibly orders flow then intentionally chosen designers then predictors without a hidden designer', async () => {
     writeBinderSelection('parent', ['design']); await mount(); await click('Next round (1)'); await click('Add protein flow → design → predict');
-    expect(tree!.root.findByProps({ 'aria-label': 'Stage 2 FA-MPNN' }).props.checked).toBe(false);
-    expect(tree!.root.findByProps({ 'aria-label': 'Stage 2 ProteinMPNN' }).props.checked).toBe(false);
-    await change('Stage 2 ProteinMPNN', true); await change('Stage 2 Caliby', true); await change('Stage 3 Protenix', true);
+    expect(tree!.root.findAll(node => node.type === 'section' && /^Invocation /.test(node.props['aria-label'] ?? ''))).toHaveLength(0);
+    await click('Add proteinmpnn call'); await click('Add caliby_binder call'); await click('Add protenix call');
     await click('Queue round');
     const stages = calls.filter(call => call.url === '/api/binder-continuation/selected').at(-1)!.body.round_plan.stages;
     expect(stages.map((stage: any) => stage.kind)).toEqual(['maturation', 'sequence_design', 'prediction']);
@@ -205,7 +232,7 @@ it('keeps task-owned protein and antibody defaults and edited drafts separate wi
 
 it('approved role initialization uses the exact producer document and preserves explicit clears through reload', async () => {
     writeBinderSelection('parent', ['design']);
-    await mount(); await click('Next round (1)'); await click('Add Sequence design'); await change('Stage 1 FA-MPNN', true); await click('FA-MPNN settings');
+    await mount(); await click('Next round (1)'); await click('Add Sequence design'); await click('Add fampnn call'); await click('FA-MPNN settings');
     const field = (name: string) => tree!.root.findAll(node => typeof node.type === 'function' && node.props.param?.name === name).at(-1)!.findByType('input');
     expect(field('design_chain').props.value).toBe('B');
     expect(field('target_chain').props.value).toBe('A');

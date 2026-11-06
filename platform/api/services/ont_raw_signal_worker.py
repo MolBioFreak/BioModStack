@@ -12,9 +12,16 @@ from typing import Any
 
 from sqlalchemy import select
 
-from database import OntInstrumentRun
+from database import OntInstrumentRun, OntRawSignalRepresentation
+from services.container_cli_environment import container_cli_environment
 from services.ont_raw_signal import (
     EXTERNAL_BLOW5_VALIDATION_PROFILE_ID,
+    SLOW5_TO_BLOW5_PROFILE_ID,
+    apply_source_retention,
+    finalize_slow5_conversion,
+    slow5_canonical_roundtrip,
+    slow5_output_validation_command,
+    stage_slow5_source,
     claim_next_derivation,
     claim_next_waveform_lookup,
     close_source_identity,
@@ -41,7 +48,30 @@ from services.ont_raw_signal import (
     transition_derivation,
     _assert_publication_directory_identity,
     _prepare_confined_directory,
+    _open_absolute_directory_nofollow,
 )
+
+# Linux sun_path holds 108 bytes including the terminating NUL.
+_UNIX_SOCKET_PATH_MAX = 107
+
+
+def _bind_unix_socket(server: socket.socket, socket_path: Path) -> None:
+    """Bind ``socket_path`` even when its absolute path exceeds sun_path.
+
+    The socket file must stay in the stage directory because the container
+    reaches it through that bind mount. Bind through a confined parent
+    directory handle for short and long roots alike, without following
+    symlinks or changing the process-wide working directory.
+    """
+    directory_fd = _open_absolute_directory_nofollow(socket_path.parent)
+    try:
+        short_path = f"/proc/self/fd/{directory_fd}/{socket_path.name}"
+        if len(os.fsencode(short_path)) > _UNIX_SOCKET_PATH_MAX:
+            raise OSError(f"AF_UNIX socket name is too long: {socket_path.name}")
+        server.bind(short_path)
+    finally:
+        os.close(directory_fd)
+
 
 logger = logging.getLogger(__name__)
 RAW_SIGNAL_WAVEFORM_RUNTIME_TIMEOUT_SECONDS = 120.0
@@ -112,8 +142,7 @@ class OntRawSignalWorker:
                     await session.execute(
                         select(OntInstrumentRun.id)
                         .where(
-                            OntInstrumentRun.state.in_(("starting", "running", "stopping")),
-                            OntInstrumentRun.minknow_run_id.is_not(None),
+                            OntInstrumentRun.state.in_(("starting", "running", "stopping", "unknown")),
                         )
                         .order_by(OntInstrumentRun.observed_at, OntInstrumentRun.id)
                         .limit(100)
@@ -197,9 +226,13 @@ class OntRawSignalWorker:
             socket_path = Path(fd_socket)
             socket_path.unlink(missing_ok=True)
             descriptor_server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            descriptor_server.bind(str(socket_path))
-            descriptor_server.listen(1)
-            descriptor_server.settimeout(0.5)
+            try:
+                _bind_unix_socket(descriptor_server, socket_path)
+                descriptor_server.listen(1)
+                descriptor_server.settimeout(0.5)
+            except BaseException:
+                descriptor_server.close()
+                raise
 
             def send_descriptors() -> None:
                 try:
@@ -235,7 +268,7 @@ class OntRawSignalWorker:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+                env=container_cli_environment(),
                 start_new_session=True,
             )
             admission_lost = False
@@ -322,6 +355,20 @@ class OntRawSignalWorker:
             raise RuntimeError(f"raw-signal stage command failed with exit {receipt['returncode']}")
         return receipt
 
+    async def _apply_retention(self, source_id: str, blow5_id: str) -> None:
+        """Remove converted POD5 when the operator chose BLOW5-only retention."""
+        try:
+            async with self._session_factory() as session:
+                source = await session.get(OntRawSignalRepresentation, source_id)
+                blow5 = await session.get(OntRawSignalRepresentation, blow5_id)
+                if source is not None and blow5 is not None:
+                    outcome = await apply_source_retention(session, source, blow5)
+                    await session.commit()
+                    if outcome and outcome.get("errors"):
+                        logger.warning("ONT POD5 removal incomplete for %s: %s", source_id, outcome["errors"])
+        except Exception:
+            logger.exception("ONT POD5 retention step failed: %s", source_id)
+
     async def run_once(self) -> int:
         async with self._session_factory() as session:
             await recover_expired_derivations(session)
@@ -371,6 +418,42 @@ class OntRawSignalWorker:
                 )
                 return await self._execute(command, item_id, token, **kwargs)
 
+            if job.profile_id == SLOW5_TO_BLOW5_PROFILE_ID:
+                for directory_name in ("source", "outputs", "check"):
+                    os.close(_prepare_confined_directory(stage, (directory_name,)))
+                async with self._session_factory() as session:
+                    await transition_derivation(session, job.id, claim_token, "converting", "converting_started", {})
+                source_identity = stage_slow5_source(commands)
+                convert_receipt = await execute_stage(commands["convert"], job.id, claim_token)
+                async with self._session_factory() as session:
+                    await transition_derivation(session, job.id, claim_token, "converting", "conversion_processes_complete", {"source": source_identity, "convert": convert_receipt})
+                for state, reason, command_name in (
+                    ("structural_check", "slow5tools_quickcheck_passed", "quickcheck"),
+                    ("indexing", "adjacent_indexes_created", "index_create"),
+                ):
+                    async with self._session_factory() as session:
+                        await transition_derivation(session, job.id, claim_token, state, f"{state}_started", {})
+                    stage_receipt = await execute_stage(commands[command_name], job.id, claim_token)
+                    async with self._session_factory() as session:
+                        await transition_derivation(session, job.id, claim_token, state, reason, stage_receipt)
+                async with self._session_factory() as session:
+                    await transition_derivation(session, job.id, claim_token, "index_validation", "index_validation_started", {})
+                await execute_stage(commands["canonical_source"], job.id, claim_token)
+                await execute_stage(commands["canonical_output"], job.id, claim_token)
+                roundtrip = slow5_canonical_roundtrip(commands)
+                validation_receipt = await execute_stage(slow5_output_validation_command(commands), job.id, claim_token)
+                semantic = finalize_slow5_conversion(commands, roundtrip)
+                async with self._session_factory() as session:
+                    await transition_derivation(session, job.id, claim_token, "index_validation", "index_open_lookup_validation_passed", validation_receipt)
+                    await transition_derivation(session, job.id, claim_token, "semantic_validation", "lossless_slow5_roundtrip_passed", {"roundtrip": roundtrip, "read_count": semantic["read_count"]})
+                    await transition_derivation(session, job.id, claim_token, "publishing", "atomic_publication_started", {})
+                    live_job = await session.get(type(job), job.id)
+                    live_source = await session.get(type(source), source.id)
+                    if live_job is None or live_source is None:
+                        raise RuntimeError("raw-signal publication authority disappeared")
+                    representation = await publish_derivation(session, live_job, live_source, commands)
+                    await transition_derivation(session, job.id, claim_token, "ready", "indexed_blow5_ready", {"representation_id": representation.id})
+                return 1
             if job.profile_id == EXTERNAL_BLOW5_VALIDATION_PROFILE_ID:
                 external_source_fds = pin_external_blow5_descriptors(commands)
             else:
@@ -465,6 +548,7 @@ class OntRawSignalWorker:
                     raise RuntimeError("raw-signal publication authority disappeared")
                 representation = await publish_derivation(session, live_job, live_source, commands)
                 await transition_derivation(session, job.id, claim_token, "ready", "indexed_blow5_ready", {"representation_id": representation.id})
+            await self._apply_retention(source.id, representation.id)
             return 1
         except asyncio.CancelledError:
             raise

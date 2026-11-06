@@ -21,7 +21,7 @@ import { JobSubmission } from '../../src/components/JobSubmission';
 import { api, EXECUTION_TARGET_STORAGE_KEY } from '../../src/lib/api';
 import { binderAuthoringKey, readBinderAuthoringSession } from '../../src/lib/binderAuthoringSession';
 const catalogs = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON || 'python3', ['-c', "import json,yaml; from pathlib import Path; p=Path('../api/config/models'); print(json.dumps([yaml.safe_load((p/(x+'.yaml')).read_text()) for x in ['ppiflow','boltzgen','proteinmpnn','fampnn','caliby_binder','protenix','boltz2','esmfold2']]))"], { encoding: 'utf8' }));
-const inventories = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON || 'python3', ['-c', "import sys,json;sys.path.insert(0,'../api');from services.ppiflow_generation import ppiflow_generation_inventory;from services.boltzgen_request_compatibility import boltzgen_generation_inventory; print(json.dumps({**{'ppiflow:'+m:ppiflow_generation_inventory(m) for m in ['protein_binder','antibody_binder','nanobody_binder']},**{'boltzgen:'+m:boltzgen_generation_inventory(m) for m in ['protein_binder','peptide_binder','nanobody_binder']}}))"], { encoding: 'utf8' }));
+const inventories = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON || 'python3', ['-c', "import sys,json;sys.path.insert(0,'../api');from services.ppiflow_generation import ppiflow_generation_inventory;from services.boltzgen_request_compatibility import boltzgen_generation_inventory; print(json.dumps({**{'ppiflow:'+m:ppiflow_generation_inventory(m) for m in ['protein_binder','antibody_binder','nanobody_binder']},**{'boltzgen:'+m:boltzgen_generation_inventory(m) for m in ['protein_binder','peptide_binder','nanobody_binder','antibody_binder','ligand_binder','ntp_binder','scaffold_around_ligand','backbone_docking']}}))"], { encoding: 'utf8' }));
 let root: Root | undefined; let client: QueryClient; const originalAdapter = api.defaults.adapter;
 const pdb = 'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00 20.00           C  \nEND\n';
 const visible = (node: Element) => !node.closest('[hidden]');
@@ -112,8 +112,11 @@ it('explicit legacy partial-flow Load replaces the retained RF draft including e
 
 it.each(['ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'])('advertised BoltzGen %s retains native source/editor shell', async mode => {
     await mount(`/submit?model=boltzgen&mode=${mode}`);
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[data-native-setting="boltzgen_protocol"]')).not.toBeNull(); });
     expect(document.body.textContent).toContain('BoltzGen generation'); expect(document.querySelector('[aria-label="Native binder execution settings"]')).not.toBeNull();
-    const model = catalogs.find((m: any) => m.id === 'boltzgen'); const advertised = model.modes.find((m: any) => m.id === mode);
-    for (const key of advertised.params) expect(document.querySelector(`[data-native-setting="${key}"]`), key).not.toBeNull();
+    const inventory = inventories[`boltzgen:${mode}`];
+    for (const field of inventory.parameters) expect(document.querySelector(`[data-native-setting="${field.name}"]`), field.name).not.toBeNull();
+    expect(saved().boltzgen_protocol).toBe('protein-small_molecule');
+    expect(saved().boltzgen_min_plddt).toBeNull();
     expect(document.querySelector('[aria-label="Automatic blind complex prediction"]')).toBeNull();
 });

@@ -12,7 +12,7 @@ import operator
 from typing import NoReturn
 
 from bioxp_method_model import validate_method
-from bioxp_workflow_authoring import WorkflowPreviewRequest, preview, _NATIVE
+from bioxp_workflow_authoring import WorkflowPreviewRequest, preview, native_intent, _NATIVE
 
 VERSION = 'bms-method-compiler.v1'
 MAX_DEPTH = 64
@@ -30,6 +30,21 @@ class RepresentationError(ValueError):
     def __init__(self, message, path='', code='representation_error'):
         super().__init__(message)
         self.path, self.code = path, code
+
+
+def plain_emission_message(message):
+    """Readable wording for common native-schema rejections; the rejection itself is unchanged."""
+    import re
+    m = re.match(r"^/(leading_air|trailing_air): \{'volume_ul': ([^}]+)\} is not valid", str(message))
+    if m:
+        phase = 'leading' if m.group(1) == 'leading_air' else 'trailing'
+        return (f'The liquid class sets a {m.group(2)} µL {phase} air gap but no air speed. '
+                'Set "Air gap aspiration µL/s" on that liquid class (Liquid classes tab); no speed is assumed.')
+    labels = {'timeout_ms': 'a command timeout (ms)', 'dispense_segments': 'dispense segments (volume and speed)'}
+    m = re.match(r"^/: '(\w+)' is a required property$", str(message))
+    if m and m.group(1) in labels:
+        return f'This transfer still needs {labels[m.group(1)]}; set it in the step\'s advanced recipe fields.'
+    return message
 
 
 def fail(message, path='', code='representation_error') -> NoReturn:
@@ -361,8 +376,29 @@ def emit_rows(rows):
     document['protocol_id'] = 'method-content'
     actions = document['stages'][0]['actions'] = []
     visible, issues = [], []
+    detected_wells = set()  # first-draw liquid detection is once per source well per run
     for row in rows:
         intent = row['intent']
+        if 'sequence' in row:
+            # Fast lane: one native endpoint-preserving sequence at travel height; position_flag is not emitted.
+            targets = []
+            for member in row['sequence']:
+                try:
+                    step = native_intent({**member['intent'], 'position_flag': 0})
+                except (ValueError, TypeError, OverflowError) as exc:
+                    issues.append({'step_id': member['step_id'], 'message': str(exc)})
+                    continue
+                targets.append({'location_id': step['location_id'], 'well': step['well']})
+            if len(targets) != len(row['sequence']):
+                continue
+            action = deepcopy(_NATIVE['document_template']['stages'][0]['actions'][0])
+            action.update(kind='pipette_position', params={'operation': 'move_sequence', 'targets': targets},
+                          metadata={}, required_capability=row.get('required_capability'))
+            action['metadata']['generated_index'] = 0
+            action['action_id'] = f'method-action-{len(actions)}'
+            actions.append(action)
+            visible.append(row['step_id'])
+            continue
         from bioxp_method_native import native_action
         try:
             direct = ('calibration', deepcopy(intent['calibration'])) if intent.get('operation') == 'calibration' else native_action(intent.get('operation'), {k: v for k, v in intent.items() if k != 'operation'})
@@ -372,7 +408,7 @@ def emit_rows(rows):
         if intent.get('operation') == 'transfer' and 'recipe' in intent:
             from bioxp_method_planning import positioned_transfer_recipes
             try:
-                recipes = positioned_transfer_recipes({k: v for k, v in intent.items() if k != 'operation'})
+                recipes = positioned_transfer_recipes({k: v for k, v in intent.items() if k != 'operation'}, detected_wells)
                 generated = []
                 for pair, recipe in enumerate(recipes):
                     kind, params = native_action('liquid_recipe', {'recipe': recipe})
@@ -402,6 +438,20 @@ def emit_rows(rows):
             action = deepcopy(_NATIVE['document_template']['stages'][0]['actions'][0])
             action.update(kind=direct[0], params=direct[1], metadata={}, required_capability=row.get('required_capability'))
             generated = [action]
+            if direct[0] == 'tip_eject':
+                # OEM script ET: movExecution to WASTE_BIN (locationID 6, well 0, positionflag 0), then ejt.
+                # Tips are never ejected wherever the head happens to be.
+                waste_row = {'step_id': row['step_id'], 'intent': {'operation': 'move', 'location_id': 6, 'well': 'A1', 'position_flag': 0}}
+                if 'required_capability' in row:
+                    waste_row['required_capability'] = row['required_capability']
+                to_waste = preview(WorkflowPreviewRequest.model_validate({'draft': {
+                    'schema': 'bms.bioxp-workflow-draft.v1', 'steps': [waste_row], 'editor_state': {}}, 'protocol_id': 'method-content'}))
+                if to_waste.document is None:
+                    issues.extend({'step_id': row['step_id'], 'message': i.message} for i in to_waste.issues)
+                    continue
+                for visible_action, move in zip(to_waste.actions, to_waste.document['stages'][0]['actions']):
+                    move['metadata']['pair_index'] = visible_action.pair_index
+                generated = to_waste.document['stages'][0]['actions'] + generated
         elif intent.get('operation') in ('checkpoint', 'note'):
             if (set(intent) - ({'operation', 'message', 'measurement_form'} if intent['operation'] == 'checkpoint' else {'operation', 'message'}) or not isinstance(intent.get('message'), str)):
                 issues.append({'step_id': row['step_id'], 'message': 'checkpoint/note requires exactly one string message'})
@@ -441,6 +491,8 @@ def native_cost(intent):
             fail(f'{field} must be an object')
     if operation == 'mix':
         return 2 * int(number(intent.get('cycles', 1)))
+    if operation == 'tip_eject':
+        return 2  # move to the waste bin, then eject
     if operation == 'transfer':
         pairs = len(intent.get('source', {}).get('wells', []))
         return pairs * (8 + native_cost({'operation': 'liquid_recipe', 'recipe': intent['recipe']}) if 'recipe' in intent else 8)
@@ -490,6 +542,8 @@ def compile_method(request):
                 fail('Compile request must be an object')
             method = request.get('method')
             validate_method(method)
+            from bioxp_method_deck import check_deck
+            result['issues'].extend(check_deck(method))
             dependencies = deepcopy(request.get('dependencies', {}))
             if not isinstance(dependencies, dict):
                 fail('Dependencies must be an object', '/dependencies')
@@ -519,16 +573,33 @@ def compile_method(request):
                     diagnostic = validate(inputs, _NATIVE['request']['$defs']['DiagnosticPlunger'])
                     intent = {'operation': 'diagnostic_pipette', 'diagnostic': diagnostic}
                 elif occurrence['action'] == 'tip_pickup':
-                    if 'channels' in inputs and (inputs['channels'] != [0, 1, 2, 3] or any(type(c) is not int for c in inputs['channels'])):
-                        fail('Source pickup is a group of four, not selected independent channels', occurrence['path'])
+                    channels = inputs.get('channels', [0, 1, 2, 3])
+                    if (not isinstance(channels, list) or not channels or len(set(channels)) != len(channels)
+                            or any(type(c) is not int or c not in range(4) for c in channels)):
+                        fail('Pickup channels must be distinct channels 0..3', occurrence['path'])
                     intent['operation'] = 'load_tip'
-                    intent.pop('channels', None)  # source pickup is a group of four
+                    intent.pop('channels', None)
+                    if sorted(channels) != [0, 1, 2, 3]:
+                        # Keep these; the robot releases the rest back into the rack after a 10 mm lift.
+                        intent['keep_channels'] = sorted(channels)
+                        intent.setdefault('release_lift_mm', 10.0)
+                    else:
+                        intent.pop('release_lift_mm', None)
                 elif occurrence['action'] in ('tip_eject', 'eject_tip'):
-                    if set(inputs) != {'channels'} or inputs.get('channels') != [0, 1, 2, 3] or any(type(c) is not int for c in inputs['channels']):
-                        fail('Source eject requires exactly explicit channels [0,1,2,3]; other settings are not discarded', occurrence['path'])
-                    intent = {'operation': 'tip_eject'}
+                    channels = inputs.get('channels')
+                    if (set(inputs) != {'channels'} or not isinstance(channels, list) or not channels or len(set(channels)) != len(channels)
+                            or any(type(c) is not int or c not in range(4) for c in channels)):
+                        fail('Tip eject requires explicit distinct channels 0..3; other settings are not discarded', occurrence['path'])
+                    # All four keeps the existing all-channel eject; a subset ejects only the tips kept by a partial pickup.
+                    intent = {'operation': 'tip_eject'} if sorted(channels) == [0, 1, 2, 3] else {'operation': 'tip_eject', 'channels': sorted(channels)}
                 if occurrence['action'] not in {'native_intent', 'calibration'} and inputs.get('operation', occurrence['action']) != occurrence['action']:
                     fail('Action/operation mismatch', occurrence['path'])
+                fast = False
+                if occurrence['action'] == 'move' and 'movement' in intent:
+                    movement = intent.pop('movement')
+                    if movement not in ('full', 'fast'):  # retarget (or anything else) never runs in workflows
+                        fail('Retarget movement is only available in Live deck movement', occurrence['path'])
+                    fast = movement == 'fast'
                 # Bound compound expansion before the existing emitter allocates its children.
                 cost = native_cost(intent)
                 if cost < 0 or cost > MAX_ACTIONS:
@@ -536,17 +607,26 @@ def compile_method(request):
                 row = {'step_id': occurrence['occurrence_id'], 'intent': intent}
                 if 'required_capability' in occurrence:
                     row['required_capability'] = occurrence['required_capability']
+                # Each maximal run of consecutive fast moves in one stage becomes one native move_sequence (1..64 targets).
+                key = [occurrence[k] for k in ('group_path', 'call_path', 'loop_path', 'on_error')] + [row.get('required_capability', ...)]
+                previous = rows[-1][0] if rows else None
+                if fast and previous is not None and previous.get('_fast_key') == key and len(previous['sequence']) < 64:
+                    previous['sequence'].append({'step_id': row['step_id'], 'intent': intent})
+                    continue
+                if fast:
+                    row = {**row, 'intent': {'operation': 'move_sequence'}, 'sequence': [{'step_id': row['step_id'], 'intent': intent}], '_fast_key': key}
                 rows.append((row, cost))
             if sum(cost for _, cost in rows) > MAX_ACTIONS:
                 fail('Native expansion exceeds 100000 actions', code='resource_limit')
             if not rows:
                 fail('Method has no executable occurrences', '/method/steps', 'empty_expansion')
+            sequences = {row['step_id']: [m['step_id'] for m in row['sequence']] for row, _ in rows if 'sequence' in row}
             document, visible_rows, emission_issues = emit_rows([row for row, _ in rows])
             by_id = {o['occurrence_id']: o for o in occurrences}
             for issue in emission_issues:
                 o = by_id.get(issue['step_id'], {})
                 result['issues'].append({'code': 'native_representation_error', 'category': 'representation',
-                    'message': issue['message'], 'path': o.get('path', '/method'), 'step_id': o.get('step_id'), 'occurrence_id': issue['step_id']})
+                    'message': plain_emission_message(issue['message']), 'path': o.get('path', '/method'), 'step_id': o.get('step_id'), 'occurrence_id': issue['step_id']})
             if document is None:
                 return result
             liquid_actions_by_occurrence = {}
@@ -638,6 +718,13 @@ def compile_method(request):
                     action['metadata']['bms_method']['effect_limitations'] = 'Phase selectors are not native child IDs; segment displacement does not measure liquid delivery or completed transfer'
                 if o['action'] in {'aspirate', 'dispense', 'mix'}:
                     action['metadata']['bms_method']['planned_liquid_effects'] = deepcopy(o['inputs'].get('channel_transfers', []))
+                if visible in sequences:
+                    # One native action, one authored occurrence per target (in order).
+                    action['metadata']['bms_method']['sequence'] = [
+                        {'target_index': i, **{k: deepcopy(by_id[m][k]) for k in ('occurrence_id', 'step_id', 'path', 'call_path', 'loop_path', 'group_path')}}
+                        for i, m in enumerate(sequences[visible])]
+                    for m in sequences[visible][1:]:
+                        provenance[m]['native_action_ids'].append(action['action_id'])
                 provenance[o['occurrence_id']]['native_action_ids'].append(action['action_id'])
             # Consecutive structural groups retain native stage boundaries. A
             # repeated group gets a distinct stage; no grouping reorders actions.
@@ -703,7 +790,12 @@ def compile_method(request):
                                         else:
                                             head.update(deepcopy(params))
                                         positions[action['source_occurrence_id']] = deepcopy(head)
-                            if action['kind'] == 'pipette_position':
+                            if action['kind'] == 'pipette_position' and action['params']['operation'] == 'move_sequence':
+                                members = action['metadata']['bms_method'].get('sequence', [])
+                                for member, target in zip(members, action['params']['targets']):
+                                    head = {'operation': 'move_sequence', **deepcopy(target)}
+                                    positions[member['occurrence_id']] = deepcopy(head)
+                            elif action['kind'] == 'pipette_position':
                                 if action['params']['operation'] == 'move':
                                     head = deepcopy(action['params'])
                                 else:

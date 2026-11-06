@@ -67,21 +67,43 @@ The cache helper is the same protocol consumed by `cache.stage_cached_bundle` an
 
 `POST /api/execution-targets/{id}/preload` accepts the typed body `{ "job_id": "<saved-job-id>" }`. The saved job is a recipe for exact current-source settings; the call does not submit or alter scientific work. Progress is persisted in the execution-target response. A historical recipe bound to a different source is rejected rather than silently upgraded.
 
+### Weights stored in pinned layouts
+
+La-Proteina, Complexa and the Caliby packer checkpoints are installed only as immutable generations under
+`weights/layouts/<name>/<digest>/`; they have no plain `weights/<name>` path. Preview and provisioning resolve a
+declared weights dependency through `paths.resolve_weight_dependency`: a plain path wins, otherwise the longest
+declared prefix with exactly one generation supplies the file, and zero or several generations are never guessed.
+This is the same resolution local launches use. A managed release manifest carries only `containers/` and
+`weights/` rows; other selected bytes such as `data/md-preparation/env-v1-explicit.txt` travel through the artifact
+cache and are not release members.
+
 ### De Novo Design preparation
 
 On a selected worker, **Workflow → De Novo Design → All De Novo dependencies** prepares the built-in family through the catalog selection `{"kind":"model","model_id":"protein_modification_experimental"}`. The same action is available beside placement in Generate, Redesign structure and Shape, even before a source, geometry or scientific draft is complete. Preview and Start provision remain explicit actions; opening or switching editors does not upload inputs, search MSAs, create a Job or rent a worker.
 
-This full-family selection includes RFD3, DISCO, La-Proteina, Shape, the existing FA-MPNN/ProteinMPNN choices, and Boltz2/ESMFold2/Protenix validators. Shared assets are deduplicated; RFD3 uses its exact checkpoint member, Protenix uses its declared default native members, and image-contained designer weights are not downloaded separately. Custom runtime overrides remain owned by current-request preparation. The existing **current-request** preview is the leaner choice when only one configured task is needed: selecting the family for preload never changes an ordinary launch's stages or assets. Native RFD3 generation/redesign do not gain validation stages, and Shape's skip policy stays skip.
+This full-family selection includes RFD3, DISCO, La-Proteina, Shape (the whole-pack preview omits `shape_rfd3.sif`, which is `foundry.sif` plus three Python files, so Foundry is delivered once; a Shape run prepares its own image through the current-request preview), the existing FA-MPNN/ProteinMPNN choices, and Boltz2/ESMFold2/Protenix validators. Shared assets are deduplicated; RFD3 uses its exact checkpoint member, Protenix uses its declared default native members, and image-contained designer weights are not downloaded separately. Custom runtime overrides remain owned by current-request preparation. The existing **current-request** preview is the leaner choice when only one configured task is needed: selecting the family for preload never changes an ordinary launch's stages or assets. Native RFD3 generation/redesign do not gain validation stages, and Shape's skip policy stays skip.
 
 The host must have the selected runtime assets available through the existing managed installation owners. The HF broker mirrors their immutable identities rather than selecting a model revision or building an image. Exact BMS workflow source/config travels through the existing source-archive launch/saved-Job preload owner, not a second family manifest. Preparation reports asset installation, not GPU inference acceptance. Missing runtime builds or unexercised model presets remain explicit delivery limitations; this feature adds no scientific readiness gate.
 
+Preview `storage_bytes` estimates persistent selected payloads: one body per image/content namespace and digest, plus one shared copy per non-0444 immutable content mode (`mode & 0555`). Ordinary weight destinations and persistent consumer sublayouts hardlink those bodies; logical aliases and symlinks do not add payload copies. `total_bytes` remains the logical artifact total and `transfer_bytes` remains the deduplicated unverified object total. Metadata, transient uploads, scratch space and backend image derivations are not included in this payload estimate; existing live free-space checks are unchanged.
+
 Independent preparation uses the existing `/provision/catalog`, `/provision/preview` and `/provision` routes. Image scope selects an image; model scope selects its reviewed asset binding; configured `workflow` scope derives dependencies from the typed scientific request. These remain distinct from an input-free whole-workflow pack.
 
-### Whole Structure workflow preparation
+### Selective Structure workflow preparation
 
-The preload menu offers **Prepare entire workflow** for Structure Prediction. One deliberate click previews the server-owned asset set and starts the existing operation with that fresh preview digest. Opening the menu, polling, and switching selections do not start preparation. A late preview cannot start work on a worker or selection the operator has left.
+The preload menu offers **Components to send** for Structure Prediction. Protenix and FrustraMPNN are initially checked; ESMFold2, Boltz-2 and Fold-CP can be checked independently. **All components (full workflow)** retains explicit full-pack preparation. Other workflow groups retain their existing full-pack defaults. These choices select downloads, not scientific predictor settings.
 
-The shared browser/API request is:
+Use **Preview artifact downloads** to inspect the exact selected dependency union and its download/storage estimates before **Start provision**, or **Prepare selected components** to preview and start in one deliberate action with the fresh digest. Opening the menu, polling, and switching checkboxes never start preparation. Editing a selection invalidates its preview; a late response cannot start work for a selection or worker the operator has left.
+
+The catalog at `/api/execution-targets/provision/catalog` exposes typed `components` entries (`model_id`, registry-owned `label`, `selected_by_default`). Browser and agents send the same request, without that discovery metadata:
+
+```json
+{"kind":"workflow_pack","workflow_id":"structure_prediction","component_ids":["frustrampnn","protenix"]}
+```
+
+`component_ids` is an explicit set of catalog component identities, canonicalized in sorted order. Omission or `null` preserves historical full-pack callers; `[]` selects no scientific assets, and the UI leaves preparation inactive until a component is chosen. Dependencies are closed at their existing native owners and deduplicated before estimation and transfer. Deselecting ESMFold2 excludes its image and weights unless required by a selected dependency. Deselecting any component does not remove assets already on the worker or change inference settings. Only complete selected consumer weight layouts are published; partial combined layouts are not advertised.
+
+The explicit full-pack request remains:
 
 ```json
 {"kind":"workflow_pack","workflow_id":"structure_prediction"}
@@ -89,7 +111,7 @@ The shared browser/API request is:
 
 Send it to `/provision/preview`; send the same fields plus the returned `preview_sha256` to `/provision`. This request contains no sequence, Job, arbitrary path, acquisition URL, or scientific configuration. Unsupported workflow identities remain outside this closed pack catalog; their existing configured preparation routes are unchanged.
 
-The pack references the existing Boltz-2, Fold-CP, Protenix V2, ESMFold2 and embedded FrustraMPNN asset bindings. It includes the supported ESMFold variants and Protenix ordinary, anchored and template-capable weight members. Shared assets are inventoried and transferred once; preparing an optional asset does not enable the corresponding scientific stage. FrustraMPNN remains an internal workflow component, not an independently enabled model. Boltz API and input-specific MSA calls are services, not predictor downloads, and are not invoked by preparation.
+The pack references the existing Boltz-2, Fold-CP, Protenix V2, ESMFold2 and embedded FrustraMPNN asset bindings. It includes the supported ESMFold variants, ordinary Protenix weights and target-anchoring metadata. Generic Protenix template search is explicitly off in this input-free pack: neither the bulk mmCIF corpus nor its search FASTA is selected, even when those files are present locally. Shared assets are inventoried and transferred once; preparing target metadata does not enable anchoring or another scientific stage. FrustraMPNN remains an internal workflow component, not an independently enabled model. Boltz API and input-specific MSA calls are services, not predictor downloads, and are not invoked by preparation.
 
 Preload reuses the job's source archive, content store, packed-weight acquisition and exact per-consumer shared weight layouts. It downloads, unpacks and publishes selected layouts; it does not derive images or invoke native compatibility probes (images=not_requested). It does not construct a disposable union-only weight tree or per-execution private container view. Actual backend-specific image preparation belongs to its separate runtime consumer, whether or not backend metadata is already known. Software provisioning evidence does not establish scientific readiness.
 

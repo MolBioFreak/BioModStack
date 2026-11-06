@@ -217,7 +217,7 @@ it('explicit Z switch-search recovery home is separate from ordinary Home and se
     expect(button.title).toContain('without the ordinary Home preposition');
 });
 
-it('recovery controls are one shared presentation across operational tabs and prepared files live only in Workflows', async () => {
+it('recovery controls are one shared presentation across operational tabs and Workflows holds the methods workspace', async () => {
     await mount();
     const recovery = host.querySelector('[aria-label="Controller preparation and recovery"]')!;
     expect(recovery).not.toBeNull();
@@ -228,7 +228,8 @@ it('recovery controls are one shared presentation across operational tabs and pr
     await click(host.querySelector('#control-tab-pipettes')!);
     expect(recovery.closest('[hidden]')).toBeNull();
     await click(host.querySelector('#control-tab-workflows')!);
-    expect(host.querySelector('#control-panel-workflows')?.textContent).toContain('Prepared request files');
+    expect(host.querySelector('#control-panel-workflows [aria-label="Methods workspace"]')).not.toBeNull();
+    expect(host.querySelector('#control-panel-workflows')?.textContent).not.toContain('Prepared request files');
     expect(postBodies).toHaveLength(0);
 });
 

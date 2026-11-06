@@ -1,11 +1,12 @@
 // Navigation metadata only. Native model owners still compile scientific requests.
 export const DE_NOVO_TEMPLATE = 'protein_modification_experimental';
-const DE_NOVO_MODELS = new Set([DE_NOVO_TEMPLATE, 'protein_local_redesign', 'protein_cad_experimental']);
-export const DE_NOVO_ROUTE_KEYS = ['modification_mode', 'generator', 'design_task'] as const;
+const DE_NOVO_MODELS = new Set([DE_NOVO_TEMPLATE, 'protein_local_redesign', 'protein_cad_experimental', 'rfd4_proteina', 'complexa', 'laproteina']);
+export const DE_NOVO_ROUTE_KEYS = ['modification_mode', 'generator', 'design_task', 'native_mode'] as const;
 export interface DeNovoNavigationState {
     modification_mode: string;
     generator?: string;
     design_task?: string;
+    native_mode?: string;
 }
 export const isDeNovoModel = (value: unknown): boolean => typeof value === 'string' && DE_NOVO_MODELS.has(value);
 
@@ -16,7 +17,7 @@ export function deNovoSavedValues(
 ): Record<string, unknown> {
     // Preserve the validated-pipeline identity; it is not interchangeable with
     // the native iteration route even though both share a visual workspace.
-    const modificationMode = values.modification_mode ?? (
+    const modificationMode = mode === 'region_redesign' && values.backbone_input_pdbs && values.seq_method ? 'resequence' : values.modification_mode ?? (
         mode === 'shape_blueprint' ? 'shape_blueprint'
             : mode === 'region_redesign' ? 'region_redesign'
                 : model === 'protein_local_redesign' || values.template_model_id === 'protein_local_redesign'
@@ -24,8 +25,10 @@ export function deNovoSavedValues(
     );
     return {
         ...values,
+        ...(modificationMode === 'resequence' && values.backbone_input_pdbs ? { resequence_job_params: values.resequence_job_params ?? values } : {}),
+        ...(model === 'rfd4_proteina' || model === 'complexa' || model === 'laproteina' ? { generator: model, native_mode: mode ?? 'generate' } : {}),
         modification_mode: modificationMode,
-        ...(values.generator === undefined && typeof values.backend === 'string' ? { generator: values.backend } : {}),
+        ...(model !== 'rfd4_proteina' && model !== 'complexa' && model !== 'laproteina' && values.generator === undefined && typeof values.backend === 'string' ? { generator: values.backend } : {}),
     };
 }
 
@@ -41,6 +44,7 @@ export function deNovoRouteValues(params: URLSearchParams): Record<string, unkno
 export function deNovoNavigation(values: Record<string, unknown>): DeNovoNavigationState {
     return {
         modification_mode: typeof values.modification_mode === 'string' ? values.modification_mode : 'de_novo_design',
+        ...(typeof values.native_mode === 'string' ? { native_mode: values.native_mode } : {}),
         ...(typeof values.generator === 'string' ? { generator: values.generator }
             : typeof values.backend === 'string' ? { generator: values.backend } : {}),
         ...(typeof values.design_task === 'string' ? { design_task: values.design_task } : {}),

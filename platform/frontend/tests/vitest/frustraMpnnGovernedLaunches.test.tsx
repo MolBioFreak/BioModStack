@@ -85,7 +85,7 @@ describe('governed FrustraMPNN inspection and launch behavior', () => {
         const originalPost = api.post;
         let queueCalls = 0;
         const postCalls: string[] = [];
-        (api as unknown as { get: () => Promise<{ data: unknown }> }).get = async () => ({ data: {} });
+        (api as unknown as { get: () => Promise<{ data: unknown }> }).get = async () => ({ data: [] });
         (api as unknown as { post: (url: string) => Promise<{ data: unknown }> }).post = async (url) => {
             postCalls.push(url);
             if (url.endsWith('/sources/inspect/upload')) return { data: inspection };

@@ -5,7 +5,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import { api } from '../../src/lib/api';
-import { BioXpPipetteControlPanel } from '../../src/components/BioXpPipetteControlPanel';
+import { BioXpPipetteAdvancedTools, BioXpPipetteControlPanel as StatusPanel } from '../../src/components/BioXpPipetteControlPanel';
+// Status (readback) and Advanced (planner) render together, as in the Pipettes tab.
+const BioXpPipetteControlPanel = (props: { generation: number }) => createElement('div', null, createElement(StatusPanel, props), createElement(BioXpPipetteAdvancedTools, props));
 import { usePlanBioXpPipetteApplication, useReadBioXpPipetteReadback } from '../../src/lib/bioxpClient';
 import type { BioXpDirectLiquidLookup, BioXpPipetteReadback, BioXpPipetteApplicationPlan, BioXpPipetteReceipt } from '../../src/lib/bioxpClient';
 

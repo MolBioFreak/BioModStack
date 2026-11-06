@@ -24,10 +24,11 @@ import httpx
 import rfc8785
 from Bio.PDB import MMCIFIO, MMCIFParser, PDBParser
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, StrictInt, StrictFloat, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, StrictInt, StrictFloat, model_validator, model_serializer
 from sqlalchemy import select
 
 from database import Design, Job, MdRun
+from schemas import CandidateRef
 from paths import get_allowed_roots, get_inputs_dir, to_allowed_relative
 
 MAX_STARTING_STRUCTURE_BYTES = 100 * 1024 * 1024
@@ -42,6 +43,7 @@ SOURCE_KINDS = Literal[
     "managed_fixture",
     "prior_md_input",
     "server_file",
+    "candidate",
 ]
 PUBLIC_STRUCTURE_FORMAT = Literal["pdb", "cif"]
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -63,6 +65,28 @@ class _ClosedModel(BaseModel):
 class StartingStructureSourceRef(_ClosedModel):
     kind: SOURCE_KINDS
     id: str = Field(min_length=1, max_length=256)
+    candidate_ref: CandidateRef | None = None
+    model_number: int | None = None
+    snapshot_job_id: str | None = None
+
+    @model_serializer(mode="wrap")
+    def source_wire(self, handler):
+        data = handler(self)
+        for field in ("candidate_ref", "model_number", "snapshot_job_id"):
+            if data.get(field) is None:
+                data.pop(field, None)
+        return data
+
+    @model_validator(mode="after")
+    def exact_candidate(self):
+        if self.kind == "candidate":
+            if self.candidate_ref is None or self.id != self.candidate_ref.job_id:
+                raise ValueError("Candidate source must name its exact owning Job")
+            if self.candidate_ref.kind not in {"design", "native_document"}:
+                raise ValueError("Select a structure document, not a sequence or observation")
+        elif self.candidate_ref is not None:
+            raise ValueError("candidate_ref belongs to candidate sources")
+        return self
 
 
 class StartingStructureInspectRequest(_ClosedModel):
@@ -208,6 +232,14 @@ from schemas import ExecutionPolicy
 
 
 class MdLaunchIntent(_ClosedModel):
+    @model_serializer(mode="wrap")
+    def intent_wire(self, handler):
+        data = handler(self)
+        if "return_to" not in self.model_fields_set:
+            data.pop("return_to", None)
+        return data
+
+    return_to: str | None = Field(default=None, pattern=r"^/designs/[^\\\s?#]+(?:[?#][^\\\r\n]*)?$")
     schema_version: Literal["bms.md.launch-intent.v1"]
     name: str = Field(min_length=1, max_length=255)
     source_ref: StartingStructureSourceRef
@@ -278,6 +310,7 @@ class MdNativeWindow(_ClosedModel):
 
 
 class MdNativeLaunchIntent(_ClosedModel):
+    return_to: str | None = Field(default=None, pattern=r"^/designs/[^\\\s?#]+(?:[?#][^\\\r\n]*)?$")
     schema_version: Literal["bms.md.launch-intent.v2"]
     launch_context_id: str | None = None
     name: str = Field(min_length=1, max_length=255)
@@ -443,7 +476,7 @@ def compile_native_job_intent(
         config["preparation"] = {field: getattr(source, field) for field in ("box_type", "padding_nm", "salt_molar", "neutralize")}
     else:
         config["input"] = source.model_dump(mode="json", exclude={"kind"}, exclude_none=True)
-    if intent.analysis is not None:
+    if "analysis" in intent.model_fields_set:
         config["analysis"] = copy.deepcopy(intent.analysis)
     return config
 
@@ -504,11 +537,16 @@ class ResolvedStartingStructure:
     source_provenance: dict[str, Any] | None = None
     descriptor: int | None = None
     suffix: str | None = None
+    retained_handles: list[Any] | None = None
+    original_runtime_path: str | None = None
 
     def close(self) -> None:
         if self.descriptor is not None:
             os.close(self.descriptor)
             self.descriptor = None
+        for handle in self.retained_handles or []:
+            handle.close()
+        self.retained_handles = None
 
 
 def _error(code: str, message: str, status_code: int = 422) -> StartingStructureError:
@@ -1500,9 +1538,30 @@ def _declared_pdb_accession(structure: StructureFile) -> str | None:
     return None
 
 
-async def resolve_source(
+async def _resolve_source(
     source_ref: StartingStructureSourceRef, session: Any
 ) -> ResolvedStartingStructure:
+    if source_ref.kind == "candidate":
+        from services.binder_source_materialization import StructureSourceRequest, resolve_structure_source
+        from services.binder_diagnostic_selection import CandidateDocument
+        ref = source_ref.candidate_ref
+        assert ref is not None
+        document = ref.document
+        selected = CandidateDocument(
+            artifact_id=document.artifact_id if document else ref.artifact_id,
+            target_state=document.target_state if document else ref.target_state,
+        ) if document or ref.artifact_id else None
+        try:
+            path, identity = await resolve_structure_source(StructureSourceRequest(
+                job_id=ref.job_id, design_id=ref.design_id, document=selected,
+            ), session)
+        except ValueError as exc:
+            raise _error("MD_STARTING_STRUCTURE_NOT_FOUND", str(exc), 404) from exc
+        return ResolvedStartingStructure(
+            source_ref=source_ref, path=_require_allowed_source_path(path), label=path.name,
+            producer_job_id=ref.job_id, design_id=ref.design_id,
+            source_provenance={**identity, "candidate_ref": ref.model_dump(mode="json", exclude_none=True)},
+        )
     if source_ref.kind == "managed_fixture":
         return resolve_product_source(source_ref)
     if source_ref.kind == "upload":
@@ -1601,6 +1660,185 @@ async def resolve_source(
     raise _error(
         "MD_STARTING_STRUCTURE_SOURCE_UNSUPPORTED", "The source kind is unsupported.", 404
     )
+
+
+async def _resolve_retained_source(source_ref: StartingStructureSourceRef, session: Any) -> ResolvedStartingStructure:
+    """Reopen the exact Job-owned source without consulting a deleted producer."""
+    job_id = _require_uuid(source_ref.snapshot_job_id or "", code="MD_STARTING_STRUCTURE_NOT_FOUND")
+    job = await session.get(Job, job_id)
+    if job is None or job.model_id != "molecular_dynamics":
+        raise _error("MD_STARTING_STRUCTURE_NOT_FOUND", "The retained MD source is unavailable.", 404)
+    try:
+        root = Path(str(job.output_dir)).resolve(strict=True)
+    except OSError as exc:
+        raise _error("MD_STARTING_STRUCTURE_NOT_FOUND", "The retained MD source is unavailable.", 404) from exc
+    provenance = dict((job.params or {}).get("md_source_provenance") or {})
+    sidecar = root / "retained_source.json"
+    if sidecar.is_file() and not sidecar.is_symlink():
+        provenance = json.loads(sidecar.read_text(encoding="utf-8"))
+    expected = StartingStructureSourceRef.model_validate(provenance.get("source_ref") or {}).model_dump(mode="json")
+    requested = source_ref.model_dump(mode="json")
+    expected.pop("snapshot_job_id", None)
+    requested.pop("snapshot_job_id", None)
+    if requested != expected:
+        raise _error("MD_STARTING_STRUCTURE_FORBIDDEN", "The retained source belongs to a different selection.", 404)
+    original = provenance.get("original_snapshot") or {}
+    snapshot = provenance.get("snapshot") or {}
+    path = Path(str(original.get("path") or snapshot.get("structure") or ""))
+    if not path.is_absolute():
+        path = root / path
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root / "inputs")
+    except (OSError, ValueError) as exc:
+        raise _error("MD_STARTING_STRUCTURE_FORBIDDEN", "The retained source is not Job-owned.", 404) from exc
+    if path.is_symlink():
+        raise _error("MD_STARTING_STRUCTURE_UNSAFE", "The retained source is symlinked.", 409)
+    result = ResolvedStartingStructure(source_ref=source_ref, path=resolved, label=resolved.name,
+                                      source_provenance=provenance, producer_job_id=provenance.get("source_job_id"),
+                                      design_id=provenance.get("design_id"))
+    digest = original.get("sha256") if original else snapshot.get("structure_sha256")
+    result.suffix = str(provenance.get("original_suffix") or resolved.suffix)
+    if result.suffix.endswith(('.gz', '.zst', '.bcif')):
+        descriptor = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        result.descriptor = descriptor
+        try:
+            if hashlib.sha256(_read_encoded_source(result)).hexdigest() != digest:
+                raise _error("MD_STARTING_STRUCTURE_CHANGED", "The retained document bytes changed.", 409)
+            return result
+        except Exception:
+            result.close()
+            raise
+    verified = open_resolved_structure_snapshot(result, expected_sha256=str(digest or read_resolved_structure(result).sha256))
+    try:
+        # Keep the verified descriptor alive through preparation and preview.
+        result.descriptor = os.dup(verified.handle.fileno())
+        result.suffix = resolved.suffix
+    finally:
+        verified.handle.close()
+    return result
+
+
+def _read_encoded_source(resolved: ResolvedStartingStructure) -> bytes:
+    """Read bounded stored bytes through the same no-symlink descriptor boundary."""
+    if resolved.descriptor is None and resolved.path is None:
+        raise _error('MD_STARTING_STRUCTURE_NOT_FOUND', 'The selected document is unavailable.', 404)
+    descriptor = (os.dup(resolved.descriptor) if resolved.descriptor is not None else
+                  os.open(str(resolved.path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK))
+    with os.fdopen(descriptor, 'rb') as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise _error('MD_STARTING_STRUCTURE_UNSAFE', 'The selected document is not a regular file.', 409)
+        handle.seek(0)
+        raw = handle.read(MAX_STARTING_STRUCTURE_BYTES + 1)
+    if len(raw) > MAX_STARTING_STRUCTURE_BYTES:
+        raise _error('MD_STARTING_STRUCTURE_TOO_LARGE', 'Structure exceeds the supported byte limit.')
+    return raw
+
+
+async def resolve_source(source_ref: StartingStructureSourceRef, session: Any) -> ResolvedStartingStructure:
+    resolved = (await _resolve_retained_source(source_ref, session) if source_ref.snapshot_job_id
+                else await _resolve_source(source_ref, session))
+    # Source identity is not reconstructed from mutable primary metadata later.
+    resolved.source_ref = source_ref if source_ref.kind != "rcsb" else resolved.source_ref.model_copy(update={"model_number": source_ref.model_number})
+    ref = source_ref.candidate_ref
+    member = (ref.document.model if ref and ref.document else ref.model if ref else None)
+    if source_ref.model_number is not None:
+        if member is not None and member != source_ref.model_number:
+            resolved.close()
+            raise _error("MD_STARTING_STRUCTURE_MODEL_INVALID", "Conflicting selected model numbers.")
+        member = source_ref.model_number
+    suffix = resolved.suffix or ''.join(Path(resolved.label).suffixes[-2:])
+    encoded = suffix.lower().endswith(('.gz', '.zst', '.bcif'))
+    if member is None and not encoded:
+        return resolved
+    try:
+        if encoded:
+            original_bytes = _read_encoded_source(resolved)
+            from services.binder_source_materialization import materialize_source_bytes
+            from paths import resolve_allowed_path
+            # Reuse the native document decoder; this private staging directory
+            # is removed after acquiring descriptor-owned bytes, not a new cache.
+            staging_root = get_inputs_dir() / 'md_starting_structures'
+            staging_root.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix='.decode-', dir=staging_root) as directory:
+                document = materialize_source_bytes(original_bytes, suffix, Path(directory), output_format='native')
+                native = Path(resolve_allowed_path(document['decoded_path'])).read_bytes()
+            original_digest = document['original_sha256']
+            format = 'pdb' if document['native_format'] == 'pdb' else 'cif'
+            original = StructureFile(native, format, 'chemical/x-pdb' if format == 'pdb' else 'chemical/x-mmcif',
+                                     '.' + format, document['decoded_sha256'], len(native))
+            resolved.source_provenance = {**(resolved.source_provenance or {}),
+                'stored_encoding': document['stored_encoding'], 'original_suffix': suffix,
+                'native_sha256': document['native_sha256'], 'decoded_sha256': document['decoded_sha256']}
+        else:
+            original = read_resolved_structure(resolved)
+            original_bytes = original.data
+            original_digest = original.sha256
+        selected = select_structure_model(original.data, original.format, member) if member is not None else original.data
+        original_handle = tempfile.TemporaryFile(mode="w+b")
+        resolved.retained_handles = [original_handle]
+        derivative = tempfile.TemporaryFile(mode="w+b")
+        resolved.retained_handles.append(derivative)
+        original_handle.write(original_bytes); original_handle.flush(); original_handle.seek(0)
+        derivative.write(selected); derivative.flush(); derivative.seek(0)
+        if resolved.descriptor is not None:
+            os.close(resolved.descriptor)
+        resolved.descriptor = os.dup(derivative.fileno())
+        resolved.suffix = original.canonical_suffix
+        resolved.original_runtime_path = f"/proc/self/fd/{original_handle.fileno()}"
+        resolved.source_provenance = {**(resolved.source_provenance or {}),
+            "original_sha256": original_digest, "original_format": original.format,
+            "model_number": member, "consumed_sha256": hashlib.sha256(selected).hexdigest()}
+        return resolved
+    except StartingStructureError:
+        resolved.close()
+        raise
+    except (ValueError, OSError) as exc:
+        resolved.close()
+        raise _error("MD_STARTING_STRUCTURE_FORMAT_UNSUPPORTED", str(exc)) from exc
+    except Exception:
+        resolved.close()
+        raise
+
+
+def select_structure_model(raw: bytes, format: str, model_number: int) -> bytes:
+    """Named derivative only; preserve original atom records and author identity."""
+    text = raw.decode("utf-8")
+    if format == "cif":
+        columns = MMCIF2Dict(io.StringIO(text))
+        count = len(columns["_atom_site.id"])
+        models = columns.get("_atom_site.pdbx_PDB_model_num", ["1"] * count)
+        rows = [i for i, value in enumerate(models) if int(value) == model_number]
+        if not rows:
+            raise _error("MD_STARTING_STRUCTURE_MODEL_INVALID", "Requested model is absent from the exact document.")
+        from services.binder_source_materialization import _select_cif_model
+        writer = MMCIFIO(); writer.set_dict(_select_cif_model(columns, model_number))
+        output = io.StringIO(); writer.save(output)
+        return output.getvalue().encode("utf-8")
+    lines = text.splitlines(keepends=True)
+    has_models = any(line.startswith("MODEL ") for line in lines)
+    if not has_models:
+        if model_number != 1:
+            raise _error("MD_STARTING_STRUCTURE_MODEL_INVALID", "Requested model is absent from the exact document.")
+        return raw
+    output = []
+    selected = False
+    in_model = False
+    found = False
+    for line in lines:
+        if line.startswith("MODEL "):
+            in_model = True
+            selected = int(line[10:14].strip()) == model_number
+            found |= selected
+        if selected or not in_model:
+            output.append(line)
+        if line.startswith("ENDMDL"):
+            selected = False
+            in_model = False
+    if not found:
+        raise _error("MD_STARTING_STRUCTURE_MODEL_INVALID", "Requested model is absent from the exact document.")
+    return "".join(output).encode("utf-8")
 
 
 _ACCEPTED_PREDICTION_PRODUCERS = frozenset(
@@ -1969,11 +2207,13 @@ def compile_launch_preview(
     )
     preimage = {
         "schema_version": "bms.md.launch-preview-preimage.v1",
+        **({"return_to": intent.return_to} if intent.return_to is not None else {}),
         "execution_target_id": intent.execution_target_id,
         "execution_policy": intent.execution_policy.model_dump(mode="json"),
         "source_ref": resolved.source_ref.model_dump(mode="json"),
         "source_sha256": structure.sha256,
         "source_size_bytes": structure.size_bytes,
+        **({"original_sha256": resolved.source_provenance["original_sha256"]} if resolved.original_runtime_path and resolved.source_provenance else {}),
         "chemistry": {
             "profile_id": intent.chemistry_profile_id,
             "profile_sha256": intent.chemistry_profile_sha256,
@@ -2147,6 +2387,9 @@ def inspect_resolved_structure(
         f"/api/molecular-dynamics/starting-structures/{encoded_kind}/{encoded_id}/content"
         f"?expected_sha256={structure_file.sha256}"
     )
+    if (resolved.source_ref.candidate_ref is not None or resolved.source_ref.model_number is not None
+            or resolved.source_ref.snapshot_job_id is not None):
+        viewer_url += "&selection=" + quote(resolved.source_ref.model_dump_json(exclude_none=True), safe="")
     return StartingStructureInspection(
         schema_version="bms.md.starting-structure-inspection.v1",
         source_ref=resolved.source_ref,

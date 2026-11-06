@@ -84,6 +84,9 @@ def verify_publication(job, design, root, *, confidence=True, scalar_only=False)
     if (job.model_id != 'protenix' or revision_for_job(job) != 1
             or design.job_id != job.id or design.source_stage is not None):
         raise ValueError('foreign selected native design')
+    if (job.provenance or {}).get('external_import', {}).get('provider') == 'protenix_native':
+        from services.external_imports.protenix import verify_imported_publication
+        return verify_imported_publication(job, design, root, confidence=confidence, scalar_only=scalar_only)
     native = (design.provenance or {})['native_producer']
     if native['producer_method'] != 'protenix' or native['source_format'] != 'mmcif':
         raise ValueError('foreign native producer')
@@ -392,12 +395,19 @@ async def verified_scalar_metrics(design, session):
     """Read only bound summary scalars; spatial full_data is not required."""
     selected = await verified_native_design(design, session, scalar_only=True)
     return scalar_records(_json(selected['snapshots']['metrics']),
-        dict(selected['block'], artifact_sha256=selected['artifacts']['metrics']['sha256']))
+        dict(selected['block'], artifact_sha256=selected['artifacts']['metrics']['sha256']),
+        producer_version=selected.get('producer_version', PINNED_PRODUCER))
 
 
 def scalar_records_from_publication(design, job, read):
     """Read bound summary bytes without opening coordinates or full_data."""
     from services.core_protein_result_contract import _persisted_candidate_artifacts
+    if (job.provenance or {}).get('external_import', {}).get('provider') == 'protenix_native':
+        from services.external_imports.protenix import verify_imported_publication
+        selected = verify_imported_publication(job, design, Path(job.output_dir), scalar_only=True)
+        return scalar_records(_json(selected['snapshots']['metrics']),
+            dict(selected['block'], artifact_sha256=selected['artifacts']['metrics']['sha256']),
+        producer_version=selected.get('producer_version', PINNED_PRODUCER))
     artifacts = _persisted_candidate_artifacts(job.provenance['core_protein_candidate_publication'], design)
     native = design.provenance['native_producer']
     from paths import get_data_root, resolve_runtime_data_path
@@ -440,7 +450,7 @@ def scalar_records_from_publication(design, job, read):
         artifact_sha256=artifacts['metrics']['sha256']))
 
 
-def scalar_records(summary, source):
+def scalar_records(summary, source, *, producer_version=PINNED_PRODUCER):
     if not isinstance(summary, dict):
         raise ValueError('invalid native summary')
     records = []
@@ -458,7 +468,7 @@ def scalar_records(summary, source):
               or (key in ('ptm', 'iptm') and not 0 <= value <= 1)
               or (key == 'gpde' and value < 0)):
             state, reason = 'invalid', 'out_of_range'
-        records.append(dict(descriptor, state=state, value=value if state == 'ok' else None,
+        records.append(dict(descriptor, producer_version=producer_version, state=state, value=value if state == 'ok' else None,
                             reason_code=reason, source=source))
     return records
 

@@ -9,14 +9,16 @@ from pathlib import Path
 from scripts.rfd3_local_redesign.contract import build_request, canonical_json, request_sha256, write_request
 
 
-def write_native_result(tmp_path, *, job_id, request_id, trajectories=False):
+def write_native_result(tmp_path, *, job_id, request_id, trajectories=False,
+                        num_designs=1, generated=1, unpaired=False,
+                        incomplete_trajectories=False, execution_status='unknown'):
     source = tmp_path / 'inputs' / f'{job_id}-source.pdb'
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text('ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 10.00           C\nEND\n')
     request = build_request(dict(input_structure=str(source), redesign_mode='partial_diffusion',
         design_chains=['A'], redesign_ranges='A1',
         source_residue_identities=[{'chain_id': 'A', 'residues': [{'res_num': 1, 'insertion_code': '', 'residue_name': 'GLY'}]}],
-        num_designs=1, sequence_policy='skip', dump_trajectories=trajectories, write_full_json=True),
+        num_designs=num_designs, sequence_policy='skip', dump_trajectories=trajectories, write_full_json=True),
         source_sha256=hashlib.sha256(source.read_bytes()).hexdigest())
     root = tmp_path / 'results' / job_id
     collected = root / 'collected' / 'protein_local_redesign'
@@ -26,11 +28,6 @@ def write_native_result(tmp_path, *, job_id, request_id, trajectories=False):
     native_request = root / 'requests' / 'request.json'
     native_request.parent.mkdir()
     write_request(native_request, request)
-    candidate = native_root / 'protein_local_redesign_0_0_model_0.cif.gz'
-    from tests.test_core_protein_candidates import TOY_CIF
-    candidate.write_bytes(gzip.compress(TOY_CIF.encode(), mtime=0))
-    metadata = native_root / 'protein_local_redesign_0_0_model_0.json'
-    metadata.write_text(json.dumps({'summary_confidences': {'test': 0.75}}))
     design_id = 'protein_local_redesign_0'
     native = dict(request['rfd3'], input=source.name)
     native_input = collected / 'rfd3_input_protein_local_redesign_0.json'
@@ -45,18 +42,33 @@ def write_native_result(tmp_path, *, job_id, request_id, trajectories=False):
     index = native_root / 'metadata.jsonl'; index.write_text('{}\n')
     output = collected / 'rfd3_result_manifest.json'
     command = [sys.executable, str(Path(__file__).resolve().parents[3] / 'scripts/rfd3_local_redesign/build_result_manifest.py'),
-        '--request', str(native_request), '--cif-file', str(candidate), '--json-file', str(metadata),
+        '--request', str(native_request),
         '--native-input', str(native_input), '--native-input-storage-path', str(native_input),
         '--preparation-receipt', str(receipt), '--preparation-receipt-storage-path', str(receipt),
         '--log-file', str(log), '--metadata-jsonl', str(index), '--output', str(output),
         '--storage-root', str(native_root), '--request-storage-path', str(native_request),
-        '--source-file', str(source), '--source-storage-path', str(source)]
-    if trajectories:
-        folder = native_root / 'trajectories'; folder.mkdir()
-        for role in ('denoised', 'noisy'):
-            path = folder / f'protein_local_redesign_0_0_{role}_model_0.cif.gz'
-            path.write_bytes(candidate.read_bytes())
-            command.extend(['--trajectory-file', str(path)])
+        '--source-file', str(source), '--source-storage-path', str(source),
+        '--execution-status', execution_status]
+    from tests.test_core_protein_candidates import TOY_CIF
+    for number in range(generated):
+        stem = f'protein_local_redesign_0_{number}_model_0'
+        candidate = native_root / f'{stem}.cif.gz'
+        candidate.write_bytes(gzip.compress(TOY_CIF.encode(), mtime=0))
+        metadata = native_root / f'{stem}.json'
+        metadata.write_text(json.dumps({'summary_confidences': {'test': 0.75}}))
+        command.extend(['--cif-file', str(candidate), '--json-file', str(metadata)])
+        if trajectories:
+            folder = native_root / 'trajectories'; folder.mkdir(exist_ok=True)
+            for role in ('denoised', 'noisy'):
+                if incomplete_trajectories and role == 'noisy':
+                    continue
+                path = folder / f'protein_local_redesign_0_{number}_{role}_model_0.cif.gz'
+                path.write_bytes(candidate.read_bytes())
+                command.extend(['--trajectory-file', str(path)])
+    if unpaired:
+        metadata = native_root / 'protein_local_redesign_0_unpaired_model_0.json'
+        metadata.write_text(json.dumps({'summary_confidences': {'test': 0.25}}))
+        command.extend(['--json-file', str(metadata)])
     subprocess.run(command, check=True)
     manifest = json.loads(output.read_text())
     return request, request_sha256(request), manifest['manifest_sha256'], root

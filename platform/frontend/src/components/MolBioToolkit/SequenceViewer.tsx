@@ -5,6 +5,8 @@
  */
 
 import { SeqViz } from "seqviz";
+import './SequenceViewer.css';
+import { isSequenceAnnotation } from './featureCatalog';
 import { restrictionSpecialCase } from '../../lib/restrictionSpecialCases';
 import {
     useCallback,
@@ -17,12 +19,13 @@ import {
 } from "react";
 import type { NucleotideMoleculeOrientation, NucleotideMoleculeStrandedness, PrimerTmSettings } from '../../lib/api';
 import type { RestrictionAnalysisBatch, RestrictionOccurrence } from '../../lib/restrictionAnalysis';
+import { groupRestrictionLabels } from './utils/restrictionLabels';
 import {
     getSeqVizTouchRotationWheelDelta,
     installSeqVizTouchBridge,
     shouldEnableSeqVizTouchBridge,
 } from './utils/seqVizTouch';
-import { COLOR_PALETTES } from './sequenceViewerConstants';
+import { useSequencePalette } from './useSequencePalette';
 import {
     displayStrandForMoleculeOrientation,
     sequenceForDisplayStrand,
@@ -36,6 +39,12 @@ import {
     getSelectionRanges,
     mapSeqVizSelectionToSource,
 } from './utils/selectionActions';
+
+function isSeqVizRenderTarget(target: EventTarget | null): target is Element {
+    return target instanceof Element
+        && Boolean(target.closest('.la-vz-viewer-event-router'))
+        && !target.closest('button, input, select, textarea, a, [contenteditable="true"], [role="dialog"], [data-seqviz-touch-control]');
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR PALETTES
@@ -62,6 +71,7 @@ export interface BpColors {
 
 interface NickingMapAnnotation {
     name: string;
+    description: string;
     start: number;
     end: number;
     direction: 1 | -1;
@@ -75,16 +85,17 @@ export function buildNickingMapAnnotations({
     sequenceLength,
     sourceDisplayStrand,
     resolvedDisplayStrand,
+    groupSameSiteLabels = true,
 }: {
     occurrences: RestrictionOccurrence[];
     selectedEnzymes: string[];
     sequenceLength: number;
     sourceDisplayStrand: NucleotideDisplayStrand;
     resolvedDisplayStrand: NucleotideDisplayStrand;
+    groupSameSiteLabels?: boolean;
 }): NickingMapAnnotation[] {
-    const selected = new Set(selectedEnzymes);
-    return occurrences.flatMap((occurrence) => {
-        if (!selected.has(occurrence.enzyme_id)) return [];
+    return groupRestrictionLabels(occurrences, selectedEnzymes, groupSameSiteLabels).flatMap((group) => {
+        const occurrence = group.representative;
         return occurrence.nicks
             .filter((nick) => nick.status === 'complete' && nick.boundary !== null)
             .map((nick) => {
@@ -104,7 +115,8 @@ export function buildNickingMapAnnotations({
                     resolvedDisplayStrand,
                 );
                 return {
-                    name: occurrence.canonical_name,
+                    name: group.name,
+                    description: group.description,
                     start: displayRange.start,
                     end: displayRange.end,
                     direction: displayDirection,
@@ -115,23 +127,24 @@ export function buildNickingMapAnnotations({
     });
 }
 
-export function buildRestrictionMapAnnotations({ occurrences, selectedEnzymes, sequenceLength, sourceDisplayStrand, resolvedDisplayStrand }: {
+export function buildRestrictionMapAnnotations({ occurrences, selectedEnzymes, sequenceLength, sourceDisplayStrand, resolvedDisplayStrand, groupSameSiteLabels = true }: {
     occurrences: RestrictionOccurrence[];
     selectedEnzymes: string[];
     sequenceLength: number;
     sourceDisplayStrand: NucleotideDisplayStrand;
     resolvedDisplayStrand: NucleotideDisplayStrand;
+    groupSameSiteLabels?: boolean;
 }) {
-    const selected = new Set(selectedEnzymes);
-    return occurrences.flatMap((occurrence) => selected.has(occurrence.enzyme_id)
-        ? occurrence.site_segments.map(([start, end], segmentIndex) => {
+    return groupRestrictionLabels(occurrences, selectedEnzymes, groupSameSiteLabels).flatMap((group) => {
+        const occurrence = group.representative;
+        return occurrence.site_segments.map(([start, end], segmentIndex) => {
             const range = transformRangeForDisplayStrand(start, end, sequenceLength, sourceDisplayStrand, resolvedDisplayStrand);
             const sourceDirection = occurrence.orientation === 'forward' ? 1 : -1;
             const special = restrictionSpecialCase(occurrence.enzyme_id);
             const semantic = occurrence.nicks.length > 0 ? 'nick' : occurrence.double_strand_events.length > 0 ? 'DSB' : 'recognition';
             return {
-                name: occurrence.canonical_name,
-                description: `${occurrence.canonical_name} · ${occurrence.certainty} ${special ? 'motif match (special case)' : semantic} · ${occurrence.orientation} · recognition ${start}–${end} (0-based, end-exclusive)${special ? ` · ${special}` : ''}`,
+                name: group.name,
+                description: `${occurrence.canonical_name} · ${occurrence.certainty} ${special ? 'motif match (special case)' : semantic} · ${occurrence.orientation} · recognition ${start}–${end} (0-based, end-exclusive)${special ? ` · ${special}` : ''}${group.description ? ` · ${group.description}` : ''}`,
                 labelLane: true,
                 start: range.start,
                 end: range.end,
@@ -140,8 +153,8 @@ export function buildRestrictionMapAnnotations({ occurrences, selectedEnzymes, s
                 type: special ? 'restriction_special_case' : `restriction_${semantic}`,
                 id: `${occurrence.occurrence_id}:segment:${segmentIndex}`,
             };
-        })
-        : []);
+        });
+    });
 }
 
 export function getNickingMarkerGeometry({
@@ -290,6 +303,8 @@ export interface Primer {
     start: number;
     end: number;
     strand: 1 | -1;
+    binding_status?: 'needs_review';
+    binding_warning?: string;
     tm?: number;
     gc_percent?: number;
     tm_algorithm?: string;
@@ -332,6 +347,7 @@ export interface AnalysisTrack {
 }
 
 export interface SequenceData {
+    digestFragment?: import('../../lib/restrictionAnalysis').RestrictionDigestFragment;
     name: string;
     description?: string;
     sequence: string;
@@ -375,6 +391,7 @@ interface SequenceViewerProps {
     visibility: VisibilityState;
     selectedEnzymes?: string[];
     restrictionAnalysis?: RestrictionAnalysisBatch | null;
+    groupSameSiteLabels?: boolean;
     searchQuery?: string;
     selection?: SelectionInfo | null;
     onSelection?: (sel: SelectionInfo) => void;
@@ -414,6 +431,7 @@ export function SequenceViewer({
     visibility,
     selectedEnzymes = [],
     restrictionAnalysis = null,
+    groupSameSiteLabels = true,
     searchQuery,
     selection,
     onSelection,
@@ -433,9 +451,19 @@ export function SequenceViewer({
         : displayStrandForMoleculeOrientation(sequenceData.moleculeOrientation);
     const resolvedDisplayStrand = activeDisplayStrand ?? sourceDisplayStrand;
     const sequenceLength = sequenceData.sequence.length;
+    const [selectedRestrictionLabel, setSelectedRestrictionLabel] = useState<string | null>(null);
+    const restrictionAnnotationPointerRef = useRef<string | null>(null);
+    const restrictionLabelGroups = useMemo(() => groupRestrictionLabels(
+        restrictionAnalysis?.analysis.occurrences ?? [], selectedEnzymes, groupSameSiteLabels,
+    ), [restrictionAnalysis, selectedEnzymes, groupSameSiteLabels]);
+    const openRestrictionGroup = visibility.cutsites ? restrictionLabelGroups.find(group =>
+        new Set(group.members.map(member => member.enzyme_id)).size > 1
+        && group.representative.site_segments.some((_, index) => selectedRestrictionLabel === `${group.representative.occurrence_id}:segment:${index}`),
+    ) : undefined;
+    useEffect(() => setSelectedRestrictionLabel(null), [restrictionAnalysis, groupSameSiteLabels]);
 
     const featureAnnotations = useMemo(() => {
-        return sequenceData.features.flatMap((feature) => {
+        return sequenceData.features.filter(isSequenceAnnotation).flatMap((feature) => {
             const segments = feature.segments && feature.segments.length > 0
                 ? feature.segments
                 : [{ start: feature.start, end: feature.end }];
@@ -508,6 +536,7 @@ export function SequenceViewer({
         if (visibility.cutsites && restrictionAnalysis) {
             result.push(...buildRestrictionMapAnnotations({
                 occurrences: restrictionAnalysis.analysis.occurrences,
+                groupSameSiteLabels,
                 selectedEnzymes,
                 sequenceLength,
                 sourceDisplayStrand,
@@ -516,7 +545,7 @@ export function SequenceViewer({
         }
 
         return result;
-    }, [featureAnnotations, resolvedDisplayStrand, restrictionAnalysis, selectedEnzymes, sequenceData.primers, sequenceLength, sourceDisplayStrand, visibility.cutsites, visibility.features, visibility.primers]);
+    }, [featureAnnotations, groupSameSiteLabels, resolvedDisplayStrand, restrictionAnalysis, selectedEnzymes, sequenceData.primers, sequenceLength, sourceDisplayStrand, visibility.cutsites, visibility.features, visibility.primers]);
 
     // Build translations array if visible - filter by selected reading frames
     // Also filter overlapping ORFs to prevent visual chaos
@@ -617,13 +646,14 @@ export function SequenceViewer({
     const nickingOverlayRef = useRef<SVGSVGElement | null>(null);
     const previousSelectionRef = useRef<SelectionInfo | null | undefined>(selection);
     const selectionPointerButtonRef = useRef<number | null>(null);
+    const mouseSelectionActiveRef = useRef(false);
     const pendingPointerSelectionRef = useRef<SelectionInfo | null>(null);
     const selectionCommitFrameRef = useRef<number | null>(null);
     const [selectionResetVersion, setSelectionResetVersion] = useState(0);
     const [circularCentralIndex, setCircularCentralIndex] = useState(0);
     const [viewerSize, setViewerSize] = useState({ width: 0, height: 0 });
     const [nickingLabelOffsets, setNickingLabelOffsets] = useState<Record<string, { x: number; y: number }>>({});
-    const activePaletteColors = COLOR_PALETTES[colorPalette].colors as Record<string, string>;
+    const activePaletteColors = useSequencePalette(colorPalette) as Record<string, string>;
 
     const displayHighlightedRegions = useMemo(() => {
         if (!highlightedRegions || highlightedRegions.length === 0) {
@@ -699,13 +729,14 @@ export function SequenceViewer({
         visibility.cutsites && sequenceData.circular && resolvedViewerMode !== 'linear'
             ? buildNickingMapAnnotations({
                 occurrences: restrictionAnalysis?.analysis.occurrences ?? [],
+                groupSameSiteLabels,
                 selectedEnzymes,
                 sequenceLength,
                 sourceDisplayStrand,
                 resolvedDisplayStrand,
             })
             : []
-    ), [resolvedDisplayStrand, resolvedViewerMode, restrictionAnalysis, selectedEnzymes, sequenceData.circular, sequenceLength, sourceDisplayStrand, visibility.cutsites]);
+    ), [groupSameSiteLabels, resolvedDisplayStrand, resolvedViewerMode, restrictionAnalysis, selectedEnzymes, sequenceData.circular, sequenceLength, sourceDisplayStrand, visibility.cutsites]);
 
     useEffect(() => {
         const viewer = viewerRef.current;
@@ -851,15 +882,32 @@ export function SequenceViewer({
     }, [flushPendingPointerSelection]);
 
     const cancelPointerSelection = useCallback(() => {
+        if (mouseSelectionActiveRef.current) {
+            // SeqViz ends its internal drag on document mouseup, not pointercancel
+            // or blur. Release it too, so returning to the page cannot extend an
+            // abandoned selection. Keep its final callback buffered, then discard.
+            mouseSelectionActiveRef.current = false;
+            document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+        }
+        if (selectionCommitFrameRef.current !== null) {
+            window.cancelAnimationFrame(selectionCommitFrameRef.current);
+            selectionCommitFrameRef.current = null;
+        }
         pendingPointerSelectionRef.current = null;
         selectionPointerButtonRef.current = null;
     }, []);
 
     useEffect(() => {
+        const finishMouseSelection = () => {
+            mouseSelectionActiveRef.current = false;
+            finishPointerSelection();
+        };
+        window.addEventListener('mouseup', finishMouseSelection, true);
         window.addEventListener('pointerup', finishPointerSelection, true);
         window.addEventListener('pointercancel', cancelPointerSelection, true);
         window.addEventListener('blur', cancelPointerSelection);
         return () => {
+            window.removeEventListener('mouseup', finishMouseSelection, true);
             window.removeEventListener('pointerup', finishPointerSelection, true);
             window.removeEventListener('pointercancel', cancelPointerSelection, true);
             window.removeEventListener('blur', cancelPointerSelection);
@@ -925,9 +973,43 @@ export function SequenceViewer({
                 }
             }}
             onPointerDownCapture={(event) => {
+                if (event.target instanceof Element && event.target.closest('[data-restriction-label-details]')) return;
+                if (selectionCommitFrameRef.current !== null) {
+                    window.cancelAnimationFrame(selectionCommitFrameRef.current);
+                    flushPendingPointerSelection();
+                }
                 selectionPointerButtonRef.current = event.button;
                 if (event.button === 0) {
                     pendingPointerSelectionRef.current = null;
+                }
+            }}
+            onMouseDownCapture={event => {
+                if (!(event.target instanceof Element) || event.target.closest('[data-restriction-label-details]')) return;
+                // SeqViz registers the native annotation ID on its paths/labels,
+                // but omits it from some selection callbacks. Capture that exact
+                // element rather than guessing from the displayed name or range.
+                restrictionAnnotationPointerRef.current = event.target.closest('[id]')?.id ?? null;
+                if (event.button !== 0 || event.ctrlKey || !isSeqVizRenderTarget(event.target)) return;
+                // Prevent browser text/image dragging without stopping SeqViz's
+                // own mouse handlers, annotation clicks or shift-range selection.
+                event.preventDefault();
+                event.target.closest<HTMLElement>('.la-vz-viewer-event-router')?.focus({ preventScroll: true });
+                if (selectionCommitFrameRef.current !== null) {
+                    window.cancelAnimationFrame(selectionCommitFrameRef.current);
+                    flushPendingPointerSelection();
+                }
+                selectionPointerButtonRef.current = 0;
+                pendingPointerSelectionRef.current = null;
+                mouseSelectionActiveRef.current = true;
+            }}
+            onDragStartCapture={event => {
+                if (isSeqVizRenderTarget(event.target)) event.preventDefault();
+            }}
+            onMouseMoveCapture={event => {
+                if (mouseSelectionActiveRef.current && (event.buttons & 1) === 0) {
+                    // Recover when mouseup happened outside the browser window.
+                    mouseSelectionActiveRef.current = false;
+                    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
                 }
             }}
             onPointerUpCapture={finishPointerSelection}
@@ -997,6 +1079,9 @@ export function SequenceViewer({
 
                 // Selection handling with type info
                 onSelection={(sel) => {
+                    // Keep inspection independent of the editing callback.
+                    setSelectedRestrictionLabel(sel?.type === 'ANNOTATION'
+                        ? sel.id ?? restrictionAnnotationPointerRef.current : null);
                     if (onSelection && sel && typeof sel.start === 'number' && typeof sel.end === 'number') {
                         const sourceSelection = mapSeqVizSelectionToSource(
                             {
@@ -1031,6 +1116,31 @@ export function SequenceViewer({
                 // Styling - seqviz needs explicit height
                 style={{ height: "100%", width: "100%" }}
             />
+            {openRestrictionGroup && (
+                <div role="dialog" aria-label="Enzymes at this cut site" data-restriction-label-details="true" data-seqviz-touch-control="true"
+                    className="absolute right-3 top-3 z-30 max-h-[70%] w-80 max-w-[calc(100%_-_1.5rem)] overflow-auto rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4 text-sm text-[var(--text-primary)] shadow-xl"
+                    onPointerDown={event => event.stopPropagation()}
+                    onContextMenu={event => event.stopPropagation()}
+                    onKeyDown={event => {
+                        if (event.key === 'Escape') { event.stopPropagation(); setSelectedRestrictionLabel(null); viewerRef.current?.focus(); }
+                    }}>
+                    <div className="flex items-start justify-between gap-3">
+                        <strong>Enzymes at this cut site</strong>
+                        <button type="button" autoFocus aria-label="Close enzyme details"
+                            className="rounded border border-[var(--border-primary)] px-2 py-1 text-[var(--text-primary)] focus-visible:outline-2 focus-visible:outline-[var(--text-action)]"
+                            onClick={() => { setSelectedRestrictionLabel(null); viewerRef.current?.focus(); }}>Close</button>
+                    </div>
+                    <p className="mt-2 text-xs text-[var(--text-secondary)]">{openRestrictionGroup.representative.canonical_name} is shown on the map. These matches share the same cut positions.</p>
+                    <dl className="mt-3 space-y-2">
+                        {openRestrictionGroup.members.map(member => (
+                            <div key={member.occurrence_id} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-[var(--border-primary)] pt-2">
+                                <dt className="font-semibold">{member.canonical_name}</dt>
+                                <dd className="break-all font-mono text-[var(--text-secondary)]">{String(member.recognition_pattern ?? '')}</dd>
+                            </div>
+                        ))}
+                    </dl>
+                </div>
+            )}
             {nickingMapMarkers.length > 0
                 && resolvedViewerMode !== 'linear'
                 && viewerSize.width > 0
@@ -1068,7 +1178,7 @@ export function SequenceViewer({
                                 data-nick-position={marker.start}
                                 aria-label={marker.name}
                             >
-                                <title>{`${marker.name}: ${strand} strand nick`}</title>
+                                <title>{`${marker.name}: ${strand} strand nick${marker.description ? ` · ${marker.description}` : ''}`}</title>
                                 <path
                                     className="la-vz-label-line"
                                     d={`M${geometry.lineStartX} ${geometry.lineStartY} L${textX} ${textY}`}

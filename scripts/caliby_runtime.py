@@ -403,10 +403,10 @@ def maybe_run_self_consistency(
 
 
 _SELF_CONSISTENCY_ALIASES = {
-    "caliby_sc_plddt": ("caliby_sc_plddt", "sc_plddt", "plddt", "avg_plddt", "mean_plddt"),
-    "caliby_sc_rmsd": ("caliby_sc_rmsd", "sc_rmsd", "rmsd", "ca_rmsd", "bb_rmsd", "backbone_rmsd"),
+    "caliby_sc_plddt": ("caliby_sc_plddt", "avg_ca_plddt", "sc_plddt", "plddt", "avg_plddt", "mean_plddt"),
+    "caliby_sc_rmsd": ("caliby_sc_rmsd", "sc_ca_rmsd", "sc_rmsd", "rmsd", "ca_rmsd", "bb_rmsd", "backbone_rmsd"),
     "caliby_sc_ptm": ("caliby_sc_ptm", "sc_ptm", "ptm", "predicted_tm_score"),
-    "caliby_sc_tm": ("caliby_sc_tm", "sc_tm", "tm", "tm_score"),
+    "caliby_sc_tm": ("caliby_sc_tm", "tmalign_score", "sc_tm", "tm", "tm_score"),
 }
 
 
@@ -560,8 +560,10 @@ def normalize_sampling_results(
             "caliby_potts_energy": energies[index - 1] if index - 1 < len(energies) else None,
             **extra,
         }
-        if example_id in sc_metrics:
-            raw_self_consistency = sc_metrics[example_id]
+        # Native Caliby keys evaluation by designed output stem, not backbone ID.
+        sc_key = structure_source.stem
+        if sc_key in sc_metrics:
+            raw_self_consistency = sc_metrics[sc_key]
             metadata["self_consistency"] = raw_self_consistency
             metadata.update(canonicalize_self_consistency_metrics(raw_self_consistency))
 

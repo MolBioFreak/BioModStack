@@ -50,64 +50,58 @@ type_map = {
 }
 
 def _convert_complex_entry(bms, default_name, seeds):
+    import copy
+    from protenix_chemistry import validate_chemistry
+
+    if not isinstance(bms, dict):
+        raise ValueError("Compiled complex JSON must be a BMS object with components, not a native task list; native tasks use the native_payload adapter")
+    validate_chemistry({"complex_components": bms.get("components", []),
+                        **{k: bms[k] for k in ("covalent_bonds", "constraint") if k in bms}})
     sequences = []
     for comp in bms.get('components', []):
-        t = comp.get('type', 'protein').lower()
-        seq = comp.get('sequence', '')
-        comp_id = str(comp.get('id') or '').strip()
-        count_raw = comp.get('count', 1)
-        try:
-            count = max(1, int(count_raw))
-        except Exception:
-            count = 1
-
+        t = comp.get('type', 'protein')
+        count = comp.get('count', 1)
+        entry = {"count": count}
+        ids = comp.get('copy_ids')
+        if ids is None:
+            label = comp.get('id')
+            ids = label if isinstance(label, list) else [label] if label and count == 1 else None
+        if ids is not None:
+            entry['id'] = copy.deepcopy(ids)
         if t in type_map:
-            if seq:
-                chain_entry = {"sequence": seq, "count": count}
-                if comp_id:
-                    chain_entry["id"] = [comp_id]
-                sequences.append({type_map[t]: chain_entry})
+            entry['sequence'] = comp['sequence']
+            fields = ['modifications']
+            if t in ('protein', 'peptide'):
+                fields += ['unpairedMsa', 'pairedMsa', 'unpairedMsaPath', 'pairedMsaPath', 'msa', 'templatesPath']
+            elif t == 'rna':
+                fields += ['unpairedMsa', 'unpairedMsaPath']
+            for key in fields:
+                if key in comp:
+                    entry[key] = copy.deepcopy(comp[key])
+            sequences.append({type_map[t]: entry})
         elif t == 'ligand':
-            ccd = comp.get('ccd', '')
-            smiles = comp.get('smiles', '')
-            entry = {}
-            if ccd:
-                ligand_id = str(ccd)
-                if not ligand_id.startswith("CCD_"):
-                    ligand_id = f"CCD_{ligand_id}"
-                ligand_entry = {"ligand": ligand_id, "count": count}
-                if comp_id:
-                    ligand_entry["id"] = [comp_id]
-                entry = {"ligand": ligand_entry}
-            elif smiles:
-                ligand_entry = {"ligand": str(smiles), "count": count}
-                if comp_id:
-                    ligand_entry["id"] = [comp_id]
-                entry = {"ligand": ligand_entry}
-            if entry:
-                sequences.append(entry)
+            if comp.get('ligand_file'):
+                entry['ligand'] = 'FILE_' + comp['ligand_file']
+            elif comp.get('ccd'):
+                ccd = comp['ccd']
+                entry['ligand'] = ccd if ccd.startswith('CCD_') else 'CCD_' + ccd
+            else:
+                entry['ligand'] = comp['smiles']
+            sequences.append({'ligand': entry})
         elif t == 'ion':
-            entry = {}
-            ion = comp.get('ion') or comp.get('element') or comp.get('ccd')
-            if ion:
-                ion_entry = {"ion": str(ion).upper(), "count": count}
-                if comp_id:
-                    ion_entry["id"] = [comp_id]
-                entry = {"ion": ion_entry}
-            if entry:
-                sequences.append(entry)
-
-    protenix_entry = {
-        "name": str(bms.get("name") or default_name),
-        "modelSeeds": list(seeds),
-        "sequences": sequences,
-    }
-    return protenix_entry
+            entry['ion'] = (comp.get('ion') or comp.get('element') or comp['ccd']).upper()
+            sequences.append({'ion': entry})
+    task = {"name": str(bms.get("name") or default_name),
+            "modelSeeds": list(seeds), "sequences": sequences}
+    for key in ('covalent_bonds', 'constraint'):
+        if key in bms:
+            task[key] = copy.deepcopy(bms[key])
+    return task
 
 def build_native_protenix_input(*, seeds, complexes=None, sequences=None, native_payload=None):
     """The native format adapter shared by controller and Nextflow preparation.
 
-    Complex conversion is factored verbatim from PrepProtenixComplex. Callers
+    Complex conversion preserves the typed ordinary scientific contract. Callers
     supply already compiled ordered tasks, never uncompiled batch requests.
     Native generated-PDB rosters are copied, not reconstructed or renamed.
     """
@@ -142,8 +136,10 @@ def load_native_protenix_input(params):
     if complex_source:
         source = Path(complex_source)
         files = sorted(path for path in source.glob("*.json") if path.is_file()) if source.is_dir() else [source]
+        from lib.portable_inputs import bind_native_document
         return build_native_protenix_input(seeds=seeds, complexes=[
-            (path.stem, json.loads(path.read_text(encoding="utf-8"))) for path in files])
+            (path.stem, bind_native_document(json.loads(path.read_text(encoding="utf-8")),
+                                             "protenix-complex", owner=path)) for path in files])
     if params.get("sequence_batch_json_path"):
         entries = json.loads(Path(params["sequence_batch_json_path"]).read_text(encoding="utf-8"))
         if any(entry.get("complex_json") for entry in entries):
@@ -235,7 +231,7 @@ def all_protein_chains_have_msa(payload: List[Dict[str, Any]]) -> bool:
         _hydrate_old_precomputed_dir(chain)
         paired_path, unpaired_path = _existing_msa_paths(chain)
         supplied = [path for path in (paired_path, unpaired_path) if path is not None]
-        if not supplied:
+        if not supplied and not any(chain.get(key) is not None for key in ("unpairedMsa", "pairedMsa")):
             complete = False
             continue
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -855,21 +851,30 @@ def main() -> None:
     if getattr(args, 'generated_service', '') and os.environ.get('BMS_COMPONENT_CONTEXT'):
         if args.prepared_inputs:
             raise ValueError('Generated service and direct prepared inputs are distinct authorities')
-        from component_adapter import await_external_service, runtime_from_environment
-        from services.model_msa_handoff import generated_protenix_request
-        runtime = runtime_from_environment()
-        if runtime.target_id != 'local':
-            source, sha = await_external_service(args.generated_service, generated_protenix_request(payload))
-            args.prepared_inputs, args.prepared_sha256 = str(source), sha
+        from component_adapter import await_external_service
+        # Load the stdlib-only module by path: importing it as services.* runs the
+        # API package init, which a task container does not carry the dependencies for.
+        import importlib.util
+        handoff_path = Path(__file__).resolve().parents[1] / 'platform' / 'api' / 'services' / 'model_msa_handoff.py'
+        handoff_spec = importlib.util.spec_from_file_location('bms_model_msa_handoff', handoff_path)
+        handoff = importlib.util.module_from_spec(handoff_spec)
+        handoff_spec.loader.exec_module(handoff)
+        generated_protenix_request = handoff.generated_protenix_request
+        source, sha = await_external_service(args.generated_service, generated_protenix_request(payload))
+        args.prepared_inputs, args.prepared_sha256 = str(source), sha
     if getattr(args, 'prepared_inputs', ''):
         import sys
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         from biomodstack_msa_handoff import hydrate_prepared_protenix_task
         payload = hydrate_prepared_protenix_task(payload, Path(args.prepared_inputs), args.prepared_sha256)
+        from run_protenix_inference import materialize_inline_protenix_msa
+        materialize_inline_protenix_msa(payload, out_dir / "inline_msa")
         dump_json(output_json, payload)
         if args.report_json:
             write_msa_report(Path(args.report_json).expanduser().resolve(), payload, 'controller_prepared', stats)
         return
+    from run_protenix_inference import materialize_inline_protenix_msa
+    materialize_inline_protenix_msa(payload, out_dir / "inline_msa")
     if args.cache_dir:
         hydrated_from_cache = hydrate_chains_from_shared_cache(
             payload,

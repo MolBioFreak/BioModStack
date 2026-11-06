@@ -38,7 +38,7 @@ def main():
         run('docker', 'run', '--rm', '--network=none', '--user', f'{os.getuid()}:{os.getgid()}',
             '-v', f'{source}:/proot', '-w', '/proot/src', 'bms-proot-readonly-builder',
             'make', '-j4', 'HAS_SWIG=', 'HAS_PYTHON_CONFIG=', 'GIT_VERSION=', 'GIT_COMMIT=',
-            'VERSION=udocker-fe64598-bms-lazy-1')
+            'VERSION=udocker-fe64598-bms-lazy-2')
         run('docker', 'run', '--rm', '--network=none', '--user', f'{os.getuid()}:{os.getgid()}',
             '-v', f'{source}:/proot', 'bms-proot-readonly-builder',
             'strip', '--strip-debug', '/proot/src/proot')

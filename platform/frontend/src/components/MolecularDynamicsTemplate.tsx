@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { savePredictionOperationDetour } from '../lib/binderSelectedRound';
 
 import { MolecularDynamicsNativeSettings } from './MolecularDynamicsNativeSettings';
 import { hydrateMolecularDynamicsNative, serializeMolecularDynamicsNativeDraft, type MolecularDynamicsNativeDraft, parseMolecularDynamicsNativePreview, type MolecularDynamicsNativeIntent, type MolecularDynamicsNativePreview } from './molecularDynamicsUiState';
@@ -28,6 +29,7 @@ import {
     parseMolecularDynamicsServerFilePage,
     parseMolecularDynamicsStartingStructureInspection,
     resolveMolecularDynamicsCloneSource,
+    molecularDynamicsSourceKey,
     storeMolecularDynamicsDraft,
     validateMolecularDynamicsChemistryProfile,
     validateMolecularDynamicsForm,
@@ -79,7 +81,7 @@ const panelClass = 'rounded-2xl border border-slate-700/80 bg-slate-900/55 p-5 s
 const inputClass = 'mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/80 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-500 disabled:cursor-not-allowed disabled:opacity-65';
 const labelClass = 'block text-xs font-semibold uppercase tracking-[0.12em] text-slate-400';
 
-type SourceMode = 'fixture' | 'rcsb' | 'upload' | 'prediction' | 'design' | 'prior_md_input' | 'server_file';
+type SourceMode = 'fixture' | 'rcsb' | 'upload' | 'prediction' | 'design' | 'prior_md_input' | 'server_file' | 'candidate';
 
 const displayError = (error: unknown, fallback: string): string => {
     if (error && typeof error === 'object') {
@@ -215,6 +217,7 @@ export function MolecularDynamicsTemplate({
         retry: (failureCount, error) => !String(error).includes('Invalid chemistry profile inventory response') && failureCount < 1,
     });
     const [form, setForm] = useState<MolecularDynamicsForm>(() => initialForm(initialValues));
+    const [selectedModelNumber, setSelectedModelNumber] = useState('');
     const [native, setNative] = useState<MolecularDynamicsNativeDraft | null>(() => hydrateMolecularDynamicsNative(initialValues));
     const [nativeEnabled, setNativeEnabled] = useState(() => hydrateMolecularDynamicsNative(initialValues) !== null);
     const nativeModeDrafts = useRef<Partial<Record<'guided' | 'prepared' | 'compiled', MolecularDynamicsNativeDraft>>>({});
@@ -257,10 +260,12 @@ export function MolecularDynamicsTemplate({
     const loadedReturnedPredictionRef = useRef<string | null>(null);
     const [predictionPage, setPredictionPage] = useState<Gen2PredictionPage | null>(null);
     const [selectedPredictionCandidate, setSelectedPredictionCandidate] = useState<Gen2PredictionCandidate | null>(null);
-    const [sequence, setSequence] = useState('');
-    const [sequenceName, setSequenceName] = useState('MD candidate');
-    const [sequenceSource, setSequenceSource] = useState<'new' | 'saved'>('new');
-    const [savedSequenceId, setSavedSequenceId] = useState('');
+    const retainedSequence = initialValues?.md_sequence_snapshot
+        ? parseMolecularDynamicsHandoffUserSequence(initialValues.md_sequence_snapshot) : null;
+    const [sequence, setSequence] = useState(retainedSequence?.sequence ?? '');
+    const [sequenceName, setSequenceName] = useState(retainedSequence?.name ?? 'MD candidate');
+    const [sequenceSource, setSequenceSource] = useState<'new' | 'saved'>(initialValues?.md_sequence_source === 'saved' ? 'saved' : 'new');
+    const [savedSequenceId, setSavedSequenceId] = useState(retainedSequence?.id ?? '');
     const [designId, setDesignId] = useState(String(initialValues?.md_design_id ?? (cloneSource?.kind === 'design' ? cloneSource.id : '')));
     const [priorMdJobId, setPriorMdJobId] = useState(String(initialValues?.md_prior_job_id ?? (cloneSource?.kind === 'prior_md_input' ? cloneSource.id : '')));
     const [serverSearch, setServerSearch] = useState('');
@@ -276,7 +281,12 @@ export function MolecularDynamicsTemplate({
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
-    const [placement, setPlacement] = useState(() => prepareExecutionPlacement({ execution_target_id: native?.execution_target_id, execution_policy: native?.execution_policy }));
+    const [placement, setPlacement] = useState(() => prepareExecutionPlacement({
+        execution_target_id: Object.hasOwn(initialValues ?? {}, 'execution_target_id')
+            ? initialValues!.execution_target_id as string | null : native?.execution_target_id,
+        execution_policy: Object.hasOwn(initialValues ?? {}, 'execution_policy')
+            ? initialValues!.execution_policy as MolecularDynamicsNativeDraft['execution_policy'] : native?.execution_policy,
+    }));
     useEffect(() => {
         const changed = () => setPlacement(current => prepareExecutionPlacement({ execution_policy: current.execution_policy }));
         const policyChanged = () => setPlacement(current => prepareExecutionPlacement({ execution_target_id: current.execution_target_id }));
@@ -401,8 +411,7 @@ export function MolecularDynamicsTemplate({
     ) => {
         const requestGeneration = ++inspectionRequestGenerationRef.current;
         const previousInspection = inspection;
-        const sameSource = previousInspection?.source_ref.kind === sourceRef.kind
-            && previousInspection.source_ref.id === sourceRef.id;
+        const sameSource = previousInspection != null && molecularDynamicsSourceKey(previousInspection.source_ref) === molecularDynamicsSourceKey(sourceRef);
         setSourceBusy(true);
         setSourceError('');
         setAdmissionAuthority(null);
@@ -528,28 +537,31 @@ export function MolecularDynamicsTemplate({
 
     useEffect(() => {
         if (!returnedPredictionJobId) return;
-        const routeGeneration = `${returnedPredictionJobId}:${routedDesignId}`;
+        const routeGeneration = `${returnedPredictionJobId}:${routedDesignId}:${JSON.stringify(initialValues?.source_ref)}`;
         if (loadedReturnedPredictionRef.current === routeGeneration) return;
         loadedReturnedPredictionRef.current = routeGeneration;
-        if (routedDesignId) {
+        if (initialValues?.source_ref) {
+            void inspectSource(initialValues.source_ref as MolecularDynamicsStartingStructureRef, undefined, returnedPredictionJobId);
+        } else if (routedDesignId) {
             // An exact ResultsViewer Design may come from any producer. The
             // existing Design resolver owns its bytes and source Job identity.
             setSourceMode('design');
             setDesignId(routedDesignId);
-            void inspectSource({ kind: 'design', id: routedDesignId }, undefined, returnedPredictionJobId);
+            void inspectSource((initialValues?.source_ref as MolecularDynamicsStartingStructureRef | undefined) ?? { kind: 'design', id: routedDesignId }, undefined, returnedPredictionJobId);
         } else {
             setSourceMode('prediction');
             void loadPredictionCandidates();
         }
         // The returned Job and optional exact Design IDs are immutable for this mounted route generation.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [returnedPredictionJobId, routedDesignId]);
+    }, [returnedPredictionJobId, routedDesignId, initialValues?.source_ref]);
 
     const openPrediction = async () => {
         try {
             let sequenceId = savedSequenceId;
             if (sequenceSource === 'saved') {
-                const selected = savedSequencesQuery.data?.find((candidate) => candidate.id === savedSequenceId)
+                const selected = (retainedSequence?.id === savedSequenceId ? retainedSequence : null)
+                    ?? savedSequencesQuery.data?.find((candidate) => candidate.id === savedSequenceId)
                     ?? (savedSequenceId ? parseMolecularDynamicsHandoffUserSequence((await api.get<unknown>(`/api/user-sequences/${savedSequenceId}`)).data, savedSequenceId) : null);
                 if (!selected) throw new Error('Select one available saved sequence before opening Structure Prediction.');
                 sequenceId = selected.id;
@@ -561,8 +573,10 @@ export function MolecularDynamicsTemplate({
                 });
                 sequenceId = parseMolecularDynamicsHandoffUserSequence(saved.data).id;
             }
+            const exact = retainedSequence?.id === sequenceId ? retainedSequence
+                : parseMolecularDynamicsHandoffUserSequence((await api.get<unknown>(`/api/user-sequences/${sequenceId}`)).data, sequenceId);
             const draftId = crypto.randomUUID();
-            storeMolecularDynamicsDraft(sessionStorage, draftId, {
+            const retainedDraft = {
                 form: {
                     ...form,
                     native_intent: nativeEnabled ? native : undefined,
@@ -570,11 +584,44 @@ export function MolecularDynamicsTemplate({
                     coordinatesPath: undefined,
                     topologyPath: undefined,
                 },
+                sequenceSnapshot: exact, sequenceSource,
+                ...(initialValues?.complex_components !== undefined ? { complex_components: JSON.parse(JSON.stringify(initialValues.complex_components)) } : {}),
+                ...(initialValues?.primary_chain_id !== undefined ? { primary_chain_id: JSON.parse(JSON.stringify(initialValues.primary_chain_id)) } : {}),
                 selectedProfileId,
                 selectedProfileDigest,
                 destinationLaunchContextId: launchContextId,
-            });
-            navigate(buildMolecularDynamicsPredictionRoute(sequenceId, draftId));
+                source_ref: inspection?.source_ref ?? cloneSource,
+                return_to: initialValues?.md_return_to ?? initialValues?.return_to,
+                ...placement,
+            };
+            const route = new URL(buildMolecularDynamicsPredictionRoute(sequenceId, draftId), window.location.origin);
+            const search = new URLSearchParams(window.location.search);
+            const project_id = search.get('project_id') ?? search.get('operation_project_id');
+            const setup_context_id = search.get('setup_context_id') ?? search.get('operation_setup_context_id');
+            const detour: Parameters<typeof savePredictionOperationDetour>[1] = {
+                schema_version: 1 as const,
+                composition: { source_sequence_id: sequenceId, sequence: exact.sequence,
+                    ...(initialValues?.primary_chain_id !== undefined ? { primary_chain_id: JSON.parse(JSON.stringify(initialValues.primary_chain_id)) } : {}),
+                    ...(initialValues?.complex_components ? { complex_components: JSON.parse(JSON.stringify(initialValues.complex_components)) } : {}) },
+                round_plan: { schema_version: 2 as const, stages: [] }, md_draft: retainedDraft,
+                destination_launch_context_id: launchContextId,
+                ...(initialValues?.candidate_ref ? { candidate_ref: JSON.parse(JSON.stringify(initialValues.candidate_ref)) } : {}),
+                ...(typeof initialValues?.md_return_to === 'string' ? { return_to: initialValues.md_return_to }
+                    : typeof initialValues?.return_to === 'string' ? { return_to: initialValues.return_to } : {}),
+            };
+            if (project_id && setup_context_id) {
+                await savePredictionOperationDetour({ project_id, setup_context_id }, detour);
+                route.searchParams.set('operation_project_id', project_id);
+                route.searchParams.set('operation_setup_context_id', setup_context_id);
+            } else {
+                const saved = await api.post<{ id: string }>('/api/molecular-dynamics/prediction-detours', detour);
+                // Read the exact durable target before navigating; browser storage
+                // remains a convenience and can be absent on return.
+                await api.get(`/api/molecular-dynamics/prediction-detours/${saved.data.id}`);
+                route.searchParams.set('md_operation_id', saved.data.id);
+            }
+            try { storeMolecularDynamicsDraft(sessionStorage, draftId, { ...retainedDraft, sequenceSnapshot: undefined }); } catch { /* Durable snapshot above is authority. */ }
+            navigate(route.pathname + route.search);
         } catch (error) {
             setSourceError(displayError(error, 'Structure Prediction handoff failed.'));
         }
@@ -621,7 +668,7 @@ export function MolecularDynamicsTemplate({
         if (nativeEnabled && native) {
             const input = native.input.kind === 'guided' && inspection && selectedProfile && chemistryCatalogQuery.data
                 ? { ...native.input, source_ref: inspection.source_ref, expected_source_sha256: inspection.identity.sha256, chemistry_profile_id: selectedProfile.id, chemistry_profile_sha256: selectedProfile.profile_sha256, catalog_digest: chemistryCatalogQuery.data.catalog_digest } : native.input;
-            return serializeMolecularDynamicsNativeDraft({ ...native, name: form.jobName, launch_context_id: launchContextId, input, stages: input.kind === 'compiled' ? [] : native.stages, ...placement });
+            return serializeMolecularDynamicsNativeDraft({ ...native, return_to: Object.hasOwn(native, 'return_to') ? native.return_to : (initialValues?.md_return_to as string | undefined), name: form.jobName, launch_context_id: launchContextId, input, stages: input.kind === 'compiled' ? [] : native.stages, ...placement });
         }
         if (!inspection || !selectedProfile || !chemistryCatalogQuery.data) throw new Error('Inspect and admit one starting structure before preview.');
         return buildMolecularDynamicsLaunchIntent({
@@ -630,6 +677,7 @@ export function MolecularDynamicsTemplate({
             profile: selectedProfile,
             catalogDigest: chemistryCatalogQuery.data.catalog_digest,
             launchContextId,
+            returnTo: initialIntent && Object.hasOwn(initialIntent, 'return_to') ? initialIntent.return_to as string | null : (initialValues?.md_return_to as string | undefined),
             ...placement,
         });
     };
@@ -838,6 +886,7 @@ export function MolecularDynamicsTemplate({
                                     </div>
                                     <div className="border-t border-slate-800 pt-4"><label className={labelClass}>Completed prediction Job ID<input className={inputClass} value={predictionJobId} onChange={(event) => setPredictionJobId(event.target.value)} /></label><button type="button" disabled={sourceBusy || !predictionJobId.trim()} onClick={() => void loadPredictionCandidates()} className="mt-3 rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">Load prediction candidates</button></div>
                                 </div>}
+                                {sourceMode === 'candidate' && <p className="text-xs text-slate-300">Exact selected producer document. Changing another source does not retarget this selection.</p>}
                                 {sourceMode === 'design' && <div><label className={labelClass}>Completed Design ID<input className={inputClass} value={designId} onChange={(event) => setDesignId(event.target.value)} /></label><button type="button" disabled={sourceBusy || !designId.trim()} onClick={() => void inspectSource({ kind: 'design', id: designId.trim() })} className="mt-3 rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">Inspect Design</button></div>}
                                 {sourceMode === 'prior_md_input' && <div><label className={labelClass}>Prior MD Job ID<input className={inputClass} value={priorMdJobId} onChange={(event) => setPriorMdJobId(event.target.value)} /></label><p className="mt-2 text-xs text-slate-500">Reopen the prior Job-owned immutable input; browser-visible host paths are never reused.</p><button type="button" disabled={sourceBusy || !priorMdJobId.trim()} onClick={() => void inspectSource({ kind: 'prior_md_input', id: priorMdJobId.trim() })} className="mt-3 rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">Inspect prior MD input</button></div>}
                                 {sourceMode === 'server_file' && <div><label className={labelClass}>Search governed server files<input className={inputClass} value={serverSearch} onChange={(event) => { setServerSearch(event.target.value); setServerCursor(null); }} /></label>{serverFilesQuery.isError && <p className="mt-3 text-xs text-amber-300">The policy-controlled server-file browser is unavailable.</p>}<div className="mt-3 max-h-64 space-y-2 overflow-auto">{serverFilesQuery.data?.items.map((item) => <button key={item.id} type="button" onClick={() => void inspectSource({ kind: 'server_file', id: item.id })} className="block w-full rounded border border-slate-700 p-2 text-left text-xs text-slate-300"><span className="font-semibold">{item.label}</span><span className="ml-2 text-slate-500">{item.format.toUpperCase()} · {item.bytes.toLocaleString()} bytes</span></button>)}</div></div>}
@@ -858,6 +907,7 @@ export function MolecularDynamicsTemplate({
                                 {sourceError && <p role="alert" className="mt-3 rounded border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-200">{sourceError}</p>}
                             </div>
 
+                            <div>{inspection && <label className={labelClass}>PDB / mmCIF model number (explicit member)<input aria-label="Selected model number" className={inputClass} type="number" step={1} value={selectedModelNumber} onChange={e => setSelectedModelNumber(e.target.value)} /><button type="button" disabled={!selectedModelNumber || sourceBusy} onClick={() => { const ref = inspection.source_ref; const candidate = ref.candidate_ref; const member = Number(selectedModelNumber); void inspectSource(candidate?.kind === 'design' && candidate.document ? { ...ref, candidate_ref: { ...candidate, document: { ...candidate.document, model: member } }, model_number: undefined } : candidate?.kind === 'native_document' ? { ...ref, candidate_ref: { ...candidate, model: member }, model_number: undefined } : { ...ref, model_number: member }); }}>Inspect selected model</button></label>}
                             <Gen2StructureReviewPanel
                                 inspection={inspection}
                                 viewerState={viewerState}
@@ -867,7 +917,7 @@ export function MolecularDynamicsTemplate({
                                 actionLabel={selectedPredictionCandidate && inspection?.source_ref.id === selectedPredictionCandidate.source_ref.id ? 'Use selected Design for MD' : 'Use this structure'}
                                 onLoadStateChange={handleViewerLoadState}
                                 onPromote={() => { if (inspection) setPromotedSha256(inspection.identity.sha256); }}
-                            />
+                            /></div>
                         </div>
                         <label className={`${labelClass} mt-4`}>Chemistry profile
                             <select data-md-chemistry-profile className={inputClass} value={profileDigestIsStale ? '' : selectedProfileId} disabled={chemistryCatalogQuery.isPending || chemistryCatalogQuery.isError || promotedSha256 !== inspection?.identity.sha256} onChange={(event) => {

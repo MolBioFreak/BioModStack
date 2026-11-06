@@ -5,8 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from database import (Job, Design, RFD3LocalRedesignRequest,
-                      RFD3LocalRedesignCandidate, RFD3LocalRedesignArtifact)
+from database import Job, Design
 from routers import jobs, files
 from schemas import JobCreate
 from services.binder_source_materialization import StructureSourceRequest
@@ -18,7 +17,7 @@ from test_project_setup_job_preparation import isolate_applied_local_policy
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('native', [False, True])
+@pytest.mark.parametrize('native', [False])
 async def test_selected_source_into_different_project_real_insertion(
     setup_store, isolated_core, isolate_applied_local_policy, tmp_path, monkeypatch, native,
 ):
@@ -117,44 +116,36 @@ async def source_rows(session, root, native):
     path = output / 'exact.cif.gz'
     path.write_bytes(raw)
     digest = hashlib.sha256(raw).hexdigest()
-    job = Job(id='source', name='source', model_id='protein_local_redesign' if native else 'protein_modification_experimental',
-              mode='local_redesign' if native else 'de_novo_design', status='completed', params={},
+    job = Job(id='source', name='source', model_id='protein_modification_experimental',
+              mode='de_novo_design', status='completed', params={},
               output_dir=str(output), lineage_root_job_id='scientific-root', execution_target_id='vast:one',
               execution_source_revision='c' * 40, execution_source_tree='d' * 40)
     session.add(job)
-    if native:
-        session.add(RFD3LocalRedesignRequest(request_id='request', job_id=job.id,
-            request_sha256='1' * 64, profile_id='fixture', profile_registry_sha256='2' * 64,
-            redesign_mode='partial_diffusion', sequence_policy='preserve', request_json={}))
-        session.add(RFD3LocalRedesignCandidate(id='candidate-row', request_id='request',
-            candidate_id='candidate', status='generated', artifact_manifest_sha256='3' * 64))
-        session.add(RFD3LocalRedesignArtifact(artifact_id='artifact', request_id='request',
-            candidate_id='candidate', role='structure', relative_path=path.name, storage_path=str(path),
-            content_sha256=digest, size_bytes=len(raw), media_type='chemical/x-mmcif'))
-        selection = dict(job_id=job.id, request_id='request', candidate_id='candidate', document={'artifact_id': 'artifact'})
-    else:
-        session.add(Design(id='design', job_id=job.id, name='candidate', pdb_path=str(path),
-            provenance={'artifacts': [{'role': 'candidate_structure', 'relative_path': path.name,
-                                      'sha256': digest, 'bytes': len(raw)}]}))
-        selection = dict(job_id=job.id, design_id='design')
+    session.add(Design(id='design', job_id=job.id, name='candidate', pdb_path=str(path),
+        provenance={'artifacts': [{'role': 'candidate_structure', 'relative_path': path.name,
+                                  'sha256': digest, 'bytes': len(raw)}]}))
+    selection = dict(job_id=job.id, design_id='design')
     if not native:
+        # Populate the real persisted generation read-model contract. This is
+        # one generated, not accepted, source specimen; no inference is claimed.
         job.params = {'rfd3_generation_request': {}, 'rfd3_generation_result_manifest_sha256': '4' * 64,
-                      'rfd3_generation_aggregate': {'requested': 1,
+                      'rfd3_generation_aggregate': {'requested': 1, 'generated': 1, 'accepted': 0,
                           'length': jobs._rfd3_generation_range([1.0]),
                           'radius_of_gyration': jobs._rfd3_generation_range([0.0])}}
         design = next(row for row in session.new if isinstance(row, Design))
-        design.provenance = {**design.provenance, 'metrics': {'residue_count': 1, 'radius_of_gyration': 0.0}}
+        design.provenance = {**design.provenance, 'accepted': False,
+                             'metrics': {'residue_count': 1, 'radius_of_gyration': 0.0,
+                                         'helix_count': 0, 'strand_count': 0}}
     await session.commit()
     return path, dict(selection, output_format='pdb', model_number=7)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('native', [False, True])
+@pytest.mark.parametrize('native', [False])
 async def test_exact_source_conversion_offline_and_wrong_owner(source_api, native):
     client, session, _, root = source_api
     path, selection = await source_rows(session, root, native)
-    readback = await (jobs.get_rfd3_local_redesign_result('source', session) if native
-                     else jobs.get_rfd3_generation_result('source', session))
+    readback = await jobs.get_rfd3_generation_result('source', session)
     row = readback['candidates'][0]
     assert row['source_structure'] == {**{k: v for k, v in selection.items() if k != 'model_number'},
                                        'output_format': 'native'}
@@ -225,13 +216,15 @@ async def test_preview_approved_insert_offline_independent_lineage(admission, se
         directory.mkdir(exist_ok=True)
     monkeypatch.setattr(paths, 'get_allowed_roots', lambda: roots)
     monkeypatch.setattr(files, 'get_allowed_roots', lambda: roots)
+    from services import job_result_roots
+    monkeypatch.setattr(job_result_roots, 'get_results_dir', lambda: roots['bms_results'])
     for module in (paths, jobs, bundle):
         monkeypatch.setattr(module, 'get_results_dir', lambda: roots['bms_results'])
         monkeypatch.setattr(module, 'get_inputs_dir', lambda: roots['inputs'])
         monkeypatch.setattr(module, 'get_data_root', lambda: tmp_path)
     monkeypatch.setattr(nextflow, 'get_work_dir', lambda: tmp_path / 'work')
     async with factory() as session:
-        original, selection = await source_rows(session, tmp_path, True)
+        original, selection = await source_rows(session, tmp_path, False)
     if destination == 'proteinmpnn':
         from tests.test_generic_sequence_launch_closeout import request as sequence_request
         payload = sequence_request('proteinmpnn', 'design', tmp_path).model_dump(mode='json')

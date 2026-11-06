@@ -76,13 +76,13 @@ it('deletes irrelevant observations for a full Build minute after visiting opera
     await click('#control-tab-live-deck');
     expect(host.querySelectorAll('section[aria-label="Camera"]')).toHaveLength(1);
     await click('#control-tab-workflows');
-    const editor = host.querySelector('[aria-label="Saved workflow"]');
-    const name = host.querySelector('[aria-label="Workflow name"]') as HTMLInputElement;
+    const editor = host.querySelector('[aria-label="Methods workspace"]');
+    const name = host.querySelector('[aria-label="Method name"]') as HTMLInputElement;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Unsubmitted retained draft'); name.dispatchEvent(new Event('input', { bubbles: true })); });
     await click('#control-tab-robot');
     await click('#control-tab-workflows');
-    expect(host.querySelector('[aria-label="Saved workflow"]')).toBe(editor);
-    expect((host.querySelector('[aria-label="Workflow name"]') as HTMLInputElement).value).toBe('Unsubmitted retained draft');
+    expect(host.querySelector('[aria-label="Methods workspace"]')).toBe(editor);
+    expect((host.querySelector('[aria-label="Method name"]') as HTMLInputElement).value).toBe('Unsubmitted retained draft');
     expect(host.querySelector('#control-panel-pipettes input')).toBe(manual);
     requests = []; await advance();
     const irrelevant = requests.filter(r => r.url !== '/api/bioxp/status' && !r.url.endsWith('/updates'));
@@ -147,6 +147,9 @@ it('uses idle camera discovery rather than 2s status polling and discovers anoth
 });
 it('refreshes selected recovery on committed updates, with no periodic or hidden receipt reads', async () => {
     recoveryVisible = true; await mount(); await click('#control-tab-live-deck'); requests = []; await advance();
+    // Opening the tab reads the selected recovery summary once; never the detail, never again on a timer.
+    expect(requests.filter(r => r.url.includes('/receipts/')).map(r => r.detail)).toEqual([false]);
+    requests = []; await advance(26000);
     expect(count('/receipts/')).toBe(0);
     recoveryRevision = 1; await advance(26000);
     expect(requests.filter(r => r.url.includes('/receipts/') && r.detail === false)).toHaveLength(1);
@@ -203,25 +206,4 @@ it('observes relocated transfers only under the open Live deck disclosure, retai
     expect(count('/calibration-settings')).toBe(1);
     expect(requests.filter(r => r.url.endsWith('/protocols/jobs')).length).toBeGreaterThan(0);
     expect(requests.every(r => r.method === 'get')).toBe(true);
-});
-
-it('discovers cross-client prepared jobs only in Workflows and retains the original active outcome owner across navigation', async () => {
-    await mount();
-    await click('#control-tab-workflows');
-    const prepared = [...host.querySelectorAll('details')].find(d => d.querySelector('summary')?.textContent === 'Prepared request files')!;
-    await act(async () => { prepared.open = true; prepared.dispatchEvent(new Event('toggle')); });
-    await advance(100);
-    liveJob = { job_id: 'job-original', status: 'dispatched', command: { command_id: 'job-original', idempotency_key: 'original-key', ownership_generation: 7, state_version: 1, status: 'dispatched', terminal: false },
-        execution: { dry_run: false, runtime_state: { workflow: { command_id: 'job-original', phase: 'executing', child_command_ids: [] } } } };
-    rows = [liveJob]; await advance(11_000);
-    expect(host.textContent).toContain('job-original');
-    await click('#control-tab-robot'); requests = []; await advance();
-    expect(requests.filter(r => r.url.endsWith('/protocols/jobs'))).toEqual([]);
-    expect(count('/protocols/jobs/job-original')).toBeGreaterThan(0);
-    expect(requests.every(r => r.method === 'get')).toBe(true);
-    liveJob = { ...liveJob, status: 'completed', command: { ...liveJob.command, terminal: true, status: 'completed' } };
-    await advance(3_000); requests = []; await advance();
-    expect(count('/protocols/jobs')).toBe(0);
-    await click('#control-tab-robot');
-    expect(host.textContent).toContain('job-original');
 });

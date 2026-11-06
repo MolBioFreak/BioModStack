@@ -53,7 +53,7 @@ async def test_sequence_native_bypasses_redesign_and_uses_independent_target(sel
         child = await session.get(Job, step['job_id'])
         assert child.model_id == 'protenix'
         assert child.params['complex_components'] == [
-            {'id': 'A', 'type': 'protein', 'sequence': 'A'}, {'id': 'B', 'type': 'protein', 'sequence': 'G'}]
+            {'id': 'A', 'type': 'protein', 'sequence': 'A', 'modifications': []}, {'id': 'B', 'type': 'protein', 'sequence': 'G', 'modifications': []}]
         assert child.params['protenix_n_sample'] == 2
         assert child.params['protenix_use_msa'] is False
         assert not child.params.get('input_pdb')
@@ -497,6 +497,34 @@ async def test_other_approved_designers_keep_native_count_and_zero_yield(selecte
         result = await rounds.reconcile_round(session, experiments, 'root')
         assert result['state'] == 'completed'
         assert len(result['steps']) == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduler_recovery_leaves_a_recently_settled_prediction_alone(selected, setup_store, monkeypatch):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from services import analysis_autorun
+    session, root, _ = await fixture_root(selected)
+    async with setup_store() as experiments:
+        result = await rounds.reconcile_round(session, experiments, root.id)
+        child_id = next(iter(result['steps'].values()))['job_id']
+        child = await session.get(Job, child_id)
+        child.status = 'completed'
+        await session.commit()
+        result = await rounds.reconcile_round(session, experiments, root.id)
+        assert result['state'] == 'completed'
+    calls = []
+    monkeypatch.setattr(analysis_autorun, 'schedule_viewer_minimum_analyses_for_job', lambda id: calls.append(id))
+    monkeypatch.setattr(analysis_autorun, '_SETTLED_ROUND_PREDICTIONS', {child_id: analysis_autorun.time.monotonic()})
+    async def forbidden(*args, **kwargs):
+        raise AssertionError('terminal rounds do not materialize sources')
+    monkeypatch.setattr(rounds, 'reconcile_round', forbidden)
+    factory = async_sessionmaker(session.bind, expire_on_commit=False)
+    await rounds.recover_rounds(factory, setup_store)
+    assert calls == []
+    # Once the marker is gone, recovery schedules it again as before.
+    monkeypatch.setattr(analysis_autorun, '_SETTLED_ROUND_PREDICTIONS', {})
+    await rounds.recover_rounds(factory, setup_store)
+    assert calls == [child_id]
 
 
 @pytest.mark.asyncio

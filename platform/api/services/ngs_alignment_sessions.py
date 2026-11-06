@@ -7,6 +7,7 @@ import hashlib
 import fcntl
 import heapq
 import json
+import logging
 import math
 import mimetypes
 import os
@@ -41,6 +42,8 @@ if str(_SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_ROOT))
 from lib.container_runtime import container_executable
 from lib.shared_runtime_images import SharedRuntimeImageError, publish_image, verify_image
+
+logger = logging.getLogger(__name__)
 
 SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,255}$")
 SAFE_CONTIG_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,255}$")
@@ -1021,6 +1024,10 @@ def _shared_runtime_snapshot(
         raise
 
 
+def _version_tuple(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", str(value))[:4])
+
+
 def _ngs_runtime_identity() -> tuple[str, str]:
     try:
         lock = json.loads(DORADO_LOCK_PATH.read_text(encoding="utf-8"))
@@ -1030,8 +1037,6 @@ def _ngs_runtime_identity() -> tuple[str, str]:
         raise AlignmentSessionError("canonical NGS runtime lock is unavailable") from exc
     if not isinstance(expected_digest, str) or re.fullmatch(r"[0-9a-f]{64}", expected_digest) is None:
         raise AlignmentSessionError("canonical NGS runtime digest is invalid")
-    if expected_version != "1.24":
-        raise AlignmentSessionError("canonical NGS samtools version is not 1.24")
     return expected_digest, expected_version
 
 
@@ -1048,8 +1053,11 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
     with _samtools_runtime_lock:
         # The small canonical lock stays fresh even when image bytes are cached.
         expected_digest, expected_version = _ngs_runtime_identity()
-        if expected_version != "1.24":
-            raise AlignmentSessionError("canonical NGS samtools version is not 1.24")
+        # Version-aware: a published store object is identified by its own
+        # digest; samtools must be at least the locked version.
+        if (runtime_sif.name == "runtime.sif" and runtime_sif.parent.parent.name == "sha256"
+                and re.fullmatch(r"[0-9a-f]{64}", runtime_sif.parent.name)):
+            expected_digest = runtime_sif.parent.name
         cached = _samtools_runtime_cache.get(key)
         if cached is not None:
             if cached.runtime_sha256 != expected_digest:
@@ -1098,7 +1106,8 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
                 command.verify_runtime()
             except (OSError, subprocess.SubprocessError) as exc:
                 raise AlignmentSessionError("pinned NGS runtime samtools probe failed") from exc
-            if not probe.stdout.startswith(f"samtools {expected_version}\n"):
+            observed = re.match(r"samtools (\S+)", probe.stdout or "")
+            if not observed or _version_tuple(observed.group(1)) < _version_tuple(expected_version):
                 raise AlignmentSessionError("pinned NGS runtime samtools version mismatch")
             _samtools_runtime_cache[key] = command
             return command
@@ -1187,8 +1196,15 @@ def _validate_alignment_bundle(
     reference_sha256: str | None = None,
     reference_size: int | None = None,
 ) -> tuple[bool, str | None]:
-    samtools = _samtools_command()
-    samtools.verify_runtime()
+    # Runtime admission failure belongs to this session's readiness. Raising it
+    # would discard every session inventory entry, including its reason.
+    try:
+        samtools = _samtools_command()
+        samtools.verify_runtime()
+    except AlignmentSessionError as exc:
+        # Host paths stay server-side; the public reason names the failed gate.
+        logger.warning("alignment session runtime admission failed: %s", exc)
+        return False, "pinned NGS samtools runtime is unavailable or does not match the Dorado lock"
     snapshots: list[BinaryIO] = []
     try:
         if bam_sha256 is None or bam_size is None:

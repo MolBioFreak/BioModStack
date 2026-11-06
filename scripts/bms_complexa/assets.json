@@ -1,0 +1,720 @@
+{
+  "source": {
+    "repository": "https://github.com/NVIDIA-BioNeMo/Proteina-Complexa",
+    "revision": "acf55a89a9a7206d5ce9abc0bf2246c3b3829f92",
+    "package_version": "1.1.0"
+  },
+  "checkpoints": {
+    "proteina_complexa": {
+      "version": "1.0",
+      "metadata_url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files",
+      "members": [
+        {
+          "name": "complexa.ckpt",
+          "bytes": 2934289381,
+          "sha256": "589db1741f29838c7961386f6b873087238c72682e56189b89e0ae02610c19e9",
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa.ckpt",
+          "hf_key": "sha256/589db1741f29838c7961386f6b873087238c72682e56189b89e0ae02610c19e9/artifact"
+        },
+        {
+          "name": "complexa_ae.ckpt",
+          "bytes": 4100101779,
+          "sha256": "35f8865efd269995eeaf1670e1c1085acfe2988c40abdeda8e09a0e15eb40816",
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa_ae.ckpt",
+          "hf_key": "sha256/35f8865efd269995eeaf1670e1c1085acfe2988c40abdeda8e09a0e15eb40816/artifact"
+        }
+      ],
+      "verification": "Canonical full-byte SHA256 acquisition and immutable layout; exact HF key/size and beginning/end range readback"
+    },
+    "proteina_complexa_ligand": {
+      "version": "1.0",
+      "metadata_url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files",
+      "members": [
+        {
+          "name": "complexa_ligand.ckpt",
+          "bytes": 1790554392,
+          "sha256": "8175213eac5ec6433fed1756d055ce3f867129bfdb033040e1a0560ca558bfe5",
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand.ckpt",
+          "hf_key": "sha256/8175213eac5ec6433fed1756d055ce3f867129bfdb033040e1a0560ca558bfe5/artifact"
+        },
+        {
+          "name": "complexa_ligand_ae.ckpt",
+          "bytes": 4100184649,
+          "sha256": "898da17022cdeaaaea7caace41c8b6fe7bfcb78be4876b0113127eb9bb1527e6",
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand_ae.ckpt",
+          "hf_key": "sha256/898da17022cdeaaaea7caace41c8b6fe7bfcb78be4876b0113127eb9bb1527e6/artifact"
+        }
+      ],
+      "verification": "Canonical full-byte SHA256 acquisition and immutable layout; exact HF key/size and beginning/end range readback"
+    },
+    "proteina_complexa_ame": {
+      "version": "1.0",
+      "metadata_url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files",
+      "members": [
+        {
+          "name": "complexa_ame.ckpt",
+          "bytes": 1792013880,
+          "sha256": "d11319693d024d0427abc356a86350a694a1cb7dceb8db642c8041e5a20a9f7b",
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame.ckpt",
+          "hf_key": "sha256/d11319693d024d0427abc356a86350a694a1cb7dceb8db642c8041e5a20a9f7b/artifact"
+        },
+        {
+          "name": "complexa_ame_ae.ckpt",
+          "bytes": 4100197925,
+          "sha256": "63b1358c5459e968628094fdc9a2a6a95ac003606fcf7b1a3a21174458a69734",
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame_ae.ckpt",
+          "hf_key": "sha256/63b1358c5459e968628094fdc9a2a6a95ac003606fcf7b1a3a21174458a69734/artifact"
+        }
+      ],
+      "verification": "Canonical full-byte SHA256 acquisition and immutable layout; exact HF key/size and beginning/end range readback"
+    }
+  },
+  "build": {
+    "base": "nvidia/cuda@sha256:61f6c08f2b59036cb935e56d1e31a6b64e3ae2c7ddb86d33fa0b044c7917b719",
+    "upstream_base_tag": "24.08-py3",
+    "python": "3.12.13",
+    "torch": "2.7.0+cu128",
+    "jax": "0.4.38",
+    "tmol_revision": "d8a6f7f9649d36e74440bca25246ee7c467ce490",
+    "status": "rebuilt for sm_120; published to the development lane; GPU-qualified on one 16 GB sm_120 card only",
+    "unresolved": [
+      "JAX/JAXlib 0.4.38 (with the ColabDesign tree_util shim in apptainer/complexa-colabdesign-tree-compat.py) replaced 0.4.29, which could not target sm_120. On an RTX 5060 Ti (sm_120) the AF2 reward then computed real values (job a9254d51, 2 rewards, no ptxas error), but only with XLA_PYTHON_CLIENT_PREALLOCATE=false; with JAX's default preallocation the 16 GB card ran out of memory. The default-preallocation run has not been repeated on a larger GPU.",
+      "SC/DSSP/HBPLUS binaries are not distributed by upstream. Foldseek 10-941cd33 and MMseqs2 18-8cc5c are installed by this recipe at pinned release hashes.",
+      "Optional AF2/RF3/ESM/MPNN checkpoint identities are acquired only for selected native operations; none acquired by this packaging continuation.",
+      "No checkpoint-backed inference, native oracle scoring or remote scientific acceptance has been run."
+    ],
+    "cuda": "12.8.1",
+    "jaxlib": "0.4.38",
+    "uv": "0.11.26",
+    "inputs": {
+      "apptainer/complexa.def": "b48adb9dda7fd5f6c5e794b6dd34a2bf20755d41e709900ec70b093b7cb8f841",
+      "apptainer/locks/complexa-NOTICES.md": "65e83b6772066e2015b199bd3481e11fe79593d9a6d136f666a23bf924b3180f",
+      "apptainer/locks/complexa-build.txt": "463df3594dc482c49381e9c950f11d1b76d31a9154441fb03b3572e9bd8a492f",
+      "apptainer/locks/complexa-requirements.txt": "35412651a2b3cc26e1f221c399109f2ea05ccc7ff425fc39bc899e5c7d77fa67"
+    },
+    "dependency_metadata_conflicts": [
+      {
+        "package": "bioservices",
+        "requires": "tqdm>=4.67.1,<5.0.0",
+        "installed": "4.66.4"
+      },
+      {
+        "package": "atomworks",
+        "requires": "biotite==1.4.0",
+        "installed": "1.6.0"
+      },
+      {
+        "package": "proteinfoundation",
+        "requires": "einops==0.6",
+        "installed": "0.8.2"
+      },
+      {
+        "package": "proteinfoundation",
+        "requires": "scipy==1.12.0",
+        "installed": "1.13.1"
+      }
+    ],
+    "image": {
+      "sha256": "26e8f0ca0325d95c78a68453bfe99ed68ac666d97535f4c72a4681678494c7fa",
+      "bytes": 11110977536,
+      "filesystem": "squashfs-zstd",
+      "activation": "candidate built 2026-11-03 by updating the retained sandbox (embedded header is localimage/root, not this recipe); in-image lock, wrapper, novelty-edit and upstream-file hashes verified; not yet published to the development lane"
+    },
+    "installed_inventory_sha256": {
+      "installed-packages.txt": "366ad384ba5b8f98f3421fc65e299b2822c2a9e1b108ec9d5bddab469efff7de",
+      "installed-debian-packages.txt": "125f39b6a17b0b08f913764a3b765ac9c70266291a7a0ed8e61cf2024bde3688"
+    },
+    "tmol_version": "0.0.2.post1.dev231",
+    "qualification": {
+      "scope": "actual final SIF; CPU-only; no checkpoint inference",
+      "packaging_tests": 3,
+      "native_contract_cases": 10,
+      "profiles": [
+        "protein_binder",
+        "ligand_binder",
+        "AME",
+        "monomer_motif_indexed",
+        "monomer_motif_unindexed"
+      ],
+      "search_algorithms": [
+        "single-pass",
+        "best-of-n",
+        "beam-search",
+        "fk-steering",
+        "mcts"
+      ],
+      "profile_search_compositions": 25,
+      "installed_distributions_checked": 266,
+      "cli_commands": [
+        "design",
+        "generate",
+        "filter",
+        "evaluate",
+        "analyze",
+        "analysis"
+      ],
+      "embedded_recipe_locks_and_notices_match": true,
+      "evidence_ref": "de-novo-full-20261021/lanes/complexa-build/final-report.json"
+    },
+    "packaging": "Pinned Apptainer sandbox build; final recipe post-section replay for complete TMOL build closure; native mksquashfs and apptainer sif assembly. No scientific source edits."
+  },
+  "upstream_files": {
+    "env/docker/Dockerfile": "679f5b2c21e4eaa93c306de17d4a81465571c6cbae79491c786d9f30c5570f02",
+    "env/build_uv_env.sh": "e75b2de7e28734da1e7654ddcd21c67db2972a1e31e86d429448943972f2839d",
+    "pyproject.toml": "de9775b3024cabb4f92a06a12dc21c5c52e8fc221070453f49f70391fda86da6",
+    "LICENSE": "379c22c1c64e5ff7cce6c9407bb5da9fb1f9279934f16c20b1031592c1b3feab",
+    "src/proteinfoundation/search/search_factory.py": "25b2f09b31b314430e4b63db6a7a96a329f4dfb853722771bcbd715e46cdea20",
+    "configs/pipeline/base_gen_data.yaml": "0d0324ea196daef26236454c7478ef3495fbab90feafccb65392c6829e263412",
+    "configs/pipeline/model_sampling.yaml": "d5ef6a7d59cd0154fd9c1c0899b4ae2f505ba9548f2717a71a71425441dfdc01",
+    "configs/pipeline/motif/motif_analyze.yaml": "b2a7bee2ceca6642b79f15e3af1aa217827bd8f5016ae52f3019a683c18755c1",
+    "configs/pipeline/motif/idx_motif_generate.yaml": "f3988b9ad1c99d317e588fb417d4be70b8c615bbd5beecf056dc76d3b815193d",
+    "configs/pipeline/motif/uidx_motif_evaluate.yaml": "b4caa9dd546c648313adaf76a3ccbb072c9315c9c8fd67fbec79fdf1a7964745",
+    "configs/pipeline/motif/idx_motif_evaluate.yaml": "948a1468affcb4f30438cc0ea64bced0517fd3f07cbbcf752c695cd0242284c4",
+    "configs/pipeline/motif/uidx_motif_generate.yaml": "a72e1e1981dfe3309647faebd409004ca670929fb8429d6f5d6287f9ad7cb5de",
+    "configs/pipeline/ligand_binder/ligand_binder_evaluate.yaml": "df1d5366b266532a524698b981bc5726786e1a3e5dce2ba7b8953a8b94706274",
+    "configs/pipeline/ligand_binder/ligand_binder_generate.yaml": "9df5d517bbb758de870ff02efaaab32d082334a05c5bd031bd8f752384f273a7",
+    "configs/pipeline/ligand_binder/ligand_binder_analyze.yaml": "bb68b5499e037788ae30c2e54ab8e6ce0778450ecb01418204d00dd281865df9",
+    "configs/pipeline/monomer/monomer_generate.yaml": "a3b22f3247c50c29f158629cdc024abaccbf9180d2e659512a85f057e290d13f",
+    "configs/pipeline/monomer/monomer_evaluate.yaml": "061b41781aed672ad503f54367982c1d2d1c08bae6cb935b4cc582fa3a1b0a78",
+    "configs/pipeline/monomer/monomer_analyze.yaml": "26e0b175e88f5f9e2167d80842e73ef6c124f77bf86d065b8f370831421cea61",
+    "configs/pipeline/ame/ame_generate.yaml": "2d83c2452454f1e247e28f5d904b465a40c575ea864c0781ed930c7cc6b9a4a9",
+    "configs/pipeline/ame/ame_analyze.yaml": "8fb0cff5ea88c385011806110ffd9007f1e7e96bfebe7e44d7d1ebfad87a2358",
+    "configs/pipeline/ame/ame_evaluate.yaml": "3330efbc0946de49504607e826662d434a85a5fd8c54a74031c57c3666e2b38b",
+    "configs/pipeline/binder/binder_generate.yaml": "501005c8a4b796da01ec00348af79510dba21230d14ae6331a60a1f6d0817aff",
+    "configs/pipeline/binder/binder_evaluate.yaml": "061a8ef1478e2a12958699a5785adea924e45dfc2dd5c61497d1b1f547f5138a",
+    "configs/pipeline/binder/binder_analyze.yaml": "cfbe42f30aedf9357e5d742b67dc830ee15b75b79b6c21e8d2ccac536330b6ba",
+    "env/download_startup.sh": "bd44402f74a5dfedd99daed991abd76d6b1082d6d1202484fa138584c4e11ec8"
+  },
+  "selected_oracle_sources": {
+    "ligand_mpnn": [
+      {
+        "member_path": "complexa/LigandMPNN/model_params/ligandmpnn_v_32_010_25.pt",
+        "url": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_010_25.pt",
+        "size_bytes": 10541943,
+        "sha256": "161cd264061fda9680cbb940255522ae42f2966c552d045d87913d9452a80970",
+        "status": "controller CAS acquired and SHA256/size verified; safe CPU checkpoint load passed; not activated or published",
+        "acquisition_manifest": {
+          "artifact_id": "evaluator-ligandmpnn_v_32_010_25.pt",
+          "kind": "weights",
+          "url": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_010_25.pt",
+          "sha256": "161cd264061fda9680cbb940255522ae42f2966c552d045d87913d9452a80970",
+          "size_bytes": 10541943,
+          "source_authority": "files.ipd.uw.edu",
+          "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+          "license_id": "MIT"
+        },
+        "license_evidence": {
+          "name": "ligandmpnn",
+          "license_id": "MIT",
+          "url": "https://raw.githubusercontent.com/dauparas/LigandMPNN/26ec57ac976ade5379920dbd43c7f97a91cf82de/LICENSE",
+          "sha256": "8af7ba31868e08e8949e20ce2ef3c0b1d0ef78c9358c91563a60a9fe3b36c9ea",
+          "size_bytes": 1072
+        }
+      },
+      {
+        "member_path": "complexa/LigandMPNN/model_params/solublempnn_v_48_020.pt",
+        "url": "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_020.pt",
+        "size_bytes": 6681301,
+        "sha256": "7af52d090172c230c7f0e9d21e02203f6b3a38b16db58d3c7a3960e0a9a6e31a",
+        "status": "controller CAS acquired and SHA256/size verified; safe CPU checkpoint load passed; not activated or published",
+        "acquisition_manifest": {
+          "artifact_id": "evaluator-solublempnn_v_48_020.pt",
+          "kind": "weights",
+          "url": "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_020.pt",
+          "sha256": "7af52d090172c230c7f0e9d21e02203f6b3a38b16db58d3c7a3960e0a9a6e31a",
+          "size_bytes": 6681301,
+          "source_authority": "files.ipd.uw.edu",
+          "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+          "license_id": "MIT"
+        },
+        "license_evidence": {
+          "name": "ligandmpnn",
+          "license_id": "MIT",
+          "url": "https://raw.githubusercontent.com/dauparas/LigandMPNN/26ec57ac976ade5379920dbd43c7f97a91cf82de/LICENSE",
+          "sha256": "8af7ba31868e08e8949e20ce2ef3c0b1d0ef78c9358c91563a60a9fe3b36c9ea",
+          "size_bytes": 1072
+        }
+      }
+    ],
+    "native_hf": {
+      "qualification": "All exact selected files acquired into canonical controller CAS and immutable snapshot layout; safe CPU checkpoint/manifest load and route-free native main config/tokenizer lookup passed. No model inference, activation or external publication.",
+      "hf": [
+        {
+          "repo": "facebook/esmfold_v1",
+          "revision": "75a3841ee059df2bf4d56688166c8fb459ddd97a",
+          "cache_root": "huggingface/models--facebook--esmfold_v1",
+          "refs/main": "75a3841ee059df2bf4d56688166c8fb459ddd97a",
+          "files": [
+            {
+              "name": "config.json",
+              "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/config.json",
+              "size_bytes": 2103,
+              "sha256": "6b98125e2685fef2875499f6bd7c83968a077993ab53f99bf5581113665f7cc6",
+              "acquisition_manifest": {
+                "artifact_id": "evaluator-esmfold_v1-config.json",
+                "kind": "weights",
+                "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/config.json",
+                "sha256": "6b98125e2685fef2875499f6bd7c83968a077993ab53f99bf5581113665f7cc6",
+                "size_bytes": 2103,
+                "source_authority": "huggingface.co",
+                "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                "license_id": "MIT",
+                "redirect_policy": {
+                  "source_url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/config.json",
+                  "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                  "allowed_authorities": [
+                    "huggingface.co",
+                    "cas-bridge.xethub.hf.co",
+                    "cdn-lfs.huggingface.co",
+                    "cdn-lfs-us-1.huggingface.co"
+                  ],
+                  "max_hops": 5
+                }
+              }
+            },
+            {
+              "name": "pytorch_model.bin",
+              "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/pytorch_model.bin",
+              "size_bytes": 8442062570,
+              "sha256": "2ee07356b125d1e3e57503c204111fd7323347fc4735d41d3caac57c2a78e116",
+              "acquisition_manifest": {
+                "artifact_id": "evaluator-esmfold_v1-pytorch_model.bin",
+                "kind": "weights",
+                "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/pytorch_model.bin",
+                "sha256": "2ee07356b125d1e3e57503c204111fd7323347fc4735d41d3caac57c2a78e116",
+                "size_bytes": 8442062570,
+                "source_authority": "huggingface.co",
+                "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                "license_id": "MIT",
+                "redirect_policy": {
+                  "source_url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/pytorch_model.bin",
+                  "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                  "allowed_authorities": [
+                    "huggingface.co",
+                    "cas-bridge.xethub.hf.co",
+                    "cdn-lfs.huggingface.co",
+                    "cdn-lfs-us-1.huggingface.co",
+                    "us.aws.cdn.hf.co"
+                  ],
+                  "max_hops": 5
+                }
+              }
+            },
+            {
+              "name": "special_tokens_map.json",
+              "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/special_tokens_map.json",
+              "size_bytes": 121,
+              "sha256": "9000546299e3cd9007b851ba512167b6f62d274e22fa74485c4ab52aabae0f35",
+              "acquisition_manifest": {
+                "artifact_id": "evaluator-esmfold_v1-special_tokens_map.json",
+                "kind": "weights",
+                "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/special_tokens_map.json",
+                "sha256": "9000546299e3cd9007b851ba512167b6f62d274e22fa74485c4ab52aabae0f35",
+                "size_bytes": 121,
+                "source_authority": "huggingface.co",
+                "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                "license_id": "MIT",
+                "redirect_policy": {
+                  "source_url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/special_tokens_map.json",
+                  "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                  "allowed_authorities": [
+                    "huggingface.co",
+                    "cas-bridge.xethub.hf.co",
+                    "cdn-lfs.huggingface.co",
+                    "cdn-lfs-us-1.huggingface.co"
+                  ],
+                  "max_hops": 5
+                }
+              }
+            },
+            {
+              "name": "tokenizer_config.json",
+              "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/tokenizer_config.json",
+              "size_bytes": 40,
+              "sha256": "bfd8a81f4215e59174634eec71eea99aa1841d8692bdf5c60e9ecaa12904fde8",
+              "acquisition_manifest": {
+                "artifact_id": "evaluator-esmfold_v1-tokenizer_config.json",
+                "kind": "weights",
+                "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/tokenizer_config.json",
+                "sha256": "bfd8a81f4215e59174634eec71eea99aa1841d8692bdf5c60e9ecaa12904fde8",
+                "size_bytes": 40,
+                "source_authority": "huggingface.co",
+                "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                "license_id": "MIT",
+                "redirect_policy": {
+                  "source_url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/tokenizer_config.json",
+                  "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                  "allowed_authorities": [
+                    "huggingface.co",
+                    "cas-bridge.xethub.hf.co",
+                    "cdn-lfs.huggingface.co",
+                    "cdn-lfs-us-1.huggingface.co"
+                  ],
+                  "max_hops": 5
+                }
+              }
+            },
+            {
+              "name": "vocab.txt",
+              "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/vocab.txt",
+              "size_bytes": 72,
+              "sha256": "4c20cc7640bf894d2cdefaa6964ec702fd9b2e7a416abf2a50172d8763f3fc14",
+              "acquisition_manifest": {
+                "artifact_id": "evaluator-esmfold_v1-vocab.txt",
+                "kind": "weights",
+                "url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/vocab.txt",
+                "sha256": "4c20cc7640bf894d2cdefaa6964ec702fd9b2e7a416abf2a50172d8763f3fc14",
+                "size_bytes": 72,
+                "source_authority": "huggingface.co",
+                "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                "license_id": "MIT",
+                "redirect_policy": {
+                  "source_url": "https://huggingface.co/facebook/esmfold_v1/resolve/75a3841ee059df2bf4d56688166c8fb459ddd97a/vocab.txt",
+                  "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                  "allowed_authorities": [
+                    "huggingface.co",
+                    "cas-bridge.xethub.hf.co",
+                    "cdn-lfs.huggingface.co",
+                    "cdn-lfs-us-1.huggingface.co"
+                  ],
+                  "max_hops": 5
+                }
+              }
+            }
+          ],
+          "license_evidence": {
+            "name": "esmfold",
+            "license_id": "MIT",
+            "url": "https://huggingface.co/facebook/esmfold_v1/raw/75a3841ee059df2bf4d56688166c8fb459ddd97a/README.md",
+            "sha256": "12c535c3711211dcd3947ff8164d2e1428ca3461ef8a631ea7b6419673322fe2",
+            "size_bytes": 696
+          },
+          "ref_metadata": {
+            "kind": "derived-native-hf-cache-ref",
+            "revision": "main",
+            "commit_hash": "75a3841ee059df2bf4d56688166c8fb459ddd97a",
+            "owner": "huggingface_hub.file_download._cache_commit_hash_for_specific_revision",
+            "note": "Derived revision bytes, not an HTTP Artifact. Native main offline config/tokenizer lookup qualified in a task-private view of the immutable snapshot."
+          }
+        },
+        {
+          "repo": "facebook/esm2_t33_650M_UR50D",
+          "revision": "08e4846e537177426273712802403f7ba8261b6c",
+          "cache_root": "huggingface/models--facebook--esm2_t33_650M_UR50D",
+          "refs/main": "08e4846e537177426273712802403f7ba8261b6c",
+          "files": [
+            {
+              "name": "config.json",
+              "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/config.json",
+              "size_bytes": 724,
+              "sha256": "539095c22efc52a09d6147074ba4ca119f76a890df5901213b2b55f7d2f96b2b",
+              "acquisition_manifest": {
+                "artifact_id": "evaluator-esm2_t33_650M_UR50D-config.json",
+                "kind": "weights",
+                "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/config.json",
+                "sha256": "539095c22efc52a09d6147074ba4ca119f76a890df5901213b2b55f7d2f96b2b",
+                "size_bytes": 724,
+                "source_authority": "huggingface.co",
+                "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                "license_id": "MIT",
+                "redirect_policy": {
+                  "source_url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/config.json",
+                  "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                  "allowed_authorities": [
+                    "huggingface.co",
+                    "cas-bridge.xethub.hf.co",
+                    "cdn-lfs.huggingface.co",
+                    "cdn-lfs-us-1.huggingface.co"
+                  ],
+                  "max_hops": 5
+                }
+              }
+            },
+            {
+              "name": "model.safetensors",
+              "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/model.safetensors",
+              "size_bytes": 2609506392,
+              "sha256": "a08adabb949fa67ad3c14b509d04fd60368b35007b0095e3358f81200c4f4db0",
+              "acquisition_manifest": {
+                "artifact_id": "evaluator-esm2_t33_650M_UR50D-model.safetensors",
+                "kind": "weights",
+                "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/model.safetensors",
+                "sha256": "a08adabb949fa67ad3c14b509d04fd60368b35007b0095e3358f81200c4f4db0",
+                "size_bytes": 2609506392,
+                "source_authority": "huggingface.co",
+                "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                "license_id": "MIT",
+                "redirect_policy": {
+                  "source_url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/model.safetensors",
+                  "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                  "allowed_authorities": [
+                    "huggingface.co",
+                    "cas-bridge.xethub.hf.co",
+                    "cdn-lfs.huggingface.co",
+                    "cdn-lfs-us-1.huggingface.co",
+                    "us.aws.cdn.hf.co"
+                  ],
+                  "max_hops": 5
+                }
+              }
+            },
+            {
+              "name": "special_tokens_map.json",
+              "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/special_tokens_map.json",
+              "size_bytes": 125,
+              "sha256": "3aedcd4211c0d43aec4e607ff60a63255f3174ead795e997350f09a5f8cd9ee1",
+              "acquisition_manifest": {
+                "artifact_id": "evaluator-esm2_t33_650M_UR50D-special_tokens_map.json",
+                "kind": "weights",
+                "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/special_tokens_map.json",
+                "sha256": "3aedcd4211c0d43aec4e607ff60a63255f3174ead795e997350f09a5f8cd9ee1",
+                "size_bytes": 125,
+                "source_authority": "huggingface.co",
+                "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                "license_id": "MIT",
+                "redirect_policy": {
+                  "source_url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/special_tokens_map.json",
+                  "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                  "allowed_authorities": [
+                    "huggingface.co",
+                    "cas-bridge.xethub.hf.co",
+                    "cdn-lfs.huggingface.co",
+                    "cdn-lfs-us-1.huggingface.co"
+                  ],
+                  "max_hops": 5
+                }
+              }
+            },
+            {
+              "name": "tokenizer_config.json",
+              "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/tokenizer_config.json",
+              "size_bytes": 95,
+              "sha256": "7e9161ecdb548ec45a41cbc6b24aa4476fdd418461f491c4207baa99419a29ad",
+              "acquisition_manifest": {
+                "artifact_id": "evaluator-esm2_t33_650M_UR50D-tokenizer_config.json",
+                "kind": "weights",
+                "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/tokenizer_config.json",
+                "sha256": "7e9161ecdb548ec45a41cbc6b24aa4476fdd418461f491c4207baa99419a29ad",
+                "size_bytes": 95,
+                "source_authority": "huggingface.co",
+                "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                "license_id": "MIT",
+                "redirect_policy": {
+                  "source_url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/tokenizer_config.json",
+                  "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                  "allowed_authorities": [
+                    "huggingface.co",
+                    "cas-bridge.xethub.hf.co",
+                    "cdn-lfs.huggingface.co",
+                    "cdn-lfs-us-1.huggingface.co"
+                  ],
+                  "max_hops": 5
+                }
+              }
+            },
+            {
+              "name": "vocab.txt",
+              "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/vocab.txt",
+              "size_bytes": 93,
+              "sha256": "0b82cc0a7c7cf9e567b1e5892d793285b9fbae822c964ca48696f7db44598e03",
+              "acquisition_manifest": {
+                "artifact_id": "evaluator-esm2_t33_650M_UR50D-vocab.txt",
+                "kind": "weights",
+                "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/vocab.txt",
+                "sha256": "0b82cc0a7c7cf9e567b1e5892d793285b9fbae822c964ca48696f7db44598e03",
+                "size_bytes": 93,
+                "source_authority": "huggingface.co",
+                "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                "license_id": "MIT",
+                "redirect_policy": {
+                  "source_url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/vocab.txt",
+                  "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+                  "allowed_authorities": [
+                    "huggingface.co",
+                    "cas-bridge.xethub.hf.co",
+                    "cdn-lfs.huggingface.co",
+                    "cdn-lfs-us-1.huggingface.co"
+                  ],
+                  "max_hops": 5
+                }
+              }
+            }
+          ],
+          "license_evidence": {
+            "name": "esm2",
+            "license_id": "MIT",
+            "url": "https://huggingface.co/facebook/esm2_t33_650M_UR50D/raw/08e4846e537177426273712802403f7ba8261b6c/README.md",
+            "sha256": "462a2f24724e19c6be0efab926315c294a863c9a9770e2c8b3d859b2d81a07de",
+            "size_bytes": 1705
+          },
+          "ref_metadata": {
+            "kind": "derived-native-hf-cache-ref",
+            "revision": "main",
+            "commit_hash": "08e4846e537177426273712802403f7ba8261b6c",
+            "owner": "huggingface_hub.file_download._cache_commit_hash_for_specific_revision",
+            "note": "Derived revision bytes, not an HTTP Artifact. Native main offline config/tokenizer lookup qualified in a task-private view of the immutable snapshot."
+          }
+        }
+      ]
+    },
+    "af2": {
+      "selected_by": "protein_binder profile reward, colabdesign evaluation or sequence_hallucination",
+      "url": "https://storage.googleapis.com/download/storage/v1/b/alphafold/o/alphafold_params_2022-12-06.tar?generation=1670353726160664&alt=media",
+      "generation": "1670353726160664",
+      "bytes": 5587968000,
+      "md5_base64": "XMWaVh6AYBhilI/zbGsECw==",
+      "sha256": null,
+      "status": "Existing alphafold/params installation reused unchanged; no duplicate download or new archive SHA claim"
+    },
+    "rf3": {
+      "selected_by": "ligand_binder profile reward, RF3 evaluation, or explicit RF3 reward",
+      "url": "https://files.ipd.uw.edu/pub/rf3/rf3_foundry_01_24_latest_remapped.ckpt",
+      "bytes": 3038876446,
+      "sha256": "364ef592fd8042a9cf4176d045015190f8322f961ccca38d891b20ca578d3bb0",
+      "status": "Authoritative native URL acquired and full bytes hashed; canonical CAS and immutable layout verified; safe CPU checkpoint load passed. Origin URL remains mutable; manifest pins the acquired bytes. No activation or inference.",
+      "acquisition_manifest": {
+        "artifact_id": "evaluator-rf3_foundry_01_24_latest_remapped.ckpt",
+        "kind": "weights",
+        "url": "https://files.ipd.uw.edu/pub/rf3/rf3_foundry_01_24_latest_remapped.ckpt",
+        "sha256": "364ef592fd8042a9cf4176d045015190f8322f961ccca38d891b20ca578d3bb0",
+        "size_bytes": 3038876446,
+        "source_authority": "files.ipd.uw.edu",
+        "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+        "license_id": "BSD-3-Clause",
+        "redirect_policy": null
+      },
+      "license_evidence": {
+        "name": "rf3",
+        "license_id": "BSD-3-Clause",
+        "url": "https://raw.githubusercontent.com/RosettaCommons/foundry/d078b24d6d0e6f8607e9a0311128f4a897f83953/LICENSE.md",
+        "sha256": "2cd97cd8d0096cc2f815825c731865d8e0bd0f265020fe9c54a8615ac0ae22eb",
+        "size_bytes": 1652
+      },
+      "source_evidence": "https://raw.githubusercontent.com/RosettaCommons/foundry/d078b24d6d0e6f8607e9a0311128f4a897f83953/models/rf3/README.md"
+    },
+    "protein_mpnn": {
+      "source_revision": "8907e6671bfbfc92303b5f79c4b5e6ce47cdef57",
+      "source": "env/download_startup.sh:104,120",
+      "selected_by": "Complexa native default ca_only=True; La separately selects vanilla",
+      "members": [
+        {
+          "path": "ca_model_weights/v_48_020.pt",
+          "mode": "100644",
+          "type": "blob",
+          "sha": "7fd96c7abf26621fad0f4352e3aad15e452251b4",
+          "size": 6624011,
+          "url": "https://api.github.com/repos/dauparas/ProteinMPNN/git/blobs/7fd96c7abf26621fad0f4352e3aad15e452251b4",
+          "member_path": "complexa/ProteinMPNN/ca_model_weights/v_48_020.pt",
+          "sha256": "f28f40170e21858c5ff31ef50b6e63414ff76dc331b19f85aa8586a12031744a",
+          "acquisition_manifest": {
+            "artifact_id": "evaluator-ca-v_48_020.pt",
+            "kind": "weights",
+            "url": "https://raw.githubusercontent.com/dauparas/ProteinMPNN/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/ca_model_weights/v_48_020.pt",
+            "sha256": "f28f40170e21858c5ff31ef50b6e63414ff76dc331b19f85aa8586a12031744a",
+            "size_bytes": 6624011,
+            "source_authority": "raw.githubusercontent.com",
+            "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+            "license_id": "MIT"
+          }
+        },
+        {
+          "path": "vanilla_model_weights/v_48_020.pt",
+          "mode": "100644",
+          "type": "blob",
+          "sha": "66f81553eea491dfc1307582c679ef029511937b",
+          "size": 6681301,
+          "url": "https://api.github.com/repos/dauparas/ProteinMPNN/git/blobs/66f81553eea491dfc1307582c679ef029511937b",
+          "member_path": "laproteina/ProteinMPNN/vanilla_model_weights/v_48_020.pt",
+          "sha256": "c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd",
+          "acquisition_manifest": {
+            "artifact_id": "evaluator-vanilla-v_48_020.pt",
+            "kind": "weights",
+            "url": "https://raw.githubusercontent.com/dauparas/ProteinMPNN/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/vanilla_model_weights/v_48_020.pt",
+            "sha256": "c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd",
+            "size_bytes": 6681301,
+            "source_authority": "raw.githubusercontent.com",
+            "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+            "license_id": "MIT"
+          }
+        }
+      ],
+      "status": "Exact pinned Git blobs and SHA256 verified from acquired bytes; distinct CA and vanilla CPU checkpoints loaded; canonical CAS/layouts materialized without changing installed generator generations",
+      "license_evidence": {
+        "name": "proteinmpnn",
+        "license_id": "MIT",
+        "url": "https://raw.githubusercontent.com/dauparas/ProteinMPNN/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/LICENSE",
+        "sha256": "82009d25ce585631f452b2b24589bdb29c559ccfefa2f200ef312ed5b501a586",
+        "size_bytes": 1072
+      }
+    },
+    "controller_acquisition": {
+      "approval_ref": "user-authorized-de-novo-closeout-20261103/evaluator-assets",
+      "scope": "User-authorized audited evaluator setup repair; not institutional release approval or worker publication",
+      "layouts": [
+        {
+          "relative_path": "huggingface",
+          "digest": "2645e65c6e84013687e483e2ca004632b394b2dc29fb85c2ea29ac569ae558dc",
+          "members": [
+            "models--facebook--esmfold_v1/snapshots/75a3841ee059df2bf4d56688166c8fb459ddd97a/vocab.txt",
+            "models--facebook--esmfold_v1/snapshots/75a3841ee059df2bf4d56688166c8fb459ddd97a/pytorch_model.bin",
+            "models--facebook--esmfold_v1/snapshots/75a3841ee059df2bf4d56688166c8fb459ddd97a/tokenizer_config.json",
+            "models--facebook--esmfold_v1/snapshots/75a3841ee059df2bf4d56688166c8fb459ddd97a/special_tokens_map.json",
+            "models--facebook--esmfold_v1/snapshots/75a3841ee059df2bf4d56688166c8fb459ddd97a/config.json",
+            "models--facebook--esm2_t33_650M_UR50D/snapshots/08e4846e537177426273712802403f7ba8261b6c/vocab.txt",
+            "models--facebook--esm2_t33_650M_UR50D/snapshots/08e4846e537177426273712802403f7ba8261b6c/model.safetensors",
+            "models--facebook--esm2_t33_650M_UR50D/snapshots/08e4846e537177426273712802403f7ba8261b6c/tokenizer_config.json",
+            "models--facebook--esm2_t33_650M_UR50D/snapshots/08e4846e537177426273712802403f7ba8261b6c/special_tokens_map.json",
+            "models--facebook--esm2_t33_650M_UR50D/snapshots/08e4846e537177426273712802403f7ba8261b6c/config.json"
+          ]
+        },
+        {
+          "relative_path": "complexa-evaluators",
+          "digest": "e97f9f7082343d8085b122233c9dc3765da9184d2c06271c4a3a5af73573feef",
+          "members": [
+            "LigandMPNN/model_params/solublempnn_v_48_020.pt",
+            "LigandMPNN/model_params/ligandmpnn_v_32_010_25.pt",
+            "ProteinMPNN/ca_model_weights/v_48_020.pt"
+          ]
+        },
+        {
+          "relative_path": "laproteina-evaluators",
+          "digest": "de01f799515cd7c10ccaa273beadb9a93a6248323b89e0cbb28f541dd3c5f7c9",
+          "members": [
+            "ProteinMPNN/vanilla_model_weights/v_48_020.pt"
+          ]
+        },
+        {
+          "relative_path": "foundry",
+          "digest": "318b1ed811b0036ef2218b5289703aa7eddfd5d5a36f092442f3fabbbc75bbcc",
+          "members": [
+            "checkpoints/rf3_foundry_01_24_latest_remapped.ckpt"
+          ]
+        }
+      ],
+      "receiving_note": "Complexa/La selected MPNN dependencies must bind to the corresponding evaluator-only immutable layout; do not append a competing generation under the installed generator root. HF refs/main is derived cache metadata, not a falsely attributed downloaded artifact. Existing selected-dependency receiving owner handles these bindings; no model-wide optional acquisition implied."
+    }
+  },
+  "layout": {
+    "relative_path": "complexa",
+    "digest": "83251bdd523240ebf9ecba634a0acf38835c58eacf8a0a4877fae4c2ed8366f5",
+    "members": [
+      "complexa.ckpt",
+      "complexa_ae.ckpt",
+      "complexa_ame.ckpt",
+      "complexa_ame_ae.ckpt",
+      "complexa_ligand.ckpt",
+      "complexa_ligand_ae.ckpt"
+    ],
+    "status": "materialized; not activated"
+  },
+  "publication": {
+    "backend": "existing controller HF asset broker",
+    "bucket": "Professionalcatlover/bms-runtime-images",
+    "object_count": 7,
+    "exact_metadata_and_range_readback": true,
+    "shared_ae_objects_reused": [
+      "898da17022cdeaaaea7caace41c8b6fe7bfcb78be4876b0113127eb9bb1527e6",
+      "63b1358c5459e968628094fdc9a2a6a95ac003606fcf7b1a3a21174458a69734"
+    ]
+  }
+}

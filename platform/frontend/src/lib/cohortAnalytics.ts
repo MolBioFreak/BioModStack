@@ -138,6 +138,9 @@ const LABELS: Record<string, string> = {
     ppiflow_interface_residue_count_original: 'Source interface residues',
     ppiflow_interface_residue_count_matured: 'Refined interface residues',
     ppiflow_anchor_count: 'PPIFlow anchor count', ppiflow_sample_index: 'PPIFlow sample',
+    overall_plddt: 'Overall pLDDT', overall_ptm: 'Overall pTM', overall_pae: 'Overall PAE',
+    plddt_coi: 'pLDDT (chain of interest)', ptm_coi: 'pTM (chain of interest)', pae_coi: 'PAE (chain of interest)',
+    fraction_disordered: 'Fraction disordered', has_clash: 'Has clash', rmsd: 'RMSD',
 };
 
 export function metricLabel(key: string): string {

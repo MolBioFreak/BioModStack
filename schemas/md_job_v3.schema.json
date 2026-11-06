@@ -477,7 +477,7 @@
       }
     },
     "analysis": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "Optional analysis-owner configuration; not an execution admission condition."
     },
     "windows": {

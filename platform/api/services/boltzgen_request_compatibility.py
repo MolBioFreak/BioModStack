@@ -63,21 +63,28 @@ def compile_boltzgen_settings(params):
 
 # Native protocol/entity mapping from boltzgen 617e549e, parse/schema.py and
 # the vanilla-protein / linear-peptide examples. Peptides are protein entities.
+# Accepted request IDs include the historical zero-design path. This is a
+# compatibility map, not the fresh capability inventory (registry modes owns it).
 BOLTZGEN_GENERATION_PROTOCOLS = {
     'protein_binder': 'protein-anything',
+    'antibody_binder': 'antibody-anything',
     'peptide_binder': 'peptide-anything',
     'nanobody_binder': 'nanobody-anything',
+    'ligand_binder': 'protein-small_molecule',
+    'ntp_binder': 'protein-small_molecule',
+    'scaffold_around_ligand': 'protein-small_molecule',
+    'backbone_docking': 'protein-small_molecule',
 }
 
 # The shared compiler imports this table instead of maintaining a second alias
 # map. Legacy ligand/nucleotide aliases retain their existing interpretation.
 BOLTZGEN_PARAMETER_ALIASES = {
     **{name: 'boltzgen_' + name for name in (
-        'input_pdb', 'ligand_pdb', 'ligand_smiles', 'protein_sequence',
+        'input_pdb', 'ligand_pdb', 'ligand_chains', 'ligand_smiles', 'protein_sequence',
         'dna_template_seq', 'dna_primer_seq', 'dna_structure', 'scaffold_length',
         'num_designs', 'batch_size', 'ntp_type', 'binding_site_residues',
         'catalytic_site', 'budget', 'alpha', 'max_rmsd', 'min_plddt',
-        'secondary_structure', 'protocol', 'target_chains', 'target_binding_positions', 'binder_sequence',
+        'secondary_structure', 'cyclic', 'protocol', 'target_chains', 'target_binding_positions', 'binder_sequence',
         'scaffold_path', 'scaffold_chain', 'scaffold_design_ranges',
         'nanobody_framework', 'cdr_h1_length', 'cdr_h2_length', 'cdr_h3_length',
         'diffusion_batch_size', 'step_scale', 'noise_scale', 'checkpoint_mode',
@@ -119,7 +126,7 @@ def _generation_contract():
 
 
 def parameter_contract(mode: str) -> list[dict]:
-    """Mode-owned typed discovery; never expand the legacy ligand defaults."""
+    """Mode-owned typed discovery; never expand historical registry defaults."""
     if mode not in BOLTZGEN_GENERATION_PROTOCOLS:
         raise ValueError('Unknown public BoltzGen generation mode: ' + str(mode))
     fields = []
@@ -156,8 +163,10 @@ def boltzgen_generation_inventory(mode: str) -> dict:
     contract = _generation_contract()
     return {'schema_version': contract['schema_version'], 'model_id': 'boltzgen',
             'source_revision': contract['source_revision'], 'mode': mode,
+            'compatibility_only': mode == 'backbone_docking',
             'parameters': parameter_contract(mode),
             'native_behavior': {
+                'zero_design': 'Not a docking operation: the pinned analysis indexes the first designed token and fails for an empty design mask. Legacy requests are preserved without adding design residues or changing the pipeline.',
                 'defaults': 'Null optional run overrides defer to the native protocol, not antibody-form recommendations.',
                 'plddt': 'Unavailable in the native CSV/NPZ producer; explicit non-null thresholds are incompatible.',
                 'aliases': 'Equal aliases accepted; conflicting names rejected. Explicit values precede defaults.',
@@ -199,11 +208,11 @@ def _validate_generation_field(field, value):
 
 
 def normalize_boltzgen_generation_request(mode, params):
-    """Call before registry defaults, for the three public generation modes only.
+    """Call before registry defaults for all public native BoltzGen modes.
 
     Preserve explicit native protocol choices (including auto), numeric zeros,
     false and null. This is source/alias normalization, not a readiness gate.
-    Legacy ligand/nucleotide and internal child requests do not use this adapter.
+    Internal child requests retain their separate parent-bound adapter.
     """
     if mode not in BOLTZGEN_GENERATION_PROTOCOLS:
         raise ValueError('Unknown public BoltzGen generation mode: ' + str(mode))

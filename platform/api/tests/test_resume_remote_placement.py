@@ -227,7 +227,9 @@ async def test_component_checkpoint_resume_requires_binding_and_never_fakes_cont
     assert (await client.post('/jobs/source/resume', json={})).status_code == 422
     payload = dict(checkpoint_id=checkpoint["checkpoint_id"], checkpoint_sha256="c" * 64,
                    checkpoint_decision={"continue": True})
-    assert (await client.post('/jobs/source/resume', json=dict(payload, execution_target_id=None))).status_code == 422
+    # A changed target (here Local) is an ordinary checkpoint successor; the decision must still be an exact artifact selection.
+    changed = await client.post('/jobs/source/resume', json=dict(payload, execution_target_id=None))
+    assert changed.status_code == 409 and 'selected_artifacts' in changed.text
     from services.remote_execution import executor
     called = []
     async def preflight(session, job, bound, decision):
@@ -526,7 +528,11 @@ async def test_true_cached_resume_preserves_scientific_cohort(store, marked):
         successor = await session.get(Job, response.json()['new_job_id'])
         assert contract.revision_for_job(successor) == (contract.REVISION if marked else None)
         assert successor.params.get(contract.REVISION_KEY) == (contract.REVISION if marked else None)
-        assert successor.provenance == provenance
+        # Resume provenance is the original keys plus the registry's additive
+        # parameter_diagnostics (689e621), computed from the admitted payload.
+        admitted = {key: value for key, value in successor.params.items() if key != 'remote_result_policy'}
+        assert successor.provenance == {
+            **provenance, 'parameter_diagnostics': jobs.get_registry().parameter_diagnostics('boltz2', admitted)}
         assert successor.output_dir == snapshot['output_dir']
         assert successor.params['resume_source_dir'] == snapshot['output_dir']
         assert successor.execution_source_revision == snapshot['execution_source_revision']

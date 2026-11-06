@@ -345,6 +345,7 @@ class OntRunSummaryResponse(BaseModel):
 
     run_id: str
     position_id: str
+    can_stop: bool = False
     status: Literal[
         "armed",
         "starting",
@@ -390,6 +391,15 @@ class OntExternalPod5CandidateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     candidate_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    experiment_group: str = Field(min_length=1, max_length=255)
+    sample_id: str | None = Field(default=None, max_length=255)
+
+
+class OntRawSignalUploadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file_path: str = Field(min_length=1, max_length=512)
+    format: Literal["pod5", "slow5", "blow5"]
+    index_file_path: str | None = Field(default=None, max_length=512)
     experiment_group: str = Field(min_length=1, max_length=255)
     sample_id: str | None = Field(default=None, max_length=255)
 
@@ -508,6 +518,9 @@ def _validate_ont_input_contract(canonical_id: str, params: dict[str, Any]) -> t
     if canonical_id in ONT_REFERENCE_REQUIRED_WORKFLOWS and not str(params.get("reference_fasta") or "").strip():
         raise ValueError(f"workflow {canonical_id!r} requires reference_fasta for construct verification")
 
+    if canonical_id == "ont_basecall_dna" and (input_mode == "fastq" or params.get("run_fastq_qc") or params.get("run_modkit")) and not str(params.get("reference_fasta") or "").strip():
+        raise ValueError("DNA reference analysis requires reference_fasta")
+
     if input_mode == "fastq" and bool(params.get("run_modkit")):
         raise ValueError("modkit requires a BAM with meaningful MM/ML tags or POD5 basecalled with modified bases")
 
@@ -609,6 +622,10 @@ def _job_create_for_ont_submit(
         )
 
     spec = get_ont_workflow_spec(canonical_id)
+    # Remote defaults must not inherit the controller installation's CPU choice.
+    # Explicit operator devices survive placement and normalization unchanged.
+    if request.execution_target_id and not submitted_params.get("dorado_device"):
+        submitted_params["dorado_device"] = "cuda:0"
     params = normalize_ont_launch_params(canonical_id, submitted_params)
     path_contract = {
         "pod5_dir": True,
@@ -709,9 +726,16 @@ async def _create_pipeline_job(
 
 
 @router.get("/positions/{position}/protocol-options")
-async def ont_position_protocol_options(position: str) -> dict[str, Any]:
-    """Issue expiring opaque server-owned protocol options for one live position."""
-    return await ont_run_control.issue_position_protocol_catalog(position)
+async def ont_position_protocol_options(
+    position: str,
+    kit: str | None = Query(None, max_length=64),
+    run_hours: float = Query(ont_run_control.DEFAULT_RUN_HOURS, gt=0, le=96),
+) -> dict[str, Any]:
+    """Issue an expiring protocol option for one live position, kit and run length."""
+    try:
+        return await ont_run_control.issue_position_protocol_catalog(position, kit=kit, run_hours=run_hours)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/positions/{position}/run-intents")
@@ -724,7 +748,7 @@ async def ont_create_run_intent(position: str, payload: OntRunIntentRequest) -> 
 
 @router.post("/runs/{run_id}/start")
 async def ont_validate_and_start_intent(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Re-read the position before a future start; actual MinKNOW start remains disabled."""
+    """Revalidate an armed run against the live position and start it in MinKNOW."""
     try:
         confirmed = OntIntentStartRequest.model_validate(payload)
     except ValidationError as exc:
@@ -737,20 +761,17 @@ async def ont_validate_and_start_intent(run_id: str, payload: dict[str, Any]) ->
         raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except NotImplementedError as exc:
-        raise HTTPException(
-            status_code=501,
-            detail="Starting MinKNOW runs from BMS is disabled; enabling it requires separate authorization and supervised commissioning.",
-        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/positions/{position}/hardware-check")
 async def ont_begin_position_hardware_check(position: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Retired physical diagnostic activation; commissioning requires separate supervision."""
+    """Hardware checks run from MinKNOW; BMS reads their results with the position."""
     del position, payload
     raise HTTPException(
         status_code=501,
-        detail="Mk1D hardware-check activation is disabled pending separately authorized supervised commissioning.",
+        detail="Run hardware checks from MinKNOW; BMS shows the result the next time it reads the position.",
     )
 
 
@@ -765,7 +786,7 @@ async def ont_refresh_position_state(position: str) -> dict[str, Any]:
 
 @router.post("/positions/{position}/restart")
 async def ont_restart_position(position: str, payload: OntRestartRequest) -> dict[str, Any]:
-    """Expose explicit restart contract; host-agent refuses until live semantics are validated."""
+    """Restart request; the host bridge reports that power-cycling is not available."""
     try:
         return ont_run_control.restart_position(position, confirm_restart=payload.confirm_restart)
     except ValueError as exc:
@@ -774,23 +795,33 @@ async def ont_restart_position(position: str, payload: OntRestartRequest) -> dic
 
 @router.post("/positions/{position}/start")
 async def ont_start_instrument_run(position: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Retired raw start surface; starts must be bound to a persisted opaque intent."""
+    """Old raw start route; runs start from a saved run intent instead."""
     del position, payload
     raise HTTPException(
         status_code=410,
-        detail="Direct ONT start is retired. Run-intent validation uses /runs/{id}/start, but physical starting remains disabled.",
+        detail="Start runs with POST /runs/{id}/start after creating a run intent.",
     )
 
 
 @router.get("/runs", response_model=list[OntRunSummaryResponse])
 async def ont_list_instrument_runs(
     limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    experiment_group: str | None = Query(None, min_length=1, max_length=256),
 ) -> list[OntRunSummaryResponse]:
-    """List persisted run summaries without contacting MinKNOW."""
+    """List persisted run summaries without contacting MinKNOW.
+
+    ``experiment_group`` restricts the list to one exact Project before
+    ``offset``/``limit`` paging is applied.
+    """
     try:
         return [
             OntRunSummaryResponse.model_validate(item)
-            for item in await ont_run_control.list_instrument_runs(limit=limit)
+            for item in await ont_run_control.list_instrument_runs(
+                limit=limit,
+                offset=offset,
+                experiment_group=experiment_group,
+            )
         ]
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -831,6 +862,57 @@ async def ont_get_instrument_run(run_id: str) -> dict[str, Any]:
     return record
 
 
+class OntRawSignalRetentionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy: Literal["pod5_and_blow5", "blow5_only"]
+
+
+@router.get("/ngs/basecall-devices")
+async def ont_basecall_devices(execution_target_id: str | None = None) -> dict[str, Any]:
+    """CPU or CUDA choices for Dorado basecalling on this host."""
+    from services.ont_ngs_contract import basecall_device_options
+    return basecall_device_options(execution_target_id=execution_target_id)
+
+
+@router.post("/runs/{run_id}/generations/{observed_generation}/raw-signal/{representation_id}/restore-pod5", status_code=202)
+async def ont_restore_pod5(
+    run_id: str, observed_generation: int, representation_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Rebuild POD5 from a ready BLOW5 representation so it can be basecalled."""
+    from database import OntRawSignalRepresentation
+    from services import ont_pod5_restore
+    representation = await session.get(OntRawSignalRepresentation, representation_id)
+    if representation is None or representation.run_id != run_id or representation.observed_generation != observed_generation:
+        raise HTTPException(status_code=404, detail="BLOW5 representation not found for this run generation")
+    try:
+        return await ont_pod5_restore.request_restore(representation)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/generations/{observed_generation}/raw-signal/{representation_id}/restore-pod5")
+async def ont_restore_pod5_status(run_id: str, observed_generation: int, representation_id: str) -> dict[str, Any]:
+    from services import ont_pod5_restore
+    status = ont_pod5_restore.restore_status(representation_id)
+    if status.get("run_id") not in (None, run_id):
+        raise HTTPException(status_code=404, detail="restore belongs to a different run")
+    return status
+
+
+@router.get("/raw-signal/retention")
+async def ont_raw_signal_retention() -> dict[str, Any]:
+    """Whether converted POD5 is kept beside its verified BLOW5."""
+    return ont_raw_signal.retention_settings()
+
+
+@router.put("/raw-signal/retention")
+async def ont_set_raw_signal_retention(request: OntRawSignalRetentionRequest) -> dict[str, Any]:
+    """Applies to conversions that finish after the change; existing files are untouched."""
+    return ont_raw_signal.save_raw_signal_retention_policy(request.policy)
+
+
 @router.get("/raw-signal/external-pod5-candidates")
 async def ont_list_external_pod5_candidates() -> dict[str, Any]:
     """List path-opaque POD5 candidates from the single governed server root."""
@@ -868,6 +950,24 @@ async def ont_register_external_pod5_candidate(
     finally:
         if session.in_transaction():
             await session.rollback()
+
+
+@router.post("/raw-signal/import", status_code=201)
+async def ont_import_uploaded_raw_signal(
+    request: OntRawSignalUploadRequest,
+    session: AsyncSession = Depends(get_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
+) -> dict[str, Any]:
+    try:
+        result = await ont_raw_signal.import_uploaded_raw_signal(
+            session, domain_session, **request.model_dump(),
+        )
+        await session.commit()
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="raw-signal upload not found") from exc
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/raw-signal/external-runs", status_code=201)
@@ -1641,10 +1741,18 @@ async def ont_submit_plasmid_qc_from_run(
     return created
 
 
+class OntStopRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    confirm_stop: StrictBool
+
+
 @router.post("/runs/{run_id}/stop")
-async def ont_stop_instrument_run(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    del run_id, payload
-    raise HTTPException(
-        status_code=410,
-        detail="Browser-initiated ONT physical stop is retired; use the separately supervised instrument-control lane.",
-    )
+async def ont_stop_instrument_run(run_id: str, payload: OntStopRequest) -> dict[str, Any]:
+    """Stop an active run in MinKNOW. Data acquired so far is kept and sealed."""
+    try:
+        return await ont_run_control.stop_instrument_run(run_id, confirm_stop=payload.confirm_stop)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown ONT instrument run: {run_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

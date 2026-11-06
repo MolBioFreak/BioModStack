@@ -207,8 +207,11 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                     labware.setdefault(identity, {})["station"] = deepcopy(inputs.get("destination_station", inputs.get('target_location')))
                     changed_other["labware"] = {identity: deepcopy(labware[identity])}
             if action in {"move", "park", "pipette_position"}:
-                state["head_reference"] = deepcopy(inputs)
-                changed_other["head_reference"] = deepcopy(inputs)
+                reference = inputs
+                if inputs.get("operation") == "move_sequence" and isinstance(inputs.get("targets"), list) and inputs["targets"]:
+                    reference = {"operation": "move_sequence", **inputs["targets"][-1]}  # the head finishes at the last target
+                state["head_reference"] = deepcopy(reference)
+                changed_other["head_reference"] = deepcopy(reference)
             if '_native_head_reference' in occurrence and occurrence.get('status') not in {'failed', 'partial', 'unknown'}:
                 state['head_reference'] = deepcopy(occurrence['_native_head_reference'])
                 changed_other['head_reference'] = deepcopy(state['head_reference'])
@@ -220,6 +223,55 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                 state.setdefault("thermal_tasks", {})[str(inputs.get("task_id", oid))] = {
                     "action": action, "inputs": deepcopy(inputs), "attainment": "unknown"}
                 changed_other["thermal_tasks"] = {str(inputs.get("task_id", oid)): deepcopy(state["thermal_tasks"][str(inputs.get("task_id", oid))])}
+            if action == "tip_pickup" and isinstance(state.get("tip_racks"), dict):
+                from bioxp_method_deck import pickup_indices
+                rack = state["tip_racks"].get(str(inputs.get("tray")))
+                indices = pickup_indices(inputs.get("well"))
+                kept = inputs.get("channels")
+                if indices is not None and isinstance(kept, list) and kept:
+                    indices = [i for ch, i in enumerate(indices) if ch in kept]
+                if rack is not None and indices is not None:
+                    missing = [i for i in indices if not rack["occupancy"][i]]
+                    if missing:
+                        issue("planned_tip_unavailable", occurrence,
+                              f"Tray {inputs.get('tray')} {inputs.get('well')}: {len(missing)} of {len(indices)} tips already used or absent in the starting deck; not a runtime gate.")
+                    for i in indices:
+                        rack["occupancy"][i] = False
+                    changed_other["tip_racks"] = {str(inputs.get("tray")): {
+                        "tips_remaining": sum(1 for tip in rack["occupancy"] if tip)}}
+            if action in {"plate_move", "move_cover"} and isinstance(state.get("object_locations"), dict):
+                from bioxp_method_deck import TOKEN_OBJECTS, resolve_target
+                token = inputs.get("plate_id" if action == "plate_move" else "cover_id")
+                name = TOKEN_OBJECTS.get(token, token)
+                target = inputs.get("target_location")
+                if isinstance(name, str) and isinstance(target, str):
+                    state["object_locations"][name] = resolve_target(name, target)
+                    changed_other["object_locations"] = {name: state["object_locations"][name]}
+                    from bioxp_method_deck import cover_slot_mismatch
+                    holder = cover_slot_mismatch(state["object_locations"][name], state.get("deck_slots"))
+                    if action == "move_cover" and holder:
+                        issue("cover_slot_holder_mismatch", occurrence,
+                              f"{name} is moved to {state['object_locations'][name]}, which the starting deck "
+                              f"records as holding a {holder.replace('_', ' ')}, not cover storage. Advisory only.")
+            if action == "inspect" and isinstance(state.get("object_locations"), dict):
+                # ControlLib.inspectCover:3745-3752 finalize: both covers end in storage.
+                from bioxp_method_deck import INSPECTED_COVER_LOCATIONS
+                state["object_locations"].update(INSPECTED_COVER_LOCATIONS)
+                from bioxp_method_deck import cover_slot_mismatch
+                for cover_name, location in INSPECTED_COVER_LOCATIONS.items():
+                    holder = cover_slot_mismatch(location, state.get("deck_slots"))
+                    if holder:
+                        issue("cover_slot_holder_mismatch", occurrence,
+                              f"Cover inspection returns {cover_name} to {location}, which the starting deck records "
+                              f"as holding a {holder.replace('_', ' ')}. Advisory only.")
+                changed_other["object_locations"] = dict(INSPECTED_COVER_LOCATIONS)
+                state["covers_inspected"] = True
+            if (action == "move_cover" and not state.get("covers_inspected")
+                    and not state.get("cover_move_uninspected_reported")):
+                state["cover_move_uninspected_reported"] = True
+                issue("cover_move_before_inspection", occurrence,
+                      "Cover move before any cover inspection step; the robot will grab where its record says "
+                      "the cover is. OEM runs cover inspection at run start. Advisory only.")
             if action in {"tip_pickup", "tip_eject"}:
                 for channel in inputs.get("channels", []):
                     touched_channels.add(str(channel))
@@ -377,6 +429,9 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
             snapshots.append({"occurrence_id": oid, "state_delta": {
                 "vessels": {key: deepcopy(vessels[key]) for key in sorted(touched_vessels)},
                 "channels": channel_delta, **changed_other}})
+    if isinstance(state.get("tip_racks"), dict):
+        from bioxp_method_deck import summarize_racks
+        state["tip_rack_summary"] = summarize_racks(state["tip_racks"])
     return {"layer": "planned", "state": state, "observed": None, "issues": issues,
             "lineage": lineage, "strokes": strokes, "after_occurrences": snapshots,
             "accounting": {k: {"known_ul": _text(v), "has_unknown": k in unknown_totals}

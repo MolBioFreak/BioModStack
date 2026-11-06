@@ -72,8 +72,8 @@ function InventoryObservation({ target, binding }: { target: ExecutionTarget; bi
     && !target.preload?.recovery_required
     && !ACTIVE_PHASES.includes(target.preload?.phase ?? '');
   return <section aria-label="Managed runtime inventory" className="space-y-2 border-t border-[var(--border-primary)] pt-3 text-sm">
-    <h5 className="font-medium">Worker asset inventory (installed)</h5>
-    <p className="text-xs text-[var(--text-muted)]">Assets this worker has installed for tracked selections, not a whole-machine scan. Saved observations reload without contacting the worker; Refresh rehashes installed assets over SSH and does not download, provision or launch anything.</p>
+    <h5 className="font-medium" title="Assets this worker has installed for tracked selections, not a whole-machine scan. Saved observations reload without contacting the worker; Refresh rehashes installed assets over SSH and does not download, provision or launch anything.">Worker asset inventory (installed) <span className="text-xs font-normal text-[var(--text-muted)]">ⓘ</span></h5>
+
     {saved.isPending && <p role="status">Loading saved installed observation…</p>}
     <p>Critical runtime ready: {fresh ? String(data?.critical_runtime_ready) : 'unknown (no fresh evidence)'} · Scientific ready: false (not checked)</p>
     {data && <p>{fresh ? 'Fresh observation (current)' : 'Stale observation — refresh before relying on installed state'}</p>}
@@ -82,7 +82,7 @@ function InventoryObservation({ target, binding }: { target: ExecutionTarget; bi
     {error && <div role="alert"><p>{message}</p></div>}
     <button type="button" className={buttonClass} disabled={saved.isFetching} onClick={() => void saved.refetch()}>Reload saved observation</button>
     {!saved.isPending && !data && <p>No saved managed observation. Installed asset state is unknown, not ready.</p>}
-    <p className="text-xs">Verified means installed bytes, modes and activation identity matched at observation, not scientific acceptance. Incompatible indicates a permission-mode or critical-runtime compatibility mismatch; unverified indicates absent or mismatched activation/manifest identity.</p>
+
     {data && <>
       <p>Observed <time dateTime={data.observed_at}>{data.observed_at}</time></p>
       <p className="break-all text-xs">Boot identity {data.boot_id}</p>
@@ -91,7 +91,7 @@ function InventoryObservation({ target, binding }: { target: ExecutionTarget; bi
       {data.releases.length === 0 && <p>No tracked releases in this observation. This is not readiness.</p>}
       <ul aria-label="Managed releases" className="space-y-3">
         {data.releases.map(release => <li key={`${release.selection.kind}:${release.release_sha256}`} className="space-y-1 break-all">
-          <p className="font-medium">{release.selection.kind} · {provisionSelectionLabel(release.selection)} · Release state: {release.state}</p>
+          <p className="font-medium" title="Verified means installed bytes, modes and activation identity matched at observation, not scientific acceptance. Incompatible indicates a permission-mode or critical-runtime compatibility mismatch; unverified indicates absent or mismatched activation/manifest identity.">{release.selection.kind} · {provisionSelectionLabel(release.selection)} · Release state: {release.state}</p>
           <p className="text-xs font-mono">Release SHA256 {release.release_sha256}</p>
           <p>Asset integrity: {fresh ? release.bounded_readiness ?? 'unknown (not checked)' : 'stale'} · Verified install only, not inference acceptance.</p>
           <div aria-label="Bounded native preflight">

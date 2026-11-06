@@ -78,15 +78,17 @@ async def test_mounted_preview_without_job_inputs_or_mutation(store, pack_assets
         await controller.close()
 
 
-def test_exact_pack_refs_and_native_optional_members():
+def test_exact_pack_refs_exclude_bulk_templates():
     refs = [(r.kind, r.relative_path) for r in workflow_pack_dependencies('structure_prediction')]
     assert len(refs) == len(set(refs))
     assert {p for k, p in refs if k == 'image'} == {
         'boltz2.sif', 'fold-cp.sif', 'protenix.sif', 'esmfold2.sif', 'frustrampnn.sif'}
-    optional, _ = native_checkpoint_dependencies('ProtenixPredict', {'protenix_use_template': True})
+    anchored, _ = native_checkpoint_dependencies('ProtenixFromComplex', {
+        'protenix_anchor_target': True, 'protenix_use_template': False})
     assert {p for k, p in refs if k == 'weights'} == {
-        'boltz', 'esmfold2', *(d.relative_path for d in optional)}
-    assert ('weights', 'protenix/mmcif') in refs
+        'boltz', 'esmfold2', *(d.relative_path for d in anchored)}
+    assert ('weights', 'protenix/mmcif') not in refs
+    assert ('weights', 'protenix/search_database/pdb_seqres_2022_09_28.fasta') not in refs
     assert get_registry().get_model('frustrampnn') is None
     assert get_registry().get_internal_model_definition('frustrampnn').enabled
     with pytest.raises(ValueError):
@@ -108,10 +110,14 @@ def test_closed_input_free_wire(extra):
 async def test_catalog_advertises_pack_not_internal_model():
     from routers.execution_targets import provision_catalog
     rows = [row.model_dump() for row in await provision_catalog()]
-    assert SELECTION.model_dump() in rows
+    from model_registry import workflow_pack_components
+    from services.remote_execution.contracts import WorkflowPackCatalogEntry
+    expected = WorkflowPackCatalogEntry(kind='workflow_pack', workflow_id='structure_prediction',
+        components=list(workflow_pack_components('structure_prediction'))).model_dump()
+    assert expected in rows
     assert not any(row.get('model_id') == 'frustrampnn' for row in rows)
     assert {'kind': 'image', 'model_id': 'boltz_cp_experimental'} in rows
-    assert {'kind': 'model', 'model_id': 'boltz_cp_experimental'} not in rows
+    assert {'kind': 'model', 'model_id': 'boltz_cp_experimental'} in rows
 
 
 def test_preview_deduplicates_before_inventory_without_scientific_compilation(pack_assets, monkeypatch):
@@ -119,11 +125,11 @@ def test_preview_deduplicates_before_inventory_without_scientific_compilation(pa
     monkeypatch.setattr(services.nextflow, 'compile_workflow_provision_request',
                         lambda *a, **kw: pytest.fail('pack must not compile a scientific request'))
     counts = Counter()
-    original = cache._records_for_source
-    def counted(path, prefix, role):
+    original = cache._declared_runtime_records
+    def counted(path, prefix, publication, **kwargs):
         counts[prefix] += 1
-        return original(path, prefix, role)
-    monkeypatch.setattr(cache, '_records_for_source', counted)
+        return original(path, prefix, publication, **kwargs)
+    monkeypatch.setattr(cache, '_declared_runtime_records', counted)
     preview, entries = cache.independent_preview(SELECTION, TARGET)
     assert preview.blockers == []
     assert preview.effective_params is None and preview.plan_sha256 is None
@@ -132,7 +138,13 @@ def test_preview_deduplicates_before_inventory_without_scientific_compilation(pa
     assert counts['weights/esmfold2'] == 1
     assert all(count == 1 for count in counts.values())
     assert len(entries) == len({e.remote_destination for e in entries})
-    assert any(e.link_target == 'fast.bin' for e in entries)
+    # Native weight aliases are transported as concrete immutable bytes, not
+    # host symlink targets. Preserve both logical names and exact byte identity.
+    by_name = {e.remote_destination: e for e in entries}
+    alias = by_name['weights/esmfold2/alias.bin']
+    fast = by_name['weights/esmfold2/fast.bin']
+    assert alias.link_target is None and fast.link_target is None
+    assert (alias.sha256, alias.size_bytes, alias.source) == (fast.sha256, fast.size_bytes, fast.source)
     assert {'weights/esmfold2/fast.bin', 'weights/esmfold2/full.bin'} <= {
         e.remote_destination for e in entries}
     first = preview.preview_sha256
@@ -145,7 +157,13 @@ def test_optional_missing_asset_is_reported_without_acquisition(pack_assets):
     preview, _ = cache.independent_preview(SELECTION, TARGET)
     assert not preview.estimates_complete
     assert preview.blockers[0].startswith('host_asset_unavailable:')
-    assert 'protenix/common/release_date_cache.json' in preview.blockers[0]
+    assert preview.blockers == ['host_asset_unavailable: Install the selected assets on the host using managed setup '
+        '(including any required license), then preview again. Worker/backend presence is separate.']
+    # The public advisory intentionally omits host paths; the missing member
+    # still prevents an inventory, and restoring exactly that asset clears it.
+    (pack_assets[1] / 'protenix/common/release_date_cache.json').write_bytes(b'restored fixture')
+    repaired, _ = cache.independent_preview(SELECTION, TARGET)
+    assert repaired.estimates_complete and repaired.blockers == []
 
 
 def test_layout_groups_match_native_members_without_rescan(pack_assets, monkeypatch):
@@ -166,7 +184,8 @@ def test_layout_groups_match_native_members_without_rescan(pack_assets, monkeypa
     assert metadata['boltz_native'] == native_boltz
     assert names('boltz_native') < names('boltz')
     assert names('boltz_native_protenix') == names('boltz_native') | names('protenix')
-    assert names('protenix') < names('protenix_anchored') < names('protenix_templates')
+    assert names('protenix') < names('protenix_anchored')
+    assert not any('templates' in name for name in groups)
     for rows in groups.values():
         digest, layout, _ = weight_layout([
             dict(name=e.remote_destination.removeprefix('weights/'), sha256=e.sha256,
@@ -189,6 +208,6 @@ def test_conflicting_identity_still_rejected_and_image_scope_unchanged(pack_asse
     image = ProvisionSelection(kind='image', model_id='boltz_cp_experimental')
     assert [e.remote_destination for e in cache.independent_plan(image)] == ['containers/fold-cp.sif']
     entries = cache.independent_plan(SELECTION)
-    monkeypatch.setattr(cache, 'independent_plan', lambda _: [*entries, replace(entries[0], sha256='0' * 64)])
+    monkeypatch.setattr(cache, 'independent_plan', lambda _, **__: [*entries, replace(entries[0], sha256='0' * 64)])
     with pytest.raises(ValueError, match='Conflicting managed dependency destinations'):
         cache.independent_preview(SELECTION, TARGET)

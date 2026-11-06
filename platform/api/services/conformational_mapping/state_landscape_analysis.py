@@ -169,8 +169,8 @@ def _source_by_candidate(
         schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
         if schema_key == "cm_frustration_landscape_v1" and (
             schema_name, schema_version
-        ) == ("frustrampnn_landscape", 2):
-            validate_frustrampnn_schema("frustrampnn_landscape_v2", value)
+        ) in {("frustrampnn_landscape", 2), ("frustrampnn_landscape", 3)}:
+            validate_frustrampnn_schema(f"frustrampnn_landscape_v{schema_version}", value)
         elif schema_key == "cm_structure_map_v1" and (
             schema_name, schema_version
         ) == ("frustrampnn_structure_map", 1):
@@ -187,7 +187,7 @@ def _source_by_candidate(
 def _provenance_identity(landscape: Mapping[str, Any]) -> tuple[Any, ...]:
     if (
         landscape.get("schema_name") == "frustrampnn_landscape"
-        and landscape.get("schema_version") == 2
+        and landscape.get("schema_version") in {2, 3}
     ):
         return (
             landscape["requested_settings_sha256"],

@@ -11,6 +11,7 @@ include {
     RunShapeFAMPNN
     RunShapeCaliby
     EvaluateShapeCandidate
+    ShapeESMFold2Predict
     RunShapeBoltzValidator
     RunShapeProtenixValidator
     AggregateShapeValidatorEvidence
@@ -18,7 +19,6 @@ include {
     BuildShapeSkipBundle
     BuildShapeResult
 } from '../modules/shape_blueprint'
-include { ESMFold2Predict } from '../modules/esmfold2_experimental'
 
 
 def loadShapeSequenceRecords(bundle, engine) {
@@ -63,6 +63,7 @@ workflow {
     }
 
     def requestFile = shapeFile(params.shape_request_path)
+    def requestDir = requestFile.parent
     def manifestFile = shapeFile(params.shape_geometry_manifest_path)
     def verticesFile = shapeFile(params.shape_vertices_path)
     def facesFile = shapeFile(params.shape_faces_path)
@@ -126,11 +127,11 @@ workflow {
             tuple(candidateId, backboneBundle.resolve('shape_backbone.pdb'))
         }
         if (sequenceEngine == 'proteinmpnn') {
-            RunShapeProteinMPNN(shapeBackbones, sequenceCount, seed, requestFile)
+            RunShapeProteinMPNN(shapeBackbones, sequenceCount, seed, requestDir)
         } else if (sequenceEngine == 'fampnn') {
-            RunShapeFAMPNN(shapeBackbones, sequenceCount, seed, requestFile)
+            RunShapeFAMPNN(shapeBackbones, sequenceCount, seed, requestDir)
         } else {
-            RunShapeCaliby(shapeBackbones, sequenceCount, seed, requestFile)
+            RunShapeCaliby(shapeBackbones, sequenceCount, seed, requestDir)
         }
         def sequenceBundles = sequenceEngine == 'proteinmpnn'
             ? RunShapeProteinMPNN.out.bundle
@@ -138,16 +139,13 @@ workflow {
         def shapeSequences = sequenceBundles.flatMap { bundle ->
             loadShapeSequenceRecords(bundle, sequenceEngine)
         }
-        ESMFold2Predict(shapeSequences.map { producerMeta, sequence, name, source ->
-            if (shapeRequest.schema == 'bms_shape_design_request_v3') {
-                producerMeta = producerMeta + [shape_settings: shapeRequest.validator_settings.esmfold2]
-            }
+        ShapeESMFold2Predict(shapeSequences.map { producerMeta, sequence, name, source ->
             tuple(producerMeta, sequence, name)
-        })
+        }, requestDir)
         // Manifest rows bind the actual native sample to its exact two files.
         // Preserve the established native sample-000 baseline; the full
         // native manifest is retained by the validator suite as alternate samples.
-        def esmSamples = ESMFold2Predict.out.shape_bundle.flatMap { name, bundle ->
+        def esmSamples = ShapeESMFold2Predict.out.shape_bundle.flatMap { name, bundle ->
             def manifest = new groovy.json.JsonSlurper().parse(new File(bundle.toString(), 'manifest.json'))
             manifest.samples.findAll { sample -> sample.sample_id.toString() == name.toString() + "_000" }.collect { sample ->
                 tuple(name, sample.sample_id.toString(), bundle.resolve(sample.cif.toString()), bundle.resolve(sample.metrics.toString()))
@@ -171,7 +169,7 @@ workflow {
                     tuple(name, sampleId, structure, metrics, sequence, peers + [evidence])
                 }
         }
-        AggregateShapeValidatorEvidence(suiteInputs.combine(ESMFold2Predict.out.shape_bundle, by: 0), validatorSuite, seed, requestFile)
+        AggregateShapeValidatorEvidence(suiteInputs.combine(ShapeESMFold2Predict.out.shape_bundle, by: 0), validatorSuite, seed, requestFile)
         def evaluatedInputs = esmSamples.combine(
             shapeSequences.map { producerMeta, sequence, name, source -> tuple(name, source) }, by: 0
         ).map { name, sampleId, structure, metrics, source -> tuple(sampleId, name, structure, metrics, source) }

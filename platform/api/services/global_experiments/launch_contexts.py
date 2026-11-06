@@ -26,10 +26,6 @@ from experiment_models import (
     ExperimentWorkflowPreparation,
     ExperimentWorkflowRun,
 )
-from services.rfd3_local_redesign import (
-    local_redesign_requests_semantically_equal,
-    prepare_local_redesign_scheduler_params,
-)
 
 
 LAUNCH_CONTEXT_SCHEMA = "bms.launch-context.v1"
@@ -43,9 +39,10 @@ DOMAIN_JOB_MODELS = {
         "boltz2", "boltz_cp_experimental", "boltzgen", "esmfold2", "molecular_dynamics",
         "ppiflow", "protein_local_redesign", "protein_modification_experimental", "protenix", "rf3",
         "template_antibody_denovo", "antibody_denovo", "bindcraft2", "binder_refinement",
-        "caliby_binder", "caliby_experimental", "proteinmpnn", "fampnn", "frustrampnn", "ligandmpnn",
+        "caliby_binder", "caliby_experimental", "proteinmpnn", "fampnn", "frustrampnn", "ligandmpnn", "protonpottsmpnn",
+        "laproteina", "rfd4_proteina", "complexa", "family_msa_protein",
     },
-    "ngs_molbio": {"nanopore", "ngs_alignment", "ont_fastq_qc", "sequence_qc", "oligo_builder", "oligo_design"},
+    "ngs_molbio": {"nanopore", "ngs_alignment", "ont_fastq_qc", "sequence_qc", "oligo_builder", "oligo_design", "family_msa_nucleic"},
 }
 
 
@@ -296,7 +293,7 @@ async def workflow_pinned_gpu(
     session: AsyncSession,
     context: ExperimentLaunchContext,
 ) -> int | None:
-    """Resolve an immutable native RFD3 GPU pin from the bound Workflow Revision."""
+    """Read the bound Workflow GPU pin, retaining native RFD3's required pin."""
     if context.workflow_revision_id is None:
         return None
     revision = await session.get(ExperimentRevision, context.workflow_revision_id)
@@ -310,11 +307,11 @@ async def workflow_pinned_gpu(
     payload = decoded_payload if isinstance(decoded_payload, dict) else {}
     raw_scheduler = payload.get("scheduler")
     scheduler: dict[str, Any] = raw_scheduler if isinstance(raw_scheduler, dict) else {}
-    if scheduler.get("model_id") != "protein_local_redesign":
-        return None
     raw_resources = scheduler.get("resources")
     resources: dict[str, Any] = raw_resources if isinstance(raw_resources, dict) else {}
     pinned_gpu = resources.get("pinned_gpu")
+    if scheduler.get("model_id") != "protein_local_redesign":
+        return pinned_gpu
     if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
         raise LaunchContextError(
             "launch_context_workflow_invalid",
@@ -587,46 +584,12 @@ async def validate_bound_job_request(
             key in prepared_params and prepared_params[key] == value
             for key, value in expected_params.items()
         )
-    if model_id == "protein_local_redesign":
-        supplied_adapter = params.get("workflow_adapter")
-        if supplied_adapter not in (None, expected_adapter):
-            raise LaunchContextError(
-                "launch_context_workflow_mismatch",
-                "Native RFD3 workflow_adapter does not match the bound Workflow Revision.",
-                status_code=409,
-            )
-        try:
-            actual_params = prepare_local_redesign_scheduler_params(
-                {**params, "workflow_adapter": expected_adapter},
-                job_name=job_name,
-                expected_adapter_id=expected_adapter,
-            )
-            expected_native_params = prepare_local_redesign_scheduler_params(
-                expected_params,
-                job_name=str(scheduler.get("name") or ""),
-                expected_adapter_id=expected_adapter,
-            )
-        except Exception as exc:
-            raise LaunchContextError(
-                "launch_context_workflow_mismatch",
-                "Job request does not satisfy the bound native RFD3 Workflow Revision.",
-                status_code=409,
-            ) from exc
-        actual_request = actual_params.get("rfd3_request")
-        expected_request = expected_native_params.get("rfd3_request")
-        params_match = (
-            isinstance(actual_request, dict)
-            and isinstance(expected_request, dict)
-            and local_redesign_requests_semantically_equal(actual_request, expected_request)
-        )
-        prepared_params = {**params, "workflow_adapter": expected_adapter}
     resources = scheduler.get("resources")
     expected_pinned_gpu = resources.get("pinned_gpu") if isinstance(resources, dict) else None
     if (
         scheduler.get("model_id") != model_id
         or scheduler.get("mode") != mode
         or not params_match
-        or (model_id == "protein_local_redesign" and expected_pinned_gpu != pinned_gpu)
     ):
         mismatched_params = sorted(
             key for key, value in expected_params.items()
@@ -772,6 +735,7 @@ async def prepare_child_launch_contexts(
     job_requests: Sequence[Any] | None = None,
     native_entrypoints: Sequence[str | None] | None = None,
     preallocated_attempt_ids: Sequence[str] | None = None,
+    md_input_resolver=None,
     idempotency_key: str,
     core_session: AsyncSession | None = None,
 ) -> dict[str, Any] | None:
@@ -795,7 +759,7 @@ async def prepare_child_launch_contexts(
             session, destination_launch_context_id=destination_launch_context_id,
             job_requests=job_requests, native_entrypoints=native_entrypoints,
             idempotency_key=idempotency_key, core_session=core_session,
-            preallocated_attempt_ids=preallocated_attempt_ids,
+            preallocated_attempt_ids=preallocated_attempt_ids, md_input_resolver=md_input_resolver,
         )
     if native_entrypoints is not None:
         raise LaunchContextError("child_preparations_invalid", "Entrypoints require Job requests.", status_code=422)
@@ -853,6 +817,7 @@ async def _prepare_child_job_requests(
     job_requests: Sequence[Any], native_entrypoints: Sequence[str | None] | None,
     idempotency_key: str, core_session: AsyncSession | None,
     preallocated_attempt_ids: Sequence[str] | None = None,
+    md_input_resolver=None,
 ) -> dict[str, Any]:
     from schemas import JobCreate
     from experiment_models import ExperimentWorkflowDraft
@@ -892,7 +857,7 @@ async def _prepare_child_job_requests(
                 session, workflow_id=workflow.aggregate_id, workspace_id=destination.project_id,
                 domain_experiment_id=destination.domain_experiment_id,
                 expected_domain_revision_id=domain.current_revision_id, capability_id=capability_id,
-                normalized_job_request=request, native_entrypoint=entrypoint,
+                normalized_job_request=request, native_entrypoint=entrypoint, md_input_resolver=md_input_resolver,
             )
             native_request = contract["capability"]["normalized_job_request"]
             draft = await session.scalar(select(ExperimentWorkflowDraft).where(
@@ -1171,6 +1136,59 @@ def _resource_authority_matches_reserved(
     return expected_with_observed_dispatch == actual_authoritative_params
 
 
+def _native_md_materialization_matches(job, expected, actual):
+    """Compare native request and MD-owned materialization, not transport paths.
+
+    The native owner already verifies input bytes while installing snapshots.
+    Use that durable identity here so cleanup does not become a new admission
+    gate. Scientific settings outside those exact materializations remain exact.
+    """
+    from copy import deepcopy
+    from services.md.launch_contract import INPUT_FILE_FIELDS, V2_SERVER_RESOLVED_CHEMISTRY_FIELDS
+    requested = (job.provenance or {}).get('core_protein_requested_params')
+    if not isinstance(requested, dict) or not all(requested.get(k) == v for k, v in expected.items()):
+        return False
+    try:
+        bound = deepcopy(actual['md_job_spec'])
+        original = expected['md_job_spec']
+        if bound['job_id'] != job.id:
+            return False
+        identity = {field: bound['input'][field + '_sha256'] for field in INPUT_FILE_FIELDS
+                    if bound['input'].get(field)}
+        if bound['input'].get('topology_closure'):
+            identity['topology_closure'] = {key: value for key, value in bound['input']['topology_closure'].items()
+                                            if key != 'root'}
+        if bound.get('windows'):
+            identity['windows'] = [{'id': window['id'], **({'coordinates': window['coordinates_sha256']}
+                                    if window.get('coordinates') else {})} for window in bound['windows']]
+        source = actual['md_source_provenance']
+        if source.get('original_snapshot'):
+            identity['original_structure'] = source['original_snapshot']['sha256']
+        if identity != expected['md_source_provenance']['native_input_identity']:
+            return False
+        # Strip only fields the MD materializer itself installs, then compare
+        # every authored field (including null/false/zero and ordered windows).
+        bound['input'] = deepcopy(original['input'])
+        bound['job_id'] = original['job_id']
+        bound.pop('engine_runtime', None)
+        for field in V2_SERVER_RESOLVED_CHEMISTRY_FIELDS:
+            bound.get('chemistry', {}).pop(field, None)
+        for before, after in zip(original.get('windows', []), bound.get('windows', [])):
+            if before.get('coordinates'):
+                after['coordinates'] = before['coordinates']
+                after.pop('coordinates_sha256', None)
+                after.pop('coordinates_bytes', None)
+        if bound != original:
+            return False
+        provenance = dict(source)
+        provenance.pop('snapshot', None)
+        provenance.pop('original_snapshot', None)
+        return all((provenance if key == 'md_source_provenance' else actual.get(key)) == value
+                   for key, value in expected.items() if key != 'md_job_spec')
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
 async def validate_bound_job(
     session: AsyncSession,
     context: ExperimentLaunchContext,
@@ -1268,6 +1286,23 @@ async def validate_bound_job(
                         base_job_params.get(key, 1 if key == "num_parallel_jobs" else object()) == value
                         for key, value in effective.items()
                     )
+        if (not params_match and job.model_id == "protein_modification_experimental"
+                and job.mode == "de_novo_design"
+                and expected_job_params.get("generator") == "rfd3"):
+            # The native owner binds request/job IDs, digest and destination at
+            # insertion. Compare with that same pure binding, not the unbound
+            # Plan template and not an identity-stripped scientific projection.
+            from services.rfd3_generation import bind_generation_request, GenerationContractError
+            try:
+                effective, _ = bind_generation_request(
+                    expected_job_params, output_dir=job.output_dir, job_id=job.id)
+            except (GenerationContractError, TypeError, ValueError):
+                effective = None
+            if effective is not None:
+                params_match = all(key in base_job_params and base_job_params[key] == value
+                                   for key, value in effective.items())
+        if not params_match and job.model_id == "molecular_dynamics" and expected_job_params.get('md_job_spec'):
+            params_match = _native_md_materialization_matches(job, expected_job_params, base_job_params)
         if not params_match and job.model_id == "boltzgen":
             from services.boltzgen_request_compatibility import (
                 BOLTZGEN_GENERATION_PROTOCOLS, compile_boltzgen_settings,
@@ -1291,23 +1326,6 @@ async def validate_bound_job(
                     and all(key in base_job_params and base_job_params[key] == value
                             for key, value in effective.items() if key != "boltzgen_yaml_config")
                 )
-        if job.model_id == "protein_local_redesign":
-            try:
-                expected_native_params = prepare_local_redesign_scheduler_params(
-                    expected_job_params,
-                    job_name=str(scheduler.get("name") or ""),
-                    expected_adapter_id=str(expected_adapter or ""),
-                )
-            except Exception:
-                expected_native_params = {}
-            expected_request = expected_native_params.get("rfd3_request")
-            observed_request = base_job_params.get("rfd3_request")
-            params_match = (
-                job_adapter == expected_adapter
-                and isinstance(expected_request, dict)
-                and isinstance(observed_request, dict)
-                and local_redesign_requests_semantically_equal(observed_request, expected_request)
-            )
         if (
             scheduler.get("model_id") != job.model_id
             or scheduler.get("mode") != job.mode

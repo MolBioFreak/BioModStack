@@ -278,7 +278,25 @@ def test_move_evidence_accepts_exact_partial_final_block_rule() -> None:
         basecall_model_id="dna_r10.4.1_e8.2_400bps_sup@v4.3.0",
     )
 
-    assert evidence == {"stride": 6, "move_count": 4, "final_block_remainder": 1}
+    assert evidence == {"stride": 6, "move_count": 4, "final_block_remainder": 1, "trailing_unstrided_samples": 0}
+
+
+def test_move_evidence_accepts_dorado_trailing_partial_stride() -> None:
+    record = SimpleNamespace(
+        query_name="read-1",
+        query_sequence="ACGT",
+        get_tags=lambda: [("mv", [6, 1, 1, 1, 1]), ("ts", 3), ("ns", 27)],
+    )
+    evidence = runtime.validate_move_record(
+        record, raw_signal_samples=32, molecule_type="dna",
+        basecall_model_id="dna_r10.4.1_e8.2_400bps_fast@v5.2.0",
+    )
+    assert evidence["trailing_unstrided_samples"] == 5
+    with pytest.raises(ValueError, match="raw-signal sample length"):
+        runtime.validate_move_record(
+            record, raw_signal_samples=33, molecule_type="dna",
+            basecall_model_id="dna_r10.4.1_e8.2_400bps_fast@v5.2.0",
+        )
 
 
 @pytest.mark.parametrize(

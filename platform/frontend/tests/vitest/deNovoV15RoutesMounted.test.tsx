@@ -1,4 +1,5 @@
 import React, { act } from 'react';
+import { isolateDeNovoTransport } from './deNovoTransport';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
@@ -15,7 +16,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../src/lib/api', async original => ({
     ...await original<typeof import('../../src/lib/api')>(),
     fetchModels: vi.fn(async () => ({ data: [] })),
-    fetchModelById: vi.fn(async () => ({ data: { params: [], modes: [{ id: 'design', params: [] }] } })),
+    fetchModelById: vi.fn(async () => ({ data: { params: [], modes: [{ id: 'design', params: [] }], engine_references: Object.fromEntries(['rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa'].map(name => [name, { name, description: 'fixture', github: 'https://example.org/github', paper: 'https://example.org/paper', docs: 'https://example.org/docs' }])) } })),
+    fetchNativeGenerationSettings: vi.fn(async () => { throw new Error('Fixture: native discovery unavailable'); }),
     fetchTemplates: vi.fn(async () => ({ data: [] })),
     fetchTemplateById: vi.fn(async () => ({ data: null })),
     fetchInputPresets: vi.fn(async () => ({ data: [] })),
@@ -41,14 +43,19 @@ vi.mock('../../src/components/MolecularDynamicsTemplate', () => ({ MolecularDyna
 vi.mock('../../src/components/OligoDesignerTemplate', () => ({ OligoDesignerTemplate: () => null }));
 vi.mock('../../src/components/conformationalMapping/ConformationalMappingLauncher', () => ({ ConformationalMappingLauncher: () => null }));
 import { JobSubmission } from '../../src/components/JobSubmission';
+// Resolve the real lazy editor during collection, outside a case's execution
+// timeout. Cold module transformation is not an authoring-action deadline.
+import '../../src/components/ProteinModificationTemplate';
 
 let root: Root | undefined;
 let client: QueryClient;
+let restoreTransport: () => void;
 function RouteProbe() {
     const location = useLocation(); const navigate = useNavigate();
     return <><output data-route>{location.pathname + location.search + location.hash}</output><button onClick={() => navigate(-1)}>History back fixture</button><button onClick={() => navigate(1)}>History forward fixture</button></>;
 }
 beforeEach(() => {
+    restoreTransport = isolateDeNovoTransport();
     mocks.create.mockImplementation(async data => {
         const saved = { ...data, id: 'saved-fixture', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' };
         mocks.saved = [saved]; return { data: saved };
@@ -58,14 +65,17 @@ afterEach(async () => {
     if (root) await act(async () => root!.unmount()); root = undefined;
     client?.clear(); document.body.replaceChildren(); localStorage.clear(); sessionStorage.clear();
     vi.clearAllMocks(); mocks.saved = []; mocks.project = null;
+    restoreTransport();
 });
 async function settle() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 25)); }); }
 async function mount(entry = '/submit?template=protein_modification_experimental', clone?: unknown) {
+    // Resolve the real lazy editor before entering React's act scope.
+    await import('../../src/components/ProteinModificationTemplate');
     if (clone) localStorage.setItem('clonedJobData', JSON.stringify(clone));
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     await act(async () => root!.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[entry]}><JobSubmission /><RouteProbe /></MemoryRouter></QueryClientProvider>));
-    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[data-bms-de-novo-form]')).not.toBeNull(); });
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[data-bms-de-novo-form]')).not.toBeNull(); }, { timeout: 10000 });
 }
 const route = () => document.querySelector('[data-route]')!.textContent!;
 const visible = (e: Element) => !e.closest('[hidden]');
@@ -77,6 +87,111 @@ async function input(selector: string, value: string) {
     const field = document.querySelector<HTMLInputElement>(selector); expect(field, selector).toBeTruthy();
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value); field!.dispatchEvent(new Event('input', { bubbles: true })); });
 }
+
+async function select(label: string, value: string) {
+    const field = [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === label)?.querySelector('select');
+    expect(field, label).toBeTruthy();
+    await act(async () => { field!.value = value; field!.dispatchEvent(new Event('change', { bubbles: true })); });
+    await settle();
+}
+
+it('keeps RFD3 selected for DNA intent and offers five engines with official links', async () => {
+    await mount('/submit?template=protein_modification_experimental&generator=rfd3');
+    await input('input[type="number"]', '123');
+    await select('Goal', 'dna_conditioned');
+    expect(route()).toContain('generator=rfd3');
+    expect(route()).toContain('design_task=dna_conditioned');
+    expect(document.querySelector('[data-bms-protein-generation-workflow="rfd3"]')).not.toBeNull();
+    expect([...document.querySelectorAll('input')].some(e => e.value === '123')).toBe(true);
+    const engine = [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Engine')!.querySelector('select')!;
+    expect([...engine.options].map(e => e.value)).toEqual(['rfd4_proteina', 'rfd3', 'disco', 'laproteina', 'complexa']);
+    for (const model of ['disco', 'laproteina', 'complexa', 'rfd4_proteina', 'rfd3']) {
+        await select('Engine', model);
+        const card = document.querySelector('aside[aria-label$=" references"]')!;
+        expect([...card.querySelectorAll('a')].map(a => a.textContent)).toEqual(['GitHub', 'Preprint', 'Docs']);
+        expect([...card.querySelectorAll('a')].every(a => a.href.startsWith('https://') && a.rel.includes('noopener'))).toBe(true);
+    }
+    expect(route()).toContain('design_task=dna_conditioned');
+    expect([...document.querySelectorAll('input')].some(e => e.value === '123')).toBe(true);
+    expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+it('makes RFD3 context optional explicit and submits the selected source-free request', async () => {
+    await mount('/submit?template=protein_modification_experimental&generator=rfd3');
+    await select('Goal', 'dna_conditioned');
+    expect(document.body.textContent).toContain('does not automatically add context or conditions');
+    await select('Length selection', 'exact');
+    const exact = [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Exact length')!.querySelector('input')!;
+    expect(exact.value).toBe('');
+    await click('Generate candidates');
+    expect(mocks.submit).not.toHaveBeenCalled();
+    exact.setAttribute('data-exact-length', ''); await input('[data-exact-length]', '147');
+    await select('Length selection', 'range');
+    expect([...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Minimum length')!.querySelector('input')!.value).toBe('100');
+    await select('Length selection', 'exact');
+    expect([...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Exact length')!.querySelector('input')!.value).toBe('147');
+    await click('Advanced'); await click('Simple');
+    await click('Generate candidates');
+    expect(mocks.submit).toHaveBeenCalledTimes(1);
+    const payload = mocks.submit.mock.calls[0][0] as any;
+    expect(payload.params).toMatchObject({ generator: 'rfd3', generation_mode: 'unconditional_monomer', min_length: 147, max_length: 147 });
+    expect(payload.params).not.toHaveProperty('input_structure');
+    expect(payload.params).not.toHaveProperty('design_task');
+});
+
+it('retains the last task of an inactive engine through template save and load', async () => {
+    await mount('/submit?template=protein_modification_experimental&generator=rfd3');
+    await select('Goal', 'rna_conditioned');
+    await select('Engine', 'disco');
+    await click('Advanced');
+    await click('Template Manager');
+    await input('input[placeholder="e.g., My Boltz Config"]', 'Task memory');
+    await click('Save Template');
+    expect(mocks.saved[0].params.editor_state).toMatchObject({ suite_view: 'advanced', suite_last_tasks: { rfd3: 'rna_conditioned', disco: 'unconditional' } });
+    await click('Load');
+    await select('Engine', 'rfd3');
+    const goal = [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Goal')!.querySelector('select')!;
+    expect(goal.value).toBe('rna_conditioned');
+    expect(document.querySelector('button[aria-pressed="true"]')?.textContent).toBeTruthy();
+});
+
+it('restores the last generation engine and goal after a redesign template load', async () => {
+    await mount('/submit?template=protein_modification_experimental&generator=rfd3');
+    await select('Goal', 'rna_conditioned');
+    await select('Engine', 'disco');
+    await select('Goal', 'dna_conditioned');
+    await click('Redesign structure');
+    await click('Template Manager');
+    await input('input[placeholder="e.g., My Boltz Config"]', 'Return to generation');
+    await click('Save Template');
+    expect(mocks.saved[0].params.editor_state).toMatchObject({ suite_last_generation: { generator: 'disco', design_task: 'dna_conditioned' }, suite_last_tasks: { rfd3: 'rna_conditioned' } });
+    await click('Load');
+    await click('Generate');
+    const selected = (label: string) => [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === label)?.querySelector('select')?.value;
+    expect(selected('Engine')).toBe('disco');
+    expect(selected('Goal')).toBe('dna_conditioned');
+    await select('Engine', 'rfd3');
+    expect(selected('Goal')).toBe('rna_conditioned');
+});
+
+it('does not infer RFD3 from shared legacy lengths', async () => {
+    await mount('/submit', { model_id: 'protein_modification_experimental', mode: 'de_novo_design', name: 'Legacy', params: { min_length: 73, max_length: 99 } });
+    const engine = [...document.querySelectorAll('label')].find(e => e.firstChild?.textContent === 'Engine')!.querySelector('select')!;
+    expect(engine.value).toBe('rfd4_proteina');
+});
+
+it('retains a native operation while another engine is active and after template load', async () => {
+    await mount('/submit?template=protein_modification_experimental&generator=rfd4_proteina');
+    await select('Operation', 'evaluate');
+    await select('Engine', 'disco');
+    await click('Template Manager');
+    await input('input[placeholder="e.g., My Boltz Config"]', 'Operation memory');
+    await click('Save Template');
+    expect(mocks.saved[0].params.editor_state.suite_last_modes.rfd4_proteina).toBe('evaluate');
+    await click('Load');
+    await select('Engine', 'rfd4_proteina');
+    expect(document.querySelector<HTMLSelectElement>('[aria-label="Native mode"]')?.value).toBe('evaluate');
+});
 
 it('navigation metadata preserves context, native aliases and false/empty scientific values', () => {
     expect(deNovoRouteValues(new URLSearchParams('template=protein_local_redesign'))).toMatchObject({ modification_mode: 'rfd3_local_redesign' });
@@ -102,6 +217,20 @@ it.each([
     expect([...document.querySelectorAll('input')].some(e => e.value === 'Exact saved run')).toBe(true);
     expect(localStorage.getItem('clonedJobData')).toBeNull();
     expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+it.each(['rfd3', 'disco', 'laproteina'])('legacy %s clone retains an omitted optional-operation envelope', async generator => {
+    await mount('/submit', { model_id: 'protein_modification_experimental', mode: 'de_novo_design', name: 'Legacy omission', params: { generator, min_length: 73, max_length: 99, ...(generator === 'rfd3' ? {} : { target_lengths: '125' }) } });
+    await click('Generate candidates');
+    expect(mocks.submit).toHaveBeenCalledTimes(1);
+    expect(Object.hasOwn(mocks.submit.mock.calls[0][0] as object, 'sequence_design')).toBe(false);
+});
+
+it.each(['rfd3', 'disco', 'laproteina'])('legacy %s clone retains a null optional-operation envelope', async generator => {
+    await mount('/submit', { model_id: 'protein_modification_experimental', mode: 'de_novo_design', name: 'Legacy null', sequence_design: null, params: { generator, min_length: 73, max_length: 99, ...(generator === 'rfd3' ? {} : { target_lengths: '125' }) } });
+    await click('Generate candidates');
+    expect(mocks.submit).toHaveBeenCalledTimes(1);
+    expect((mocks.submit.mock.calls[0][0] as any).sequence_design).toBeNull();
 });
 
 it.each([
@@ -132,9 +261,9 @@ it('saved template round trip uses the real modal and retains current native val
     await input('input[placeholder="e.g., My Boltz Config"]', 'UI-only saved fixture');
     await click('Save Template');
     expect(mocks.create).toHaveBeenCalledTimes(1);
-    expect(mocks.saved[0]).toMatchObject({ base_template_id: 'protein_modification_experimental', params: {
+    expect(mocks.saved[0]).toMatchObject({ base_template_id: 'protein_modification_experimental', params: { editor_state: {
         generator: 'rfd3', min_length: 73, max_length: 99, num_designs: 3, seed: 0, dump_trajectories: false,
-    } });
+    }, native_job_request: { model_id: 'protein_modification_experimental', execution_target_id: null, params: { seed: 0, num_designs: 3 } } } });
     await click('Load');
     expect(document.querySelector('[data-bms-de-novo-form]')).not.toBeNull();
     expect([...document.querySelectorAll('input')].some(e => e.value === '73')).toBe(true);
@@ -148,7 +277,7 @@ it('Project hydration and Save draft retain native settings without launching a 
     mocks.saveProject.mockImplementation(async (_project, _setup, request) => ({ ...mocks.project, generation: 2, draft: request.draft }));
     await mount('/submit?template=protein_modification_experimental&project_id=project-fixture&setup_context_id=setup-fixture');
     await click('Save draft');
-    expect(mocks.saveProject).toHaveBeenCalledWith('project-fixture', 'setup-fixture', expect.objectContaining({ expected_generation: 1, draft: expect.objectContaining(initial) }));
+    expect(mocks.saveProject).toHaveBeenCalledWith('project-fixture', 'setup-fixture', expect.objectContaining({ expected_generation: 1, draft: expect.objectContaining({ editor_state: expect.objectContaining(initial), native_job_request: expect.objectContaining({ model_id: 'protein_modification_experimental', execution_target_id: null }) }) }));
     expect([...document.querySelectorAll('input')].some(e => e.value === '73')).toBe(true);
     expect(mocks.submit).not.toHaveBeenCalled();
 });

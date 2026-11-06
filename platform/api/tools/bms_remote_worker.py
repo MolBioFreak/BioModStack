@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 import tempfile
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -423,6 +423,61 @@ def supervise(attempt_dir: Path) -> int:
         return _supervise_owned(attempt_dir)
 
 
+@contextmanager
+def _launch_environment(envelope: dict):
+    """Compile a continuation under the launch envelope's environment.
+
+    The supervisor starts every generation in that environment (bound Nextflow executable, data and weight
+    roots). The control commands run over a plain SSH shell that carries none of it, so a compile there could
+    not even resolve the workflow launcher. Values are restored on exit.
+    """
+    values = dict(envelope.get("environment") or {})
+    for key, value in values.items():
+        if not isinstance(key, str) or not isinstance(value, str) or "\x00" in key + value:
+            raise RuntimeError("execution environment is invalid")
+    saved = {key: os.environ.get(key) for key in values}
+    os.environ.update(values)
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _place_paths(value: Any, path_map: dict) -> Any:
+    """Rewrite absolute controller paths with the launch path map, exactly as the first launch rewrote its argv."""
+    if isinstance(value, str):
+        candidate = PurePosixPath(value)
+        if not candidate.is_absolute() or ".." in candidate.parts:
+            return value
+        for local, remote in sorted(path_map.items(), key=lambda item: len(item[0]), reverse=True):
+            try:
+                relative = candidate.relative_to(PurePosixPath(local))
+            except ValueError:
+                continue
+            return str(PurePosixPath(remote) / relative)
+        return value
+    if isinstance(value, dict):
+        return {key: _place_paths(item, path_map) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_place_paths(item, path_map) for item in value]
+    return value
+
+
+def _placed_checkpoint_context(envelope: dict, context: dict) -> dict:
+    """The controller built this context in its own filesystem; compile the continuation in the worker's.
+
+    Only the parent's native settings carry controller paths. Without placing them the continuation's output
+    directory is the controller's, outside this attempt's artifact custody.
+    """
+    path_map = dict(envelope.get("path_map") or {})
+    parent = dict(context["parent"], params=_place_paths(context["parent"].get("params") or {}, path_map))
+    return dict(context, parent=parent)
+
+
 def _component_checkpoint_runtime(envelope: dict):
     """Use only the launch-bound source/context, not SSH shell configuration."""
     value = (envelope.get("environment") or {}).get("BMS_COMPONENT_CONTEXT")
@@ -490,7 +545,8 @@ def checkpoint_control(attempt_dir: Path, *, attempt_id: str, expected_boot_id: 
         if (current.get("attempt_id") != attempt_id or current.get("boot_id") != expected_boot_id
                 or expected_boot_id != boot_id()):
             raise RuntimeError("Checkpoint attempt/boot authority conflicts")
-        runtime = _component_checkpoint_runtime(load_json(envelope_path(attempt_dir)))
+        envelope = load_json(envelope_path(attempt_dir))
+        runtime = _component_checkpoint_runtime(envelope)
         if runtime is None or runtime.lease_id != lease_id:
             raise RuntimeError("Checkpoint lease authority conflicts")
         operation = runtime.checkpoint_operation(operation_id)
@@ -510,7 +566,9 @@ def checkpoint_control(attempt_dir: Path, *, attempt_id: str, expected_boot_id: 
             from services.nextflow import (compile_component_checkpoint_continuation,
                 component_checkpoint_parent_snapshot, component_checkpoint_resources)
             try:
-                invocation = compile_component_checkpoint_continuation(context, checkpoint, decision)
+                with _launch_environment(envelope):
+                    invocation = compile_component_checkpoint_continuation(
+                        _placed_checkpoint_context(envelope, context), checkpoint, decision)
                 runtime.resume_checkpoint(checkpoint_id, checkpoint_sha256=checkpoint_sha256,
                     decision=decision, actor="jobs.resume", boot_id=expected_boot_id,
                     invocation=invocation, continuation_lease_id=continuation_lease_id,
@@ -599,10 +657,11 @@ def component_retry_control(attempt_dir: Path, *, attempt_id: str, expected_boot
         if edge is None:
             verify_bundle(attempt_dir)
         from scripts.lib.component_adapter import retry_component_workflow
-        edge = retry_component_workflow(Path(envelope["environment"]["BMS_COMPONENT_CONTEXT"]),
-            component_id=component_id, operation_id=operation_id, failure_code=failure_code,
-            actor=actor, boot_id=expected_boot_id, continuation_lease_id=continuation_lease_id,
-            resources=resource_admission)
+        with _launch_environment(envelope):
+            edge = retry_component_workflow(Path(envelope["environment"]["BMS_COMPONENT_CONTEXT"]),
+                component_id=component_id, operation_id=operation_id, failure_code=failure_code,
+                actor=actor, boot_id=expected_boot_id, continuation_lease_id=continuation_lease_id,
+                resources=resource_admission)
         output = Path(edge["parent_snapshot"]["output_dir"]).resolve()
         original = Path(envelope["output_directory"]).resolve()
         if output == original or not output.is_relative_to(original):
@@ -670,10 +729,11 @@ def md_production_control(attempt_dir: Path, *, attempt_id: str, expected_boot_i
         if (attempt_dir / CANCEL_REQUEST_FILE).exists():
             raise RuntimeError('Cancelled attempt cannot continue')
         from scripts.lib.component_adapter import resume_md_workflow
-        state = resume_md_workflow(Path(envelope['environment']['BMS_COMPONENT_CONTEXT']),
-            operation_id=operation_id, pause_operation_id=pause_operation_id,
-            boot_id=expected_boot_id, continuation_lease_id=continuation_lease_id,
-            resources=resources, checkpoints=checkpoints)
+        with _launch_environment(envelope):
+            state = resume_md_workflow(Path(envelope['environment']['BMS_COMPONENT_CONTEXT']),
+                operation_id=operation_id, pause_operation_id=pause_operation_id,
+                boot_id=expected_boot_id, continuation_lease_id=continuation_lease_id,
+                resources=resources, checkpoints=checkpoints)
         edge = state['continuation_edge']
         with status_path(attempt_dir).with_suffix('.json.lock').open('a+b') as status_lock:
             fcntl.flock(status_lock.fileno(), fcntl.LOCK_EX)

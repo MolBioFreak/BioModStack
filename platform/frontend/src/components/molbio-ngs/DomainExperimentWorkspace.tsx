@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchMolBioNgsDomainState, fetchProjectHub, updateProjectHubPlasmidInfo,
     type ProjectHubPlasmidInfoDraft, type ProjectHubPlasmidSummary } from '../../lib/api';
@@ -108,7 +109,12 @@ export default function DomainExperimentWorkspace() {
         },
     });
     if (hasProjectHubContext) {
-        if (projectHubQuery.isLoading || selectedStateRevisionId === null) {
+        if (stateQuery.isSuccess && selectedStateRevisionId === null) {
+            const query = new URLSearchParams({ workspace_id: workspaceId!, global_experiment_id: globalExperimentId!, domain_experiment_id: exactDomainId!, action: 'add-plasmid' });
+            return <section className="rounded-xl border border-border-primary bg-surface-secondary px-5 py-4"><h2 className="font-semibold text-content">Project sequence workspace</h2><p className="mt-2 text-sm text-content-secondary">No sequences attached yet. Import a DNA sequence below, then use Add to Project.</p><Link to={`/designer?${query}`} className="mt-3 inline-block text-sm font-semibold text-accent">Add DNA sequence</Link></section>;
+        }
+        if (stateQuery.isError) return <p role="alert" className="px-5 py-4 text-sm text-error">Project workspace could not be loaded. {errorText(stateQuery.error)}</p>;
+        if (stateQuery.isPending || projectHubQuery.isLoading) {
             return <div className="px-6 py-10 text-sm text-content-secondary" role="status">Loading project hub…</div>;
         }
         if (projectHubQuery.error || !projectHubQuery.data) {

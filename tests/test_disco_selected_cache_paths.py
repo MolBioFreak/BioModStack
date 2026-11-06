@@ -113,6 +113,7 @@ def test_prepared_request_portable_relocation_without_originals(assets, tmp_path
         assert env['CUTLASS_PATH'] == runtime_refs[str(cutlass)]['path']
         relocated = Path(env['HF_HOME']) / cache_member.relative_to(hf)
         assert relocated.read_bytes() == b'offline asset fixture'
+        return wrapper.subprocess.CompletedProcess(cmd, 0)
     monkeypatch.setattr(wrapper.subprocess, 'run', inert_native)
     wrapper.main()
     assert len(calls) == 1

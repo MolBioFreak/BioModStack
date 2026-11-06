@@ -71,6 +71,8 @@ def _v2_inputs(
     thresholds: tuple[float, float] = (-0.5, 0.5),
     source_suffix: bytes = b"",
     request_generation: int = 2,
+    candidate_id: str = "candidate-v2",
+    invocation_id: str = "invoke-v2",
 ) -> tuple[dict[str, object], Path, Path, dict[str, object]]:
     source = tmp_path / "source.pdb"
     source.write_bytes(_multi_residue_pdb(residues) + source_suffix)
@@ -82,7 +84,7 @@ def _v2_inputs(
         map_path=structure_map_path,
         target_id="target-v2",
         parent_job_id="job-v2",
-        candidate_id="candidate-v2",
+        candidate_id=candidate_id,
         identity_authority={
             "kind": "pdb_self_identity_v1",
             "identity_domain": "candidate_local",
@@ -152,10 +154,10 @@ def _v2_inputs(
         "schema_version": request_generation,
         "component_id": "frustrampnn",
         "component_contract_version": f"{request_generation}.0",
-        "invocation_id": "invoke-v2",
+        "invocation_id": invocation_id,
         "parent_job_id": "job-v2",
         "parent_workflow_id": "structure_prediction",
-        "candidate_id": "candidate-v2",
+        "candidate_id": candidate_id,
         "source_artifact": {
             "relative_path": "inputs/original.pdb",
             "sha256": structure_map["source_sha256"],

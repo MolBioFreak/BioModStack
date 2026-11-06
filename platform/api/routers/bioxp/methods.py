@@ -25,9 +25,9 @@ from . import protocols
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 
 router = APIRouter(prefix="/methods")
-Collection = Literal["library", "liquid-classes", "presets"]
+Collection = Literal["library", "liquid-classes", "presets", "plate-profiles"]
 SCHEMAS = {"library": "bms.bioxp-method.v1", "liquid-classes": "bms.bioxp-liquid-class.v1",
-           "presets": "bms.bioxp-method-preset.v1"}
+           "presets": "bms.bioxp-method-preset.v1", "plate-profiles": "bms.bioxp-plate-profile.v1"}
 LEGACY = {"bms.bioxp-workflow-draft.v1", "bms.bioxp-workflow-draft.v2"}
 Revision = Annotated[StrictInt, Field(ge=0)]
 
@@ -111,7 +111,11 @@ class SavedRun(RunRequest):
 
 
 class QuickRun(RunRequest):
+    """Run the current draft, saved or not. The exact method is frozen on the run."""
     method: dict[str, JsonValue]
+    # Optional record of the library entry this draft was opened from; it does
+    # not select what runs (the submitted method body does).
+    based_on: dict[str, JsonValue] | None = None
 
 
 class Recovery(Wire):
@@ -173,6 +177,23 @@ def starter_classes():
     return starter_entries()
 
 
+@router.get("/plates")
+async def plate_library(session: AsyncSession = Depends(get_session)):
+    """Built-in plate profiles, with measured ones saved from Pipettes > Calibration replacing them by id."""
+    import json
+    from pathlib import Path
+    library = json.loads((Path(__file__).resolve().parents[2] / 'schemas' / 'bioxp_plate_library.json').read_text(encoding='utf-8'))
+    rows = (await session.scalars(select(UserTemplate).where(UserTemplate.mode == "bioxp_workflow",
+        UserTemplate.params["schema"].as_string() == SCHEMAS["plate-profiles"]).order_by(UserTemplate.created_at))).all()
+    saved = {}
+    for row in rows:
+        profile = (row.params or {}).get("profile")
+        if isinstance(profile, dict) and isinstance(profile.get("id"), str):
+            saved[profile["id"]] = {**profile, "saved_record_id": row.id}
+    merged = [saved.pop(p["id"], p) for p in library["profiles"]] + list(saved.values())
+    return {**library, "profiles": merged}
+
+
 @router.get("/liquid-classes/source")
 def liquid_source():
     from bioxp_method_liquids import source_catalog_text
@@ -204,7 +225,7 @@ async def _create(collection, data, session):
     return await exact_revision(session, template, 1)
 
 
-async def _submit(method, data, response, runtime, *, saved=None):
+async def _submit(method, data, response, runtime, *, saved=None, based_on=None):
     # Freeze before any network await. Compiler failures never emit a prefix.
     request = deepcopy({"method": method, "bindings": data.bindings, "dependencies": data.dependencies})
     if "initial_state" in data.model_fields_set:
@@ -218,12 +239,17 @@ async def _submit(method, data, response, runtime, *, saved=None):
                          "saved": saved, "compilation": compiled})
     if "recovery" in data.model_fields_set:
         snapshot["recovery"] = deepcopy(data.recovery)
+    if based_on is not None:
+        snapshot["based_on"] = deepcopy(based_on)
     document = deepcopy(compiled["document"])
     document.setdefault("metadata", {})["bms_method_run"] = snapshot
     submission = ProtocolSubmission(
         expected_connection_generation=data.expected_generation, source_type="native",
         document=document, dry_run=False, idempotency_key=data.idempotency_key,
         live_execution_ack=data.acknowledge_live,
+        # Record-only annotation of the authored starting deck; the robot keeps it
+        # out of the idempotency fingerprint so interactive deck edits stay legal.
+        deck_manifest=deepcopy(method["deck_plan"]) if isinstance(method.get("deck_plan"), dict) else None,
     )
     job_id = "protocol-live-" + sha256(data.idempotency_key.strip().encode("utf-8")).hexdigest()
     try:
@@ -249,7 +275,9 @@ async def _submit(method, data, response, runtime, *, saved=None):
 @router.post("/quick-runs", response_model=MethodRunResponse, response_model_exclude_unset=True,
              dependencies=[Depends(require_bioxp_mutation_access)])
 async def quick_run(data: QuickRun, response: Response, runtime=Depends(get_bioxp_runtime)):
-    return await _submit(data.method, data, response, runtime)
+    # Saved or unsaved draft: the exact submitted method is retained in the
+    # native document metadata (bms_method_run), which clone/report read back.
+    return await _submit(data.method, data, response, runtime, based_on=data.based_on)
 
 
 @router.get("/runs")

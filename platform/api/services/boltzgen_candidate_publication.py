@@ -358,7 +358,7 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
     if not isinstance(publication, dict) or 'record_index' not in publication:
         # Historical marked authority is retained, without writes or invented rows.
         return await _generation_publication(job, job.output_dir, session, offset=offset, limit=limit)
-    if job.model_id != 'boltzgen' or job.mode not in {'protein_binder', 'nanobody_binder', 'peptide_binder'}:
+    if job.model_id != 'boltzgen' or job.mode not in {'protein_binder', 'nanobody_binder', 'peptide_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'}:
         raise ValueError('Not a BoltzGen generation Job')
     root = native_page_root(job, publication, schema='boltzgen.generation-publication.v1', campaign_root='collected/boltzgen_filtered')
     core = (job.provenance or {}).get('core_protein_candidate_publication')

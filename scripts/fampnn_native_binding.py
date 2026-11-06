@@ -144,7 +144,8 @@ def instrument_source(relative, data):
         text = _replace(text, '                pickle.dump(sample_j, f)', '                pickle.dump(sample_j, f)\n            _bms.capture_sample(f.name, pdbs[j], bms_inputs[j])')
     elif relative == 'fampnn/data/pdb_utils.py':
         text = _replace(text, '        f.write(protein.to_pdb(prot, conect=conect))', '        f.write(protein.to_pdb(prot, conect=conect))\n    _bms.capture_candidate(filename, prot, protein.PDB_CHAIN_IDS)')
-    return 'import fampnn_native_binding as _bms\n' + text
+    from fampnn_native_runtime import instrument
+    return instrument(relative, 'import fampnn_native_binding as _bms\n' + text)
 
 
 def main():

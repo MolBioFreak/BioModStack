@@ -92,30 +92,6 @@ test('structure-prediction batch/target copy stays short and operator-focused', 
     }
 });
 
-test('protein-local-redesign source/review surfaces do not carry explainer paragraphs', () => {
-    const source = readSource('src', 'components', 'ProteinLocalRedesignTemplate.tsx');
-
-    for (const snippet of [
-        'Optional source-complex simulation; promote completed PDB-backed outputs into redesign.',
-        'Creates a source-structure job; promote completed PDB-backed designs below.',
-        'Upload, reuse a run, choose a preset, or fetch RCSB—no manual path typing.',
-        'Chain ${designChain ||',
-        'Pause at checkpoints, filter in Results, then continue that subset.',
-    ]) {
-        requireSnippet(source, snippet);
-    }
-
-    for (const stale of [
-        'Optional upstream step. If you want to simulate a protein with chosen DNA, RNA, ions, or ligands before local editing',
-        'This does not bypass visual redesign. It creates a source-structure job, waits for designs',
-        'Use the existing structure-source system rather than typing file paths by hand.',
-        'The workflow will derive editable residues on chain',
-        'Match the RFA interaction pattern: pause at a chosen checkpoint',
-    ]) {
-        rejectSnippet(source, stale);
-    }
-});
-
 test('Results, structure viewer, and quality settings avoid explainer paragraphs', () => {
     const source = readSource('src', 'components', 'ResultsViewer.tsx')
         + readSource('src', 'components', 'StructureViewerPane.tsx')
@@ -123,7 +99,6 @@ test('Results, structure viewer, and quality settings avoid explainer paragraphs
 
     for (const snippet of [
         'Added ${result.uniqueCount.toLocaleString()} / ${result.totalCount.toLocaleString()} BoltzGen reps',
-        'Filter/promote outputs, then continue the paused PLR workflow.',
         'RF lens: ${rfMetricLabels.short}. Toggle loop/whole-antibody in review.',
         'Any-Target: whole target. Epitope: selected residues.',
         'BoltzGen candidates: triage by conf_score, affinity priors, size.',

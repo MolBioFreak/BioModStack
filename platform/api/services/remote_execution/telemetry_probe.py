@@ -89,16 +89,18 @@ def gpu_processes(root):
 
 def snapshot(root):
     result = {'worker_time': time.monotonic(), 'gpus': [], 'cpu': {}, 'ram': {}, 'disk': {}, 'network': {}}
-    query = 'index,uuid,name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw'
+    query = 'index,uuid,name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,power.limit'
     try:
         proc = subprocess.run(['nvidia-smi', '--query-gpu=' + query, '--format=csv,noheader,nounits'],
                               capture_output=True, text=True, timeout=3, check=True)
         for line in proc.stdout.splitlines()[:64]:
             cells = [s.strip() for s in line.split(',')]
-            if len(cells) == 8 and cells[0].isdigit():
+            if len(cells) == 9 and cells[0].isdigit():
+                # power.limit is display scale only; "[N/A]" parses to None.
                 result['gpus'].append(dict(index=int(cells[0]), uuid=cells[1][:100], name=cells[2][:160],
                     memory_total_mb=number(cells[3]), memory_used_mb=number(cells[4]),
-                    utilization=number(cells[5]), temperature=number(cells[6]), power_draw_w=number(cells[7])))
+                    utilization=number(cells[5]), temperature=number(cells[6]), power_draw_w=number(cells[7]),
+                    power_limit_w=number(cells[8])))
     except (OSError, subprocess.SubprocessError):
         pass
     result['gpu_processes'] = gpu_processes(root)

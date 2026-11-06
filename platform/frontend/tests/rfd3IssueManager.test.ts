@@ -29,23 +29,3 @@ test('De Novo Design exposes the complete supported native request controls', ()
     assert.doesNotMatch(template, /<option value="medium">Medium<\/option>/);
 });
 
-test('RFD3 native and validated execution depths share one operator workbench', () => {
-    const workbench = DE_NOVO_MODIFICATION_MODE_CARDS.find((card) => card.id === 'rfd3_iteration');
-    const template = source('components/ProteinLocalRedesignTemplate.tsx');
-
-    assert.equal(workbench?.label, 'RFD3 Iteration Workbench');
-    assert.match(workbench?.description ?? '', /native RFD3 output or downstream sequence design and validation/i);
-    assert.match(template, /Native RFD3 only/);
-    assert.match(template, /Continue through sequence design and validation/);
-    assert.match(template, /isNativeLocalRedesign \? 'Launch Native RFD3' : 'Launch RFD3 \+ Sequence \+ Validation'/);
-});
-
-test('the RFD3 workflow uses the available wide viewport instead of stacking its main sections', () => {
-    const submission = source('components/JobSubmission.tsx');
-    const template = source('components/ProteinLocalRedesignTemplate.tsx');
-
-    assert.match(submission, /selectedTemplateId === 'protein_modification_experimental'\s*\? 'max-w-none'/);
-    assert.match(template, /data-bms-rfd3-layout="wide"/);
-    assert.match(template, /2xl:grid-cols-\[minmax\(0,1\.1fr\)_minmax\(0,1fr\)_minmax\(20rem,0\.75fr\)\]/);
-    assert.match(template, /2xl:contents/);
-});

@@ -188,6 +188,13 @@ async def test_approved_create_preserves_native_binding_through_bundle(admission
         shutil.copytree(prepared.local_attempt_dir, attempt, dirs_exist_ok=True)
         (attempt / 'bundle/source').symlink_to(prepared.remote_source_dir, target_is_directory=True)
         (attempt / 'bundle/runtime').symlink_to(prepared.remote_runtime_dir, target_is_directory=True)
+        # Source transport is archive-backed; emulate its extraction before
+        # exercising the real worker verifier (copying the directory is no longer enough).
+        archive_path = next(Path(prepared.remote_source_dir).glob('.bms-source.tar*'))
+        bundle._safe_extract(archive_path, Path(prepared.remote_source_dir))
+        for record in prepared.envelope.files:
+            if record.role == 'source':
+                (Path(prepared.remote_source_dir) / record.relative_path.removeprefix('source/')).chmod(record.mode)
         worker.verify_bundle(attempt)
         command = prepared.envelope.command
         if 'BMS_COMPONENT_CONTEXT' in prepared.envelope.environment:
@@ -216,7 +223,7 @@ def test_workflow_provision_uses_native_plan_without_staging_biology(tmp_path, m
     monkeypatch.setattr(cache, 'current_source_identity', lambda: (source.revision, source.tree))
     monkeypatch.setattr(paths, 'get_results_dir', lambda: tmp_path / 'not-created')
     seen = []
-    def unavailable_runtime(model, mode, params, *, include_support, selected_plan):
+    def unavailable_runtime(model, mode, params, *, include_support, selected_plan, publication, resolved):
         assert (model, mode) == (MODEL, MODE)
         assert include_support is False
         assert selected_plan.complete

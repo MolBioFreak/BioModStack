@@ -43,6 +43,7 @@ modes:
       - boltz_diffusion_samples
       - boltz_max_parallel_samples
       - boltz_sampling_steps
+      - boltz_seed
       - boltz_use_msa
       - boltz_method
       - num_parallel_jobs
@@ -68,6 +69,7 @@ modes:
       - boltz_diffusion_samples
       - boltz_max_parallel_samples
       - boltz_sampling_steps
+      - boltz_seed
       - boltz_use_potentials
       - boltz_use_msa
       - boltz_method
@@ -174,6 +176,13 @@ params:
     default: 1
     minimum: 1
     maximum: 32
+
+  - name: boltz_seed
+    type: integer
+    description: "Native Boltz random seed. Zero is an explicit seed; unset/null omits --seed and preserves the native unseeded behavior."
+    required: false
+    default: null
+    minimum: 0
 
   - name: boltz_sampling_steps
     type: integer

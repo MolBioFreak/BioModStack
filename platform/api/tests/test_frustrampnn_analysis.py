@@ -325,6 +325,8 @@ def test_raw_csv_rejects_extra_or_trailing_fields_and_retained_1ubq_has_exact_wi
 def _selected_effective(*, positions: tuple[int, ...] = (0, 1)):
     settings = importlib.import_module("services.frustrampnn.settings")
     structure_map = _map()
+    # Author 10A then 12 is native G-A, not a dense GA array.
+    structure_map["rows"][1]["model_position"] = 2
     selectors = []
     for position in positions:
         row = structure_map["rows"][position]
@@ -375,7 +377,7 @@ def test_v2_shard_merge_is_selected_exact_stable_and_classifies_custom_boundarie
         "services.frustrampnn.configuration"
     ).execution_configuration
     effective = _selected_effective()
-    shard_position_1 = _raw(_selected_rows(1, "A")).encode("utf-8")
+    shard_position_1 = _raw(_selected_rows(2, "A")).encode("utf-8")
     shard_position_0 = _raw(_selected_rows(0, "G")).encode("utf-8")
 
     merged, landscape = module.finalize_landscape_v2(
@@ -394,7 +396,7 @@ def test_v2_shard_merge_is_selected_exact_stable_and_classifies_custom_boundarie
         for row in merged_rows
     ] == [
         ("A", position, mutation)
-        for position in (0, 1)
+        for position in (0, 2)
         for mutation in AA_ORDER
     ]
     assert [slot["class"] for slot in landscape["residues"][0]["slots"][:3]] == [
@@ -436,7 +438,7 @@ def test_v2_shard_merge_rejects_duplicate_extra_missing_and_malformed_slots(
     if mutation == "duplicate_across_shards":
         shards.append(_raw([rows[0]]).encode("utf-8"))
     elif mutation == "outside_selection":
-        rows.append(_selected_rows(1, "A")[0])
+        rows.append(_selected_rows(2, "A")[0])
         shards = [_raw(rows).encode("utf-8")]
     elif mutation == "missing_slot":
         shards = [_raw(rows[:-1]).encode("utf-8")]

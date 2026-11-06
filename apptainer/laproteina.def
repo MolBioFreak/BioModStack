@@ -1,52 +1,68 @@
 Bootstrap: docker
-From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+From: python@sha256:65a93d69fa75478d554f4ad27c85c1e69fa184956261b4301ebaf6dbb0a3543d
 
 %labels
     Author BioModStack
-    Version 0.1.0
-    Description La-Proteina runtime for experimental protein CAD generation
+    Version laproteina-bms-3
+    NumericalBackend torch-2.7.0-cu128-pyg-pt27cu128
+    SourceRevision cde5de3ead6e4d76f367da6dc5174be9913ef6ca
+    Description Pinned La-Proteina sampling and native evaluation callables; selected checkpoints mounted externally
+
+%files
+    scripts/lib/laproteina_contract.py /opt/bms/laproteina_contract.py
+    apptainer/locks/laproteina-cu128.lock /opt/runtime.lock
 
 %post
     set -eu
-    export DEBIAN_FRONTEND=noninteractive
-
-    apt-get update && apt-get install -y \
-        git \
-        curl \
-        wget \
-        build-essential \
-        python3.11 \
-        python3.11-dev \
-        python3.11-venv \
-        python3-pip \
-        && rm -rf /var/lib/apt/lists/*
-
-    ln -sf /usr/bin/python3.11 /usr/bin/python3
-    ln -sf /usr/bin/python3.11 /usr/bin/python
-
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="/root/.local/bin:${PATH}"
-
-    uv venv /opt/venv
-    . /opt/venv/bin/activate
-
-    uv pip install --compile torch==2.7.0 --index-url https://download.pytorch.org/whl/cu118
-    uv pip install --compile graphein==1.7.7 --no-deps
-    uv pip install --compile torch_geometric torch_scatter torch_sparse torch_cluster -f https://data.pyg.org/whl/torch-2.7.0+cu118.html
-
-    git clone https://github.com/NVIDIA-Digital-Bio/la-proteina.git /opt/laproteina
-    cd /opt/laproteina
-
-    uv pip install --compile python-dotenv==1.0.1 einops==0.6 dm-tree==0.1.8 lightning==2.5.0 \
-        loguru==0.7.2 hydra-core==1.3.1 numpy==1.23.5 pandas==2.3.0 biopandas==0.5.1 \
-        wandb==0.17.0 wget==3.2 tqdm==4.66.4 ml-collections==0.1.1 jaxtyping loralib \
-        biopython biotite cpdb-protein==0.2.0 pre-commit joblib==1.4.2 rich==14.0.0 \
-        deepdiff multipledispatch plotly pydantic rich-click scikit-learn seaborn xarray
-
-    uv pip install --compile -e .
-
-    mkdir -p /weights/laproteina /cache/huggingface
-    uv pip freeze > /opt/venv/requirements.lock 2>/dev/null || true
+    # Immutable Debian snapshot pins the compiler and its transitive build closure.
+    rm /etc/apt/sources.list.d/debian.sources
+    printf '%s\n' 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261021T000000Z bookworm main' 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20261021T000000Z bookworm-security main' > /etc/apt/sources.list
+    apt-get update
+    apt-get install -y --no-install-recommends build-essential
+    rm -rf /var/lib/apt/lists/*
+    dpkg-query -W > /opt/installed-system-packages.txt
+    python -m venv /opt/venv
+    export PATH=/opt/venv/bin:$PATH
+    python - <<'PY'
+import hashlib, io, tarfile, urllib.request
+from pathlib import Path
+url = "https://codeload.github.com/NVIDIA-Digital-Bio/la-proteina/tar.gz/cde5de3ead6e4d76f367da6dc5174be9913ef6ca"
+body = urllib.request.urlopen(url).read()
+assert hashlib.sha256(body).hexdigest() == "844fea44b6727731a146cf68f8b6066edb8db31ed64b4099ab6ef5d05e735de7"
+root = Path("/opt/laproteina")
+root.mkdir()
+with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
+    for member in archive.getmembers():
+        parts = Path(member.name).parts
+        if len(parts) < 2:
+            continue
+        member.name = str(Path(*parts[1:]))
+        archive.extract(member, root, filter="data")
+PY
+    python /opt/bms/laproteina_contract.py --apply-runtime-patches /opt/laproteina
+    cat > /opt/bootstrap.lock <<'LOCK'
+pip==25.2 --hash=sha256:6d67a2b4e7f14d8b31b8b52648866fa717f45a1eb70e83002f4331d07e953717
+setuptools==80.9.0 --hash=sha256:062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922
+wheel==0.45.1 --hash=sha256:708e7481cc80179af0e556bbf0cc00b8444c7321e2700b8d8580231d13017248
+LOCK
+    python -m pip install --require-hashes --no-deps -r /opt/bootstrap.lock
+    python - <<'PY'
+from pathlib import Path
+import re
+lock = Path('/opt/runtime.lock').read_text()
+blocks = re.split(r'(?m)^(?=[A-Za-z0-9][A-Za-z0-9_.-]*==)', lock)
+Path('/opt/build-prerequisites.lock').write_text(''.join(b for b in blocks if b.startswith(('numpy==', 'cython=='))))
+PY
+    python -m pip install --require-hashes --no-deps -r /opt/build-prerequisites.lock
+    python -m pip install --require-hashes --no-build-isolation --no-deps --report /opt/installed-artifacts.json \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+        --find-links https://data.pyg.org/whl/torch-2.7.0+cu128.html -r /opt/runtime.lock
+    # Official README installs graphein without dependencies. Its optional
+    # evaluation/training closure is deliberately not an acquisition dependency.
+    python -m pip install --no-deps 'https://files.pythonhosted.org/packages/70/5a/23be3e8d1bfbcb9dec698cfd18e208acc2f4864ff9f3b6ffb257c53eaf24/graphein-1.7.7-py3-none-any.whl#sha256=a1683cd4f5d6b4b5a00391c7b90494f4b58ea2aee556679fb57512b424e4ed90'
+    mkdir -p /weights/laproteina /cache
+    python -m pip freeze > /opt/installed-packages.txt
+    rm -rf /root/.cache/pip
 
 %environment
     export PATH=/opt/venv/bin:$PATH
@@ -57,16 +73,37 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     export MPLCONFIGDIR=/cache/matplotlib
 
 %test
-    . /opt/venv/bin/activate
-    python3 -c "import torch; print(torch.__version__)"
-    python3 -c "import hydra, lightning, proteinfoundation; print('La-Proteina runtime ok')"
+    set -eu
+    export PATH=/opt/venv/bin:$PATH
+    export PYTHONPATH=/opt/laproteina
+    python - <<'PY'
+import json, sys
+import torch, hydra, lightning, torch_scatter, torch_sparse, torch_cluster
+from proteinfoundation.generate import parse_args_and_cfg
+from proteinfoundation.evaluate import compute_traditional_metrics
+from proteinfoundation.metrics.folding_models import run_esmfold
+from transformers import AutoTokenizer, EsmForProteinFolding
+assert callable(compute_traditional_metrics) and callable(run_esmfold)
+sys.path.insert(0, '/opt/bms')
+from laproteina_contract import PROFILES, resolve_profile
+rows = []
+for preset in PROFILES:
+    profile = resolve_profile(preset)
+    sys.argv = ['generate.py', '--config_name', profile['config_name']]
+    _, cfg, name = parse_args_and_cfg()
+    assert cfg.ckpt_name == profile['ld']
+    assert str(cfg.autoencoder_ckpt_path).endswith(profile['ae'])
+    noise = cfg.generation.model.bb_ca.simulation_step_params.sc_scale_noise
+    latent_noise = cfg.generation.model.local_latents.simulation_step_params.sc_scale_noise
+    assert noise == (0.15 if preset == 'ucond_notri_long' else 0.1)
+    assert latent_noise == (0.05 if preset == 'ucond_notri_long' else 0.1)
+    rows.append(dict(preset=preset, ld=profile['ld'], ae=profile['ae'], ca_noise=noise, latent_noise=latent_noise))
+print(json.dumps(dict(torch=torch.__version__, cuda=torch.version.cuda, arch_list=torch.cuda.get_arch_list(), profiles=rows)))
+PY
+    python -c "import json; print(json.load(open('/opt/laproteina/bms-runtime.json')))"
 
 %help
-    La-Proteina runtime image for BioModStack experimental Protein CAD work.
-
-    Expected external mounts:
-    - /weights/laproteina for AE/LD checkpoints
-    - /cache for HuggingFace and matplotlib cache state
-
-    Upstream:
-    https://github.com/NVIDIA-Digital-Bio/la-proteina
+    Build from the repository root: apptainer build laproteina.sif apptainer/laproteina.def
+    Mount only the selected LD/AE pair at /weights/laproteina, shared read-only.
+    Invocation configs, trajectories and native writer indexes are job-private.
+    No ESMFold/ProteinMPNN/oracle checkpoints or AFDB training payloads included.

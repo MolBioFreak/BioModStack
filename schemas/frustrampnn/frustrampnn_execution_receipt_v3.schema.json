@@ -186,7 +186,8 @@
     "execution_method": {
       "enum": [
         "predict",
-        "predict_batch"
+        "predict_batch",
+        "predict_selected_batch"
       ]
     },
     "invocation_id": {

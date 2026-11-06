@@ -132,11 +132,33 @@ async def test_remote_preparation_and_crash_after_committed_insert(selected, set
     assert result.status_code == 201, result.text
     identity = result.json()['round_id']
     monkeypatch.setattr(jobs, 'submit_selected_child_jobs', original)
+    # The real router committed this child, but its response never reached the
+    # progress owner. Complete it before recovery, the former closure race.
+    children = list(await session.scalars(select(Job).where(Job.provenance[rounds.STEP]['round_id'].as_string() == identity)))
+    assert len(children) == 1
+    producer = children[0]
+    producer.status = 'completed'
+    path = tmp / 'committed-output.pdb'
+    path.write_text(PDB.replace('ALA', 'SER'))
+    session.add(Design(id='committed-output', job_id=producer.id, name='native output',
+        pdb_path=str(path), artifact_class='designed_structure',
+        provenance={'binder_chains': ['A'], 'target_chains': ['B']}))
+    await session.commit()
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from services import analysis_autorun
+    sessions = async_sessionmaker(session.bind, expire_on_commit=False)
+    monkeypatch.setattr(analysis_autorun, 'schedule_viewer_minimum_analyses_for_job', lambda *args: None)
+    await rounds.recover_rounds(sessions, setup_store)
+    await rounds.recover_rounds(sessions, setup_store)
+    session.expire_all()
     retry = await client.post('/api/binder-continuation/selected', json=local)
     assert retry.status_code == 201, retry.text
     assert retry.json()['round_id'] == identity
     children = list(await session.scalars(select(Job).where(Job.provenance[rounds.STEP]['round_id'].as_string() == identity)))
-    assert len(children) == 1
+    assert len(children) == 3
+    assert {c.model_id for c in children} == {'proteinmpnn', 'protenix', 'boltz2'}
+    assert all(c.params['complex_components'][0]['sequence'] == 'S'
+               for c in children if c.model_id != 'proteinmpnn')
 
 
 @pytest.mark.asyncio

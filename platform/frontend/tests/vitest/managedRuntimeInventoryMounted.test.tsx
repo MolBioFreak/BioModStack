@@ -260,14 +260,14 @@ it('owns the observer only while both actual ancestor disclosures are open, reta
   const chooser = container.querySelector<HTMLSelectElement>('[aria-label="Preparation workflow"]')!;
   const draft = chooser.options[1].value;
   await act(async () => { chooser.value = draft; chooser.dispatchEvent(new Event('change', { bubbles: true })); });
-  await toggle('Evidence'); expect(reads()).toBe(1);
+  await toggle('What is already on this worker'); expect(reads()).toBe(1);
   await flush(30_000); expect(reads()).toBe(2);
   await toggle('Prepare worker'); const closed = reads(); await flush(60_000); expect(reads()).toBe(closed);
   expect(container.querySelector('[aria-label="Managed runtime inventory"]')).toBeNull();
   await toggle('Prepare worker'); expect(reads()).toBe(closed + 1);
   expect(container.querySelector('[aria-label="Preparation workflow"]')).toBe(chooser);
   expect(chooser.value).toBe(draft);
-  await toggle('Evidence'); const innerClosed = reads(); await flush(60_000); expect(reads()).toBe(innerClosed);
+  await toggle('What is already on this worker'); const innerClosed = reads(); await flush(60_000); expect(reads()).toBe(innerClosed);
   expect(signals.every(signal => signal instanceof AbortSignal)).toBe(true);
   let resolve!: (value: ReturnType<typeof response>) => void;
   let pendingSignal!: AbortSignal;
@@ -275,7 +275,7 @@ it('owns the observer only while both actual ancestor disclosures are open, reta
     pendingSignal = config!.signal as AbortSignal;
     return new Promise(r => { resolve = r; });
   });
-  await toggle('Evidence');
+  await toggle('What is already on this worker');
   await toggle('Prepare worker');
   expect(pendingSignal.aborted).toBe(true);
   await act(async () => { resolve(response({ ...observation(), observation_id: 'late', releases: [] })); });

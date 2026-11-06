@@ -137,8 +137,17 @@ if [ -n "$BMS_MANAGED_PYTHON" ]; then
     "$BMS_MANAGED_PYTHON" run_migrations.py
     cmd=("$BMS_MANAGED_PYTHON" -m uvicorn main:app --port "$bms_api_port" --host 127.0.0.1 --no-access-log)
 else
-    uv run --frozen python run_migrations.py
-    cmd=(uv run --frozen uvicorn main:app --port "$bms_api_port" --host 127.0.0.1 --no-access-log)
+    # uv is dependency/environment setup, not the long-lived service owner.
+    # With KillMode=process, leaving uv above uvicorn lets a timed-out stop
+    # kill only uv and orphan the API (even before it opens its listener).
+    # Resolve through uv to honor its project/environment selection, then exec
+    # that Python directly. Never sweep descendants: scientific runs have their
+    # own local unit/session or detached remote owner and must survive API stop.
+    api_python="$(uv run --frozen python -c 'import sys; print(sys.executable)')"
+    export VIRTUAL_ENV="$(dirname "$(dirname "$api_python")")"
+    export PATH="$(dirname "$api_python"):$PATH"
+    "$api_python" run_migrations.py
+    cmd=("$api_python" -m uvicorn main:app --port "$bms_api_port" --host 127.0.0.1 --no-access-log)
 fi
 case "$(api_mode)" in
     dev)

@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import select, event
-from database import Design, Job, RFD3LocalRedesignRequest, RFD3LocalRedesignCandidate
-from services.global_experiments.adapters import CoreProteinResultAdapter, TypedCoreJobResultAdapter, Rfd3LocalRedesignAdapter, AdapterError, _canonical_json_sha256
-from services.result_ingester import ingest_job_results, validate_rfd3_local_redesign_manifest
+from database import Design, Job
+from services.global_experiments.adapters import CoreProteinResultAdapter, TypedCoreJobResultAdapter, AdapterError, _canonical_json_sha256
+from services.result_ingester import ingest_job_results
 from tests.test_core_protein_candidates import artifacts, setup, job
 from tests.rfd3_native_fixture import write_native_result
 
@@ -108,61 +108,6 @@ async def test_native_job_receipt_bounded_complete_and_historical_digest(tmp_pat
         await engine.dispose()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize('trajectories', [False, True])
-async def test_rfd3_producer_ingest_readback_retry_and_shared_semantics(tmp_path, monkeypatch, trajectories):
-    monkeypatch.setenv('BMS_DATA', str(tmp_path))
-    monkeypatch.setenv('BMS_RESULTS_DIR', str(tmp_path / 'results'))
-    request, digest, manifest_digest, root = write_native_result(tmp_path, job_id='rfd', request_id='req', trajectories=trajectories)
-    factory, engine = await setup(tmp_path)
-    try:
-        async with factory() as session:
-            current = Job(id='rfd', name='TEST', model_id='protein_local_redesign', mode='local_redesign', status='completed', output_dir=str(root), params={})
-            record = RFD3LocalRedesignRequest(request_id='req', job_id='rfd', request_sha256=digest,
-                profile_id=request['profile_id'], profile_registry_sha256=request['profile_registry_sha256'],
-                redesign_mode=request['redesign_mode'], sequence_policy=request['sequence_policy'], status='queued', request_json=request)
-            session.add_all([current, record]); await session.commit()
-            assert await ingest_job_results('rfd', str(root), session) == 1
-            assert await ingest_job_results('rfd', str(root), session) == 1
-            rows = list((await session.scalars(select(RFD3LocalRedesignCandidate))).all())
-            assert len(rows) == 1
-            assert rows[0].metrics_json == {'summary_confidences': {'test': 0.75}}
-            from routers.jobs import get_rfd3_local_redesign_result
-            projection = await get_rfd3_local_redesign_result('rfd', session)
-            assert projection['request']['result_manifest_sha256'] == manifest_digest
-            assert projection['candidates'][0]['metrics'] == rows[0].metrics_json
-            assert projection['capabilities']['trajectories']['available'] is trajectories
-            adapter = Rfd3LocalRedesignAdapter()
-            from collections import Counter
-            from services import result_ingester
-            reads = Counter()
-            real_read = result_ingester._local_redesign_read_bytes
-            def counted(path):
-                reads[str(path)] += 1
-                return real_read(path)
-            with monkeypatch.context() as patcher:
-                patcher.setattr(result_ingester, '_local_redesign_read_bytes', counted)
-                receipt = await adapter.verify(session, 'req')
-            assert reads and max(reads.values()) == 1
-            assert receipt['content_digest'] == manifest_digest
-            attached = await attach_and_reverify(tmp_path, session, adapter, 'req', manifest_digest)
-            before = copy.deepcopy(record.preparation_receipt_json)
-            # One hash-bound native proof also validates exact metrics semantics.
-            manifest_path = root / 'collected/protein_local_redesign/rfd3_result_manifest.json'
-            manifest = json.loads(manifest_path.read_text())
-            manifest['candidates'][0]['metrics'] = {'invented': 1}
-            from services.result_ingester import _local_redesign_canonical_sha
-            unsigned = dict(manifest); unsigned.pop('manifest_sha256')
-            manifest['manifest_sha256'] = _local_redesign_canonical_sha(unsigned)
-            manifest_path.write_text(json.dumps(manifest))
-            with pytest.raises(RuntimeError, match='metrics'):
-                validate_rfd3_local_redesign_manifest(root, record)
-            with pytest.raises(AdapterError, match='metrics'):
-                await adapter.verify(session, 'req')
-            await assert_reverify_denied(tmp_path, session, attached)
-            assert record.preparation_receipt_json == before and not session.dirty
-    finally:
-        await engine.dispose()
 
 
 async def attach_and_reverify(tmp_path, session, adapter, entity_id, expected_digest):

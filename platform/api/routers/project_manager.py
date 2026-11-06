@@ -112,7 +112,6 @@ from services.ngs_molbio_run_control import (
     request_run_group_cancellation,
     require_launch_not_fenced,
 )
-from services.rfd3_local_redesign import project_local_redesign_scheduler_params
 from schemas import LaunchContextCreateRequest, LaunchContextResponse
 from routers.experiment_workspaces import _require_mutation_owner
 
@@ -134,7 +133,7 @@ class WorkflowSetupCreateRequest(StrictRequestModel):
     relationship_kind: Literal["primary", "follow_up"]
     global_experiment_id: str | None = Field(default=None, min_length=1, max_length=128)
     experiment: WorkflowSetupExperimentRequest | None = None
-    domain_kind: Literal["protein_in_silico"]
+    domain_kind: Literal["protein_in_silico", "ngs_molbio"]
     capability_id: str = Field(min_length=1, max_length=255)
 
     @model_validator(mode="after")
@@ -324,11 +323,7 @@ async def _project_bound_job(
     timestamp = datetime.now(timezone.utc).isoformat()
     adapter_id = f"bms.core-job.{job.model_id}.adapter.v1"
     if context.workflow_id is None:
-        projected_params = (
-            project_local_redesign_scheduler_params(job.params or {})
-            if job.model_id == "protein_local_redesign"
-            else {**(job.params or {}), "workflow_adapter": adapter_id}
-        )
+        projected_params = {**(job.params or {}), "workflow_adapter": adapter_id}
         scheduler: dict[str, object] = {
             "name": job.name,
             "model_id": job.model_id,
@@ -459,13 +454,29 @@ def _launch_context_error(exc: LaunchContextError) -> HTTPException:
 
 @router.get("/api/domain-adapters")
 async def list_domain_adapters() -> dict:
-    return {"schema": "bms.global.adapter-registry.v1", "adapters": registry.list()}
+    return {"schema": "bms.global.adapter-registry.v1", "adapters": [
+        item for item in registry.list() if item["domain_kind"] == "ngs_molbio"
+    ]}
+
+
+def _edition_adapter(adapter_id: str):
+    adapter = registry.get(adapter_id)
+    if adapter.domain_kind != "ngs_molbio":
+        raise AdapterError("unknown_adapter", "adapter is not available in the NGS/MolBio edition")
+    return adapter
 
 
 @router.get("/api/protein-project-capabilities")
 async def list_protein_project_capabilities() -> dict[str, Any]:
     """Expose only server-adapted Protein workflows for Project creation."""
     return protein_capability_inventory(project_ready_only=True)
+
+
+@router.get("/api/family-msa-project-capabilities")
+async def list_family_msa_project_capabilities() -> dict[str, Any]:
+    """Discover editor setup routes; this does not attest Job execution readiness."""
+    from services.family_msa_project_capabilities import family_msa_capability_inventory
+    return family_msa_capability_inventory()
 
 
 @router.post("/api/projects/{project_id}/workflow-setups", status_code=status.HTTP_201_CREATED)
@@ -768,7 +779,7 @@ async def search_adapter_entities(
     core_session: AsyncSession = Depends(get_core_session),
 ) -> dict:
     try:
-        adapter = registry.get(adapter_id)
+        adapter = _edition_adapter(adapter_id)
         projections = await adapter.search(core_session, query=q, limit=limit)
         items: list[dict] = []
         for projection in projections:
@@ -812,7 +823,7 @@ async def issue_adapter_receipt(
 ) -> dict:
     try:
         await _require_mutation_owner(request, experiment_session, resource_id=payload.project_id)
-        adapter = registry.get(adapter_id)
+        adapter = _edition_adapter(adapter_id)
         receipt = await adapter.verify(core_session, entity_id)
         receipt["verified_at"] = datetime.now(timezone.utc).isoformat()
         digest = receipt.get("content_digest") or receipt.get("contract_digest")
@@ -855,6 +866,7 @@ async def attach_domain_entity(
 ) -> dict:
     try:
         await _require_mutation_owner(request, experiment_session, resource_id=project_id)
+        _edition_adapter(payload.adapter_id)
         receipt = await attach_verified_entity(
             experiment_session,
             core_session,
@@ -1567,7 +1579,8 @@ async def _plan_launch_authority(
     plan_authority: ExperimentWorkflowPlanAuthority,
     pinned: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if await _is_native_protein_domain(session, plan_authority.expected_domain_revision_id):
+    if ((isinstance(pinned, dict) and pinned.get("schema") == "bms.protein-setup-launch-authority.v1")
+            or await _is_native_protein_domain(session, plan_authority.expected_domain_revision_id)):
         from experiment_services import protein_setup_launch_authority
         return await protein_setup_launch_authority(session, plan_authority, pinned=pinned)
     authority = await exact_local_launch_authority(
@@ -1597,7 +1610,8 @@ async def _current_preparation_launch_authority(
     if not isinstance(normalized_preparation, dict):
         raise ValidationFailure("replacement_preparation_required")
     pinned = normalized_preparation.get("launch_authority")
-    native = await _is_native_protein_domain(global_session, plan_authority.expected_domain_revision_id)
+    native = ((isinstance(pinned, dict) and pinned.get("schema") == "bms.protein-setup-launch-authority.v1")
+              or await _is_native_protein_domain(global_session, plan_authority.expected_domain_revision_id))
     # Native proof includes the preparation's pinned Project/Experiment revisions
     # and capability. A Domain-only cache must not substitute another Plan's proof.
     current_authority = (
@@ -2885,3 +2899,36 @@ async def project_receipt_surface(
 
 
 __all__ = ["router"]
+
+
+@router.get("/api/projects/{project_id}/native-results/{receipt_id}")
+async def get_retained_native_result(project_id: str, receipt_id: str, request: Request,
+                                     session: AsyncSession = Depends(get_experiment_session)):
+    from services.global_experiments.receipts import retained_native_result
+    from services.family_msa.publication import CustodyError
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    try:
+        acknowledgement, files = await retained_native_result(session, workspace_id=project_id, receipt_id=receipt_id)
+        return {"receipt_id": receipt_id, "producer": acknowledgement,
+                "artifacts": [{**entry, "content_url": f"/api/projects/{project_id}/native-results/{receipt_id}/artifacts/{entry['resource_id']}"}
+                              for entry, _ in files]}
+    except (CustodyError, ValidationFailure, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(409, "Retained native result is unavailable or changed") from exc
+
+
+@router.get("/api/projects/{project_id}/native-results/{receipt_id}/artifacts/{artifact_id}")
+async def get_retained_native_artifact(project_id: str, receipt_id: str, artifact_id: str, request: Request,
+                                       session: AsyncSession = Depends(get_experiment_session)):
+    from fastapi.responses import FileResponse
+    from pathlib import PurePosixPath
+    from services.global_experiments.receipts import retained_native_result
+    from services.family_msa.publication import CustodyError
+    await _require_mutation_owner(request, session, resource_id=project_id)
+    try:
+        _, files = await retained_native_result(session, workspace_id=project_id, receipt_id=receipt_id)
+        for entry, path in files:
+            if entry['resource_id'] == artifact_id:
+                return FileResponse(path, media_type=entry['media_type'], filename=PurePosixPath(entry['logical_path']).name)
+        raise HTTPException(404, "Retained native artifact not found")
+    except (CustodyError, ValidationFailure, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(409, "Retained native result is unavailable or changed") from exc

@@ -1,4 +1,4 @@
-export type ModificationMode = 'de_novo_design' | 'rfd3_iteration' | 'shape_blueprint';
+export type ModificationMode = 'de_novo_design' | 'rfd3_iteration' | 'resequence' | 'shape_blueprint';
 
 export interface DeNovoModificationModeCard {
     id: ModificationMode;
@@ -20,6 +20,13 @@ export const DE_NOVO_MODIFICATION_MODE_CARDS: DeNovoModificationModeCard[] = [
         id: 'rfd3_iteration',
         label: 'Redesign structure',
         description: 'Load or simulate a complex, select residue roles in Mol*, then choose native RFD3 output or downstream sequence design and validation.',
+        cardClassName: 'border-[var(--border-primary)] bg-[var(--card-bg)] hover:border-[var(--accent-primary)]',
+        labelClassName: 'text-[var(--text-primary)]',
+    },
+    {
+        id: 'resequence',
+        label: 'Resequence',
+        description: 'Resequence a design from any generator with a chosen engine and residue selection, then validate it.',
         cardClassName: 'border-[var(--border-primary)] bg-[var(--card-bg)] hover:border-[var(--accent-primary)]',
         labelClassName: 'text-[var(--text-primary)]',
     },

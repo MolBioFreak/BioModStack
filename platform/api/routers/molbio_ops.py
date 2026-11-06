@@ -6,7 +6,7 @@ Provides digest, PCR, ligation, mutagenesis, Gibson, and Golden Gate workflows.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, Query
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator, TypeAdapter, AliasChoices
 from typing import Any, List, Literal, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
@@ -20,7 +20,7 @@ import hashlib
 import json
 import os
 import uuid
-from Bio.SeqUtils import MeltingTemp as mt
+from Bio.SeqUtils import MeltingTemp as mt, gc_fraction
 
 from molbio_database import get_molbio_session
 from molbio_models import (
@@ -79,7 +79,7 @@ from services.assembly.types import (
     GibsonDesignResult,
 )
 from services.molbio_ops import pcr_product, apply_mutations, reverse_complement, clean_sequence
-from services.primer_qc import evaluate_primer_pair_qc, evaluate_primer_qc, _evaluate_primer_qc_canonical
+from services.primer_qc import evaluate_primer_pair_qc, evaluate_primer_qc, _evaluate_primer_qc_canonical, PrimerQcProfile, PRIMER_QC_PROFILE
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
 from services.annotation_sources import (
     AnnotationSourceAmbiguityError,
@@ -667,17 +667,59 @@ class SequenceInput(BaseModel):
     is_circular: bool = False
 
 
+class PrimerTmSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["primer-tm-settings-v1"] = "primer-tm-settings-v1"
+    algorithm: str = "nn_santalucia_hicks_2004"
+    salt_correction: str = "owczarzy_2008"
+    primer_concentration_nM: float = Field(default=250.0, gt=0, allow_inf_nan=False)
+    template_concentration_nM: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    na_mM: float = Field(default=50.0, ge=0, allow_inf_nan=False)
+    k_mM: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    tris_mM: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    mg_mM: float = Field(default=1.5, ge=0, allow_inf_nan=False)
+    dntps_mM: float = Field(default=0.6, ge=0, allow_inf_nan=False)
+    dmso_percent: float = Field(default=0.0, ge=0, le=100, allow_inf_nan=False)
+    formamide_percent: float = Field(default=0.0, ge=0, le=100, allow_inf_nan=False)
+    self_complementary: bool = False
+
+
+class PCRBindingSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start: int = Field(ge=0, description="Zero-based start of the template footprint")
+    anneal_length: int = Field(ge=1, description="Length of the maximal matching 3′ suffix")
+
+
+class PCRReactionMetadata(BaseModel):
+    """Recorded conditions only; not inputs to an amplification-yield model."""
+    model_config = ConfigDict(extra="forbid")
+    volume_uL: Optional[float] = Field(default=None, gt=0, le=10000, allow_inf_nan=False,
+        validation_alias=AliasChoices("volume_uL", "reaction_volume_uL"))
+
+
+class PCRCyclingMetadata(BaseModel):
+    """Recorded cycling conditions; the sequence model does not simulate kinetics."""
+    model_config = ConfigDict(extra="forbid")
+    cycles: Optional[int] = Field(default=None, ge=1, le=100)
+    extension_seconds: Optional[float] = Field(default=None, ge=0, le=86400, allow_inf_nan=False)
+
+
 class PCRRequest(SequenceInput):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["pcr-v2"] = "pcr-v2"
+    min_anneal_length: int = Field(default=8, ge=8, le=100, description="Minimum exact IUPAC-compatible 3′ match, in nucleotides. Search threshold, not a guarantee of amplification.")
+    forward_binding: Optional[PCRBindingSelection] = None
+    reverse_binding: Optional[PCRBindingSelection] = None
     primer_fwd: str
     primer_rev: str
     new_name: Optional[str] = None
     save: bool = True
     persist_experiment: bool = True
     idempotency_key: Optional[str] = Field(default=None, max_length=255)
-    tm_settings: dict[str, Any] = Field(default_factory=dict)
+    tm_settings: PrimerTmSettings = Field(default_factory=PrimerTmSettings)
     polymerase_preset_revision_id: Optional[str] = None
-    reaction_settings: dict[str, Any] = Field(default_factory=dict)
-    cycling_assumptions: dict[str, Any] = Field(default_factory=dict)
+    reaction_settings: PCRReactionMetadata = Field(default_factory=PCRReactionMetadata)
+    cycling_assumptions: PCRCyclingMetadata = Field(default_factory=PCRCyclingMetadata)
     notes: Optional[str] = None
     review_state: str = Field(
         default="draft", pattern="^(draft|in_review|approved|rejected)$"
@@ -800,12 +842,33 @@ class NucleotideSequenceResponse(SavedSequenceMetadata):
     sequence: str
 
 
+class PCRBindingResponse(PCRBindingSelection):
+    end: int
+    overhang_length: int
+
+
+class PCRPrimerResponse(BaseModel):
+    sequence: str
+    annealing_sequence: str
+    tail_sequence: str
+    binding: PCRBindingResponse
+    annealing_tm: dict[str, Any]
+    full_oligo_tm: dict[str, Any]
+
+
 class PCRProductResponse(BaseModel):
     sequence: str
     start: int
     end: int
     length: int
     wraps_origin: bool
+    # Optional only for reading existing immutable, pre-v2 results.
+    template_span: Optional[int] = None
+    min_anneal_length: Optional[int] = None
+    method: Optional[str] = None
+    forward_primer: Optional[PCRPrimerResponse] = None
+    reverse_primer: Optional[PCRPrimerResponse] = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class MolbioOperationResponse(BaseModel):
@@ -1141,6 +1204,9 @@ class SequenceAlignmentResponse(BaseModel):
     reference_wraps_origin: bool
     query_start: int
     query_end: int
+    query_coordinate_system: Literal["input", "reverse_complement"]
+    query_input_start: int
+    query_input_end: int
     query_soft_clip_left: int = 0
     query_soft_clip_right: int = 0
     reference_flank_left: int = 0
@@ -1740,29 +1806,68 @@ async def persist_assembly_product(
 @router.post("/pcr", response_model=MolbioOperationResponse)
 async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_session)):
     parent = await resolve_sequence(request, session)
+    if parent.sequence_type != "dna":
+        raise HTTPException(status_code=400, detail="PCR prediction requires a DNA template. Convert RNA to cDNA in a reverse-transcription workflow first.")
     forward_primer, _ = normalize_primer_sequence(request.primer_fwd, "dna")
     reverse_primer, _ = normalize_primer_sequence(request.primer_rev, "dna")
     try:
-        resolved_tm_settings = (
-            PrimerTmSettings(**request.tm_settings)
-            if request.tm_settings
-            else default_tm_settings_for_sequence_type("dna")
-        )
+        resolved_tm_settings = PrimerTmSettings.model_validate(request.tm_settings)
+        reaction_metadata = PCRReactionMetadata.model_validate(request.reaction_settings).model_dump(exclude_none=True)
+        cycling_metadata = PCRCyclingMetadata.model_validate(request.cycling_assumptions).model_dump(exclude_none=True)
     except ValueError as exc:
         raise HTTPException(
-            status_code=400, detail=f"Invalid Tm settings: {exc}"
+            status_code=400, detail=f"Invalid PCR settings: {exc}"
         ) from exc
 
+    try:
+        product = await run_in_threadpool(
+            pcr_product, parent.sequence, forward_primer, reverse_primer,
+            circular=parent.is_circular, sequence_type="dna",
+            min_anneal_length=request.min_anneal_length,
+            forward_binding=(request.forward_binding.start, request.forward_binding.anneal_length) if request.forward_binding else None,
+            reverse_binding=(request.reverse_binding.start, request.reverse_binding.anneal_length) if request.reverse_binding else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    forward_anneal = forward_primer[-product.forward_binding.anneal_length:]
+    reverse_anneal = reverse_primer[-product.reverse_binding.anneal_length:]
+
     forward_tm = await run_in_threadpool(calculate_primer_tm_result,
-        forward_primer,
+        forward_anneal,
         sequence_type="dna",
         settings=resolved_tm_settings,
     )
     reverse_tm = await run_in_threadpool(calculate_primer_tm_result,
-        reverse_primer,
+        reverse_anneal,
         sequence_type="dna",
         settings=resolved_tm_settings,
     )
+    forward_full_tm = forward_tm if forward_anneal == forward_primer else await run_in_threadpool(
+        calculate_primer_tm_result, forward_primer, sequence_type="dna", settings=resolved_tm_settings,
+    )
+    reverse_full_tm = reverse_tm if reverse_anneal == reverse_primer else await run_in_threadpool(
+        calculate_primer_tm_result, reverse_primer, sequence_type="dna", settings=resolved_tm_settings,
+    )
+    forward_details = PCRPrimerResponse(
+        sequence=forward_primer, annealing_sequence=forward_anneal,
+        tail_sequence=forward_primer[:product.forward_binding.overhang_length],
+        binding=PCRBindingResponse(**vars(product.forward_binding)),
+        annealing_tm=forward_tm.model_dump(), full_oligo_tm=forward_full_tm.model_dump(),
+    )
+    reverse_details = PCRPrimerResponse(
+        sequence=reverse_primer, annealing_sequence=reverse_anneal,
+        tail_sequence=reverse_primer[:product.reverse_binding.overhang_length],
+        binding=PCRBindingResponse(**vars(product.reverse_binding)),
+        annealing_tm=reverse_tm.model_dump(), full_oligo_tm=reverse_full_tm.model_dump(),
+    )
+    search_settings = {
+        "method": "exact-3prime-suffix-v2", "min_anneal_length": request.min_anneal_length,
+        "requested_forward_binding": request.forward_binding.model_dump() if request.forward_binding else None,
+        "requested_reverse_binding": request.reverse_binding.model_dump() if request.reverse_binding else None,
+        "forward_binding": forward_details.binding.model_dump(),
+        "reverse_binding": reverse_details.binding.model_dump(),
+    }
     provenance = dict(request.provenance)
     provenance.update(
         {
@@ -1783,14 +1888,18 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
             "sequence": forward_primer,
             "sha256": hashlib.sha256(forward_primer.encode("utf-8")).hexdigest(),
             "tm": forward_tm.model_dump(),
+            **forward_details.model_dump(),
         }
         reverse_snapshot = {
             "sequence": reverse_primer,
             "sha256": hashlib.sha256(reverse_primer.encode("utf-8")).hexdigest(),
             "tm": reverse_tm.model_dump(),
+            **reverse_details.model_dump(),
         }
         tm_snapshot = {
             "settings": resolved_tm_settings.model_dump(),
+            "scope": "Tm of selected template-annealing suffix; full-oligo Tm is recorded separately",
+            "search_settings": search_settings,
             "forward": forward_tm.model_dump(),
             "reverse": reverse_tm.model_dump(),
             "algorithm_definition": TM_ALGORITHM_DEFS.get(resolved_tm_settings.algorithm),
@@ -1811,7 +1920,7 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
             template_projection_snapshot.pop("updated_at", None)
         request_fingerprint = canonical_request_fingerprint(
             {
-                "schema": "pcr-request-v1",
+                "schema": request.schema_version,
                 "template": {
                     "document_id": request.sequence_id,
                     "revision_id": template_revision.id if template_revision else None,
@@ -1831,8 +1940,8 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
                 "tm_snapshot": tm_snapshot,
                 "tm_model_revision": tm_model_revision_identity(tm_snapshot),
                 "polymerase_preset_revision_id": request.polymerase_preset_revision_id,
-                "reaction_settings": request.reaction_settings,
-                "cycling_assumptions": request.cycling_assumptions,
+                "reaction_settings": reaction_metadata,
+                "cycling_assumptions": cycling_metadata,
                 "save_intent": {
                     "save": request.save,
                     "persist_experiment": request.persist_experiment,
@@ -1843,7 +1952,8 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
                     "review_state": request.review_state,
                 },
                 "provenance": provenance,
-                "implementation": "services.molbio_ops.pcr_product:v1",
+                "search_settings": search_settings,
+                "implementation": "services.molbio_ops.pcr_product:v2",
             }
         )
 
@@ -1863,27 +1973,25 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
             # Mol Bio session factory uses expire_on_commit=False.
             await session.commit()
 
-    try:
-        product = await run_in_threadpool(pcr_product,
-            parent.sequence,
-            forward_primer,
-            reverse_primer,
-            circular=parent.is_circular,
-            sequence_type=parent.sequence_type or "dna",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     product_payload = PCRProductResponse(
         sequence=product.sequence,
         start=product.start,
         end=product.end,
         length=product.length,
         wraps_origin=product.wraps_origin,
+        template_span=product.template_span,
+        min_anneal_length=request.min_anneal_length,
+        method="exact-3prime-suffix-v2",
+        forward_primer=forward_details,
+        reverse_primer=reverse_details,
     )
-    warnings = list(forward_tm.warnings) + list(reverse_tm.warnings)
+    warnings = list(dict.fromkeys(list(forward_tm.warnings) + list(reverse_tm.warnings)))
+    warnings.append("Sequence prediction from exact 3′ matches; amplification yield, efficiency and specificity under laboratory conditions are not simulated.")
+    if any(base not in "ACGT" for base in parent.sequence + forward_primer + reverse_primer):
+        warnings.append("IUPAC symbols represent compatible possible bases, not guaranteed template binding or a single resolved molecule.")
     if product.wraps_origin:
         warnings.append("PCR product crosses the circular sequence origin.")
+    product_payload.warnings = warnings
     saved_sequence = None
     operation_id = None
     if request.save:
@@ -1897,8 +2005,11 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
                 "primer_fwd": forward_primer,
                 "primer_rev": reverse_primer,
                 "tm_settings": resolved_tm_settings.model_dump(),
+                "search_settings": search_settings,
             },
         )
+        saved_sequence.molecule_strandedness = "double"
+        saved_sequence.molecule_orientation = "both"
 
     if request.persist_experiment:
         try:
@@ -1910,8 +2021,8 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
                 reverse_primer_snapshot=reverse_snapshot,
                 tm_snapshot=tm_snapshot,
                 polymerase_preset_revision_id=request.polymerase_preset_revision_id,
-                reaction_settings=request.reaction_settings,
-                cycling_assumptions=request.cycling_assumptions,
+                reaction_settings=reaction_metadata,
+                cycling_assumptions=cycling_metadata,
                 product_snapshot={
                     **product_payload.model_dump(),
                     "sha256": hashlib.sha256(product.sequence.encode("utf-8")).hexdigest(),
@@ -1955,7 +2066,7 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
         return MolbioOperationResponse(
             sequence=saved_sequence,
             product=product_payload,
-            message="PCR complete",
+            message="PCR sequence predicted",
             experiment_id=persisted.experiment_id,
             experiment_revision_id=persisted.experiment_revision_id,
             operation_id=persisted.operation_id,
@@ -1973,6 +2084,7 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
                 "primer_fwd": forward_primer,
                 "primer_rev": reverse_primer,
                 "tm_settings": resolved_tm_settings.model_dump(),
+                "search_settings": search_settings,
             },
             warnings=warnings,
             provenance=provenance,
@@ -2000,7 +2112,7 @@ async def pcr(request: PCRRequest, session: AsyncSession = Depends(get_molbio_se
     return MolbioOperationResponse(
         sequence=saved_sequence,
         product=product_payload,
-        message="PCR complete",
+        message="PCR sequence predicted",
         operation_id=operation_id,
     )
 
@@ -2276,6 +2388,21 @@ async def update_pcr_experiment_review_state(
         status = 404 if "not found" in str(exc).lower() else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     return _pcr_revision_payload(revision)
+
+
+@router.get("/sequences/{sequence_id}/project-export-history")
+async def read_project_export_history(
+    sequence_id: str,
+    revision_id: str = Query(min_length=1, max_length=128),
+    session: AsyncSession = Depends(get_molbio_session),
+) -> dict[str, Any]:
+    from services.molbio_project_history import project_export_history
+    try:
+        return await project_export_history(session, sequence_id, revision_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except OverflowError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
 
 
 @router.get("/operations/{operation_id}")
@@ -3435,9 +3562,9 @@ TM_ALGORITHM_DEFS = {
     },
     "gc_empirical": {
         "label": "GC empirical",
-        "description": "Empirical GC-based formula with selectable salt correction.",
+        "description": "DNA GC formula; additive salt corrections only. Oligo concentration is not used.",
         "kind": "gc",
-        "sequence_types": ["dna", "rna"],
+        "sequence_types": ["dna"],
         "gc_valueset": 7,
     },
     "nn_breslauer_1986": {
@@ -3549,6 +3676,23 @@ TM_SALT_CORRECTION_DEFS = {
     },
 }
 
+def tm_algorithm_capabilities(algorithm: str) -> dict[str, Any]:
+    definition = TM_ALGORITHM_DEFS[algorithm]
+    if definition["kind"] == "wallace":
+        salts = ["none"]
+        scope = "Rough base-count estimate. Concentrations, salt and self-complementarity are not used."
+    elif definition["kind"] == "gc":
+        salts = [key for key, value in TM_SALT_CORRECTION_DEFS.items() if value["method"] <= 4]
+        scope = "DNA empirical estimate. Oligo concentrations and self-complementarity are not used."
+    elif definition.get("polymer_pairing", "").startswith("rna"):
+        salts = ["none"]
+        scope = "RNA reference condition: 1 M Na. Only perfectly paired overlap is supported; RNA/RNA dangling ends use RNA_DE1. No DNA salt extrapolation."
+    else:
+        salts = list(TM_SALT_CORRECTION_DEFS)
+        scope = "Perfect DNA duplex unless an explicit 3′→5′ complementary strand is supplied in Advanced duplex Tm."
+    return {"salt_corrections": salts, "applicability": scope}
+
+
 DEFAULT_TM_SETTINGS_BY_SEQUENCE_TYPE = {
     "dna": {
         "algorithm": "nn_santalucia_hicks_2004",
@@ -3566,14 +3710,14 @@ DEFAULT_TM_SETTINGS_BY_SEQUENCE_TYPE = {
     },
     "rna": {
         "algorithm": "rna_nn_chen_2012",
-        "salt_correction": "owczarzy_2008",
+        "salt_correction": "none",
         "primer_concentration_nM": 250.0,
         "template_concentration_nM": 0.0,
-        "na_mM": 50.0,
+        "na_mM": 1000.0,
         "k_mM": 0.0,
         "tris_mM": 0.0,
-        "mg_mM": 1.5,
-        "dntps_mM": 0.6,
+        "mg_mM": 0.0,
+        "dntps_mM": 0.0,
         "dmso_percent": 0.0,
         "formamide_percent": 0.0,
         "self_complementary": False,
@@ -3581,31 +3725,34 @@ DEFAULT_TM_SETTINGS_BY_SEQUENCE_TYPE = {
 }
 
 
-class PrimerTmSettings(BaseModel):
-    algorithm: str = "nn_santalucia_hicks_2004"
-    salt_correction: str = "owczarzy_2008"
-    primer_concentration_nM: float = Field(default=250.0, gt=0, allow_inf_nan=False)
-    template_concentration_nM: float = Field(default=0.0, ge=0, allow_inf_nan=False)
-    na_mM: float = Field(default=50.0, ge=0, allow_inf_nan=False)
-    k_mM: float = Field(default=0.0, ge=0, allow_inf_nan=False)
-    tris_mM: float = Field(default=0.0, ge=0, allow_inf_nan=False)
-    mg_mM: float = Field(default=1.5, ge=0, allow_inf_nan=False)
-    dntps_mM: float = Field(default=0.6, ge=0, allow_inf_nan=False)
-    dmso_percent: float = Field(default=0.0, ge=0, le=100, allow_inf_nan=False)
-    formamide_percent: float = Field(default=0.0, ge=0, le=100, allow_inf_nan=False)
-    self_complementary: bool = False
+class PrimerDesignSearchProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    version: Literal["flanking_exact_v1"] = "flanking_exact_v1"
+    candidates_per_strand: Literal[48] = 48
+    target_overlap_bases: Literal[4] = 4
+    origin_wrapping_candidates: Literal[False] = False
+    product_size_includes_tails: Literal[True] = True
+    overlapping_footprints: Literal[False] = False
+    substrate: Literal["dna_template"] = "dna_template"
+    qc: PrimerQcProfile = Field(default_factory=PrimerQcProfile)
 
 
 class PrimerTmInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["primer-tm-input-v1"] = "primer-tm-input-v1"
     id: Optional[str] = None
     name: Optional[str] = None
     sequence: str
-    sequence_type: Optional[str] = None
-    complement_sequence: Optional[str] = None
-    shift: int = 0
+    sequence_type: Optional[Literal["dna", "rna"]] = None
+    complement_sequence: Optional[str] = Field(default=None, description="Aligned complementary strand written 3′ to 5′; omitted means a perfect complement.")
+    shift: int = Field(default=0, description="Complement index aligned to oligo index zero; positive shifts move oligo right.")
 
 
 class PrimerTmResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["primer-tm-result-v1"] = "primer-tm-result-v1"
+    effective_settings: PrimerTmSettings
+    effective_input: PrimerTmInput
     id: Optional[str] = None
     name: Optional[str] = None
     sequence: str
@@ -3622,6 +3769,8 @@ class PrimerTmResult(BaseModel):
 
 
 class PrimerTmBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["primer-tm-batch-v1"] = "primer-tm-batch-v1"
     primers: List[PrimerTmInput]
     settings: Optional[PrimerTmSettings] = None
 
@@ -3632,6 +3781,8 @@ class PrimerTmOption(BaseModel):
     description: str
     sequence_types: List[str]
     polymer_pairing: Optional[str] = None
+    salt_corrections: List[str] = Field(default_factory=list)
+    applicability: str = ""
 
 
 class PrimerTmSaltCorrectionOption(BaseModel):
@@ -3641,6 +3792,9 @@ class PrimerTmSaltCorrectionOption(BaseModel):
 
 
 class PrimerTmOptionsResponse(BaseModel):
+    schema_version: Literal["primer-options-v1"] = "primer-options-v1"
+    qc_profile: PrimerQcProfile = Field(default_factory=PrimerQcProfile)
+    design_profile: PrimerDesignSearchProfile = Field(default_factory=PrimerDesignSearchProfile)
     algorithms: List[PrimerTmOption]
     salt_corrections: List[PrimerTmSaltCorrectionOption]
     defaults: dict[str, PrimerTmSettings]
@@ -3648,7 +3802,7 @@ class PrimerTmOptionsResponse(BaseModel):
 
 def clean_primer_sequence(sequence: str) -> str:
     """Normalize primer sequence text."""
-    return (sequence or "").upper().replace(" ", "").replace("\n", "").replace("\r", "")
+    return "".join((sequence or "").upper().split())
 
 
 def infer_primer_sequence_type(sequence: str) -> str:
@@ -3725,9 +3879,7 @@ def calculate_gc_percent(sequence: str) -> float:
     """Calculate GC content percentage."""
     if not sequence or len(sequence) == 0:
         return 0.0
-    upper = sequence.upper()
-    gc = upper.count("G") + upper.count("C")
-    return round((gc / len(sequence)) * 100, 1)
+    return round(gc_fraction(sequence.upper(), ambiguous="weighted") * 100, 1)
 
 
 def default_tm_settings_for_sequence_type(sequence_type: str) -> PrimerTmSettings:
@@ -3750,10 +3902,14 @@ def calculate_primer_tm_result(
         resolved_sequence_type
     )
     gc_percent = calculate_gc_percent(cleaned)
+    receipt = dict(effective_settings=resolved_settings, effective_input=PrimerTmInput(
+        sequence=cleaned, sequence_type=resolved_sequence_type,
+        complement_sequence=clean_primer_sequence(complement_sequence) if complement_sequence is not None else None, shift=shift))
     warnings: List[str] = []
 
     if not cleaned:
         return PrimerTmResult(
+            **receipt,
             sequence=cleaned,
             sequence_type=resolved_sequence_type,
             length=0,
@@ -3769,6 +3925,7 @@ def calculate_primer_tm_result(
 
     if not all(base in "ATCGUMRWSYKVHDBN" for base in cleaned):
         return PrimerTmResult(
+            **receipt,
             sequence=cleaned,
             sequence_type=resolved_sequence_type,
             length=len(cleaned),
@@ -3787,6 +3944,7 @@ def calculate_primer_tm_result(
 
     if algorithm_def is None:
         return PrimerTmResult(
+            **receipt,
             sequence=cleaned,
             sequence_type=resolved_sequence_type,
             length=len(cleaned),
@@ -3802,6 +3960,7 @@ def calculate_primer_tm_result(
 
     if salt_def is None:
         return PrimerTmResult(
+            **receipt,
             sequence=cleaned,
             sequence_type=resolved_sequence_type,
             length=len(cleaned),
@@ -3821,6 +3980,7 @@ def calculate_primer_tm_result(
 
     if resolved_sequence_type not in algorithm_def["sequence_types"]:
         return PrimerTmResult(
+            **receipt,
             sequence=cleaned,
             sequence_type=resolved_sequence_type,
             length=len(cleaned),
@@ -3840,6 +4000,24 @@ def calculate_primer_tm_result(
 
     tm_value: Optional[float] = None
     try:
+        if resolved_settings.salt_correction not in tm_algorithm_capabilities(resolved_settings.algorithm)["salt_corrections"]:
+            raise ValueError("Selected salt correction is not supported by this Tm model; choose a compatible correction.")
+        ambiguous = set(cleaned) - set("ACGTU")
+        if ambiguous:
+            warnings.append("GC is an estimate using equal weighting of IUPAC alternatives.")
+            if algorithm_def["kind"] == "nn":
+                raise ValueError("Nearest-neighbor Tm is unavailable for ambiguous bases; supply an unambiguous oligo. No bases were removed.")
+        rna_model = algorithm_def.get("polymer_pairing", "").startswith("rna")
+        if rna_model:
+            if (resolved_settings.na_mM != 1000 or resolved_settings.k_mM or resolved_settings.tris_mM
+                    or resolved_settings.mg_mM or resolved_settings.dntps_mM
+                    or resolved_settings.dmso_percent or resolved_settings.formamide_percent):
+                raise ValueError("RNA thermodynamics are supported only at the tabulated 1 M Na reference condition (other ions and additives zero); DNA salt corrections are not applied to RNA.")
+            warnings.append("Reference-condition RNA Tm (1 M Na); not a mixed-ion reaction prediction.")
+        if algorithm_def["kind"] != "nn":
+            if complement_sequence is not None or shift:
+                raise ValueError("Complementary-strand and shift inputs require a supported nearest-neighbor model.")
+            warnings.append("This approximate model does not use oligo concentrations or self-complementarity.")
         if algorithm_def["kind"] == "wallace":
             tm_value = float(mt.Tm_Wallace(cleaned, strict=True))
         elif algorithm_def["kind"] == "gc":
@@ -3847,7 +4025,7 @@ def calculate_primer_tm_result(
                 mt.Tm_GC(
                     cleaned,
                     strict=True,
-                    valueset=algorithm_def.get("gc_valueset", 7),
+                    userset=(81.5, 0.41, 600, 1),
                     Na=resolved_settings.na_mM,
                     K=resolved_settings.k_mM,
                     Tris=resolved_settings.tris_mM,
@@ -3870,10 +4048,27 @@ def calculate_primer_tm_result(
                 "saltcorr": salt_def["method"],
                 "strict": True,
             }
-            if complement_sequence:
-                tm_kwargs["c_seq"] = clean_primer_sequence(complement_sequence)
+            if complement_sequence is not None:
+                complement = clean_primer_sequence(complement_sequence)
+                if not complement or any(base not in "ACGTU" for base in complement):
+                    raise ValueError("Complementary strand must contain only unambiguous nucleotide bases; no bases were removed.")
+                complement = complement.replace("U", "T")
+                if rna_model:
+                    overlap = [(base, complement[index + shift]) for index, base in enumerate(cleaned.replace("U", "T"))
+                               if 0 <= index + shift < len(complement)]
+                    if len(overlap) < 2 or any(base.translate(str.maketrans("ACGT", "TGCA")) != paired for base, paired in overlap):
+                        raise ValueError("RNA mismatch thermodynamics are not supported; the overlapping complementary strand must be perfectly paired.")
+                    if algorithm_def["polymer_pairing"] == "rna_dna_hybrid" and (shift or len(complement) != len(cleaned)):
+                        raise ValueError("RNA/DNA hybrid dangling-end thermodynamics are not supported.")
+                tm_kwargs["c_seq"] = complement
                 tm_kwargs["shift"] = shift
-            tm_value = float(mt.Tm_NN(cleaned, **tm_kwargs))
+            elif shift:
+                raise ValueError("A shift requires an explicit complementary strand.")
+            # Bypass Biopython's destructive ambiguity filtering after validation.
+            tm_kwargs["check"] = False
+            if rna_model:
+                tm_kwargs["de_table"] = mt.RNA_DE1
+            tm_value = float(mt.Tm_NN(cleaned.replace("U", "T"), **tm_kwargs))
 
         if resolved_settings.dmso_percent or resolved_settings.formamide_percent:
             warnings.append("DMSO/formamide corrections are approximate.")
@@ -3886,9 +4081,11 @@ def calculate_primer_tm_result(
                 )
             )
     except Exception as exc:
+        tm_value = None
         warnings.append(str(exc))
 
     return PrimerTmResult(
+            **receipt,
         sequence=cleaned,
         sequence_type=resolved_sequence_type,
         length=len(cleaned),
@@ -3903,7 +4100,13 @@ def calculate_primer_tm_result(
     )
 
 
+
+
 class PrimerDesignRequest(SequenceInput):
+    sequence_type: Optional[Literal["dna", "rna"]] = None
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["primer-design-v1"] = "primer-design-v1"
+    search_profile: PrimerDesignSearchProfile = Field(default_factory=PrimerDesignSearchProfile)
     target_start: int = 0
     target_end: Optional[int] = None
     primer_min_length: int = 18
@@ -3960,6 +4163,9 @@ class PrimerDesignPairResponse(BaseModel):
 
 
 class PrimerDesignResponse(BaseModel):
+    schema_version: Literal["primer-design-result-v1"] = "primer-design-result-v1"
+    effective_request: PrimerDesignRequest
+    search_profile: PrimerDesignSearchProfile = Field(default_factory=PrimerDesignSearchProfile)
     sequence_name: Optional[str] = None
     sequence_type: str
     target_start: int
@@ -4010,6 +4216,9 @@ def _design_candidate(
     tm_max_delta_c: float,
 ) -> Optional[dict[str, Any]]:
     primer_sequence = (overhang + anneal_sequence).upper()
+    # Candidate ranking requires defined Tm and structure metrics.
+    if any(base not in "ACGTU" for base in primer_sequence):
+        return None
     gc_percent = calculate_gc_percent(anneal_sequence)
     if gc_percent < gc_min or gc_percent > gc_max:
         return None
@@ -4053,7 +4262,10 @@ def _design_candidate(
 def design_primer_pairs_for_request(
     request: PrimerDesignRequest, sequence_name: Optional[str]
 ) -> PrimerDesignResponse:
+    search_profile = request.search_profile
     sequence_type = normalize_sequence_type(request.sequence_type, request.sequence)
+    if sequence_type != "dna":
+        raise HTTPException(status_code=400, detail="PCR primer design requires a DNA template. Supply the intended cDNA sequence for an RNA source; reverse transcription is not modeled.")
     template = clean_inline_sequence(request.sequence or "", sequence_type)
     if not template:
         raise HTTPException(
@@ -4088,9 +4300,11 @@ def design_primer_pairs_for_request(
     )
     forward_overhang = clean_inline_sequence(request.overhang_forward, sequence_type) if request.overhang_forward else ""
     reverse_overhang = clean_inline_sequence(request.overhang_reverse, sequence_type) if request.overhang_reverse else ""
+    if any(base not in "ACGTU" for base in forward_overhang + reverse_overhang):
+        raise HTTPException(status_code=400, detail="Primer design requires unambiguous 5′ tails so candidates can be scored.")
     forward_candidates: list[dict[str, Any]] = []
     reverse_candidates: list[dict[str, Any]] = []
-    warnings: list[str] = []
+    warnings: list[str] = ["Search considers at most 48 Tm-ranked candidates per strand and excludes overlapping primer footprints; results are not an exhaustive primer search."]
 
     if request.is_circular:
         warnings.append(
@@ -4110,7 +4324,7 @@ def design_primer_pairs_for_request(
             anneal_sequence = _linear_segment(template, start, end)
             if anneal_sequence is None:
                 continue
-            if end > request.target_start + 4:
+            if end > request.target_start + search_profile.target_overlap_bases:
                 continue
             candidate = _design_candidate(
                 anneal_sequence=anneal_sequence,
@@ -4138,7 +4352,7 @@ def design_primer_pairs_for_request(
             anneal_template = _linear_segment(template, start, end)
             if anneal_template is None:
                 continue
-            if start < target_end - 4:
+            if start < target_end - search_profile.target_overlap_bases:
                 continue
             anneal_sequence = reverse_complement(anneal_template, sequence_type)
             candidate = _design_candidate(
@@ -4172,13 +4386,15 @@ def design_primer_pairs_for_request(
         )
     )
 
-    forward_candidates = forward_candidates[:48]
-    reverse_candidates = reverse_candidates[:48]
+    forward_candidates = forward_candidates[:search_profile.candidates_per_strand]
+    reverse_candidates = reverse_candidates[:search_profile.candidates_per_strand]
     # QC does not participate in the existing Tm/start shortlist ordering.
     for candidate in [*forward_candidates, *reverse_candidates]:
         qc = _evaluate_primer_qc_canonical(
             candidate["sequence"], sequence_type=sequence_type,  # type: ignore[arg-type]
             template_sequence=template, circular_template=request.is_circular,
+            min_binding_anneal_length=PRIMER_QC_PROFILE.binding_core_bases,
+            intended_binding=(candidate["start"], candidate["end"], candidate["strand"]),
         )
         for field in ("max_self_complement", "three_prime_self_complement",
                       "max_hairpin_stem", "hairpin_loop_size", "binding_site_count",
@@ -4189,7 +4405,12 @@ def design_primer_pairs_for_request(
     pair_candidates: list[dict[str, Any]] = []
     for forward in forward_candidates:
         for reverse in reverse_candidates:
-            product_length = reverse["end"] - forward["start"]
+            # Match the supported PCR sequence geometry; overlapping 3′ ends
+            # require a different extension/primer-dimer model.
+            if forward["end"] > reverse["start"]:
+                continue
+            product_length = (reverse["end"] - forward["start"]
+                              + forward["overhang_length"] + reverse["overhang_length"])
             if (
                 product_length < request.product_min_length
                 or product_length > request.product_max_length
@@ -4254,10 +4475,12 @@ def design_primer_pairs_for_request(
 
     if not pairs:
         warnings.append(
-            "No primer pairs met the current GC/Tm/product constraints. Relax the design settings or widen the target flanks."
+            "No primer pairs in the searched candidates met the current GC/Tm/product constraints. Relax the design settings or widen the target flanks."
         )
 
     return PrimerDesignResponse(
+        search_profile=search_profile,
+        effective_request=request.model_copy(update={"sequence": template, "sequence_type": sequence_type, "target_end": target_end, "tm_settings": tm_settings, "overhang_forward": forward_overhang, "overhang_reverse": reverse_overhang}),
         sequence_name=sequence_name,
         sequence_type=sequence_type,
         target_start=request.target_start,
@@ -4367,9 +4590,9 @@ class PrimerQcResultResponse(BaseModel):
     sequence_type: str
     length: int
     gc_percent: float
-    max_self_complement: int
-    three_prime_self_complement: int
-    max_hairpin_stem: int
+    max_self_complement: Optional[int]
+    three_prime_self_complement: Optional[int]
+    max_hairpin_stem: Optional[int]
     hairpin_loop_size: Optional[int] = None
     binding_site_count: Optional[int] = None
     off_target_site_count: Optional[int] = None
@@ -4378,22 +4601,37 @@ class PrimerQcResultResponse(BaseModel):
 
 
 class PrimerPairQcResultResponse(BaseModel):
-    heterodimer_complement: int
-    three_prime_heterodimer: int
+    heterodimer_complement: Optional[int]
+    three_prime_heterodimer: Optional[int]
     warnings: List[str] = Field(default_factory=list)
 
 
 class PrimerQcEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     id: Optional[str] = None
     name: Optional[str] = None
     sequence: str
-    sequence_type: Optional[str] = None
+    sequence_type: Optional[Literal["dna", "rna"]] = None
+
+    intended_binding_start: Optional[int] = Field(default=None, ge=0)
+    intended_binding_end: Optional[int] = Field(default=None, ge=0)
+    intended_binding_strand: Optional[Literal[-1, 1]] = None
+
+    @model_validator(mode="after")
+    def complete_intended_site(self):
+        fields = (self.intended_binding_start, self.intended_binding_end, self.intended_binding_strand)
+        if any(value is not None for value in fields) and not all(value is not None for value in fields):
+            raise ValueError("Intended binding start, end and strand must be supplied together")
+        return self
 
 
 class PrimerQcRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["primer-qc-v1"] = "primer-qc-v1"
+    profile: PrimerQcProfile = Field(default_factory=PrimerQcProfile)
     primers: List[PrimerQcEntry]
     template_sequence: Optional[str] = None
-    template_sequence_type: Optional[str] = None
+    template_sequence_type: Optional[Literal["dna", "rna"]] = None
     template_is_circular: bool = False
     include_pairwise: bool = True
 
@@ -4405,6 +4643,9 @@ class PrimerQcEntryResponse(BaseModel):
 
 
 class PrimerQcBatchResponse(BaseModel):
+    schema_version: Literal["primer-qc-result-v1"] = "primer-qc-result-v1"
+    effective_request: PrimerQcRequest
+    profile: PrimerQcProfile = Field(default_factory=PrimerQcProfile)
     primers: List[PrimerQcEntryResponse]
     pairwise: List[dict[str, Any]] = Field(default_factory=list)
 
@@ -4420,6 +4661,7 @@ async def primer_tm_options():
                 description=definition["description"],
                 sequence_types=definition["sequence_types"],
                 polymer_pairing=definition.get("polymer_pairing"),
+                **tm_algorithm_capabilities(option_id),
             )
             for option_id, definition in TM_ALGORITHM_DEFS.items()
         ],
@@ -4462,6 +4704,7 @@ def _calculate_primer_tm_batch(request: PrimerTmBatchRequest):
         )
         result.id = primer.id
         result.name = primer.name
+        result.effective_input = result.effective_input.model_copy(update={"id": primer.id, "name": primer.name})
         results.append(result)
     return results
 
@@ -4493,6 +4736,9 @@ def _calculate_primer_qc(request: PrimerQcRequest):
             sequence_type=sequence_type,  # type: ignore[arg-type]
             template_sequence=template_sequence,
             circular_template=request.template_is_circular,
+            min_binding_anneal_length=PRIMER_QC_PROFILE.binding_core_bases,
+            intended_binding=(primer.intended_binding_start, primer.intended_binding_end, primer.intended_binding_strand)
+                if all(value is not None for value in (primer.intended_binding_start, primer.intended_binding_end, primer.intended_binding_strand)) else None,
         )
         primer_results.append(
             PrimerQcEntryResponse(
@@ -4539,6 +4785,8 @@ def _calculate_primer_qc(request: PrimerQcRequest):
                 )
 
     return PrimerQcBatchResponse(
+        profile=request.profile,
+        effective_request=request.model_copy(update={"template_sequence": template_sequence, "template_sequence_type": template_sequence_type, "primers": [entry.model_copy(update={"sequence": qc.qc.sequence, "sequence_type": qc.qc.sequence_type}) for entry, qc in zip(request.primers, primer_results)]}),
         primers=primer_results,
         pairwise=pairwise,
     )

@@ -766,12 +766,13 @@ def test_live_conversion_defaults_to_dual_retention_and_is_enabled(monkeypatch: 
     assert ont_raw_signal.raw_signal_retention_policy() == "pod5_and_blow5"
 
 
-def test_blow5_only_retention_is_a_dormant_standalone_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_blow5_only_retention_removes_pod5_after_verification(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("BMS_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("BMS_ONT_RAW_SIGNAL_RETENTION_POLICY", "blow5_only")
 
     assert ont_raw_signal.raw_signal_retention_policy() == "blow5_only"
-    assert ont_raw_signal.retention_disposition() == "future_delete_after_verified_blow5_not_active_in_integrated_bms"
-    assert ont_raw_signal.retention_deletion_enabled() is False
+    assert ont_raw_signal.retention_disposition() == "remove_pod5_after_verified_blow5"
+    assert ont_raw_signal.retention_deletion_enabled() is True
 
 
 def test_live_pod5_chunk_requires_two_identical_running_observations(tmp_path: Path) -> None:
@@ -1085,6 +1086,132 @@ async def test_execute_cancellation_terminates_and_reaps_child(
         await task
     assert child.terminated is True
     assert child.waited is True
+    assert worker._child is None
+
+
+@pytest.mark.asyncio
+async def test_execute_transfers_descriptors_from_stage_path_longer_than_sun_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage = tmp_path.joinpath(*(["long-staging-root-segment"] * 6), "ont-raw-job-0123456789abcdef", "attempt-2")
+    stage.mkdir(parents=True)
+    fd_socket = stage / "source-fd.sock"
+    assert len(os.fsencode(str(fd_socket))) > 107
+    source = tmp_path / "source.pod5"
+    source.write_bytes(b"pod5-source")
+    source_fd = os.open(source, os.O_RDONLY)
+    received: list[bytes] = []
+
+    async def fake_create(*_args, **_kwargs):
+        class Child:
+            returncode: int | None = None
+
+            async def communicate(self):
+                def receive() -> None:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                        directory_fd = os.open(stage, os.O_PATH | os.O_DIRECTORY)
+                        try:
+                            client.connect(f"/proc/self/fd/{directory_fd}/{fd_socket.name}")
+                        finally:
+                            os.close(directory_fd)
+                        _message, ancillary, _flags, _address = client.recvmsg(
+                            1, socket.CMSG_SPACE(array.array("i", [0]).itemsize)
+                        )
+                        fds = array.array("i")
+                        fds.frombytes(ancillary[0][2])
+                        with os.fdopen(fds[0], "rb") as handle:
+                            received.append(handle.read())
+
+                await asyncio.to_thread(receive)
+                self.returncode = 0
+                return b"", b""
+
+        return Child()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+    monkeypatch.setattr(ont_raw_signal_worker, "source_lease_break_requested", lambda: False)
+    worker = OntRawSignalWorker(lambda: None)
+    try:
+        receipt = await worker._execute(
+            ["fake"], "job", "claim", source_fds=[source_fd], fd_socket=str(fd_socket)
+        )
+    finally:
+        os.close(source_fd)
+    assert receipt["returncode"] == 0
+    assert received == [b"pod5-source"]
+    assert not fd_socket.exists()
+
+
+@pytest.mark.parametrize("long_stage_path", [False, True])
+def test_descriptor_socket_rejects_symlinked_parent(tmp_path: Path, long_stage_path: bool) -> None:
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(stage, target_is_directory=True)
+    if long_stage_path:
+        nested = "segment-" + "x" * 100
+        (stage / nested).mkdir()
+        linked = linked / nested
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        with pytest.raises(OSError):
+            ont_raw_signal_worker._bind_unix_socket(server, linked / "source.sock")
+    assert not (linked / "source.sock").exists()
+
+
+def test_descriptor_socket_rejects_overlong_encoded_name_and_closes_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opened: list[int] = []
+    real_open = ont_raw_signal_worker._open_absolute_directory_nofollow
+
+    def record_open(path: Path) -> int:
+        descriptor = real_open(path)
+        opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(ont_raw_signal_worker, "_open_absolute_directory_nofollow", record_open)
+    # Fewer than 107 characters, but too many UTF-8 bytes for sun_path.
+    name = "µ" * 60 + ".sock"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        with pytest.raises(OSError, match="AF_UNIX socket name is too long"):
+            ont_raw_signal_worker._bind_unix_socket(server, tmp_path / name)
+    assert len(opened) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened[0])
+    assert not (tmp_path / name).exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["open", "bind", "listen"])
+async def test_descriptor_socket_setup_failure_closes_server_before_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    class Server:
+        closed = False
+
+        def bind(self, path: str) -> None:
+            if failure == "bind":
+                raise OSError("bind failed")
+
+        def listen(self, backlog: int) -> None:
+            raise OSError("listen failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    server = Server()
+    monkeypatch.setattr(ont_raw_signal_worker.socket, "socket", lambda *args: server)
+    monkeypatch.setattr(ont_raw_signal_worker, "source_lease_break_requested", lambda: False)
+
+    async def unexpected_spawn(*args, **kwargs):
+        pytest.fail("socket setup failed but a child was spawned")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", unexpected_spawn)
+    stage = tmp_path / "missing" if failure == "open" else tmp_path
+    worker = OntRawSignalWorker(None)
+    with pytest.raises(OSError):
+        await worker._execute(["fake"], "job", "claim", source_fds=[0], fd_socket=str(stage / "s"))
+    assert server.closed
     assert worker._child is None
 
 
@@ -1405,6 +1532,9 @@ class _LookupSession:
 
 @pytest.mark.asyncio
 async def test_waveform_execute_rechecks_policy_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", "/operator/home")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setenv("BMS_SUDO_PASSWORD", "do-not-forward")
     policy_digest = "d" * 64
     admitted: list[tuple[str, str]] = []
 
@@ -1428,6 +1558,9 @@ async def test_waveform_execute_rechecks_policy_command(monkeypatch: pytest.Monk
             return b"", b""
 
     async def fake_create_subprocess_exec(*_command, **_kwargs):
+        assert _kwargs["env"]["HOME"] == "/operator/home"
+        assert _kwargs["env"]["XDG_RUNTIME_DIR"] == "/run/user/1000"
+        assert "BMS_SUDO_PASSWORD" not in _kwargs["env"]
         return Child()
 
     monkeypatch.setattr(ont_raw_signal_worker.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
@@ -1459,7 +1592,7 @@ async def test_waveform_claim_uses_checked_in_runtime_identity(
     index = tmp_path / "source.blow5.idx"
     blow5.write_bytes(b"blow5")
     index.write_bytes(b"index")
-    representation = OntRawSignalRepresentation(id="representation-1")
+    representation = OntRawSignalRepresentation(id="representation-1", artifact_manifest={})
     lookup = OntRawSignalLookup(
         id="lookup-1",
         representation_id=representation.id,
@@ -2504,17 +2637,27 @@ def test_source_read_lease_blocks_in_place_writer_until_cleanup(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_worker_transfers_exact_source_descriptor_and_cleans_socket(tmp_path: Path) -> None:
+@pytest.mark.parametrize("long_stage_path", [False, True])
+async def test_worker_transfers_exact_source_descriptor_and_cleans_socket(tmp_path: Path, long_stage_path: bool) -> None:
     source_path = tmp_path / "source.pod5"
     source_path.write_bytes(b"selected-inode")
     root_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
     source_fd = os.open(source_path, os.O_RDONLY)
     socket_dir = tempfile.TemporaryDirectory(prefix="ont-fd-")
-    socket_path = Path(socket_dir.name) / "s"
+    socket_root = Path(socket_dir.name)
+    if long_stage_path:
+        socket_root = socket_root / ("stage-" + "a" * 100)
+        socket_root.mkdir()
+    socket_path = socket_root / "s"
+    assert (len(os.fsencode(socket_path)) > 107) == long_stage_path
     script = """
 import array, os, socket, sys
 connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-connection.connect(sys.argv[1])
+parent_fd = os.open(os.path.dirname(sys.argv[1]), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    connection.connect(f'/proc/self/fd/{parent_fd}/{os.path.basename(sys.argv[1])}')
+finally:
+    os.close(parent_fd)
 _, ancillary, _, _ = connection.recvmsg(1, socket.CMSG_SPACE(2 * array.array('i').itemsize))
 received = array.array('i')
 for level, kind, data in ancillary:
@@ -2600,19 +2743,34 @@ def test_raw_runtime_identity_is_bound_to_checked_in_policy_and_rejects_env_drif
         ont_raw_signal.raw_signal_runtime_identity()
 
 
+@pytest.mark.parametrize("runtime,prefix", [("docker", "sha256:"), ("podman", ""), ("podman", "sha256:")])
 def test_raw_runtime_admission_inspects_exact_local_image_id(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, runtime: str, prefix: str,
 ) -> None:
     inspected: list[list[str]] = []
+    monkeypatch.setenv("HOME", "/operator/home")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setenv("BMS_SUDO_PASSWORD", "do-not-forward")
     monkeypatch.setattr(ont_raw_signal.shutil, "which", lambda runtime: f"/usr/bin/{runtime}")
 
     def inspect(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert _kwargs["env"]["HOME"] == "/operator/home"
+        assert _kwargs["env"]["XDG_RUNTIME_DIR"] == "/run/user/1000"
+        assert "BMS_SUDO_PASSWORD" not in _kwargs["env"]
         inspected.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout="sha256:" + "a" * 64 + "\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout=prefix + "a" * 64 + "\n", stderr="")
 
     monkeypatch.setattr(ont_raw_signal.subprocess, "run", inspect)
-    ont_raw_signal.assert_local_raw_runtime_image("docker", "sha256:" + "a" * 64)
-    assert inspected == [["docker", "image", "inspect", "--format", "{{.Id}}", "sha256:" + "a" * 64]]
+    ont_raw_signal.assert_local_raw_runtime_image(runtime, "sha256:" + "a" * 64)
+    assert inspected == [[runtime, "image", "inspect", "--format", "{{.Id}}", "sha256:" + "a" * 64]]
+
+
+@pytest.mark.parametrize("observed", ["b" * 64, "a" * 63, "sha256:" + "b" * 64, "mutable:tag"])
+def test_raw_runtime_admission_rejects_diverged_podman_identity(monkeypatch: pytest.MonkeyPatch, observed: str) -> None:
+    monkeypatch.setattr(ont_raw_signal.shutil, "which", lambda runtime: f"/usr/bin/{runtime}")
+    monkeypatch.setattr(ont_raw_signal.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(command, 0, stdout=observed, stderr=""))
+    with pytest.raises(RuntimeError, match="absent or diverged"):
+        ont_raw_signal.assert_local_raw_runtime_image("podman", "sha256:" + "a" * 64)
 
 
 def test_every_raw_container_command_uses_pull_never(
@@ -2768,3 +2926,24 @@ async def test_publication_rejects_expired_or_cancelled_claim_before_commit(
     with pytest.raises(ValueError, match="lease|cancellation"):
         await ont_raw_signal.publish_derivation(session, job, source, commands)
     assert session.commits == 0
+
+
+def test_external_candidates_ignore_unreadable_vendor_state(monkeypatch, tmp_path):
+    root = tmp_path / "minknow-data"
+    private = root / "private-state"
+    reads = root / "reads"
+    private.mkdir(parents=True)
+    reads.mkdir()
+    (reads / "closed.pod5").write_bytes(b"candidate")
+    (private / "hidden.pod5").write_bytes(b"not-authorized")
+    monkeypatch.setenv(ont_raw_signal.EXTERNAL_POD5_ROOT_ENV, str(root))
+    real_open = ont_raw_signal.os.open
+
+    def guarded_open(path, flags, *args, **kwargs):
+        if path == "private-state":
+            raise PermissionError("private vendor state")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(ont_raw_signal.os, "open", guarded_open)
+    candidates = ont_raw_signal.list_external_pod5_candidates()
+    assert [entry["display_name"] for entry in candidates] == ["reads/closed.pod5"]

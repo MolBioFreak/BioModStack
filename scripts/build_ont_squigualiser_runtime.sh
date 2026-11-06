@@ -23,6 +23,8 @@ fi
     "$REPO_ROOT"
 
 IMAGE_ID="$($RUNTIME image inspect --format '{{.Id}}' "$TAG")"
+# Podman returns the same SHA-256 identifier without Docker's prefix.
+IMAGE_ID="sha256:${IMAGE_ID#sha256:}"
 [[ "$IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Invalid built image ID" >&2; exit 70; }
 DIGEST="${IMAGE_ID#sha256:}"
 # Publish this measured ID through the checked-in policy after qualification.

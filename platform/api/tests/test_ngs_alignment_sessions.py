@@ -1138,7 +1138,7 @@ def test_samtools_runtime_rejects_unpinned_or_unsafe_authority(
     if unsafe == "digest":
         expected_digest = "0" * 64
     elif unsafe == "version":
-        expected_version = "1.23"
+        expected_version = "1.25"  # observed runtime is older than the lock minimum
     elif unsafe == "runtime_symlink":
         runtime_path = tmp_path / "runtime-link.sif"
         runtime_path.symlink_to(image)

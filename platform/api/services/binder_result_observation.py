@@ -11,13 +11,47 @@ async def observe_retained_binder_results(session, job, output_path, *, commit=F
     from services.binder_retained_publication import ROOTS
     from services.result_state_integrity import _sequence_native_publication_owner
     from services.binder_publication_roots import publication_root
+    from services.rfd4_proteina_results import (
+        PUBLICATIONS, publication_model, has_native_publication, publication_spec,
+        publish_native_generation, read_published_generation_page, PUBLICATION_KEY,
+    )
     sequence_owner = _sequence_native_publication_owner(job)
+    params = job.params if isinstance(job.params, dict) else {}
+    rfd3_owner = (job.model_id == 'protein_modification_experimental' and job.mode == 'de_novo_design'
+                 and (params.get('generator_model_id') or params.get('generator') or 'rfd3') == 'rfd3')
     result = {'job_id': job.id, 'model_id': job.model_id, 'available': False,
               'publication_ref': None, 'document_count': 0, 'native_record_count': 0}
-    if job.model_id != 'bindcraft2' and job.model_id not in ROOTS and sequence_owner is None:
+    if (job.model_id != 'bindcraft2' and job.model_id not in ROOTS and sequence_owner is None
+            and publication_model(job) not in PUBLICATIONS and not rfd3_owner):
         return result
     root = publication_root(job, output_path)
     if not root.is_dir():
+        return result
+    if has_native_publication(job, root):
+        prefix, name, _ = publication_spec(job)
+        if not (root / prefix / name).is_file():
+            return result  # Pre-runtime failures may have only logs, not a zero-yield receipt.
+        await publish_native_generation(session, job, root)
+        page = await read_published_generation_page(job, session, limit=1)
+        result.update(available=True, publication_ref=PUBLICATION_KEY,
+                      native_record_count=page['total'], retained_file_count=len(page['artifacts']))
+        if commit:
+            await session.commit()
+        return result
+    if rfd3_owner:
+        manifest = root / 'collected/rfd3_generation/rfd3_generation_result_manifest.json'
+        if not manifest.is_file():
+            return result
+        # RFD3 already owns paired Design rows plus retained unpaired artifacts.
+        # Import through that owner only; never call the success finalizer here.
+        from services.result_ingester import _ingest_rfd3_generation_manifest
+        count = await _ingest_rfd3_generation_manifest(job, root, session, commit=False)
+        result.update(available=True, publication_ref='rfd3_generation_result_manifest_sha256',
+                      native_record_count=count, document_count=count)
+        if commit:
+            await session.commit()
+        return result
+    if job.model_id != 'bindcraft2' and job.model_id not in ROOTS and sequence_owner is None:
         return result
     if sequence_owner is not None:
         if not (root / sequence_owner.DIRECTORY).is_dir():

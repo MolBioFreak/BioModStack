@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { BinderInvocationPlan } from './BinderInvocationPlan';
+import { initialInvocationEnvelope, type InitialInvocationDraft } from '../lib/binderInvocationPlan';
 import { useQueries } from '@tanstack/react-query';
 import { fetchModelById } from '../lib/api';
 import { NativeSetting } from './NativeBinderGeneration';
@@ -96,5 +98,20 @@ export function BinderRoundSettings({ values, onChange }: {
             {(['binder_chains', 'target_chains'] as const).map(role => <label className="mr-4 inline-flex flex-col gap-1" key={role}>{role === 'binder_chains' ? 'Binder chains' : 'Target chains'}<ChainRoles role={role} value={request[role]} onChange={chains => edit({ [role]: chains })} /></label>)}
         </details>
         </div></details>
+    </section>;
+}
+
+/** New initial authoring emits one envelope; legacy saved rounds keep their editor. */
+export function InitialInvocationSettings({ draft, onChange }: {
+    draft: InitialInvocationDraft;
+    onChange: (draft: InitialInvocationDraft, envelope: ReturnType<typeof initialInvocationEnvelope>) => void;
+}) {
+    const change = (value: InitialInvocationDraft) => onChange(value, initialInvocationEnvelope(value));
+    return <section aria-label="Optional operations" className="space-y-4">
+        <label><input type="checkbox" aria-label="Enable optional operations" checked={draft.enabled} onChange={event => change({ ...draft, enabled: event.target.checked })} />Optional operations</label>
+        {!draft.enabled && <p>OFF: generation only. Operation drafts remain saved.</p>}
+        <details open={draft.enabled || undefined}><summary>Retained operation settings</summary>
+            <BinderInvocationPlan stages={draft.stages} onChange={stages => change({ ...draft, stages })} />
+        </details>
     </section>;
 }

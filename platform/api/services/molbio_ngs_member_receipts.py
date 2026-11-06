@@ -35,7 +35,7 @@ from molbio_models import (
 from molbio_ngs_models import MolBioNGSMemberReceipt
 from services.job_result_roots import resolve_persisted_job_result_root
 from services.ont_ngs_contract import get_ont_workflow_spec
-from services.ont_run_control import _valid_terminal_manifest
+from services.ont_run_control import _valid_terminal_manifest, terminal_artifact_roots
 from services.molbio_ngs_receipts import _snapshot_sequence
 from services.ngs_comparison_panels import _validated_panel_manifest
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
@@ -527,7 +527,7 @@ async def resolve_ont_instrument_run_receipt(
             path = resolve_runtime_data_path(str(artifact["path"])).resolve()
             if not any(
                 path.is_relative_to(root.resolve())
-                for root in (get_inputs_dir(), get_results_dir())
+                for root in terminal_artifact_roots(run, get_inputs_dir(), get_results_dir())
             ):
                 raise ValueError("ONT terminal artifact is outside server-owned roots")
             observed_digest, observed_size = _sha256_regular_file(path)

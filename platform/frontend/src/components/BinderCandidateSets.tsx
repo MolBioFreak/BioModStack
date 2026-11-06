@@ -5,7 +5,7 @@ import { fetchCandidateSets, saveCandidateSet, type CandidateRef } from '../lib/
 /** Persist frozen members and operator order; never alter producer rank or verdict. */
 export function BinderCandidateSets({ jobId, candidates, ranking, filterState = {}, onLoad }: {
     jobId: string; candidates: CandidateRef[]; ranking?: unknown; filterState?: Record<string, unknown>;
-    onLoad: (refs: CandidateRef[]) => void;
+    onLoad: (refs: CandidateRef[], saved?: { saved_set_id: string; revision: number }) => void;
 }) {
     const [name, setName] = useState('');
     const [loaded, setLoaded] = useState<{ id: string; revision: number }>();
@@ -38,7 +38,7 @@ export function BinderCandidateSets({ jobId, candidates, ranking, filterState = 
         <button type="button" disabled={busy} onClick={() => void save(true)}>Mark final</button>
         <button type="button" disabled={busy} onClick={() => void save(false)}>Remove final</button>
         <p>Order is frozen separately from native rank. Final designation does not change reuse or native outcome.</p>
-        {sets.data?.map(set => <button type="button" key={set.id} onClick={() => { setName(set.name); setLoaded({ id: set.id, revision: set.revision ?? 1 }); onLoad(set.candidate_refs ?? (set.design_ids ?? []).map(design_id => ({ kind: 'design', job_id: jobId, design_id }))); }}>Load {set.name}{set.revision !== undefined ? ` · revision ${set.revision}` : ''}{set.final_designation?.designated ? ' · final' : ''}</button>)}
+        {sets.data?.map(set => <button type="button" key={set.id} onClick={() => { setName(set.name); setLoaded({ id: set.id, revision: set.revision ?? 1 }); onLoad(set.candidate_refs ?? (set.design_ids ?? []).map(design_id => ({ kind: 'design', job_id: jobId, design_id })), set.revision !== undefined ? { saved_set_id: set.id, revision: set.revision } : undefined); }}>Load {set.name}{set.revision !== undefined ? ` · revision ${set.revision}` : ''}{set.final_designation?.designated ? ' · final' : ''}</button>)}
         {sets.isError && <p role="status">Saved sets unavailable. <button type="button" onClick={() => void sets.refetch()}>Refresh sets</button></p>}
         {error && <p role="alert">{error}</p>}
     </div></details>;

@@ -70,7 +70,7 @@ async def hub_stores(tmp_path):
         sequence = NucleotideSequence(
             id="sequence-pl1480", name="PL1480", description="Synthetic circular DNA", sequence="AACCGGTT", sequence_type="dna",
             molecule_strandedness="double", molecule_orientation="forward", is_circular=True, length=8,
-            features=[{"name": "CMV promoter", "type": "promoter", "start": 0, "end": 4, "strand": 1}, {"name": "NeoR/KanR", "type": "CDS", "start": 6, "end": 2, "strand": -1}],
+            features=[{"name": "source", "type": "source", "start": 0, "end": 8, "strand": 1}, {"name": "CMV promoter", "type": "promoter", "start": 0, "end": 4, "strand": 1}, {"name": "NeoR/KanR", "type": "CDS", "start": 6, "end": 2, "strand": -1}],
             primers=[], analysis_tracks=[], organism=None, version=1, gc_content=50.0,
         )
         molbio_session.add(sequence)
@@ -177,6 +177,11 @@ async def test_project_hub_read_model_is_exact_linked_typed_and_bulk_free(hub_st
     payload = response.json()
     assert payload["schema"] == "bms.project-hub.v1"
     assert payload["project"]["name"] == "Syenex New Plasmids"
+    add_href = payload["project"]["add_plasmid_href"]
+    assert f"workspace_id={project.id}" in add_href
+    assert f"global_experiment_id={experiment.id}" in add_href
+    assert f"domain_experiment_id={domain.id}" in add_href
+    assert "state_revision_id=state-current" in add_href
     assert payload["identity"]["selected_state_revision_id"] == "state-current"
     assert payload["identity"]["current_state_revision_id"] == "state-current"
     assert payload["plasmids"][0]["sequence_id"] == "sequence-pl1480"
@@ -186,6 +191,9 @@ async def test_project_hub_read_model_is_exact_linked_typed_and_bulk_free(hub_st
     assert payload["plasmids"][0]["content_digest"]
     assert payload["plasmids"][0]["source_store_id"] == "molbio"
     assert payload["plasmids"][0]["schema_name"]
+    assert payload["plasmids"][0]["feature_count"] == 2
+    assert "source" not in payload["plasmids"][0]["feature_labels"]
+    assert all(segment["feature_type"] != "source" for segment in payload["plasmids"][0]["map_segments"])
     assert payload["plasmids"][0]["map_segments"][1] == {
         "start": 6, "end": 2, "tone": "accent", "label": "NeoR/KanR", "feature_type": "CDS", "strand": "reverse",
     }
@@ -490,3 +498,20 @@ async def test_project_hub_keeps_unavailable_molecular_members_visible(hub_store
     missing = next(item for item in response.json()["plasmids"] if item["revision_id"] == "missing-revision")
     assert missing["availability"] == "unavailable"
     assert missing["unavailable_reason"] == "Molecular member unavailable"
+
+
+@pytest.mark.asyncio
+async def test_deleted_editable_sequence_reopens_its_retained_exact_project_revision(hub_stores):
+    from datetime import datetime
+    experiment_factory, native_factory, molbio_factory, project, experiment, domain, revision = hub_stores
+    async with molbio_factory() as session:
+        document = await session.get(MolecularDocument, 'sequence-pl1480')
+        document.deleted_at = datetime.utcnow()
+        await session.commit()
+    app = _app(experiment_factory, native_factory, molbio_factory)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.get(f'/api/projects/{project.id}/experiments/{experiment.id}/domains/{domain.id}/project-hub', params={'state_revision_id': 'state-current'})
+    assert response.status_code == 200, response.text
+    card = next(item for item in response.json()['plasmids'] if item['sequence_id'] == 'sequence-pl1480')
+    assert card['editable_projection_available'] is False
+    assert f'molbio_revision_id={revision.id}' in card['reopen_href']

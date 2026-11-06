@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from lib.portable_inputs import bind_native_document, resolve_input_path
+from lib.disco_contract import build_native_jobs
 
 
 def _parse_bool(value: Any) -> bool:
@@ -49,6 +50,7 @@ def _copy_optional(path_value: str, input_dir: Path) -> str:
     source = resolve_input_path(Path(raw).expanduser()).resolve()
     if not source.exists():
         raise FileNotFoundError(f"Input file not found: {source}")
+    input_dir.mkdir(parents=True, exist_ok=True)
     target = input_dir / source.name
     if source != target:
         shutil.copy2(source, target)
@@ -105,7 +107,7 @@ def main() -> None:
     parser.add_argument("--backend", required=True, choices=["laproteina", "disco"])
     parser.add_argument("--task", required=True)
     parser.add_argument("--num-designs", type=int, required=True)
-    parser.add_argument("--target-lengths", required=True)
+    parser.add_argument("--target-lengths", default="")
     parser.add_argument("--laproteina-preset", default="ucond_tri")
     parser.add_argument("--laproteina-samples-per-length", type=int, default=8)
     parser.add_argument("--laproteina-num-steps", type=int, default=400)
@@ -130,17 +132,34 @@ def main() -> None:
     parser.add_argument("--disco-hf-cache-path", default="")
     parser.add_argument("--disco-use-deepspeed-evo-attention", type=_parse_bool, default=False)
     parser.add_argument("--disco-cutlass-path", default="")
+    parser.add_argument("--laproteina-settings-json", type=json.loads, default={})
+    parser.add_argument("--disco-settings-json", type=json.loads, default={})
+    parser.add_argument("--disco-jobs-json", type=json.loads, default=None)
+    parser.add_argument("--disco-jobs-source-path", default="")
     parser.add_argument("--output", required=True)
     parser.add_argument("--input-dir", required=True)
     args = parser.parse_args()
 
-    target_lengths = _parse_lengths(args.target_lengths)
     input_dir = Path(args.input_dir).resolve()
     input_dir.mkdir(parents=True, exist_ok=True)
 
-    copied_motif_pdb = _copy_optional(args.laproteina_motif_pdb, input_dir)
-    copied_disco_json = _copy_optional(args.disco_input_json_path, input_dir)
-    copied_ligand_sdf = _copy_optional(args.disco_ligand_sdf, input_dir)
+    # Select effective inputs before materializing any fallback. Presence in the
+    # sparse native map wins, including explicit empty/null values.
+    effective_la = {
+        "motif_task_name": args.laproteina_motif_task_name,
+        "motif_pdb": args.laproteina_motif_pdb,
+        "contig_string": args.laproteina_contig_string,
+        **args.laproteina_settings_json,
+    }
+    copied_motif_pdb = (_copy_optional(effective_la["motif_pdb"], input_dir)
+                        if args.backend == "laproteina" else "")
+    explicit_jobs = args.disco_jobs_json is not None
+    selected_file = args.backend == "disco" and not explicit_jobs and bool(args.disco_input_json_path)
+    shorthand = args.backend == "disco" and not explicit_jobs and not selected_file
+    target_lengths = _parse_lengths(args.target_lengths) if args.backend == "laproteina" or shorthand else []
+    copied_disco_json = _copy_optional(args.disco_input_json_path, input_dir) if selected_file else ""
+    copied_ligand_sdf = (_copy_optional(args.disco_ligand_sdf, input_dir)
+                         if shorthand and args.task == "ligand_conditioned" else "")
     if copied_disco_json:
         source_json = resolve_input_path(args.disco_input_json_path)
         native_jobs = json.loads(source_json.read_text(encoding="utf-8"))
@@ -150,10 +169,10 @@ def main() -> None:
         copied_disco_json = str(execution_json)
 
     if args.backend == "laproteina":
-        if args.task == "motif_scaffolding" and not (args.laproteina_motif_task_name or (copied_motif_pdb and args.laproteina_contig_string)):
+        if args.task == "motif_scaffolding" and not (effective_la["motif_task_name"] or (copied_motif_pdb and (effective_la["contig_string"] or effective_la.get("motif_atom_spec") is not None))):
             raise ValueError(
                 "La-Proteina motif_scaffolding requires either laproteina_motif_task_name "
-                "or a custom laproteina_motif_pdb + laproteina_contig_string"
+                "or a custom laproteina_motif_pdb + (laproteina_contig_string or motif_atom_spec)"
             )
         if args.task != "motif_scaffolding" and args.task != "unconditional":
             raise ValueError(
@@ -161,11 +180,8 @@ def main() -> None:
             )
 
     if args.backend == "disco":
-        if args.task == "custom_json" and not copied_disco_json:
+        if args.task == "custom_json" and not copied_disco_json and args.disco_jobs_json is None:
             raise ValueError("DISCO custom_json requires --disco-input-json-path")
-        if args.task in {"ligand_conditioned", "dna_conditioned", "rna_conditioned"} and args.disco_effort == "fast":
-            # Upstream docs explicitly recommend max for conditional generation.
-            args.disco_effort = "max"
 
     request: dict[str, Any] = {
         "job_id": args.job_id,
@@ -204,7 +220,29 @@ def main() -> None:
         },
     }
 
-    if args.backend == "disco" and args.task != "custom_json":
+    # Typed native values are last, including explicit false, zero and null.
+    # Saved legacy effective effort is normalized by the Job migration owner;
+    # this producer never changes requested effort based on molecular task.
+    request["native_settings_fields"] = {
+        "laproteina": list(args.laproteina_settings_json),
+        "disco": list(args.disco_settings_json),
+    }
+    request["requested_primary"] = {"laproteina": {**request["laproteina"], "motif_pdb": args.laproteina_motif_pdb}}
+    request["native_settings_overrides"] = {"laproteina": args.laproteina_settings_json, "disco": args.disco_settings_json}
+    request["laproteina"].update(args.laproteina_settings_json)
+    if args.backend == "laproteina":
+        request["laproteina"]["motif_pdb"] = copied_motif_pdb
+    request["disco"].update(args.disco_settings_json)
+
+    if args.backend == "disco" and args.disco_jobs_json is not None:
+        owner = resolve_input_path(args.disco_jobs_source_path) if args.disco_jobs_source_path else None
+        if owner:
+            _copy_optional(args.disco_jobs_source_path, input_dir / "original_disco_jobs")
+        disco_jobs = bind_native_document(build_native_jobs(args.disco_jobs_json), "disco-json", owner=owner)
+        disco_input_path = input_dir / "disco_input.json"
+        disco_input_path.write_text(json.dumps(disco_jobs, indent=2), encoding="utf-8")
+        request["disco"]["input_json_path"] = str(disco_input_path)
+    elif shorthand and args.task != "custom_json":
         disco_jobs = _build_disco_jobs(
             task=args.task,
             target_lengths=target_lengths,

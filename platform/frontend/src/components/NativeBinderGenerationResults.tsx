@@ -1,14 +1,20 @@
+import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { materializeExactStructure, type StructureSourceSelection } from '../lib/api';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
 import { metricKeys, numericMetricKeys, formatMetric, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
-import { fetchNativeBinderGeneration, nativeCandidateRoute, nativeDocumentLabel, nativeGenerationMetrics, nativeGenerationMetricDetail, nativeGenerationMetricUnit, type NativeGenerationPage, type NativeGenerationRecord, type NativeGenerationDocument } from '../lib/nativeBinderResults';
+import { fetchNativeBinderGeneration, nativeCandidateRoute, nativeDocumentLabel, nativeGenerationMetrics, nativeGenerationMetricDetail, nativeGenerationMetricUnit, nativeGenerationExport, type NativeGenerationPage, type NativeGenerationRecord, type NativeGenerationDocument } from '../lib/nativeBinderResults';
 
 import { readBinderSelection, writeBinderSelection, readBinderNativeSources, writeBinderNativeSources, type NativeCandidateSource } from '../lib/binderContinuation';
 import { BinderCandidateSets } from './BinderCandidateSets';
 import { candidateKey, candidateIdentity, uniqueCandidates, readRoundStorage, writeRoundStorage, type CandidateRef } from '../lib/binderSelectedRound';
-import { continuationHref } from '../lib/deNovoContinuation';
+import { continuationHref, continuationLabel, rfd4Destinations } from '../lib/deNovoContinuation';
+import { DeNovoRepeatSettings } from './DeNovoRepeatSettings';
+import { NativeGeneratedSequences } from './NativeGeneratedSequences';
+import { Rfd4RetainedStateContinuation } from './Rfd4RetainedStateContinuation';
+import { buildResultsViewerMolecularDynamicsRoute } from './gen2StartingStructureState';
 import type { CohortInitialMetrics } from './CohortAnalytics';
 import { CohortMetricPicker } from './CohortMetricPicker';
 import { describeCohortMetric } from '../lib/cohortMetricPresentation';
@@ -16,6 +22,23 @@ import { describeCohortMetric } from '../lib/cohortMetricPresentation';
 // Load useful visualization and operation owners only when their view is demanded.
 const CohortAnalytics = lazy(() => import('./CohortAnalytics').then(module => ({ default: module.CohortAnalytics })));
 const StructureWorkbench = lazy(() => import('../structureViewer/StructureWorkbench').then(module => ({ default: module.StructureWorkbench })));
+
+function NativeDocumentWorkbench({ jobId, document, collapsed }: { jobId: string; document: NativeGenerationDocument; collapsed: boolean }) {
+    const encoded = /\.(?:cif|mmcif|bcif)(?:\.(?:gz|zst))?(?:$|\?)/i.test(document.logical_path ?? document.download_url ?? '')
+        && /(?:\.(?:gz|zst)|\.bcif)(?:$|\?)/i.test(document.logical_path ?? document.download_url ?? '');
+    const acquired = useQuery({ queryKey: ['native-document-view', jobId, document.artifact_id, document.target_state, document.model, document.sha256],
+        enabled: encoded, retry: false, staleTime: Infinity,
+        queryFn: () => materializeExactStructure({ job_id: jobId, document: { artifact_id: document.artifact_id, target_state: document.target_state ?? undefined },
+            ...(document.model != null ? { model_number: document.model } : {}), expected_sha256: document.sha256, output_format: 'native' }) });
+    if (encoded && !acquired.data) return <p role="status">{acquired.isError ? 'Exact native document could not be decoded. Original download remains available.' : 'Decoding exact native document…'}</p>;
+    const decoded = acquired.data;
+    const path = document.model != null ? decoded?.path : decoded?.decoded_path ?? decoded?.path;
+    const url = encoded && path ? `/api/files/download/${path.split('/').map(encodeURIComponent).join('/')}` : document.download_url;
+    return <StructureWorkbench mode="standard" structureUrl={url}
+        format={encoded || /\.(cif|mmcif)(?:$|\?)/i.test(document.logical_path ?? document.download_url ?? '') ? 'cif' : 'pdb'}
+        structureDocumentId={document.artifact_id} structureContentSha256={encoded ? document.model != null ? decoded?.sha256 : decoded?.decoded_sha256 ?? decoded?.sha256 : document.sha256}
+        alphafoldView={false} height={520} showSequenceTrack showMeasurements showM6Workbench hideControls={false} workbenchCollapsed={collapsed} />;
+}
 
 export interface NativeWorkbenchAdapter {
     key: string; title: string; recordLabel?: string;
@@ -40,11 +63,13 @@ export interface Props {
     selectedNativeSources?: NativeCandidateSource[];
     onSelectedNativeSourcesChange?: (sources: NativeCandidateSource[]) => void;
     onInspectDocument?: (row: NativeGenerationRecord, document?: NativeGenerationDocument) => void;
+    /** S04 adoption callback: opens a derivative; publication bytes remain immutable. */
+    onEditExactDocument?: (source: StructureSourceSelection, context: { candidateRef: CandidateRef; returnTo: string }) => void;
     artifactId?: string | null; targetState?: string | null;
 }
 type View = 'candidates' | 'dashboard' | 'analytics' | 'table' | 'structure';
 type Filter = { key: string; kind: 'range' | 'missing' | 'null' | 'nonNumeric'; min: string; max: string };
-const control = 'rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)] disabled:opacity-50';
+const control = 'rounded-lg border-0 bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)] disabled:opacity-50';
 const panel = 'min-w-0 rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)]';
 const values = nativeGenerationMetrics;
 const rowKey = (row: NativeGenerationRecord, index: number) => row.candidate_key ?? row.design_id ?? `record:${index}`;
@@ -74,7 +99,12 @@ function Download({ name, content, mime, children }: { name: string; content: st
 export function NativeBinderGenerationResults(props: Props) {
     return <NativeGenerationWorkbench key={`${props.jobId}:${props.adapter?.key ?? "native"}`} {...props} />;
 }
-function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, selectedDesignId, selectedDesignIds = [], onSelectedDesignIdsChange, selectedRecordIds, onSelectedRecordIdsChange, selectedNativeSources, onSelectedNativeSourcesChange, onInspectDocument, artifactId, targetState }: Props) {
+/** Reward and timing CSV rows are measurements of the run, not generated candidates. */
+function observationLabel(item: NativeGenerationRecord): string {
+    const file = String(item.artifact ?? '').split('/').pop() || 'Observation';
+    return typeof item.row === 'number' ? `${file} · row ${item.row + 1}` : file;
+}
+function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, selectedDesignId, selectedDesignIds = [], onSelectedDesignIdsChange, selectedRecordIds, onSelectedRecordIdsChange, selectedNativeSources, onSelectedNativeSourcesChange, onInspectDocument, onEditExactDocument, artifactId, targetState }: Props) {
     const [view, setView] = useState<View>(() => selectedDesignId || artifactId || new URLSearchParams(window.location.search).has('native_candidate') ? 'structure' : 'candidates');
     const [structureOpened, setStructureOpened] = useState(view === 'structure' || view === 'candidates');
     const [analyticsOpened, setAnalyticsOpened] = useState(view === 'dashboard' || view === 'analytics');
@@ -82,13 +112,15 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         if (view === 'structure' || view === 'candidates') setStructureOpened(true);
         if (view === 'dashboard' || view === 'analytics') setAnalyticsOpened(true);
     }, [view]);
-    const [search, setSearch] = useState('');
-    const [population, setPopulation] = useState('all');
+    const [review] = useState(() => readRoundStorage<{ search?: string; population?: string; filters?: Filter[]; page?: number }>(jobId, `review:${adapter?.key ?? 'native'}`, {}));
+    const [search, setSearch] = useState(review.search ?? '');
+    const [population, setPopulation] = useState(review.population ?? 'all');
     const [rankScope, setRankScope] = useState<'matching' | 'selected'>('matching');
-    const [filters, setFilters] = useState<Filter[]>([]);
+    const [filters, setFilters] = useState<Filter[]>(review.filters ?? []);
     const [selectedOnly, setSelectedOnly] = useState(false);
     const [sort, setSort] = useState({ key: '', descending: false });
-    const [pageIndex, setPageIndex] = useState(0);
+    const [pageIndex, setPageIndex] = useState(review.page ?? 0);
+    useEffect(() => { writeRoundStorage(jobId, `review:${adapter?.key ?? 'native'}`, { search, population, filters, page: pageIndex }); }, [jobId, adapter?.key, search, population, filters, pageIndex]);
     const [pageSize, setPageSize] = useState(25);
     const [columns, setColumns] = useState<string[] | null>(null);
     const [columnSearch, setColumnSearch] = useState('');
@@ -114,6 +146,8 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         if (query.hasNextPage && !query.isFetching && !query.isFetchNextPageError) void query.fetchNextPage();
     }, [query.hasNextPage, query.isFetching, query.isFetchNextPageError, query.fetchNextPage, query.data?.pages.length]);
     const page = query.data?.pages[0];
+    const rfd4 = page?.model_id === 'rfd4_proteina';
+    const complexa = page?.model_id === 'complexa';
     const rows = useMemo(() => query.data?.pages.flatMap(part => part.records) ?? [], [query.data]);
     useEffect(() => {
         const inventory = readRoundStorage<Record<string, NativeCandidateSource>>(jobId, 'native-documents', {});
@@ -121,11 +155,11 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
             const ref = item.candidate_ref;
             if (ref?.kind !== 'native_document') continue;
             const document = item.structures?.find(doc => doc.artifact_id === ref.artifact_id && (ref.target_state == null || doc.target_state === ref.target_state));
-            if (document) inventory[candidateKey(ref)] = { job_id: ref.job_id, artifact_id: ref.artifact_id, document };
+            if (document) inventory[candidateKey(ref)] = { job_id: ref.job_id, artifact_id: ref.artifact_id, document: { ...document, ...(ref.model != null ? { model: ref.model } : {}) } };
         }
         writeRoundStorage(jobId, 'native-documents', inventory);
     }, [jobId, rows]);
-    const cohort = useMemo<CohortRow[]>(() => rows.map((item, i) => ({ id: rowKey(item, i), label: adapter?.label(item) ?? `Candidate ${i + 1}`, values: values(item) })), [rows, adapter]);
+    const cohort = useMemo<CohortRow[]>(() => rows.map((item, i) => ({ id: rowKey(item, i), label: adapter?.label(item) ?? (rfd4 ? String(item.label ?? (item.record_kind === 'observation' ? item.event ?? 'Observation' : `Candidate ${i + 1}`)) : complexa && item.record_kind === 'observation' ? observationLabel(item) : `Candidate ${i + 1}`), values: values(item) })), [rows, adapter, rfd4]);
     const keys = useMemo(() => metricKeys(cohort), [cohort]);
     const numericKeys = useMemo(() => numericMetricKeys(cohort), [cohort]);
     const label = (key: string) => { const nativeLabel = adapter?.metricLabel?.(key); if (nativeLabel) return nativeLabel; const unit = rows.map(item => nativeGenerationMetricUnit(item, key)).find(Boolean); return `${describeCohortMetric(key, keys).label}${unit ? ` (${unit})` : ''}`; };
@@ -139,14 +173,32 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
             const detail = (event as CustomEvent).detail;
             if (detail.jobId !== jobId) return;
             setSavedRefs(detail.refs);
+            const inventory = readRoundStorage<Record<string, NativeCandidateSource>>(jobId, 'native-documents', {});
+            const sourceKey = (source: NativeCandidateSource) => candidateKey({
+                kind: 'native_document', job_id: source.job_id, artifact_id: source.artifact_id,
+                ...(source.document?.target_state != null ? { target_state: source.document.target_state } : {}),
+                ...(source.document?.model != null ? { model: source.document.model } : {}),
+            });
+            // Non-replacement round events update only the round-owned refs.
+            // Keep independently selected source documents; remove a mirrored
+            // ref only when it disappears from the round's previous selection.
+            const mirrored = new Set(savedRefs.filter(ref => ref.kind === 'native_document').map(candidateKey));
+            const independent = detail.replace ? [] : readBinderNativeSources(jobId).filter(source => !mirrored.has(sourceKey(source)));
+            const incoming = (detail.refs as CandidateRef[]).flatMap(ref => {
+                if (ref.kind !== 'native_document') return [];
+                return [inventory[candidateKey(ref)] ?? { job_id: ref.job_id, artifact_id: ref.artifact_id,
+                    document: { artifact_id: ref.artifact_id, target_state: ref.target_state, model: ref.model } }];
+            });
+            const sources = [...new Map([...independent, ...incoming].map(source => [sourceKey(source), source])).values()];
+            setSavedSources(sources); writeBinderNativeSources(jobId, sources); onSelectedNativeSourcesChange?.(sources);
             if (detail.replace) { setNativeSelected([]); writeBinderSelection(selectionScope, []); }
         };
         window.addEventListener('bms:binder-round-selection', sync);
         return () => window.removeEventListener('bms:binder-round-selection', sync);
-    }, [jobId, selectionScope]);
+    }, [jobId, selectionScope, onSelectedNativeSourcesChange, savedRefs]);
     const nativeSources = selectedNativeSources ?? savedSources;
     const changeSources = (sources: NativeCandidateSource[]) => {
-        const unique = [...new Map(sources.map(source => [JSON.stringify([source.job_id, source.artifact_id]), source])).values()];
+        const unique = [...new Map(sources.map(source => [JSON.stringify([source.job_id, source.artifact_id, source.document?.target_state, source.document?.model]), source])).values()];
         setSavedSources(unique); writeBinderNativeSources(jobId, unique); onSelectedNativeSourcesChange?.(unique);
     };
     const selectionId = (item: NativeGenerationRecord) => rowKey(item, rows.indexOf(item));
@@ -157,9 +209,15 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         if (ref.job_id !== jobId) return false;
         if (ref.kind === 'design') return ref.design_id === item.design_id;
         return ref.kind === 'native_document' && !!item.structures?.some(doc => doc.artifact_id === ref.artifact_id
-            && (ref.target_state == null || doc.target_state === ref.target_state));
+            && (ref.target_state == null || doc.target_state === ref.target_state)
+            && (ref.model == null || doc.model === ref.model));
     };
-    const selection = Array.from(new Set([...(selectedRecordIds ?? nativeSelected).filter(id => !rows.some(item => selectionId(item) === id && item.candidate_ref)), ...rows.filter(item => (item.design_id && selectedDesignIds.includes(item.design_id)) || savedRefs.some(ref => matchesRef(item, ref)) || nativeSources.some(source => source.job_id === jobId && item.structures?.some(doc => doc.artifact_id === source.artifact_id))).map(selectionId)]));
+    const matchesSource = (item: NativeGenerationRecord, source: NativeCandidateSource) => matchesRef(item, {
+        kind: 'native_document', job_id: source.job_id, artifact_id: source.artifact_id,
+        ...(source.document?.target_state != null ? { target_state: source.document.target_state } : {}),
+        ...(source.document?.model != null ? { model: source.document.model } : {}),
+    });
+    const selection = Array.from(new Set([...(selectedRecordIds ?? nativeSelected).filter(id => !rows.some(item => selectionId(item) === id && item.candidate_ref)), ...rows.filter(item => (item.design_id && selectedDesignIds.includes(item.design_id)) || savedRefs.some(ref => matchesRef(item, ref)) || nativeSources.some(source => matchesSource(item, source))).map(selectionId)]));
     const tableKeys = columns ?? (preferred.length || adapter?.preferredColumns !== undefined ? preferred : keys.slice(0, 6));
     const byId = useMemo(() => new Map(cohort.map((entry, index) => [entry.id, rows[index]])), [cohort, rows]);
     const selectedSet = useMemo(() => new Set(selection), [selection]);
@@ -169,6 +227,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         const result = cohort.filter(entry => {
             const source = byId.get(entry.id)!;
             const outcome = String(entry.values.outcome ?? source.outcome ?? '').toLowerCase();
+            if (population.startsWith('native:') && source.population !== population.slice(7)) return false;
             if (population === 'passed' && !['pass', 'passed', 'accepted'].includes(outcome)) return false;
             if (population === 'rejected' && !['reject', 'rejected', 'failed', 'filtered'].includes(outcome)) return false;
             if (population === 'ranked' && entry.values.rank == null && source.rank == null) return false;
@@ -199,8 +258,9 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const displayedPage = Math.min(pageIndex, Math.max(0, Math.ceil(matched.length / pageSize) - 1));
     const navigationRows = matched.map(entry => byId.get(entry.id)!);
     const pageRows = matched.slice(displayedPage * pageSize, (displayedPage + 1) * pageSize);
-    const localSelection = local && (local.scope === scope || (!selectedDesignId && artifactId == null && targetState == null)) ? local : undefined;
     const returnCandidate = new URLSearchParams(window.location.search).get('native_candidate');
+    const localSelection = local && (returnCandidate == null || local.key === returnCandidate)
+        && (local.scope === scope || (!selectedDesignId && artifactId == null && targetState == null)) ? local : undefined;
     const activeId = localSelection?.key ?? (selectedDesignId ? cohort.find(entry => byId.get(entry.id)?.design_id === selectedDesignId)?.id : returnCandidate ?? (artifactId ? cohort.find(entry => byId.get(entry.id)?.structures?.some(doc => doc.artifact_id === artifactId))?.id : cohort[0]?.id));
     const row = activeId ? byId.get(activeId) : undefined;
     const focusedInspection = useRef(false);
@@ -216,6 +276,15 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const document = explicit
         ? documents.find(doc => (requestedArtifact == null || doc.artifact_id === requestedArtifact) && (requestedState == null || doc.target_state === requestedState))
         : documents.find(doc => doc.primary) ?? (row ? adapter?.preferredDocument?.(row) : undefined) ?? (row?.design_id || documents.length === 1 ? documents[0] : undefined);
+    // One MODEL authority for every continuation of the inspected molecule.
+    const requestedModel = new URLSearchParams(window.location.search).get('model_number');
+    const nativeRef = row?.candidate_ref;
+    const sourceModel = document?.model ?? (requestedModel ? Number(requestedModel) : nativeRef?.kind === 'design' ? nativeRef.document?.model : nativeRef?.kind === 'native_document' ? nativeRef.model : undefined);
+    const continuationSource = document ? { job_id: jobId, expected_sha256: document.sha256,
+        ...(row?.design_id ? { design_id: row.design_id } : {}),
+        document: { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}) },
+        ...(sourceModel != null ? { model_number: sourceModel } : {}),
+    } : undefined;
     const inspect = (item: NativeGenerationRecord, doc?: NativeGenerationDocument) => {
         const exact = doc ?? item.structures?.find(value => value.primary) ?? adapter?.preferredDocument?.(item) ?? (item.structures?.length === 1 ? item.structures[0] : undefined);
         setLocal({ scope, key: rowKey(item, rows.indexOf(item)), document: exact });
@@ -242,11 +311,16 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         const changedDesignIds = rows.filter(item => ids.includes(selectionId(item)) && item.design_id && (!checked || !item.candidate_ref)).map(item => item.design_id!);
         onSelectedDesignIdsChange?.(checked ? Array.from(new Set([...selectedDesignIds, ...changedDesignIds])) : selectedDesignIds.filter(id => !changedDesignIds.includes(id)));
         const affected = rows.filter(item => ids.includes(selectionId(item)) && (!item.design_id || item.candidate_ref));
-        const remaining = nativeSources.filter(source => !affected.some(item => item.structures?.some(doc => source.job_id === jobId && doc.artifact_id === source.artifact_id)));
+        const remaining = nativeSources.filter(source => !affected.some(item => matchesSource(item, source)));
         // A sole document is unambiguous. Multiple states require an explicit document choice.
         const added = checked ? affected.flatMap(item => {
-            if (item.candidate_ref) return [];
-            const chosen = nativeSources.filter(source => item.structures?.some(doc => source.job_id === jobId && doc.artifact_id === source.artifact_id));
+            const ref = item.candidate_ref;
+            if (ref?.kind === 'native_document') {
+                const doc = item.structures?.find(value => value.artifact_id === ref.artifact_id && (ref.target_state == null || value.target_state === ref.target_state));
+                return doc ? [{ job_id: ref.job_id, artifact_id: ref.artifact_id, document: { ...doc, ...(ref.model != null ? { model: ref.model } : {}) } }] : [];
+            }
+            if (ref) return [];
+            const chosen = nativeSources.filter(source => matchesSource(item, source));
             if (chosen.length) return chosen;
             const primary = item.structures?.find(doc => doc.primary) ?? (item.structures?.length === 1 ? item.structures[0] : undefined);
             return primary?.artifact_id ? [{ job_id: jobId, artifact_id: primary.artifact_id, document: primary }] : [];
@@ -270,7 +344,28 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const scopeText = complete ? 'All records loaded' : `${rows.length} of ${page?.total ?? '…'} loaded`;
     const exportRows = useMemo(() => exportScope === 'all' ? rows : exportScope === 'selected' ? rows.filter(item => selectionId(item) && selectedSet.has(selectionId(item)!)) : matched.map(entry => byId.get(entry.id)!), [rows, exportScope, selectedSet, matched, byId]);
     const csv = useMemo(() => [['candidate_key', 'design_id', ...keys].map(csvCell).join(','), ...exportRows.map(item => [item.candidate_key, item.design_id, ...keys.map(key => values(item)[key])].map(csvCell).join(','))].join('\r\n'), [exportRows, keys]);
-    const exportJson = useMemo(() => JSON.stringify(exportRows.map(item => item.native_record ?? item), null, 2), [exportRows]);
+    const selectedExportRefs: unknown[] = [
+        ...savedRefs, ...selectedDesignIds.map(design_id => ({ kind: 'design', job_id: jobId, design_id })),
+        ...nativeSources.map(source => ({ kind: 'native_document', job_id: source.job_id, artifact_id: source.artifact_id,
+            ...(source.document?.target_state != null ? { target_state: source.document.target_state } : {}),
+            ...(source.document?.model != null ? { model: source.document.model } : {}) })),
+        ...selection.map(candidate_key => ({ kind: 'record', job_id: jobId, candidate_key })),
+    ];
+    const unresolvedExportRefs = selectedExportRefs.filter(ref => {
+        const selected = ref as CandidateRef & { candidate_key?: string };
+        return selected.candidate_key != null ? !byId.has(selected.candidate_key) : !rows.some(item => matchesRef(item, selected));
+    });
+    const exportEnvelope = nativeGenerationExport(exportRows, {
+        jobId, adapter: adapter?.key ?? 'native', page, loaded: rows.length, scope: exportScope,
+        filter: { search, population, filters, selected_only: selectedOnly }, rank: { ...sort, scope: rankScope, missing: 'last' },
+        readError: query.isError ? String(query.error) : null, loading: query.isFetching,
+        selected: selectedExportRefs, unresolved: unresolvedExportRefs,
+    });
+    const exportJson = JSON.stringify(exportEnvelope, null, 2);
+    const { records: exportedRecords, ...exportMetadata } = exportEnvelope;
+    const exportCsvMetadata = JSON.stringify({ ...exportMetadata, csv_file: `${jobId}-native-${exportScope}.csv`,
+        metric_columns: keys, records: exportedRecords.map(({ native_record: _raw, record: _record, ...identity }, index) => ({ csv_row: index + 2, ...identity,
+            native_metrics: exportRows[index].native_metrics ?? null, metric_descriptors: exportRows[index].metric_descriptors ?? null })) }, null, 2);
     const initialMetrics = adapter?.initialMetrics?.(numericKeys);
     const headlineKeys = (initialMetrics?.headline?.length ? initialMetrics.headline : adapter ? ['duration_seconds', ...numericKeys] : ['seq_length', 'dsasa', ...numericKeys]).filter((key, i, all) => numericKeys.includes(key) && all.indexOf(key) === i).slice(0, 2);
     const headlineMetrics = headlineKeys.map(key => ({ key, ...summarizeMetric(matched, key) }));
@@ -313,6 +408,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         </nav>
     </section>;
     return <section aria-label="Native initial-generation results" className={`min-w-0 ${adapter?.compact ? "space-y-1" : "space-y-4"} text-[var(--text-primary)]`}>
+        <DeNovoRepeatSettings jobId={jobId} />
         <header style={view === 'analytics' ? { display: 'none' } : undefined} className="flex flex-wrap items-center justify-between gap-3"><h3 className={`${adapter?.compact ? "text-base" : "text-xl"} font-semibold`}>{adapter?.title ?? "Candidates"}</h3><span className="rounded-full border border-[var(--border-color)] px-3 py-1 text-xs">{scopeText}</span></header>
         {!adapter && <BinderPredictionEvidence jobId={jobId} sourceDesignId={row?.design_id} launchContextId={launchContextId} />}
         {query.isLoading && <p role="status">Reading published generation records…</p>}
@@ -320,15 +416,16 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         {query.isFetchingNextPage && <p role="status">Loading the full cohort: {rows.length} of {page?.total} records. Current plots and exports cover loaded records only.</p>}
         {page && <>
             <div hidden={view === 'analytics' || view === 'structure'}>{adapter?.summary?.(matched.map(entry => byId.get(entry.id)!))}</div>
-            {page.total === 0 ? <p className={`${panel} p-5`}>No native candidate records were emitted. This published zero-yield result remains available for review.</p> : <>
+            {page.total === 0 ? <div className={`${panel} p-5`}><p>No native candidate records were emitted. This published zero-yield result remains available for review.</p><Download name={`${jobId}-native-${exportScope}.json`} content={exportJson} mime="application/json">Native JSON</Download><Download name={`${jobId}-native-${exportScope}.csv`} content={csv} mime="text/csv;charset=utf-8">Metrics CSV</Download><Download name={`${jobId}-native-${exportScope}.metadata.json`} content={exportCsvMetadata} mime="application/json">CSV scope metadata</Download></div> : <>
                 <div className={`grid grid-cols-2 ${adapter?.compact ? "gap-2" : "gap-3"} lg:grid-cols-4`} aria-label="Cohort summary" style={view === 'analytics' || view === 'structure' ? { display: 'none' } : undefined}>
                     {[
-                        [adapter?.recordLabel ?? 'Published candidates', page.total, `${matched.length} in view · ${rows.length} loaded`],
+                        [adapter?.recordLabel ?? 'Publication records', page.total, `${matched.length} in view · ${rows.length} loaded`],
+                        ...(page.record_counts ? [['Molecular records', page.record_counts.molecular_records, 'Not a unique candidate count'], ['Observations', page.record_counts.observations, 'Events, not generated candidates']] : []),
                         ...headlineMetrics.map(metric => [`Median ${label(metric.key)}`, metric.median == null ? '—' : formatMetric(metric.median), `${metric.observed} observations in this view`]),
                         ['Selected', selection.length, 'Records for export; saved molecules for operations'],
                     ].map(([label, count, detail]) => <div key={String(label)} className={`${panel} px-4 py-2 ${adapter?.compact ? "flex min-w-0 items-center justify-between gap-2" : ""}`}><div title={String(label)} className={`text-xs text-[var(--text-secondary)] ${adapter?.compact ? "truncate" : ""}`}>{label}</div><div title={String(detail)} className={`${adapter?.compact ? "text-lg" : "my-1 text-2xl"} font-semibold tabular-nums`}>{count}</div>{!adapter?.compact && <div className="text-xs text-[var(--text-secondary)]">{detail}</div>}</div>)}
                 </div>
-                <nav hidden={view === 'structure'} aria-label="Native populations" className="flex flex-wrap gap-2">{[['all', 'All'], ['passed', 'Passed'], ['ranked', 'Ranked'], ['rejected', 'Rejected']].map(([key, title]) => <button type="button" className={control} aria-pressed={population === key} key={key} onClick={() => { setPopulation(key); setPageIndex(0); }}>{title}</button>)}<span>{selection.length} checked in this population · {selection.filter(id => !matched.some(entry => entry.id === id)).length} outside this view</span></nav>
+                <nav hidden={view === 'structure'} aria-label="Native populations" className="flex flex-wrap gap-2">{(rfd4 ? [['all', 'All records'], ...Object.keys(page.record_counts?.populations ?? {}).map(key => [`native:${key}`, key.replaceAll('_', ' ')])] : [['all', 'All'], ['passed', 'Passed'], ['ranked', 'Ranked'], ['rejected', 'Rejected']]).map(([key, title]) => <button type="button" className={control} aria-pressed={population === key} key={key} onClick={() => { setPopulation(key); setPageIndex(0); }}>{title}</button>)}<span>{selection.length} checked in this population · {selection.filter(id => !matched.some(entry => entry.id === id)).length} outside this view</span></nav>
                 <div role="tablist" aria-label="Native result review" className="flex flex-wrap gap-1 border-b border-[var(--border-color)]">{([['candidates', 'Candidates'], ['dashboard', 'Dashboard'], ['analytics', 'Custom charts'], ['table', 'Data table'], ['structure', 'Structure']] as const).map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={view === key} className={`border-b-2 px-4 py-2 text-sm font-medium ${view === key ? 'border-blue-500 bg-blue-500/10' : 'border-transparent hover:bg-blue-500/5'}`} onClick={event => { setView(key); const section = event?.currentTarget?.closest('section'); if (section && key === 'analytics') requestAnimationFrame(() => section.scrollIntoView({ block: 'start' })); }}>{adapter && key === 'structure' && !documents.length ? 'Inspect record' : label}</button>)}</div>
                 {view === 'dashboard' && matched.length !== rows.length && <p className="text-sm text-[var(--text-secondary)]">Showing {matched.length} of {rows.length} records after filtering. <button type="button" className="underline" onClick={() => setView('table')}>Adjust filters</button></p>}
                 <div hidden={view === 'dashboard' || view === 'structure'} className={`${panel} ${adapter?.compact ? "space-y-1 p-2" : "space-y-3 p-3"}`} aria-label="Cohort controls">
@@ -336,7 +433,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                         <button className={control} type="button" onClick={() => filterChanged([...filters, { key: numericKeys[0] ?? keys[0] ?? '', kind: 'range', min: '', max: '' }])}>Add metric filter</button>
                         <label className="flex items-center gap-2 text-sm"><input type="checkbox" aria-label="Selected candidates only" checked={selectedOnly} onChange={event => { setSelectedOnly(event.target.checked); setPageIndex(0); }} />Selected only</label>
                         {(search || filters.length > 0 || selectedOnly) && <button className={control} type="button" onClick={() => { setSearch(''); setFilters([]); setSelectedOnly(false); setPageIndex(0); }}>Clear filters</button>}
-                        <details className="relative"><summary className={`${control} cursor-pointer`}>Export ({exportRows.length})</summary><div className="absolute right-0 z-30 mt-2 w-72 max-w-[85vw] space-y-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] p-4 shadow-xl"><label className="block text-sm">Export scope<select aria-label="Export scope" className={`${control} mt-2 w-full`} value={exportScope} onChange={event => setExportScope(event.target.value as typeof exportScope)}><option value="filtered">Matching records</option><option value="selected">Selected records</option><option value="all">All loaded records</option></select></label><p className="text-xs">{exportRows.length} records · all native metric columns</p><div className="flex flex-wrap gap-2"><Download name={`${jobId}-native-${exportScope}.csv`} content={csv} mime="text/csv;charset=utf-8">Metrics CSV</Download><Download name={`${jobId}-native-${exportScope}.json`} content={exportJson} mime="application/json">Native JSON</Download></div></div></details>
+                        <details className="relative"><summary className={`${control} cursor-pointer`}>Export ({exportRows.length})</summary><div className="absolute right-0 z-30 mt-2 w-72 max-w-[85vw] space-y-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] p-4 shadow-xl"><label className="block text-sm">Export scope<select aria-label="Export scope" className={`${control} mt-2 w-full`} value={exportScope} onChange={event => setExportScope(event.target.value as typeof exportScope)}><option value="filtered">Matching records</option><option value="selected">Selected records</option><option value="all">All loaded records</option></select></label><p className="text-xs">{exportRows.length} records · all native metric columns</p><div className="flex flex-wrap gap-2"><Download name={`${jobId}-native-${exportScope}.csv`} content={csv} mime="text/csv;charset=utf-8">Metrics CSV</Download><Download name={`${jobId}-native-${exportScope}.metadata.json`} content={exportCsvMetadata} mime="application/json">CSV scope metadata</Download><Download name={`${jobId}-native-${exportScope}.json`} content={exportJson} mime="application/json">Native JSON</Download></div></div></details>
                     </div>
                     {filters.map((filter, index) => <div key={index} className="flex flex-wrap items-center gap-2 text-sm">
                         <CohortMetricPicker label={`Filter ${index + 1} metric`} keys={keys} value={filter.key} onChange={key => filterChanged(filters.map((item, i) => i === index ? { ...item, key } : item))} />
@@ -361,37 +458,61 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                             <label className="mb-2 block text-xs">Structure <select className={`${control} ml-2 max-w-full`} aria-label="Published document" value={document ? String(documents.indexOf(document)) : ''} onChange={event => { const doc = documents[Number(event.target.value)]; if (doc) inspect(row, doc); }}>
                                 {!document && <option value="">{explicit ? 'Requested document unavailable' : 'Choose a saved structure'}</option>}{documents.map((doc, i) => <option key={`${doc.artifact_id}:${doc.target_state}:${i}`} value={i}>{nativeDocumentLabel(doc)}{doc.primary ? ' · primary' : ''}</option>)}
                             </select></label>
-                            {document?.download_url ? <StructureWorkbench key={`${document.artifact_id}:${document.target_state}:${document.download_url}`} mode="standard" structureUrl={document.download_url} format={/\.(cif|mmcif)(?:$|\?)/i.test(document.logical_path ?? document.download_url) ? 'cif' : 'pdb'} structureDocumentId={document.artifact_id} structureContentSha256={document.sha256} alphafoldView={false} height={520} showSequenceTrack showMeasurements showM6Workbench hideControls={false} workbenchCollapsed={!viewerToolsOpen} /> : <p role="status">{explicit ? 'Requested native document is unavailable. The Design primary structure is not substituted.' : documents.some(doc => doc.download_url) ? 'Choose a saved structure above to inspect this candidate.' : 'No downloadable native structure was published for this record.'}</p>}
+                            {document?.download_url ? <NativeDocumentWorkbench key={`${document.artifact_id}:${document.target_state}:${document.download_url}`} jobId={jobId} document={document} collapsed={!viewerToolsOpen} /> : <p role="status">{explicit ? 'Requested native document is unavailable. The Design primary structure is not substituted.' : documents.some(doc => doc.download_url) ? 'Choose a saved structure above to inspect this candidate.' : 'No downloadable native structure was published for this record.'}</p>}
                         </div>}
                         </div>{adapter?.related?.(row)}</div>
-                        {document?.artifact_id && <nav aria-label="Continue exact native document">{(['redesign', 'sequence', 'prediction'] as const).map(destination => {
-                            const href = new URL(continuationHref({ job_id: jobId, ...(row.design_id ? { design_id: row.design_id } : {}), document: { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}) } }, destination), window.location.origin);
+                        <details className="my-2 text-xs"><summary>Candidate details</summary><label className="block">Exact candidate identifier<input className="block w-full" aria-label="Exact candidate identifier" readOnly value={String(row.candidate_key ?? row.native_input_id ?? '')} onFocus={event => event.target.select()} /></label></details>
+                        <NativeGeneratedSequences row={row} />
+                        {rfd4 && continuationSource && <Rfd4RetainedStateContinuation key={`${document!.artifact_id}:${document!.target_state}:${sourceModel}`} candidate={activeId ?? undefined} page={page} source={{ ...continuationSource, expected_sha256: document!.sha256 }} />}
+                        {document?.artifact_id && <nav aria-label="Continue exact native document">{(rfd4 ? [...rfd4Destinations, 'redesign', 'sequence', 'prediction'] as const : ['redesign', 'sequence', 'prediction'] as const).map(destination => {
+                            const href = new URL(continuationHref(continuationSource!, destination), window.location.origin);
                             const back = new URL(href.searchParams.get('return_to')!, window.location.origin);
                             back.searchParams.set('native_candidate', activeId!); back.searchParams.set('artifact_id', document.artifact_id);
                             if (document.target_state != null) back.searchParams.set('target_state', document.target_state); else back.searchParams.delete('target_state');
+                            if (sourceModel != null) back.searchParams.set('model_number', String(sourceModel)); else back.searchParams.delete('model_number');
                             if (adapter) back.searchParams.set('native_scope', adapter.key);
                             if (launchContextId) { href.searchParams.set('launch_context_id', launchContextId); back.searchParams.set('launch_context_id', launchContextId); }
                             href.searchParams.set('return_to', `${back.pathname}${back.search}${back.hash}`);
-                            return <a className="mr-3 underline" key={destination} href={`${href.pathname}${href.search}`}>{destination === 'redesign' ? 'Redesign exact structure' : destination === 'sequence' ? 'Design sequence from exact structure' : 'Predict exact structure'}</a>;
-                        })}</nav>}
+                            return <a className="mr-3 underline" key={destination} href={`${href.pathname}${href.search}`}>{continuationLabel(destination)}</a>;
+                        })}<button className="underline" type="button" onClick={() => {
+                            const selected = { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}), ...(sourceModel != null ? { model: sourceModel } : {}) };
+                            const ref: CandidateRef = row.design_id ? { kind: 'design', job_id: jobId, design_id: row.design_id, document: selected } : { kind: 'native_document', job_id: jobId, ...selected };
+                            const back = new URL(window.location.href);
+                            back.searchParams.set('native_candidate', activeId!); back.searchParams.set('artifact_id', document.artifact_id);
+                            if (document.target_state != null) back.searchParams.set('target_state', document.target_state); else back.searchParams.delete('target_state');
+                            if (adapter) back.searchParams.set('native_scope', adapter.key);
+                            const href = buildResultsViewerMolecularDynamicsRoute(jobId, row.design_id ?? null, { sourceRef: { kind: 'candidate', id: jobId, candidate_ref: ref }, returnTo: `${back.pathname}${back.search}${back.hash}` });
+                            window.location.assign(launchContextId ? `${href}&launch_context_id=${encodeURIComponent(launchContextId)}` : href);
+                        }}>Use as MD starting structure</button></nav>}
+                        {onEditExactDocument && continuationSource && <button type="button" onClick={() => {
+                            const back = new URL(window.location.href);
+                            back.searchParams.set('native_candidate', activeId!);
+                            back.searchParams.set('artifact_id', document!.artifact_id);
+                            if (document!.target_state != null) back.searchParams.set('target_state', document!.target_state); else back.searchParams.delete('target_state');
+                            if (sourceModel != null) back.searchParams.set('model_number', String(sourceModel)); else back.searchParams.delete('model_number');
+                            const selector = { artifact_id: document!.artifact_id, ...(document!.target_state != null ? { target_state: document!.target_state } : {}), ...(sourceModel != null ? { model: sourceModel } : {}) };
+                            onEditExactDocument(continuationSource, { candidateRef: row.design_id ? { kind: 'design', job_id: jobId, design_id: row.design_id, document: selector } : { kind: 'native_document', job_id: jobId, ...selector }, returnTo: `${back.pathname}${back.search}${back.hash}` });
+                        }}>Edit this exact document</button>}
                         {adapter?.inspect?.(row)}
                         {!row.design_id && <details className="my-3"><summary className="cursor-pointer text-sm">Select saved structures for another operation</summary>
-                            {!documents.length ? <p>No saved molecule. This record remains available for inspection and export.</p> : documents.filter(doc => doc.artifact_id).map((doc, index) => <div key={doc.artifact_id} className="my-3 space-y-2"><label className="flex items-start gap-2"><input type="checkbox" aria-label={`Use native document ${doc.artifact_id}`} checked={nativeSources.some(source => source.job_id === jobId && source.artifact_id === doc.artifact_id)} onChange={event => {
-                                const remaining = nativeSources.filter(source => source.job_id !== jobId || source.artifact_id !== doc.artifact_id);
+                            {!documents.length ? <p>No saved molecule. This record remains available for inspection and export.</p> : documents.filter(doc => doc.artifact_id).map(doc => doc.artifact_id === document?.artifact_id && doc.target_state === document.target_state && sourceModel != null ? { ...doc, model: sourceModel } : doc).map((doc, index) => <div key={`${doc.artifact_id}:${doc.target_state}:${doc.model}`} className="my-3 space-y-2"><label className="flex items-start gap-2"><input type="checkbox" aria-label={`Use native document ${doc.artifact_id}`} checked={nativeSources.some(source => source.job_id === jobId && source.artifact_id === doc.artifact_id && source.document?.target_state === doc.target_state && source.document?.model === doc.model)} onChange={event => {
+                                const remaining = nativeSources.filter(source => source.job_id !== jobId || source.artifact_id !== doc.artifact_id || source.document?.target_state !== doc.target_state || source.document?.model !== doc.model);
                                 changeSources(event.target.checked ? [...remaining, { job_id: jobId, artifact_id: doc.artifact_id, document: doc }] : remaining);
                                 if (event.target.checked) { const next = Array.from(new Set([...nativeSelected, selectionId(row)])); setNativeSelected(next); writeBinderSelection(selectionScope, next); }
                             }} /><span>Use saved molecule {index + 1} · {nativeDocumentLabel(doc)}{doc.primary ? ' · primary' : ''}</span></label><details className="text-xs text-[var(--text-secondary)]"><summary>Exact saved molecule identity</summary><code className="block break-all">{doc.logical_path}</code><code className="block break-all">{doc.artifact_id}</code></details></div>)}
                         </details>}
                         {(!adapter || documents.length > 0) && <div className="mt-4 min-w-0 space-y-4"><aside className="min-w-0"><h5 className="mb-2 text-sm font-semibold">Native measurements</h5><dl aria-label="Native measurements" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))] gap-x-6 text-sm">{Object.entries(values(row)).filter(([, value]) => value != null).map(([key, value]) => <div key={key} className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-baseline gap-3 border-b border-[var(--border-color)] py-2" title={[key, nativeGenerationMetricDetail(row, key)].filter(Boolean).join(' · ')}><dt className="min-w-0 [overflow-wrap:anywhere] text-[var(--text-secondary)]">{label(key)}</dt><dd className="min-w-0 [overflow-wrap:anywhere] text-right tabular-nums">{formatMetric(value)}</dd></div>)}</dl>{Object.entries(values(row)).some(([, value]) => value == null) && <details className="mt-3 text-xs text-[var(--text-secondary)]"><summary className="cursor-pointer">Unreported fields</summary>{Object.entries(values(row)).filter(([, value]) => value == null).map(([key, value]) => <p key={key}>{label(key)}: {formatMetric(value)}</p>)}</details>}</aside></div>}
-                        <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">{document?.download_url && <><button className={control} type="button" aria-expanded={viewerToolsOpen} onClick={() => setViewerToolsOpen(value => !value)}>{viewerToolsOpen ? 'Hide viewer tools' : 'Measurements and exports'}</button><a className="underline" href={document.download_url} download>Download exact native document</a></>}{row.design_id && <a className="underline" href={nativeCandidateRoute(jobId, row.design_id, document, launchContextId)}>Open candidate workbench</a>}</div>
+                        <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">{document?.download_url && <><button className={control} type="button" aria-expanded={viewerToolsOpen} onClick={() => setViewerToolsOpen(value => !value)}>{viewerToolsOpen ? 'Hide viewer tools' : 'Measurements and exports'}</button><a className="underline" href={resolveApiResourceUrl(document.download_url)} download>Download exact native document</a></>}{row.design_id && <a className="underline" href={nativeCandidateRoute(jobId, row.design_id, document, launchContextId)}>Open candidate workbench</a>}</div>
                     </>}</Suspense>}
                 </div>
                 </div>
                 <p className="text-xs text-[var(--text-secondary)]">Model predictions are not experimental validation. {adapter && 'Phase plots show recorded optimization updates, not acceptance scores. '}{!complete && 'Only loaded records are included.'}</p>
             </>}
+            {(page.execution_status || page.population_completeness) && <p role="status">Execution: {page.execution_status ?? 'Not reported'} · Population: {page.population_completeness ?? 'Not reported'}</p>}
+            {!!page.observation_errors?.length && <OnDemand title="Native observation errors"><BindCraft2SettingsReadback value={page.observation_errors} /></OnDemand>}
             {row && <OnDemand title="Selected record: complete native readback"><BindCraft2SettingsReadback value={row.native_record ?? row} /><a href={dataUrl(row.native_record ?? row)} download={`${jobId}-native-record.json`}>Export selected record JSON</a></OnDemand>}
             <OnDemand title="Native receipt and accounting"><BindCraft2SettingsReadback value={page.receipt} /><a href={dataUrl(page.receipt)} download={`${jobId}-native-receipt.json`}>Export receipt JSON</a></OnDemand>
-            <OnDemand title="Native files and provenance">{page.artifacts?.map((file, i) => <p key={i}>{file.path} {file.download_url && <a href={file.download_url} download>Download native file</a>}</p>)}<BindCraft2SettingsReadback value={page.publication} /><a href={dataUrl(page.publication)} download={`${jobId}-native-publication.json`}>Export publication JSON</a></OnDemand>
+            <OnDemand title="Native files and provenance">{page.artifacts?.map((file, i) => <p key={i}>{file.path} {file.download_url && <a href={resolveApiResourceUrl(file.download_url)} download>Download native file</a>}</p>)}<BindCraft2SettingsReadback value={page.publication} /><a href={dataUrl(page.publication)} download={`${jobId}-native-publication.json`}>Export publication JSON</a></OnDemand>
         </>}
     </section>;
 }

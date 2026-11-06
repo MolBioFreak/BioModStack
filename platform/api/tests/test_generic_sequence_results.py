@@ -129,7 +129,7 @@ async def test_malformed_native_collection_cannot_partially_mutate_sqlite(admiss
 async def test_native_generation_replacement_is_not_silent_import_replay(admission, tmp_path):
     output, index = native_fixture(tmp_path, 'fampnn', [0])
     job = Job(id='generation-replay', name='explicit generation fixture', model_id='fampnn',
-              mode='design', status='completed', params={})
+              mode='design', status='completed', params={}, output_dir=str(output))
     admission.add(job); await admission.commit()
     assert await ingest_job_results(job.id, output, admission) == 1
     original = (await admission.execute(select(Design))).scalars().one()

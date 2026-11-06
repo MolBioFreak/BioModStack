@@ -40,6 +40,9 @@ def nextflow(tmp_path, workflow, *, module_root=ROOT):
         trace = tmp_path / ('resume-trace.tsv' if '-resume' in extra else 'trace.tsv')
         result = subprocess.run(command + ['-with-trace', str(trace), *extra], cwd=tmp_path,
                                 env=environment, text=True, capture_output=True, timeout=120)
+        trace.with_suffix('.stdout.log').write_text(result.stdout)
+        trace.with_suffix('.stderr.log').write_text(result.stderr)
+        trace.with_suffix('.exit').write_text(str(result.returncode) + '\n')
         assert result.returncode == 0, result.stdout + result.stderr
         with trace.open() as stream:
             return list(csv.DictReader(stream, delimiter='\t'))
@@ -160,6 +163,7 @@ def test_real_cached_result_then_actual_database_ingestion(tmp_path):
         validator_artifacts=[{**descriptor(structure), 'validator': 'esmfold2', 'native_path': 'structure.cif'}],
         provenance={'sequence_name': sequence_name, 'predictor': 'esmfold2', 'sequence_engine': 'proteinmpnn'}))
     workflow = f"""
+params.shape_gpu_memory_gib = 32
 include {{ PlanRFD3Batches; BuildShapeResult }} from '{ROOT}/modules/shape_blueprint'
 workflow {{
     PlanRFD3Batches(file('{tmp_path}/request.json'))

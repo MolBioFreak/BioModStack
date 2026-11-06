@@ -1,3 +1,5 @@
+import { parseMolecularDynamicsSourceRef, type MolecularDynamicsStartingStructureRef } from './molecularDynamicsUiState.js';
+
 export const MD_HANDOFF_DRAFT_PREFIX = 'bms.md.gen2.draft.v1:';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -13,6 +15,8 @@ export interface MolecularDynamicsHandoffRoute {
     sourcePredictionJobId: string | null;
     sourceDesignId: string | null;
     returnTemplate: 'molecular_dynamics' | null;
+    sourceRef?: MolecularDynamicsStartingStructureRef | null;
+    returnTo?: string | null;
 }
 
 export interface MolecularDynamicsHandoffUserSequence {
@@ -79,16 +83,26 @@ export const buildMolecularDynamicsPredictionReturnRoute = (draftId: string, job
     return `/submit?template=molecular_dynamics&md_draft_id=${draftId}&source_prediction_job_id=${id}`;
 };
 
-export const buildResultsViewerMolecularDynamicsRoute = (jobId: string, designId: string): string => {
+export const buildResultsViewerMolecularDynamicsRoute = (jobId: string, designId: string | null, options?: { sourceRef?: MolecularDynamicsStartingStructureRef; returnTo?: string }): string => {
     requireUuid(jobId, 'source_prediction_job_id');
-    requireUuid(designId, 'source_design_id');
-    return `/submit?template=molecular_dynamics&source_prediction_job_id=${jobId}&source_design_id=${designId}`;
+    if (designId) requireUuid(designId, 'source_design_id');
+    const params = new URLSearchParams({ template: 'molecular_dynamics', source_prediction_job_id: jobId });
+    if (designId) params.set('source_design_id', designId);
+    if (options?.sourceRef) params.set('source_ref', JSON.stringify(parseMolecularDynamicsSourceRef(options.sourceRef, 'MD route')));
+    if (options?.returnTo) params.set('return_to', requireMolecularDynamicsReturn(options.returnTo));
+    return `/submit?${params}`;
+};
+
+export const requireMolecularDynamicsReturn = (raw: string): string => {
+    // Same local Designs return policy as ResultsViewer, without URL normalization.
+    if (!/^\/designs\/[^\\\s?#]+(?:[?#][^\\\r\n]*)?$/.test(raw)) throw new Error('Invalid Molecular Dynamics return route.');
+    return raw;
 };
 
 export const parseMolecularDynamicsHandoffRoute = (search: string): MolecularDynamicsHandoffRoute => {
     const query = search.startsWith('?') ? search.slice(1) : search;
     const params = new URLSearchParams(query);
-    const controlled = ['source_sequence_id', 'return_template', 'md_draft_id', 'source_prediction_job_id', 'source_design_id'] as const;
+    const controlled = ['source_sequence_id', 'return_template', 'md_draft_id', 'source_prediction_job_id', 'source_design_id', 'source_ref', 'return_to', 'md_operation_id'] as const;
     for (const key of params.keys()) {
         if (/^(source_|return_|md_)/.test(key) && !controlled.includes(key as typeof controlled[number])) {
             throw new Error(`Invalid Molecular Dynamics handoff route: unknown ${key}.`);
@@ -105,6 +119,7 @@ export const parseMolecularDynamicsHandoffRoute = (search: string): MolecularDyn
     const rawReturnTemplate = value('return_template');
     if (sourceSequenceId) requireUuid(sourceSequenceId, 'source_sequence_id');
     if (draftId) requireUuid(draftId, 'md_draft_id');
+    if (value('md_operation_id')) requireUuid(value('md_operation_id')!, 'md_operation_id');
     if (sourcePredictionJobId) requireUuid(sourcePredictionJobId, 'source_prediction_job_id');
     if (sourceDesignId) requireUuid(sourceDesignId, 'source_design_id');
     if (rawReturnTemplate && rawReturnTemplate !== 'molecular_dynamics') {
@@ -121,6 +136,8 @@ export const parseMolecularDynamicsHandoffRoute = (search: string): MolecularDyn
         draftId,
         sourcePredictionJobId,
         sourceDesignId,
+        ...(value('source_ref') ? { sourceRef: parseMolecularDynamicsSourceRef(JSON.parse(value('source_ref')!), 'MD route') } : {}),
+        ...(value('return_to') ? { returnTo: requireMolecularDynamicsReturn(value('return_to')!) } : {}),
         returnTemplate: rawReturnTemplate as 'molecular_dynamics' | null,
     };
 };
@@ -150,8 +167,23 @@ export const buildMolecularDynamicsHandoffInitialValues = (
     if (typeof savedDraft?.destinationLaunchContextId === 'string') {
         result.md_destination_launch_context_id = savedDraft.destinationLaunchContextId;
     }
+    for (const key of ['execution_target_id', 'execution_policy', 'complex_components', 'primary_chain_id']) {
+        if (savedDraft && Object.hasOwn(savedDraft, key)) result[key] = savedDraft[key];
+    }
+    if (savedDraft?.return_to != null) result.md_return_to = requireMolecularDynamicsReturn(String(savedDraft.return_to));
+    if (savedDraft?.sequenceSnapshot) {
+        result.md_sequence_snapshot = parseMolecularDynamicsHandoffUserSequence(savedDraft.sequenceSnapshot);
+        result.md_sequence_source = savedDraft.sequenceSource;
+        if (!route.sourcePredictionJobId && !route.sourceDesignId) result.md_source_mode = 'prediction';
+    }
+    // Cancel/back restores source; successful prediction must use its new document.
+    if (!route.sourcePredictionJobId && !route.sourceDesignId && savedDraft?.source_ref) {
+        result.source_ref = parseMolecularDynamicsSourceRef(savedDraft.source_ref, 'Saved MD draft');
+    }
     if (route.sourcePredictionJobId) result.source_prediction_job_id = route.sourcePredictionJobId;
     if (route.sourceDesignId) result.source_design_id = route.sourceDesignId;
+    if (route.sourceRef) result.source_ref = route.sourceRef;
+    if (route.returnTo) result.md_return_to = route.returnTo;
     return result;
 };
 

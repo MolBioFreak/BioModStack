@@ -21,6 +21,7 @@ import {
     type MDTrajectoryFrameMap,
 } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
+import { requireMolecularDynamicsReturn } from './gen2StartingStructureState';
 import MDNativeAnalysis, { mdLaneLabel } from './MDNativeAnalysis';
 import type { MDSceneState } from '../structureViewer/contracts/mdTrajectory';
 
@@ -35,7 +36,9 @@ const layout: Partial<Layout> = {
     yaxis: { title: { text: 'Backbone RMSD (Å)' }, gridcolor: '#334155' },
 };
 
-export default function MDResultsPane({ jobId }: { jobId: string }) {
+export default function MDResultsPane({ jobId, returnTo }: { jobId: string; returnTo?: string | null }) {
+    let safeReturn: string | null = null;
+    try { safeReturn = returnTo ? requireMolecularDynamicsReturn(returnTo) : null; } catch { /* Historical unlinked result. */ }
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [selectedReplica, setSelectedReplica] = useState<number | null>(null);
@@ -285,6 +288,7 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     const analysisData = nativeAnalysis;
     return (
         <section className="space-y-4" data-bms-result-pane="molecular-dynamics">
+            {safeReturn && <button type="button" onClick={() => navigate(safeReturn!)}>Return to selected parent</button>}
             {lifecyclePanel}
             {(summary.isError || artifacts.isError || analysis.isError) && <div role="alert" className="rounded border border-amber-500/30 p-3 text-amber-200">Some result reads failed. Valid independent results remain available. {summary.isError && <span>Summary: {String(summary.error?.message)}</span>} {artifacts.isError && <span>Artifacts: {String(artifacts.error?.message)}</span>} {analysis.isError && <span>Analysis: {String(analysis.error?.message)}</span>} <button type="button" onClick={() => { void summary.refetch(); void artifacts.refetch(); void analysis.refetch(); }} className="underline">Retry result reads</button></div>}
             <details className="rounded border border-slate-700 p-3"><summary>Native artifacts and analysis evidence</summary>

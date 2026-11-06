@@ -6,6 +6,7 @@ params.md_job_config = null
 params.md_retry_spawn_receipt = null
 params.md_analysis_retry_spawn_receipt = null
 params.md_input_root = null
+params.md_source_provenance = null
 params.api_url = System.getenv('API_BASE_URL') ?: 'http://127.0.0.1:8000'
 params.job_id = null
 params.job_name = 'Molecular Dynamics'
@@ -81,11 +82,18 @@ process MD_COLLECT_REPLICAS {
     path 'replica_collection.done', emit: collection_marker
 
     script:
+    def sourceProvenanceJson = groovy.json.JsonOutput.toJson(params.md_source_provenance ?: [:]).replace("'", "'\"'\"'")
+    def retainSource = params.md_source_provenance
+        ? "printf '%s' '${sourceProvenanceJson}' > md_source_provenance.json"
+        : ':'
+    def sourceProvenanceArg = params.md_source_provenance ? '--source-provenance md_source_provenance.json' : ''
     """
     export PYTHONPATH="${params.code_root}:\${PYTHONPATH:-}"
+    ${retainSource}
     '${params.api_python}' -m scripts.bms_md.aggregate_children \
       --child-status ${child_status} \
       --spawn-receipt ${spawn_receipt} \
+      ${sourceProvenanceArg} \
       --output-dir "${params.out_dir}"
     printf 'completed\n' > replica_collection.done
     """

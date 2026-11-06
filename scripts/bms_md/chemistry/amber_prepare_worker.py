@@ -15,8 +15,9 @@ ION_NAMES = {"NA", "CL", "Na+", "Cl-"}
 
 def _preprocess_pdb(source: Path, destination: Path) -> list[str]:
     records: list[str] = []
-    residue_order: list[tuple[str, str, str]] = []
-    sulfurs: dict[tuple[str, str, str], tuple[float, float, float]] = {}
+    residue_order: list[tuple[int, str, str, str]] = []
+    sulfurs: dict[tuple[int, str, str, str], tuple[float, float, float]] = {}
+    model = 0
     source_text = source.read_text(encoding="utf-8", errors="strict")
     if any(line.lstrip().startswith("_atom_site.") for line in source_text.splitlines()):
         # Managed source bytes remain unchanged in source.pdb and its manifest.
@@ -34,6 +35,13 @@ def _preprocess_pdb(source: Path, destination: Path) -> list[str]:
         PDBFile.writeFooter(parsed.topology, normalized)
         source_text = normalized.getvalue()
     for raw in source_text.splitlines():
+        if raw.startswith("MODEL "):
+            model += 1
+            records.append(raw.ljust(80))
+            continue
+        if raw.startswith("ENDMDL"):
+            records.append(raw.ljust(80))
+            continue
         if raw.startswith("TER"):
             if records and not records[-1].startswith("TER"):
                 records.append(raw.ljust(80))
@@ -44,27 +52,30 @@ def _preprocess_pdb(source: Path, destination: Path) -> list[str]:
         residue_name = line[17:20].strip()
         if residue_name in WATER_NAMES:
             continue
-        residue = (line[21], line[22:26], line[26])
+        residue = (model, line[21], line[22:26], line[26])
         if residue not in residue_order:
             residue_order.append(residue)
         if line[12:16].strip() == "SG" and residue_name in {"CYS", "CYX"}:
             sulfurs[residue] = (float(line[30:38]), float(line[38:46]), float(line[46:54]))
         records.append(line)
-    disulfides: list[tuple[tuple[str, str, str], tuple[str, str, str]]] = []
-    claimed: set[tuple[str, str, str]] = set()
+    disulfides: list[tuple[tuple[int, str, str, str], tuple[int, str, str, str]]] = []
+    claimed: set[tuple[int, str, str, str]] = set()
     keys = list(sulfurs)
     for index, left in enumerate(keys):
         if left in claimed:
             continue
         for right in keys[index + 1 :]:
-            if right in claimed:
+            if right in claimed or left[0] != right[0]:
                 continue
             distance = math.dist(sulfurs[left], sulfurs[right])
             if distance <= 2.5:
                 disulfides.append((left, right)); claimed.update((left, right)); break
     renamed = []
+    model = 0
     for line in records:
-        residue = (line[21], line[22:26], line[26])
+        if line.startswith("MODEL "):
+            model += 1
+        residue = (model, line[21], line[22:26], line[26])
         if residue in claimed:
             line = line[:17] + "CYX" + line[20:]
         renamed.append(line.rstrip())

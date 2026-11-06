@@ -141,8 +141,15 @@ def saved_manifests(target):
     return manifests
 
 
+# A managed release installs only image and shared-weight namespaces. Other selected
+# bytes (for example runtime_data under data/) travel through the artifact cache and
+# are never members of a release, so they stay out of the release manifest.
+RELEASE_NAMESPACES = ('containers/', 'weights/')
+
+
 def manifest_for(selection, entries, source) -> dict[str, Any]:
     # Never transfer the scientific request, sequences, paths or generated inputs.
+    entries = [e for e in entries if e.remote_destination.startswith(RELEASE_NAMESPACES)]
     wire_selection = selection.model_dump(mode="json")
     if selection.kind in {"workflow", "workflow_pack"}:
         wire_selection = dict(kind="workflow", model_id=hashlib.sha256(json.dumps(

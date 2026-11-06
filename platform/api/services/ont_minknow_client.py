@@ -48,7 +48,12 @@ def _safe_get(obj: Any, name: str, default: Any = None) -> Any:
         return default
     if isinstance(obj, dict):
         return obj.get(name, default)
-    return getattr(obj, name, default)
+    try:
+        return getattr(obj, name, default)
+    except (AttributeError, TypeError):
+        # minknow_api message wrappers raise TypeError for fields absent from
+        # this MinKNOW release (e.g. GetFlowCellInfoResponse.sample_rate).
+        return default
 
 
 def _string_or_none(value: Any) -> str | None:

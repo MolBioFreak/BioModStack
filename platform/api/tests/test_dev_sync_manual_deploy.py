@@ -183,3 +183,21 @@ def test_cli_runs_real_transaction_without_resuming_timer(deployment, monkeypatc
     assert current["live"] == "b" * 40
     assert rows(database) == before and sync._read_deployment_paused(state)
     assert not any(call[0] == "systemctl" for call in calls)
+
+
+@pytest.mark.parametrize("late_ready", [True, False])
+def test_failed_rollback_reuses_only_matching_late_healthy_owner(deployment, late_ready):
+    sync, root, state, database, installed, current, calls = deployment
+    current["restart_failures"] = 2
+    with pytest.raises(sync.DeploymentRollbackFailedError):
+        sync.sync_once(root, state, deploy_now=True, allow_active_work=True)
+    assert calls.count(("restart",)) == 2
+    with sqlite3.connect(database) as db:
+        db.execute("UPDATE jobs SET status='completed', queue_status=NULL")
+    current["live"] = "a" * 40 if late_ready else None
+    sync.recover_failed_rollback(root, state)
+    assert calls.count(("restart",)) == (2 if late_ready else 3)
+    assert current["head"] == current["live"] == "a" * 40
+    assert sync._read_sync_refresh_required(state) is None
+    assert installed.read_bytes() == b"previous synchronizer\n"
+    assert sync._read_deployment_paused(state)

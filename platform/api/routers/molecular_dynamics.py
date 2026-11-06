@@ -22,6 +22,7 @@ from schemas import ExecutionPolicy, JobCreate, JobResponse
 from paths import get_results_dir
 from services.stage_review import resolve_output_dir
 
+from services.md.prediction_detours import MdPredictionDetour, save_prediction_detour, load_prediction_detour
 from services.md.cancel_actuator import cancel_running_md_run
 from services.md.chemistry_catalog import ChemistryCatalogError, get_chemistry_catalog
 from services.md.feature_gate import molecular_dynamics_feature_enabled, require_molecular_dynamics_feature
@@ -66,6 +67,24 @@ from services.md.state import (
 )
 
 router = APIRouter(prefix="/api/molecular-dynamics", tags=["molecular-dynamics"])
+
+
+@router.post("/prediction-detours", status_code=201)
+async def create_prediction_detour(payload: MdPredictionDetour, session: AsyncSession = Depends(get_session)):
+    return {"id": await save_prediction_detour(payload, session)}
+
+
+@router.get("/prediction-detours/{identity}", response_model=MdPredictionDetour, response_model_exclude_unset=True)
+async def read_prediction_detour(identity: str, session: AsyncSession = Depends(get_session)):
+    return await load_prediction_detour(identity, session)
+
+
+@router.get("/native-parameters")
+async def get_native_parameters() -> dict[str, Any]:
+    """Discover the same versioned MDP metadata used by native authoring."""
+    from scripts.bms_md.native_parameters import native_parameter_catalog
+
+    return native_parameter_catalog()
 
 
 class LifecycleCommand(BaseModel):
@@ -377,16 +396,23 @@ def browse_starting_structure_server_files(
 )
 async def starting_structure_content(
     source_kind: Literal[
-        "rcsb", "design", "upload", "managed_fixture", "prior_md_input", "server_file"
+        "rcsb", "design", "upload", "managed_fixture", "prior_md_input", "server_file", "candidate"
     ],
     source_id: str,
     expected_sha256: str = Query(pattern=r"^[0-9a-f]{64}$"),
+    selection: str | None = Query(default=None, max_length=8192),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     resolved = None
     try:
         expected = require_expected_sha256(expected_sha256)
-        source_ref = StartingStructureSourceRef(kind=source_kind, id=source_id)
+        try:
+            source_ref = (StartingStructureSourceRef.model_validate_json(selection) if selection else
+                          StartingStructureSourceRef(kind=source_kind, id=source_id))
+        except ValueError as exc:
+            raise StartingStructureError("MD_STARTING_STRUCTURE_SOURCE_INVALID", "Invalid exact source selection.") from exc
+        if source_ref.kind != source_kind or source_ref.id != source_id:
+            raise StartingStructureError("MD_STARTING_STRUCTURE_SOURCE_ID_MISMATCH", "Selection differs from content owner.", status_code=409)
         resolved = await resolve_source(source_ref, session)
         snapshot = open_resolved_structure_snapshot(
             resolved, expected_sha256=expected
@@ -557,10 +583,10 @@ async def _validate_preview_launch_context(intent: MdLaunchIntent | MdNativeLaun
                 )
             return
         bound_refs = _launch_context_source_refs(normalized_request, workflow_payload)
-        if intent.source_ref.kind != "design":
+        if intent.source_ref.kind not in {"design", "candidate"}:
             raise LaunchContextError(
                 "launch_context_source_mismatch",
-                "Project Molecular Dynamics launch intent must select one Design source.",
+                "Project Molecular Dynamics launch intent must select one prepared source.",
                 status_code=409,
             )
         if len(bound_refs) != 1:
@@ -570,6 +596,16 @@ async def _validate_preview_launch_context(intent: MdLaunchIntent | MdNativeLaun
                 status_code=409,
             )
         bound_ref = bound_refs[0]
+        if intent.source_ref.kind == "candidate" or bound_ref.kind == "candidate":
+            # Native documents carry artifact/state/MODEL identity. Compare the
+            # existing prepared source, not a lossy Design-id projection.
+            if bound_ref.model_dump(mode="json") != intent.source_ref.model_dump(mode="json"):
+                raise LaunchContextError(
+                    "launch_context_source_mismatch",
+                    "Selected native document does not match the prepared Project source.",
+                    status_code=409,
+                )
+            return
         if bound_ref.kind != "design" or bound_ref.id != intent.source_ref.id:
             raise LaunchContextError(
                 "launch_context_source_mismatch",
@@ -695,6 +731,8 @@ async def _compile_native_preview(intent: MdNativeLaunchIntent, session: AsyncSe
         def resolver(value: str) -> str:
             if resolved is not None and value == source_token:
                 return resolved_runtime_path(resolved)
+            if resolved is not None and value == "bms-md-starting-structure:original" and resolved.original_runtime_path:
+                return resolved.original_runtime_path
             return _resolve_md_input_path_for_runtime(value)
 
         spec = compile_native_job_intent(intent, profile=profile, source_token=source_token)
@@ -703,6 +741,9 @@ async def _compile_native_preview(intent: MdNativeLaunchIntent, session: AsyncSe
             chemistry_catalog=catalog, chemistry_view=view,
         )
         identity = native_input_identity(normalized)
+        if resolved is not None and resolved.original_runtime_path:
+            assert resolved.source_provenance is not None
+            identity["original_structure"] = resolved.source_provenance["original_sha256"]
         if source is not None:
             normalized["input"]["structure"] = source_token
         for field in V2_SERVER_RESOLVED_CHEMISTRY_FIELDS:
@@ -714,7 +755,7 @@ async def _compile_native_preview(intent: MdNativeLaunchIntent, session: AsyncSe
             "execution_policy": intent.execution_policy.model_dump(mode="json"),
         }
         preview = MdNativeLaunchPreview(
-            **preimage, preview_digest=hashlib.sha256(canonical_bytes(preimage)).hexdigest(),
+            **preimage, preview_digest=hashlib.sha256(canonical_bytes({**preimage, **({"return_to": intent.return_to} if intent.return_to is not None else {})})).hexdigest(),
         )
         if intent.execution_target_id:
             from services.nextflow import build_selected_execution_plan
@@ -744,7 +785,37 @@ async def _compile_native_preview(intent: MdNativeLaunchIntent, session: AsyncSe
         raise
 
 
-async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession):
+def _native_md_job_request(request, preview, resolved, *, md_input_resolver=None):
+    """One canonical request builder for standalone and retained round MD."""
+    provenance: dict[str, Any] = {}
+    if resolved is not None:
+        provenance.update(copy.deepcopy(resolved.source_provenance or {}))
+        assert preview.source is not None
+        provenance.update(source_ref=resolved.source_ref.model_dump(mode="json"), source_sha256=preview.source.sha256)
+    provenance["native_input_identity"] = preview.input_identity
+    params = {"md_job_spec": preview.effective_request, "md_source_provenance": provenance,
+              "intent": request.intent.model_dump(mode="json")}
+    if resolved is not None and resolved.design_id is not None:
+        params.update(
+            source_design_id=resolved.design_id, lineage_root_job_id=provenance.get("lineage_root_job_id"),
+            selection_source_job_id=resolved.producer_job_id, selection_source_type="design",
+            source_stage_job_id=resolved.producer_job_id, source_stage_family=provenance.get("source_stage_family"),
+            source_stage_mode=provenance.get("source_stage_mode"), source_selection_count=1,
+        )
+    job_data = JobCreate(
+        name=request.intent.name, model_id="molecular_dynamics", mode="simulate", parent_job_id=None,
+        params=params, launch_context_id=request.intent.launch_context_id,
+        execution_target_id=request.intent.execution_target_id,
+        execution_policy=request.intent.execution_policy,
+    )
+    if md_input_resolver is not None:
+        from routers.jobs import normalize_job_request
+        job_data = normalize_job_request(job_data, md_input_resolver=md_input_resolver)
+    return job_data
+
+
+async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession, *, round_step=None,
+                                destination_launch_context_id=None, experiment_session=None):
     from routers.jobs import create_job, ApprovedExecutionPlan, TypedMdProjectLaunch
     from component_runtime import canonical_bytes
 
@@ -753,27 +824,11 @@ async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession)
     try:
         if preview.preview_digest != request.preview_digest:
             raise StartingStructureError("MD_LAUNCH_PREVIEW_STALE", "The native launch preview is stale.", status_code=409)
-        provenance: dict[str, Any] = {}
-        if resolved is not None:
-            provenance.update(copy.deepcopy(resolved.source_provenance or {}))
-            assert preview.source is not None
-            provenance.update(source_ref=resolved.source_ref.model_dump(mode="json"), source_sha256=preview.source.sha256)
-        provenance["native_input_identity"] = preview.input_identity
-        params = {"md_job_spec": preview.effective_request, "md_source_provenance": provenance,
-                  "intent": request.intent.model_dump(mode="json")}
-        if resolved is not None and resolved.design_id is not None:
-            params.update(
-                source_design_id=resolved.design_id, lineage_root_job_id=provenance.get("lineage_root_job_id"),
-                selection_source_job_id=resolved.producer_job_id, selection_source_type="design",
-                source_stage_job_id=resolved.producer_job_id, source_stage_family=provenance.get("source_stage_family"),
-                source_stage_mode=provenance.get("source_stage_mode"), source_selection_count=1,
-            )
-        job_data = JobCreate(
-            name=request.intent.name, model_id="molecular_dynamics", mode="simulate", parent_job_id=None,
-            params=params, launch_context_id=request.intent.launch_context_id,
-            execution_target_id=request.intent.execution_target_id,
-            execution_policy=request.intent.execution_policy,
-        )
+        job_data = _native_md_job_request(request, preview, resolved,
+            md_input_resolver=resolver if round_step is not None else None)
+        params = job_data.params
+        if round_step is not None:
+            job_data.binder_round_step = round_step
         kwargs = {"_md_output_creation": {}, "_md_input_resolver": resolver}
         if request.intent.execution_target_id:
             kwargs["_approved_execution_plan"] = ApprovedExecutionPlan(
@@ -781,6 +836,26 @@ async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession)
                 canonical_bytes({"approval_digest": preview.preview_digest, "plan": preview.execution_plan,
                                  "admissible": True, "deferred_preparation": [], "blockers": []}),
             )
+        if destination_launch_context_id is not None and round_step is not None:
+            # Native preview/source verification precedes the ordinary Project
+            # child handoff. The destination is never consumed as MD authority.
+            from services.global_experiments.launch_contexts import prepare_child_launch_contexts, resolve_launch_context_for_display
+            from routers.jobs import _create_prepared_child_batch, _reserve_selected_run_group
+            prepared = await prepare_child_launch_contexts(experiment_session,
+                destination_launch_context_id=destination_launch_context_id,
+                job_requests=[job_data],
+                native_entrypoints=["workflows/experimental/molecular_dynamics/orchestrator.nf"],
+                idempotency_key=round_step.step_id, core_session=session, md_input_resolver=resolver)
+            bound = JobCreate.model_validate(prepared['children'][0]['job_request'])
+            destination = await resolve_launch_context_for_display(experiment_session, destination_launch_context_id)
+            await _reserve_selected_run_group(experiment_session, group_id=prepared['run_group_id'],
+                                              domain_id=destination.domain_experiment_id)
+            if request.intent.execution_target_id:
+                kwargs['_approved_execution_plan'] = ApprovedExecutionPlan(
+                    canonical_bytes(bound.model_dump(mode='json')),
+                    kwargs['_approved_execution_plan'].preview_json)
+            return (await _create_prepared_child_batch([bound], BackgroundTasks(), session,
+                experiment_session, native_job_kwargs=kwargs))[0]
         if request.intent.launch_context_id is not None:
             adapter = TypedMdProjectLaunch(
                 request_schema_version=request.schema_version,
@@ -793,6 +868,10 @@ async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession)
                 return await create_job(job_data, BackgroundTasks(), session,
                     experiment_session=experiment_session, _typed_md_project_launch=adapter, **kwargs)
         return await create_job(job_data, BackgroundTasks(), session, **kwargs)
+    except Exception:
+        if destination_launch_context_id is not None and experiment_session is not None:
+            await experiment_session.rollback()
+        raise
     finally:
         if resolved is not None:
             resolved.close()
@@ -900,6 +979,8 @@ async def launch_typed_md_job(
         expected_sha256 = preview.source.sha256
 
         def trusted_source_resolver(value: str) -> str:
+            if value == "bms-md-starting-structure:original" and resolved.original_runtime_path:
+                return resolved.original_runtime_path
             if value != source_token:
                 raise MDLaunchError(
                     "MD_INPUT_PATH_FORBIDDEN",
@@ -922,7 +1003,8 @@ async def launch_typed_md_job(
             "source_ref": preview.source.source_ref.model_dump(mode="json"),
             "source_sha256": expected_sha256,
         }
-        params = {"md_job_spec": md_job_spec, "md_source_provenance": source_provenance}
+        params = {"md_job_spec": md_job_spec, "md_source_provenance": source_provenance,
+                  "intent": request.intent.model_dump(mode="json")}
         if resolved.design_id is not None:
             params.update({
                 "source_design_id": resolved.design_id,

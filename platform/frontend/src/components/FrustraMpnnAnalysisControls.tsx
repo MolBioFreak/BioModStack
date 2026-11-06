@@ -1,3 +1,5 @@
+import { FrustraMpnnLaunchControls } from './frustrampnn/FrustraMpnnLaunchControls';
+import type { FrustraMpnnLaunchOptions } from '../lib/frustraMpnnApi';
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQueries } from '@tanstack/react-query';
 import { downloadDesignPdb } from '../lib/api.js';
@@ -7,7 +9,7 @@ import {
     inspectFrustraMpnnUploadedSource,
     validateFrustraMpnnUploadedSettings,
     type FrustraMpnnRequestedSettings,
-    type FrustraMpnnStructureDatasetFanout,
+    type FrustraMpnnAnalysisSubmission,
 } from '../lib/frustraMpnnApi.js';
 import { useModelIntegrationConfig } from './ModelIntegrationControl';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
@@ -60,7 +62,8 @@ export default function FrustraMpnnAnalysisControls({
 }: FrustraMpnnAnalysisControlsProps) {
     const integrationQuery = useModelIntegrationConfig('frustrampnn');
     const integration = integrationQuery.data;
-    const [fanout, setFanout] = useState<FrustraMpnnStructureDatasetFanout | null>(null);
+    const [fanout, setFanout] = useState<FrustraMpnnAnalysisSubmission | null>(null);
+    const [launchOptions, setLaunchOptions] = useState<FrustraMpnnLaunchOptions>({});
     const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(CANONICAL_FRUSTRAMPNN_SETTINGS);
     const [governedPreview, setGovernedPreview] = useState<Awaited<ReturnType<typeof resolveOwnedSelection>> | null>(null);
     const [previewError, setPreviewError] = useState<string | null>(null);
@@ -99,6 +102,7 @@ export default function FrustraMpnnAnalysisControls({
                 await validateFrustraMpnnUploadedSettings(frustrampnnSettings, resolved.file);
             }
             return analyzeFrustraMpnnDesigns(parentJobId, {
+                ...launchOptions,
                 selections: resolvedSelections.map((resolved) => resolved.selection),
                 frustrampnn_settings: frustrampnnSettings,
             });
@@ -152,6 +156,7 @@ export default function FrustraMpnnAnalysisControls({
                     {submission.isPending ? 'Creating queued child…' : `Analyze ${selectedDesigns.length} selected`}
                 </button>
             </div>
+            <FrustraMpnnLaunchControls value={launchOptions} onChange={setLaunchOptions} />
             <FrustraMpnnSettingsPanel
                 value={frustrampnnSettings}
                 onChange={setFrustrampnnSettings}

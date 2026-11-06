@@ -1,0 +1,84 @@
+Bootstrap: docker
+From: nvidia/cuda@sha256:61f6c08f2b59036cb935e56d1e31a6b64e3ae2c7ddb86d33fa0b044c7917b719
+
+%labels
+    org.biomodstack.model complexa
+    org.biomodstack.source.revision acf55a89a9a7206d5ce9abc0bf2246c3b3829f92
+    org.biomodstack.cuda 12.8.1
+
+%files
+    apptainer/locks/complexa-requirements.txt /opt/locks/requirements.txt
+    apptainer/locks/complexa-build.txt /opt/locks/build.txt
+    apptainer/locks/complexa-NOTICES.md /opt/locks/NOTICES.md
+    apptainer/complexa-colabdesign-tree-compat.py /opt/locks/tree_compat.py
+    scripts/bms_complexa/colabfold_cli.py /opt/locks/colabfold_cli.py
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+    mkdir -p /opt/build-tmp
+    export TMPDIR=/opt/build-tmp
+    apt-get update
+    apt-get install -y --no-install-recommends git=1:2.34.1-1ubuntu1.18 git-lfs=3.0.2-1ubuntu0.3 curl=7.81.0-1ubuntu1.30 ca-certificates=20260816ubuntu0.22.04.1 rsync=3.2.7-0ubuntu0.22.04.7 libxrender1=1:0.9.10-1build4 libxext6=2:1.3.4-1build1 build-essential=12.9ubuntu3
+    mkdir -p /opt/evaluator-tools
+    curl -fL https://github.com/steineggerlab/foldseek/releases/download/10-941cd33/foldseek-linux-avx2.tar.gz -o /opt/build-tmp/foldseek.tar.gz
+    curl -fL https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-avx2.tar.gz -o /opt/build-tmp/mmseqs.tar.gz
+    printf '%s  %s\n' e6a3e3860e76b0b7b858736f627fe680d4d7f0fc7298301d8a92b9f711d74ac7 /opt/build-tmp/foldseek.tar.gz bd9b0234da5949ad528d5b5f9ea4cda9c1e23dce14b46c0791d4d919a76e61ce /opt/build-tmp/mmseqs.tar.gz | sha256sum -c -
+    tar -xzf /opt/build-tmp/foldseek.tar.gz -C /opt/evaluator-tools
+    tar -xzf /opt/build-tmp/mmseqs.tar.gz -C /opt/evaluator-tools
+    curl -fL https://raw.githubusercontent.com/steineggerlab/foldseek/941cd33ff0771cd2e3f144e3293e22a2b87e9fda/LICENSE.md -o /opt/evaluator-tools/foldseek/LICENSE.md
+    curl -fL https://raw.githubusercontent.com/soedinglab/MMseqs2/8cc5ce367b5638c4306c2d7cfc652dd099a4643f/LICENSE.md -o /opt/evaluator-tools/mmseqs/LICENSE.md
+    printf '%s  %s\n' d62f065830aa3739cc031156b9690805c7b2e811b4a178c8b4acd8725d561c94 /opt/evaluator-tools/foldseek/LICENSE.md adc3ea1f2f5096d2464460495e12a65a94f466edb9ccca50d1f25844ca83792a /opt/evaluator-tools/mmseqs/LICENSE.md | sha256sum -c -
+    ln -sf /opt/evaluator-tools/foldseek/bin/foldseek /usr/local/bin/foldseek
+    ln -sf /opt/evaluator-tools/mmseqs/bin/mmseqs /usr/local/bin/mmseqs
+    curl -fL https://github.com/astral-sh/uv/releases/download/0.11.26/uv-x86_64-unknown-linux-gnu.tar.gz -o /opt/build-tmp/uv.tar.gz
+    printf '%s  %s\n' 6426a73c3837e6e2483ee344cbc00f36394d179afcba6183cb77437e67db4af0 /opt/build-tmp/uv.tar.gz | sha256sum -c -
+    tar -xzf /opt/build-tmp/uv.tar.gz -C /opt/build-tmp
+    install /opt/build-tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv
+    export UV_PYTHON_INSTALL_DIR=/opt/uv-python UV_CACHE_DIR=/opt/build-tmp/uv-cache
+    uv python install 3.12.13
+    git lfs install --system
+    if [ ! -d /opt/complexa/.git ]; then
+        git clone https://github.com/NVIDIA-BioNeMo/Proteina-Complexa.git /opt/complexa
+    fi
+    cd /opt/complexa
+    git checkout --detach acf55a89a9a7206d5ce9abc0bf2246c3b3829f92
+    # Restore this sole build-owned compatibility edit on sandbox updates.
+    git restore src/proteinfoundation/metrics/novelty.py
+    git lfs pull
+    printf '%s\n' 'Licensed by NVIDIA Corporation under the NVIDIA Open Model License' > /opt/complexa/licenses/NOTICE.txt
+    uv venv --allow-existing --python 3.12.13 /opt/complexa/.venv
+    # Install ColabDesign from a build-owned copy so the pinned checkout stays clean.
+    rm -rf /opt/colabdesign
+    cp -a /opt/complexa/community_models/colabdesign /opt/colabdesign
+    /opt/complexa/.venv/bin/python /opt/locks/tree_compat.py /opt/colabdesign/__init__.py
+    uv pip install --no-config --python /opt/complexa/.venv/bin/python --default-index https://pypi.org/simple --no-deps --require-hashes -r /opt/locks/build.txt
+    # Upstream sequential installs deliberately override incompatible metadata.
+    # Exact overrides and qualification limits are recorded in assets.json.
+    uv pip install --no-config --python /opt/complexa/.venv/bin/python --no-deps --require-hashes --no-build-isolation --default-index https://pypi.org/simple --find-links https://download.pytorch.org/whl/cu128/torch --find-links https://download.pytorch.org/whl/cu128/torchaudio --find-links https://download.pytorch.org/whl/cu128/torchvision --find-links https://download.pytorch.org/whl/cu128/triton --find-links https://data.pyg.org/whl/torch-2.7.0+cu128.html --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html -r /opt/locks/requirements.txt
+    uv pip install --no-config --python /opt/complexa/.venv/bin/python --no-deps --no-build-isolation --reinstall-package tmol 'tmol @ git+https://github.com/uw-ipd/tmol.git@d8a6f7f9649d36e74440bca25246ee7c467ce490' -e /opt/complexa -e /opt/colabdesign
+    # Preserve upstream CLI; translate only native HF-cache --data misrouting.
+    install -m 755 /opt/locks/colabfold_cli.py /opt/complexa/.venv/bin/colabfold_batch
+    # Python 3.12 rejects float bounds; preserve the exact native integer range.
+    /opt/complexa/.venv/bin/python -c 'from pathlib import Path; p=Path("/opt/complexa/src/proteinfoundation/metrics/novelty.py"); s=p.read_text(); assert s.count("random.randint(1, 1e12)")==1; p.write_text(s.replace("random.randint(1, 1e12)", "random.randint(1, 10**12)"))'
+    uv pip freeze --python /opt/complexa/.venv/bin/python > /opt/complexa/installed-packages.txt
+    dpkg-query -W > /opt/complexa/installed-debian-packages.txt
+    rm -rf /opt/build-tmp /var/lib/apt/lists/*
+
+%environment
+    export COMPLEXA_ROOT=/opt/complexa
+    export PATH=/opt/complexa/.venv/bin:/usr/local/cuda/bin:$PATH
+    export PYTHONPATH=/opt/complexa/src:/opt/complexa:$PYTHONPATH
+    export DATA_PATH=/opt/complexa/assets
+    export FOLDSEEK_EXEC=/usr/local/bin/foldseek
+    export MMSEQS_EXEC=/usr/local/bin/mmseqs
+
+%test
+    set -eu
+    /opt/complexa/.venv/bin/complexa --help
+    /opt/complexa/.venv/bin/colabfold_batch --help
+    /usr/local/bin/foldseek version
+    /usr/local/bin/mmseqs version
+
+%runscript
+    exec /opt/complexa/.venv/bin/complexa "$@"

@@ -32,16 +32,24 @@ describe('mounted NGS workflow chooser', () => {
         const cards = Array.from(container.querySelectorAll<HTMLButtonElement>('button[data-ngs-workflow-key]'));
         const byKey = (key: string) => cards.find((card) => card.dataset.ngsWorkflowKey === key);
 
-        expect(cards).toHaveLength(11);
+        expect(cards).toHaveLength(6);
+        expect(byKey('duplex')).toBeUndefined();
+        expect(byKey('barcode')).toBeUndefined();
+        expect(byKey('bamQc')).toBeUndefined();
+        expect(byKey('modified')?.textContent).toContain('Methylation analysis');
+        expect(byKey('dna')?.textContent).toContain('DNA POD5, BAM or FASTQ');
+        expect(byKey('dna')?.textContent).toContain('tandem methylation analysis');
         expect(byKey('dna')?.getAttribute('aria-pressed')).toBe('true');
         expect(cards.filter((card) => card.getAttribute('aria-pressed') === 'true')).toHaveLength(1);
         expect(byKey('clone')?.getAttribute('aria-pressed')).toBe('false');
         expect(byKey('pooledAssignment')?.getAttribute('aria-pressed')).toBe('false');
-        expect(byKey('clone')?.className).toContain('bg-[color-mix(in_srgb,var(--bg-secondary)_75%,#000)]');
-        expect(byKey('pooledAssignment')?.className).toContain('bg-[color-mix(in_srgb,var(--bg-secondary)_75%,#000)]');
+        expect(byKey('clone')?.className).toContain('bg-[var(--bg-primary)]');
+        expect(byKey('pooledAssignment')?.className).toContain('bg-[var(--bg-primary)]');
         expect(byKey('clone')?.className).not.toContain('ring-1');
         expect(byKey('pooledAssignment')?.className).not.toContain('ring-1');
-        expect(container.textContent).toContain('VENDOR REPORT');
+        expect(byKey('clone')?.textContent).toContain('Plasmid analysis');
+        expect(byKey('plasmidQc')).toBeUndefined();
+        expect(byKey('constructScreening')).toBeUndefined();
         expect(container.textContent).toContain('REVIEW ONLY');
     });
 
@@ -56,6 +64,41 @@ describe('mounted NGS workflow chooser', () => {
 
         expect(onSelect).toHaveBeenCalledTimes(1);
         expect(onSelect).toHaveBeenCalledWith('fastqQc');
+    });
+
+    it('groups tasks by the data you start with', async () => {
+        await renderChooser('dna');
+        const groups = Array.from(container.querySelectorAll('[role="group"]')).map((group) => ({
+            label: group.getAttribute('aria-label'),
+            keys: Array.from(group.querySelectorAll<HTMLElement>('[data-ngs-workflow-key]')).map((node) => node.dataset.ngsWorkflowKey),
+        }));
+        expect(groups).toEqual([
+            { label: 'General DNA analysis and RNA basecalling', keys: ['dna', 'rna'] },
+            { label: 'Analyse reads against a reference', keys: ['clone', 'fastqQc', 'modified'] },
+            { label: 'Review pooled samples', keys: ['pooledAssignment'] },
+        ]);
+    });
+
+    it('explains how FASTQ read QC differs from plasmid read QC', async () => {
+        await renderChooser('fastqQc');
+        const tile = container.querySelector<HTMLElement>('[data-ngs-workflow-key="fastqQc"]');
+        expect(tile?.textContent).toContain('No consensus or per-base support');
+    });
+
+    it.each(['clone', 'plasmidQc', 'constructScreening'] as const)('reopens and edits the exact %s method within one plasmid task', async (workflow) => {
+        const onSelect = await renderChooser(workflow);
+        const select = container.querySelector<HTMLSelectElement>('select[aria-label="Plasmid analysis method"]')!;
+        expect(select.value).toBe(workflow);
+        expect(Array.from(select.options).map(option => option.value)).toEqual(['clone', 'plasmidQc', 'constructScreening']);
+        const next = workflow === 'clone' ? 'plasmidQc' : 'clone';
+        await act(async () => { select.value = next; select.dispatchEvent(new Event('change', { bubbles: true })); });
+        expect(onSelect).toHaveBeenCalledWith(next);
+    });
+
+    it('does not reset an existing method when its selected task is clicked again', async () => {
+        const onSelect = await renderChooser('constructScreening');
+        await act(async () => container.querySelector<HTMLButtonElement>('[data-ngs-workflow-key="clone"]')!.click());
+        expect(onSelect).not.toHaveBeenCalled();
     });
 
 });

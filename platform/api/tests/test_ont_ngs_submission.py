@@ -67,6 +67,12 @@ def _client_with_fake_create(monkeypatch, captured: dict[str, Any]) -> TestClien
 
     monkeypatch.setattr(ont_runs, "_create_pipeline_job", fake_create_pipeline_job)
     monkeypatch.setattr(ont_runs, "_confine_submitted_path", lambda value, _label, **_kwargs: str(value))
+
+    async def no_retained_pod5(_session, _root):
+        return None
+
+    # POD5 launches observe retained native generations; this fixture has no ledger.
+    monkeypatch.setattr(ont_runs.ont_raw_signal, "retained_pod5_launch_binding", no_retained_pod5)
     return TestClient(app)
 
 

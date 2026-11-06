@@ -1,5 +1,18 @@
 # PRoot canonical-image reads and lazy private rootfs
 
+## Symlinked checkpoint reads (bms3)
+
+A regular file reached while resolving a symlink can be marked non-final by
+PRoot's path walker. The earlier read-only patch incorrectly treated every
+non-final node as a directory and temporarily added execute permission to the
+checkpoint blob (0644 -> 0744 -> 0644). This changed ctime and correctly tripped
+the unchanged declared-input exit guard after successful ESMFold2 inference.
+Select read versus directory-search permission from the resolved inode type,
+not the walker's final-component flag. Preserve mutation permission emulation,
+fake UID, canonical checks, and the private source guards. Tests exercise both
+open ABIs, absolute/relative symlinks and 0400/0644 targets using actual pinned
+engine bytes. The versioned bms3 installation leaves bms2 consumers untouched.
+
 ## Lazy private files (bms2)
 
 `cow.c` materializes a sparse **private inode** before its first translated
@@ -115,7 +128,7 @@ The critical-runtime producer bundles this artifact as
 `lib/proot-x86_64-4_8_0`, alongside the changed bootstrap and container launcher.
 Its normal managed installation invokes bootstrap's udocker mode, which verifies
 upstream archives and the bundled engine and publishes a **new** tool directory:
-`<worker-root>/tools/udocker-1.3.17-bms2`. Existing tool directories are not edited.
+`<worker-root>/tools/udocker-1.3.17-bms3`. Existing tool directories are not edited.
 `bms_managed_runtime.container_environment` selects that directory.
 
 A controller-only update is insufficient. Deployment must include these source

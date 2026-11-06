@@ -1,7 +1,10 @@
 /** Presentation only: persisted names and scientific identities are never changed. */
-export function predictionDisplayLabel(design: { name: string; native_sample?: { producer_sample?: unknown; producer_rank?: unknown } | null }, index?: number): string {
+export function predictionDisplayLabel(design: { name: string; native_sample?: { producer_sample?: unknown; producer_rank?: unknown } | null; provenance?: Record<string, unknown> | null }, index?: number): string {
     if (!/[a-f0-9]{24,}|[a-f0-9]{8}-[a-f0-9-]{27,}/i.test(design.name) && design.name.length <= 80) return design.name;
     const sample = design.name.match(/(?:sample|prediction|model)[_-]?(\d+)/i)?.[1];
+    // Native sample index names the producer's own output file (e.g. *_sample_2.cif); never a saved-order position.
+    const native = design.provenance?.native_producer as { producer_rank?: unknown } | undefined;
+    if (sample == null && design.native_sample == null && typeof native?.producer_rank === 'number') return `Sample ${native.producer_rank}`;
     const rank = design.native_sample?.producer_rank;
     return sample != null ? `Prediction ${sample}` : rank != null ? `Prediction · producer rank ${rank}` : index != null ? `Prediction ${index + 1}` : 'Selected prediction';
 }

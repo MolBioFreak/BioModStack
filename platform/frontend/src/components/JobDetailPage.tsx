@@ -1,3 +1,4 @@
+import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 /**
  * JobDetailPage - Standalone page for viewing job details
  * 
@@ -363,7 +364,7 @@ export function JobDetailPage() {
                                         </div>
                                         <div className="flex gap-2">
                                             <a
-                                                href={`/api/files/pdb/${struct.path}`}
+                                                href={resolveApiResourceUrl(`/api/files/pdb/${struct.path}`)}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="px-3 py-1.5 bg-accent/20 text-accent rounded-lg text-sm hover:bg-accent/30 transition-colors"
@@ -371,7 +372,7 @@ export function JobDetailPage() {
                                                 View
                                             </a>
                                             <a
-                                                href={`/api/files/download/${struct.path}`}
+                                                href={resolveApiResourceUrl(`/api/files/download/${struct.path}`)}
                                                 download={struct.filename}
                                                 className="px-3 py-1.5 bg-slate-700/50 text-slate-300 rounded-lg text-sm hover:bg-slate-700 transition-colors"
                                             >

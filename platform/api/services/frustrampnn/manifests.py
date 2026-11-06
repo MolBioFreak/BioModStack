@@ -981,9 +981,9 @@ def _validate_physical_pdb(payload: bytes, structure: Mapping[str, Any]) -> None
     ]
     if observed != expected:
         raise ManifestValidationError("normalized PDB residues/order disagree with mapped structure rows")
-    positions: dict[str, list[int]] = {}
+    from .structure import native_residue_positions
+    positions = native_residue_positions(mapped_rows)
     for row in mapped_rows:
-        positions.setdefault(row["pdb_chain_id"], []).append(row["model_position"])
         key = (row["pdb_chain_id"], row["pdb_residue_id"], row["pdb_insertion_code"])
         missing = {"N", "CA", "C", "O"} - set(atoms[key])
         if missing:
@@ -994,10 +994,9 @@ def _validate_physical_pdb(payload: bytes, structure: Mapping[str, Any]) -> None
             raise ManifestValidationError(
                 "normalized PDB backbone atom order must be exactly N, CA, C, O"
             )
-    for chain, observed_positions in positions.items():
-        if observed_positions != list(range(len(observed_positions))):
+        if row["model_position"] != positions[key]:
             raise ManifestValidationError(
-                f"structure map model_position must be contiguous zero-based within chain {chain}"
+                "structure map model_position disagrees with native author-gap/insertion indexing"
             )
 
 
@@ -2058,7 +2057,7 @@ def _validate_receipt_argv_predict_batch(receipt: Mapping[str, Any]) -> None:
 
 
 def _validate_receipt_argv_v2(receipt: Mapping[str, Any], configuration: Any) -> None:
-    if receipt.get("schema_version") == 3 and receipt.get("execution_method") == "predict_batch":
+    if receipt.get("schema_version") == 3 and receipt.get("execution_method") in {"predict_batch", "predict_selected_batch"}:
         _validate_receipt_argv_predict_batch(receipt)
         return
     runtime = configuration.runtime

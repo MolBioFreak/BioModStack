@@ -1,0 +1,22 @@
+{
+  "dependencies": {
+    "@emotion/react": "11.14.0",
+    "@emotion/styled": "11.14.1",
+    "@jbrowse/core": "5.0.0-beta.17",
+    "@jbrowse/mobx-state-tree": "6.10.0",
+    "@mui/icons-material": "9.5.0",
+    "@mui/material": "9.5.0",
+    "mobx": "7.1.3",
+    "mobx-react": "10.0.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-msaview": "9.8.0",
+    "vite": "6.4.5"
+  },
+  "private": true,
+  "scripts": {
+    "build": "vite build"
+  },
+  "name": "@bms/jbrowse-viewer",
+  "version": "0.0.0"
+}

@@ -106,6 +106,8 @@ def test_compact_sources_have_no_legacy_proxy_or_host_lifecycle_authority() -> N
         path.read_text(encoding="utf-8")
         for directory in (root / "routers" / "bioxp", root / "services" / "bioxp")
         for path in sorted(directory.glob("*.py"))
+        # The bounded service-only restart API (8b3fee5) owns one fixed ssh exec.
+        if path.name != "service_control.py"
     )
     forbidden = (
         "_GLOBAL_LINKAGE_URL",

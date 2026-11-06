@@ -4,16 +4,48 @@ import { sourceResultReturn } from '../../src/lib/sourceResultReturn';
 import { materializeExactStructure, type StructureMaterialization } from '../../src/lib/api';
 vi.mock('../../src/lib/api', () => ({ materializeExactStructure: vi.fn() }));
 const materialized = (roles?: Record<string, unknown>) => ({ path: 'exact.cif', format: 'cif', sha256: 'hash', native_path: 'exact.cif', native_format: 'cif', native_sha256: 'hash', source_path: 'exact.cif', model_numbers: [2], model_number: 2, author_residues: [], source_identity: { artifact_id: 'alternate', target_state: 'state2', ...(roles ? { producer_document: roles } : {}) } }) as StructureMaterialization;
-it('receives only the selected complex roles and leaves identity untouched through PDB conversion', async () => {
+it('receives only the selected complex roles and leaves native CIF identity untouched', async () => {
     const native = materialized({ binder_chains: 'B', target_chains: 'A' });
     const source = { job_id: 'producer', document: { artifact_id: 'alternate', target_state: 'state2' }, model_number: 2 };
     native.source_structure = source;
-    vi.mocked(materializeExactStructure).mockResolvedValueOnce(native).mockResolvedValueOnce({ ...native, path: 'derived.pdb', format: 'pdb', source_identity: {} });
+    vi.mocked(materializeExactStructure).mockReset().mockResolvedValueOnce(native);
     const result = await prepareDeNovoContinuation(source, 'redesign');
     expect(result).toMatchObject({ design_chains: 'B', context_chains: ['A'], source_structure: source, model_number: 2 });
     expect(result._source_native_prepared).toBe(native);
-    expect(materializeExactStructure).toHaveBeenLastCalledWith({ path: 'exact.cif', expected_sha256: 'hash', output_format: 'pdb', model_number: 2 });
+    expect(materializeExactStructure).toHaveBeenCalledExactlyOnceWith({ ...source, output_format: 'native' });
+    expect(result._source_prepared).toBe(native);
     expect(source.document).toEqual({ artifact_id: 'alternate', target_state: 'state2' });
+});
+it('receives an unselected multi-MODEL CIF without attempting a PDB derivative or inventing a MODEL', async () => {
+    const source = { job_id: 'producer', candidate_id: 'candidate-7', document: { artifact_id: 'alternate', target_state: 'state2' } };
+    const native = { ...materialized({ binder_chains: 'B', target_chains: 'A' }),
+        source_structure: { ...source, path: 'exact.cif', expected_sha256: 'hash' }, model_numbers: [1, 2], model_number: null };
+    vi.mocked(materializeExactStructure).mockReset().mockResolvedValueOnce(native);
+    const result = await prepareDeNovoContinuation(source, 'redesign');
+    expect(materializeExactStructure).toHaveBeenCalledExactlyOnceWith({ ...source, output_format: 'native' });
+    expect(result).toMatchObject({ input_structure: 'exact.cif', design_chains: 'B', context_chains: ['A'],
+        source_structure: native.source_structure, _redesign_source: { path: 'exact.cif', sourceStructure: native.source_structure, prepared: native } });
+    expect(result.model_number).toBeUndefined();
+    expect(result._source_prepared).toBe(native);
+    expect(result._source_native_prepared).toBe(native);
+    expect(source).not.toHaveProperty('model_number');
+});
+it.each(['sequence', 'prediction'] as const)('does not prepare a redesign derivative for the inactive %s sibling', async destination => {
+    const native = { ...materialized(), model_numbers: [1, 2], model_number: null };
+    vi.mocked(materializeExactStructure).mockReset().mockResolvedValueOnce(native);
+    const result = await prepareDeNovoContinuation({ path: 'exact.cif' }, destination);
+    expect(materializeExactStructure).toHaveBeenCalledExactlyOnceWith({ path: 'exact.cif', output_format: 'native' });
+    expect(result._source_prepared).toBe(native);
+});
+it('preserves single-model native CIF and direct PDB receiving paths', async () => {
+    const native = { ...materialized(), model_number: null, model_numbers: [1] };
+    const pdb = { ...native, path: 'derived.pdb', format: 'pdb' as const };
+    vi.mocked(materializeExactStructure).mockReset().mockResolvedValueOnce(native);
+    expect(await prepareDeNovoContinuation({ path: 'exact.cif' }, 'redesign')).toMatchObject({ input_structure: 'exact.cif', _source_prepared: native });
+    expect(materializeExactStructure).toHaveBeenCalledExactlyOnceWith({ path: 'exact.cif', output_format: 'native' });
+    vi.mocked(materializeExactStructure).mockReset().mockResolvedValueOnce(pdb);
+    await prepareDeNovoContinuation({ path: 'derived.pdb' }, 'redesign');
+    expect(materializeExactStructure).toHaveBeenCalledTimes(1);
 });
 it('initializes sequence roles and independent monomer roles without borrowing complex roles', () => {
     expect(continuationRoleDefaults(materialized({ binder_chains: 'B', target_chains: 'A' }), 'sequence')).toEqual({ binder_chains: 'B', target_chains: 'A', design_chain: 'B', target_chain: 'A' });
@@ -49,4 +81,15 @@ it('cold handoff preserves exact candidate/document and PM query in the safe ret
     expect(JSON.parse(href.searchParams.get('source_structure')!)).toEqual(source);
     expect(sourceResultReturn(href.searchParams.get('return_to'))).toBe(back);
     for (const bad of ['//evil/a', '/\\evil/a', 'https://evil/designs/a', '/designs/a\\x', '/designs/a\n']) expect(sourceResultReturn(bad)).toBeNull();
+});
+it.each(['/bms/', '/lab/tools/', '/'])('receives the exact selected-result return under basename %s without double-prefixing', base => {
+    const route = '/designs/producer?native_candidate=candidate%3A0&artifact_id=alternate&project_id=p#structure';
+    const browserPath = `${base.replace(/\/+$/, '')}${route}`;
+    const received = sourceResultReturn(browserPath, base);
+    expect(received).toBe(route);
+    expect(`${base.replace(/\/+$/, '')}${received}`).toBe(browserPath);
+    expect(sourceResultReturn(route, base)).toBe(route);
+    for (const bad of ['//evil/designs/a', 'https://evil/designs/a', '/bmsx/designs/a', `${base}submit`, `${base}designs/a\\x`]) {
+        expect(sourceResultReturn(bad, base)).toBeNull();
+    }
 });

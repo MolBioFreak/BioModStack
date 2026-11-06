@@ -27,7 +27,7 @@ def identity(path):
 
 
 def test_shipped_proot_pin():
-    assert hashlib.sha256(PROOT.read_bytes()).hexdigest() == 'dc9012cf46fb1f4d1e168273a22f15077693ebe94cd09fa3247204a726187efd'
+    assert hashlib.sha256(PROOT.read_bytes()).hexdigest() == '55047d1f180eb3a93483ea3d68da6b2f87eeba0fd68ca50642e9697fa3bf3ec3'
 
 
 @pytest.mark.parametrize('call', ['open', 'openat'])
@@ -57,6 +57,32 @@ for _ in range(3):
         assert before == (identity(image), identity(parent))
     finally:
         parent.chmod(0o700)
+
+
+@pytest.mark.parametrize('call', ['open', 'openat'])
+@pytest.mark.parametrize('mode', [0o400, 0o644])
+@pytest.mark.parametrize('absolute', [False, True])
+def test_readonly_symlink_resolution_preserves_target_identity(tmp_path, call, mode, absolute):
+    blob = tmp_path / 'blob'
+    blob.write_bytes(b'checkpoint')
+    blob.chmod(mode)
+    snapshot = tmp_path / 'snapshot'
+    snapshot.mkdir()
+    alias = snapshot / 'model.safetensors'
+    alias.symlink_to(blob if absolute else '../blob')
+    before = identity(blob), identity(tmp_path), identity(snapshot)
+    run_guest('''import ctypes,os,sys
+libc=ctypes.CDLL(None,use_errno=True)
+p=sys.argv[1].encode()
+for _ in range(3):
+ os.stat(p)
+ if sys.argv[2]=='open': fd=libc.syscall(2,p,os.O_RDONLY)
+ else: fd=libc.syscall(257,-100,p,os.O_RDONLY)
+ assert fd>=0,ctypes.get_errno()
+ assert os.read(fd,100)==b'checkpoint'
+ os.close(fd)
+''', alias, call)
+    assert before == (identity(blob), identity(tmp_path), identity(snapshot))
 
 
 @pytest.mark.parametrize('flags', ['os.O_WRONLY', 'os.O_RDWR', 'os.O_RDONLY|os.O_TRUNC'])

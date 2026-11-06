@@ -2,12 +2,13 @@
 Pydantic schemas for API request/response validation.
 """
 
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator, model_serializer
 from typing import Optional, List, Any, Literal
 from datetime import datetime
 from enum import Enum
 from services.fampnn_policy_admission import FampnnAnalysisOverrides
 from services.binder_source_materialization import StructureSourceRequest
+from services.caliby_native import ConformerSettings as CalibyConformerSettings
 
 
 def serialize_datetime(dt: datetime) -> str:
@@ -104,11 +105,31 @@ class ExecutionPolicy(BaseModel):
 class SequenceDesignRequest(BaseModel):
     """Optional general-generation follow-on; settings remain model-owned."""
     model_config = ConfigDict(extra='forbid')
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     enabled: bool = False
-    model_id: Literal['proteinmpnn', 'fampnn', 'caliby_experimental']
+    model_id: Literal['proteinmpnn', 'fampnn', 'caliby_experimental'] | None = None
     params: dict[str, Any] = Field(default_factory=dict)
     input_settings: dict[str, Any] = Field(default_factory=dict)
+    round_plan: 'SelectedRoundPlan | None' = None
+
+    @model_validator(mode='after')
+    def versioned_operations(self):
+        if self.schema_version == 1:
+            if self.model_id is None or self.round_plan is not None:
+                raise ValueError('Legacy sequence design requires its scalar model')
+        elif self.round_plan is None or self.round_plan.schema_version != 2 or self.model_id is not None or self.params or self.input_settings:
+            raise ValueError('Sequence design v2 uses only the shared invocation plan')
+        return self
+
+    @model_serializer(mode='wrap')
+    def historical_wire(self, handler):
+        payload = handler(self)
+        if self.schema_version == 1:
+            payload.pop('round_plan', None)
+        else:
+            for key in ('model_id', 'params', 'input_settings'):
+                payload.pop(key, None)
+        return payload
 
 
 class BinderRoundDesign(BaseModel):
@@ -190,29 +211,70 @@ class CandidateRef(BaseModel):
         return self
 
 
+# Resolve the existing source envelope's exact native-candidate alternative.
+StructureSourceRequest.model_rebuild(_types_namespace={'CandidateRef': CandidateRef})
+
+
 class SelectedRoundInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     selected: Literal[True] | None = None
     stage_id: str | None = None
+    invocation_id: str | None = Field(default=None, min_length=1)
+    scope: Literal['binder', 'whole_composition'] = 'binder'
+    chains: list[str] | None = None
 
     @model_validator(mode='after')
     def one_source(self):
         if (self.selected is not None) == (self.stage_id is not None):
             raise ValueError('Choose selected or an earlier stage')
+        if self.invocation_id is not None and self.stage_id is None:
+            raise ValueError('Invocation output requires an earlier stage')
         return self
+
+
+# Share the native mask domain, not a second scientific settings dictionary.
+class SelectedRoundState(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    state_id: str = Field(min_length=1)
+    candidate_ref: CandidateRef
+    settings: CalibyConformerSettings | None = None
+
+
+class SelectedRoundInputGroup(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    ensemble_id: str = Field(min_length=1)
+    # The first state is the native primary conformer; never sort or deduplicate.
+    states: list[SelectedRoundState] = Field(min_length=1)
 
 
 class SelectedRoundModel(BaseModel):
     model_config = ConfigDict(extra='forbid')
+    invocation_id: str | None = Field(default=None, min_length=1)
+    mode: str | None = Field(default=None, min_length=1)
+    execution_target_id: str | None = None
+    input_groups: list[SelectedRoundInputGroup] = Field(default_factory=list)
+    route: Literal['job', 'boltz_api'] = 'job'
+    approved_estimate_fingerprint: str | None = None
     model_id: str
     params: dict[str, Any] = Field(default_factory=dict)
+
+    @model_serializer(mode='wrap')
+    def placement_wire(self, handler):
+        payload = handler(self)
+        # Omitted placement inherits; explicit null means Local, including replay.
+        if 'execution_target_id' not in self.model_fields_set:
+            payload.pop('execution_target_id', None)
+        for field in ('route', 'approved_estimate_fingerprint'):
+            if field not in self.model_fields_set:
+                payload.pop(field, None)
+        return payload
 
 
 class SelectedRoundStage(BaseModel):
     model_config = ConfigDict(extra='forbid')
     id: str = Field(min_length=1)
     input: SelectedRoundInput
-    kind: Literal['sequence_design', 'maturation', 'prediction']
+    kind: Literal['sequence_design', 'maturation', 'prediction', 'md']
     models: list[SelectedRoundModel] = Field(default_factory=list)
     model_id: Literal['binder_refinement'] | None = None
     mode: Literal['refine'] | None = None
@@ -224,26 +286,62 @@ class SelectedRoundStage(BaseModel):
             if self.models or self.model_id != 'binder_refinement' or self.mode != 'refine':
                 raise ValueError('Maturation uses binder_refinement/refine')
         else:
-            allowed = ({'proteinmpnn', 'fampnn', 'caliby_binder', 'protonpottsmpnn'}
-                       if self.kind == 'sequence_design' else {'protenix', 'boltz2', 'esmfold2'})
+            allowed = ({'proteinmpnn', 'fampnn', 'caliby_binder', 'protonpottsmpnn', 'caliby_experimental', 'ligandmpnn'}
+                       if self.kind == 'sequence_design' else ({'molecular_dynamics'} if self.kind == 'md' else {'protenix', 'boltz2', 'esmfold2', 'boltz_cp_experimental'}))
             if not self.models or self.model_id or self.mode or self.params:
                 raise ValueError('Design/prediction stages use models')
-            if any(m.model_id not in allowed for m in self.models) or len({m.model_id for m in self.models}) != len(self.models):
-                raise ValueError('Stage models must be supported and unique')
+            if any(m.model_id not in allowed for m in self.models):
+                raise ValueError('Stage models must be supported')
         return self
 
 
 class SelectedRoundPlan(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    schema_version: Literal[1] = 1
-    stages: list[SelectedRoundStage] = Field(min_length=1)
+    schema_version: Literal[1, 2] = 1
+    stages: list[SelectedRoundStage] = Field(default_factory=list)
+
+    @model_serializer(mode='wrap')
+    def historical_wire(self, handler):
+        payload = handler(self)
+        if self.schema_version == 1:
+            # Existing retained intent digests include this exact legacy wire.
+            # New default fields must not invalidate replay of an old request.
+            for stage in payload.get('stages', []):
+                for field in ('invocation_id', 'scope', 'chains'):
+                    stage.get('input', {}).pop(field, None)
+                for model in stage.get('models', []):
+                    for field in ('invocation_id', 'mode', 'execution_target_id', 'input_groups', 'route', 'approved_estimate_fingerprint'):
+                        model.pop(field, None)
+        return payload
 
     @model_validator(mode='after')
     def dependencies(self):
+        if self.schema_version == 1 and any(stage.kind == 'md' for stage in self.stages):
+            raise ValueError('MD invocations require plan v2')
+        if self.schema_version == 1 and not self.stages:
+            raise ValueError('Legacy plans require a stage')
         seen = set()
+        calls = {}
         for stage in self.stages:
+            models = stage.models
+            if self.schema_version == 1:
+                if len({m.model_id for m in models}) != len(models):
+                    raise ValueError('Legacy stage models must be unique')
+                if any(m.model_id in {'caliby_experimental', 'ligandmpnn', 'boltz_cp_experimental'} or m.route != 'job' or m.approved_estimate_fingerprint is not None or
+                       m.invocation_id is not None or m.mode is not None or m.input_groups or
+                       m.execution_target_id is not None for m in models):
+                    raise ValueError('Explicit invocation settings require plan v2')
+                if stage.input.scope != 'binder' or stage.input.chains is not None or stage.input.invocation_id:
+                    raise ValueError('Explicit input scope requires plan v2')
+            elif any(not m.invocation_id or not m.mode for m in models) or len({m.invocation_id for m in models}) != len(models):
+                raise ValueError('Plan v2 requires unique invocation IDs and native modes per stage')
+            if any(m.route == 'boltz_api' and (stage.kind != 'prediction' or m.model_id != 'boltz2') for m in models):
+                raise ValueError('The paid Boltz route belongs to an explicit Boltz prediction call')
             if stage.id in seen or (stage.input.stage_id is not None and stage.input.stage_id not in seen):
                 raise ValueError('Stage IDs must be unique and dependencies must name an earlier stage')
+            if stage.input.invocation_id and stage.input.invocation_id not in calls.get(stage.input.stage_id, set()):
+                raise ValueError('Input invocation must name an earlier call')
+            calls[stage.id] = {m.invocation_id for m in models}
             seen.add(stage.id)
         return self
 
@@ -329,6 +427,11 @@ class JobCreate(BaseModel):
         # in preview/admission effective params, while replay retains intent.
         if "remote_result_policy" in self.params or "execution_policy" in self.params:
             raise ValueError("use typed execution_policy, not scientific params")
+        if self.model_id == "protenix":
+            from scripts.protenix_chemistry import validate_chemistry
+            validate_chemistry(self.params)
+            from services.protenix_chemistry import validate_component_files
+            validate_component_files(self.params)
         apply_msa_policy(self.model_id, self.params)
         return self
 
@@ -457,6 +560,7 @@ class JobSummaryResponse(BaseModel):
     awaiting_input: Optional[bool] = None
     awaiting_stage: Optional[str] = None
     frustrampnn_result_count: int = 0
+    native_result_count: int = 0
     frustrampnn_reopen_destination: Optional[dict] = None
     conformational_mapping_request_id: Optional[str] = None
 

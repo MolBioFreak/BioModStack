@@ -22,6 +22,7 @@ import urllib.request
 
 from biomodstack_runtime_profile import load_install_profile
 from biomodstack_services import systemd_exec_arg, systemd_value
+from biomodstack_services import units_need_daemon_reload
 from biomodstack_services import (
     API_SERVICE,
     CONTAINER_RUNTIME_MODE,
@@ -842,6 +843,14 @@ def _dev_frontend_matches_root(
 
 
 def _atomic_write(path: Path, content: str | bytes, *, mode: int = 0o600) -> None:
+    payload = content if isinstance(content, bytes) else content.encode("utf-8")
+    try:
+        if path.read_bytes() == payload and (path.stat().st_mode & 0o7777) == mode:
+            # Already exact: rewriting identical bytes cost three fsyncs per
+            # file on every restart and made systemd see a changed drop-in.
+            return
+    except OSError:
+        pass
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(temporary_name)
@@ -1076,6 +1085,23 @@ def _wait_for_adapter_policy(
     return False
 
 
+def refresh_installed_adapter_control_policy(root: Path = CANONICAL_DEVELOPMENT_ROOT) -> bool:
+    """Rewrite an already-installed selector drop-in for the current revision.
+
+    Called by the Development restart before it restarts the adapter, so the
+    adapter starts once with the new revision. Without this the global Tailnet
+    oneshot found the stale revision after every deploy and restarted the
+    adapter a second time. A host without the drop-in is left untouched.
+    """
+    dropin = _host_user_systemd_dir() / f"{WORKFLOW_ADAPTER_SERVICE}.d" / "99-tailnet-canonical-source.conf"
+    if not dropin.is_file():
+        return False
+    canonical_root = root.resolve()
+    _validate_canonical_environment_root(canonical_root, "development")
+    _install_adapter_control_policy(canonical_root, _git_revision(canonical_root))
+    return True
+
+
 def ensure_tailnet_control_policy(root: Path = CANONICAL_DEVELOPMENT_ROOT) -> dict[str, object]:
     """Synchronize the Development-owned selector policy outside selector requests.
 
@@ -1087,7 +1113,8 @@ def ensure_tailnet_control_policy(root: Path = CANONICAL_DEVELOPMENT_ROOT) -> di
     _validate_canonical_environment_root(canonical_root, "development")
     revision = _git_revision(canonical_root)
     login = _install_adapter_control_policy(canonical_root, revision)
-    daemon_reload(project_root=canonical_root)
+    if units_need_daemon_reload([WORKFLOW_ADAPTER_SERVICE], project_root=canonical_root):
+        daemon_reload(project_root=canonical_root)
     restarted = False
     if service_is_active(WORKFLOW_ADAPTER_SERVICE, project_root=canonical_root):
         if not _adapter_identity_policy_matches(
@@ -1360,7 +1387,9 @@ def _host_listener_closure(port: int) -> dict[str, object]:
     # Bind reports, socket inodes and complete owners to one stable observation.
     # A replacement that preserves a PID but changes the socket inode must not be
     # combined with the prior process identity.
-    for _attempt in range(1):
+    for _attempt in range(3):
+        if _attempt:
+            time.sleep(0.5)
         before_inodes = _host_listener_inodes(port)
         before_owners = _host_listener_inode_owners(before_inodes)
         before_addresses = sorted(_listener_bind_addresses(port))

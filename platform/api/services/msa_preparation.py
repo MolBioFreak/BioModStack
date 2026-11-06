@@ -47,6 +47,10 @@ def materialize_protenix_inputs(source: Path, output_json: Path, settings: dict)
     manifest = json.loads((source / 'msa-inputs.json').read_text())
     payload = copy.deepcopy(manifest['model_input'])
     sequences = {f'{task}:{index}': chain['sequence'] for task, index, chain in iter_protein_chains(payload)}
+    inline_ids = {f'{task}:{index}' for task, index, chain in iter_protein_chains(payload)
+                  if any(chain.get(key) is not None for key in ('unpairedMsa', 'pairedMsa'))}
+    artifact_ids = {item['chain_id'] for item in manifest['artifacts']}
+    sequences = {key: value for key, value in sequences.items() if key not in inline_ids or key in artifact_ids}
     paths = resolve_alignments(source, manifest, sequences=sequences, settings=settings)
     for task, index, chain in iter_protein_chains(payload):
         for role, key in [('paired', 'pairedMsaPath'), ('unpaired', 'unpairedMsaPath')]:
@@ -138,7 +142,7 @@ def _protenix_paired_headers(data: bytes) -> bytes:
     return ('\n'.join(lines) + '\n').encode('ascii')
 
 
-def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destination: Path, settings: dict) -> dict:
+def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destination: Path, settings: dict, *, policy_model: str = 'protenix') -> dict:
     """Package supplied inputs or cached API alignments; no inference install.
 
     The legacy positional config_path is retained for caller compatibility, not
@@ -146,7 +150,7 @@ def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destinat
     deployment-owned via the shared setup boundary.
     """
     from prepare_protenix_msa import load_json, all_protein_chains_have_msa, iter_protein_chains
-    effective = apply_msa_policy('protenix', settings)
+    effective = apply_msa_policy(policy_model, settings)
     payload = load_json(input_json)
     if all_protein_chains_have_msa(payload):
         return export_protenix_inputs(payload, destination, effective, {'backend': 'supplied'})
@@ -175,7 +179,8 @@ def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destinat
             chains = [chain for _, chain in roster]
             # Supplied paired groups have no provider-operation identity. Joining
             # them to newly generated rows would invent cross-source pairing.
-            supplied = [chain for chain in chains if chain.get('pairedMsaPath') or chain.get('unpairedMsaPath')]
+            supplied = [chain for chain in chains if chain.get('pairedMsaPath') or chain.get('unpairedMsaPath')
+                        or any(chain.get(key) is not None for key in ('pairedMsa', 'unpairedMsa'))]
             if supplied and (scientific['pairing_mode'] != 'unpaired'
                              or any(chain.get('pairedMsaPath') for chain in supplied)):
                 raise ValueError('Cannot combine supplied and generated paired groups without shared pairing identity')

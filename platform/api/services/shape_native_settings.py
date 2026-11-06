@@ -238,6 +238,34 @@ def rfd3_definition() -> dict:
     return _definition("protein_modification_experimental", "shape_blueprint", params, schema, defaults)
 
 
+def generated_msa_services(params: Mapping[str, Any]):
+    """Existing generated-MSA service declarations for selected Shape peers."""
+    from component_runtime import ExternalServiceIntent, canonical_bytes
+    services = []
+    if params.get("shape_sequence_policy") == "skip" or not params.get("shape_sequences_per_backbone", 0):
+        return services
+    selected = params.get("shape_validator_suite", "")
+    selected = selected.split(",") if isinstance(selected, str) else selected
+    settings = params.get("shape_validator_settings") or {}
+    for validator, key, process in (("boltz2", "boltz_use_msa", "RunShapeBoltzValidator"),
+                                    ("protenix_v2", "protenix_use_msa", "RunShapeProtenixValidator")):
+        native = settings.get(validator, {})
+        if validator not in selected or not native.get(key, False):
+            continue
+        backend = native.get("protenix_msa_backend")
+        if validator == "protenix_v2" and backend in {"none", "esm"}:
+            continue
+        from biomodstack_msa_policy import apply_msa_policy
+        model = "protenix" if validator == "protenix_v2" else "boltz2"
+        provider = apply_msa_policy(model, native)["msa_provider"]
+        identity = "shape:" + validator + ":generated_msa"
+        services.append(ExternalServiceIntent(identity, provider,
+            "platform/api/services/model_msa_handoff.py; platform/api/services/msa_preparation.py; "
+            "modules/shape_blueprint.nf:" + process,
+            canonical_bytes(dict(native)), (), (identity,), "planned_from_generated_candidates"))
+    return services
+
+
 def settings_definition() -> dict:
     return {"schema": "bms_shape_settings_v1", "rfd3": rfd3_definition(),
             "sequence_engines": list(SEQUENCE_ENGINES),

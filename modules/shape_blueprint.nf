@@ -65,7 +65,7 @@ process PlanRFD3Batches {
     python3 ${params.code_root}/scripts/shape_blueprint/plan_rfd3_batches.py \\
         --request ${request_json} \\
         --output-dir . \\
-        --gpu-memory-gib ${params.shape_gpu_memory_gib ?: 32}
+        ${params.shape_gpu_memory_gib != null ? "--gpu-memory-gib ${params.shape_gpu_memory_gib}" : ""}
     """
 }
 
@@ -203,7 +203,7 @@ process RunShapeProteinMPNN {
     tuple val(candidate_id), path(backbone)
     val sequence_count
     val seed
-    path request_json
+    path request_dir
 
     output:
     path "${candidate_id}_proteinmpnn", emit: bundle
@@ -222,7 +222,7 @@ process RunShapeProteinMPNN {
         --receipt ${bundle}/runtime_receipt.json \\
         --count ${sequence_count} \\
         --seed ${seed} \\
-        --request ${request_json}
+        --request ${request_dir}/request.json
     """
 }
 
@@ -238,7 +238,7 @@ process RunShapeFAMPNN {
     tuple val(candidate_id), path(backbone)
     val sequence_count
     val seed
-    path request_json
+    path request_dir
 
     output:
     path "${candidate_id}_fampnn", emit: bundle
@@ -255,7 +255,7 @@ process RunShapeFAMPNN {
         --receipt ${bundle}/runtime_receipt.json \\
         --count ${sequence_count} \\
         --seed ${seed} \\
-        --request ${request_json}
+        --request ${request_dir}/request.json
     """
 }
 
@@ -271,7 +271,7 @@ process RunShapeCaliby {
     tuple val(candidate_id), path(backbone)
     val sequence_count
     val seed
-    path request_json
+    path request_dir
 
     output:
     path "${candidate_id}_caliby_experimental", emit: bundle
@@ -288,7 +288,7 @@ process RunShapeCaliby {
         --receipt ${bundle}/runtime_receipt.json \\
         --count ${sequence_count} \\
         --seed ${seed} \\
-        --request ${request_json}
+        --request ${request_dir}/request.json
     """
 }
 
@@ -321,6 +321,38 @@ process EvaluateShapeCandidate {
         --points ${point_pool} \\
         --sdf ${sdf_grid} \\
         --output-dir ${bundle}
+    """
+}
+
+process ShapeESMFold2Predict {
+    publishDir "${params.out_dir}/final/esmfold2/${sequence_name}", mode: "${shapeResultPublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results'
+    publishDir "${params.out_dir}/pdb_files", mode: "${shapeResultPublishMode(workflow.workDir, params.out_dir)}", pattern: 'esmfold2_results/*.cif'
+    tag "${sequence_name}"
+    label 'ESMFold2'
+    label 'gpu'
+    stageInMode 'rellink'
+
+    input:
+    tuple val(producer_meta), val(sequence), val(sequence_name)
+    path request_dir
+
+    output:
+    tuple val(producer_meta), path('esmfold2_results/*.cif'), emit: typed_cifs
+    path 'esmfold2_results/*.metrics.json', emit: metrics
+    path 'esmfold2_results/*.confidence.npz', optional: true, emit: native_confidence
+    tuple val(sequence_name), path('esmfold2_results/*.cif'), path('esmfold2_results/*.metrics.json'), emit: shape_result
+    tuple val(sequence_name), path('esmfold2_results'), emit: shape_bundle
+    path 'esmfold2_results/*.telemetry.json', emit: telemetry
+    path 'esmfold2_results/manifest.json', emit: manifest
+    path 'esmfold2_results/summary.tsv', emit: summary
+
+    script:
+    def quote = { value -> "'" + value.toString().replace("'", "'\"'\"'") + "'" }
+    """
+    set -euo pipefail
+    python3 ${params.code_root}/scripts/shape_blueprint/run_shape_esmfold2.py \
+        --request ${request_dir}/request.json \
+        --sequence ${quote(sequence)} --sequence-name ${quote(sequence_name)}
     """
 }
 

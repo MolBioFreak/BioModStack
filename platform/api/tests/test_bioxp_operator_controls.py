@@ -854,7 +854,7 @@ def test_every_v2_route_relays_and_validates_the_exact_robot_contract(monkeypatc
     assert "expected_connection_generation" not in runtime.connection.client.calls[2][1]["json_data"]
 
 
-@pytest.mark.parametrize("action_id", ["meta.activate_motion", "meta.recover_motion_non_homing"])
+@pytest.mark.parametrize("action_id", ["meta.activate_motion", "meta.deactivate_motion", "meta.recover_motion_non_homing"])
 def test_oem_lifecycle_actions_relay_through_the_closed_v2_contract(monkeypatch, action_id):
     client, runtime = make_client(monkeypatch)
     runtime.connection.client.responses["invoke_operator_action_v2"] = v2_receipt(

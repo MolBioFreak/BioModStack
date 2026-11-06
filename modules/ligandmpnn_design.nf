@@ -17,11 +17,12 @@ process RunLigandMPNNDesign {
     path 'ligandmpnn_design', emit: native_outputs
 
     script:
-    def image = "${params.container_dir}/foundry.sif"
+    def launcher = System.getenv('BMS_CONTAINER_EXECUTABLE') ?: 'apptainer'
+    def image = System.getenv('BMS_SELECTED_IMAGE_FOUNDRY_SIF') ?: "${params.container_dir}/foundry.sif"
     def runner = "${params.code_root}/scripts/run_ligandmpnn_design.py"
     """
     set -euo pipefail
-    apptainer exec --nv --no-home --env CUDA_VISIBLE_DEVICES=${params.gpu_id} \
+    '${launcher}' exec --nv --no-home --env CUDA_VISIBLE_DEVICES=${params.gpu_id} \
       --bind "\$PWD:\$PWD" \
       --bind '${runner}:/probe/run_ligandmpnn_design.py' \
       '${image}' python /probe/run_ligandmpnn_design.py \

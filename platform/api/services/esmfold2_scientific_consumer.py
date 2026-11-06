@@ -1,6 +1,8 @@
 """Pinned ESMFold2 scalar, CIF confidence and raw-token PAE readback."""
+import hashlib
 import json
 import math
+from collections import OrderedDict
 from pathlib import Path
 from zipfile import BadZipFile
 
@@ -43,16 +45,12 @@ def canonical_bytes(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
 
 
-async def verified_esmfold2_design(design, session):
-    """Return selected {block, artifacts, payload, ...} after whole-set verification.
-
-    block.metrics are native fractional scalars. Only display pLDDT uses x100.
-    No DB writes or legacy authority inference; consumers use verified snapshots.
-    """
+async def _verified_publication(job_id, session):
+    """Verify one Job's whole publication once; callers select from it."""
     from paths import get_data_root, resolve_runtime_data_path
     from services.core_protein_result_contract import prepare_esmfold2_publication, revalidate_prepared_publication
     with session.no_autoflush:
-        job = await session.scalar(select(Job).where(Job.id == design.job_id))
+        job = await session.scalar(select(Job).where(Job.id == job_id))
         if job is None or revision_for_job(job) != 1 or job.model_id not in ('esmfold2', 'esmfold2_experimental'):
             raise ValueError('missing_esmfold2_publication_authority')
         if not isinstance(job.output_dir, str) or not job.output_dir:
@@ -65,12 +63,82 @@ async def verified_esmfold2_design(design, session):
             raise ValueError('missing_producer_publication_root')
         rows = list((await session.execute(select(Design).where(
             Design.job_id == job.id, Design.source_stage.is_(None)))).scalars())
-        prepared, receipt = prepare_esmfold2_publication(job, root, rows)
-        selected = next((prepared[row.name] for row in rows if row.id == design.id), None)
-        if selected is None:
-            raise ValueError('foreign selected design')
-        revalidate_prepared_publication(root, receipt)
-        return dict(selected, publication_root=root, publication_receipt=receipt)
+        key = _publication_fingerprint(job, root, rows)
+        cached = _VERIFIED_PUBLICATIONS.get(job.id)
+        if cached is not None and cached[0] == key:
+            _VERIFIED_PUBLICATIONS.move_to_end(job.id)
+            prepared, receipt = cached[1], cached[2]
+        else:
+            prepared, receipt = prepare_esmfold2_publication(job, root, rows)
+            revalidate_prepared_publication(root, receipt)
+            _VERIFIED_PUBLICATIONS[job.id] = (key, prepared, receipt)
+            _VERIFIED_PUBLICATIONS.move_to_end(job.id)
+            while len(_VERIFIED_PUBLICATIONS) > _VERIFIED_PUBLICATION_LIMIT:
+                _VERIFIED_PUBLICATIONS.popitem(last=False)
+    return {row.id: row for row in rows}, prepared, root, receipt
+
+
+# Full verification re-reads, hashes and parses every structure in a Job's
+# publication; a results page repeated that on every request. The verified
+# result is reused only while nothing it depends on has changed: every file
+# under the publication root (path, size, mtime, inode, so additions and
+# removals that the inventory check would reject also invalidate), the Job's
+# recorded provenance, and the Design rows. Any change re-runs the full check.
+_VERIFIED_PUBLICATION_LIMIT = 16
+_VERIFIED_PUBLICATIONS: "OrderedDict[str, tuple[str, dict, dict]]" = OrderedDict()
+
+
+def _publication_fingerprint(job, root, rows) -> str:
+    digest = hashlib.sha256()
+    digest.update(str(root.resolve()).encode())
+    # Every persisted column of every Design row: verification also compares
+    # the stored scientific blocks with the publication, so an edited row must
+    # re-run it.
+    row_state = sorted(
+        json.dumps({c.key: getattr(r, c.key, None) for c in r.__table__.columns},
+                   sort_keys=True, default=str)
+        if hasattr(r, '__table__') else json.dumps(vars(r), sort_keys=True, default=str)
+        for r in rows
+    )
+    digest.update(json.dumps({'provenance': job.provenance or {}, 'params': job.params or {},
+                              'rows': row_state}, sort_keys=True, default=str).encode())
+    for path in sorted(p for p in root.resolve().rglob('*') if p.is_file()):
+        stat = path.stat()
+        digest.update(f'{path}\0{stat.st_size}\0{stat.st_mtime_ns}\0{stat.st_ino}\n'.encode())
+    return digest.hexdigest()
+
+
+async def verified_esmfold2_design(design, session):
+    """Return selected {block, artifacts, payload, ...} after whole-set verification.
+
+    block.metrics are native fractional scalars. Only display pLDDT uses x100.
+    No DB writes or legacy authority inference; consumers use verified snapshots.
+    """
+    rows, prepared, root, receipt = await _verified_publication(design.job_id, session)
+    row = rows.get(design.id)
+    if row is None:
+        raise ValueError('foreign selected design')
+    selected = prepared.get(row.name)
+    if selected is None:
+        raise ValueError('foreign selected design')
+    return dict(selected, publication_root=root, publication_receipt=receipt)
+
+
+async def scientific_documents(designs, session):
+    """Documents for one Job's designs from a single publication verification."""
+    if not designs:
+        return {}
+    try:
+        rows, prepared, _root, _receipt = await _verified_publication(designs[0].job_id, session)
+    except _ERRORS:
+        return {}
+    documents = {}
+    for design in designs:
+        row = rows.get(design.id)
+        selected = prepared.get(row.name) if row is not None else None
+        if selected is not None:
+            documents[design.id] = _document(design, dict(selected, source_kind=_source_kind(selected)))
+    return documents
 
 
 def scalar_records_from_publication(design, job, read):
@@ -102,11 +170,14 @@ CONFIDENCE_DIALECT = {**SCALAR_DIALECT, 'name': 'biohub_esmfold2_native_confiden
 _ERRORS = (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError, BadZipFile, EOFError)
 
 
+def _source_kind(selected):
+    return 'mmcif' if Path(selected['artifacts']['structure']['path']).suffix.lower() in ('.cif', '.mmcif') else 'pdb'
+
+
 async def verified_native_design(design, session, *, structure_only=False):
     # Optional tensor parsing is deliberately NOT part of structure authority.
     selected = await verified_esmfold2_design(design, session)
-    return dict(selected, design_id=design.id,
-        source_kind='mmcif' if Path(selected['artifacts']['structure']['path']).suffix.lower() in ('.cif', '.mmcif') else 'pdb',
+    return dict(selected, design_id=design.id, source_kind=_source_kind(selected),
         native={'confidence_dialect': selected['payload'].get('confidence_dialect')})
 
 

@@ -58,6 +58,7 @@ from services.ngs_molbio_capabilities import NgsMolBioCapabilityError
 from build_identity import deployed_source_identity
 from services.molbio_ngs_member_receipts import persist_member_receipt, resolve_molecular_revision_receipt
 from services.molbio_persistence import begin_immediate_molbio_write, record_sequence_revision
+from services.molbio_feature_display import is_sequence_annotation
 from molbio_ngs_services import RevisionConflict as NativeRevisionConflict, StateMember, save_state_revision
 from services.global_experiments.project_datasets import (
     InvalidProteinDatasetLifecycle,
@@ -575,8 +576,9 @@ def _project_hub_molecular_href(
     domain_id: str,
     state_revision_id: str,
     sequence_id: str,
+    revision_id: str | None = None,
 ) -> str:
-    """Open the stable sequence at its latest editable server head."""
+    """Open an editable head or an exact retained version after projection deletion."""
     return "/designer?" + urlencode({
         "workspace_id": project_id,
         "global_experiment_id": experiment_id,
@@ -584,6 +586,7 @@ def _project_hub_molecular_href(
         "state_revision_id": state_revision_id,
         "section": "plasmids",
         "molbio_sequence_id": sequence_id,
+        **({"molbio_revision_id": revision_id} if revision_id else {}),
     })
 
 
@@ -630,7 +633,7 @@ async def project_hub(
     attached_sequence_ids = sorted({row.document_id for row in attached_revisions.values()})
     molecular_documents = {
         row.id: row for row in (await molbio.scalars(
-            select(MolecularDocument).options(load_only(MolecularDocument.id, MolecularDocument.current_revision_id)).where(MolecularDocument.id.in_(attached_sequence_ids))
+            select(MolecularDocument).options(load_only(MolecularDocument.id, MolecularDocument.current_revision_id, MolecularDocument.deleted_at)).where(MolecularDocument.id.in_(attached_sequence_ids))
         )).all()
     } if attached_sequence_ids else {}
     current_revision_ids = [
@@ -650,9 +653,9 @@ async def project_hub(
 
     operation_receipts, operation_page = await _project_hub_linked_receipts(
         session, project_id=project_id, domain_id=domain_id,
-        kinds={"molecular_operation", "pcr_experiment_revision"}, cursor=operations_cursor, state_revision_id=selected.id,
+        kinds={"molecular_operation", "molbio_operation", "pcr_experiment_revision"}, cursor=operations_cursor, state_revision_id=selected.id,
     )
-    operation_ids = [row.entity_id for row in operation_receipts if row.entity_kind == "molecular_operation"]
+    operation_ids = [row.entity_id for row in operation_receipts if row.entity_kind in {"molecular_operation", "molbio_operation"}]
     operations = {
         row.id: row for row in (await molbio.scalars(
             select(MolecularOperation).options(load_only(MolecularOperation.id, MolecularOperation.operation_kind, MolecularOperation.status, MolecularOperation.parameters)).where(MolecularOperation.id.in_(operation_ids))
@@ -701,9 +704,10 @@ async def project_hub(
     for receipt in molecular_receipts:
         attached_revision = attached_revisions.get(receipt.entity_id)
         document = molecular_documents.get(attached_revision.document_id) if attached_revision is not None else None
+        editable_projection_available = document is not None and document.deleted_at is None
         revision = (
             current_revisions.get(document.current_revision_id)
-            if document is not None and document.current_revision_id
+            if editable_projection_available and document.current_revision_id
             else None
         ) or attached_revision
         if revision is None or not isinstance(revision.snapshot, dict):
@@ -734,6 +738,7 @@ async def project_hub(
             continue
         snapshot = revision.snapshot
         features = snapshot.get("features") if isinstance(snapshot.get("features"), list) else []
+        features = [feature for feature in features if is_sequence_annotation(feature)]
         labels = [str(item.get("name") or item.get("label") or item.get("type") or "Feature") for item in features if isinstance(item, dict)]
         folded = [label.casefold() for label in labels]
         sequence_id = revision.document_id
@@ -770,6 +775,7 @@ async def project_hub(
             "name": name,
             "description": str(snapshot.get("description") or ""),
             "availability": receipt.availability,
+            "editable_projection_available": editable_projection_available,
             "unavailable_reason": None,
             "length_bp": revision.content_length,
             "gc_percent": snapshot.get("gc_content"),
@@ -791,6 +797,7 @@ async def project_hub(
                 domain_id=domain_id,
                 state_revision_id=selected.id,
                 sequence_id=sequence_id,
+                revision_id=revision.id if not editable_projection_available else None,
             ),
             "map_segments": map_segments,
         })
@@ -896,7 +903,7 @@ async def project_hub(
         "project": {
             "id": project_id, "name": project.display_name, "objective": project.description,
             "lifecycle_state": project.lifecycle_state, "created_at": project.created_at, "plasmid_count": member_page["total_count"],
-            "settings_href": f"/projects/{project_id}", "add_plasmid_href": f"/designer?workspace_id={project_id}&section=plasmids&action=add-plasmid",
+            "settings_href": f"/projects/{project_id}", "add_plasmid_href": f"/designer?workspace_id={project_id}&global_experiment_id={experiment_id}&domain_experiment_id={domain_id}&state_revision_id={selected.id}&section=plasmids&action=add-plasmid",
         },
         "identity": {
             "workspace_id": project_id, "global_experiment_id": experiment_id, "domain_experiment_id": domain_id,

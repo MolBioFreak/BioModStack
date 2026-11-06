@@ -11,33 +11,33 @@
     "images": [
       {
         "cache_file": "ontresearch-wf-clone-validation-sha0ebc91d22c0ea5183272af8bf2b96ca51e88ad5d.img",
-        "sha256": "28d79c632f990c4a220b0d9d55fa7af1684320f77c8f907dcd37c803205eb8cc",
+        "sha256": "f1a8b4bd4d1e00a12a19e48d9125301803f72759fe391202d1042415c1879937",
         "uri": "docker://ontresearch/wf-clone-validation:sha0ebc91d22c0ea5183272af8bf2b96ca51e88ad5d",
         "label": "wfplasmid"
       },
       {
         "cache_file": "ontresearch-canu-sha50e56c57b7dfcc28ea176895c6ad98b43c607df2.img",
-        "sha256": "fd26bc095b1970900d60b9a3a81f925218da39934ecad04054e1ffe9773762f1",
+        "sha256": "7bb99dd38ebdfeaa9785c9617b7c0193f29828753362ec0c11180e353d0cb044",
         "uri": "docker://ontresearch/canu:sha50e56c57b7dfcc28ea176895c6ad98b43c607df2",
         "label": "canu",
         "assembly_tool": "canu"
       },
       {
         "cache_file": "medaka-2.2.2.img",
-        "sha256": "58122b812860996a29dce1e70aa14253702ac86ec36b7f31185fe5555e200687",
+        "sha256": "66ff42ab4839cb711354e11daa24500bf4207a5580b4fd386a257bbb6724f6a7",
         "uri": "docker://ontresearch/medaka@sha256:6794e1b293ffa125b4a57a042cbc7f85db2584f34a44ffd415e7eb501684c430",
         "label": "medaka",
         "definition": "../../apptainer/medaka.def"
       },
       {
         "cache_file": "ontresearch-wf-common-shafdd79f8e4a6faad77513c36f623693977b92b08e.img",
-        "sha256": "8cacb6a3c0a9a1ad3dd0f0e0624e7da512ae6d247bb878d16b3b8457d8342262",
+        "sha256": "3371148352b3c8004eb564198184503bd577f1d3ee7a823f1c89bc398adad30f",
         "uri": "docker://ontresearch/wf-common:shafdd79f8e4a6faad77513c36f623693977b92b08e",
         "label": "wf_common"
       },
       {
         "cache_file": "ontresearch-plannotate-shae4901fb4353581a26049f564d279edd81fe38805.img",
-        "sha256": "46ed6a2c15c986f9d04a452199f741b84e06d48dd5d16ced20a095b4cdbaf3b1",
+        "sha256": "0d7d7beb3f08397b7369cf5b68367dedd17ff49c9360c52b6788e403a99c643c",
         "uri": "docker://ontresearch/plannotate:shae4901fb4353581a26049f564d279edd81fe38805",
         "label": "plannotate"
       }

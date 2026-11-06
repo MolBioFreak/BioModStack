@@ -18,6 +18,8 @@ include { FastqDimerAnalysis as Pod5DimerAnalysis; FastqDimerAnalysis as BamDime
 include { ConstructVerify as Pod5ConstructVerify; ConstructVerify as BamConstructVerify; ConstructVerify as InputFastqConstructVerify } from '../../modules/ngs/construct_verify.nf'
 include { ComparisonPanelAttribution as Pod5ComparisonPanelAttribution; ComparisonPanelAttribution as BamComparisonPanelAttribution; ComparisonPanelAttribution as InputComparisonPanelAttribution } from '../../modules/ngs/comparison_panel_attribution.nf'
 
+include { ModkitAnalysis } from '../../modules/ngs/modkit_analysis.nf'
+
 include { reportStage } from '../../modules/ngs/stage_reporting.nf'
 
 workflow ONT_PLASMID_QC {
@@ -61,6 +63,10 @@ workflow ONT_PLASMID_QC {
         error("FASTQ analysis requires --reference_fasta for alignment and QC")
     }
 
+    if (params.run_modkit == true && (has_fastq || !has_reference)) {
+        error("Modkit requires a reference and POD5 modified-base calls or an MM/ML-tagged BAM; FASTQ cannot retain modification probabilities")
+    }
+
     // Validate minimap2 preset for FASTQ
     if (has_fastq) {
         def allowed_presets = ['map-ont', 'map-hifi', 'map-pb', 'sr'] as Set
@@ -71,6 +77,7 @@ workflow ONT_PLASMID_QC {
     }
 
     // Retain input-specific process aliases for selectors and resume identity.
+    def modkitBam = null
     def qcSummary = null
     def comparisonSummary = null
 
@@ -98,6 +105,7 @@ workflow ONT_PLASMID_QC {
 
         if (has_reference) {
             DoradoAlign(DoradoBasecall.out.bam, Channel.of(reference_file))
+            modkitBam = DoradoAlign.out.aligned
             DoradoAlign.out.aligned.subscribe { bam, bai ->
                 reportStage(params, "dorado_align", [
                     "${params.out_dir}/align/aligned.bam",
@@ -179,6 +187,8 @@ workflow ONT_PLASMID_QC {
             PrepareReferenceForIGV.out.log.subscribe { _ignored -> }
         }
 
+        modkitBam = analysis_bam
+
         if (has_reference && runFastqQc && analysis_bam != null) {
             BamInputToFastqForQC(analysis_bam)
             BamDimerAnalysis(BamInputToFastqForQC.out.fastq, Channel.of(reference_file))
@@ -256,6 +266,9 @@ workflow ONT_PLASMID_QC {
                 comparisonSummary = InputComparisonPanelAttribution.out.summary
             }
         }
+    }
+    if (params.run_modkit == true) {
+        ModkitAnalysis(modkitBam, Channel.value(reference_file))
     }
     if (qcSummary != null) {
         qcSummary.subscribe { _ignored ->

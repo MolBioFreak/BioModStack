@@ -1,8 +1,10 @@
+import { resolveApiResourceUrl } from '../../../runtime/tailnetEnvironment';
 import { digestFragmentsForAssembly } from '../../../lib/digestAssemblyTransfer';
 import type { AssemblyFragmentInput } from '../../../lib/api';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { saveRestrictionDigest, restrictionRecognitionSite } from '../../../lib/restrictionAnalysis';
 import { restrictionSpecialCase } from '../../../lib/restrictionSpecialCases';
+import { hasStickyDigestEnds } from '../../../lib/retainedDigestFragment';
 import type { HighlightedRegion, SelectionInfo, SequenceData } from '../types';
 import type {
     RestrictionAnalysisBatch,
@@ -29,6 +31,8 @@ interface DigestPanelProps {
     selectedEnzymes?: string[];
     onEnzymesChange?: (enzymes: string[]) => void;
     onMapVisibilityRequest?: () => void;
+    groupSameSiteLabels?: boolean;
+    onGroupSameSiteLabelsChange?: (grouped: boolean) => void;
     catalog: RestrictionCatalogReceipt | null;
     productEvidence?: RestrictionProductReleaseReceipt | null;
     catalogRecords: Array<RestrictionRecord | RestrictionCatalogSummary>;
@@ -131,7 +135,11 @@ const CUT_FILTERS: Array<[CutFilter, string]> = [['all','All'],['unique','1x'],[
 const GROUP_FILTERS: Array<[GroupFilter, string]> = [['all','All Types'],['digest','Digest-ready'],['nicking','Nicking'],['recognition_only','Recognition only']];
 const QUICK: Array<[QuickMapGroup, string]> = [['unique','Map all 1x'],['double','Map all 2x'],['three_plus','Map all 3x+'],['nicking','Map nicking'],['type_iis','Map Golden Gate']];
 
-export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, catalog, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest, onAnalyzeAll, onReadEnzymeDetails, productEvidence, sequenceId, onUseInAssembly }: DigestPanelProps) {
+export function DigestPanel({ mobile = false, compactLandscape = false, sequenceData, selection, onHighlight, selectedEnzymes = [], onEnzymesChange, onMapVisibilityRequest, groupSameSiteLabels = true, onGroupSameSiteLabelsChange, catalog, catalogRecords, analysis, authorityLoading, authorityError, digestSimulation, digestLoading, digestError, onDigestSelectionChange, onSimulateDigest, onAnalyzeAll, onReadEnzymeDetails, productEvidence, sequenceId, onUseInAssembly }: DigestPanelProps) {
+    const substrateError = sequenceData.moleculeStrandedness !== 'double'
+        ? 'Digest requires confirmed double-stranded DNA. Single-stranded or unknown substrates are unsupported.'
+        : hasStickyDigestEnds(sequenceData.digestFragment)
+            ? 'Redigestion of a retained sticky-ended fragment is unsupported. Preserve its exact duplex ends for assembly.' : null;
     const [assemblySelection, setAssemblySelection] = useState<{simulation: RestrictionDigestSimulation; indices: number[]} | null>(null);
     const assemblyIndices = assemblySelection?.simulation === digestSimulation ? assemblySelection.indices : [];
     const [digestEnzymes, setDigestEnzymes] = useState<string[]>([]);
@@ -249,6 +257,9 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
     const fullAnalysisRows = async (): Promise<EnzymeCutData[] | undefined> => {
         if (hasFullAnalysis || !onAnalyzeAll) return enzymeData;
         const batch = await onAnalyzeAll();
+        if (batch?.complete === false) {
+            throw new Error('The enzyme scan is incomplete. Retry Analyze full catalog before mapping a group; your existing map is unchanged.');
+        }
         return batch ? buildEnzymeRows(recordsRef.current, indexRestrictionAnalysis(batch), selection, sequenceData) : undefined;
     };
     const requestCountAnalysis = () => {
@@ -349,10 +360,15 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
 
         <div data-digest-mobile-sticky-search={mobile ? 'true' : undefined} className="space-y-2 px-3">
             <button type="button" aria-pressed={specialCasesVisible} onClick={() => { setGroupFilter(specialCasesVisible ? 'all' : 'special'); setCutFilter('all'); setDisplayPage(0); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-3 py-1 ${specialCasesVisible ? 'border-amber-400 bg-amber-900/40' : 'border-slate-600 bg-slate-800'}`}>Special cases</button>
-            {specialCasesVisible && <p className="text-xs text-amber-200">AbaSI and MspJI require modified cytosines. On unmodified DNA, their sequence matches are not cut sites. Map them here only to inspect sequence motifs.</p>}
+            {specialCasesVisible && <p className="text-xs text-amber-200">These enzymes require modified cytosines. Sequence matches alone do not establish cleavage; substrate requirements differ by enzyme. Map them here to inspect sequence motifs.</p>}
             <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search enzyme or recognition site…" data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 ${mobile ? 'min-h-12 min-w-12' : ''}`} />
             {!compactLandscape && <>{!specialCasesVisible && <div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{CUT_FILTERS.map(([value,label]) => <button key={value} onClick={() => { setCutFilter(value); if (value !== 'all') requestCountAnalysis(); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${cutFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div>}{!specialCasesVisible && <div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{GROUP_FILTERS.map(([value,label]) => <button key={value} onClick={() => { setGroupFilter(value); if (value === 'nicking') requestCountAnalysis(); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${groupFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div>}<div data-digest-bulk-map="true" className="flex gap-1 overflow-x-auto"><button disabled={hasFullAnalysis && filteredMapIds.length === 0} onClick={() => void mapFiltered()} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border border-cyan-600 bg-cyan-950/50 px-2 disabled:opacity-40`}>Map filtered ({filteredMapIds.length})</button><button disabled={selectedEnzymes.length === 0 && pendingMappingCount === 0} onClick={clearMap} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 disabled:opacity-40`}>Clear map ({selectedEnzymes.length})</button></div>{!specialCasesVisible && <div data-digest-quick-map="true" className="flex gap-1 overflow-x-auto">{QUICK.map(([value,label]) => <button key={value} aria-pressed={activeQuickMapGroups.has(value)} aria-busy={pendingGroups.current.has(value)} onClick={() => void toggleQuick(value)} className={`${mobile ? 'min-h-12 min-w-12' : ''} ${activeQuickMapGroups.has(value) ? 'border-cyan-400 bg-cyan-700' : 'border-slate-600 bg-slate-800'} rounded border px-2`}>{label}</button>)}</div>}</>}
         </div>
+        {onGroupSameSiteLabelsChange && <label className={`flex items-center gap-2 px-3 text-xs text-slate-300 ${mobile ? 'min-h-12' : ''}`}
+            title="Keep one label for matching cut positions, favoring the most specific recognition pattern. Hover over a + label for other matches, or uncheck to show every label.">
+            <input type="checkbox" checked={groupSameSiteLabels} onChange={event => onGroupSameSiteLabelsChange(event.target.checked)} />
+            One label per cut site
+        </label>}
         <nav aria-label="Enzyme display pages" className="flex items-center justify-between gap-2 px-3">
             <button type="button" disabled={currentPage === 0} onClick={() => setDisplayPage(currentPage - 1)} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 disabled:opacity-40`}>Previous enzymes</button>
             <span role="status" className="text-xs text-slate-400">{filtered.length === 0 ? '0 enzymes' : `${currentPage * 50 + 1}–${Math.min((currentPage + 1) * 50, filtered.length)} of ${filtered.length} enzymes`} · Page {currentPage + 1}/{pageCount}</span>
@@ -371,16 +387,19 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
         </div>}
         </div>
         <div data-digest-mobile-footer={mobile ? 'true' : undefined} data-digest-compact-landscape={mobile && compactLandscape ? 'true' : undefined} className={`${mobile ? 'max-h-[40%] shrink-0 overflow-y-auto overscroll-contain' : ''} border-t border-slate-700 bg-slate-950 p-3`}>
+            <p className="mb-2 text-xs text-slate-300">Sequence-based cleavage geometry for fully double-stranded DNA. Methylation, buffer conditions and digestion efficiency are not modeled.</p>
+            {substrateError && <p role="alert" className="mb-2 text-xs text-amber-200">{substrateError}</p>}
+            {digestEnzymes.some(id => id === 'DpnI' || id === 'MalI') && <p className="mb-2 text-xs text-amber-200">DpnI/MalI require methylated adenine at GATC. Ordinary unmethylated PCR products are not substrates.</p>}
             <div className="mb-2 flex gap-1 overflow-x-auto">{digestEnzymes.map((id) => <button key={id} onClick={() => toggleDigest(id)} className="rounded border border-amber-500 px-2">{id} ×</button>)}</div>
             {digestEnzymes.some(id => restrictionSpecialCase(id)) && <p className="mb-2 text-xs text-amber-200">Special-case simulation shows motif-based geometry, not cleavage of unmodified DNA.</p>}
-            <button onClick={() => onSimulateDigest(digestEnzymes)} disabled={digestLoading || digestEnzymes.length === 0} data-digest-mobile-run={mobile ? 'true' : undefined} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded bg-cyan-600 py-2 disabled:bg-slate-600 ${mobile ? 'min-h-12 min-w-12' : ''}`}>{digestLoading ? 'Digesting…' : `Run Digest (${digestEnzymes.length} enzyme${digestEnzymes.length === 1 ? '' : 's'})`}</button>
+            <button onClick={() => onSimulateDigest(digestEnzymes)} disabled={digestLoading || digestEnzymes.length === 0 || Boolean(substrateError)} data-digest-mobile-run={mobile ? 'true' : undefined} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded bg-cyan-600 py-2 disabled:bg-slate-600 ${mobile ? 'min-h-12 min-w-12' : ''}`}>{digestLoading ? 'Digesting…' : `Run Digest (${digestEnzymes.length} enzyme${digestEnzymes.length === 1 ? '' : 's'})`}</button>
             {digestSimulation?.source?.kind === 'molecular_revision' && <div>
                 <button type="button" onClick={saveDigest} disabled={currentSave?.pending || !!currentSave?.operationId} className="rounded border px-3 py-2 disabled:opacity-40">{currentSave?.pending ? 'Saving…' : 'Save digest & fragments'}</button>
                 {onUseInAssembly && digestSimulation && <div><p>Select physical fragments for Assembly (order can be edited there):</p>{digestSimulation.fragments.map(f => <label key={f.fragment_index}><input type="checkbox" aria-label={`Use digest fragment ${f.fragment_index}`} checked={assemblyIndices.includes(f.fragment_index)} onChange={e => setAssemblySelection({simulation:digestSimulation,indices:e.target.checked ? [...assemblyIndices,f.fragment_index] : assemblyIndices.filter(i => i !== f.fragment_index)})}/>{f.fragment_index}: {f.top_strand_sequence.length} bp</label>)}<button disabled={!assemblyIndices.length} onClick={() => onUseInAssembly(digestFragmentsForAssembly(digestSimulation,assemblyIndices,sequenceId,sequenceData.name))}>Use selected fragments in assembly</button></div>}
-                {currentSave?.operationId && <a className="ml-2 underline" href={`/api/molbio/restriction/digests/${encodeURIComponent(currentSave.operationId)}`} target="_blank" rel="noreferrer">Open saved digest</a>}
+                {currentSave?.operationId && <a className="ml-2 underline" href={resolveApiResourceUrl(`/api/molbio/restriction/digests/${encodeURIComponent(currentSave.operationId)}`)} target="_blank" rel="noreferrer">Open saved digest</a>}
                 {currentSave?.error && <p role="alert">{currentSave.error}</p>}
             </div>}
-            {digestSimulation && <div data-digest-mobile-result={mobile ? 'true' : undefined} className="mt-2 space-y-1 rounded border border-cyan-700 p-2"><div>{digestSimulation.fragments.length} exact sequence fragments</div>{digestSimulation.fragments.map((fragment) => <div key={fragment.fragment_index} data-fragment-index={fragment.fragment_index} className="rounded bg-slate-800 p-2 text-xs"><strong>#{fragment.fragment_index + 1} · {fragment.reference_span_bp} bp</strong><div>Left: {endLabel(fragment.left_end)}</div><div>Right: {endLabel(fragment.right_end)}</div></div>)}</div>}
+            {digestSimulation && <div data-digest-mobile-result={mobile ? 'true' : undefined} className="mt-2 space-y-1 rounded border border-cyan-700 p-2"><div>{digestSimulation.fragments.length} predicted sequence fragments</div>{[...(digestSimulation.warnings ?? []), ...(digestSimulation.limitations ?? [])].map(note => <p key={note} className="text-amber-200">{note}</p>)}{digestSimulation.fragments.map((fragment) => <div key={fragment.fragment_index} data-fragment-index={fragment.fragment_index} className="rounded bg-slate-800 p-2 text-xs"><strong>#{fragment.fragment_index + 1} · {fragment.reference_span_bp} bp</strong><div>Left: {endLabel(fragment.left_end)}</div><div>Right: {endLabel(fragment.right_end)}</div></div>)}</div>}
         </div>
     </div>;
 }

@@ -50,7 +50,9 @@ test('action forms and route provenance come only from the robot catalog and adm
     // Current command evidence survives an unrelated history read failure.
     assert.match(cockpit, /const displayedLatestReceipt = latestReceiptQuery\.data\?\.command_id === latestOperatorReceipt\?\.command_id/);
     assert.match(cockpit, /\? latestReceiptQuery\.data : latestOperatorReceipt/);
-    assert.match(cockpit, /const latestOperatorReceipt = interruptAggregateAbort\.data \?\? interruptZStop\.data \?\? interruptYStop\.data \?\? interruptXStop\.data \?\? invokeDeckAction\.data \?\? invokeLifecycleActionMutation\.data \?\? invokeYAction\.data \?\? xyReceipt \?\? invokeOperatorAction\.data/);
+    // Latest receipt is the newest same-generation request across every operator mutation, Stops included.
+    assert.match(cockpit, /const latestRequest = repairManualLatestRequest\(\[\s*interruptAggregateAbort, interruptZStop, interruptYStop, interruptXStop,\s*invokeDeckAction, invokeLifecycleActionMutation, invokeYAction, invokeXYAction, invokeOperatorAction, componentStop,/);
+    assert.match(cockpit, /const latestOperatorReceipt = latestRequest\?\.data;/);
     assert.match(cockpit, /resetInterruptAggregateAbort\(\)/);
     assert.match(cockpit, /resetInvokeLifecycleAction\(\)/);
     // Current history is canonical cursor pagination, not a synthesized local
@@ -97,26 +99,6 @@ test('browser uses fixed BMS routes and action ids, never arbitrary robot paths'
         '/assessment',
     ]) assert.ok(client.includes(routeToken), `missing fixed BMS route token: ${routeToken}`);
     assert.doesNotMatch(client, /informationalPath|robotPath|targetPath/);
-});
-
-test('four-channel pipette surface separates physical admission from no-motion planning', () => {
-    assert.match(cockpit, /BioXpPipetteControlPanel/);
-    assert.ok(
-        cockpit.lastIndexOf('BioXpPipetteControlPanel') > cockpit.indexOf('Thermal Door'),
-        'pipette panel must render beneath the Thermal Door card',
-    );
-    assert.doesNotMatch(source, /BioXpPipetteControlPanel/);
-    for (const label of [
-        'Pipette status', 'Channel', 'Hardware tip readback', 'Hardware pressure',
-        'Assign source tip type / location (host only)', 'Move to waste physically', 'Detect fluid physically', 'Lift pipette head (Z)', 'Lower pipette head (Z)',
-        'Build no-motion plan', 'No-motion application planner', 'Active hardware readback', 'Read live hardware',
-    ]) assert.ok(pipettePanel.toLowerCase().includes(label.toLowerCase()), `missing literal label: ${label}`);
-    for (const token of [
-        'controller_acknowledged', 'completion_verified', 'physical_effect_verified',
-        'motion_commanded', 'truth_source', 'live_query_performed',
-    ]) assert.ok(pipettePanel.includes(token), `missing pipette evidence token: ${token}`);
-    assert.doesNotMatch(pipettePanel, /execute pipette|run physical/i);
-    assert.doesNotMatch(pipettePanel, /Robot-owned blocker|physical_pipette_execution_not_authorized/);
 });
 
 test('receipts expose machine assessment and require explicit human PASS or FAIL observations', () => {

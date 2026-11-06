@@ -32,13 +32,6 @@ from services.workflow_adapter_registry import (
     register_workflow_adapter,
 )
 from model_registry import get_registry
-from scripts.rfd3_local_redesign.contract import ContractError
-from services.rfd3_local_redesign import (
-    canonical_local_redesign_data_alias,
-    local_redesign_requests_semantically_equal,
-    prepare_local_redesign_scheduler_params,
-    validate_local_redesign_workflow_params,
-)
 from services.resource_usage_evidence import (
     GLOBAL_DISPATCH_AUTHORITY_PARAM,
     GLOBAL_RESOURCE_ADMISSION_PARAM,
@@ -459,6 +452,7 @@ async def persist_workflow_plan_authority(
     capability_id: str,
     normalized_job_request: Any | None = None,
     native_entrypoint: str | None = None,
+    md_input_resolver=None,
 ) -> tuple[ExperimentWorkflowPlanAuthority, dict[str, Any]]:
     """Persist or exactly replay the immutable authority for one Project Manager Plan."""
     head = await _head(session, workflow_id, "workflow")
@@ -468,10 +462,11 @@ async def persist_workflow_plan_authority(
     native_contract = None
     if normalized_job_request is not None:
         from services.protein_project_capabilities import normalized_job_plan_contract, protein_setup_parameter_schema, _PARAMETER_SCHEMAS
-        setup_capability = capability_id if capability_id in _PARAMETER_SCHEMAS and protein_setup_parameter_schema(capability_id).get("x-bms-native-editor-draft") else None
+        from services.family_msa_project_capabilities import family_msa_capability
+        setup_capability = capability_id if ((capability_id in _PARAMETER_SCHEMAS and protein_setup_parameter_schema(capability_id).get("x-bms-native-editor-draft")) or family_msa_capability(capability_id) is not None) else None
         native_contract = normalized_job_plan_contract(
             normalized_job_request, native_entrypoint=native_entrypoint,
-            setup_capability_id=setup_capability,
+            setup_capability_id=setup_capability, md_input_resolver=md_input_resolver,
         )
         if native_contract["capability"]["capability_id"] != capability_id:
             raise ValidationFailure("native Job Plan capability identity disagrees")
@@ -480,6 +475,10 @@ async def persist_workflow_plan_authority(
         if loaded is None:
             raise ValidationFailure("Workflow Plan authority is unavailable")
         existing, stored_contract = loaded
+        if native_contract is not None and "result_adapter_ids" not in stored_contract["capability"]:
+            # Reopen historical immutable Plans without retroactively adding
+            # result-routing metadata to their original request identity.
+            native_contract["capability"].pop("result_adapter_ids", None)
         if (
             head.workspace_id != workspace_id
             or head.parent_id != domain_experiment_id
@@ -583,51 +582,11 @@ def validate_workflow_payload_for_plan(
 
 
 def public_workflow_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Publish native workflow intent while hiding every private runtime path."""
-    scheduler = payload.get("scheduler")
-    if not isinstance(scheduler, dict) or scheduler.get("model_id") != "protein_local_redesign":
-        return copy.deepcopy(payload)
-
-    def redact(value: Any) -> Any:
-        if isinstance(value, dict):
-            result: dict[str, Any] = {}
-            for key, child in value.items():
-                normalized = str(key).lower()
-                if normalized == "input_structure":
-                    try:
-                        result[str(key)] = canonical_local_redesign_data_alias(child)
-                    except ContractError:
-                        pass
-                    continue
-                if normalized in {
-                    "input",
-                    "input_pdb",
-                    "input_cif",
-                    "plr_input_pdb",
-                    "rfd3_request",
-                }:
-                    continue
-                if any(
-                    token in normalized
-                    for token in ("path", "directory", "output_dir", "command", "executable")
-                ):
-                    continue
-                result[str(key)] = redact(child)
-            return result
-        if isinstance(value, list):
-            return [redact(child) for child in value]
-        return value
-
-    return redact(payload)
+    return copy.deepcopy(payload)
 
 
 def public_preparation_scheduler(payload: dict[str, Any]) -> dict[str, Any]:
-    """Publish a prepared scheduler without private runtime paths or native request bodies."""
-    if payload.get("model_id") != "protein_local_redesign":
-        return copy.deepcopy(payload)
-    public = public_workflow_payload({"scheduler": payload})
-    scheduler = public.get("scheduler")
-    return scheduler if isinstance(scheduler, dict) else {}
+    return copy.deepcopy(payload)
 
 
 def now() -> str:
@@ -759,22 +718,6 @@ def _validate_workflow_payload(
             raise ValidationFailure("typed core workflow scheduler params must be an object")
         if scheduler["params"].get("workflow_adapter") != adapter_id:
             raise ValidationFailure("typed core workflow scheduler adapter identity disagrees")
-        if expected_model_id == "protein_local_redesign":
-            if scheduler.get("mode") != "local_redesign":
-                raise ValidationFailure("native RFD3 typed workflow requires local_redesign mode")
-            resources = scheduler.get("resources")
-            pinned_gpu = resources.get("pinned_gpu") if isinstance(resources, dict) else None
-            if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
-                raise ValidationFailure(
-                    "native RFD3 typed workflow requires scheduler.resources.pinned_gpu as a non-negative integer"
-                )
-            try:
-                validate_local_redesign_workflow_params(
-                    scheduler["params"],
-                    expected_adapter_id=adapter_id,
-                )
-            except ContractError as exc:
-                raise ValidationFailure(str(exc)) from exc
     if family == "conformational_mapping":
         stage = payload.get("stage")
         stage_by_adapter = {
@@ -894,7 +837,8 @@ def _validate_workflow_payload(
         if not isinstance(scheduler, dict):
             raise ValidationFailure("workflow scheduler must be an object")
         unknown_scheduler_keys = sorted(
-            set(scheduler) - {"name", "model_id", "mode", "params", "resources", "profile"}
+            set(scheduler) - {"name", "model_id", "mode", "params", "resources", "profile",
+                              "execution_target_id", "execution_policy"}
         )
         if unknown_scheduler_keys:
             raise ValidationFailure(
@@ -2362,6 +2306,43 @@ async def save_dataset_revision(
     return revision
 
 
+async def derive_dataset_revision(
+    session: AsyncSession, dataset_id: str, parent_revision_id: str,
+    ordinals: list[int], *, expected_head_generation: int,
+) -> ExperimentRevision:
+    """Copy explicitly selected parent occurrences, recording their exact origin.
+
+    Origin is the immediate parent, not a claim about earlier revisions. The
+    order and multiplicity of ordinals are intentional and preserved.
+    """
+    parent = await session.get(ExperimentRevision, parent_revision_id)
+    if parent is None or parent.subject_id != dataset_id:
+        raise NotFound("parent Dataset revision not found")
+    if any(type(ordinal) is not int or ordinal < 0 for ordinal in ordinals):
+        raise ValidationFailure("invalid parent member ordinal")
+    rows = (await session.execute(select(ExperimentDatasetRevisionMember).where(
+        ExperimentDatasetRevisionMember.revision_id == parent_revision_id,
+        ExperimentDatasetRevisionMember.ordinal.in_(ordinals),
+    ))).scalars().all()
+    by_ordinal = {row.ordinal: row for row in rows}
+    if any(ordinal not in by_ordinal for ordinal in ordinals):
+        raise NotFound("parent Dataset member ordinal not found")
+    members = []
+    for ordinal in ordinals:
+        row = by_ordinal[ordinal]
+        value = json.loads(row.value_json)
+        # Wrap rather than mutate source values, including scalar values.
+        value = {"schema": "bms.dataset-derived-member.v1", "source_value": value,
+                 "origin": {"revision_id": parent_revision_id,
+                            "revision_sha256": parent.payload_sha256,
+                            "ordinal": ordinal, "member_sha256": row.content_sha256}}
+        members.append({"role": row.role, "identity": row.semantic_identity,
+                        "value": value, "media_type": row.media_type})
+    return await save_dataset_revision(session, dataset_id,
+        {"schema": "bms.dataset-revision.v1", "members": members},
+        expected_head_generation=expected_head_generation)
+
+
 async def protein_setup_launch_authority(
     session: AsyncSession,
     authority: ExperimentWorkflowPlanAuthority,
@@ -2383,6 +2364,9 @@ async def protein_setup_launch_authority(
         "schema": "bms.protein-setup-launch-authority.v1",
         "capability_contract_sha256": authority.capability_contract_sha256,
     }
+    from services.family_msa_project_capabilities import family_msa_capability
+    family = family_msa_capability((await _head(session, authority.workflow_id, "workflow")).description)
+    expected_domain = family[0]["domain_kind"] if family is not None else "protein_in_silico"
     for prefix, head in (("project", project), ("global_experiment", experiment), ("domain", domain)):
         revision_id = (pinned or {}).get(f"{prefix}_revision_id", head.current_revision_id)
         if prefix == "domain":
@@ -2396,7 +2380,7 @@ async def protein_setup_launch_authority(
             raise ValidationFailure("Protein setup hierarchy revision is not canonical")
         if prefix == "domain" and (
             payload.get("schema") != "bms.domain-experiment.v1"
-            or payload.get("domain_kind") != "protein_in_silico"
+            or payload.get("domain_kind") != expected_domain
         ):
             raise ValidationFailure("native Protein setup authority requires its Protein Domain")
         result.update({
@@ -2521,17 +2505,6 @@ async def prepare_workflow(
             mode = scheduler_payload.get("mode")
             params = scheduler_payload.get("params")
             if isinstance(model_id, str) and isinstance(mode, str) and isinstance(params, dict):
-                if model_id == "protein_local_redesign":
-                    try:
-                        params = prepare_local_redesign_scheduler_params(
-                            params,
-                            job_name=str(scheduler_payload.get("name") or ""),
-                            expected_adapter_id=str(payload.get("adapter_id") or ""),
-                        )
-                    except ContractError as exc:
-                        reasons.append(str(exc))
-                    else:
-                        scheduler_payload["params"] = params
                 native_entrypoint = (
                     plan_authority[1]["capability"].get("native_entrypoint")
                     if plan_authority is not None else None
@@ -2754,21 +2727,6 @@ async def validate_preparation_authority(
     if not isinstance(raw_expected_scheduler, dict):
         raise ValidationFailure("preparation scheduler authority is unavailable")
     expected_scheduler = copy.deepcopy(raw_expected_scheduler)
-    if (
-        normalized_workflow.get("workflow_family") == "typed_core_job"
-        and expected_scheduler.get("model_id") == "protein_local_redesign"
-    ):
-        expected_params = expected_scheduler.get("params")
-        if not isinstance(expected_params, dict):
-            raise ValidationFailure("native RFD3 preparation scheduler parameters are malformed")
-        try:
-            expected_scheduler["params"] = prepare_local_redesign_scheduler_params(
-                expected_params,
-                job_name=str(expected_scheduler.get("name") or ""),
-                expected_adapter_id=str(normalized_workflow.get("adapter_id") or ""),
-            )
-        except ContractError as exc:
-            raise ValidationFailure(str(exc)) from exc
     if normalized_workflow.get("workflow_family") == "conformational_mapping":
         expected_params = expected_scheduler.get("params")
         if not isinstance(expected_params, dict):
@@ -3216,14 +3174,40 @@ def _core_job_progress(stage_progress: Any) -> dict[str, float | str | None]:
     return {"kind": "indeterminate", "value": None}
 
 
-def _core_job_elapsed_seconds(started_at: Any) -> int:
-    if not isinstance(started_at, datetime):
-        return 0
-    current = datetime.now(started_at.tzinfo) if started_at.tzinfo is not None else datetime.utcnow()
-    return max(0, int((current - started_at).total_seconds()))
+# Late terminal-output linking reopens and verifies the producer's whole
+# publication (for BindCraft2, every campaign file). While the Job's provenance
+# is unchanged, retry with exponential backoff (immediately once, then 15 s,
+# doubling up to _LATE_OUTPUT_RECHECK_SECONDS) instead of on every 2 s sweep.
+# A provenance change (a late publication) resets the backoff. In-process
+# only: a restart checks every pending attempt again.
+_LATE_OUTPUT_RECHECK_SECONDS = 600.0
+_late_output_checks: dict[str, tuple[str, float, int]] = {}
+
+
+def _late_output_check_due(attempt_id: str, job: Any, *, now: float | None = None) -> bool:
+    import time
+
+    current = time.monotonic() if now is None else now
+    marker = sha256_text(canonical_json({
+        "job_id": str(getattr(job, "id", "")),
+        "provenance": _public_runtime_metadata(getattr(job, "provenance", None) or {}),
+    }))
+    previous = _late_output_checks.get(attempt_id)
+    if previous is None or previous[0] != marker:
+        _late_output_checks[attempt_id] = (marker, current, 1)
+        return True
+    _, last, checks = previous
+    delay = 0.0 if checks < 2 else min(_LATE_OUTPUT_RECHECK_SECONDS, 15.0 * 2 ** (checks - 2))
+    if current - last < delay:
+        return False
+    _late_output_checks[attempt_id] = (marker, current, checks + 1)
+    return True
 
 
 def _core_job_live_receipt(job: Any, status: str) -> dict[str, Any]:
+    # The live receipt records observed Job state only. Elapsed time is derived
+    # from started_at by readers; storing a wall-clock counter here made every
+    # 2 s reconcile sweep look like a state change and append a run event.
     return {
         "schema": "bms.experiment.runtime-receipt.v1",
         "job_id": str(job.id),
@@ -3234,7 +3218,6 @@ def _core_job_live_receipt(job: Any, status: str) -> dict[str, Any]:
         "stage_progress": str(job.stage_progress) if job.stage_progress is not None else None,
         "progress": _core_job_progress(job.stage_progress),
         "started_at": str(job.started_at) if job.started_at is not None else None,
-        "elapsed_seconds": _core_job_elapsed_seconds(job.started_at),
         "assigned_gpu": job.assigned_gpu,
         "provenance": _public_runtime_metadata(job.provenance or {}),
     }
@@ -3394,6 +3377,35 @@ async def reconcile_run_group(
             continue
         attempt = attempts[0]
         if attempt.state in {"completed", "failed", "cancelled"}:
+            # Native terminal state remains authoritative. A producer may commit
+            # retained partial outputs after the first terminal projection.
+            terminal = json.loads(attempt.terminal_receipt_json or "{}")
+            if terminal.get("output_evidence") and not terminal.get("output_receipt_ids"):
+                preparation = await session.get(ExperimentWorkflowPreparation, attempt.preparation_id)
+                normalized = json.loads(preparation.normalized_request_json) if preparation else {}
+                terminal_job = await core_session.get(Job, attempt.scheduler_job_id)
+                native_family_msa = terminal_job is not None and terminal_job.model_id in {
+                    'family_msa_protein', 'family_msa_nucleic'} and terminal_job.mode == 'family_msa'
+                if normalized.get("launch_authority", {}).get("schema") == "bms.protein-setup-launch-authority.v1" or native_family_msa:
+                    linked = await session.scalar(select(ExperimentLineageEdge.id).where(
+                        ExperimentLineageEdge.source_resource_id == attempt.resource_id,
+                        ExperimentLineageEdge.edge_mode == "produced",
+                        ExperimentLineageEdge.edge_key == "verified-terminal-output"))
+                    if linked is None and _late_output_check_due(attempt.resource_id, terminal_job):
+                        try:
+                            from services.global_experiments.receipts import verify_and_link_terminal_outputs
+
+                            async with session.begin_nested():
+                                await verify_and_link_terminal_outputs(
+                                    session, core_session, attempt_id=attempt.resource_id,
+                                )
+                            # Linked: this attempt never needs the check again.
+                            _late_output_checks.pop(attempt.resource_id, None)
+                        except Exception:
+                            # Retain pending evidence without a lifecycle change.
+                            pass
+                        # The terminal receipt is immutable. Late outputs belong
+                        # to the existing verified external receipt/lineage owner.
             continue
         # A deterministic Job may survive a typed-claim or outbox crash cut.
         # Recovery owns completion of that durable handoff; reconciliation must
@@ -3417,7 +3429,9 @@ async def reconcile_run_group(
             preparation = await session.get(ExperimentWorkflowPreparation, attempt.preparation_id)
             normalized = json.loads(preparation.normalized_request_json) if preparation else {}
             launch_authority = normalized.get("launch_authority", {})
-            native_protein = launch_authority.get("schema") == "bms.protein-setup-launch-authority.v1"
+            native_protein = launch_authority.get("schema") == "bms.protein-setup-launch-authority.v1" or (
+                job.model_id in {'family_msa_protein', 'family_msa_nucleic'} and job.mode == 'family_msa'
+            )
             resource_usage = None
             resource_evidence = None
             try:
@@ -3465,17 +3479,18 @@ async def reconcile_run_group(
             }
             if resource_evidence is not None:
                 receipt["resource_usage_evidence"] = resource_evidence
-            if projected_state == "completed":
+            if projected_state == "completed" or native_protein:
                 try:
                     from services.global_experiments.receipts import verify_and_link_terminal_outputs
 
-                    receipt.update(
-                        await verify_and_link_terminal_outputs(
-                            session,
-                            core_session,
-                            attempt_id=attempt.resource_id,
+                    async with session.begin_nested():
+                        receipt.update(
+                            await verify_and_link_terminal_outputs(
+                                session,
+                                core_session,
+                                attempt_id=attempt.resource_id,
+                            )
                         )
-                    )
                 except Exception as exc:
                     condition_code = str(getattr(exc, "code", "terminal_output_verification_pending"))
                     pending_receipt = {
@@ -3486,14 +3501,19 @@ async def reconcile_run_group(
                         "message": str(exc)[:512],
                         "provenance": _public_runtime_metadata(job.provenance or {}),
                     }
-                    pending_json = canonical_json(pending_receipt)
-                    if attempt.runtime_identity_json == pending_json:
-                        continue
-                    attempt.runtime_identity_json = pending_json
-                    projected_state = "running"
-                    event_type = "core_output_reconciliation_pending"
-                    idempotency_key = f"core-output-pending:{attempt.scheduler_job_id}:{sha256_text(pending_json)}"
-                    receipt = None
+                    if native_protein:
+                        # Missing output proof cannot turn an authoritative
+                        # terminal native Job into a running Project attempt.
+                        receipt["output_evidence"] = pending_receipt
+                    else:
+                        pending_json = canonical_json(pending_receipt)
+                        if attempt.runtime_identity_json == pending_json:
+                            continue
+                        attempt.runtime_identity_json = pending_json
+                        projected_state = "running"
+                        event_type = "core_output_reconciliation_pending"
+                        idempotency_key = f"core-output-pending:{attempt.scheduler_job_id}:{sha256_text(pending_json)}"
+                        receipt = None
             if receipt is not None:
                 terminal_receipt_json = canonical_json(receipt)
                 attempt.terminal_receipt_json = terminal_receipt_json
@@ -5543,33 +5563,9 @@ class ExistingJobMaterializer:
             if scheduler.get("model_id") != expected_model_id:
                 raise DispatchFailure("typed workflow adapter and scheduler model_id disagree")
             pinned_gpu: int | None = handoff["gpu_index"]
-            if expected_model_id == "protein_local_redesign":
-                resources = scheduler.get("resources")
-                raw_pinned_gpu = resources.get("pinned_gpu") if isinstance(resources, dict) else None
-                if (
-                    isinstance(raw_pinned_gpu, bool)
-                    or not isinstance(raw_pinned_gpu, int)
-                    or raw_pinned_gpu < 0
-                    or raw_pinned_gpu != pinned_gpu
-                ):
-                    raise DispatchFailure("native RFD3 GPU authority differs from resource admission")
             existing_job = await self.core_session.get(Job, scheduler_job_id)
             if existing_job is not None:
                 params_match = dict(existing_job.params or {}) == authoritative_params
-                if expected_model_id == "protein_local_redesign":
-                    expected_request = authoritative_params.get("rfd3_request")
-                    existing_params = dict(existing_job.params or {})
-                    existing_request = existing_params.get("rfd3_request")
-                    expected_without_request = dict(authoritative_params)
-                    expected_without_request.pop("rfd3_request", None)
-                    existing_without_request = dict(existing_params)
-                    existing_without_request.pop("rfd3_request", None)
-                    params_match = (
-                        existing_without_request == expected_without_request
-                        and isinstance(expected_request, dict)
-                        and isinstance(existing_request, dict)
-                        and local_redesign_requests_semantically_equal(existing_request, expected_request)
-                    )
                 if (
                     existing_job.model_id != expected_model_id
                     or existing_job.mode != expected_mode

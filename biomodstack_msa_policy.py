@@ -106,7 +106,7 @@ def apply_msa_policy(model_id: str, params: Mapping[str, Any] | None) -> dict[st
                 raise ValueError(f"{key}=true is unsupported for Protenix A3M consumption; saved intent is not reset.")
     if model_id in {"esmfold2", "esmfold2_experimental"} and effective.get("esmf_use_msa"):
         if effective.get("model_variant", effective.get("esmf_model_variant", "fast")) != "full":
-            raise ValueError("ESMFold2 Fast is not MSA-conditioned; explicitly select Full for hosted MSA")
+            raise ValueError("Hosted ESMFold2 MSA policy requires Full; Fast lacks the dedicated MSA encoder but accepts supplied MSA-derived features")
         if effective.get("msa_provider") == "colabfold_api" and effective.get("colabfold_pairing_mode") != "unpaired":
             raise ValueError("ESMFold2 accepts native per-chain A3M, not provider paired-row CSV; select unpaired")
     return effective

@@ -42,6 +42,7 @@ workflow ANTIBODY_CHILD {
     def pdb_files = pdb_paths.collect { pathStr -> file(pathStr) }
 
     def structure_validator = (params.structure_validator ?: 'boltz2').toString().toLowerCase()
+    if (structure_validator == 'protenix_v2') structure_validator = 'protenix'
     if (!(structure_validator in ['boltz2', 'protenix', 'esmfold2'])) {
         log.warn("Unknown structure_validator '${structure_validator}', defaulting to boltz2")
         structure_validator = 'boltz2'

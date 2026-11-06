@@ -161,6 +161,8 @@ function primerEquals(a: NonNullable<SequenceData['primers']>[number], b: NonNul
         a.end === b.end &&
         a.strand === b.strand &&
         a.tm === b.tm &&
+        a.binding_status === b.binding_status &&
+        a.binding_warning === b.binding_warning &&
         a.gc_percent === b.gc_percent &&
         a.tm_algorithm === b.tm_algorithm &&
         a.tm_salt_correction === b.tm_salt_correction &&

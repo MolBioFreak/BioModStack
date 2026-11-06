@@ -5,11 +5,13 @@
  */
 
 import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { molecularAlignmentHref } from '../alignments/MolecularAlignmentSources';
 const GoldenGateRetainedWorkspace = lazy(() => import('./panels/golden-gate/GoldenGateWorkflowWorkspace'));
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ngsResultHref } from '../../lib/ngsResultRouting';
 import { createLatestAsyncResourceController } from '../../lib/latestAsyncResource';
+import { retainedDigestFragment, requireSupportedDigestImport, DUPLEX_EDIT_REASON } from '../../lib/retainedDigestFragment';
 import {
     fetchRestrictionAnalysisBatch,
     fetchRestrictionCatalogBrowse,
@@ -24,8 +26,12 @@ import {
     type RestrictionSource,
 } from '../../lib/restrictionAnalysis';
 import { SequenceViewer, type ColorPaletteName } from './SequenceViewer';
+import { DEFAULT_MAPPED_ENZYMES } from './utils/restrictionLabels';
 import { DEFAULT_VISIBILITY } from './sequenceViewerConstants';
+import { ProjectAttachmentDialog, type ProjectAttachmentSource } from '../project-manager/ProjectAttachmentDialog';
+import { MOLECULAR_MEMBER_ADAPTER } from '../../lib/molecularProjectMembership';
 import { SequenceHeader } from './SequenceHeader';
+import { DeleteSequenceAction } from './DeleteSequenceAction';
 import {
     MobileMolBioWorkspace,
     MobileMolBioReadPanel,
@@ -45,7 +51,7 @@ import {
 } from './SelectionActionDialog';
 import { MolecularInputModal } from './MolecularInputModal';
 import { RnaStructureViewer, type RnaStructureDisplayMode } from './RnaStructureViewer';
-import { getFeatureColor, normalizeFeatureType } from './featureCatalog';
+import { getFeatureColor, isSequenceAnnotation } from './featureCatalog';
 import {
     didFocusLeaveContainer,
     moveMenuFocus,
@@ -71,6 +77,7 @@ import {
     calculatePrimerTm,
     fetchProjectHub,
     fetchMolecularRevision,
+    fetchMolecularRevisionSummaries,
     fetchNucleotideSequence,
     fetchNucleotideSequences,
     fetchPrimerTmOptions,
@@ -108,8 +115,6 @@ import {
 } from './utils/nucleotides';
 import { findOpenReadingFrames } from './utils/orfs';
 import {
-    dedupeFeatures,
-    featureBounds,
     featureLength,
     featureOverlapLength,
 } from './utils/features';
@@ -118,11 +123,11 @@ import {
     buildPrimerTmRequest,
     createSelectionSnapshot,
     getPrimerHighlightRegions,
-    normalizeStoredPrimerPlacement,
     prepareSelectionPrimer,
     type SelectionSnapshot,
 } from './utils/selectionActions';
 import { applyImportedTopology, type ImportTopology } from './utils/topology';
+import { normalizeFeatureList, normalizeFeatureRecord, normalizePrimerRecord, sequenceDataFromApiRecord } from './utils/sequenceRecord';
 import {
     MOLBIO_LIBRARY_PANEL_DEFAULT_WIDTH,
     clampMolBioPanelWidth,
@@ -156,6 +161,7 @@ import {
     type MolBioMobileSurface,
 } from './utils/mobileLayout';
 import { useMolBioBodyScrollLock } from './useMolBioBodyScrollLock';
+import { ShareDialog, type ShareableItem } from './ShareDialog';
 
 const GCContentTrack = lazy(() => import('./GCContentTrack').then(module => ({ default: module.GCContentTrack })));
 
@@ -178,6 +184,10 @@ interface SequenceLibraryProps {
     projectScoped: boolean;
     showAllConstructs: boolean;
     onToggleAllConstructs: () => void;
+    onDeleted?: (sequenceId: string) => void;
+    onAlign?: (sequences: NucleotideSequenceListItem[]) => void;
+    alignmentBusy?: boolean;
+    alignmentError?: string;
 }
 
 export function SequenceLibrary({
@@ -195,8 +205,20 @@ export function SequenceLibrary({
     projectScoped,
     showAllConstructs,
     onToggleAllConstructs,
+    onDeleted,
+    onAlign,
+    alignmentBusy = false,
+    alignmentError,
 }: SequenceLibraryProps) {
     const [showDemos, setShowDemos] = useState(false);
+    const [alignmentSelection, setAlignmentSelection] = useState<string[]>([]);
+    const alignmentKey = (sequence: NucleotideSequenceListItem) => JSON.stringify([sequence.id, sequence.revision_id ?? null]);
+    const alignmentSequences = sequences.filter(sequence => alignmentSelection.includes(alignmentKey(sequence)));
+    const mixedMolecules = new Set(alignmentSequences.map(sequence => sequence.sequence_type)).size > 1;
+    useEffect(() => {
+        const available = new Set(sequences.map(alignmentKey));
+        setAlignmentSelection(previous => previous.filter(key => available.has(key)));
+    }, [sequences]);
 
     return (
         <div
@@ -226,6 +248,14 @@ export function SequenceLibrary({
                 </button>
             </div>
             {projectScoped && <button type="button" onClick={onToggleAllConstructs} className="border-b border-slate-700 px-3 py-2 text-left text-xs font-semibold text-cyan-300 hover:bg-slate-800">{showAllConstructs ? 'Show Project DNA sequences' : 'All DNA sequences'}</button>}
+            {onAlign && <div className="border-b border-[var(--border-primary)] p-3 text-xs text-[var(--text-secondary)]">
+                <button type="button" disabled={alignmentBusy || alignmentSequences.length < 2 || mixedMolecules}
+                    className="w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 font-semibold text-[var(--text-primary)] disabled:opacity-50"
+                    onClick={() => onAlign(alignmentSequences)}>{alignmentBusy ? 'Preparing alignment…' : `Align selected (${alignmentSequences.length})`}</button>
+                <p className="mt-1">Select two or more saved sequences.</p>
+                {mixedMolecules && <p role="alert">Select DNA together, or RNA together.</p>}
+                {alignmentError && <p role="alert">{alignmentError}</p>}
+            </div>}
 
             <div
                 data-molbio-scroll-region="construct-shelf"
@@ -272,11 +302,17 @@ export function SequenceLibrary({
                     </div>
                 ) : (
                     sequences.map((seq) => (
+                        <div key={seq.id} className="border-b border-[var(--border-primary)]">
+                        <div className="flex items-start">
+                        {onAlign && <label className={`flex shrink-0 items-center justify-center ${mobile ? 'min-h-12 min-w-12' : 'px-2 py-4'}`}>
+                            <input type="checkbox" aria-label={`Select ${seq.name} for alignment`} disabled={alignmentBusy}
+                                checked={alignmentSelection.includes(alignmentKey(seq))}
+                                onChange={event => { const key = alignmentKey(seq); setAlignmentSelection(previous => event.target.checked ? [...previous.filter(value => value !== key), key] : previous.filter(value => value !== key)); }} />
+                        </label>}
                         <button
-                            key={seq.id}
                             onClick={() => onSelect(seq)}
                             data-molbio-mobile-touch-target={mobile ? 'true' : undefined}
-                            className={`w-full border-b border-slate-800 p-3 text-left transition-colors hover:bg-slate-800 ${mobile ? 'min-h-12' : ''} ${selectedId === seq.id ? 'bg-slate-700' : ''}`}
+                            className={`min-w-0 flex-1 border-b border-slate-800 p-3 text-left transition-colors hover:bg-slate-800 ${mobile ? 'min-h-12' : ''} ${selectedId === seq.id ? 'bg-slate-700' : ''}`}
                         >
                             <div className="font-medium text-slate-200 truncate">{seq.name}</div>
                             <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
@@ -294,6 +330,9 @@ export function SequenceLibrary({
                                 {seq.feature_count} features{seq.updated_at ? ` • ${new Date(seq.updated_at).toLocaleDateString()}` : ''}
                             </div>
                         </button>
+                        </div>
+                        {seq.entity_kind !== 'molecular_revision' && <div className="px-3 pb-2"><DeleteSequenceAction mobile={mobile} sequenceId={seq.id} name={seq.name} onDeleted={() => { onDeleted?.(seq.id); onRefresh(); }} /></div>}
+                        </div>
                     ))
                 )}
             </div>
@@ -372,113 +411,6 @@ function PanelTabs({ active, onChange, sequenceType, readOnlyAuthority = false }
     );
 }
 
-function normalizeFeatureList(features: Feature[]): Feature[] {
-    return dedupeFeatures(features);
-}
-
-function normalizeFeatureRecord(feature: Partial<Feature> & Record<string, UntypedApiValue>, fallbackId: string): Feature {
-    const rawSegments = Array.isArray(feature.segments)
-        ? feature.segments
-        : Array.isArray(feature.locations)
-            ? feature.locations
-            : [];
-
-    const segments = rawSegments
-        .map((segment: UntypedApiValue) => ({
-            start: Number(segment?.start ?? segment?.startIndex ?? segment?.rangeBegin ?? feature.start ?? 0),
-            end: Number(segment?.end ?? segment?.endIndex ?? segment?.rangeEnd ?? feature.end ?? 0),
-        }))
-        .filter((segment: { start: number; end: number }) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start);
-
-    const start = typeof feature.start === 'number'
-        ? feature.start
-        : (segments[0]?.start ?? 0);
-    const end = typeof feature.end === 'number'
-        ? feature.end
-        : (segments[segments.length - 1]?.end ?? 0);
-
-    const normalizedType = normalizeFeatureType(feature.type || 'misc_feature');
-    const normalized: Feature = {
-        id: feature.id || fallbackId,
-        name: feature.name || feature.type || 'feature',
-        type: normalizedType,
-        start,
-        end,
-        strand: feature.strand === -1 ? -1 : 1,
-        color: feature.color || getFeatureColor(normalizedType),
-        description: feature.description,
-        notes: feature.notes,
-        qualifiers: feature.qualifiers || feature.notes,
-        provenance: feature.provenance,
-        segments: segments.length > 0 ? segments : undefined,
-    };
-
-    const bounds = featureBounds(normalized);
-    return {
-        ...normalized,
-        start: bounds.start,
-        end: bounds.end,
-    };
-}
-
-function normalizePrimerRecord(
-    primer: Partial<Primer> & Record<string, UntypedApiValue>,
-    fallbackId: string,
-    sequenceLength: number,
-    circular: boolean,
-): Primer {
-    const placement = normalizeStoredPrimerPlacement(primer, sequenceLength, circular);
-    return {
-        id: primer.id || fallbackId,
-        name: primer.name || 'Primer',
-        sequence: (primer.sequence || '').toUpperCase(),
-        sequenceType: primer.sequenceType || primer.sequence_type || inferSequenceTypeFromSequence(primer.sequence || ''),
-        start: placement.start,
-        end: placement.end,
-        strand: placement.strand,
-        tm: primer.tm,
-        gc_percent: primer.gc_percent,
-        tm_algorithm: primer.tm_algorithm,
-        tm_salt_correction: primer.tm_salt_correction,
-        tm_settings: primer.tm_settings,
-        notes: primer.notes,
-        provenance: primer.provenance,
-        sites: placement.sites,
-    };
-}
-
-function sequenceDataFromApiRecord(seq: NucleotideSequenceResponse): SequenceData {
-    return {
-        name: seq.name,
-        description: seq.description ?? undefined,
-        sequence: seq.sequence,
-        circular: seq.is_circular,
-        sequenceType: seq.sequence_type,
-        moleculeStrandedness: seq.molecule_strandedness,
-        moleculeOrientation: seq.molecule_orientation,
-        moleculeLabel: seq.molecule_label,
-        features: normalizeFeatureList((seq.features || []).map((feature: Feature, index: number) => normalizeFeatureRecord(
-            feature as Feature & Record<string, UntypedApiValue>,
-            feature.id || `loaded_feature_${index}`,
-        ))),
-        primers: (seq.primers || []).map((primer: Primer, index: number) => normalizePrimerRecord(
-            primer as Primer & Record<string, UntypedApiValue>,
-            primer.id || `loaded_primer_${index}`,
-            seq.sequence.length,
-            seq.is_circular,
-        )),
-        translations: [],
-        analysisTracks: (seq.analysis_tracks || []).map(trackFromApi),
-        organism: seq.organism ?? undefined,
-        accession: seq.accession ?? undefined,
-        sourceFile: seq.source_file ?? undefined,
-        parentId: seq.parent_id ?? null,
-        operation: seq.operation ?? null,
-        operationParams: seq.operation_params ?? null,
-        version: seq.version ?? null,
-    };
-}
-
 function sequenceDataFromMolecularRevision(revision: MolecularRevision): SequenceData {
     const snapshot = revision.snapshot;
     const sequence = snapshot.sequence;
@@ -509,7 +441,7 @@ function sequenceDataFromMolecularRevision(revision: MolecularRevision): Sequenc
         ? moleculeOrientation
         : (sequenceType === 'rna' ? 'unknown' : 'not_applicable');
 
-    return sequenceDataFromApiRecord({
+    const data = sequenceDataFromApiRecord({
         id: revision.sequence_id,
         name: typeof snapshot.name === 'string' ? snapshot.name : revision.document_name,
         description: typeof snapshot.description === 'string' ? snapshot.description : null,
@@ -538,24 +470,7 @@ function sequenceDataFromMolecularRevision(revision: MolecularRevision): Sequenc
         created_at: typeof snapshot.created_at === 'string' ? snapshot.created_at : revision.created_at,
         updated_at: typeof snapshot.updated_at === 'string' ? snapshot.updated_at : null,
     });
-}
-
-function trackFromApi(track: SequenceAnalysisTrack): AnalysisTrack {
-    return {
-        id: track.id,
-        name: track.name,
-        kind: track.kind,
-        description: track.description ?? undefined,
-        color: track.color ?? undefined,
-        sourceFormat: track.source_format ?? undefined,
-        sourceName: track.source_name ?? undefined,
-        sourceUrl: track.source_url ?? undefined,
-        normalization: track.normalization ?? undefined,
-        values: track.values || [],
-        minValue: track.min_value ?? undefined,
-        maxValue: track.max_value ?? undefined,
-        createdAt: track.created_at ?? undefined,
-    };
+    return { ...data, digestFragment: retainedDigestFragment(revision.provenance, sequence) };
 }
 
 function trackToApi(track: AnalysisTrack): SequenceAnalysisTrack {
@@ -671,7 +586,7 @@ function WorkspaceTabs({
         }
     }, [activeId, tabs]);
     return (
-        <div className="border-b border-slate-700 bg-slate-900/80 px-2 py-1">
+        <div className="shrink-0 border-b border-slate-700 bg-slate-900/80 px-2 py-1">
             <div ref={railRef} className="flex gap-2 overflow-x-auto pb-1">
                 {tabs.map((tab) => (
                     <div
@@ -691,9 +606,6 @@ function WorkspaceTabs({
                             <div className="truncate font-medium">
                                 {tab.title || 'Untitled'}
                                 {tab.dirty ? ' *' : ''}
-                            </div>
-                            <div className="mt-0.5 text-[10px] uppercase tracking-[0.1em] text-slate-500">
-                                {tab.sequenceType}
                             </div>
                         </button>
                         <button
@@ -740,7 +652,19 @@ function assertExactMolecularRevisionIdentity(
 
 export function MolBioToolkitV2() {
     const location = useLocation();
+    const navigate = useNavigate();
     const { workspaceId, globalExperimentId, domainExperimentId, stateRevisionId, updateQueryParams, contextHref } = useGlobalExperimentContext();
+    const [alignmentBusy, setAlignmentBusy] = useState(false);
+    const [alignmentError, setAlignmentError] = useState('');
+    const alignmentTransferGeneration = useRef(0);
+    useEffect(() => {
+        setAlignmentBusy(false); setAlignmentError('');
+        return () => { alignmentTransferGeneration.current++; };
+    }, [workspaceId, globalExperimentId, domainExperimentId]);
+    const [projectAttachmentSource, setProjectAttachmentSource] = useState<ProjectAttachmentSource | null>(null);
+    const [projectAttachmentError, setProjectAttachmentError] = useState<string | null>(null);
+    const projectAttachmentRequestRef = useRef(0);
+    const [projectExportHref, setProjectExportHref] = useState<string | null>(null);
     const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
     const requestedCanonicalMolecularSequenceId = queryParams.get('molbio_sequence_id')?.trim() || null;
     const requestedCanonicalMolecularRevisionId = queryParams.get('molbio_revision_id')?.trim() || null;
@@ -769,7 +693,7 @@ export function MolBioToolkitV2() {
     const [exactMolecularError, setExactMolecularError] = useState<string | null>(null);
     const deepLinkSequenceId = requestedLegacyMolecularSequenceId;
     const deepLinkRevisionId = requestedLegacyMolecularRevisionId;
-    const deepLinkOperationId = queryParams.get('operation_id')?.trim() || null;
+    const deepLinkOperationId = queryParams.get('molbio_operation_id')?.trim() || queryParams.get('operation_id')?.trim() || null;
     const deepLinkReceiptId = queryParams.get('receipt_id')?.trim() || null;
     const [goldenGateLinkedOperation,setGoldenGateLinkedOperation]=useState<string | null>(null);
     const [showLinkedGoldenGate,setShowLinkedGoldenGate]=useState(false);
@@ -780,7 +704,13 @@ export function MolBioToolkitV2() {
     const [sequences, setSequences] = useState<NucleotideSequenceListItem[]>([]);
     const [showAllConstructs, setShowAllConstructs] = useState(false);
     const [selectedSequenceId, setSelectedSequenceId] = useState<string | null>(null);
+    const [shareOpen, setShareOpen] = useState(false);
     const [showInputModal, setShowInputModal] = useState(false);
+    useEffect(() => {
+        if (queryParams.get('action') !== 'add-plasmid') return;
+        setShowInputModal(true);
+        updateQueryParams({ action: null }, { replace: true });
+    }, [queryParams, updateQueryParams]);
     const [visibility, setVisibility] = useState<VisibilityState>(DEFAULT_VISIBILITY);
     const [activePanel, setActivePanel] = useState<ActivePanel>('view');
     const [selection, setSelection] = useState<SelectionInfo | null>(null);
@@ -809,15 +739,8 @@ export function MolBioToolkitV2() {
     const [demoRequested, setDemoRequested] = useState(false);
     const requestDemos = useCallback(() => setDemoRequested(true), []);
     // Enzymes currently displayed on the viewer - controlled by DigestPanel
-    const [selectedEnzymes, setSelectedEnzymes] = useState<string[]>([
-        // Default: Common 6-cutters for cloning
-        'EcoRI', 'BamHI', 'HindIII', 'XbaI', 'SalI', 'PstI', 'SmaI', 'KpnI', 'SacI', 'XhoI',
-        'NotI', 'NdeI', 'NcoI', 'BglII', 'SpeI', 'MluI', 'ApaI', 'ClaI', 'EcoRV', 'NheI',
-        // Golden Gate / MoClo enzymes
-        'BsaI', 'BbsI', 'SapI',
-        // Other frequently used
-        'AgeI', 'AscI', 'PacI', 'SfiI', 'FseI', 'PmeI'
-    ]);
+    const [selectedEnzymes, setSelectedEnzymes] = useState<string[]>([...DEFAULT_MAPPED_ENZYMES]);
+    const [groupSameSiteLabels, setGroupSameSiteLabels] = useState(true);
 
     // History hook for undo/redo
     const {
@@ -923,8 +846,9 @@ export function MolBioToolkitV2() {
             name: sequenceData.name,
             dna: sequenceData.sequence,
             topology: sequenceData.circular ? 'circular' : 'linear',
+            molecule_strandedness: sequenceData.moleculeStrandedness ?? 'unknown',
         };
-    }, [selectedExactMolecularRevision, sequenceData.circular, sequenceData.name, sequenceData.sequence, sequenceData.sequenceType]);
+    }, [selectedExactMolecularRevision, sequenceData.circular, sequenceData.name, sequenceData.sequence, sequenceData.sequenceType, sequenceData.moleculeStrandedness]);
 
     // Fence callbacks during render as well as effect cleanup: a previous source
     // can finish between a construct/catalog render and its passive effects.
@@ -1621,10 +1545,11 @@ export function MolBioToolkitV2() {
         sequence: string;
         sequenceType: 'dna' | 'rna';
         circular: boolean;
+        moleculeStrandedness?: 'single' | 'double' | 'unknown';
         description?: string;
     }) => {
         if (exactMolecularAuthorityRef.current) return;
-        const moleculeStrandedness = data.sequenceType === 'rna' ? 'single' : 'double';
+        const moleculeStrandedness = data.moleculeStrandedness ?? (data.sequenceType === 'rna' ? 'single' : 'double');
         const moleculeOrientation = moleculeStrandedness === 'double' ? 'not_applicable' : 'unknown';
         const newSequence: SequenceData = {
             name: data.name,
@@ -1651,14 +1576,16 @@ export function MolBioToolkitV2() {
     const handleOpenPrimerAsConstruct = useCallback((data: {
         name: string;
         sequence: string;
+        sequenceType?: 'dna' | 'rna';
         description?: string;
     }) => {
         handlePasteSequence({
             name: data.name,
             description: data.description,
             sequence: data.sequence.toUpperCase(),
-            sequenceType: inferSequenceTypeFromSequence(data.sequence),
+            sequenceType: data.sequenceType || inferSequenceTypeFromSequence(data.sequence),
             circular: false,
+            moleculeStrandedness: 'single',
         });
     }, [handlePasteSequence]);
 
@@ -1667,6 +1594,7 @@ export function MolBioToolkitV2() {
         const ownsCompletion = captureEditableOwner();
         if (exactMolecularAuthorityRef.current) return;
         try {
+            if (/\.json$/i.test(file.name)) requireSupportedDigestImport(JSON.parse(await file.text()));
             const { anyToJson } = await import('@teselagen/bio-parsers');
             const result = await anyToJson(file, {
                 fileName: file.name,
@@ -1746,6 +1674,7 @@ export function MolBioToolkitV2() {
         const targetHistory = targetIsActive ? historyState : target.historyState;
         const targetData = targetIsActive ? sequenceData : targetHistory.present;
         if (!targetData.sequence.trim()) return false;
+        if (targetData.digestFragment) { alert(DUPLEX_EDIT_REASON); return false; }
 
         const payload = sequencePayloadFromData(targetData);
         const savedRecord = target.sequenceId
@@ -1779,6 +1708,41 @@ export function MolBioToolkitV2() {
         return unchanged;
     }, [activeWorkspaceId, createSequence, historyState, hydrate, loadLibrary, sequenceData, updateSequence, workspaceTabs]);
 
+    useEffect(() => {
+        projectAttachmentRequestRef.current += 1;
+        setProjectAttachmentSource(null);
+        setProjectAttachmentError(null);
+    }, [selectedSequenceId, selectedExactMolecularRevision?.revision_id, isDirty]);
+
+    const openProjectExport = async () => {
+        const sequenceId = selectedExactMolecularRevision?.sequence_id ?? selectedSequenceId;
+        if (!sequenceId || isDirty) return;
+        setProjectAttachmentError(null);
+        const requestId = ++projectAttachmentRequestRef.current;
+        try {
+            const pinned = selectedExactMolecularRevision;
+            // The current revision is not always the newest one (e.g. after a revert).
+            let revision: { revision_id: string; content_sha256: string } | null | undefined = pinned;
+            if (!revision) {
+                for (let offset = 0; offset < 5000 && !revision; offset += 50) {
+                    const page = await fetchMolecularRevisionSummaries(sequenceId, 50, offset);
+                    revision = page.find((item) => item.is_current);
+                    if (page.length < 50) break;
+                }
+            }
+            if (requestId !== projectAttachmentRequestRef.current) return;
+            if (!revision) throw new Error('The saved molecular revision is unavailable.');
+            setProjectAttachmentSource({
+                adapterId: MOLECULAR_MEMBER_ADAPTER,
+                entityId: new URLSearchParams({ sequence_id: sequenceId, revision_id: revision.revision_id }).toString(),
+                label: sequenceData.name, revision: revision.revision_id, digest: revision.content_sha256, availability: 'available',
+                historyJournal: historyState.journal.map(({ timestamp, label, summary }) => ({ timestamp, label, summary })),
+            });
+        } catch (error) {
+            if (requestId === projectAttachmentRequestRef.current) setProjectAttachmentError(error instanceof Error ? error.message : 'Unable to load saved revision.');
+        }
+    };
+
     const saveSequence = useCallback(
         (): Promise<boolean> => saveWorkspace(activeWorkspaceId),
         [activeWorkspaceId, saveWorkspace],
@@ -1810,6 +1774,20 @@ export function MolBioToolkitV2() {
             discard: options?.discard,
         });
     }, [activeWorkspaceId, isDirty]);
+
+    const handleAlignSequences = (selected: NucleotideSequenceListItem[]) => {
+        requestWorkspaceTransition('open Alignments', () => {
+            const generation = ++alignmentTransferGeneration.current;
+            setAlignmentBusy(true); setAlignmentError('');
+            void molecularAlignmentHref(selected).then(href => {
+                if (generation === alignmentTransferGeneration.current) navigate(href);
+            }).catch(error => {
+                if (generation === alignmentTransferGeneration.current) setAlignmentError(error instanceof Error ? error.message : 'Could not prepare the selected sequences.');
+            }).finally(() => {
+                if (generation === alignmentTransferGeneration.current) setAlignmentBusy(false);
+            });
+        });
+    };
 
     const completeWorkspaceTransition = useCallback(async (choice: DirtyWorkspaceChoice) => {
         if (!pendingWorkspaceTransition) return;
@@ -2509,10 +2487,6 @@ export function MolBioToolkitV2() {
     }, []);
 
     useEffect(() => {
-        setRightPanelWidth(getDefaultMolBioToolPanelWidth(activePanel));
-    }, [activePanel]);
-
-    useEffect(() => {
         if (!isViewerFullscreen) {
             return undefined;
         }
@@ -2633,7 +2607,7 @@ export function MolBioToolkitV2() {
 
     const clearAnnotations = useCallback(() => {
         if (exactMolecularAuthorityRef.current) return;
-        const featureCount = sequenceData.features.length;
+        const featureCount = sequenceData.features.filter(isSequenceAnnotation).length;
         if (featureCount === 0) return;
         setSequenceData(
             clearFeatureAnnotations(sequenceData),
@@ -2653,7 +2627,7 @@ export function MolBioToolkitV2() {
         if (!sequenceData.sequence) {
             throw new Error('Open a construct before importing annotations.');
         }
-        if (sequenceData.features.length > 0) {
+        if (sequenceData.features.some(isSequenceAnnotation)) {
             throw new Error('This construct already has existing feature annotations. Use Clear all feature annotations before importing a published annotation set; source sets are never silently merged.');
         }
 
@@ -3206,6 +3180,29 @@ export function MolBioToolkitV2() {
         requestedLegacyMolecularSequenceId,
     ]);
 
+    const shareCurrentSequenceId = selectedExactMolecularRevision?.sequence_id ?? selectedSequenceId;
+    const shareCurrentSequence: ShareableItem | null = shareCurrentSequenceId
+        ? { id: shareCurrentSequenceId, name: sequenceData.name || shareCurrentSequenceId }
+        : null;
+    const shareSequences: ShareableItem[] = sequences.map((item) => ({ id: item.id, name: item.name }));
+    const shareOperations: ShareableItem[] = [...new Set([
+        deepLinkOperationId,
+        goldenGateLinkedOperation,
+        selectedExactMolecularRevision?.operation_id ?? null,
+    ].filter((id): id is string => Boolean(id)))].map((id) => ({ id, name: `Experiment ${id}` }));
+    const shareDialog = (
+        <ShareDialog
+            open={shareOpen}
+            onClose={() => setShareOpen(false)}
+            currentSequence={shareCurrentSequence}
+            sequences={shareSequences}
+            operations={shareOperations}
+            projectContext={workspaceId && globalExperimentId && domainExperimentId
+                ? { projectId: workspaceId, globalExperimentId, domainExperimentId, stateRevisionId }
+                : null}
+        />
+    );
+
     if (isMobileMolBio) {
         const mobileMapViewMode: ViewMode = sequenceData.circular ? 'circular' : 'linear';
         const mobileViewer = (mode: ViewMode) => (
@@ -3215,6 +3212,7 @@ export function MolBioToolkitV2() {
                     visibility={visibility}
                     selectedEnzymes={selectedEnzymes}
                     restrictionAnalysis={restrictionAnalysis}
+                    groupSameSiteLabels={groupSameSiteLabels}
                     selection={selection}
                     onSelection={handleSelection}
                     highlightedRegions={highlightedRegions}
@@ -3227,7 +3225,10 @@ export function MolBioToolkitV2() {
         );
 
         return (
+            <>
+            {shareDialog}
             <MobileMolBioWorkspace
+                onShare={() => setShareOpen(true)}
                 constructName={sequenceData.name}
                 digestIdentity={`${activeWorkspaceId}:${selectedSequenceId ?? sequenceData.name}:${sequenceData.sequence.length}`}
                 digestAvailable={!isExactMolecularAuthority}
@@ -3247,9 +3248,18 @@ export function MolBioToolkitV2() {
                             demos={demoPlasmids}
                             demoLoading={demoLoading}
                             onDemoIntent={requestDemos}
+                            onAlign={handleAlignSequences}
+                            alignmentBusy={alignmentBusy}
+                            alignmentError={alignmentError}
                             selectedId={selectedSequenceId}
                             onSelect={(sequence) => handleMobileSelectSequence(sequence.id)}
                             onRefresh={loadLibrary}
+                            onDeleted={(id) => {
+                                invalidateGetSequence();
+                                if (selectedSequenceId === id && !activeWorkspace?.exactMolecularRevision) closeWorkspaceImmediately(activeWorkspaceId);
+                                setWorkspaceTabs(previous => previous.filter(tab => tab.sequenceId !== id || Boolean(tab.exactMolecularRevision)));
+                                void loadLibrary();
+                            }}
                             onLoadDemo={handleMobileLoadDemo}
                             loading={libraryLoading}
                             width={viewportWidth}
@@ -3282,6 +3292,8 @@ export function MolBioToolkitV2() {
                         onHighlight={setHighlightedRegions}
                         selectedEnzymes={selectedEnzymes}
                         onEnzymesChange={setSelectedEnzymes}
+                        groupSameSiteLabels={groupSameSiteLabels}
+                        onGroupSameSiteLabelsChange={setGroupSameSiteLabels}
                         onMapVisibilityRequest={ensureCutSitesVisible}
                         catalog={restrictionCatalog}
                         productEvidence={restrictionProductEvidence}
@@ -3314,6 +3326,7 @@ export function MolBioToolkitV2() {
                     </MobileMolBioReadPanel>
                 )}
             />
+            </>
         );
     }
 
@@ -3341,10 +3354,7 @@ export function MolBioToolkitV2() {
             <div
                 ref={toolkitRootRef}
                 tabIndex={-1}
-                className={`molbio-toolkit w-full flex bg-slate-900 text-slate-100 overflow-hidden ${isViewerFullscreen ? 'fixed inset-0 z-[70] h-full' : 'relative'}`}
-                style={isViewerFullscreen
-                    ? undefined
-                    : { height: 'clamp(36rem, calc(100vh - 8rem), 96rem)' }}
+                className={`molbio-toolkit w-full flex bg-slate-900 text-slate-100 overflow-hidden ${isViewerFullscreen ? 'fixed inset-0 z-[70] h-full' : 'relative flex-1 min-h-0'}`}
                 data-molbio-viewer-fullscreen={isViewerFullscreen ? 'true' : 'false'}
                 data-molbio-viewer-desktop={!isMobileMolBio ? 'true' : 'false'}
             >
@@ -3357,6 +3367,9 @@ export function MolBioToolkitV2() {
                             demos={demoPlasmids}
                             demoLoading={demoLoading}
                             onDemoIntent={requestDemos}
+                            onAlign={handleAlignSequences}
+                            alignmentBusy={alignmentBusy}
+                            alignmentError={alignmentError}
                             selectedId={selectedSequenceId}
                             onSelect={(sequence) => {
                                 if (sequence.revision_id) {
@@ -3380,6 +3393,12 @@ export function MolBioToolkitV2() {
                                 guardedLoadSequence(sequence.id);
                             }}
                             onRefresh={loadLibrary}
+                            onDeleted={(id) => {
+                                invalidateGetSequence();
+                                if (selectedSequenceId === id && !activeWorkspace?.exactMolecularRevision) closeWorkspaceImmediately(activeWorkspaceId);
+                                setWorkspaceTabs(previous => previous.filter(tab => tab.sequenceId !== id || Boolean(tab.exactMolecularRevision)));
+                                void loadLibrary();
+                            }}
                             onLoadDemo={guardedLoadDemo}
                             loading={libraryLoading}
                             width={viewerLayout.leftPanelWidth}
@@ -3401,11 +3420,26 @@ export function MolBioToolkitV2() {
                 )}
 
                 {/* Center: Viewer */}
-                <div className="relative flex-1 flex flex-col min-w-0 overflow-hidden">
+                <div data-molbio-workspace className="relative flex-1 flex flex-col min-w-0 min-h-0 overflow-y-auto [&>*]:shrink-0">
+                    {!isViewerFullscreen && (projectExportHref || projectAttachmentError) && <div className="flex flex-wrap items-center justify-end gap-2 border-b border-slate-700 px-3 py-2">
+                        {projectExportHref && <span role="status" className="text-xs text-emerald-300">Exported. <Link to={projectExportHref} className="underline">Open destination Project</Link></span>}
+                        {projectAttachmentError && <span role="alert" className="text-xs text-red-300">{projectAttachmentError}</span>}
+                    </div>}
+                    <ProjectAttachmentDialog open={projectAttachmentSource !== null} source={projectAttachmentSource ?? undefined} initialProjectId={workspaceId ?? undefined}
+                        destination={globalExperimentId && domainExperimentId ? { globalExperimentId, domainExperimentId, stateRevisionId } : undefined}
+                        onClose={() => setProjectAttachmentSource(null)} onAttached={(_receiptId, revisionId, destination) => {
+                            setProjectAttachmentSource(null);
+                            if (destination) setProjectExportHref(`/projects/${destination.projectId}?${new URLSearchParams({ selected: `domain_experiment:${destination.domainExperimentId}`, ...(revisionId ? { state_revision_id: revisionId } : {}) })}`);
+                            if (revisionId && destination?.projectId === workspaceId && destination.domainExperimentId === domainExperimentId) updateQueryParams({ state_revision_id: revisionId });
+                            void loadLibrary();
+                        }} />
                     {!isViewerFullscreen && (
                         <SequenceHeader
                             sequenceData={sequenceData}
                             onSave={isExactMolecularAuthority ? undefined : saveSequence}
+                            onFocusViewer={sequenceData.circular ? toggleViewerFullscreen : undefined}
+                            onExportToProject={() => void openProjectExport()}
+                            projectExportDisabled={!(selectedExactMolecularRevision || selectedSequenceId) || isDirty}
                             onUndo={isExactMolecularAuthority ? undefined : undo}
                             onRedo={isExactMolecularAuthority ? undefined : redo}
                             onAutoAnnotate={isExactMolecularAuthority ? undefined : handleAutoAnnotate}
@@ -3422,13 +3456,12 @@ export function MolBioToolkitV2() {
                             showGCTrack={showGCTrack}
                             onGCTrackToggle={() => setShowGCTrack(prev => !prev)}
                             onOpenLibrary={isExactMolecularAuthority ? undefined : () => setShowInputModal(true)}
-                            isViewerFullscreen={isViewerFullscreen}
-                            onToggleFullscreen={toggleViewerFullscreen}
                             isLibraryPanelCollapsed={isLibraryPanelCollapsed}
                             isToolPanelCollapsed={isToolPanelCollapsed}
                             onToggleLibraryPanel={toggleLibraryPanel}
                             onToggleToolPanel={toggleToolPanel}
                             historyJournal={historyJournal}
+                            onShare={() => setShareOpen(true)}
                         />
                     )}
 
@@ -3498,9 +3531,22 @@ export function MolBioToolkitV2() {
                     )}
 
                     {!isViewerFullscreen && selectedSequenceId && (
-                        <section className="mx-3 mt-2 rounded border border-slate-700 bg-slate-800/60 px-3 py-2 text-xs" aria-label="Sequencing verification workup">
-                            <div className="flex items-center justify-between gap-3">
-                                <span className="font-medium text-slate-200">Sequencing verification (read-only)</span>
+                        <section className="mx-3 mt-2 rounded border border-slate-700 bg-slate-800/60 px-3 py-2 text-xs" aria-label="Sequencing results">
+                            <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+                                {(ngsWorkups.length > 0 || ngsWorkupStatus !== 'ready' || ngsWorkupQuery.hasNextPage) && (
+                                    <details className="min-w-0 flex-1">
+                                        <summary className="w-fit cursor-pointer font-medium text-slate-200">Sequencing results · {ngsWorkups.length ? ngsWorkups.length : ngsWorkupStatus === 'loading' ? 'loading' : ngsWorkupStatus === 'unavailable' ? 'unavailable' : 'more history available'}</summary>
+                                        {ngsWorkups.length === 0 ? (
+                                            <p className="mt-1 text-slate-400">{ngsWorkupStatus === 'loading' ? 'Loading sequencing results…' : ngsWorkupStatus === 'unavailable' ? 'Sequencing results unavailable.' : 'No valid workups in the loaded page; older history remains.'}</p>
+                                        ) : ngsWorkups.map((workup) => (
+                                            <div key={workup.job_id} className="mt-1 flex items-center justify-between text-slate-300">
+                                                <span>{workup.scientific_status} · {workup.revision_relation === 'current' ? 'current revision' : 'historical revision'} · {workup.manifest_available ? 'validated manifest' : 'evidence unavailable/review'}</span>
+                                                <a className="text-blue-300 hover:text-blue-200" href={ngsResultHref(workup.job_id, location.search)}>NGS Run Inspector</a>
+                                            </div>
+                                        ))}
+                                        {ngsWorkupContinuation}
+                                    </details>
+                                )}
                                 <a
                                     className="text-blue-300 hover:text-blue-200"
                                     href={contextHref('/ngs', {
@@ -3511,15 +3557,6 @@ export function MolBioToolkitV2() {
                                     Hand off {selectedExactMolecularRevision ? 'this exact immutable revision' : 'current construct'} to Nanopore
                                 </a>
                             </div>
-                            {ngsWorkups.length === 0 ? (
-                                <p className="mt-1 text-slate-400">{ngsWorkupStatus === 'loading' ? 'Loading sequencing workups…' : ngsWorkupStatus === 'unavailable' ? 'Sequencing workups unavailable.' : ngsWorkupQuery.hasNextPage ? 'No valid workups in the loaded page; older history remains.' : 'No revision-bound NGS evidence. Job completion is not a scientific PASS.'}</p>
-                            ) : ngsWorkups.map((workup) => (
-                                <div key={workup.job_id} className="mt-1 flex items-center justify-between text-slate-300">
-                                    <span>{workup.scientific_status} · {workup.revision_relation === 'current' ? 'current revision' : 'historical revision'} · {workup.manifest_available ? 'validated manifest' : 'evidence unavailable/review'}</span>
-                                    <a className="text-blue-300 hover:text-blue-200" href={ngsResultHref(workup.job_id, location.search)}>NGS Run Inspector</a>
-                                </div>
-                            ))}
-                            {ngsWorkupContinuation}
                         </section>
                     )}
 
@@ -3533,39 +3570,13 @@ export function MolBioToolkitV2() {
                     )}
 
 
-                    <div className="relative flex-1 overflow-hidden flex flex-col">
-                        {sequenceData.circular && (
-                            <div
-                                style={isViewerFullscreen ? {
-                                    left: 'calc(env(safe-area-inset-left) + 0.75rem)',
-                                    top: 'calc(env(safe-area-inset-top) + 0.75rem)',
-                                } : undefined}
-                                className={`pointer-events-none absolute z-20 flex items-center gap-2 ${
-                                    isViewerFullscreen
-                                        ? 'left-[max(env(safe-area-inset-left),0.75rem)] top-[max(env(safe-area-inset-top),0.75rem)]'
-                                        : `right-4 ${showGCTrack ? 'top-[212px]' : 'top-4'}`
-                                }`}
-                            >
-                                {isViewerFullscreen ? (
-                                    <button
-                                        type="button"
-                                        data-molbio-focus-exit="true"
-                                        onClick={() => setIsViewerFullscreen(false)}
-                                        className="pointer-events-auto min-h-12 rounded-lg border border-cyan-500/70 bg-slate-950/95 px-4 text-sm font-semibold text-slate-100 shadow-xl transition-colors hover:bg-slate-800"
-                                        title="Exit focused plasmid view"
-                                    >
-                                        Exit Focus
-                                    </button>
-                                ) : (
-                                    <button
-                                        type="button"
-                                        onClick={toggleViewerFullscreen}
-                                        className="pointer-events-auto rounded-full border border-slate-600 bg-slate-900/90 px-3 py-1.5 text-sm font-medium text-slate-100 shadow-lg transition-colors hover:bg-slate-800"
-                                        title="Focus Viewer"
-                                    >
-                                        Focus Viewer
-                                    </button>
-                                )}
+                    <div className="relative flex-1 flex flex-col">
+                        {sequenceData.circular && isViewerFullscreen && (
+                            <div style={{left:'calc(env(safe-area-inset-left) + 0.75rem)',top:'calc(env(safe-area-inset-top) + 0.75rem)'}}
+                                className="pointer-events-none absolute z-20 flex items-center gap-2">
+                                <button type="button" data-molbio-focus-exit="true" onClick={() => setIsViewerFullscreen(false)}
+                                    className="pointer-events-auto min-h-12 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 text-sm font-semibold text-[var(--text-primary)] shadow-[var(--shadow-card)] hover:bg-[var(--bg-tertiary)]"
+                                    title="Exit focused plasmid view">Exit Focus</button>
                             </div>
                         )}
                         {sequenceData.sequence ? (
@@ -3590,15 +3601,16 @@ export function MolBioToolkitV2() {
                                     </Suspense>
                                 )}
 
-                                {/* Sequence Viewer */}
+                                {/* Retain a readable canvas; the workspace scrolls when headers and tracks need more room. */}
                                 {showRnaStructureViewer ? (
-                                    <div className="flex-1 overflow-hidden grid grid-rows-[minmax(220px,42%)_minmax(280px,58%)]">
+                                    <div data-molbio-sequence-canvas className="flex-1 overflow-hidden grid grid-rows-[minmax(220px,42%)_minmax(280px,58%)]" style={{flex: '1 0 32rem', minHeight: '32rem'}}>
                                         <div className="min-h-0 overflow-hidden">
                                             <SequenceViewer
                                                 sequenceData={viewerSequenceData}
                                                 visibility={visibility}
                                                 selectedEnzymes={selectedEnzymes}
-                    restrictionAnalysis={restrictionAnalysis}
+                                                restrictionAnalysis={restrictionAnalysis}
+                                                groupSameSiteLabels={groupSameSiteLabels}
                                                 selection={selection}
                                                 onSelection={handleSelection}
                                                 onContextMenu={isExactMolecularAuthority ? undefined : handleViewerContextMenu}
@@ -3620,12 +3632,13 @@ export function MolBioToolkitV2() {
                                         )}
                                     </div>
                                 ) : (
-                                    <div className="flex-1 min-h-0 overflow-hidden">
+                                    <div data-molbio-sequence-canvas className="overflow-hidden" style={isViewerFullscreen ? { flex: '1 1 0%', minHeight: 0 } : { flex: '1 0 24rem', minHeight: '24rem' }}>
                                         <SequenceViewer
                                             sequenceData={viewerSequenceData}
                                             visibility={visibility}
                                             selectedEnzymes={selectedEnzymes}
-                    restrictionAnalysis={restrictionAnalysis}
+                                            restrictionAnalysis={restrictionAnalysis}
+                                            groupSameSiteLabels={groupSameSiteLabels}
                                             selection={selection}
                                             onSelection={handleSelection}
                                             onContextMenu={isExactMolecularAuthority ? undefined : handleViewerContextMenu}
@@ -3797,6 +3810,7 @@ export function MolBioToolkitV2() {
                             />
                         )}
                         {!isExactMolecularAuthority && activePanel === 'edit' && (
+                            sequenceData.digestFragment ? <p role="alert">{DUPLEX_EDIT_REASON}</p> :
                             <EditPanel
                                 sequenceData={sequenceData}
                                 selection={selection}
@@ -3819,6 +3833,8 @@ export function MolBioToolkitV2() {
                                 onHighlight={setHighlightedRegions}
                                 selectedEnzymes={selectedEnzymes}
                                 onEnzymesChange={setSelectedEnzymes}
+                                groupSameSiteLabels={groupSameSiteLabels}
+                                onGroupSameSiteLabelsChange={setGroupSameSiteLabels}
                                 onMapVisibilityRequest={ensureCutSitesVisible}
                         catalog={restrictionCatalog}
                         productEvidence={restrictionProductEvidence}
@@ -3900,7 +3916,7 @@ export function MolBioToolkitV2() {
                     <button
                         type="button"
                         aria-label="Close quick add menu"
-                        className="fixed inset-0 z-40 cursor-default bg-transparent"
+                        className="fixed inset-0 z-[80] cursor-default bg-transparent"
                         onClick={closeQuickAddMenuAndRestoreFocus}
                     />
                     <div
@@ -3913,10 +3929,11 @@ export function MolBioToolkitV2() {
                                 closeQuickAddMenuAndRestoreFocus();
                             }
                         }}
-                        className="fixed z-50 w-64 rounded-xl border border-slate-700 bg-slate-900/95 p-2 shadow-2xl backdrop-blur"
+                        className="fixed z-[85] w-64 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900/95 p-2 shadow-2xl backdrop-blur"
                         style={{
                             left: Math.max(12, Math.min(quickAddMenu.x, window.innerWidth - 280)),
                             top: Math.max(12, Math.min(quickAddMenu.y, window.innerHeight - 280)),
+                            maxHeight: Math.max(0, window.innerHeight - Math.max(12, Math.min(quickAddMenu.y, window.innerHeight - 280)) - 12),
                         }}
                     >
                         <div className="border-b border-slate-700 px-2 pb-2">
@@ -4040,7 +4057,7 @@ export function MolBioToolkitV2() {
                 annotationSourceStatus={annotationSourceStatus}
                 isAnnotating={isAnnotating}
                 hasSequence={!!sequenceData.sequence}
-                featureCount={sequenceData.features.length}
+                featureCount={sequenceData.features.filter(isSequenceAnnotation).length}
                 sequenceLength={sequenceData.sequence.length}
                 isCircular={sequenceData.circular}
             />
@@ -4074,6 +4091,7 @@ export function MolBioToolkitV2() {
                 onDemoIntent={requestDemos}
                 demos={demoPlasmids}
             />
+            {shareDialog}
         </>
     );
 }

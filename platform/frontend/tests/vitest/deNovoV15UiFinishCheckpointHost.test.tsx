@@ -1,0 +1,45 @@
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { afterEach, expect, it, vi } from 'vitest';
+import { api } from '../../src/lib/api';
+import { ResultsViewer } from '../../src/components/ResultsViewer';
+import { ThemeProvider } from '../../src/components/ThemeProvider';
+vi.mock('../../src/components/MolstarViewer', () => ({ default: () => null }));
+vi.mock('react-plotly.js', () => ({ default: () => null }));
+vi.mock('../../src/components/ExecutionTargetPicker', () => ({ ExecutionTargetPicker: ({ onChange }: any) => <button onClick={() => onChange(null)}>Continue on Local</button> }));
+let root: ReturnType<typeof createRoot> | undefined, client: QueryClient;
+const previous = api.defaults.adapter, unexpected: string[] = [];
+afterEach(async () => { if (root) await act(async () => root!.unmount()); client?.clear(); document.body.replaceChildren(); api.defaults.adapter = previous; vi.restoreAllMocks(); vi.unstubAllGlobals(); expect(unexpected.splice(0)).toEqual([]); });
+const flush = async () => act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
+it('real loop Results exposes the bound completed stage and submits exact Local successor intent, without Design selection', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { unexpected.push('fetch'); throw Error('No network'); });
+    const checkpoint = { checkpoint_id: 'checkpoint', checkpoint_sha256: 'a'.repeat(64) };
+    const job = { id: 'loop', name: 'Loop fixture', model_id: 'protein_modification_experimental', mode: 'region_redesign', status: 'awaiting_input', execution_target_id: 'old-worker', execution_policy: { remote_result_policy: 'manual' }, awaiting_input: true, awaiting_stage: 'post_structure_validation', awaiting_payload: { component_checkpoint: checkpoint }, params: { seq_method: 'mpnn' }, design_count: 0, created_at: '2026-01-01T00:00:00Z' };
+    const calls: Array<{ url: string; body: any }> = [];
+    api.defaults.adapter = async config => {
+        const url = String(config.url), body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data; calls.push({ url, body }); let data: any;
+        if (url === '/api/jobs') data = { jobs: [job], total: 1 };
+        else if (url === '/api/jobs/loop') data = job;
+        else if (url === '/api/designs') data = { designs: [], total: 0, model_counts: {} };
+        else if (url === '/api/designs/by-job/loop/backbone-summary') data = { job_id: 'loop', total: 0, backbones: {} };
+        else if (url === '/api/binder-continuation/loop/round') data = { selected_rounds: [] };
+        else if (url.includes('/integration')) data = { enabled: false };
+        else if (url.includes('/backbones')) data = { backbones: [] };
+        else if (url === '/api/jobs/loop/structure-files') data = { ...checkpoint, structures: [{ relative_path: 'stage/a.cif', path: 'retained/a.cif', name: 'A', type: 'cif' }], artifacts: [] };
+        else if (url === '/api/jobs/loop/resume') data = { new_job_id: 'successor', message: 'continued' };
+        else { unexpected.push(url); throw Error(`Unexpected ${url}`); }
+        return { data, config, status: 200, statusText: 'OK', headers: {} };
+    };
+    const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    await act(async () => root!.render(<MemoryRouter initialEntries={['/designs/loop?launch_context_id=destination']}><QueryClientProvider client={client}><ThemeProvider><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></ThemeProvider></QueryClientProvider></MemoryRouter>));
+    await vi.waitFor(async () => { await flush(); expect(document.querySelector('[aria-label="Continue with stage/a.cif"]')).toBeTruthy(); }, { timeout: 12000 });
+    await act(async () => document.querySelector<HTMLInputElement>('[aria-label="Continue with stage/a.cif"]')!.click());
+    const panel = document.querySelector('[aria-label="Completed stage continuation"]')!;
+    await act(async () => [...panel.querySelectorAll('button')].find(b => b.textContent === 'Continue on Local')!.click());
+    await act(async () => [...panel.querySelectorAll('button')].find(b => b.textContent === 'Continue selected stage outputs')!.click()); await flush();
+    expect(calls.find(call => call.url.endsWith('/resume'))!.body).toEqual({ ...checkpoint, checkpoint_decision: { selected_artifacts: ['stage/a.cif'] }, execution_target_id: null, execution_policy: { remote_result_policy: 'manual' }, launch_context_id: 'destination' });
+}, 30000);

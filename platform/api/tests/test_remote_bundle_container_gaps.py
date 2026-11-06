@@ -10,21 +10,24 @@ from services.remote_execution import bundle
 
 
 @pytest.mark.skipif(not os.getenv('BMS_RELOCATION_TEST_NEXTFLOW_JAR'), reason='explicit installed Nextflow parser probe opt-in')
-@pytest.mark.parametrize('remote,backend,use_msa,offline', [(True, 'colabfold_api', True, False), (True, 'local', True, True), (False, 'colabfold_api', True, True), (True, 'local', False, False)])
+@pytest.mark.parametrize('remote,backend,use_msa,offline', [(True, 'colabfold_api', True, False), (True, 'local', True, True), (False, 'colabfold_api', True, False), (True, 'local', False, False)])
 def test_protenix_bind_contract(tmp_path, remote, backend, use_msa, offline):
     config = Path(__file__).resolve().parents[3] / 'nextflow.config'
     source = config.read_text()
     block = source.split('    withLabel: Protenix {', 1)[1].split('\n    withLabel:', 1)[0]
     minimal = tmp_path/'nextflow.config'
-    minimal.write_text('params {\ncontainer_dir="/containers"\nprotenix_weights="/weights/protenix"\n'
+    weight_helper = 'def weightBind(' + source.split('def weightBind(', 1)[1].split('def gpuPrefix', 1)[0]
+    minimal.write_text(weight_helper + 'params {\ncontainer_dir="/containers"\nprotenix_weights="/weights/protenix"\n'
                        'msa_local_db="/offline-absent"\nmsa_cache_dir="/remote/cache"\n'
                        f'protenix_msa_backend="{backend}"\nprotenix_use_msa={str(use_msa).lower()}\n'
                        'cm_api_runtime_dir="/remote/support-python"\ncode_root="/source"\n}\n'
                        'process {\nwithLabel: Protenix {' + block + '\n}\n')
     env = dict(os.environ, NXF_OFFLINE='true', NXF_DISABLE_CHECK_LATEST='true', NXF_HOME=str(tmp_path/'nxf-home'), HOME=str(tmp_path))
     env.pop('BMS_REMOTE_EXECUTION', None)
+    env.pop('BMS_PORTABLE_INPUT_BINDINGS', None)
     if remote:
         env['BMS_REMOTE_EXECUTION'] = '1'
+        env['BMS_PORTABLE_INPUT_BINDINGS'] = '/attempt/bundle/inputs/.bms/portable-input-bindings.json'
     jar = Path(os.environ['BMS_RELOCATION_TEST_NEXTFLOW_JAR'])
     assert jar.is_file(), 'An installed Nextflow JAR is required; never bootstrap over the network'
     result = subprocess.run(['java', '-jar', str(jar), 'config', '-flat', str(tmp_path)],
@@ -33,6 +36,7 @@ def test_protenix_bind_contract(tmp_path, remote, backend, use_msa, offline):
     assert ('--bind /offline-absent:/offline-absent' in result.stdout) is offline
     assert '--bind /remote/cache:/remote/cache' in result.stdout
     assert '--bind /remote/support-python:/remote/support-python:ro' in result.stdout
+    assert ('--bind /attempt/bundle/inputs:/attempt/bundle/inputs:ro' in result.stdout) is remote
 
 
 @pytest.mark.skipif(not os.getenv('BMS_RELOCATION_TEST_RUNTIME'), reason='explicit readonly managed-runtime probe opt-in')

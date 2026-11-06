@@ -590,6 +590,9 @@ def test_complete_public_response_bound_rejects_wrapper_overflow_and_admits_exac
     assert rejected.json() == {"detail": {
         "code": "request_too_large",
         "message": "restriction analysis request is too large",
+        "budget": "response_bytes",
+        "limit": len(complete_bytes) - 1,
+        "observed": len(complete_bytes),
     }}
 
     monkeypatch.setattr(molbio_restriction, "MAX_RESPONSE_BYTES", len(complete_bytes))
@@ -605,40 +608,39 @@ async def test_cpu_analysis_does_not_block_event_loop(monkeypatch) -> None:
     app = FastAPI()
     app.include_router(molbio_restriction.router)
     authority = _authority()
+    # Validate the 1,092-record catalog before timing analyzer scheduling. Cold
+    # catalog initialization is covered by the complete-pipeline tests below.
+    authority.require()
     app.dependency_overrides[molbio_restriction.get_catalog_authority] = lambda: authority
     app.dependency_overrides[molbio_restriction.get_molbio_session] = lambda: object()
     original = molbio_restriction._analyze_normalized_sequence
     started = threading.Event()
-    lightweight_completed = threading.Event()
     release = threading.Event()
-    observed: list[bool] = []
     event_loop_thread = threading.get_ident()
 
     def blocked_analysis(**kwargs):
         started.set()
         assert threading.get_ident() != event_loop_thread
-        assert release.wait(2)
+        assert release.wait(10)
         return original(**kwargs)
 
-    def controller() -> None:
-        assert started.wait(2)
-        observed.append(lightweight_completed.wait(1))
-        release.set()
-
     monkeypatch.setattr(molbio_restriction, "_analyze_normalized_sequence", blocked_analysis)
-    control = threading.Thread(target=controller)
-    control.start()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         analysis_task = asyncio.create_task(
             client.post("/api/molbio/restriction/analyze", json=_inline_request())
         )
-        assert await asyncio.to_thread(started.wait, 2)
-        lightweight = await client.get("/api/molbio/restriction/catalog?limit=1")
-        lightweight_completed.set()
-        analysis = await analysis_task
-    control.join(timeout=2)
-    assert observed == [True]
+        try:
+            # Cold full-catalog validation is setup work, not the responsiveness
+            # assertion: the lightweight request must finish with this stage held.
+            assert await asyncio.to_thread(started.wait, 5)
+            lightweight = await asyncio.wait_for(
+                client.get("/api/molbio/restriction/catalog?limit=1"), timeout=2,
+            )
+            assert not release.is_set()
+        finally:
+            release.set()
+            analysis = await analysis_task
     assert lightweight.status_code == analysis.status_code == 200
 
 
@@ -647,13 +649,14 @@ async def test_analysis_worker_concurrency_is_process_bounded(monkeypatch) -> No
     app = FastAPI()
     app.include_router(molbio_restriction.router)
     authority = _authority()
+    # Validate the 1,092-record catalog before timing analyzer scheduling. Cold
+    # catalog initialization is covered by the complete-pipeline tests below.
+    authority.require()
     app.dependency_overrides[molbio_restriction.get_catalog_authority] = lambda: authority
     app.dependency_overrides[molbio_restriction.get_molbio_session] = lambda: object()
     original = molbio_restriction._analyze_normalized_sequence
     release = threading.Event()
-    first_started = threading.Event()
     both_started = threading.Event()
-    observed: list[bool] = []
     lock = threading.Lock()
     active = 0
     maximum_active = 0
@@ -663,41 +666,39 @@ async def test_analysis_worker_concurrency_is_process_bounded(monkeypatch) -> No
         with lock:
             active += 1
             maximum_active = max(maximum_active, active)
-            first_started.set()
             if active == 2:
                 both_started.set()
         try:
-            assert release.wait(2)
+            assert release.wait(10), "test did not release admitted workers"
             return original(**kwargs)
         finally:
             with lock:
                 active -= 1
 
-    def controller() -> None:
-        assert first_started.wait(2)
-        observed.append(both_started.wait(1))
-        if not observed[-1]:
-            release.set()
-
     monkeypatch.setattr(molbio_restriction, "_analyze_normalized_sequence", blocked_analysis)
-    control = threading.Thread(target=controller)
-    control.start()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         first = asyncio.create_task(client.post("/api/molbio/restriction/analyze", json=_inline_request()))
         second_payload = _inline_request()
         second_payload["source"]["name"] = "second"
         second = asyncio.create_task(client.post("/api/molbio/restriction/analyze", json=second_payload))
-        assert await asyncio.to_thread(both_started.wait, 2)
-        rejected = await client.post("/api/molbio/restriction/analyze", json=_inline_request())
-        assert rejected.status_code == 503
-        assert rejected.json()["detail"]["code"] == "analysis_busy"
-        release.set()
-        completed = await asyncio.gather(first, second)
-    control.join(timeout=2)
-    assert observed == [True]
+        try:
+            # This deadline covers scheduling only, not cold catalog validation.
+            assert await asyncio.to_thread(both_started.wait, 5)
+            with lock:
+                assert active == 2
+            rejected = await client.post("/api/molbio/restriction/analyze", json=_inline_request())
+            assert rejected.status_code == 503
+            assert rejected.json()["detail"]["code"] == "analysis_busy"
+            with lock:
+                assert active == 2
+        finally:
+            # A failed assertion must not leave workers/slots alive for later tests.
+            release.set()
+            completed = await asyncio.gather(first, second, return_exceptions=True)
     assert [response.status_code for response in completed] == [200, 200]
     assert maximum_active == 2
+    assert active == 0
 
 
 def test_executor_submit_failure_releases_slot_once_and_next_request_completes(
@@ -824,8 +825,6 @@ async def test_complete_cpu_pipeline_does_not_block_lightweight_routes(
     app.dependency_overrides[molbio_restriction.get_molbio_session] = lambda: object()
     started = threading.Event()
     release = threading.Event()
-    lightweight_completed = threading.Event()
-    observed: list[bool] = []
     event_loop_thread = threading.get_ident()
 
     if blocked_phase == "preprocessing":
@@ -834,7 +833,7 @@ async def test_complete_cpu_pipeline_does_not_block_lightweight_routes(
         def blocked_normalize(value):
             assert threading.get_ident() != event_loop_thread
             started.set()
-            assert release.wait(3)
+            assert release.wait(10)
             return original(value)
 
         monkeypatch.setattr(molbio_restriction, "normalize_dna", blocked_normalize)
@@ -844,27 +843,25 @@ async def test_complete_cpu_pipeline_does_not_block_lightweight_routes(
         def blocked_serialize(value, **kwargs):
             assert threading.get_ident() != event_loop_thread
             started.set()
-            assert release.wait(3)
+            assert release.wait(10)
             return original(value, **kwargs)
 
         monkeypatch.setattr(molbio_restriction.AnalysisResponse, "model_dump_json", blocked_serialize)
 
-    def controller() -> None:
-        assert started.wait(3)
-        observed.append(lightweight_completed.wait(1))
-        release.set()
-
-    control = threading.Thread(target=controller)
-    control.start()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         analysis_task = asyncio.create_task(client.post("/api/molbio/restriction/analyze", json=_inline_request()))
-        assert await asyncio.to_thread(started.wait, 3)
-        lightweight = await client.get("/api/molbio/restriction/catalog?limit=1")
-        lightweight_completed.set()
-        analysis = await analysis_task
-    control.join(timeout=2)
-    assert observed == [True]
+        try:
+            # Cold full-catalog validation is setup work, not the responsiveness
+            # assertion: the lightweight request must finish with this stage held.
+            assert await asyncio.to_thread(started.wait, 15)
+            lightweight = await asyncio.wait_for(
+                client.get("/api/molbio/restriction/catalog?limit=1"), timeout=2,
+            )
+            assert not release.is_set()
+        finally:
+            release.set()
+            analysis = await analysis_task
     assert lightweight.status_code == analysis.status_code == 200
 
 

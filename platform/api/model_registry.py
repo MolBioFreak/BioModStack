@@ -72,6 +72,7 @@ class ModelMode(BaseModel):
     description: str
     params: List[str] = []  # Parameter names required for this mode
     selected_only: bool = False  # Launched from an owned Design selection, not a manual Job draft.
+    compatibility_only: bool = False  # Retained requests, not a fresh capability; never an admission gate.
 
 
 class NTPTemplate(BaseModel):
@@ -101,7 +102,7 @@ class ModelIntegration(BaseModel):
 class RuntimeDependencyRef(BaseModel):
     """Trusted managed-storage binding, never an operator path or download URL."""
     model_config = {"extra": "forbid", "frozen": True}
-    kind: str = Field(pattern=r"^(image|weights)$")
+    kind: str = Field(pattern=r"^(image|weights|runtime_data)$")
     # Nested managed members are resolved by the existing contained-root owner.
     # Reject empty/dot/traversal segments rather than normalizing their spelling.
     relative_path: str = Field(pattern=r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$")
@@ -122,14 +123,15 @@ INDEPENDENT_RUNTIME_MODELS = frozenset({
     "boltz2", "af2", "proteinmpnn", "unidock", "protein_modification_experimental",
     "caliby_binder", "caliby_experimental", "ligandmpnn", "bindcraft2", "protonpottsmpnn",
     # Fold-CP uses its own image with the native BoltzCP shared Boltz tree.
-    "boltz_cp_experimental",
+    "boltz_cp_experimental", "rfd4_proteina", "complexa", "laproteina",
+    "family_msa_protein", "family_msa_nucleic",
 })
 
 
 # Image-only selection does not promise the model's selected weights/stages.
 # These public launcher entries already bind the named image in native plans.
 INDEPENDENT_RUNTIME_IMAGES = INDEPENDENT_RUNTIME_MODELS | frozenset({
-    'boltzgen', 'protein_local_redesign', 'molecular_dynamics',
+    'boltzgen', 'molecular_dynamics',
     'confornets_experimental',
 })
 
@@ -157,6 +159,15 @@ def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tupl
     if model_id == 'protein_modification_experimental':
         return _denovo_runtime_dependencies()
     refs = [RuntimeDependencyRef(kind="image", relative_path=model.container)]
+    if model_id == 'rfd4_proteina':
+        refs.append(RuntimeDependencyRef(kind='weights', relative_path='rfd4-proteina'))
+    if model_id == 'laproteina':
+        refs.append(RuntimeDependencyRef(kind='weights', relative_path='laproteina'))
+    if model_id == 'complexa':
+        from scripts.lib.complexa_contract import PROFILES
+        refs.extend(RuntimeDependencyRef(kind=ref.kind, relative_path=ref.relative_path)
+                    for task in PROFILES for ref in native_checkpoint_dependencies('RunComplexa', {
+                        'complexa_request': {'task': task, 'task_name': 'preparation', 'operation': 'generate'}})[0])
     if model_id == 'bindcraft2':
         # Native campaign bind in scripts/run_bindcraft2.py; image-owned MPNN
         # plus the selected AlphaFold parameter tree.
@@ -226,6 +237,19 @@ def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
     mode constructs a task-local CIF, not a bulk mmCIF corpus.
     FrustraMPNN checkpoints are image-owned and add no shared weight members.
     """
+    if workflow_id == 'de_novo_design':
+        from scripts.lib.complexa_contract import PROFILES
+        groups = {'generators': tuple(ref.relative_path for ref in _denovo_runtime_dependencies()
+                                      if ref.kind == 'weights'),
+                  'rfd4_proteina': ('rfd4-proteina',),
+                  'complexa': tuple(ref.relative_path for ref in model_runtime_dependencies('complexa')
+                                    if ref.kind == 'weights')}
+        for model_id in ('boltz2', 'esmfold2', 'caliby_experimental'):
+            groups[model_id] = tuple(ref.relative_path for ref in model_runtime_dependencies(model_id)
+                                     if ref.kind == 'weights')
+        groups['protenix'] = tuple(ref.relative_path for ref in
+            native_checkpoint_dependencies('ProtenixPredict', {})[0])
+        return groups
     if workflow_id == 'antibody_denovo':
         from services.ppiflow_generation import MODES
         boltzgen, blockers = native_checkpoint_dependencies('RunBoltzGen', {
@@ -254,9 +278,9 @@ def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
               'boltz_native': native_boltz,
               'esmfold2_fast': ('esmfold2',), 'esmfold2_full': ('esmfold2',)}
     for name, process, settings in (
-        ('protenix', 'ProtenixPredict', {}),
-        ('protenix_anchored', 'ProtenixFromComplex', {'protenix_anchor_target': True}),
-        ('protenix_templates', 'ProtenixPredict', {'protenix_use_template': True}),
+        ('protenix', 'ProtenixPredict', {'protenix_use_template': False}),
+        ('protenix_anchored', 'ProtenixFromComplex', {
+            'protenix_anchor_target': True, 'protenix_use_template': False}),
     ):
         dependencies, _ = native_checkpoint_dependencies(process, settings)
         members = tuple(d.relative_path for d in dependencies)
@@ -266,9 +290,139 @@ def workflow_pack_weight_groups(workflow_id: str) -> dict[str, tuple[str, ...]]:
     return groups
 
 
-def workflow_pack_dependencies(workflow_id: str):
-    """Input-free union of the selected workflow's declared managed assets."""
+def workflow_pack_weight_owners(workflow_id: str) -> dict[str, str]:
+    """Keep acquisition ownership when projecting a multi-model pack's union.
+
+    Consumer layout names are not always model IDs (and combined layouts are
+    not acquisition owners). Use the native leaf groups, including optional
+    Protenix members, without changing the pack's dependency selection.
+    """
+    if workflow_id == 'de_novo_design':
+        # This pack includes a heterogeneous generator union, not model-ID groups.
+        # Preserve its existing declared-layout acquisition-owner resolution.
+        return {}
+    groups = workflow_pack_weight_groups(workflow_id)
+    owners = ({group: group for group in groups} if workflow_id == 'antibody_denovo' else {
+        'boltz': 'boltz2', 'esmfold2_fast': 'esmfold2',
+        'protenix_anchored': 'protenix',
+    })
+    return {member: owner for group, owner in owners.items()
+            for member in groups[group]}
+
+
+# De novo design preparation leaves: (component id, label, prepared by default). The ids select what is sent to a
+# worker; they do not change inference settings. The default is the usual loop (RFD4 generation, the common
+# sequence models, FrustraMPNN, Protenix); the rest are added when a run needs them.
+DENOVO_PACK_COMPONENTS = (
+    ('rfd4_proteina', 'RFD4 (Proteina)', True),
+    ('rfd3', 'RFD3 (Foundry)', False),
+    ('disco', 'DISCO', False),
+    ('laproteina', 'La-Proteina', False),
+    ('complexa', 'Complexa', False),
+    ('proteinmpnn', 'ProteinMPNN', True),
+    ('fampnn', 'FAMPNN', True),
+    ('ligandmpnn', 'LigandMPNN', False),
+    ('protonpottsmpnn', 'ProtonPottsMPNN', False),
+    ('caliby_experimental', 'Caliby', False),
+    ('frustrampnn', 'FrustraMPNN', True),
+    ('protenix', 'Protenix v2', True),
+    ('boltz2', 'Boltz-2', False),
+    ('esmfold2', 'ESMFold2', False),
+    ('molecular_dynamics', 'Molecular dynamics', False),
+)
+
+
+def _denovo_component_dependencies(component_id: str) -> tuple[RuntimeDependencyRef, ...]:
+    """One de novo component's images and weights, from the same owners the full pack unions."""
+    from native_components import LABEL_ASSETS
+
+    def image(label):
+        return RuntimeDependencyRef(kind='image', relative_path=LABEL_ASSETS[label][0])
+
+    def native(process, settings=None):
+        deps, _ = native_checkpoint_dependencies(process, settings or {})
+        return [RuntimeDependencyRef(kind=d.kind, relative_path=d.relative_path) for d in deps]
+
+    if component_id == 'rfd4_proteina':
+        refs = [image('RFD4Proteina'), RuntimeDependencyRef(kind='weights', relative_path='rfd4-proteina')]
+    elif component_id == 'rfd3':
+        refs = [image('Foundry'), *native('RunRFD3')]
+    elif component_id == 'disco':
+        refs = [image('DISCO'), RuntimeDependencyRef(kind='weights', relative_path='disco')]
+    elif component_id == 'laproteina':
+        refs = [image('LaProteina'), *native('RunLaProteina')]
+    elif component_id == 'complexa':
+        refs = list(model_runtime_dependencies('complexa'))
+    elif component_id in {'proteinmpnn', 'fampnn', 'boltz2', 'esmfold2'}:
+        refs = list(model_runtime_dependencies(component_id))
+        if component_id == 'boltz2':
+            refs.extend(native('RunShapeBoltzValidator'))
+    elif component_id in {'ligandmpnn', 'protonpottsmpnn', 'frustrampnn'}:
+        refs = list(model_runtime_dependencies(component_id, internal=True))
+    elif component_id == 'caliby_experimental':
+        refs = [*model_runtime_dependencies('caliby_experimental'), *native('RunShapeCaliby')]
+    elif component_id == 'protenix':
+        refs = [*model_image_dependencies('protenix'), *native('ProtenixPredict'),
+                *native('RunShapeProtenixValidator')]
+    elif component_id == 'molecular_dynamics':
+        refs = [image('MolecularDynamicsPreparation'), image('MolecularDynamicsGromacs'),
+                image('MolecularDynamicsAnalysis'),
+                RuntimeDependencyRef(kind='runtime_data', relative_path='md-preparation/env-v1-explicit.txt')]
+    else:
+        raise ValueError('Unknown workflow preparation component')
+    return tuple(refs)
+
+
+def workflow_pack_components(workflow_id: str):
+    """Selectable preparation leaves, not inference settings or dependency copies."""
+    if workflow_id == 'de_novo_design':
+        return tuple({'model_id': component_id, 'label': label, 'selected_by_default': default}
+                     for component_id, label, default in DENOVO_PACK_COMPONENTS)
+    if workflow_id != 'structure_prediction':
+        return ()
+    registry = get_registry()
+    return tuple({'model_id': model_id, 'label': registry.get_internal_model_definition(model_id).name,
+                  'selected_by_default': model_id in {'protenix', 'frustrampnn'}}
+                 for model_id in ('protenix', 'frustrampnn', 'esmfold2', 'boltz2', 'boltz_cp_experimental'))
+
+
+def workflow_pack_dependencies(workflow_id: str, component_ids=None):
+    """Input-free union; omission retains historical whole-pack preparation."""
+    if component_ids is not None:
+        available = {item['model_id'] for item in workflow_pack_components(workflow_id)}
+        if set(component_ids) - available:
+            raise ValueError('Unknown workflow preparation component')
+        if workflow_id == 'de_novo_design':
+            return tuple({(ref.kind, ref.relative_path): ref for component_id in component_ids
+                          for ref in _denovo_component_dependencies(component_id)}.values())
+        refs = []
+        for model_id in component_ids:
+            if model_id == 'protenix':
+                refs.extend(model_image_dependencies(model_id))
+                refs.extend(native_checkpoint_dependencies('ProtenixFromComplex', {
+                    'protenix_anchor_target': True, 'protenix_use_template': False})[0])
+            else:
+                refs.extend(model_runtime_dependencies(model_id, internal=model_id == 'frustrampnn'))
+        return tuple({(ref.kind, ref.relative_path): ref for ref in refs}.values())
     groups = workflow_pack_weight_groups(workflow_id)  # closed supported identity
+    if workflow_id == 'de_novo_design':
+        from native_components import LABEL_ASSETS
+        # shape_rfd3.sif is foundry.sif plus three Python files (113,761 of 113,767 files identical),
+        # so the pack ships the Foundry image once. A Shape run prepares its own image through the
+        # current-request preview; the model-family selection still lists it.
+        shape_image = LABEL_ASSETS['ShapeRFD3'][0]
+        refs = [ref for ref in _denovo_runtime_dependencies()
+                if not (ref.kind == 'image' and ref.relative_path == shape_image)]
+        for label in ('RFD4Proteina', 'Complexa', 'MolecularDynamicsPreparation',
+                      'MolecularDynamicsGromacs', 'MolecularDynamicsAnalysis'):
+            refs.append(RuntimeDependencyRef(kind='image', relative_path=LABEL_ASSETS[label][0]))
+        for model_id in ('ligandmpnn', 'protonpottsmpnn', 'frustrampnn'):
+            refs.extend(model_runtime_dependencies(model_id, internal=True))
+        refs.append(RuntimeDependencyRef(kind='runtime_data',
+            relative_path='md-preparation/env-v1-explicit.txt'))
+        refs.extend(RuntimeDependencyRef(kind='weights', relative_path=member)
+                    for members in groups.values() for member in members)
+        return tuple(dict.fromkeys(refs))
     if workflow_id == 'antibody_denovo':
         from native_components import LABEL_ASSETS
         registry = get_registry()
@@ -290,16 +444,8 @@ def workflow_pack_dependencies(workflow_id: str):
         refs.extend(RuntimeDependencyRef(kind='weights', relative_path=member)
                     for members in groups.values() for member in members)
         return tuple(dict.fromkeys(refs))
-    refs = []
-    for model_id in ('boltz2', 'protenix', 'esmfold2'):
-        refs.extend(ref for ref in model_runtime_dependencies(model_id)
-                    if not (model_id == 'protenix' and ref.kind == 'weights'))
-    refs.extend(model_image_dependencies('boltz_cp_experimental'))
-    refs.extend(model_runtime_dependencies('frustrampnn', internal=True))
-    # The template-capable set contains the ordinary and anchored members.
-    members, _ = native_checkpoint_dependencies('ProtenixPredict', {'protenix_use_template': True})
-    refs.extend(members)
-    return tuple({(ref.kind, ref.relative_path): ref for ref in refs}.values())
+    return workflow_pack_dependencies(workflow_id, [item['model_id']
+        for item in workflow_pack_components(workflow_id)])
 
 
 def _native_metadata_bytes(root, relative):
@@ -350,7 +496,44 @@ def native_checkpoint_dependencies(process: str, params: dict):
             compatibility_authority='model_acquisition_plan; scripts/lib/pinned_weight_layout.py'))
         blockers.append(UnresolvedField(key, 'dependency_closure', authority, reason))
 
-    if process in {'PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets'}:
+    if process == 'RunRFD4Proteina':
+        dependencies.append(SelectedDependency('weights:rfd4-proteina', 'weights', 'rfd4-proteina',
+            'scripts.lib.rfd4_proteina_contract:selected_dependencies', selector='rfd4_proteina_bundle'))
+        from services.rfd4_proteina import selected_oracle_assets
+        for asset in selected_oracle_assets(params['rfd4_request'].get('mode', 'generate'), params):
+            dependencies.append(SelectedDependency(asset['kind'] + ':' + asset['relative_path'],
+                asset['kind'], asset['relative_path'], 'services.rfd4_proteina:selected_oracle_assets'))
+    elif process == 'RunComplexa':
+        from scripts.lib.complexa_contract import Request, PROFILES
+        request = Request.model_validate(params['complexa_request'])
+        pair = PROFILES[request.task][1]
+        for suffix in ('.ckpt', '_ae.ckpt'):
+            member = pair + suffix
+            dependencies.append(SelectedDependency('weights:complexa:' + member, 'weights',
+                'complexa/' + member, 'scripts/bms_complexa/config.py:compose_request',
+                selector='complexa_weights_dir', selector_subpath=member))
+        from scripts.bms_complexa.config import selected_dependencies
+        external = {
+            'af2': ('alphafold/params',),
+            'rf3': ('foundry/checkpoints/rf3_foundry_01_24_latest_remapped.ckpt',),
+            'esmfold': ('huggingface/models--facebook--esmfold_v1',),
+            'esm': ('huggingface/models--facebook--esm2_t33_650M_UR50D',),
+            'protein_mpnn': ('complexa-evaluators/ProteinMPNN/ca_model_weights/v_48_020.pt',),
+            'ligand_mpnn': ('complexa-evaluators/LigandMPNN/model_params/ligandmpnn_v_32_010_25.pt',),
+            'soluble_mpnn': ('complexa-evaluators/LigandMPNN/model_params/solublempnn_v_48_020.pt',),
+            'novelty_pdb': ('complexa/foldseek_db/pdb_db',),
+            'novelty_afdb_rep_v4': ('complexa/foldseek_db/afdb_rep_v4_db',),
+            'novelty_afdb_rep_v4_geniefilters_maxlen512': ('complexa/foldseek_db/afdb_rep_v4_geniefilters_maxlen512',),
+        }
+        for selected in selected_dependencies(request):
+            for member in external.get(selected, ()):
+                dependencies.append(SelectedDependency('weights:' + member, 'weights', member,
+                    'scripts/bms_complexa/config.py:selected_dependencies'))
+        if params.get('complexa_autoguidance_checkpoint'):
+            dependencies.append(SelectedDependency('weights:complexa_autoguidance_checkpoint',
+                'weights', None, 'modules/complexa.nf:RunComplexa',
+                selector='complexa_autoguidance_checkpoint'))
+    elif process in {'PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets'}:
         dependencies.append(SelectedDependency('weights:openfold3:checkpoint', 'weights',
             'openfold3/of3-p2-155k.pt', 'cm_request.confornets.checkpoint',
             selector='cn_checkpoint_path', semantic_release=(params.get('cm_request') or {}).get(
@@ -367,6 +550,21 @@ def native_checkpoint_dependencies(process: str, params: dict):
             relative = 'caliby/model_params/' + member
             dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
                 'scripts/caliby_runtime.py:resolve_expected_caliby_checkpoint; MODEL_PARAMS_DIR'))
+    elif process == 'RunCalibyResequence':
+        import json
+        from services.caliby_native import selected_assets
+        # The loop keeps the caller's model choice in the designer template file, not in job params.
+        template = params.get('plr_designer_template') or params.get('designer_template')
+        name = None
+        if template:
+            try:
+                name = json.loads(Path(str(template)).read_text()).get('model_name')
+            except (OSError, ValueError, AttributeError):
+                name = None
+        assets = selected_assets('ensemble_design', {'model_name': name} if name else {})
+        relative = assets['model_params_subdir'] + '/' + assets['checkpoint']
+        dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
+            'services.caliby_native:selected_assets; MODEL_PARAMS_DIR'))
     elif process in {'RunCalibyNative', 'RunShapeCaliby'}:
         from services.caliby_native import selected_assets
         if process == 'RunShapeCaliby':
@@ -408,9 +606,10 @@ def native_checkpoint_dependencies(process: str, params: dict):
         templates = enabled('protenix_use_template') or anchored
         if templates:
             members.extend(('common/obsolete_to_successor.json', 'common/release_date_cache.json'))
-            # Anchored consumers generate mmcif from their declared target input.
-            if not anchored:
-                members.append('mmcif')
+            # Exact-only anchoring uses the declared target, while an explicit
+            # generic search still needs its corpus even when also anchored.
+            if enabled('protenix_use_template'):
+                members.extend(('mmcif', 'search_database/pdb_seqres_2022_09_28.fasta'))
         for member in members:
             dependencies.append(SelectedDependency('weights:protenix:' + member, 'weights',
                 'protenix/' + member, owner, selector='protenix_weights', selector_subpath=member))
@@ -439,11 +638,44 @@ def native_checkpoint_dependencies(process: str, params: dict):
         dependencies.append(SelectedDependency('weights:disco:huggingface', 'weights',
             'disco/huggingface', owner, selector='weights_root',
             selector_subpath='disco/huggingface'))
+    elif process == 'EvaluateLaProteina':
+        import json
+        from paths import resolve_allowed_path
+        request = params.get('laproteina_evaluation_request') or {}
+        metric = {}
+        try:
+            closure = params.get('laproteina_evaluation_input_closure')
+            if closure:
+                root = Path(closure)
+                retained = json.loads((root / 'request.json').read_text())
+                config_path = root / retained['config_path']
+            else:
+                binding = (params.get('native_sources') or {}).get(request.get('config_slot'), {})
+                config_path = resolve_allowed_path(binding['path'])
+            metric = (yaml.safe_load(config_path.read_text()) or {}).get('generation', {}).get('metric', {})
+        except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError):
+            # Preview may precede materialization. Keep the prior launch path;
+            # unknown retained settings conservatively select evaluator assets,
+            # never a guessed scientific default or a new refusal condition.
+            pass
+        metric = {**metric, **request.get('metrics', {})}
+        members = []
+        if metric.get('compute_designability') is not False:
+            members.append('laproteina-evaluators/ProteinMPNN/vanilla_model_weights/v_48_020.pt')
+        if any(metric.get('compute_' + name) is not False and
+               'esmfold' in metric.get(name + '_folding_models', ['esmfold'])
+               for name in ('designability', 'codesignability')):
+            members.append('huggingface/models--facebook--esmfold_v1')
+        for member in members:
+            dependencies.append(SelectedDependency('weights:' + member, 'weights', member,
+                'scripts/run_laproteina_inference.py:evaluate_native; retained generation.metric'))
     elif process == 'RunLaProteina':
         from paths import get_weights_root
 
         owner = 'modules/protein_cad_experimental.nf:PrepProteinCadRequest'
-        default = Path(params.get('weights_root') or get_weights_root()) / 'laproteina'
+        from paths import default_weight_location
+
+        default = default_weight_location('laproteina', params.get('weights_root'))
         seen = set()
         for name in ('checkpoint_dir', 'data_path'):
             selector = ('pcad_laproteina_' + name if params.get('pcad_laproteina_' + name)
@@ -578,6 +810,37 @@ def native_checkpoint_dependencies(process: str, params: dict):
     return tuple(dependencies), tuple(blockers)
 
 
+def evaluator_acquisition_layouts() -> list[tuple[dict, list[dict]]]:
+    """Selected evaluator layout declarations from their existing byte authority.
+
+    These are not model-wide acquisition requests. The selected runtime receiver
+    matches an exact immutable generation, then emits only the requested members.
+    Keep generator generations and ordinary model acquisition plans unchanged.
+    """
+    import json
+
+    source = json.loads((Path(__file__).resolve().parents[2] /
+        'scripts/bms_complexa/assets.json').read_text())['selected_oracle_sources']
+    groups: dict[str, list[dict]] = {}
+
+    def member(group, path, manifest):
+        groups.setdefault(group, []).append({'member_path': path, 'manifest': manifest})
+
+    for repository in source['native_hf']['hf']:
+        group, directory = repository['cache_root'].split('/', 1)
+        for entry in repository['files']:
+            member(group, directory + '/snapshots/' + repository['revision'] + '/' + entry['name'],
+                   entry['acquisition_manifest'])
+    for entry in source['protein_mpnn']['members']:
+        owner, path = entry['member_path'].split('/', 1)
+        member(owner + '-evaluators', path, entry['acquisition_manifest'])
+    for entry in source['ligand_mpnn']:
+        owner, path = entry['member_path'].split('/', 1)
+        member(owner + '-evaluators', path, entry['acquisition_manifest'])
+    return [({'kind': 'weights', 'relative_path': name}, entries)
+            for name, entries in sorted(groups.items())]
+
+
 class RuntimeAcquisitionArtifact(BaseModel):
     """Release-owner reviewed byte manifest, not user-supplied launch settings.
 
@@ -597,7 +860,20 @@ class RuntimeAcquisitionArtifact(BaseModel):
     member_path: Optional[str] = None
 
 
-def model_acquisition_plan(model_id: str) -> dict:
+# Selected-only evaluator assets an owner model ships beside its own closure. They
+# are declared acquisition authority (so reviewed manifests are accepted) but are NOT
+# part of model_runtime_dependencies, the workflow-pack default set, or any job that
+# does not select them (e.g. RFD4 refolding oracles only when metrics_tags activate one).
+OPTIONAL_SELECTED_RUNTIME_DEPENDENCIES: dict[str, tuple[RuntimeDependencyRef, ...]] = {
+    'rfd4_proteina': (
+        RuntimeDependencyRef(kind='image', relative_path='af3-open.sif'),
+        RuntimeDependencyRef(kind='image', relative_path='af2-open.sif'),
+        RuntimeDependencyRef(kind='weights', relative_path='rfd4-oracles/of3'),
+    ),
+}
+
+
+def model_acquisition_plan(model_id: str, *, include_optional: bool = False) -> dict:
     """Resolve approved metadata against existing runtime dependency authority.
 
     Missing closure/metadata is an explicit blocker; URLs from legacy scripts,
@@ -611,25 +887,68 @@ def model_acquisition_plan(model_id: str) -> dict:
     model = get_registry().get_model(model_id)
     assert model is not None  # Closure resolution above already checked availability.
     artifacts, blockers = [], []
-    allowed = {(ref.kind, ref.relative_path) for ref in refs}
+
+    def binds(dependency, ref):
+        # An entry binds to the dependency it names, or to the pinned weight layout
+        # root that contains a requested member (e.g. complexa/ for complexa/x.ckpt).
+        return dependency.kind == ref.kind and (
+            dependency.relative_path == ref.relative_path or (
+                ref.kind == "weights" and ref.relative_path.startswith(dependency.relative_path + "/")))
+
+    def supplies(entry, ref):
+        # Coverage stays exact: a layout root supplies only the members it pins.
+        dependency = entry.dependency
+        return dependency == ref or (
+            ref.kind == "weights" and entry.member_path is not None
+            and ref.relative_path == dependency.relative_path + "/" + entry.member_path)
+
+    optional = OPTIONAL_SELECTED_RUNTIME_DEPENDENCIES.get(model_id, ())
+    optional_entries = {entry.artifact_id for entry in model.acquisition
+                        if any(entry.dependency == ref or supplies(entry, ref) for ref in optional)}
     ids = [entry.artifact_id for entry in model.acquisition]
     if len(ids) != len(set(ids)) or any(
-        (entry.dependency.kind, entry.dependency.relative_path) not in allowed
-        for entry in model.acquisition
+        not any(binds(entry.dependency, ref) for ref in (*refs, *optional)) for entry in model.acquisition
     ):
         return {"model_id": model_id, "artifacts": [], "blockers": [
             {"code": "invalid_acquisition_dependency_binding"}]}
+    # Optional selected assets are visible to selected-layout receivers only
+    # (include_optional); the model's own plan/provision stays unchanged.
+    if not include_optional:
+        acquisition = [entry for entry in model.acquisition if entry.artifact_id not in optional_entries]
+    else:
+        acquisition = list(model.acquisition)
+    emitted = set()
     for ref in refs:
-        entries = [entry for entry in model.acquisition
-                   if entry.dependency == ref]
+        entries = [entry for entry in acquisition if supplies(entry, ref)]
         if not entries:
             blockers.append({"code": "approved_acquisition_metadata_missing",
                              **ref.model_dump()})
         for entry in entries:
-            artifacts.append({"dependency": ref.model_dump(), "member_path": entry.member_path,
+            if entry.artifact_id in emitted:
+                continue
+            emitted.add(entry.artifact_id)
+            artifacts.append({"dependency": entry.dependency.model_dump(), "member_path": entry.member_path,
                               "manifest": {
-                **entry.model_dump(exclude={"dependency", "member_path"}), "kind": ref.kind}})
+                **entry.model_dump(exclude={"dependency", "member_path"}), "kind": entry.dependency.kind}})
+    # Entries that bind through a layout root but supply no requested member still
+    # belong to that pinned layout generation; keep them so its digest is complete.
+    for entry in acquisition:
+        if entry.artifact_id not in emitted:
+            emitted.add(entry.artifact_id)
+            artifacts.append({"dependency": entry.dependency.model_dump(), "member_path": entry.member_path,
+                              "manifest": {
+                **entry.model_dump(exclude={"dependency", "member_path"}), "kind": entry.dependency.kind}})
     return {"model_id": model_id, "artifacts": artifacts, "blockers": blockers}
+
+
+class ModelPublicReference(BaseModel):
+    """Display-only maintainer references, never execution or acquisition input."""
+    name: str
+    description: str
+    github: str = Field(pattern=r'^https://')
+    paper: str = Field(pattern=r'^https://')
+    docs: str = Field(pattern=r'^https://')
+    version: Optional[str] = None
 
 
 class ModelDefinition(BaseModel):
@@ -644,6 +963,24 @@ class ModelDefinition(BaseModel):
     workflow: Optional[str] = None
     engine_containers: Dict[str, str] = Field(default_factory=dict)
     capabilities: Dict[str, Any] = Field(default_factory=dict)
+    engine_references: Dict[str, ModelPublicReference] = Field(default_factory=dict)
+
+    @field_validator("engine_references", mode="before")
+    @classmethod
+    def display_references_only(cls, value: Any) -> Dict[str, ModelPublicReference]:
+        """Bad optional help must not make scientific model loading fail."""
+        if not isinstance(value, dict):
+            return {}
+        references = {}
+        for key, entry in value.items():
+            if not isinstance(key, str):
+                continue
+            try:
+                references[key] = ModelPublicReference.model_validate(entry)
+            except (ValueError, TypeError):
+                continue
+        return references
+
     public_launch: bool = True
     integration: Optional[ModelIntegration] = None
     
@@ -848,6 +1185,28 @@ class ModelRegistry:
             errors.append(f"Unknown mode '{mode_id}' for model '{model_id}'")
             return errors
         
+        if model_id == 'protenix':
+            from scripts.protenix_chemistry import validate_chemistry
+            try:
+                validate_chemistry(params)
+            except (TypeError, ValueError) as exc:
+                errors.append(str(exc))
+
+        selected_generator = (params.get('generator', 'rfd3')
+            if model_id == 'protein_modification_experimental' and mode_id == 'de_novo_design'
+            else model_id)
+        if selected_generator in {'rfd4_proteina', 'complexa'}:
+            native_mode = mode_id if selected_generator == model_id else 'generate'
+            try:
+                if selected_generator == 'rfd4_proteina':
+                    from services.rfd4_proteina import normalize_params
+                    normalize_params(native_mode, params)
+                else:
+                    from services.complexa import normalize_job_request
+                    normalize_job_request(native_mode, params['complexa_request'])
+            except (KeyError, TypeError, ValueError) as exc:
+                errors.append(str(exc))
+            return errors
         if model_id == 'protonpottsmpnn':
             from services.protonpottsmpnn_design import normalize_design_params
             try:
@@ -960,6 +1319,22 @@ class ModelRegistry:
         
         return errors
     
+    def parameter_diagnostics(self, model_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Non-gating catalog coverage, not a claim that an extension is unused.
+
+        Shared workflow and native extensions can legitimately be outside this
+        catalog. Preserve their values; expose the coverage boundary rather than
+        silently certifying their scientific consumption or rejecting them.
+        """
+        model = self.get_model(model_id)
+        declared = {field.name for field in model.params} if model is not None else set()
+        return {
+            'schema_version': 1,
+            'scope': 'model_parameter_catalog',
+            'settings_outside_catalog': sorted(key for key in params if key not in declared),
+            'native_consumption': 'not_established_by_catalog_validation',
+        }
+
     def reload(self) -> None:
         """Atomically reload all model definitions from disk."""
         self._load_models()
@@ -1040,6 +1415,14 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     def native_stage(key, module, deps, inputs=(), outputs=(), *, after=(),
                      condition=None, label='CPU', optional_outputs=(), optional_inputs=()):
         source = module + ':' + key
+        # Manual child stages consume the same source helpers as their public
+        # process owner. Managed image bindings alone omit these files.
+        from native_components import PROCESS_CONTRACTS
+        for helper in PROCESS_CONTRACTS.get(source, ((), (), (), (), ()))[3]:
+            helper_id = 'support_tool:' + helper
+            dependencies[helper_id] = SelectedDependency(
+                helper_id, 'support_tool', helper, source)
+            deps = (*deps, helper_id)
         input_ids = tuple(key + ':input:' + name for name in inputs)
         output_ids = tuple(key + ':output:' + name for name in outputs)
         for direction, names, ids in (('input', inputs, input_ids), ('output', outputs, output_ids)):
@@ -1170,7 +1553,8 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
                        'BoltzFromSequenceTask')
         else:
             module = 'modules/esmfold2_experimental.nf'
-            process = 'ESMFold2MSAPredict' if 'core_protein_scientific_contract' in p else 'ESMFold2Predict'
+            process = ('ESMFold2MSAPredict' if 'core_protein_scientific_contract' in p
+                       or p.get('sequence_batch_json_path') else 'ESMFold2Predict')
 
         deps = managed(predictor)
         selected_weights, weight_blockers = native_checkpoint_dependencies(process, p)
@@ -1181,13 +1565,12 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
         source = module + ':' + process
         helpers = []
         if predictor == 'protenix':
-            helpers.append('run_protenix_inference.py')
-            if native_bool('protenix_use_msa', True):
-                helpers.append('prepare_protenix_msa.py')
+            helpers.extend(('run_protenix_inference.py', 'prepare_protenix_msa.py', 'protenix_chemistry.py'))
             if complex_input:
-                helpers.extend(('prepare_protenix_constraints.py', 'write_structure_producer_manifest.py',
+                helpers.extend(('prepare_protenix_constraints.py', 'protenix_constraint_utils.py', 'write_structure_producer_manifest.py',
                     'extract_target_templates.py', 'prepare_protenix_exact_templates.py', 'finalize_target_geometry.py'))
         elif predictor == 'boltz2':
+            helpers.extend(('run_boltz_wrapper.py', 'lib/boltz_fidelity.py'))
             helpers.append('write_structure_producer_manifest.py' if complex_input else
                            'write_sequence_producer_manifest.py')
             if complex_input:
@@ -1361,6 +1744,20 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
         from services.ont_ngs_completion import ont_native_result_contract
         result_payload = ont_native_result_contract(model_id, mode, p)
         retrieval_authority = result_payload['native_contract_authority']
+    elif reviewed and workflow == 'laproteina_evaluation':
+        retrieval_authority = 'platform/api/services/rfd4_proteina_results.py:read_published_generation_page'
+        result_payload = {'native_contract_authority': retrieval_authority,
+            'publication_authority': 'platform/api/services/rfd4_proteina_results.py:publish_native_generation',
+            'analysis_contract_id': 'laproteina_evaluation_v1', 'generator_model_id': 'laproteina'}
+    elif reviewed and workflow in {'rfd4_proteina', 'complexa'}:
+        if workflow == 'rfd4_proteina':
+            from scripts.lib.rfd4_proteina_contract import RESULT_CONTRACT
+        else:
+            from scripts.lib.complexa_contract import RESULT_CONTRACT
+        retrieval_authority = 'platform/api/services/rfd4_proteina_results.py:read_published_generation_page'
+        result_payload = {'native_contract_authority': retrieval_authority,
+            'publication_authority': 'platform/api/services/rfd4_proteina_results.py:publish_native_generation',
+            'analysis_contract_id': RESULT_CONTRACT, 'generator_model_id': workflow}
     elif native_generation is not None:
         result_payload = native_generation
         retrieval_authority = native_generation['native_contract_authority']

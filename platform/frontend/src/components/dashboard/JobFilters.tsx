@@ -1,10 +1,13 @@
+import { JobCategoryFilter } from './JobCategoryFilter';
+import type { JobCategoryVisibility } from '../../lib/jobCategories';
+
 interface JobFiltersProps {
     search: string;
     onSearchChange: (value: string) => void;
     status: string;
     onStatusChange: (value: string) => void;
-    showNgsJobs: boolean;
-    onShowNgsJobsChange: (value: boolean) => void;
+    categoryVisibility: JobCategoryVisibility;
+    onCategoryVisibilityChange: (value: JobCategoryVisibility) => void;
 }
 
 export function JobFilters({
@@ -12,8 +15,8 @@ export function JobFilters({
     onSearchChange,
     status,
     onStatusChange,
-    showNgsJobs,
-    onShowNgsJobsChange,
+    categoryVisibility,
+    onCategoryVisibilityChange,
 }: JobFiltersProps) {
     return (
         <div className="mb-6 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_12rem_auto] lg:items-center">
@@ -44,15 +47,7 @@ export function JobFilters({
                     <option value="cancelled">Cancelled</option>
                 </select>
             </div>
-            <label className="flex min-h-11 items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/50 px-3 py-2 text-slate-200 cursor-pointer select-none lg:w-44">
-                <input
-                    type="checkbox"
-                    checked={showNgsJobs}
-                    onChange={(e) => onShowNgsJobsChange(e.target.checked)}
-                    className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-500 focus:ring-blue-500"
-                />
-                <span className="text-sm">Show NGS Jobs</span>
-            </label>
+            <JobCategoryFilter value={categoryVisibility} onChange={onCategoryVisibilityChange} />
         </div>
     );
 }

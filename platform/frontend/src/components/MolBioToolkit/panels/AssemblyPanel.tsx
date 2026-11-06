@@ -1,4 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { digestFragmentEnds } from '../../../lib/digestAssemblyTransfer';
+import { DUPLEX_EDIT_REASON } from '../../../lib/retainedDigestFragment';
+import type { RestrictionDigestFragment } from '../../../lib/restrictionAnalysis';
 const GoldenGateWorkflowWorkspace = lazy(() => import('./golden-gate/GoldenGateWorkflowWorkspace'));
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useInputOwnership } from './useInputOwnership';
@@ -91,6 +94,7 @@ function fragmentFromSequence(
         sourceStart?: number;
         sourceEnd?: number;
         wrapsOrigin?: boolean;
+        digestFragment?: RestrictionDigestFragment;
     },
     mode: AssemblyMode,
 ): AssemblyFragmentInput {
@@ -106,7 +110,10 @@ function fragmentFromSequence(
         source_start: source.sourceStart,
         source_end: source.sourceEnd,
         source_wraps_origin: source.wrapsOrigin,
-        ...defaultEnds(mode),
+        ...(source.digestFragment ? {
+            ...digestFragmentEnds(source.digestFragment),
+            metadata: { digest_fragment: source.digestFragment },
+        } : defaultEnds(mode)),
     };
 }
 
@@ -457,12 +464,14 @@ export function AssemblyPanel({
                 sourceName: sequenceData.name,
                 name: current.length === 0 ? `${sequenceData.name} backbone` : `${sequenceData.name} fragment ${current.length + 1}`,
                 sequence: sequenceData.sequence,
+                digestFragment: sequenceData.digestFragment,
                 role: current.length === 0 ? 'vector' : 'insert',
             }, mode),
         ]);
     };
 
     const addSelectionFragment = () => {
+        if (sequenceData.digestFragment) { setError(DUPLEX_EDIT_REASON); return; }
         setDnaWeaverPlan(null);
         if (!activeSelection) return;
         setFragments((current) => [

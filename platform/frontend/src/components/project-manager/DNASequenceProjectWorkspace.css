@@ -1,0 +1,44 @@
+/* Keep action placement independent of the length of the sequence name. */
+.dna-project-card-header {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.875rem;
+}
+
+.dna-project-card-actions {
+  width: 100%;
+}
+
+/* These unlayered component rules intentionally outrank the global anchor
+   colors, which otherwise override Tailwind's layered text utilities. */
+.dna-project-workspace .dna-project-primary-action,
+.dna-project-workspace .dna-project-primary-action:hover,
+.dna-project-workspace .dna-project-primary-action:focus-visible {
+  background-color: var(--accent-primary);
+  color: var(--text-on-accent);
+  text-decoration: none;
+}
+
+.dna-project-workspace .dna-project-primary-action:hover {
+  box-shadow: inset 0 0 0 2px var(--text-on-accent);
+}
+
+.dna-project-workspace :is(a, button, summary):focus-visible {
+  outline: 2px solid var(--text-action);
+  outline-offset: 3px;
+}
+
+.dna-project-workspace .dna-project-revision {
+  color: var(--text-success);
+  background-color: var(--bg-tertiary);
+  border-color: var(--border-secondary);
+}
+
+.dna-project-workspace a:not(.dna-project-primary-action) {
+  color: var(--text-action);
+}
+
+.dna-project-workspace a:not(.dna-project-primary-action):hover {
+  text-decoration: underline;
+}

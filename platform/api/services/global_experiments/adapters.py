@@ -38,7 +38,6 @@ from database import (
     NgsPooledAssignmentReleaseTarget,
     OntInstrumentRun,
     OntInstrumentRunEvent,
-    RFD3LocalRedesignRequest,
 )
 from molbio_database import molbio_session
 from molbio_models import (
@@ -60,7 +59,6 @@ from molbio_ngs_models import (
     MolBioNGSReferenceRevision,
     MolBioNGSSampleRevision,
 )
-from scripts.rfd3_local_redesign.contract import request_sha256 as rfd3_request_sha256
 from services.conformational_mapping.contracts import canonical_sha256 as cm_canonical_sha256
 from services.frustrampnn.contracts import canonical_json_bytes as frustrampnn_canonical_bytes
 from services.md.read_model import md_run_snapshot
@@ -72,7 +70,7 @@ from services.ont_ngs_contract import normalized_fasta_sequence_sha256
 from services.ont_barcode_batches import BarcodeBatchError, get_reference_set
 from services.result_contracts import resolve_result_contract
 from services.sequence_qc_manifest import SequenceQcManifestError, load_sequence_qc_manifest
-from services.ont_run_control import TERMINAL_RUN_STATES, _valid_terminal_manifest
+from services.ont_run_control import TERMINAL_RUN_STATES, _valid_terminal_manifest, terminal_artifact_roots
 from services.job_result_roots import resolve_persisted_job_result_root
 from services.molbio_ngs_member_receipts import (
     ExternalMemberReceipt,
@@ -405,6 +403,38 @@ def _query_uri(path: str, **identity: str) -> str:
     return f"{path}?{urlencode(identity)}"
 
 
+def _native_protenix_import(job: Job) -> bool:
+    return job.model_id == "protenix" and job.mode == "external_import"
+
+
+def _import_result_authority(job: Job) -> tuple[Path, dict[str, Any]]:
+    """Use import custody, without extending the ordinary Job results root."""
+    from paths import get_data_root, resolve_runtime_data_path
+    from services.protenix_scientific_consumer import _snapshot, _json
+
+    try:
+        provenance = job.provenance["external_import"]
+        parts = [provenance[key] for key in
+                 ("provider", "resource_type", "provider_job_id", "source_fingerprint")]
+        if parts[:2] != ["protenix_native", "native_structure_prediction"] or any(
+            not isinstance(part, str) or not part or Path(part).name != part or part in {".", ".."}
+            for part in parts
+        ):
+            raise ValueError("invalid native import custody identity")
+        base = (get_data_root() / "external_imports").resolve()
+        expected = base.joinpath(*parts).resolve()
+        expected.relative_to(base)
+        root = resolve_runtime_data_path(job.output_dir).resolve()
+        if root != expected:
+            raise ValueError("native import result root differs from retained custody")
+        descriptor, raw = _snapshot(root, "normalized/import-manifest.json")
+        if descriptor["sha256"] != provenance["manifest_sha256"]:
+            raise ValueError("changed native import manifest")
+        return root, _json(raw)
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+        raise AdapterError("source_contract_unavailable", str(exc)) from exc
+
+
 class CoreProteinResultAdapter:
     adapter_id = "bms.core.protein-result-reference.adapter.v1"
     adapter_version = 1
@@ -455,16 +485,22 @@ class CoreProteinResultAdapter:
                 raise AdapterError("source_contract_unavailable", "design has no native candidate artifacts")
         from services.core_protein_result_contract import verify_addressed_design_artifacts, CandidateIntegrityError
         try:
-            artifact_root = resolve_persisted_job_result_root(job)
-            from services.core_protein_scientific_contract import revision_for_job
-            if job.model_id in {"boltz", "boltz2"} and revision_for_job(job) == 1 and design.source_stage is None:
-                from services.boltz_scientific_consumer import verified_boltz_design
-                native = await verified_boltz_design(design, core_session)
+            if _native_protenix_import(job):
+                artifact_root, manifest = _import_result_authority(job)
+                from services.protenix_scientific_consumer import verify_publication
+                native = verify_publication(job, design, artifact_root, confidence=False)
                 authoritative = native["artifacts"]["structure"]
             else:
-                authoritative = verify_addressed_design_artifacts(
-                    job, design, artifact_root, verify_file=_verify_file,
-                )
+                artifact_root = resolve_persisted_job_result_root(job)
+                from services.core_protein_scientific_contract import revision_for_job
+                if job.model_id in {"boltz", "boltz2"} and revision_for_job(job) == 1 and design.source_stage is None:
+                    from services.boltz_scientific_consumer import verified_boltz_design
+                    native = await verified_boltz_design(design, core_session)
+                    authoritative = native["artifacts"]["structure"]
+                else:
+                    authoritative = verify_addressed_design_artifacts(
+                        job, design, artifact_root, verify_file=_verify_file,
+                    )
         except AdapterError:
             raise
         except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
@@ -489,111 +525,6 @@ class CoreProteinResultAdapter:
                 "result_contract_id": contract.analysis_contract_id,
                 "review_contract_version": int(design.review_contract_version or 1),
                 "review_contract_source": design.review_contract_source,
-            },
-        )
-
-
-def _verify_rfd3_result_manifest(
-    job: Job, record: RFD3LocalRedesignRequest, expected_request_digest: str,
-) -> tuple[str, int]:
-    from services.result_ingester import validate_rfd3_local_redesign_manifest, RFD3ResultIntegrityError
-
-    try:
-        root = resolve_persisted_job_result_root(job)
-        request_input = record.request_json.get("input") if isinstance(record.request_json, dict) else None
-        source = request_input.get("path") if isinstance(request_input, dict) else None
-        if isinstance(source, str):
-            source_path = resolve_runtime_data_path(source)
-            if not any(source_path.is_relative_to(base.resolve()) for base in (get_inputs_dir(), get_results_dir())):
-                raise AdapterError("source_contract_invalid", "RFD3 source structure is outside canonical roots")
-        proof = validate_rfd3_local_redesign_manifest(root, record)
-    except AdapterError:
-        raise
-    except RFD3ResultIntegrityError as exc:
-        code = {"manifest_unavailable": "source_contract_unavailable",
-                "artifact_unavailable": "source_artifact_unavailable",
-                "digest_mismatch": "source_digest_mismatch"}[exc.kind]
-        raise AdapterError(code, str(exc)) from exc
-    except (OSError, ValueError, RuntimeError, TypeError, KeyError) as exc:
-        raise AdapterError("source_contract_invalid", str(exc)) from exc
-    if proof["digest"] != record.result_manifest_sha256 or record.request_sha256 != expected_request_digest:
-        raise AdapterError("source_digest_mismatch", "RFD3 retained result identity changed")
-    return proof["digest"], len(proof["candidates"])
-
-
-class Rfd3LocalRedesignAdapter:
-    adapter_id = "bms.core-job.protein_local_redesign.adapter.v1"
-    adapter_version = 1
-    display_name = "RFD3 local redesign request/result"
-    entity_kind = "rfd3_local_redesign_request"
-    domain_kind = "protein_in_silico"
-    store_id = "core"
-
-    async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
-        normalized = _search_inputs(query, limit)
-        statement = select(RFD3LocalRedesignRequest, Job).join(Job, Job.id == RFD3LocalRedesignRequest.job_id)
-        if normalized:
-            pattern = f"%{normalized}%"
-            statement = statement.where(
-                or_(
-                    RFD3LocalRedesignRequest.request_id.ilike(pattern),
-                    RFD3LocalRedesignRequest.job_id.ilike(pattern),
-                    Job.name.ilike(pattern),
-                )
-            )
-        rows = (await core_session.execute(statement.order_by(RFD3LocalRedesignRequest.created_at.desc()).limit(limit))).all()
-        return [
-            EntityProjection(
-                entity_id=record.request_id,
-                entity_kind=self.entity_kind,
-                label=_bounded_label(job.name, record.request_id),
-                canonical_state=str(record.status),
-                metadata={"job_id": record.job_id, "job_status": str(job.status), "request_status": str(record.status)},
-            )
-            for record, job in rows
-        ]
-
-    async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
-        record = await core_session.get(RFD3LocalRedesignRequest, entity_id)
-        if record is None:
-            record = (
-                await core_session.execute(
-                    select(RFD3LocalRedesignRequest).where(RFD3LocalRedesignRequest.job_id == entity_id).limit(2)
-                )
-            ).scalar_one_or_none()
-        if record is None:
-            raise AdapterError("entity_not_found", "RFD3 local-redesign request does not exist")
-        job = await core_session.get(Job, record.job_id)
-        if job is None or job.model_id != "protein_local_redesign":
-            raise AdapterError("source_contract_invalid", "RFD3 request is not bound to its native job")
-        expected_request_digest = rfd3_request_sha256(record.request_json)
-        if expected_request_digest != _sha256(record.request_sha256, "RFD3 request digest"):
-            raise AdapterError("source_digest_mismatch", "RFD3 request digest no longer matches native request")
-        profile_digest = _sha256(record.profile_registry_sha256, "RFD3 profile registry digest")
-        result_digest = record.result_manifest_sha256
-        candidate_count = 0
-        if str(record.status) == "completed":
-            if result_digest is None:
-                raise AdapterError("source_contract_unavailable", "completed RFD3 result has no authoritative manifest digest")
-            content_digest, candidate_count = _verify_rfd3_result_manifest(job, record, expected_request_digest)
-        else:
-            content_digest = expected_request_digest
-        return _receipt(
-            self,
-            entity_id=record.request_id,
-            content_digest=content_digest,
-            contract_digest=expected_request_digest,
-            reopen_uri=f"/designs/{job.id}",
-            metadata={
-                "canonical_state": str(record.status),
-                "job_status": str(job.status),
-                "request_status": str(record.status),
-                "job_id": job.id,
-                "request_id": record.request_id,
-                "profile_id": record.profile_id,
-                "profile_registry_sha256": profile_digest,
-                "result_contract_id": "rfd3_local_redesign_v1",
-                "candidate_count": candidate_count,
             },
         )
 
@@ -1158,7 +1089,7 @@ class MolBioRevisionAdapter:
             if normalized:
                 pattern = f"%{normalized}%"
                 statement = statement.where(
-                    or_(MolecularRevision.id.ilike(pattern), MolecularRevision.document_id.ilike(pattern))
+                    or_(MolecularRevision.id.ilike(pattern), MolecularRevision.document_id.ilike(pattern), MolecularRevision.snapshot["name"].as_string().ilike(pattern))
                 )
             rows = list((await session.scalars(statement.order_by(MolecularRevision.created_at.desc()).limit(limit))).all())
         return [
@@ -1198,7 +1129,7 @@ class MolBioRevisionAdapter:
             entity_id=entity_id,
             content_digest=digest,
             contract_digest=digest,
-            reopen_uri=_query_uri("/designer", sequence_id=revision.document_id, revision_id=revision.id),
+            reopen_uri=_query_uri("/designer", molbio_sequence_id=revision.document_id, molbio_revision_id=revision.id),
             metadata={
                 "canonical_state": "immutable",
                 "sequence_id": revision.document_id,
@@ -1347,12 +1278,12 @@ class MolBioOperationAdapter:
             output_revision = revisions[first_output.revision_id]
             reopen_uri = _query_uri(
                 "/designer",
-                sequence_id=output_revision.document_id,
-                revision_id=output_revision.id,
-                operation_id=operation.id,
+                molbio_sequence_id=output_revision.document_id,
+                molbio_revision_id=output_revision.id,
+                molbio_operation_id=operation.id,
             )
         else:
-            reopen_uri = _query_uri("/designer", operation_id=operation.id)
+            reopen_uri = _query_uri("/designer", molbio_operation_id=operation.id)
         return _receipt(
             self,
             entity_id=operation.id,
@@ -1365,7 +1296,7 @@ class MolBioOperationAdapter:
                 "implementation": operation.implementation,
                 "input_count": len(inputs),
                 "output_count": len(outputs),
-                "native_lineage": lineage,
+                "native_lineage": [{**item, "receipt_content_digest": item["content_digest"]} for item in lineage],
                 "result_contract_id": "molbio_operation_v1",
             },
         )
@@ -1771,7 +1702,11 @@ class OntInstrumentRunAdapter:
             for artifact in raw_artifacts:
                 resolved = resolve_runtime_data_path(str(artifact["path"])).resolve()
                 root = next(
-                    (candidate.resolve() for candidate in (get_results_dir(), get_inputs_dir()) if resolved.is_relative_to(candidate.resolve())),
+                    (
+                        candidate.resolve()
+                        for candidate in terminal_artifact_roots(run, get_results_dir(), get_inputs_dir())
+                        if resolved.is_relative_to(candidate.resolve())
+                    ),
                     None,
                 )
                 if root is None:
@@ -2309,7 +2244,7 @@ class ExactMolecularRevisionMemberAdapter:
             statement = select(MolecularRevision)
             if normalized:
                 pattern = f"%{normalized}%"
-                statement = statement.where(or_(MolecularRevision.id.ilike(pattern), MolecularRevision.document_id.ilike(pattern)))
+                statement = statement.where(or_(MolecularRevision.id.ilike(pattern), MolecularRevision.document_id.ilike(pattern), MolecularRevision.snapshot["name"].as_string().ilike(pattern)))
             rows = list((await session.scalars(statement.order_by(MolecularRevision.created_at.desc()).limit(limit))).all())
         return [EntityProjection(
             entity_id=urlencode({"sequence_id": row.document_id, "revision_id": row.id}),
@@ -2344,7 +2279,7 @@ class ExactMolecularRevisionMemberAdapter:
                 "sequence_id": identity["sequence_id"],
                 "revision_id": identity["revision_id"],
             }), member=member,
-            reopen_uri=_query_uri("/designer", **identity),
+            reopen_uri=_query_uri("/designer", molbio_sequence_id=identity["sequence_id"], molbio_revision_id=identity["revision_id"]),
             metadata={
                 "sequence_id": identity["sequence_id"],
                 "revision_id": identity["revision_id"],
@@ -3239,7 +3174,10 @@ class TypedCoreJobResultAdapter:
                 "model_id": job.model_id,
                 "mode": job.mode,
                 "artifact_count": artifact_count,
-                "artifact_authority": "verified_producer_design_receipts",
+                "artifact_authority": (
+                    "verified_external_import_design_receipts" if _native_protenix_import(job)
+                    else "verified_producer_design_receipts"
+                ),
                 "result_scope": "declared_native_final_candidates" if expected is not None else "all_design_rows",
                 "result_contract_id": "typed_core_job_result_v1",
             },
@@ -3257,12 +3195,25 @@ class NativeBinderJobResultAdapter:
     store_id = "core"
     adapter_version = 1
     entity_kind = "native_binder_job_result"
+    from scripts.sequence_design_results import MODES as _SEQUENCE_MODES
+    from services.caliby_native import SUPPORTED_MODES as _CALIBY_MODES
+    from services.ligandmpnn_design import MODES as _LIGAND_MODES
+    from services.protonpottsmpnn_design import MODES as _PROTON_MODES
+
     _MODES = {
+        **_SEQUENCE_MODES,
+        "caliby_experimental": _CALIBY_MODES,
+        "protonpottsmpnn": _PROTON_MODES,
         "bindcraft2": {"campaign", "resume", "score", "rank", "filter", "campaign_output", "archive", "unarchive"},
-        "ligandmpnn": {"interface_context"},
+        "ligandmpnn": {"interface_context", *_LIGAND_MODES},
+        "laproteina": {"evaluate"},
+        "rfd4_proteina": {"generate", "evaluate"},
+        "complexa": {"generate", "evaluate"},
+        "protein_modification_experimental": {"de_novo_design", "region_redesign"},
+        "protein_cad_experimental": {"design"},
         "esmfold2": {"blind_pose"},
         "ppiflow": {"protein_binder", "antibody_binder", "nanobody_binder"},
-        "boltzgen": {"protein_binder", "nanobody_binder", "peptide_binder"},
+        "boltzgen": {"protein_binder", "nanobody_binder", "peptide_binder", "antibody_binder", "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking"},
     }
 
     def __init__(self, model_id: str):
@@ -3277,7 +3228,6 @@ class NativeBinderJobResultAdapter:
         statement = select(Job).where(
             Job.model_id == self.model_id,
             Job.mode.in_(self._MODES[self.model_id]),
-            Job.status.in_(("completed", "succeeded")),
         )
         if normalized:
             pattern = f"%{normalized}%"
@@ -3293,11 +3243,26 @@ class NativeBinderJobResultAdapter:
         job = await core_session.get(Job, entity_id)
         if job is None or job.model_id != self.model_id or job.mode not in self._MODES[self.model_id]:
             raise AdapterError("entity_not_found", "Native result does not belong to this adapter")
-        if job.status not in {"completed", "succeeded"}:
-            raise AdapterError("source_contract_unavailable", "Native Job result is not complete")
+        # Execution status is evidence, not native population membership. Failed,
+        # cancelled and still-running Jobs may own a registered partial publication.
         from services.core_protein_result_contract import CandidateIntegrityError
+        from services.rfd4_proteina_results import has_native_publication
+        from fastapi import HTTPException
+        record_count = None
         try:
-            if self.model_id == "bindcraft2":
+            if has_native_publication(job):
+                from services.rfd4_proteina_results import read_published_generation_page
+                page = await read_published_generation_page(job, core_session, limit=1)
+                publication = page['publication']
+                record_count = page['total']
+            elif self.model_id == 'protein_modification_experimental' and (job.params or {}).get('rfd3_generation_request'):
+                from services.rfd3_generation_results import read_generation_results
+                result = await read_generation_results(job, core_session, limit=1)
+                publication = {key: result[key] for key in ('schema', 'result_manifest_sha256', 'result_schema', 'population', 'counts')}
+            elif self.model_id in {'protein_modification_experimental', 'protein_cad_experimental'}:
+                # Historical Design-backed receiving remains with its existing owner.
+                publication = await TypedCoreJobResultAdapter(self.model_id).verify(core_session, entity_id)
+            elif self.model_id == "bindcraft2":
                 from services.bindcraft2_publication import read_published_native_results
                 _, publication = await read_published_native_results(job, core_session)
             elif self.model_id in {"ppiflow", "boltzgen"}:
@@ -3306,13 +3271,28 @@ class NativeBinderJobResultAdapter:
                 else:
                     from services.boltzgen_candidate_publication import read_published_generation_results
                 publication = (await read_published_generation_results(job, core_session))["publication"]
+            elif self.model_id in self._SEQUENCE_MODES:
+                from services.binder_native_selection import read_native_sequence_candidates
+                artifact, records = await read_native_sequence_candidates(core_session, job, verify_bytes=True)
+                publication = {"artifact_id": artifact.id, "sha256": artifact.sha256}
+                record_count = len(records)
+            elif self.model_id == "protonpottsmpnn":
+                from services.binder_selected_round import native_sequences
+                artifact, records = await native_sequences(core_session, job)
+                publication = {"artifact_id": artifact.id, "sha256": artifact.sha256}
+                record_count = len(records)
+            elif self.model_id == "caliby_experimental" or (
+                    self.model_id == "ligandmpnn" and job.mode in self._LIGAND_MODES):
+                from services.binder_selected_round import native_operation_records
+                publication, _ = await native_operation_records(core_session, job)
+                record_count = len(publication["records"])
             elif self.model_id == "ligandmpnn":
                 from services.ligandmpnn_interface_publication import read_selected
                 publication = await read_selected(job, core_session)
             else:
                 from services.binder_blind_pose_selected import read_selected
                 publication = (await read_selected(job, core_session))["publication"]
-        except (ValueError, OSError, KeyError, TypeError, CandidateIntegrityError) as exc:
+        except (ValueError, OSError, KeyError, TypeError, CandidateIntegrityError, HTTPException) as exc:
             raise AdapterError("source_contract_unavailable", "Native publication is unavailable or changed") from exc
         return _receipt(
             self, entity_id=job.id,
@@ -3324,6 +3304,7 @@ class NativeBinderJobResultAdapter:
                 "model_id": job.model_id, "mode": job.mode,
                 "artifact_authority": "verified_native_publication",
                 "result_contract_id": "native_binder_job_result_v1",
+                **({"record_count": record_count} if record_count is not None else {}),
             },
         )
 
@@ -3336,7 +3317,6 @@ _TYPED_CORE_RESULT_MODELS = {
 
 for _adapter in (
     CoreProteinResultAdapter(),
-    Rfd3LocalRedesignAdapter(),
     ConformationalMappingProtenixAdapter(),
     ConformationalMappingConfornetsAdapter(),
     MolecularDynamicsResultAdapter(),
@@ -3373,3 +3353,14 @@ for _model_id in sorted(_TYPED_CORE_RESULT_MODELS):
 
 for _model_id in sorted(NativeBinderJobResultAdapter._MODES):
     registry.register(NativeBinderJobResultAdapter(_model_id))
+
+# Historical normalized child Plans used the launch adapter ID as their result
+# adapter. Keep that exact identity readable, backed by native publications.
+for _model_id in ("proteinmpnn", "fampnn", "caliby_experimental", "ligandmpnn", "protonpottsmpnn"):
+    _adapter = NativeBinderJobResultAdapter(_model_id)
+    _adapter.adapter_id = f"bms.core-job.{_model_id}.adapter.v1"
+    registry.register(_adapter)
+
+from services.family_msa.project_adapters import FamilyMsaResultAdapter
+registry.register(FamilyMsaResultAdapter('family_msa_protein', 'protein_in_silico'))
+registry.register(FamilyMsaResultAdapter('family_msa_nucleic', 'ngs_molbio'))

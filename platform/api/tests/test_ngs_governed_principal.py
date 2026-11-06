@@ -68,7 +68,7 @@ def test_unauthenticated_principal_is_rejected(monkeypatch: pytest.MonkeyPatch) 
 def test_governed_hierarchy_gate_is_scoped_to_canonical_fastq_qc() -> None:
     from routers import ngs_alignment_sessions as routes
 
-    gate = cast(Any, getattr(routes, "_requires_governed_ont_hierarchy", None))
+    gate = cast(Any, getattr(routes, "_is_canonical_fastq", None))
     assert callable(gate)
     canonical = type("Job", (), {
         "model_id": "nanopore",

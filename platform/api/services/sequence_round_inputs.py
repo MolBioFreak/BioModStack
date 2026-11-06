@@ -30,6 +30,10 @@ def normalize_request(request, registry=None):
     from services.sequence_designer_settings import normalize_historical_sequence_settings
     registry = registry or get_registry()
     result = SequenceDesignRequest.model_validate(request).model_copy(deep=True)
+    if result.schema_version == 2:
+        # Preserve supplied keys until the source/placement is known. The shared
+        # planner normalizes native settings once, before retaining child intent.
+        return result
     if result.model_id == 'caliby_experimental':
         result.params = CalibySettings.model_validate(result.params).model_dump(mode='json')
         # Empty means native defaults; preserve explicitly supplied empty fields.

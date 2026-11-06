@@ -7,6 +7,8 @@ import { deckResources, deckStations, type BioXpDeckSelection } from '../lib/bio
 import { BioXpSchemaVariantContext } from './BioXpSchemaInput';
 import { MethodFields, object } from './BioXpMethodFields';
 import './BioXpMethodPipettingEditor.css';
+import { BioXpTransferSpeeds } from './BioXpTransferSpeeds';
+import { BioXpLiquidDetection } from './BioXpLiquidDetection';
 
 const scalar = (value: unknown) => typeof value === 'string' || typeof value === 'number' ? value : '';
 const display = (value: unknown): string => value === undefined ? 'Not set' : typeof value === 'string' ? value || 'Blank' : JSON.stringify(value);
@@ -47,6 +49,7 @@ export function BioXpMethodPipettingEditor({ node, onChange, catalog, selection,
             <label>Station<select aria-label="Move station" value={station?.id ?? ''} onChange={e => { const target = deckStations.find(s => s.id === e.target.value); if (target?.locationId != null) patch({ location_id: target.locationId }); }}><option value="">{inputs.location_id != null ? `Saved location ${String(inputs.location_id)}` : 'Choose a station…'}</option>{deckStations.filter(s => s.locationId != null).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label>
             <label>Reference well<input aria-label="Move reference well" value={scalar(inputs.well)} onChange={e => patch({ well: e.target.value })} /></label>
             <label>Move height<select aria-label="Move height" value={flag} onChange={e => patch({ position_flag: e.target.value })}><option value="">Choose height…</option><option value="0">Clearance height</option><option value="1">Calibrated high</option><option value="2">Calibrated low</option>{flag !== '' && !['0', '1', '2'].includes(String(flag)) && <option value={flag}>Saved value: {flag}</option>}</select></label>
+            <label>Movement<select aria-label="Movement" value={inputs.movement === undefined ? 'full' : String(inputs.movement)} onChange={e => patch({ movement: e.target.value })}><option value="full">Full</option><option value="fast">Fast lane</option>{inputs.movement !== undefined && !['full', 'fast'].includes(String(inputs.movement)) && <option value={String(inputs.movement)}>Saved value: {String(inputs.movement)}</option>}</select></label>
             {advanced}
         </section>;
     }
@@ -55,6 +58,10 @@ export function BioXpMethodPipettingEditor({ node, onChange, catalog, selection,
     const references = (side: typeof endpoints[number]): unknown[] => Array.isArray(object(inputs[side]).wells) ? object(inputs[side]).wells as unknown[] : [];
     const editEndpoint = (side: typeof endpoints[number], change: MethodValue) => patch({ [side]: { ...object(inputs[side]), ...change } });
     const channels = Array.isArray(inputs.channels) ? inputs.channels : [];
+    const deckPlan = object(workspace.method.deck_plan);
+    const materials = (Array.isArray(deckPlan.materials) ? deckPlan.materials as MethodValue[] : []).map(object);
+    const assignments = (Array.isArray(deckPlan.assignments) ? deckPlan.assignments as MethodValue[] : []).map(object);
+    const planLabware = (Array.isArray(deckPlan.labware) ? deckPlan.labware as MethodValue[] : []).map(object);
     const volumeEditable = inputs.volume_ul === undefined || typeof inputs.volume_ul === 'string' || typeof inputs.volume_ul === 'number';
     const classResolved = transferMode(node) === 'class';
     const recipe = object(inputs.recipe);
@@ -63,7 +70,6 @@ export function BioXpMethodPipettingEditor({ node, onChange, catalog, selection,
     const recipeEditable = (inputs.recipe === undefined || inputs.recipe !== null && typeof inputs.recipe === 'object' && !Array.isArray(inputs.recipe) && !recipe.expr) && (recipe.mode === undefined || typeof recipe.mode === 'string');
     return <section className="bioxp-transfer-scene" aria-label="Transfer editor">
         <label>Transfer mode<select aria-label="Transfer mode" value={transferMode(node)} onChange={e => onChange(switchTransferMode(node, e.target.value as 'manual' | 'class'))}><option value="manual">Manual speeds</option><option value="class">Liquid class &amp; recipe</option></select></label>
-        {classResolved && <RepairWorkspaceClassSelection owner={node} value={inputs.liquid} schema={inputSchema?.oneOf?.find(s => s.properties?.liquid)?.properties?.liquid} onChange={liquid => patch({ liquid })} />}
         <div className="bioxp-transfer-link">{endpoints.map((side, index) => {
             const current = object(inputs[side]);
             const station = deckStations.find(s => s.id === current.station);
@@ -75,21 +81,31 @@ export function BioXpMethodPipettingEditor({ node, onChange, catalog, selection,
             const profile = (Array.isArray(workspace.dependencies.labware_profiles) ? workspace.dependencies.labware_profiles as MethodValue[] : []).map(object).find(p => labware.length === 1 && p.id === labware[0].profile_id);
             const footprints = wells.map(well => transferFootprint(well, channels, profile?.native_addressing));
             const columns = resource ? Math.max(...resource.points.map(p => p.column)) + 1 : 0;
+            const byMaterial = Object.hasOwn(current, 'material_id');
+            const material = materials.find(m => m.id === current.material_id);
+            const materialLabware = byMaterial ? [...new Set(assignments.filter(a => a.material_id === current.material_id).map(a => String(a.labware_id)))] : [];
             return <div className="bioxp-transfer-endpoint" key={side}>
                 {index === 1 && <span className="bioxp-transfer-arrow" aria-hidden="true">→</span>}
-                <header><small>{title}</small><h3>{endpointLabels?.[side] || station?.label || display(current.station)}</h3><span>{wells.length} references</span></header>
-                {resource ? <div className="bioxp-transfer-plate" role="group" aria-label={`${title} wells`} style={{ gridTemplateColumns: `1.2em repeat(${columns}, minmax(0, 1fr))` }}>
+                <header><small>{title}</small><h3>{byMaterial ? String(material?.name || current.material_id || 'Choose material') : endpointLabels?.[side] || station?.label || display(current.station)}</h3><span>{byMaterial ? 'by material' : `${wells.length} references`}</span></header>
+                <div className="bioxp-endpoint-mode" role="group" aria-label={`${title} by`}><button type="button" aria-pressed={byMaterial} onClick={() => { if (!byMaterial) patch({ [side]: { material_id: material?.id ?? materials[0]?.id ?? '', ...(typeof current.labware_id === 'string' ? { labware_id: current.labware_id } : {}) } }); }}>Material</button><button type="button" aria-pressed={!byMaterial} onClick={() => { if (byMaterial) { const rest = { ...current }; delete rest.material_id; patch({ [side]: { station: '', location_id: '', wells: [], ...rest } }); } }}>Wells</button></div>
+                {byMaterial && <div className="bioxp-endpoint-material"><label>{title} material<select aria-label={`${title} material`} value={String(current.material_id ?? '')} onChange={e => patch({ [side]: { ...current, material_id: e.target.value } })}><option value="">Choose material…</option>{!!current.material_id && !material && <option value={String(current.material_id)}>Saved: {String(current.material_id)}</option>}{materials.map(m => <option key={String(m.id)} value={String(m.id)}>{String(m.name || m.id)}</option>)}</select></label>
+                    {materialLabware.length > 1 && <label>{title} labware<select aria-label={`${title} material labware`} value={String(current.labware_id ?? '')} onChange={e => { const next = { ...current }; if (e.target.value) next.labware_id = e.target.value; else delete next.labware_id; patch({ [side]: next }); }}><option value="">Choose which labware…</option>{materialLabware.map(id => <option key={id} value={id}>{String(planLabware.find(l => l.id === id)?.name || id)}</option>)}</select></label>}
+                    <small>{materials.length ? 'Wells come from the starting deck when the method is compiled.' : 'Add samples or reagents to the starting deck first.'}</small></div>}
+                {byMaterial ? null : resource ? <div className="bioxp-transfer-plate" role="group" aria-label={`${title} wells`} style={{ gridTemplateColumns: `1.2em repeat(${columns}, minmax(0, 1fr))` }}>
                     <span />{Array.from({ length: columns }, (_, i) => <small key={i}>{i + 1}</small>)}
                     {Array.from({ length: 8 }, (_, row) => <div className="bioxp-transfer-row" key={row}><small>{String.fromCharCode(65 + row)}</small>{resource.points.filter(p => p.row === row).map(p => <button key={p.well} type="button" aria-label={`${title} well ${p.well}`} aria-pressed={selection.station === resource.id && selection.wells.includes(p.well)} data-authored={wells.includes(p.well)} data-footprint={footprints.flatMap(rows => rows ?? []).some(row => row.well === p.well)} title={`${p.well} · ${footprints.flatMap((rows, pair) => (rows ?? []).filter(row => row.well === p.well).map(row => `pair ${pair + 1} P${row.channel + 1}`)).join(', ')}${wells.includes(p.well) ? ` · reference ${wells.indexOf(p.well) + 1}` : ''}`} onClick={() => onSelect({ station: resource.id, wells: selection.station !== resource.id ? [p.well] : selection.wells.includes(p.well) ? selection.wells.filter(w => w !== p.well) : [...selection.wells, p.well] })}><span>{wells.includes(p.well) ? wells.indexOf(p.well) + 1 : ''}</span></button>)}</div>)}
                 </div> : <div className="bioxp-transfer-unmapped">{display(inputs[side])}<p>Select a deck station to view its wells.</p></div>}
-                {nativeStation?.id !== current.station && <small>Retained native endpoint: {nativeStation?.label ?? 'Unknown location'} ({display(current.location_id)}). Planning label is unchanged.</small>}
+                {!byMaterial && nativeStation?.id !== current.station && <small>Retained native endpoint: {nativeStation?.label ?? 'Unknown location'} ({display(current.location_id)}). Planning label is unchanged.</small>}
                 <ol aria-label={`${title} per-channel footprints`}>{wells.map((well, i) => <li key={i}>Pair {i + 1} · reference {display(well)}: {footprints[i] ? footprints[i]!.map(p => `P${p.channel + 1} ${p.well}${resource && !resource.points.some(point => point.well === p.well) ? ' (outside displayed plate)' : ''}`).join(', ') : 'Mapping unavailable'} · {display(inputs.volume_ul)} µL per channel</li>)}</ol>
                 <p className="bioxp-transfer-reference-summary">{wells.length ? wells.map(display).join(' → ') : 'No authored references'}<small>{station?.label || display(current.station)} · location {display(current.location_id)}</small></p>
-                <div className="bioxp-transfer-tools"><button type="button" disabled={selectedStation?.locationId == null} onClick={() => { if (selectedStation?.locationId != null) editEndpoint(side, { station: selectedStation.id, location_id: selectedStation.locationId, wells: [...selection.wells] }); }}>Use deck selection as {side}</button><button type="button" disabled={typeof current.station !== 'string'} onClick={() => onSelect({ station: String(current.station), wells: wells.filter((w): w is string => typeof w === 'string') })}>Show {side} on deck</button></div>
+                <div className="bioxp-transfer-tools"><button type="button" disabled={selectedStation?.locationId == null} onClick={() => { if (selectedStation?.locationId != null) { const rest = { ...current }; delete rest.material_id; patch({ [side]: { ...rest, station: selectedStation.id, location_id: selectedStation.locationId, wells: [...selection.wells] } }); } }}>Use deck selection as {side}</button><button type="button" disabled={typeof current.station !== 'string'} onClick={() => onSelect({ station: String(current.station), wells: wells.filter((w): w is string => typeof w === 'string') })}>Show {side} on deck</button></div>
             </div>;
         })}</div>
         <div className="bioxp-transfer-selection" role="status">Selection: {selectedStation?.label || selection.station || 'None'} · {selection.wells.join(', ') || 'No wells'}<small>Click wells to select; use an endpoint button to adopt. Filled wells and numbers show authored order.</small></div>
         <div className="bioxp-transfer-amount"><label>Volume per channel<div><input aria-label="Volume per channel (µL)" inputMode="decimal" value={scalar(inputs.volume_ul)} disabled={!volumeEditable} placeholder={volumeEditable ? '—' : 'Retained'} onChange={e => patch({ volume_ul: e.target.value })} /><span>µL / channel / pair</span></div></label><div><strong>Ordered head-reference pairs</strong><ol aria-label="Transfer pairs">{Array.from({ length: Math.max(references('source').length, references('destination').length) }, (_, i) => <li key={i}>{display(references('source')[i])} → {display(references('destination')[i])}</li>)}</ol><small>No source broadcasting. Each source pairs with the destination at the same index.</small>{!volumeEditable && <small>Volume: {display(inputs.volume_ul)} · edit in Advanced.</small>}</div></div>
+        {classResolved && <RepairWorkspaceClassSelection owner={node} value={inputs.liquid} schema={inputSchema?.oneOf?.find(s => s.properties?.liquid)?.properties?.liquid} onChange={liquid => patch({ liquid })} />}
+        {classResolved && !!object(inputs.liquid).liquid_class && <BioXpTransferSpeeds liquid={object(inputs.liquid)} recipe={recipe} onLiquid={liquid => patch({ liquid })} onRecipe={next => patch({ recipe: next })} />}
+        {classResolved && <BioXpLiquidDetection value={inputs.liquid_detection} onChange={next => patch({ liquid_detection: next })} />}
         <div className="bioxp-transfer-motion" aria-label="Pipetting speeds and heights">
             {!classResolved && (['aspirate_speed', 'dispense_speed'] as const).map(key => { const title = key === 'aspirate_speed' ? 'Aspirate speed' : 'Dispense speed'; const editable = inputs[key] === undefined || typeof inputs[key] === 'string' || typeof inputs[key] === 'number'; return <label key={key}>{title}<input aria-label={title} inputMode="decimal" value={scalar(inputs[key])} disabled={!editable} placeholder={editable ? 'Not set' : 'Retained value — see Advanced'} onChange={e => patch({ [key]: e.target.value })} /></label>; })}
             {endpoints.map(side => {

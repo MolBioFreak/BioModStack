@@ -88,6 +88,7 @@ from migrations.enable_multiple_execution_targets import migrate as migrate_mult
 from run_migration import migrate as migrate_stage_tracking
 from migrations.add_design_producer_identity import migrate as migrate_design_producer_identity
 from migrations.add_user_template_revisions import migrate as migrate_user_template_revisions
+from migrations.allow_ont_job_move_source_fresh_attempts import migrate as allow_ont_job_move_source_fresh_attempts
 
 
 @dataclass
@@ -166,6 +167,7 @@ MIGRATIONS: List[Migration] = [
     Migration(46, "enable_multiple_execution_targets", migrate_multiple_execution_targets),
     Migration(47, "add_design_producer_identity", migrate_design_producer_identity),
     Migration(48, "add_user_template_revisions", migrate_user_template_revisions),
+    Migration(49, "allow_ont_job_move_source_fresh_attempts", allow_ont_job_move_source_fresh_attempts),
 ]
 
 

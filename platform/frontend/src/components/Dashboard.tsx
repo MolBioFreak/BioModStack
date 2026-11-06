@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useJobCategoryVisibility } from '../lib/useJobCategoryVisibility';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchJobs, fetchJobById, cancelJob, resubmitJob, fetchJobLogs, resumeJob, deleteJobPermanently, forceRunJob, fetchExecutionTargets } from '../lib/api';
@@ -179,7 +180,7 @@ export function Dashboard() {
     const [offset, setOffset] = useState(0);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
-    const [showNgsJobs, setShowNgsJobs] = useState(true);
+    const [categoryVisibility, setCategoryVisibility] = useJobCategoryVisibility('dashboard', { ngs: true, alignments: true });
     // Debug mode is read from localStorage (toggled via Layout's DebugMenu or browser dev tools)
     const debugMode = (() => {
         try {
@@ -197,9 +198,10 @@ export function Dashboard() {
     };
 
     const { data: jobsData, isLoading: jobsLoading, isError: jobsError, dataUpdatedAt: jobsUpdatedAt, refetch: retryJobs } = useQuery({
-        queryKey: ['jobs', 'dashboard-summary', search, statusFilter, showNgsJobs, offset],
+        queryKey: ['jobs', 'dashboard-summary', search, statusFilter, categoryVisibility.ngs, categoryVisibility.alignments, offset],
         queryFn: ({ queryKey, signal }) => fetchJobs({ limit: 100, offset, q: search || undefined,
-            status: statusFilter === 'all' ? undefined : statusFilter, exclude_ngs: !showNgsJobs, summary: true },
+            status: statusFilter === 'all' ? undefined : statusFilter, exclude_ngs: !categoryVisibility.ngs,
+            exclude_alignments: !categoryVisibility.alignments, summary: true },
             queryClient.getQueryData<Awaited<ReturnType<typeof fetchJobs>>>(queryKey), signal),
         refetchInterval: (query) => jobPollingInterval(3000, query),
         refetchIntervalInBackground: false,
@@ -287,6 +289,10 @@ export function Dashboard() {
 
     const handleResume = async (job: Job) => {
         const detailedJob = await hydrateJobForDetail(job);
+        if (detailedJob.status === 'awaiting_input' && detailedJob.awaiting_payload?.component_checkpoint) {
+            navigate(`/designs/${encodeURIComponent(detailedJob.id)}`);
+            return;
+        }
         if (detailedJob.status === 'awaiting_input' && detailedJob.awaiting_payload?.resume_direct) {
             setResumeDialogMode('resume');
             resumeMutation.mutate({ jobId: detailedJob.id });
@@ -315,6 +321,10 @@ export function Dashboard() {
             return;
         }
 
+        if (detailedJob.status === 'awaiting_input' && detailedJob.awaiting_payload?.component_checkpoint) {
+            navigate(`/designs/${encodeURIComponent(detailedJob.id)}`);
+            return;
+        }
         if (isLegacyRf3StructureJob(detailedJob)) {
             alert('RF3 is available for historical result review only. New Structure submissions and retries use current predictors.');
             return;
@@ -952,8 +962,8 @@ export function Dashboard() {
                     onSearchChange={value => { setSearch(value); setOffset(0); }}
                     status={statusFilter}
                     onStatusChange={value => { setStatusFilter(value); setOffset(0); }}
-                    showNgsJobs={showNgsJobs}
-                    onShowNgsJobsChange={value => { setShowNgsJobs(value); setOffset(0); }}
+                    categoryVisibility={categoryVisibility}
+                    onCategoryVisibilityChange={value => { setCategoryVisibility(value); setOffset(0); }}
                 />
 
                 {jobsError && <p role="alert" className="mb-3 text-amber-300">

@@ -25,12 +25,28 @@ RANGE_BYTES = 8 * 1024 * 1024
 PARALLEL_RANGES = 8
 REQUEST_TIMEOUT = 30
 RANGE_TIMEOUT = 120
-TRANSFER_TIMEOUT = 1800
+TRANSFER_TIMEOUT = 1800  # Inactivity budget, renewed by contiguous read/write progress.
 MAX_ARTIFACT_BYTES = 10**12
 
 
 class TransferError(ValueError):
     """Fixed safe diagnostic only; never constructed from external prose."""
+
+    @property
+    def code(self):
+        value = str(self)
+        return value if value in SAFE_ERROR_CODES else "hf_acquisition_failed"
+
+
+SAFE_ERROR_CODES = frozenset({
+    "hf_source_expired", "hf_invalid_source", "hf_source_lifetime_exceeded",
+    "hf_transfer_timeout", "hf_transport_timeout", "hf_transport_failed",
+    "hf_authorization_failed", "hf_range_response_invalid",
+    "hf_range_length_mismatch", "hf_artifact_too_large",
+    "hf_partial_size_mismatch", "hf_write_failed", "hf_identity_mismatch",
+    "hf_unsafe_incoming_file", "hf_acquisition_busy",
+    "hf_incoming_identity_changed", "hf_acquisition_failed",
+})
 
 
 class SourceExpired(TransferError):
@@ -224,6 +240,7 @@ def download(fd, item, source):
             raise TransferError("hf_partial_size_mismatch")
         digest.update(data)
         remaining -= len(data)
+        deadline = time.monotonic() + TRANSFER_TIMEOUT
     received = 0
     # A rolling window bounds queued and retained data to 8 x 8MiB. Refill
     # after each contiguous write, not after the slowest range in a batch.
@@ -240,7 +257,10 @@ def download(fd, item, source):
                     futures.append(executor.submit(
                         _fetch_range, url, expiry, next_start, end, size, deadline))
                     next_start = end + 1
-                data = futures[0].result(timeout=max(0.001, deadline - time.monotonic()))
+                try:
+                    data = futures[0].result(timeout=max(0.001, deadline - time.monotonic()))
+                except TimeoutError:
+                    raise TransferError("hf_transfer_timeout") from None
                 _check_deadline(expiry, deadline)
                 view = memoryview(data)
                 while view:
@@ -251,6 +271,7 @@ def download(fd, item, source):
                 digest.update(data)
                 done += len(data)
                 received += len(data)
+                deadline = time.monotonic() + TRANSFER_TIMEOUT
                 # Release the consumed result before admitting its replacement.
                 futures.popleft()
                 del data, view

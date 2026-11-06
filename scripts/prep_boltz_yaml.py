@@ -5,62 +5,97 @@ from Bio import SeqIO
 import yaml
 
 def extract_chain_groups(pdb_path):
-    """Group chains by identical sequences, returns {sequence: [chain_ids]}"""
-    sequence_map = defaultdict(list)
-    
-    for record in SeqIO.parse(pdb_path, 'pdb-atom'):
-        chain_id = record.annotations.get('chain', '')
-        sequence = str(record.seq)
-        sequence_map[sequence].append(chain_id)
-    
-    return sequence_map
+    """Read polymer identity from residues, never from one-letter alphabets.
 
-def is_nucleic_acid_sequence(sequence):
-    """Check if a sequence is DNA/RNA based on content"""
-    nucleotide_chars = set('ATGCU')
-    sequence_upper = sequence.upper().replace('X', '')
-    if not sequence_upper:
-        return None
-    nucleotide_ratio = sum(1 for c in sequence_upper if c in nucleotide_chars) / len(sequence_upper)
-    if nucleotide_ratio > 0.8:
-        # Check for U (RNA) vs T (DNA)
-        if 'U' in sequence_upper and 'T' not in sequence_upper:
-            return 'rna'
-        return 'dna'
-    return None
+    Ordered entries avoid grouping separated chains across intervening entities.
+    Modified amino acids retain CCD identity alongside their parent sequence.
+    """
+    from Bio.PDB import PDBParser
+    from Bio.Data.PDBData import protein_letters_3to1, protein_letters_3to1_extended
+    groups = {}
+    model = next(PDBParser(QUIET=True).get_structure('input', pdb_path).get_models())
+    for chain in model:
+        residues = [r for r in chain if r.resname.strip() not in {'HOH', 'WAT'}]
+        if not residues:
+            continue
+        names = [r.resname.strip() for r in residues]
+        if all(n in {'DA', 'DC', 'DG', 'DT', 'DI', 'DN'} for n in names):
+            kind, sequence = 'dna', ''.join(n[1:] for n in names)
+            mods = ()
+        elif all(n in {'A', 'C', 'G', 'U', 'I', 'N'} for n in names):
+            kind, sequence = 'rna', ''.join(names)
+            mods = ()
+        else:
+            # Only residues with protein backbone CA belong to this polymer.
+            names = [r.resname.strip() for r in residues if 'CA' in r and ('N' in r or r.resname.strip() in protein_letters_3to1_extended)]
+            if not names:
+                continue
+            kind = 'protein'
+            sequence = ''.join(protein_letters_3to1_extended.get(n, 'X') for n in names)
+            mods = tuple((i, n) for i, n in enumerate(names, 1) if n not in protein_letters_3to1)
+        groups[(kind, sequence, mods, chain.id)] = [chain.id]
+    return groups
+
 
 def generate_yaml_config(chain_groups):
-    """Create YAML structure with combined chain IDs, detecting nucleic acids"""
+    """Legacy sequence-only callers are protein; typed PDB callers retain type."""
     sequences = []
-    for sequence, chain_ids in chain_groups.items():
-        mol_type = is_nucleic_acid_sequence(sequence)
-        
-        if mol_type == 'dna':
-            entry = {
-                'dna': {
-                    'id': sorted(chain_ids),
-                    'sequence': sequence
-                }
-            }
-        elif mol_type == 'rna':
-            entry = {
-                'rna': {
-                    'id': sorted(chain_ids),
-                    'sequence': sequence
-                }
-            }
+    for key, chain_ids in chain_groups.items():
+        kind, sequence, mods = key[:3] if isinstance(key, tuple) else ('protein', key, ())
+        entity = {'id': list(chain_ids), 'sequence': sequence}
+        if mods:
+            entity['modifications'] = [{'position': p, 'ccd': c} for p, c in mods]
+        if kind == 'protein':
+            entity['msa'] = 'empty'
+        sequences.append({kind: entity})
+    return {'version': 1, 'sequences': sequences}
+
+def candidate_yaml_config(pdb_path):
+    """Serialize the existing chemistry-aware candidate recipe to native Boltz.
+
+    CCD owns intra-residue chemistry; the recipe owns explicit cross-residue
+    connectivity and source ordering. No distance-based bonds or protonation.
+    Protein MSA remains explicitly empty for this no-MSA prep process.
+    """
+    from pathlib import Path
+    from prepare_protein_local_validator_input import build_contract
+
+    try:
+        contract = build_contract(Path(pdb_path), [])
+    except ValueError as exc:
+        # This shared prep also has historical nucleic-only callers; the
+        # Resequence recipe requires protein. Keep their existing behavior.
+        if 'PDB contains no supported protein residues:' not in str(exc):
+            raise
+        return generate_yaml_config(extract_chain_groups(pdb_path))
+    sequences = []
+    labels = {}
+    for index, component in enumerate(contract['components'], 1):
+        kind = component['molecule_type']
+        labels[str(index)] = component['chain_id']
+        entity = {'id': [component['chain_id']]}
+        if kind in {'protein', 'dna', 'rna'}:
+            entity['sequence'] = component['sequence']
+            if kind == 'protein':
+                entity['msa'] = 'empty'
+            modifications = component.get('modifications', [])
+            if modifications:
+                entity['modifications'] = [
+                    {'position': mod['ptmPosition'] if kind == 'protein' else mod['basePosition'],
+                     'ccd': (mod['ptmType'] if kind == 'protein' else mod['modificationType']).removeprefix('CCD_')}
+                    for mod in modifications]
         else:
-            # Protein chain
-            entry = {
-                'protein': {
-                    'id': sorted(chain_ids),
-                    'sequence': sequence,
-                    'msa': 'empty'
-                }
-            }
-        sequences.append(entry)
-    
-    return {'sequences': sequences}
+            kind = 'ligand'  # Boltz represents ions by their source CCD too.
+            entity['ccd'] = component['ccd']
+        sequences.append({kind: entity})
+    result = {'version': 1, 'sequences': sequences}
+    bonds = contract['protenix_input'][0].get('covalent_bonds', [])
+    if bonds:
+        result['constraints'] = [{'bond': {
+            f'atom{side}': [labels[bond[f'entity{side}']], int(bond[f'position{side}']), bond[f'atom{side}']]
+            for side in (1, 2)}} for bond in bonds]
+    return result
+
 
 def process_pdb_files(input_dir, output_dir):
     """Process PDB files with flexible chain handling"""
@@ -71,11 +106,7 @@ def process_pdb_files(input_dir, output_dir):
         if filename.endswith('.pdb'):
             pdb_path = os.path.join(input_dir, filename)
             
-            # Group chains by identical sequences
-            chain_groups = extract_chain_groups(pdb_path)
-            
-            # Generate YAML config
-            yaml_config = generate_yaml_config(chain_groups)
+            yaml_config = candidate_yaml_config(pdb_path)
             
             # Create output path
             yaml_filename = filename.replace('.pdb', '.yaml')

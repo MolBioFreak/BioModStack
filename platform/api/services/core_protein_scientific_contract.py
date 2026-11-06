@@ -24,7 +24,7 @@ SUPPORTED_CALLERS = MappingProxyType({
     **{(model, mode): "structure_prediction" for model in ("boltz2", "protenix") for mode in ("predict", "complex")},
     **{(model, "predict"): "structure_prediction" for model in ("esmfold2", "esmfold2_experimental")},
     **{("boltzgen", mode): "boltzgen" for mode in (
-        "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking", "nanobody_binder", "peptide_binder", "protein_binder")},
+        "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking", "nanobody_binder", "peptide_binder", "protein_binder", "antibody_binder")},
     **{("boltzgen_child", mode): "boltzgen" for mode in ("nanobody_binder", "peptide_binder", "protein_binder")},
     **{("fampnn", mode): "fampnn" for mode in ("design", "fixed_backbone", "binder_design")},
     ("fampnn_child", "sequence_design"): "fampnn",
@@ -237,6 +237,30 @@ async def scientific_document(design, session):
     """Only publish a spatial document for a proven model-native dialect."""
     consumer = await native_spatial_consumer(design, session)
     return await consumer.scientific_document(design, session) if consumer is not None else None
+
+
+async def scientific_documents(designs, session):
+    """Resolve documents for one Job's designs with a single publication check.
+
+    Consumers that verify a whole producer publication expose a batch entry
+    point; without this a list of N designs re-verified the same publication N
+    times. Designs from different Jobs are resolved separately.
+    """
+    documents = {}
+    by_job: dict[str, list] = {}
+    for design in designs:
+        by_job.setdefault(design.job_id, []).append(design)
+    for group in by_job.values():
+        consumer = await native_spatial_consumer(group[0], session)
+        batch = getattr(consumer, "scientific_documents", None)
+        if batch is not None:
+            documents.update(await batch(group, session))
+            continue
+        for design in group:
+            documents[design.id] = (
+                await consumer.scientific_document(design, session) if consumer is not None else None
+            )
+    return documents
 
 
 async def verified_native_spatial_design(design, session, *, structure_only=False):

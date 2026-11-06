@@ -6,7 +6,7 @@ Provides CRUD operations for DNA/RNA sequences with feature annotations.
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing import Optional, List, Any, Literal
+from typing import Annotated, Optional, List, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func, case
 from datetime import datetime, timezone
@@ -79,6 +79,8 @@ class PrimerSchema(BaseModel):
     start: int
     end: int
     strand: int = 1
+    binding_status: Optional[Literal["needs_review"]] = None
+    binding_warning: Optional[str] = None
     tm: Optional[float] = None
     gc_percent: Optional[float] = None
     tm_algorithm: Optional[str] = None
@@ -589,6 +591,7 @@ def normalize_primer_payloads(
     primers: Optional[List[Any]],
     sequence_length: int,
     is_circular: bool,
+    sequence: Optional[str] = None,
 ) -> List[dict]:
     """Validate primer placement and serialize canonical binding-site segments."""
 
@@ -616,6 +619,15 @@ def normalize_primer_payloads(
                 status_code=400,
                 detail=f"Primer '{primer_name}' strand must be +1 or -1",
             )
+        if payload.get("binding_status") == "needs_review":
+            if start != 0 or end != 0 or payload.get("sites"):
+                raise HTTPException(status_code=400, detail=f"Unplaced primer '{primer_name}' must not retain binding coordinates")
+            payload.update(start=0, end=0, sites=[], strand=strand)
+            payload["binding_warning"] = payload.get("binding_warning") or "Review this primer binding after template changes."
+            for key in ("tm", "tm_algorithm", "tm_salt_correction", "tm_settings"):
+                payload[key] = None
+            normalized.append(payload)
+            continue
         if not (0 <= start < sequence_length and 0 <= end <= sequence_length):
             raise HTTPException(
                 status_code=400,
@@ -705,6 +717,25 @@ def normalize_primer_payloads(
         payload["end"] = end
         payload["strand"] = strand
         payload["sites"] = normalized_sites
+        if sequence is not None:
+            # An edit can leave legal coordinates that no longer describe this
+            # oligo. Preserve the ordered primer but withdraw its binding claim.
+            from Bio.Data.IUPACData import ambiguous_dna_values
+            from Bio.Seq import Seq
+
+            target = "".join(sequence[a:b] for a, b in expected_ranges).upper().replace("U", "T")
+            if strand == -1:
+                target = str(Seq(target).reverse_complement())
+            oligo = str(payload.get("sequence") or "").upper().replace("U", "T")
+            compatible = len(oligo) >= len(target) and bool(target) and all(
+                set(ambiguous_dna_values.get(a, "")) & set(ambiguous_dna_values.get(b, ""))
+                for a, b in zip(oligo[-len(target):], target)
+            )
+            if not compatible:
+                payload.update(start=0, end=0, sites=[], binding_status="needs_review",
+                               binding_warning="Template changes invalidated this primer binding. Review or re-add the primer.")
+                for key in ("tm", "tm_algorithm", "tm_salt_correction", "tm_settings"):
+                    payload[key] = None
         normalized.append(payload)
 
     return normalized
@@ -722,11 +753,20 @@ async def list_sequences(
     topology: str = Query("all", description="Filter by topology: all, circular, linear"),
     sort_by: str = Query("updated_at", description="Sort by updated_at, created_at, name, length, gc_content, or feature_count"),
     sort_desc: bool = Query(True, description="Sort descending"),
+    sequence_ids: Annotated[Optional[str], Query(max_length=10000, description="Comma-separated exact sequence IDs, at most 256")] = None,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
     """List all nucleotide sequences."""
-    feature_count = func.coalesce(func.json_array_length(NucleotideSequence.features), 0)
+    # Match the viewer's annotation count without hydrating sequence blobs.
+    # GenBank source records are retained metadata, not map annotations.
+    feature_entries = func.json_each(NucleotideSequence.features).table_valued("value", "type")
+    feature_count = (
+        select(func.count()).select_from(feature_entries)
+        .where(feature_entries.c.type == "object")
+        .where(func.lower(func.trim(func.coalesce(func.json_extract(feature_entries.c.value, "$.type"), ""))) != "source")
+        .correlate(NucleotideSequence).scalar_subquery()
+    )
     summary_fields = (
         "id", "name", "description", "sequence_type", "molecule_strandedness",
         "molecule_orientation", "is_circular", "length", "gc_content", "organism",
@@ -736,6 +776,12 @@ async def list_sequences(
         *(getattr(NucleotideSequence, field) for field in summary_fields),
         feature_count.label("feature_count"),
     )
+
+    if sequence_ids is not None:
+        exact_ids = sequence_ids.split(",")
+        if not exact_ids or len(exact_ids) > 256 or any(not item or item != item.strip() or len(item) > 100 for item in exact_ids):
+            raise HTTPException(status_code=422, detail="sequence_ids must contain 1–256 exact non-empty IDs")
+        query = query.where(NucleotideSequence.id.in_(exact_ids))
 
     normalized_type = sequence_type.strip().lower() if sequence_type else None
     if normalized_type in {"dna", "rna"}:
@@ -1075,6 +1121,7 @@ async def update_sequence(
         values["primers"] = normalize_primer_payloads(
             (data.primers or []) if "primers" in provided_fields else seq.primers,
             len(next_sequence), next_is_circular,
+            sequence=next_sequence if sequence_changed or type_changed or topology_changed else None,
         )
     if "analysis_tracks" in provided_fields:
         values["analysis_tracks"] = normalize_analysis_tracks(data.analysis_tracks, len(next_sequence))

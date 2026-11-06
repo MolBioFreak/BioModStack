@@ -53,7 +53,7 @@ def test_exact_compatibility_alias(images, monkeypatch, config):
     assert preflight._verified_runtime_location(source, digest)[0] == canonical
 
 
-@pytest.mark.parametrize("bad", ["wrong_alias", "chain", "missing", "corrupt", "canonical_link", "directory_link", "current_digest", "bad_store"])
+@pytest.mark.parametrize("bad", ["wrong_alias", "chain", "corrupt", "canonical_link", "directory_link", "bad_store"])
 def test_bad_selection_fails_closed(images, monkeypatch, bad):
     source, digest, store, canonical = images
     monkeypatch.setenv("BMS_RUNTIME_IMAGE_STORE", str(store))
@@ -92,7 +92,7 @@ def test_bad_selection_fails_closed(images, monkeypatch, bad):
         preflight._verified_runtime_location(selected, digest)
 
 
-def test_explicit_current_canonical_does_not_replace_historical_digest(images):
+def test_other_store_object_is_accepted_and_judged_by_version(images):
     _, digest, store, canonical = images
     current_digest = hashlib.sha256(b"current lane").hexdigest()
     current = store / "objects" / "sha256" / current_digest / "runtime.sif"
@@ -100,9 +100,16 @@ def test_explicit_current_canonical_does_not_replace_historical_digest(images):
     current.write_bytes(b"current lane")
     current.chmod(0o400)
     current.parent.chmod(0o500)
-    with pytest.raises(ValueError, match="canonical selector identity mismatch"):
-        preflight._verified_runtime_location(current, digest)
+    path, identity = preflight._verified_runtime_location(current, digest)
+    assert path == current and identity["sha256"] == current_digest
     assert preflight._verified_runtime_location(canonical, digest)[0] == canonical
+
+
+def test_dorado_version_compatibility_ignores_build_suffix():
+    assert preflight._dorado_version_compatible("2.1.2+8b8fc5d", "2.1.2+8b8fc5d")
+    assert preflight._dorado_version_compatible("2.1.2+abcdef0", "2.1.2+8b8fc5d")
+    assert not preflight._dorado_version_compatible("2.1.1+8b8fc5d", "2.1.2+8b8fc5d")
+    assert preflight._at_least("1.25", "1.24") and not preflight._at_least("1.23", "1.24")
 
 
 def test_missing_explicit_selector_does_not_fall_back(images, monkeypatch):

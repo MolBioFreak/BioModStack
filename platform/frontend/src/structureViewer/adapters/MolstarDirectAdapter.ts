@@ -289,6 +289,9 @@ interface DirectMolecularDynamicsEntry {
     readonly frameCount: number;
 }
 
+const WEBGL_INIT_RETRIES = 3;
+const WEBGL_INIT_RETRY_DELAY_MS = 150;
+
 export class MolstarDirectAdapterCancelledError extends Error {
     constructor() {
         super('Mol* adapter operation was cancelled');
@@ -342,7 +345,17 @@ export class MolstarDirectAdapter {
         this.target = target;
         adapterRegistry.set(target, this);
 
-        const result = await this.owner.initialize(target);
+        // Chrome can transiently refuse a WebGL context right after the previous
+        // viewer released its own (size/job switches rebuild the plugin). Retry
+        // the identical initialization a few times before reporting failure.
+        let result = await this.owner.initialize(target);
+        for (let retry = 0; retry < WEBGL_INIT_RETRIES; retry++) {
+            if (result.status !== 'ok' || result.plugin.canvas3d || this.disposed) break;
+            this.owner.dispose();
+            await new Promise<void>((resolve) => setTimeout(resolve, WEBGL_INIT_RETRY_DELAY_MS * (retry + 1)));
+            if (this.disposed) throw new MolstarDirectAdapterCancelledError();
+            result = await this.owner.initialize(target);
+        }
         if (result.status === 'cancelled') throw new MolstarDirectAdapterCancelledError();
         if (result.status === 'error') throw result.error;
         if (this.disposed) throw new MolstarDirectAdapterCancelledError();

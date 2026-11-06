@@ -744,7 +744,7 @@ def _validate_execution_receipt_v2(instance: Mapping[str, Any]) -> None:
     commands = instance["commands"]
     is_predict_batch = (
         instance.get("schema_version") == 3
-        and instance.get("execution_method") == "predict_batch"
+        and instance.get("execution_method") in {"predict_batch", "predict_selected_batch"}
     )
     if [entry["ordinal"] for entry in entries] != list(range(len(entries))):
         raise ContractValidationError("command plan ordinals are not contiguous and ordered")

@@ -58,6 +58,7 @@ class PreparedCandidate(NamedTuple):
     source_path: Path
     structure_map_path: Path
     staged_pdb_path: Path
+    selection_plan: Mapping[str, Any] | None = None
 
 
 def _read_batch(path: Path) -> dict[str, Any]:
@@ -226,7 +227,21 @@ def _default_prepare_record(
     )
     staged = work_root / f"{ordinal:04d}_{hashlib.sha256(str(record['candidate_id']).encode()).hexdigest()[:16]}.pdb"
     shutil.copyfile(source, staged)
-    return PreparedCandidate(record, request, source, structure_map, staged)
+    candidate = PreparedCandidate(record, request, source, structure_map, staged)
+    return candidate._replace(selection_plan=_selected_command_plan(candidate))
+
+
+def _selected_command_plan(candidate: PreparedCandidate) -> dict[str, Any]:
+    request = json.loads(candidate.request_path.read_bytes())
+    effective = _component.validate_v3_input_closure(
+        request, candidate.source_path.read_bytes(), candidate.structure_map_path.read_bytes()
+    )[1]
+    if effective.requested_settings.protein_selection.mode == "all_protein_entities":
+        return {}
+    plan = _runtime.compile_frustrampnn_command_plan(effective)
+    return {"command_plan": [{"chains": list(e.chains) if e.chains else None,
+                               "positions": list(e.positions) if e.positions else None}
+                              for e in plan.entries]}
 
 
 def _default_finalize_candidate(
@@ -306,6 +321,7 @@ def run_grouped_batch(
                     "invocation_id": item.record["invocation_id"],
                     "staged_pdb_path": os.fspath(item.staged_pdb_path.absolute()),
                     "source_sha256": hashlib.sha256(item.staged_pdb_path.read_bytes()).hexdigest(),
+                    **(item.selection_plan or {}),
                 }
                 for item in prepared
             ],
@@ -339,8 +355,9 @@ def run_grouped_batch(
         if (
             not isinstance(evidence, dict)
             or evidence.get("record_count") != len(prepared)
-            or evidence.get("model_load_count") != 1
-            or evidence.get("method_identity") != "frustrampnn.FrustraMPNN.predict_batch"
+            or type(evidence.get("model_load_count")) is not int
+            or evidence["model_load_count"] not in {0, 1}
+            or evidence.get("method_identity") not in {"frustrampnn.FrustraMPNN.predict_batch", "frustrampnn.FrustraMPNN.predict"}
             or evidence.get("upstream_sequential_semantics") != UPSTREAM_SEQUENTIAL_SEMANTICS
             or not isinstance(evidence.get("records"), list)
         ):

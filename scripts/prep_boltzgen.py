@@ -203,8 +203,9 @@ def preparation_parser():
     parser.add_argument("--scaffold_length", type=str, default="80-120", help="Scaffold length range")
     parser.add_argument("--num_designs", type=int, default=10, help="Number of designs")
     parser.add_argument("--binding_site_residues", type=str, help="Binding pocket specification (e.g. 'A:45-52,A:78-85')")
-    parser.add_argument("--catalytic_site", action="store_true", help="Include Mg2+ coordination for enzyme design")
+    parser.add_argument("--catalytic_site", action="store_true", help="Include an Mg2+ entity only; does not impose catalytic geometry or activity")
     parser.add_argument("--input_pdb", type=str, help="Existing protein backbone for docking mode")
+    parser.add_argument("--ligand_chains", type=str, help="Exact native chain IDs to retain from the ligand structure file")
     parser.add_argument("--ligand_pdb", type=str, help="Ligand structure with 3D coordinates")
     parser.add_argument("--protein_sequence", type=str, help="Protein sequence for co-folding")
     parser.add_argument("--dna_template_seq", type=str, help="DNA template sequence")
@@ -223,9 +224,10 @@ def preparation_parser():
     parser.add_argument("--cdr_h2_length", type=str, default="6-10", help="CDR-H2 length range (e.g., '6-10')")
     parser.add_argument("--cdr_h3_length", type=str, default="12-18", help="CDR-H3 length range (e.g., '12-18')")
     parser.add_argument("--target_pdb", type=str, help="Target structure (PDB or native mmCIF file)")
-    parser.add_argument("--generation_mode", choices=["protein_binder", "peptide_binder", "nanobody_binder"])
+    parser.add_argument("--generation_mode", choices=["protein_binder", "peptide_binder", "nanobody_binder", "antibody_binder", "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking"])
     parser.add_argument("--target_chains", type=str, help="Comma-separated exact native target chain IDs; omitted means all for generic generation")
     parser.add_argument("--target_binding_positions", type=str, help="Native 1-indexed chain-local target positions, e.g. A:2-5,b:8; usable with mmCIF")
+    parser.add_argument("--cyclic", action="store_true", help="Native cyclic protein/peptide chain")
     parser.add_argument("--binder_sequence", type=str, help="Native protein sequence/length template, not a VHH CDR template")
     parser.add_argument("--scaffold_path", type=str, help="Generic binder scaffold PDB/mmCIF")
     parser.add_argument("--scaffold_chain", type=str, help="Exact native scaffold chain ID")
@@ -304,8 +306,12 @@ def build_design_config(args, *, preview=False, input_texts=None):
     target_position_map = {}
     target_position_chain = None
     
+    # Legacy backbone binding controls address the supplied backbone when no
+    # separate target is given; retain native file coordinates and index mapping.
+    if getattr(args, 'generation_mode', None) == 'backbone_docking' and args.input_pdb and not args.target_pdb:
+        args.target_pdb = args.input_pdb
     # Target antigen entity (if provided)
-    generic_binder = getattr(args, 'generation_mode', None) in ('protein_binder', 'peptide_binder')
+    generic_binder = getattr(args, 'generation_mode', None) in ('protein_binder', 'peptide_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand')
     if args.target_pdb and (getattr(args, 'generation_mode', None) or getattr(args, 'target_chains', None)):
         # Native file entities retain coordinates, chain IDs and non-protein context.
         # Do not infer an antibody scaffold or assemble a seed complex.
@@ -389,14 +395,29 @@ def build_design_config(args, *, preview=False, input_texts=None):
             entities.append(target_entity)
 
     # New generic generation has its own native binder entity, not a VHH alias.
-    if generic_binder:
+    if getattr(args, 'generation_mode', None) == 'backbone_docking':
+        # Compatibility name: native conditioned complex sampling, not a docking
+        # optimizer. File conditioning retains coordinates; no design mask invented.
+        if args.input_pdb and args.input_pdb != args.target_pdb:
+            entities.append({'file': {'path': args.input_pdb}})
+        if args.ligand_pdb:
+            entities.append({'file': {'path': args.ligand_pdb, **({'include': [{'chain': {'id': chain.strip()}} for chain in args.ligand_chains.split(',') if chain.strip()]} if args.ligand_chains else {})}})
+        if smiles:
+            entities.append({'ligand': {'id': 'L', 'smiles': smiles}})
+    elif generic_binder:
         if args.scaffold_path:
             scaffold = {'path': args.scaffold_path,
                         'include': [{'chain': {'id': args.scaffold_chain}}],
                         'design': [{'chain': {'id': args.scaffold_chain, 'res_index': args.scaffold_design_ranges}}]}
+            if args.cyclic:
+                scaffold['add_cyclization'] = [{'chain': {'id': args.scaffold_chain}}]
             entities.append({'file': scaffold})
         else:
             entities.append({'protein': {'id': 'B', 'sequence': args.binder_sequence or scaffold_length}})
+            if args.cyclic:
+                entities[-1]['protein']['cyclic'] = True
+        if args.ligand_pdb:
+            entities.append({'file': {'path': args.ligand_pdb, **({'include': [{'chain': {'id': chain.strip()}} for chain in args.ligand_chains.split(',') if chain.strip()]} if args.ligand_chains else {})}})
         if smiles:
             entities.append({'ligand': {'id': 'L', 'smiles': smiles}})
     # Mode 4: DNA-Protein Complex Prediction
@@ -428,43 +449,16 @@ def build_design_config(args, *, preview=False, input_texts=None):
                 }
             })
             
-    # Mode 1: Backbone docking - use existing protein structure
-    elif args.input_pdb and exists(args.input_pdb):
-        print(f"Mode: Backbone docking with existing structure: {args.input_pdb}")
-        # BoltzGen requires BOTH path AND sequence for PDB-loaded entities
-        input_seq = extract_sequence_from_pdb(args.input_pdb, input_text=input_texts.get(str(args.input_pdb)))
-        if input_seq:
-            entities.append({
-                'protein': {
-                    'id': 'A',
-                    'path': args.input_pdb,
-                    'sequence': input_seq
-                }
-            })
-            print(f"  Backbone sequence: {len(input_seq)} AA")
-        else:
-            print("  Warning: Could not extract sequence from input PDB")
-            entities.append({
-                'protein': {
-                    'id': 'A',
-                    'path': args.input_pdb
-                }
-            })
-    # Mode 2: Scaffold around ligand - fixed ligand pose
-    elif args.ligand_pdb and exists(args.ligand_pdb):
-        print(f"Mode: Scaffold around fixed ligand: {args.ligand_pdb}")
-        entities.append({
-            'protein': {
-                'id': 'A',
-                'sequence': scaffold_length
-            }
-        })
-        entities.append({
-            'ligand': {
-                'id': 'L',
-                'path': args.ligand_pdb  # Use 'path' for PDB files
-            }
-        })
+    # Historical direct CLI inputs use the same native file entities as public modes.
+    elif args.input_pdb:
+        entities.append({'file': {'path': args.input_pdb}})
+        if args.ligand_pdb:
+            entities.append({'file': {'path': args.ligand_pdb, **({'include': [{'chain': {'id': chain.strip()}} for chain in args.ligand_chains.split(',') if chain.strip()]} if args.ligand_chains else {})}})
+        if smiles:
+            entities.append({'ligand': {'id': 'L', 'smiles': smiles}})
+    elif args.ligand_pdb:
+        entities.append({'protein': {'id': 'A', 'sequence': scaffold_length}})
+        entities.append({'file': {'path': args.ligand_pdb, **({'include': [{'chain': {'id': chain.strip()}} for chain in args.ligand_chains.split(',') if chain.strip()]} if args.ligand_chains else {})}})
     # Mode 5: Nanobody design (VHH)
     elif args.nanobody_framework or args.protocol == 'nanobody-anything' or getattr(args, 'generation_mode', None) == 'nanobody_binder':
         print(f"Mode: Nanobody (VHH) design")
@@ -561,7 +555,7 @@ def build_design_config(args, *, preview=False, input_texts=None):
     
     # Add Mg2+ for catalytic site if requested
     if args.catalytic_site:
-        print("Adding Mg2+ coordination for catalytic site")
+        print("Adding Mg2+ entity; no coordination geometry or catalytic activity is specified")
         entities.append({
             'ligand': {
                 'id': 'M',

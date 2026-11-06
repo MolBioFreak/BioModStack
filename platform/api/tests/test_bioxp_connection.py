@@ -658,6 +658,9 @@ def test_connection_and_active_monitor_are_status_only_and_stop_on_disconnect(
         assert service.snapshot().observation_fresh is True
         assert clients[0].status_only_probes >= 3
         assert clients[0].probes == 0  # connect/initial status monitor never collect
+        # One query-only hardware read per connection, flagged automatic so the robot yields to operator actions.
+        assert [c for c in clients[0].request_calls if c[0] == "collect_hardware_snapshot"] == [
+            ("collect_hardware_snapshot", {"json_data": {"automatic": True}})]
         assert not hasattr(service, "_snapshot_refresh_task")
 
         await service.disconnect()

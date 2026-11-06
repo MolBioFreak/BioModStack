@@ -1,5 +1,6 @@
 import type { Job } from './api';
 import { normalizeResultPolicy } from './executionPolicy';
+import { workflowKeyForOntWorkflowId } from './nanoporeWorkflow';
 
 export function normalizeNanoporeCloneState(job: Job | null): Record<string, unknown> | undefined {
     if (!job) return undefined;
@@ -18,28 +19,18 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         : legacyModel === 'hac' || legacyModel.includes('_hac@')
             ? 'hac'
             : 'sup';
-    const workflowId = String(p.ont_workflow_id || '');
-    const selectedWorkflow = workflowId === 'ont_construct_screening'
-        ? 'constructScreening'
-        : workflowId === 'ont_fastq_qc'
-            ? 'fastqQc'
-            : workflowId === 'wf_clone_validation' || p.run_assembly === true
-                ? 'clone'
-                : workflowId === 'ont_basecall_rna'
-                    ? 'rna'
-                    : workflowId === 'ont_methylation_analysis' || (p.modified_bases && p.modified_bases !== 'none')
-                        ? 'modified'
-                        : workflowId === 'ont_basecall_dna' && p.barcode_kit
-                            ? 'barcode'
-                            : workflowId === 'ont_basecall_dna' && p.dorado_basecall_mode === 'duplex'
-                                ? 'duplex'
-                                : (p.bam_path ? 'bamQc' : (p.fastq_path ? 'plasmidQc' : 'dna'));
+    const workflowId = String(p.ont_workflow_id || (job.mode === 'clone_validation'
+        ? 'wf_clone_validation' : job.mode ? `ont_${job.mode}` : ''));
+    // Resolve only by exact canonical id. An unknown id is reported, never guessed
+    // from params; the form then asks the operator to choose a workflow.
+    const selectedWorkflow = workflowKeyForOntWorkflowId(workflowId);
     return {
         execution_target_id: job.execution_target_id ?? null,
         execution_policy: job.execution_policy ?? {
             remote_result_policy: normalizeResultPolicy(p.remote_result_policy),
         },
         selectedWorkflow,
+        workflowUnrecognized: selectedWorkflow === null,
         ontWorkflowId: workflowId,
         jobName: job.name,
         molbioSequenceId: typeof molecular.sequence_id === 'string' ? molecular.sequence_id : '',
@@ -106,6 +97,7 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         singleRefSplitMaxQueryGapBp: p.single_ref_split_max_query_gap_bp ?? 500,
         emitSummary: p.emit_summary !== false,
         emitMoves: p.emit_moves !== false,
+        doradoDevice: typeof p.dorado_device === 'string' ? p.dorado_device : undefined,
         batchSize: p.dorado_batch_size ?? null,
         minQscore: p.min_qscore ?? 10,
         modkitFilterThreshold: p.modkit_filter_threshold ?? null,

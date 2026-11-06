@@ -235,6 +235,13 @@ def native_reference_fields(document, format):
     elif format == "boltz-authority":
         for source in document.get("input_files", {}):
             yield ("input_files", source), source, "input"
+    elif format == "protenix-complex":
+        for i, component in enumerate(document.get("components", [])):
+            for key, role in (("ligand_file", "ligand"), ("unpairedMsaPath", "msa"),
+                              ("pairedMsaPath", "msa"), ("templatesPath", "template")):
+                yield from field(component, key, ("components", i), role)
+            yield from field(component.get("msa", {}), "precomputed_msa_dir",
+                             ("components", i, "msa"), "msa")
     elif format == "boltz-complex":
         for i, component in enumerate(document.get("components", [])):
             yield from field(component, "msa_path", ("components", i), "msa")
@@ -244,6 +251,9 @@ def native_reference_fields(document, format):
     elif format == "boltz-yaml":
         for i, entry in enumerate(document.get("sequences", [])):
             yield from field(entry.get("protein", {}), "msa", ("sequences", i, "protein"), "msa")
+            ligand = entry.get("ligand", {})
+            if not ligand.get("smiles") and not ligand.get("ccd"):
+                yield from field(ligand, "path", ("sequences", i, "ligand"), "ligand")
         for i, entry in enumerate(document.get("templates", [])):
             for key in ("cif", "pdb"):
                 yield from field(entry, key, ("templates", i), "template")
@@ -252,6 +262,11 @@ def native_reference_fields(document, format):
         # and requested_* settings are provenance, never fresh input reads.
         for i, source in enumerate(document.get("native_input_sources", [])):
             yield from field(source, "path", ("native_input_sources", i))
+    elif format == "rfd3-generation":
+        yield from field(document.get("source", {}), "path", ("source",), "structure")
+    elif format == "laproteina-evaluation":
+        for key in ("source_directory", "config_path"):
+            yield from field(document, key, (), "native-snapshot")
     elif format == "protein-cad":
         for section, fields in {"laproteina": ("motif_pdb", "checkpoint_dir", "data_path"),
                                 "disco": ("input_json_path", "compiled_input_json", "ligand_sdf", "checkpoint_path", "hf_cache_path", "cutlass_path")}.items():
@@ -295,6 +310,10 @@ def bind_native_document(document, format, *, owner=None):
 
 def _format(document, path):
     if isinstance(document, dict):
+        if document.get("schema") == "bms.rfd3.generation.request.v1":
+            return "rfd3-generation"
+        if document.get("schema") == "laproteina_evaluation_request_v1":
+            return "laproteina-evaluation"
         if document.get('schema_version') == 1 and 'native_request' in document and 'upstream_commit' in document:
             return 'bc2-compilation'
         if document.get("schema") in {"bms_shape_design_request_v2", "bms_shape_design_request_v3"}:
@@ -325,6 +344,18 @@ def prepared_generation_source_fields(model_id, mode, params):
     Do not reacquire controller sources on replay; only these model-owned input
     slots are superseded. Other parameters retain existing discovery behavior.
     """
+    if model_id == 'laproteina' and params.get('laproteina_evaluation_input_closure'):
+        return {'laproteina_evaluation_request', 'native_sources'}
+    rfd4_selected = (model_id == 'rfd4_proteina' or
+                     (model_id == 'protein_modification_experimental' and
+                      mode == 'de_novo_design' and params.get('generator') == 'rfd4_proteina'))
+    if rfd4_selected and params.get('rfd4_input_closure'):
+        return {'rfd4_request', 'native_sources'}
+    complexa_selected = (model_id == 'complexa' or
+                        (model_id == 'protein_modification_experimental' and
+                         mode == 'de_novo_design' and params.get('generator') == 'complexa'))
+    if complexa_selected and params.get('complexa_request_dir'):
+        return {'complexa_request', 'native_sources'}
     if (model_id == 'protein_modification_experimental' and mode == 'shape_blueprint'
             and params.get('shape_request_path')):
         return {'shape_requested_sequence_settings', 'shape_requested_rfd3_settings',
@@ -455,7 +486,7 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
                         visit(row['processed_path'], path, ('processed_path', index),
                               lineage=(*lineage, logical_id))
             return
-        if path in visited or role == "runtime" or path.suffix.lower() not in {".json", ".yaml", ".yml"}:
+        if path in visited or role in {"runtime", "native-snapshot"} or path.suffix.lower() not in {".json", ".yaml", ".yml"}:
             return
         visited.add(path)
         if size > MAX_DOCUMENT_BYTES:
@@ -468,6 +499,8 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         else:
             document = json.loads(data)
         fmt = _format(document, path)
+        if model_id == "protenix" and fmt == "boltz-complex":
+            fmt = "protenix-complex"
         record["format"] = fmt
         for child_selector, child, child_role in native_reference_fields(document, fmt):
             if fmt == "cm-request" and child_role == "runtime-snapshot" and inventory_supplied:
@@ -490,7 +523,10 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
     # The CAD compiler consumes the public names and emits pcad_* slots.
     # Discover the same immutable documents after compilation so nested FILE_
     # references reach the existing portable binding owner, not a JSON rewrite.
-    keys.update({'pcad_laproteina_motif_pdb', 'pcad_disco_input_json_path',
+    if (model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
+            and params.get('generator', 'rfd3') == 'rfd3'):
+        keys.add('rfd3_generation_request_path')
+    keys.update({'pcad_laproteina_motif_pdb', 'pcad_disco_input_json_path', 'pcad_disco_jobs_source_path',
                  'pcad_disco_ligand_sdf'})
     if model_id in {'antibody_denovo', 'template_antibody_denovo'} and mode in {
             'antibody_denovo_pipeline', 'antibody_refinement_pipeline'}:
@@ -525,8 +561,61 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
             else:
                 for i, state in enumerate(params.get('structures', [])):
                     visit(state['path'], None, ('structures', i, 'path'))
+    if model_id in {'esmfold2', 'esmfold2_experimental'}:
+        # Preview sees public components before the compiler writes their native
+        # document. Reuse its typed MSA fields and the existing visit/roots owner;
+        # esmf_use_msa controls search, not explicitly supplied component inputs.
+        components = params.get('complex_components') or []
+        prefix = ('complex_components',)
+        if isinstance(components, dict):
+            key = 'components' if 'components' in components else 'sequences'
+            components = components.get(key, [])
+            prefix += (key,)
+        for selector, value, role in native_reference_fields(
+                {'components': components}, 'boltz-complex'):
+            visit(value, None, (*prefix, *selector[1:]), role)
+    if model_id == 'molecular_dynamics':
+        spec_input = (params.get('md_job_spec') or {}).get('input') or {}
+        if spec_input.get('structure'):
+            visit(spec_input['structure'], None, ('md_job_spec', 'input', 'structure'), 'native-snapshot')
+    snapshot = (params.get('md_source_provenance') or {}).get('snapshot') or {}
+    if snapshot.get('structure'):
+        # The collector consumes this executable derivative binding as well as
+        # md_job_spec.input.structure. Preserve the typed provenance around it.
+        visit(snapshot['structure'], None,
+              ('md_source_provenance', 'snapshot', 'structure'), 'native-snapshot')
+    original_snapshot = (params.get('md_source_provenance') or {}).get('original_snapshot') or {}
+    if original_snapshot.get('path'):
+        # Retain the original document independently of the selected MODEL
+        # derivative. Historical Jobs need not carry this optional metadata.
+        visit(original_snapshot['path'], None,
+              ('md_source_provenance', 'original_snapshot', 'path'), 'native-snapshot')
+    if (model_id == 'rfd4_proteina' or
+            (model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
+             and params.get('generator') == 'rfd4_proteina')) and params.get('rfd4_input_closure'):
+        # The model preparation owner has already retained each selected slot,
+        # including native state companions. Preserve this relative tree; never
+        # deserialize state or rediscover paths inside annotation/provenance.
+        visit(params['rfd4_input_closure'], None, ('rfd4_input_closure',), 'native-snapshot')
     if model_id == 'protein_modification_experimental' and mode == 'shape_blueprint':
         keys.add('shape_request_path')
+    # Prepared source trees are owned by the selected native generator, not
+    # arbitrary params on another model or experimental workflow.
+    generation_model = (params.get('generator')
+                        if model_id == 'protein_modification_experimental'
+                        and mode == 'de_novo_design' else model_id)
+    if model_id == 'laproteina' and params.get('laproteina_evaluation_input_closure'):
+        visit(params['laproteina_evaluation_input_closure'], None, ('laproteina_evaluation_input_closure',), 'native-snapshot')
+        keys.add('laproteina_evaluation_input_closure')
+    if generation_model == 'rfd4_proteina':
+        keys.add('rfd4_input_closure')
+    elif generation_model == 'complexa':
+        if params.get('complexa_request_dir'):
+            # Checked structures and explicitly consumed companions are already
+            # retained by Complexa's preparation owner. Source ledgers are
+            # provenance, not another native document/path discovery surface.
+            visit(params['complexa_request_dir'], None, ('complexa_request_dir',), 'native-snapshot')
+        keys.add('complexa_request_dir')
     if model_id == 'bindcraft2':
         keys.add('bc2_compilation')
     if model_id == 'ppiflow' and mode in {'protein_binder', 'antibody_binder', 'nanobody_binder'}:
@@ -543,9 +632,36 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
     keys.difference_update(prepared_generation_source_fields(model_id, mode, params))
     if model_id == "nanopore":
         keys.update({"fastq_path", "reference_fasta", "bam_path"})
+    # Explicit editor jobs retain their original document owner separately from
+    # the reversible selected-file fallback. Discover edited/new FILE_ members too.
+    jobs = params.get('pcad_disco_jobs_json', params.get('disco_jobs'))
+    disco_selected = (model_id == 'protein_cad_experimental' or (
+        model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
+    )) and params.get('pcad_backend', params.get('backend', params.get('generator', 'disco'))) == 'disco'
+    if disco_selected and isinstance(jobs, str):
+        jobs = json.loads(jobs)
+    if disco_selected:
+        fallbacks = {'pcad_disco_input_json_path', 'disco_input_json_path'}
+        ligands = {'pcad_disco_ligand_sdf', 'disco_ligand_sdf'}
+        keys.discard('pcad_disco_jobs_source_path')
+        if jobs is not None:
+            keys.difference_update(fallbacks | ligands)
+            if params.get('pcad_disco_jobs_source_path'):
+                # Retain original bytes, but edited jobs alone own active FILE_
+                # dependencies; removed original rows must not be enumerated.
+                visit(params['pcad_disco_jobs_source_path'], None,
+                      ('pcad_disco_jobs_source_path',), 'native-snapshot')
+        elif any(params.get(key) for key in fallbacks):
+            keys.difference_update(ligands)
+        elif params.get('pcad_task', params.get('design_task', params.get('task'))) != 'ligand_conditioned':
+            keys.difference_update(ligands)
     for key in sorted(keys & params.keys()):
         if params[key]:
             visit(params[key], None, (key,))
+    if jobs is not None and disco_selected:
+        owner = params.get('pcad_disco_jobs_source_path') or None
+        for selector, value, role in native_reference_fields(jobs, 'disco-json'):
+            visit(value, owner, ('pcad_disco_jobs_json', *selector), role)
     custody = params.get('ont_input_provenance') or {}
     if model_id == 'nanopore' and custody.get('source') == 'managed_fastq_launch_snapshot':
         received = next((record for record in records if record['selector'] == ['fastq_path']), None)

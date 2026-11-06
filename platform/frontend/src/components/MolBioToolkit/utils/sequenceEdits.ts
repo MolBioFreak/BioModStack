@@ -13,6 +13,12 @@ export interface SequenceEditPrimer extends RangeLike {
     sequence: string;
     sequenceType?: 'dna' | 'rna';
     strand: 1 | -1;
+    binding_status?: 'needs_review';
+    binding_warning?: string;
+    tm?: number;
+    tm_algorithm?: string;
+    tm_salt_correction?: string;
+    tm_settings?: unknown;
     sites?: Array<RangeLike & {
         strand: 1 | -1;
         tm?: number;
@@ -29,6 +35,7 @@ export interface SequenceEditData {
     primers?: SequenceEditPrimer[];
     translations?: unknown[];
     analysisTracks?: unknown[];
+    digestFragment?: unknown;
 }
 
 export type TransformOperation = 'reverse' | 'complement' | 'reverse_complement';
@@ -103,6 +110,9 @@ function withUpdatedSequenceData<T extends SequenceEditData>(
     features: FeatureRecord[],
     primers: SequenceEditPrimer[],
 ): T {
+    if (sequenceData.digestFragment && sequence !== sequenceData.sequence) {
+        throw new Error('This digest fragment has physical strand ends. Sequence edits require an explicit duplex/end-repair operation.');
+    }
     return {
         ...sequenceData,
         sequence,
@@ -116,22 +126,20 @@ function withUpdatedSequenceData<T extends SequenceEditData>(
     } as T;
 }
 
-function transformPrimerSequence(
-    primerSequence: string,
-    operation: TransformOperation,
-    sequenceType: SequenceEditData['sequenceType'],
-): string {
-    if (sequenceType === 'protein') {
-        return primerSequence;
-    }
-
-    if (operation === 'reverse') {
-        return complementSequence(primerSequence, sequenceType);
-    }
-    if (operation === 'complement') {
-        return primerSequence.toUpperCase().split('').reverse().join('');
-    }
-    return primerSequence.toUpperCase();
+export function invalidatePrimerBinding<T extends SequenceEditPrimer>(primer: T, reason: string): T {
+    // Keep the ordered oligo, but never let stale coordinates look like a binding site.
+    return {
+        ...primer,
+        start: 0,
+        end: 0,
+        sites: [],
+        binding_status: 'needs_review',
+        binding_warning: reason,
+        tm: undefined,
+        tm_algorithm: undefined,
+        tm_salt_correction: undefined,
+        tm_settings: undefined,
+    };
 }
 
 function transformFeaturesForSelection(
@@ -172,8 +180,18 @@ function remapPrimersAfterInsertion<T extends SequenceEditPrimer>(
     circular: boolean,
 ): T[] {
     return primers.flatMap((primer) => {
+        if (primer.binding_status === 'needs_review' || insertedLength === 0) return [primer];
+        const sites = primerSites(primer, sequenceLength, circular);
+        const insideSite = sites.some(site => site.start < position && position < site.end);
+        // Zero is inside an origin-spanning footprint, even though it is the
+        // boundary of each of its two serialized segments.
+        const insideOrigin = circular && primer.start > primer.end
+            && (position === 0 || position === sequenceLength);
+        if (insideSite || insideOrigin) {
+            return [invalidatePrimerBinding(primer, 'Template insertion changed this primer binding site. Review or re-add the primer.')];
+        }
         const remapped = remapRangeEntitiesAfterInsertion(
-            primerSites(primer, sequenceLength, circular),
+            sites,
             position,
             insertedLength,
         );
@@ -190,8 +208,13 @@ function remapPrimersAfterDeletion<T extends SequenceEditPrimer>(
     circular: boolean,
 ): T[] {
     return primers.flatMap((primer) => {
+        if (primer.binding_status === 'needs_review' || start === end) return [primer];
+        const sites = primerSites(primer, sequenceLength, circular);
+        if (sites.some(site => site.start < end && start < site.end)) {
+            return [invalidatePrimerBinding(primer, 'Template deletion or replacement changed this primer binding site. Review or re-add the primer.')];
+        }
         const remapped = remapRangeEntitiesAfterDeletion(
-            primerSites(primer, sequenceLength, circular),
+            sites,
             start,
             end,
         );
@@ -205,34 +228,32 @@ function transformPrimersForSelection<T extends SequenceEditPrimer>(
     start: number,
     end: number,
     operation: TransformOperation,
-    sequenceType: SequenceEditData['sequenceType'],
     sequenceLength: number,
     circular: boolean,
 ): T[] {
     return primers.map((primer) => {
+        if (primer.binding_status === 'needs_review') return primer;
         const sites = primerSites(primer, sequenceLength, circular);
+        if (!sites.some(site => site.start < end && start < site.end)) return primer;
         if (!sites.every((site) => site.start >= start && site.end <= end)) {
-            return primer;
+            return invalidatePrimerBinding(primer, 'A template transformation changed part of this binding site. Review or re-add the primer.');
+        }
+        if (operation !== 'reverse_complement') {
+            return invalidatePrimerBinding(primer, 'Template reversal or complementation requires a new binding check. The ordered primer sequence is unchanged.');
         }
         const nextSites = sites
+            .slice().reverse()
             .map((site) => ({
                 ...site,
-                ...(operation === 'complement'
-                    ? { start: site.start, end: site.end }
-                    : {
-                        start: start + (end - site.end),
-                        end: start + (end - site.start),
-                    }),
+                start: start + (end - site.end),
+                end: start + (end - site.start),
                 strand: (site.strand === 1 ? -1 : 1) as 1 | -1,
             }));
         const transformed = withPrimerSites(primer, nextSites);
         if (!transformed) {
             return primer;
         }
-        return {
-            ...transformed,
-            sequence: transformPrimerSequence(primer.sequence, operation, sequenceType),
-        } as T;
+        return transformed;
     });
 }
 
@@ -261,6 +282,7 @@ export function applyInsertEdit<T extends SequenceEditData>(
 ): T {
     const insertAt = clamp(position, 0, sequenceData.sequence.length);
     const insertedLength = insertedSequence.length;
+    if (insertedLength === 0) return sequenceData;
     const nextSequence =
         sequenceData.sequence.slice(0, insertAt) +
         insertedSequence +
@@ -286,6 +308,7 @@ export function applyDeleteEdit<T extends SequenceEditData>(
     end: number,
 ): T {
     const range = normalizeRange(start, end, sequenceData.sequence.length);
+    if (range.start === range.end) return sequenceData;
     const nextSequence = sequenceData.sequence.slice(0, range.start) + sequenceData.sequence.slice(range.end);
 
     return withUpdatedSequenceData(
@@ -311,6 +334,7 @@ export function applyReplaceEdit<T extends SequenceEditData>(
     replacementSequence: string,
 ): T {
     const range = normalizeRange(start, end, sequenceData.sequence.length);
+    if (sequenceData.sequence.slice(range.start, range.end) === replacementSequence) return sequenceData;
     const deleted = applyDeleteEdit(sequenceData, range.start, range.end);
     return applyInsertEdit(deleted, range.start, replacementSequence);
 }
@@ -342,7 +366,6 @@ export function applyTransformEdit<T extends SequenceEditData>(
             range.start,
             range.end,
             operation,
-            sequenceData.sequenceType,
             sequenceData.sequence.length,
             Boolean(sequenceData.circular),
         ),

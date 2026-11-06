@@ -1044,18 +1044,14 @@ def _validated_structure_map(
             "structure map has an ambiguous source entity for a normalized chain",
             location=("structure_map", "rows"),
         )
-    mapped_positions: dict[str, list[int]] = {}
-    for row in payload["rows"]:
-        if row["status"] == "mapped":
-            mapped_positions.setdefault(row["pdb_chain_id"], []).append(
-                row["model_position"]
-            )
+    from .structure import native_residue_positions
+    positions = native_residue_positions(payload["rows"])
     if any(
-        sorted(positions) != list(range(len(positions)))
-        for positions in mapped_positions.values()
+        row["model_position"] != positions[(row["pdb_chain_id"], row["pdb_residue_id"], row["pdb_insertion_code"])]
+        for row in payload["rows"] if row["status"] == "mapped"
     ):
         raise SourceResolutionError(
-            "structure map has stale or non-contiguous normalized model positions",
+            "structure map has stale native model positions",
             location=("structure_map", "rows"),
         )
     return payload, selected_altloc

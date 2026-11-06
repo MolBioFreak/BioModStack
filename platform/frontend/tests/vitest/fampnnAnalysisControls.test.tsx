@@ -29,22 +29,22 @@ it('rejects malformed saved overrides instead of silently dropping them', () => 
     expect(() => fampnnOverridePayload({ mutation: [{ chain_id: 'AB', author_number: 1, insertion_code: '' }] })).toThrow();
     expect(() => fampnnOverridePayload({ mutation: [{ chain_id: 'A', author_number: Number.NaN, insertion_code: '' }] })).toThrow();
 });
-it('mounted typed scope controls serialize omission, empty and insertion-code selection through submitJob', () => {
+it('mounted typed scope controls serialize omission, empty and insertion-code selection through submitJob', async () => {
     render(<Launcher />);
     const post = axios.create().post;
-    fireEvent.click(screen.getByText('Submit'));
+    await act(async () => { screen.getByText('Submit').click(); });
     expect(vi.mocked(post).mock.calls.at(-1)?.[1]).not.toHaveProperty('fampnn_analysis_overrides');
     fireEvent.click(screen.getByLabelText('Override mutation scope'));
-    fireEvent.click(screen.getByText('Submit'));
+    await act(async () => { screen.getByText('Submit').click(); });
     expect(vi.mocked(post).mock.calls.at(-1)?.[1]).toMatchObject({ fampnn_analysis_overrides: { mutation: [] } });
     fireEvent.change(screen.getByLabelText('mutation chain'), { target: { value: 'H' } });
     fireEvent.change(screen.getByLabelText('mutation author residue'), { target: { value: '-4' } });
     fireEvent.change(screen.getByLabelText('mutation insertion code'), { target: { value: 'A' } });
     fireEvent.click(screen.getByText('Add mutation residue'));
-    fireEvent.click(screen.getByText('Submit'));
+    await act(async () => { screen.getByText('Submit').click(); });
     expect(vi.mocked(post).mock.calls.at(-1)?.[1]).toMatchObject({ fampnn_analysis_overrides: { mutation: [{ chain_id: 'H', author_number: -4, insertion_code: 'A' }] } });
     expect(screen.getByText(/only narrow/i)).toBeTruthy();
     fireEvent.click(screen.getByLabelText('Override mutation scope'));
-    fireEvent.click(screen.getByText('Submit'));
+    await act(async () => { screen.getByText('Submit').click(); });
     expect(vi.mocked(post).mock.calls.at(-1)?.[1]).not.toHaveProperty('fampnn_analysis_overrides');
 });

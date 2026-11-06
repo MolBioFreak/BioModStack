@@ -45,7 +45,9 @@ def declaration_dependencies(declaration):
     if declaration.get('owner') == 'protein_local_redesign':
         local = {'input_pdb', 'design_chains', 'model_number', 'region_mode',
                  'redesign_ranges', 'context_chains', 'interface_cutoff',
-                 'region_padding', 'sequence_redesign_ranges', 'seq_method'}
+                 'region_padding', 'sequence_redesign_ranges', 'seq_method',
+                 'backbone_input_pdbs', 'fixed_positions', 'designable_positions',
+                 'region_manifest'}
         keys.update(local)
         keys.update('plr_' + key for key in local)
         keys.add('rfd3_request')
@@ -137,7 +139,7 @@ def _local_region(params):
     # manifest, generated PDB, correspondence or hash is predicted here.
     from services import aligned_error_utils  # shared scripts import owner
     from resolve_redesign_regions import (select_structure_lines, parse_pdb_residues_from_lines,
-        parse_chain_list, parse_manual_ranges, pick_interface_shell, residue_numbers_from_indices)
+        parse_chain_list, parse_author_ranges, pick_interface_shell, residue_keys_from_indices)
     source = params.get('input_pdb') or params.get('plr_input_pdb')
     def setting(name, default=None):
         ordinary, native = params.get(name), params.get('plr_' + name)
@@ -153,26 +155,64 @@ def _local_region(params):
     if chain not in records:
         raise ValueError('local redesign chain outside input domain')
     residues = records[chain]
-    available = {r.key.resnum for r in residues}
+    available = {r.key for r in residues}
     region_mode = setting('region_mode', 'manual_ranges')
     if region_mode == 'manual_ranges':
-        movable = parse_manual_ranges(setting('redesign_ranges', ''), chain, available)
+        movable = parse_author_ranges(setting('redesign_ranges', ''), chain, available)
     elif region_mode == 'interface_shell':
         context = parse_chain_list(setting('context_chains', ''))
         if not set(context) <= set(records):
             raise ValueError('local redesign context outside input domain')
         indices = pick_interface_shell(residues, [r for c in context for r in records[c]],
             cutoff=float(setting('interface_cutoff', 6.0)), padding=max(0, int(setting('region_padding', 2))))
-        movable = residue_numbers_from_indices(residues, indices)
+        movable = residue_keys_from_indices(residues, indices)
     else:
         raise ValueError('unsupported local redesign region mode')
     sequence = setting('sequence_redesign_ranges', '')
-    selected = parse_manual_ranges(sequence, chain, available) if sequence else movable
+    selected = parse_author_ranges(sequence, chain, available) if sequence else movable
     if not selected <= movable:
         raise ValueError('sequence redesign outside coordinate-edit region')
     domain = [f'{r.key.chain}:{r.key.resnum}:{r.key.icode}' for group in records.values() for r in group]
-    authorized = [f'{r.key.chain}:{r.key.resnum}:{r.key.icode}' for r in residues if r.key.resnum in selected]
+    authorized = [f'{r.key.chain}:{r.key.resnum}:{r.key.icode}' for r in residues if r.key in selected]
     return domain, authorized
+
+
+def _local_collection(params, overrides):
+    from services import aligned_error_utils  # shared scripts import owner
+    from prep_fampnn_constraints_from_spec import sequence_scope
+    import json
+
+    def setting(name, default=''):
+        value = params.get(name)
+        return value if value is not None else params.get('plr_' + name, default)
+
+    manifest_path = setting('region_manifest')
+    manifest = json.loads(Path(manifest_path).read_text()) if manifest_path else {}
+    fixed = setting('fixed_positions') or manifest.get('sequence_fixed_positions_spec',
+                                                     manifest.get('fixed_positions_spec', ''))
+    declaration = dict(schema_version=1, owner='protein_local_redesign', version=1,
+        declaration='sequence_redesign_positions_spec', input_domain=None,
+        sequence_design=None, summary=None, fixed=None,
+        summary_override=overrides.identities('summary'),
+        mutation_override=overrides.identities('mutation'),
+        allow_summary_override=True, require_full_coverage=False, inputs={})
+    # Exact staged input names survive PrepFAMPNN. Each has its own domain:
+    # neither the first source nor an alignment defines the other sources.
+    for source in sorted(Path(setting('backbone_input_pdbs')).iterdir()):
+        if source.suffix.lower() != '.pdb':
+            continue
+        domain = _domain(source)
+        authorized = sequence_scope(domain, setting('design_chains'), fixed,
+                                    setting('designable_positions'))
+        concrete = {k: deepcopy(v) for k, v in declaration.items() if k != 'inputs'}
+        concrete.update(input_domain=domain, sequence_design=authorized,
+                        summary=authorized, fixed=[v for v in domain if v not in authorized])
+        for field, permitted in [('summary', domain), ('mutation', authorized)]:
+            value = concrete[field + '_override']
+            if value is not None and not set(value) <= set(permitted):
+                raise ValueError(f'{field} override outside input domain')
+        declaration['inputs'][source.stem] = concrete
+    return declaration
 
 
 def compile_declaration(model_id, mode, params, overrides=None, *, parent=None):
@@ -202,6 +242,16 @@ def compile_declaration(model_id, mode, params, overrides=None, *, parent=None):
         if declaration.get('declaration') not in supported.get(declaration.get('owner'), set()):
             raise ValueError('unsupported parent FA-MPNN declaration')
         declaration = deepcopy(declaration)
+        if 'inputs' in declaration:
+            from types import SimpleNamespace
+            declaration['inputs'] = {name: compile_declaration(model_id, mode, params,
+                overrides.model_dump(), parent=SimpleNamespace(provenance={DECLARATION_KEY: concrete}))
+                for name, concrete in declaration['inputs'].items()}
+            for field in ('summary', 'mutation'):
+                value = overrides.identities(field)
+                if value is not None:
+                    declaration[field + '_override'] = value
+            return declaration
         # Child overrides cannot replace parent biological authority.
         for field in ('summary', 'mutation'):
             value = overrides.identities(field)
@@ -241,6 +291,16 @@ def compile_declaration(model_id, mode, params, overrides=None, *, parent=None):
         if overrides.summary is not None or overrides.mutation is not None:
             raise ValueError('FA-MPNN declaration owner unresolved for this caller')
         return None
+    if local and any(params.get(key) for key in (
+            'plr_final_candidate_dir', 'plr_sequence_input_pdbs', 'plr_validation_input_pdbs')):
+        # These native continuation branches publish retained candidates or run
+        # validators only. Do not reopen the original backbone collection to
+        # mint analysis authority for a FAMPNN stage that will not execute.
+        return None
+    if local and not (params.get('input_pdb') or params.get('plr_input_pdb')):
+        if params.get('backbone_input_pdbs') or params.get('plr_backbone_input_pdbs'):
+            return _local_collection(params, overrides)
+        return None  # Sequence/validation-only continuations do not run FAMPNN.
     if local:
         domain, authorized = _local_region(params)
         fixed = set(domain) - set(authorized)

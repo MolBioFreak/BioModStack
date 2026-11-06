@@ -343,6 +343,49 @@ def handoff_selection(
     )
 
 
+async def loop_candidate_selection(
+    session: AsyncSession, *, source_parent: Job, path: Path, normalize_copy,
+) -> SourceSelection:
+    """Bind a review candidate to its Job and, when published, exact Design.
+
+    Review gates can precede Design ingestion. Absence of a Design is not a
+    refusal; retain the Job, filename and original digest rather than inventing
+    one. A published Design is linked only by exact path or name AND bytes.
+    """
+    payload = _read_owned_structure(path, label="loop review candidate")
+    original_sha256 = hashlib.sha256(payload).hexdigest()
+    result = await session.execute(select(Design).where(Design.job_id == source_parent.id))
+    matches = []
+    for design in result.scalars():
+        source = Path(design.pdb_path) if design.pdb_path else None
+        if source is None:
+            continue
+        if source.resolve() == path.resolve():
+            matches.append(design)
+        elif source.name == path.name or design.name == path.stem:
+            try:
+                if _read_owned_structure(source, label="loop Design") == payload:
+                    matches.append(design)
+            except FrustraMPNNChildError:
+                pass  # A missing historical Design is not an advisory gate.
+    design = matches[0] if len(matches) == 1 else None
+    normalized = normalize_copy(payload)
+    return SourceSelection(
+        design_id=str(design.id) if design is not None else None,
+        source_job_id=str(source_parent.id), source_path=str(path),
+        source_bytes=normalized, source_sha256=hashlib.sha256(normalized).hexdigest(),
+        media_type="chemical/x-pdb", source_format="pdb",
+        producer_stage="resequence_loop_candidate",
+        producer_coordinates={
+            "candidate_filename": path.name,
+            "source_job_id": str(source_parent.id),
+            "source_design_id": str(design.id) if design is not None else None,
+            "original_source_sha256": original_sha256,
+            "normalization": "heavy_atom_copy",
+        },
+    )
+
+
 async def create_child_job(
     session: AsyncSession,
     *,
@@ -677,7 +720,11 @@ async def create_child_job(
             source_stage_job_id=source_parent_id,
             source_stage_family=(source_parent.stage_family or source_parent.model_id) if source_parent else "upload",
             source_stage_mode=(source_parent.stage_mode or source_parent.mode) if source_parent else "upload",
-            selection_source_type="selected_designs" if source_parent else "uploaded_structure",
+            selection_source_type=(
+                "selected_native_artifacts"
+                if trigger == "resequence_loop_candidate" and any(item.design_id is None for item in selections)
+                else "selected_designs" if source_parent else "uploaded_structure"
+            ),
             selection_source_job_id=source_parent_id,
             source_selection_count=len(lineage),
             stage_family="frustrampnn",
@@ -737,14 +784,15 @@ async def create_child_job(
 async def submit_selected_analysis(session, experiment_session, background_tasks, *,
                                    selections, source_parent, requested_settings,
                                    execution_target_id, destination_launch_context_id,
-                                   idempotency_key, response_context):
+                                   idempotency_key, response_context, trigger="binder_selected",
+                                   supersedes=None, partition=True, execution_target_supplied=True):
     from component_runtime import partition_ordered
     from experiment_services import new_id, scheduler_job_id_for_attempt
     from routers.jobs import submit_selected_child_jobs
     from fastapi import HTTPException
 
     batches = partition_ordered(selections, batching_enabled=requested_settings.batching_enabled,
-                                structures_per_job=requested_settings.structures_per_job)
+                                structures_per_job=requested_settings.structures_per_job) if partition else (selections,)
     children = []
     attempts = []
     try:
@@ -754,11 +802,11 @@ async def submit_selected_analysis(session, experiment_session, background_tasks
             if attempt_id:
                 attempts.append(attempt_id)
             children.append(await create_child_job(session, selections=batch,
-                source_parent=source_parent, trigger="binder_selected",
+                source_parent=source_parent, trigger=trigger, supersedes=supersedes,
                 requested_settings=requested_settings, preallocated_job_id=job_id,
                 prepare_only=True, execution_target_id=execution_target_id))
         return await submit_selected_child_jobs(
-            [prepared_child_request(child) for child in children], background_tasks,
+            [prepared_child_request(child, execution_target_supplied=execution_target_supplied) for child in children], background_tasks,
             session, experiment_session,
             destination_launch_context_id=destination_launch_context_id,
             preallocated_attempt_ids=attempts if destination_launch_context_id else None,
@@ -778,13 +826,16 @@ async def submit_selected_analysis(session, experiment_session, background_tasks
         raise
 
 
-def prepared_child_request(child: Job):
+def prepared_child_request(child: Job, *, execution_target_supplied: bool = True):
     from schemas import JobCreate
     # Scientific ancestry is retained in the child envelope/Job, not used for
     # placement inheritance by the generic submission owner.
-    return JobCreate(name=child.name, model_id=MODEL_ID, mode=MODE,
+    request = JobCreate(name=child.name, model_id=MODEL_ID, mode=MODE,
                      params=copy.deepcopy(child.params), sequence_length=child.sequence_length,
                      execution_target_id=child.execution_target_id)
+    if not execution_target_supplied:
+        request.model_fields_set.discard("execution_target_id")
+    return request
 
 
 def load_prepared_child(request) -> Job:
@@ -827,6 +878,7 @@ async def create_reanalysis_child(
     *,
     prior_child: Job,
     replacement_settings: FrustraMPNNRequestedSettings | None,
+    submission: dict[str, Any] | None = None,
 ) -> Job:
     envelope = (prior_child.params or {}).get(ENVELOPE_KEY)
     if prior_child.model_id != MODEL_ID or not isinstance(envelope, dict):
@@ -916,6 +968,13 @@ async def create_reanalysis_child(
     source_parent = await session.get(Job, source_parent_id) if source_parent_id else None
     if source_parent_id and source_parent is None:
         raise FrustraMPNNChildError("prior child source-parent authority no longer exists")
+    if submission is not None:
+        responses = await submit_selected_analysis(
+            session, selections=selections, source_parent=source_parent,
+            requested_settings=requested_settings, trigger="reanalyze",
+            supersedes=prior_child, partition=False, **submission,
+        )
+        return await session.get(Job, responses[0].id)
     return await create_child_job(
         session,
         selections=selections,

@@ -1,24 +1,30 @@
 import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { methodsGet, type MethodCatalog } from '../lib/bioxpMethods';
 import {
     bioXpErrorText, useBioXpWorkflowJobs, useBioXpWorkflowJob, useSubmitBioXpProtocol,
     useBioXpOperatorReceiptV2, type BioXpWorkflowJob,
 } from '../lib/bioxpClient';
 
-// OEM MP/MC script tokens, not a source-location override or admission authority.
-const objects = [
-    ['CV_OUTPUT', 'Output cover'], ['CV_REAGENT', 'Reagent cover'], ['CV_BIOSECURITY', 'Biosecurity cover'],
-    ['PL_POOL', 'Pool plate'], ['PL_OUTPUT', 'Output plate'], ['PL_REAGENT', 'Reagent plate'],
-] as const;
-const destinations = [
-    ['LOC_OC', 'Output station'], ['LOC_OCS', 'Output cover storage'],
-    ['LOC_RC', 'Reagent station'], ['LOC_RCS', 'Reagent cover storage'],
-    ['LOC_TC', 'Thermal cycler'], ['LOC_BSCS', 'Biosecurity cover storage'], ['LOC_MS', 'Magnetic station'],
-] as const;
+type CustodyObject = { token: string; label: string; kind: 'plate' | 'cover'; ordinal: number };
+type CustodyDestination = { token: string; label: string };
+type Custody = { objects: CustodyObject[]; destinations: CustodyDestination[] };
+
+// Object/destination suggestions come from the backend method catalog
+// (authoring.custody, OEM lookupSrcDstPlate/lookupDesLocation). The robot
+// translates and decides; this list is not an admission check.
+export function custodyOptions(catalog: MethodCatalog | undefined): Custody {
+    const custody = (catalog?.authoring as { custody?: Partial<Custody> } | undefined)?.custody;
+    // Ordinals 0-11 are the movable objects on this deck (ClassMachineStatus); the
+    // rest are other-instrument plates.
+    const objects = (custody?.objects ?? []).filter(row => typeof row?.token === 'string' && row.ordinal <= 11 && row.ordinal !== 6);
+    const destinations = (custody?.destinations ?? []).filter(row => typeof row?.token === 'string');
+    return { objects, destinations };
+}
 
 export function transferDocument(object: string, destination: string, inspect: boolean) {
-    if (!inspect && (!objects.some(([id]) => id === object) || !destinations.some(([id]) => id === destination)))
-        throw new Error('Select a supported OEM object and destination.');
+    if (!inspect && (!object || !destination)) throw new Error('Select an object and destination.');
     return { protocol_id: 'bms-deck-compound', version: 1, stages: [{ stage_id: 'deck', actions: [{
         action_id: inspect ? 'inspect-covers' : 'transfer', stage_id: 'deck',
         kind: inspect ? 'inspect' : object.startsWith('CV_') ? 'move_cover' : 'plate_move',
@@ -49,6 +55,9 @@ export function BioXpTransferControls({ generation, connected, visible = true }:
     const [object, setObject] = useState<string>('CV_OUTPUT');
     const [destination, setDestination] = useState<string>('LOC_OCS');
     const [error, setError] = useState<string | null>(null);
+    const catalog = useQuery({ queryKey: ['bioxp', 'methods', 'catalog'], queryFn: () => methodsGet<MethodCatalog>('catalog'),
+        enabled: visible, retry: false, staleTime: Infinity });
+    const { objects, destinations } = custodyOptions(catalog.data);
     const [attempt, setAttempt] = useState<{ id: string; key: string; generation: number } | null>(null);
     const [accepted, setAccepted] = useState<BioXpWorkflowJob | null>(null);
     const busyRef = useRef(false);
@@ -109,15 +118,17 @@ export function BioXpTransferControls({ generation, connected, visible = true }:
         } finally { busyRef.current = false; if (mounted.current) setSubmitting(false); }
     }
 
-    return <section aria-label="Plate and cover transfer" className="mt-4 space-y-3 rounded border border-teal-700 p-4">
-        <h3 className="font-semibold">Pick up and move a plate or cover</h3>
-        <p className="text-sm">Catch, carry and release. Inspect covers may move covers.</p>
+    const objectOptions = objects.length ? objects.map(row => [row.token, row.label] as const) : [[object, object] as const];
+    const destinationOptions = destinations.length ? destinations.map(row => [row.token, row.label] as const) : [[destination, destination] as const];
+    return <section aria-label="Plate and cover transfer" className="space-y-2">
+        <p className="text-sm">Pick up, carry and release. Inspect covers may move covers.</p>
+        {catalog.isError && <p role="status" className="text-xs">Object list unavailable; the robot checks each request.</p>}
         <div className="grid gap-3 sm:grid-cols-2">
             <label>Object<select className="block w-full bg-slate-950 p-2" value={object} disabled={busy} onChange={event => setObject(event.target.value)}>
-                {objects.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                {objectOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
             </select></label>
             <label>Transfer destination<select className="block w-full bg-slate-950 p-2" value={destination} disabled={busy} onChange={event => setDestination(event.target.value)}>
-                {destinations.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                {destinationOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
             </select></label>
         </div>
 

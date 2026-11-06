@@ -12,6 +12,7 @@ from datetime import datetime
 from contextvars import ContextVar
 import asyncio
 import json
+import os
 import sqlite3
 from paths import get_db_path, get_db_url
 from migrations.sqlite_sha256 import register_sqlite_sha256
@@ -61,6 +62,45 @@ if DATABASE_URL.startswith("sqlite"):
     engine_kwargs["connect_args"] = {"timeout": 30}
     engine_kwargs["json_serializer"] = _canonical_sqlite_json
 engine = create_async_engine(DATABASE_URL, **engine_kwargs)
+
+# Opt-in statement statistics. Statement work runs on aiosqlite worker threads,
+# so a Python profile shows an idle event loop and cannot name the query.
+# BMS_SQL_STATS_SECONDS=N logs, every N seconds, the ten statements with the
+# most total time, with their count and slowest single run. Off unless set.
+_sql_stats_seconds = float(os.environ.get("BMS_SQL_STATS_SECONDS") or 0)
+if _sql_stats_seconds > 0:
+    import logging
+    import threading
+    import time as _time
+
+    _sql_stats: dict[str, list[float]] = {}
+    _sql_stats_lock = threading.Lock()
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def _sql_stats_before(conn, cursor, statement, params, context, executemany):
+        context._bms_sql_started = _time.perf_counter()
+
+    @event.listens_for(engine.sync_engine, "after_cursor_execute")
+    def _sql_stats_after(conn, cursor, statement, params, context, executemany):
+        elapsed_ms = (_time.perf_counter() - context._bms_sql_started) * 1000
+        key = " ".join(statement.split())[:200]
+        with _sql_stats_lock:
+            total_count_max = _sql_stats.setdefault(key, [0.0, 0, 0.0])
+            total_count_max[0] += elapsed_ms
+            total_count_max[1] += 1
+            total_count_max[2] = max(total_count_max[2], elapsed_ms)
+
+    def _sql_stats_report():
+        logger = logging.getLogger("bms.sql")
+        while True:
+            _time.sleep(_sql_stats_seconds)
+            with _sql_stats_lock:
+                top = sorted(_sql_stats.items(), key=lambda item: -item[1][0])[:10]
+                _sql_stats.clear()
+            for key, (total, count, slowest) in top:
+                logger.warning("sql-stats total=%.0fms n=%d max=%.1fms %s", total, count, slowest, key)
+
+    threading.Thread(target=_sql_stats_report, daemon=True, name="bms-sql-stats").start()
 
 if engine.dialect.name == "sqlite":
     @event.listens_for(engine.sync_engine, "connect")
@@ -2756,8 +2796,8 @@ def _attest_sqlite_migration_33(db_path: str) -> None:
 
 
 def _attest_sqlite_migration_34(db_path: str) -> None:
-    """Prove move-source attempt lineage and its sealed migration ledger."""
-    from migrations.add_ont_move_source_attempt_lineage import attest
+    """Prove move-source attempt lineage (as amended by migration 49) and its ledger."""
+    from migrations.allow_ont_job_move_source_fresh_attempts import attest
     from migrations.ont_sqlite_schema_contract import assert_ont_move_source_table_contract
     from migrations import runner as migration_runner
 
@@ -2783,7 +2823,7 @@ def _attest_sqlite_migration_34(db_path: str) -> None:
 
 def _attest_sqlite_migration_38(db_path: str) -> None:
     """Prove migration 38 ledger identity and terminal trigger authority."""
-    from migrations.add_ont_move_source_attempt_lineage import attest
+    from migrations.allow_ont_job_move_source_fresh_attempts import attest
     from migrations.ont_sqlite_schema_contract import assert_ont_move_source_table_contract
     from migrations import runner as migration_runner
 

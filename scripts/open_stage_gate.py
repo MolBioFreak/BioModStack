@@ -10,7 +10,10 @@ import re
 import sys
 from pathlib import Path
 
-import requests
+try:  # Worker containers have no `requests`; their gate opens through the attempt journal, not HTTP.
+    import requests
+except ImportError:  # pragma: no cover - exercised by test_open_stage_gate_worker_imports
+    requests = None
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CODE_ROOT / "platform" / "api"))
@@ -153,6 +156,15 @@ def open_component_gate(runtime, *, job_id: str, stage: str, payload: dict,
                             for p in directory.glob(pattern) if p.is_file()})
             for path in files:
                 retain(path, role, path.name)
+    # The loop's raw directory is validation/. Keep only the existing small
+    # score artifacts, not refolds/full-data matrices or a new metric store.
+    raw = directories.get("raw")
+    if stage == "post_structure_validation" and payload.get("framework_type") == "protein_local_redesign" and raw is not None:
+        for pattern in ("boltz2/*_boltzpred.json", "protenix_v2/**/*_summary_confidence_sample_*.json",
+                        "esmfold2/**/*.metrics.json"):
+            for path in sorted(raw.glob(pattern)):
+                if path.is_file():
+                    retain(path, "validator-scores", path.relative_to(raw).as_posix())
     if payload_path is not None:
         retain(payload_path, "native-payload", payload_path.name)
     annotation = Path(f"gate_{stage}_annotations.json")
@@ -249,6 +261,8 @@ def main() -> int:
             directories={"candidate": candidate_dir, "raw": raw_dir, "filtered": filtered_dir},
             payload_path=Path(args.payload_json).resolve() if args.payload_json else None)
     else:
+        if requests is None:
+            raise RuntimeError("controller-local gate opening needs the requests package")
         response = requests.post(
             f"{args.api_url}/api/jobs/{args.job_id}/stage-gates/{args.stage}/open",
             json={"payload": payload},

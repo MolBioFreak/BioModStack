@@ -236,3 +236,35 @@ async def test_terminal_publication_rejects_every_nonactive_or_gated_snapshot(
                 assert getattr(persisted, field) == value
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_terminal_publication_lets_a_workflow_opened_gate_reach_awaiting_input(tmp_path) -> None:
+    service = _service()
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'terminal-cas-gate.db'}")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        async with factory() as session:
+            job = _job()
+            job.awaiting_input = True
+            job.awaiting_stage = "post_structure_validation"
+            job.awaiting_payload = {"stage": "post_structure_validation"}
+            session.add(job)
+            await session.commit()
+            snapshot = service.capture_terminal_job_publication_snapshot(job)
+            # A different terminal change must still be refused for a gated row.
+            refused = await service.publish_terminal_job_changes(
+                session, job_id=job.id, snapshot=snapshot, changes={"status": "completed"})
+            assert refused == 0
+            accepted = await service.publish_terminal_job_changes(
+                session, job_id=job.id, snapshot=snapshot,
+                changes={"status": "awaiting_input", "queue_status": "completed"})
+            assert accepted == 1
+            await session.commit()
+        async with factory() as verify:
+            row = await verify.get(Job, "terminal-cas-job")
+            assert (row.status, row.queue_status, row.awaiting_input) == ("awaiting_input", "completed", True)
+    finally:
+        await engine.dispose()

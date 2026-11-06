@@ -54,6 +54,7 @@ def request_host_agent(
     payload: dict[str, Any] | None = None,
     *,
     query: dict[str, Any] | None = None,
+    timeout: float | None = None,
 ) -> Any:
     base_url = host_agent_base_url()
     if not base_url:
@@ -73,7 +74,7 @@ def request_host_agent(
 
     request = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
     try:
-        with urllib.request.urlopen(request, timeout=host_agent_timeout_seconds()) as response:
+        with urllib.request.urlopen(request, timeout=timeout or host_agent_timeout_seconds()) as response:
             raw_body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         raw_body = exc.read().decode("utf-8", errors="replace")

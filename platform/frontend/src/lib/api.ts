@@ -87,8 +87,25 @@ export interface CandidateResultSummary {
     reason: { code: string; message: string } | null;
 }
 
+export interface NativeGenerationSettingsInventory {
+    model_id: string;
+    mode?: string;
+    modes?: string[];
+    contract?: string;
+    request_field?: string;
+    request_key?: string;
+    parameter_schema?: import('./bioxpClient').BioXpOperatorJsonSchema;
+    schema?: import('./bioxpClient').BioXpOperatorJsonSchema;
+    limitations?: string[];
+    native_profile_defaults?: Record<string, unknown>;
+    native_sources_schema?: import('./bioxpClient').BioXpOperatorJsonSchema;
+}
+
+export const fetchNativeGenerationSettings = (model: 'rfd4_proteina' | 'complexa', mode: string) =>
+    api.get<NativeGenerationSettingsInventory>(`/api/models/${model}/generation-settings`, { params: { mode } });
+
 export interface Job {
-    sequence_design?: import('./generalSequenceDesign').GeneralSequenceDesignRequest | null;
+    sequence_design?: import('./generalSequenceDesign').GeneralSequenceEnvelope | null;
     source_structure?: StructureSourceSelection | null;
     binder_round?: import('./binderRound').BinderRoundRequest | null;
     execution_plan_approval?: string | null;
@@ -155,6 +172,7 @@ export interface Job {
     awaiting_payload?: Record<string, UntypedApiValue> | null;
     decision_history?: Array<Record<string, UntypedApiValue>> | null;
     frustrampnn_result_count?: number;
+    native_result_count?: number;
     frustrampnn_reopen_destination?: Record<string, UntypedApiValue> | null;
     conformational_mapping_request_id?: string | null;
     selected_cdr_loops?: string[] | null;
@@ -180,6 +198,10 @@ export interface MDArtifact {
 export interface RFD3LocalRedesignReadModel {
     schema: 'bms.rfd3.local-redesign.read-model.v1';
     job_id: string;
+    population?: { requested: number | null; generated: number | null; failed: number | null;
+        missing: number | null; unexpected: number | null; unpaired_artifacts: number | null };
+    execution_status?: string;
+    population_completeness?: 'complete' | 'partial' | 'unknown';
     capabilities: {
         source_structure: boolean;
         candidate_structures: boolean;
@@ -565,7 +587,11 @@ export interface CatalogProvisionSelection {
 }
 export interface WorkflowPackSelection {
     kind: 'workflow_pack';
-    workflow_id: 'structure_prediction' | 'antibody_denovo';
+    workflow_id: 'structure_prediction' | 'antibody_denovo' | 'de_novo_design';
+    component_ids?: string[] | null;
+}
+export interface WorkflowPackCatalogEntry extends WorkflowPackSelection {
+    components: Array<{ model_id: string; label: string; selected_by_default: boolean }>;
 }
 export interface MdLaunchPreviewRequest {
     schema_version: 'bms.md.launch-preview-request.v1';
@@ -583,7 +609,7 @@ export const provisionSelectionLabel = (selection: ProvisionSelection | Critical
     'workflow_request' in selection
         ? 'workflow_type' in selection.workflow_request ? selection.workflow_request.workflow_type
             : `${selection.workflow_request.model_id} / ${selection.workflow_request.mode}`
-        : 'workflow_id' in selection ? selection.workflow_id : selection.model_id;
+        : 'workflow_id' in selection ? `${selection.workflow_id}${selection.component_ids == null ? ' (full pack)' : ` (${selection.component_ids.join(', ') || 'no components'})`}` : selection.model_id;
 
 export interface CachedArtifactReceipt {
     name: string;
@@ -673,6 +699,7 @@ export interface RemoteArtifactProgress {
 }
 
 export interface ExecutionTarget {
+    can_remove_from_list?: boolean;
     artifact_inventory?: ObservedArtifactInventory | null;
     preload?: RemotePreloadProgress | null;
     progress?: RemoteArtifactProgress | null;
@@ -731,6 +758,7 @@ export interface RemoteTelemetrySample {
 export interface RemoteGpuTelemetry extends Omit<RemoteTelemetrySample, 'gpus'> {
     cursor?: string;
     reset?: boolean;
+    sample_interval_seconds?: number;
     history?: RemoteTelemetrySample[];
     source: 'active_vast';
     available: boolean;
@@ -746,6 +774,7 @@ export interface RemoteGpuTelemetry extends Omit<RemoteTelemetrySample, 'gpus'> 
         memory_total_mb: number | null;
         temperature: number | null;
         power_draw_w: number | null;
+        power_limit_w?: number | null;
         controls: { fan: false; power: false };
     }>;
     observed_at?: string;
@@ -771,8 +800,21 @@ export const preloadExecutionTarget = async (targetId: string, jobId: string): P
     return response.data;
 };
 
-export const fetchProvisionCatalog = async (): Promise<Array<CatalogProvisionSelection | WorkflowPackSelection>> =>
-    (await api.get<Array<CatalogProvisionSelection | WorkflowPackSelection>>('/api/execution-targets/provision/catalog')).data;
+export interface HuggingFaceAssetLinkStatus {
+    configured: boolean;
+    available: boolean;
+    bucket: string | null;
+    mode: 'hf_preferred' | 'ssh';
+    credential_configured: boolean;
+    allow_publish: boolean;
+    message: string;
+}
+export const fetchHuggingFaceAssetStatus = async (signal?: AbortSignal): Promise<HuggingFaceAssetLinkStatus> =>
+    (await api.get<HuggingFaceAssetLinkStatus>('/api/execution-targets/providers/huggingface', { signal })).data;
+export const checkHuggingFaceAssetConnection = async (): Promise<HuggingFaceAssetLinkStatus> =>
+    (await api.post<HuggingFaceAssetLinkStatus>('/api/execution-targets/providers/huggingface/check', {})).data;
+export const fetchProvisionCatalog = async (): Promise<Array<CatalogProvisionSelection | WorkflowPackCatalogEntry>> =>
+    (await api.get<Array<CatalogProvisionSelection | WorkflowPackCatalogEntry>>('/api/execution-targets/provision/catalog')).data;
 
 export const previewExecutionTargetProvision = async (targetId: string, selection: ProvisionSelection): Promise<ProvisionPreview> =>
     (await api.post<ProvisionPreview>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision/preview`, selection)).data;
@@ -885,6 +927,9 @@ export const activateExecutionTarget = (providerInstanceId: string, endpoint?: {
         provider_instance_id: providerInstanceId,
         ...endpoint,
     });
+
+export const dismissExecutionTarget = (executionTargetId: string) =>
+    api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(executionTargetId)}/dismiss`);
 
 export const deactivateExecutionTarget = (executionTargetId: string) =>
     api.post<ExecutionTarget>(
@@ -1021,6 +1066,7 @@ export const fetchJobs = async (params?: {
     include_children?: boolean;
     summary?: boolean;
     exclude_ngs?: boolean;
+    exclude_alignments?: boolean;
 }, previous?: { data: { jobs: Job[]; total: number }; headers: Record<string, unknown> }, signal?: AbortSignal) => {
     const etag = previous?.headers.etag;
     const response = await api.get<{ jobs: Job[]; total: number }>('/api/jobs', {
@@ -1225,10 +1271,20 @@ export const uploadImmutableFile = async (path: string, file: File, sha256: stri
 };
 
 export interface StructureMaterialization {
+    native_recipe?: {
+        complex_components: import('../components/protenixChemistry').ProtenixComponent[];
+        covalent_bonds: import('../components/protenixChemistry').ProtenixBond[];
+        entries: Array<{ id: string; model_number: number; auth_asym_id: string; positions: unknown[] }>;
+        unresolved: unknown[];
+        declared_chemistry?: Record<string, unknown>;
+    };
     source_structure?: StructureSourceSelection;
     original_path?: string; original_sha256?: string;
-    path: string; format: 'pdb' | 'cif'; sha256: string;
-    native_path: string; native_format: 'pdb' | 'cif'; native_sha256: string;
+    path: string; format: 'pdb' | 'cif' | 'bcif'; sha256: string;
+    native_path: string; native_format: 'pdb' | 'cif' | 'bcif'; native_sha256: string;
+    decoded_path?: string; decoded_sha256?: string; selected_path?: string; selected_sha256?: string;
+    stored_encoding?: string; inspection_error?: string | null;
+    source_positions?: Array<Record<string, unknown>>; declared_chemistry?: Record<string, unknown>;
     model_number: number | null; model_numbers: number[];
     author_residues: Array<{ model_number: number; auth_asym_id: string; auth_seq_id: number; insertion_code: string; residue_name: string }>;
     source_identity: Record<string, unknown>; source_path: string;
@@ -1236,9 +1292,12 @@ export interface StructureMaterialization {
 export interface StructureSourceSelection {
     path?: string; design_id?: string; job_id?: string;
     request_id?: string; candidate_id?: string;
-    document?: { artifact_id?: string; target_state?: string };
-    output_format?: 'native' | 'pdb'; model_number?: number; expected_sha256?: string;
+    document?: { artifact_id?: string; target_state?: string; model?: number };
+    candidate?: import('./binderSelectedRound').CandidateRef;
+    output_format?: 'native' | 'pdb' | 'cif'; model_number?: number; expected_sha256?: string;
 }
+export type NativeGenerationSourceBinding = StructureSourceSelection | { kind: 'file'; path: string; expected_sha256?: string };
+export type NativeGenerationSourceBindings = Record<string, NativeGenerationSourceBinding>;
 export const materializeExactStructure = async (source: StructureSourceSelection): Promise<StructureMaterialization> =>
     (await api.post<StructureMaterialization>('/api/files/materialize-structure', source)).data;
 
@@ -1347,6 +1406,11 @@ export const previewJobExecutionPlan = (jobData: Partial<Job>, options: { launch
     api.post<import('../components/ExecutionPlanApproval').ExecutionPlanPreview>(
         '/api/jobs/execution-plan/preview', jobData, jobLaunchContextConfig(jobData, options));
 
+// Distinguish an explicit pre-create cancellation from an uncertain transport failure.
+export class ExecutionPlanCancelled extends Error {
+    constructor() { super('Execution-plan approval cancelled'); }
+}
+
 async function approveJobExecutionPlan(payload: Partial<Job>, options: { launchContext?: boolean } = {}): Promise<Partial<Job>> {
     if (payload.execution_target_id && !payload.execution_plan_approval) {
         const preview = (await previewJobExecutionPlan(payload, options)).data;
@@ -1356,7 +1420,7 @@ async function approveJobExecutionPlan(payload: Partial<Job>, options: { launchC
             throw new Error('Execution-plan preview does not bind this request; refresh the preview and review it again.');
         }
         const { reviewExecutionPlan } = await import('../components/ExecutionPlanApproval');
-        if (!await reviewExecutionPlan(preview)) throw new Error('Execution-plan approval cancelled');
+        if (!await reviewExecutionPlan(preview)) throw new ExecutionPlanCancelled();
         // Selected-source preview retains the input. Submit that exact request,
         // not the original source reference that would acquire it a second time.
         return { ...payload, ...(payload.source_structure ? preview.request : {}),
@@ -2201,6 +2265,19 @@ export const fetchJobStages = (jobId: string) => {
     }>(`/api/jobs/${jobId}/stages`);
 };
 
+export interface ComponentCheckpointDecision {
+    checkpoint_id: string;
+    checkpoint_sha256: string;
+    checkpoint_decision: { selected_artifacts: string[] };
+    execution_target_id?: string | null;
+    execution_policy?: import('./executionPolicy').ExecutionPolicy;
+    launch_context_id?: string | null;
+}
+
+export const continueComponentCheckpoint = (jobId: string, request: ComponentCheckpointDecision) =>
+    submitPreparedJobAction(() => api.post<{ job_id?: string; new_job_id?: string; state?: string; message?: string }>(
+        `/api/jobs/${encodeURIComponent(jobId)}/resume`, structuredClone(request)));
+
 // Resume a failed job from checkpoint
 export const resumeJob = (
     jobId: string,
@@ -2230,6 +2307,27 @@ export const resumeJob = (
         preserved_stages: string[];
         applied_overrides?: string[];
     }>(`/api/jobs/${jobId}/resume`, requestBody, { params: { from_stage: fromStage } }));
+};
+
+/** Advisory FrustraMPNN on selected resequence-loop candidates (hydrogens dropped from a copy server-side). */
+export const analyzeLoopCandidates = async (jobId: string, names: string[], options: {
+    execution_target_id?: string | null; launch_context_id?: string | null;
+    frustrampnn_settings?: import('../components/frustrampnn/frustraMpnnSettingsState').FrustraMpnnRequestedSettings;
+} = {}) => {
+    const { submitPreparedSelectedMutation } = await import('./binderContinuation');
+    type Receipt = { loop_job_id: string; analyses: Array<{ job_id: string; candidate: string }> };
+    const result = await submitPreparedSelectedMutation(async () => ({
+        ...(await api.post<Receipt>(`/api/frustrampnn/jobs/${encodeURIComponent(jobId)}/analyze-loop-candidates`, { names, ...options })).data,
+        launched_jobs: [] as Job[],
+    }));
+    if (result.analyses) return { data: result };
+    // Reviewed Jobs retain the same per-candidate selection roster as Local.
+    const analyses = result.launched_jobs.flatMap(job => {
+        const owner = job.params?._frustrampnn_child_v1 as { selection?: Array<{ producer_coordinates?: { candidate_filename?: string } }> } | undefined;
+        return (owner?.selection ?? []).flatMap(selection => selection.producer_coordinates?.candidate_filename
+            ? [{ job_id: job.id, candidate: selection.producer_coordinates.candidate_filename }] : []);
+    });
+    return { data: { loop_job_id: jobId, analyses } };
 };
 
 export const continueProteinLocalReview = (
@@ -3240,6 +3338,7 @@ export interface SchedulerConfig {
         enabled: boolean;
         target_vram_fill: number;
         vram_safety_margin_mb: number;
+        nanopore_vram_fraction?: number;
         capacity_weight: number;
         emptiness_weight: number;
         max_launches_per_cycle: number;
@@ -3758,6 +3857,7 @@ export interface GoldenGateAssemblyOptionsResponse {
 }
 
 export interface FetchNucleotideSequencesParams {
+    sequence_ids?: string;
     limit?: number;
     offset?: number;
     search?: string;
@@ -3796,7 +3896,7 @@ export interface MolBioRawDnaImportRow {
 }
 
 export interface MolBioSequenceImportPayload {
-    source_format: 'fasta' | 'genbank' | 'raw_dna';
+    source_format: 'fasta' | 'genbank' | 'csv' | 'raw_dna';
     source_text?: string;
     raw_rows?: MolBioRawDnaImportRow[];
     topology_default: 'circular' | 'linear';
@@ -4006,6 +4106,9 @@ export interface SequenceAlignmentResult {
     reference_wraps_origin?: boolean;
     query_start: number;
     query_end: number;
+    query_coordinate_system?: 'input' | 'reverse_complement';
+    query_input_start?: number;
+    query_input_end?: number;
     query_soft_clip_left?: number;
     query_soft_clip_right?: number;
     reference_flank_left?: number;
@@ -4024,7 +4127,14 @@ export interface SequenceAlignmentResult {
     variants: SequenceAlignmentVariant[];
 }
 
+export interface PrimerDesignSearchProfile {
+    version: 'flanking_exact_v1'; candidates_per_strand: 48; target_overlap_bases: 4;
+    origin_wrapping_candidates: false; product_size_includes_tails: true; overlapping_footprints: false; substrate: 'dna_template'; qc: PrimerQcProfile;
+}
+
 export interface PrimerDesignRequest {
+    schema_version?: 'primer-design-v1';
+    search_profile?: PrimerDesignSearchProfile;
     sequence_id?: string;
     name?: string;
     sequence?: string;
@@ -4086,6 +4196,9 @@ export interface PrimerDesignPair {
 }
 
 export interface PrimerDesignResponse {
+    schema_version?: 'primer-design-result-v1';
+    effective_request?: PrimerDesignRequest;
+    search_profile?: PrimerDesignSearchProfile;
     sequence_name?: string | null;
     sequence_type: 'dna' | 'rna';
     target_start: number;
@@ -4110,9 +4223,9 @@ export interface PrimerQcMetrics {
     sequence_type: 'dna' | 'rna' | string;
     length: number;
     gc_percent: number;
-    max_self_complement: number;
-    three_prime_self_complement: number;
-    max_hairpin_stem: number;
+    max_self_complement: number | null;
+    three_prime_self_complement: number | null;
+    max_hairpin_stem: number | null;
     hairpin_loop_size?: number | null;
     binding_site_count?: number | null;
     off_target_site_count?: number | null;
@@ -4131,12 +4244,30 @@ export interface PrimerPairQcEntry {
     left_name?: string | null;
     right_id?: string | null;
     right_name?: string | null;
-    heterodimer_complement: number;
-    three_prime_heterodimer: number;
+    heterodimer_complement: number | null;
+    three_prime_heterodimer: number | null;
     warnings: string[];
 }
 
+export interface PrimerQcProfile {
+    version: 'exact_match_v1';
+    binding_core_bases: number;
+    shorter_primer_uses_whole_sequence: boolean;
+    hairpin_min_stem: number;
+    hairpin_min_loop: number;
+    hairpin_max_loop: number;
+    moderate_complement_bases: number;
+    strong_complement_bases: number;
+    three_prime_warning_bases: number;
+    hairpin_warning_stem_bases: number;
+    three_prime_requires_both_ends: boolean;
+    template_scope: 'provided_template_only';
+}
+
 export interface PrimerQcResponse {
+    schema_version?: 'primer-qc-result-v1';
+    effective_request?: PrimerQcRequest;
+    profile?: PrimerQcProfile;
     primers: PrimerQcEntry[];
     pairwise: PrimerPairQcEntry[];
 }
@@ -4599,6 +4730,7 @@ export const annotateFrameworkCdrs = (pdbCode: string, scheme: string = 'imgt') 
 // ============================================================
 
 export interface PrimerTmSettings {
+    schema_version?: 'primer-tm-settings-v1';
     algorithm: string;
     salt_correction: string;
     primer_concentration_nM: number;
@@ -4619,6 +4751,8 @@ export interface PrimerTmOption {
     description: string;
     sequence_types: Array<'dna' | 'rna'>;
     polymer_pairing?: string | null;
+    salt_corrections?: string[];
+    applicability?: string;
 }
 
 export interface PrimerTmSaltCorrectionOption {
@@ -4628,6 +4762,9 @@ export interface PrimerTmSaltCorrectionOption {
 }
 
 export interface PrimerTmOptionsResponse {
+    schema_version?: 'primer-options-v1';
+    qc_profile?: PrimerQcProfile;
+    design_profile?: PrimerDesignSearchProfile;
     algorithms: PrimerTmOption[];
     salt_corrections: PrimerTmSaltCorrectionOption[];
     defaults: {
@@ -4637,6 +4774,7 @@ export interface PrimerTmOptionsResponse {
 }
 
 export interface PrimerTmInput {
+    schema_version?: 'primer-tm-input-v1';
     id?: string;
     name?: string;
     sequence: string;
@@ -4646,6 +4784,9 @@ export interface PrimerTmInput {
 }
 
 export interface PrimerTmResult {
+    schema_version?: 'primer-tm-result-v1';
+    effective_input?: PrimerTmInput;
+    effective_settings?: PrimerTmSettings;
     id?: string | null;
     name?: string | null;
     sequence: string;
@@ -4717,25 +4858,33 @@ export const fetchPrimerTmOptions = (signal?: AbortSignal) =>
     api.get<PrimerTmOptionsResponse>('/api/molbio/primer-tm/options', { signal });
 
 export const calculatePrimerTm = (data: {
+    schema_version?: 'primer-tm-batch-v1';
     primers: PrimerTmInput[];
     settings?: PrimerTmSettings;
-}, signal?: AbortSignal) => api.post<PrimerTmResult[]>('/api/molbio/primer-tm/calculate', data, { signal });
+}, signal?: AbortSignal) => api.post<PrimerTmResult[]>('/api/molbio/primer-tm/calculate', { schema_version: 'primer-tm-batch-v1', ...data, primers: data.primers.map(primer => ({ schema_version: 'primer-tm-input-v1', ...primer })), settings: data.settings ? { schema_version: 'primer-tm-settings-v1', ...data.settings } : undefined }, { signal });
 
-export const calculatePrimerQc = (data: {
+export interface PrimerQcRequest {
+    schema_version?: 'primer-qc-v1';
+    profile?: PrimerQcProfile;
     primers: Array<{
         id?: string;
         name?: string;
         sequence: string;
         sequence_type?: 'dna' | 'rna';
+        intended_binding_start?: number;
+        intended_binding_end?: number;
+        intended_binding_strand?: number;
     }>;
     template_sequence?: string;
     template_sequence_type?: 'dna' | 'rna';
     template_is_circular?: boolean;
     include_pairwise?: boolean;
-}, signal?: AbortSignal) => api.post<PrimerQcResponse>('/api/molbio/primer-qc', data, { signal });
+}
+
+export const calculatePrimerQc = (data: PrimerQcRequest, signal?: AbortSignal) => api.post<PrimerQcResponse>('/api/molbio/primer-qc', { schema_version: 'primer-qc-v1', ...data }, { signal });
 
 export const designPrimers = (data: PrimerDesignRequest, signal?: AbortSignal) =>
-    api.post<PrimerDesignResponse>('/api/molbio/primer-design', data, { signal });
+    api.post<PrimerDesignResponse>('/api/molbio/primer-design', { schema_version: 'primer-design-v1', ...data }, { signal });
 
 export const fetchPrimers = (params?: {
     search?: string;
@@ -4822,6 +4971,9 @@ export interface OntProtocolOptions {
     can_start: boolean;
     blockers: string[];
     flow_cell_present: boolean;
+    kit?: string | null;
+    available_kits?: string[];
+    run_hours?: number;
     options: OntProtocolOption[];
     fake_or_demo_devices: false;
 }
@@ -4845,8 +4997,10 @@ export interface OntMk1dReconnectResponse {
 export const requestMk1dReconnect = () =>
     api.post<OntMk1dReconnectResponse>('/api/ont/devices/reconnect', { confirm_reconnect: true });
 
-export const fetchOntProtocolOptions = (position: string) =>
-    api.get<OntProtocolOptions>(`/api/ont/positions/${encodeURIComponent(position)}/protocol-options`);
+export const fetchOntProtocolOptions = (position: string, selection: { kit?: string; run_hours?: number } = {}) =>
+    api.get<OntProtocolOptions>(`/api/ont/positions/${encodeURIComponent(position)}/protocol-options`, {
+        params: { kit: selection.kit || undefined, run_hours: selection.run_hours },
+    });
 
 export const createOntRunIntent = (position: string, payload: {
     option_id: string;
@@ -4857,6 +5011,9 @@ export const createOntRunIntent = (position: string, payload: {
 
 export const startOntRunIntent = (runId: string, payload: { confirm_start: boolean; intent_generation: number }) =>
     api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/start`, payload);
+
+export const stopOntInstrumentRun = (runId: string) =>
+    api.post<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}/stop`, { confirm_stop: true });
 
 export const fetchOntInstrumentRun = (runId: string) =>
     api.get<OntInstrumentRun>(`/api/ont/runs/${encodeURIComponent(runId)}`);
@@ -5558,12 +5715,26 @@ export interface PcrExperimentListItem {
     current_revision: Omit<PcrExperimentRevision, 'parent_revision_id' | 'relation' | 'reopen_destination'> | null;
 }
 
+export interface PcrBindingSelection { start: number; anneal_length: number; }
+export interface PcrPrimerResult {
+    sequence: string;
+    annealing_sequence: string;
+    tail_sequence: string;
+    binding: PcrBindingSelection & { end: number; overhang_length: number };
+    annealing_tm: PrimerTmResult;
+    full_oligo_tm: PrimerTmResult;
+}
+
 export interface PcrOperationRequest {
+    schema_version?: 'pcr-v2';
     sequence_id?: string;
     name?: string;
     sequence?: string;
     sequence_type?: 'dna' | 'rna';
     is_circular: boolean;
+    min_anneal_length?: number;
+    forward_binding?: PcrBindingSelection | null;
+    reverse_binding?: PcrBindingSelection | null;
     primer_fwd: string;
     primer_rev: string;
     new_name: string;
@@ -5580,6 +5751,12 @@ export interface PcrOperationResponse {
         end: number;
         length: number;
         wraps_origin: boolean;
+        template_span?: number | null;
+        min_anneal_length?: number | null;
+        method?: string | null;
+        forward_primer?: PcrPrimerResult | null;
+        reverse_primer?: PcrPrimerResult | null;
+        warnings?: string[];
     } | null;
     message: string;
     experiment_id: string | null;
@@ -5641,6 +5818,7 @@ export const updatePcrExperimentReviewState = (
 export interface OntRunSummary {
     run_id: string;
     position_id: string;
+    can_stop?: boolean;
     status: 'armed' | 'starting' | 'running' | 'stopping' | 'stopped' | 'completed' | 'failed' | 'unknown';
     observed_at: string;
     observed_generation: number;
@@ -5678,6 +5856,7 @@ export interface OntRawSignalRepresentation {
     state: OntRawSignalReadiness;
     reason_code: string;
     manifest_sha256: string;
+    source_removed?: boolean;
     artifact_count: number;
     artifacts: Array<{
         artifact_id?: string;
@@ -5754,8 +5933,19 @@ export interface OntExternalPod5Registration {
     already_registered: boolean;
 }
 
-export const fetchOntInstrumentRuns = (limit = 100) =>
-    apiData(api.get<OntRunSummary[]>('/api/ont/runs', { params: { limit } }));
+export interface OntInstrumentRunListOptions {
+    /** Exact Project (experiment_group) id; filtered server-side before paging. */
+    experimentGroup?: string;
+    offset?: number;
+}
+export const fetchOntInstrumentRuns = (limit = 100, options: OntInstrumentRunListOptions = {}) =>
+    apiData(api.get<OntRunSummary[]>('/api/ont/runs', {
+        params: {
+            limit,
+            ...(options.offset ? { offset: options.offset } : {}),
+            ...(options.experimentGroup !== undefined ? { experiment_group: options.experimentGroup } : {}),
+        },
+    }));
 export const fetchOntInstrumentRunGeneration = (runId: string, observedGeneration: number) =>
     apiData(api.get<OntRunGeneration>(
         `/api/ont/runs/${encodeURIComponent(runId)}/generations/${encodeURIComponent(String(observedGeneration))}`,
@@ -5764,6 +5954,13 @@ export const fetchOntExternalPod5Candidates = () =>
     apiData(api.get<{ candidates: OntExternalPod5Candidate[] }>(
         '/api/ont/raw-signal/external-pod5-candidates',
     ));
+export const importOntRawSignalUpload = (request: {
+    file_path: string;
+    format: 'pod5' | 'slow5' | 'blow5';
+    index_file_path: string | null;
+    experiment_group: string;
+    sample_id: string | null;
+}) => apiData(api.post<OntExternalPod5Registration>('/api/ont/raw-signal/import', request));
 export const registerOntExternalPod5Candidate = (
     candidateId: string,
     experimentGroup: string,
@@ -5795,6 +5992,38 @@ export const requestOntRawSignalWaveform = (
 ));
 export const fetchOntRawSignalWaveform = (lookupId: string) =>
     apiData(api.get<OntRawSignalWaveform>(`/api/ont/raw-signal/waveforms/${encodeURIComponent(lookupId)}`));
+export interface OntBasecallDeviceOptions {
+    default: string;
+    cuda_available: boolean | null;
+    options: Array<{ value: string; label: string }>;
+}
+export const fetchOntBasecallDevices = (executionTargetId: string | null = null) =>
+    apiData(api.get<OntBasecallDeviceOptions>('/api/ont/ngs/basecall-devices', { params: { execution_target_id: executionTargetId || undefined } }));
+export type OntRawSignalRetentionPolicy = 'pod5_and_blow5' | 'blow5_only';
+export interface OntRawSignalRetentionSettings {
+    policy: OntRawSignalRetentionPolicy;
+    remove_pod5_after_verified_blow5: boolean;
+    installation_default: string;
+}
+export const fetchOntRawSignalRetention = () =>
+    apiData(api.get<OntRawSignalRetentionSettings>('/api/ont/raw-signal/retention'));
+export const saveOntRawSignalRetention = (policy: OntRawSignalRetentionPolicy) =>
+    apiData(api.put<OntRawSignalRetentionSettings>('/api/ont/raw-signal/retention', { policy }));
+export interface OntPod5RestoreStatus {
+    representation_id: string;
+    state: 'not_requested' | 'running' | 'ready' | 'failed';
+    directory?: string;
+    restored_read_count?: number;
+    expected_read_count?: number | null;
+    error?: string;
+}
+const ontPod5RestorePath = (runId: string, generation: number, representationId: string) =>
+    `/api/ont/runs/${encodeURIComponent(runId)}/generations/${generation}/raw-signal/${encodeURIComponent(representationId)}/restore-pod5`;
+export const requestOntPod5Restore = (runId: string, generation: number, representationId: string) =>
+    apiData(api.post<OntPod5RestoreStatus>(ontPod5RestorePath(runId, generation, representationId)));
+export const fetchOntPod5Restore = (runId: string, generation: number, representationId: string) =>
+    apiData(api.get<OntPod5RestoreStatus>(ontPod5RestorePath(runId, generation, representationId)));
+
 export const requestOntBlow5Preparation = (
     runId: string,
     observedGeneration: number,
@@ -6417,7 +6646,7 @@ export const registerOntExternalMoveBamCandidate = (
 ));
 export const registerOntMoveSource = (runId: string, observedGeneration: number, request: {
     raw_representation_id: string;
-    input_file_id: string;
+    input_file_id?: string | null;
     molecule_type: 'dna' | 'rna';
     source_job_id: string;
 }) => apiData(api.post<OntMoveTableSource>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/move-sources`, request));
@@ -6535,6 +6764,7 @@ export interface ProjectHubMapSegment {
 }
 
 export interface ProjectHubDNASequenceSummary {
+    editable_projection_available?: boolean;
     sequence_id: string;
     revision_id: string;
     receipt_id: string;

@@ -1,3 +1,4 @@
+import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import type { NativeResults, NativeScalarQuery } from '../lib/scientificAnalytics';
 import { MSA_POLICY } from '../lib/msaPolicy';
 import { predictionDisplayLabel, predictionJobLabel } from '../lib/designFriendlyLabel';
@@ -8,8 +9,13 @@ import { parseScientificPae } from '../lib/scientificViewerIdentity';
 import { hashKey, useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
 
-import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, exportNativeResults, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, fetchChainPairIptm } from '../lib/api';
+import { CheckpointReview } from './CheckpointReview';
+import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, exportNativeResults, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, analyzeLoopCandidates, fetchChainPairIptm } from '../lib/api';
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { isNgsJob, ngsResultHref } from '../lib/ngsResultRouting';
+import { jobCategory, isCategoryVisible } from '../lib/jobCategories';
+import { useJobCategoryVisibility } from '../lib/useJobCategoryVisibility';
+import { JobCategoryFilter } from './dashboard/JobCategoryFilter';
 import type {
     AntibodyData,
     AntibodyCdrIndelConfig,
@@ -67,14 +73,9 @@ import { ProteinDesignPanel } from './ProteinDesignWorkflow';
 import { readRoundStorage, type CandidateRef } from '../lib/binderSelectedRound';
 import { RFantibodyCandidateResults } from './RFantibodyCandidateResults';
 import NativeSequenceResults, { nativeSequenceResultKind } from './NativeSequenceResults';
-import { isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
-import { fetchRFD3Generation, fetchRFD3LocalRedesign } from '../lib/api';
+import { fetchNativeBinderGeneration, isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
+import { fetchRFD3Generation } from '../lib/api';
 import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';
-import {
-    getRFD3LocalRedesignCandidateLabel,
-    isRFD3LocalRedesignResultJob,
-} from './rfd3LocalRedesignResultsView';
-import ProteinLocalRedesignResultsPane, { isProteinLocalRedesignResultJob } from './ProteinLocalRedesignResultsPane';
 import { readBinderSelection, writeBinderSelection, readBinderCandidateDocuments, writeBinderCandidateDocuments, readBinderNativeSources, writeBinderNativeSources, type NativeCandidateSource } from '../lib/binderContinuation';
 import { BinderResultFamily } from './BinderResultFamily';
 const BinderResultComparison = lazy(() => import('./BinderResultComparison').then(module => ({ default: module.BinderResultComparison })));
@@ -105,15 +106,16 @@ const MolstarViewer = lazy(() => import('./MolstarViewer'));
 const StabilityHeatmap = lazy(() => import('./MetricCharts').then(module => ({ default: module.StabilityHeatmap })));
 const BatchComparePane = lazy(() => import('./BatchComparePane').then(module => ({ default: module.BatchComparePane })));
 const DesignComparePane = lazy(() => import('./DesignComparePane').then(module => ({ default: module.DesignComparePane })));
+const NativeBinderComparison = lazy(() => import('./NativeBinderComparison').then(module => ({ default: module.NativeBinderComparison })));
 const DataViewerLanding = lazy(() => import('./DataViewerLanding').then(module => ({ default: module.DataViewerLanding })));
 const AnalyticsDashboard = lazy(() => import('./AnalyticsDashboard').then(module => ({ default: module.AnalyticsDashboard })));
 const StructureViewerPane = lazy(() => import('./StructureViewerPane'));
+const StructurePredictionWorkspace = lazy(() => import('./StructurePredictionWorkspace').then(module => ({ default: module.StructurePredictionWorkspace })));
 const StructurePredictionResults = lazy(() => import('./StructurePredictionResults').then(module => ({ default: module.StructurePredictionResults })));
 const ShapeDocumentInspector = lazy(() => import('./StructureViewerPane').then(module => ({ default: module.ShapeDocumentInspector })));
 const MDResultsPane = lazy(() => import('./MDResultsPane'));
 const BindCraft2JobResults = lazy(() => import('./BindCraft2JobResults').then(module => ({ default: module.BindCraft2JobResults })));
 const NativeBinderGenerationResults = lazy(() => import('./NativeBinderGenerationResults').then(module => ({ default: module.NativeBinderGenerationResults })));
-const RFD3LocalRedesignResultsPane = lazy(() => import('./RFD3LocalRedesignResultsPane'));
 const RFD3GenerationResultsPane = lazy(() => import('./RFD3GenerationResultsPane'));
 const ConformationalMappingViewer = lazy(() => import('./conformationalMapping/ConformationalMappingViewer').then(module => ({ default: module.ConformationalMappingViewer })));
 const BlindPoseSelectedControls = lazy(() => import('./BlindPoseSelectedControls'));
@@ -133,6 +135,7 @@ const REVIEW_TAB_DEFINITIONS = [
 ] as const;
 
 type TabId = typeof REVIEW_TAB_DEFINITIONS[number]['id'];
+const STRUCTURE_PREDICTION_MODELS = new Set(['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental']);
 const MAX_BULK_SELECTION_DESIGNS = 500;
 const SERVER_SORT_FIELDS = new Set<DesignSortField>([
     'name',
@@ -1813,6 +1816,7 @@ function ResultsViewerContent() {
 
     // State
     const selectedJobId = jobId || ''; // The route is the sole Job selection authority.
+    const [categoryVisibility, setCategoryVisibility] = useJobCategoryVisibility('results', { ngs: false, alignments: true });
     const [showJobSelectorMenu, setShowJobSelectorMenu] = useState(false);
     const [jobSelectorSearch, setJobSelectorSearch] = useState('');
     const [debouncedJobSelectorSearch, setDebouncedJobSelectorSearch] = useState('');
@@ -1829,7 +1833,10 @@ function ResultsViewerContent() {
     const exactTargetState = new URLSearchParams(location.search).get('target_state');
     const [localDesignId, setSelectedDesignId] = useState<string>('');
     const selectedDesignId = requestedDesignId || localDesignId;
+    // In-page selections update design_id too; only an externally supplied link opens Structure.
+    const internalDesignSelection = useRef<string | null>(null);
     const selectDesign = useCallback((id: string) => {
+        internalDesignSelection.current = id;
         const params = new URLSearchParams(location.search);
         params.set('design_id', id);
         params.delete('artifact_id'); params.delete('target_state');
@@ -1853,9 +1860,9 @@ function ResultsViewerContent() {
     const [comparison, setComparison] = useState<{ jobId: string; ids: string[] }>();
     useEffect(() => {
         if (!requestedDesignId || !exactArtifactId) return;
-        writeBinderCandidateDocuments(selectedJobId, { ...readBinderCandidateDocuments(selectedJobId), [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } });
+        writeBinderCandidateDocuments(selectedJobId, { ...readBinderCandidateDocuments(selectedJobId), [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}), ...(returnParams.get('model_number') !== null ? { model: Number(returnParams.get('model_number')) } : {}) } });
         const boundSelection = readRoundStorage<CandidateRef[]>(selectedJobId, 'selection', []);
-        if (!boundSelection.some(ref => ref.kind === 'design' && ref.job_id === selectedJobId && ref.design_id === requestedDesignId && ref.document?.artifact_id === exactArtifactId && (ref.document?.target_state ?? null) === exactTargetState))
+        if (!boundSelection.some(ref => ref.kind === 'design' && ref.job_id === selectedJobId && ref.design_id === requestedDesignId && ref.document?.artifact_id === exactArtifactId && (ref.document?.target_state ?? null) === exactTargetState && (ref.document?.model ?? null) === (returnParams.get('model_number') === null ? null : Number(returnParams.get('model_number')))))
             setSelectedDesignIds(ids => ids.includes(requestedDesignId) ? ids : [...ids, requestedDesignId]);
     }, [selectedJobId, requestedDesignId, exactArtifactId, exactTargetState, setSelectedDesignIds]);
     useEffect(() => {
@@ -1866,13 +1873,17 @@ function ResultsViewerContent() {
             const params = new URLSearchParams(location.search);
             if (selector?.artifact_id) params.set('artifact_id', selector.artifact_id); else params.delete('artifact_id');
             if (selector?.target_state !== undefined) params.set('target_state', selector.target_state); else params.delete('target_state');
+            if (selector?.model !== undefined) params.set('model_number', String(selector.model)); else params.delete('model_number');
             if (params.toString() !== new URLSearchParams(location.search).toString()) navigate(`${location.pathname}?${params}`, { replace: true });
         };
         window.addEventListener('bms:binder-documents', syncDocumentRoute);
         return () => window.removeEventListener('bms:binder-documents', syncDocumentRoute);
     }, [selectedJobId, requestedDesignId, location.pathname, location.search, navigate]);
-    const mdRoute = (source: string, design: string) => {
-        const route = buildResultsViewerMolecularDynamicsRoute(source, design);
+    const mdRoute = (ref: CandidateRef) => {
+        const route = buildResultsViewerMolecularDynamicsRoute(ref.job_id, ref.kind === 'design' ? ref.design_id : null, {
+            sourceRef: { kind: 'candidate', id: ref.job_id, candidate_ref: ref },
+            returnTo: `${location.pathname}${location.search}${location.hash}`,
+        });
         return destinationLaunchContextId ? `${route}&launch_context_id=${encodeURIComponent(destinationLaunchContextId)}` : route;
     };
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
@@ -2012,12 +2023,14 @@ function ResultsViewerContent() {
         error: jobsQueryError,
         refetch: refetchJobs,
     } = useQuery({
-        queryKey: ['jobs', 'include_children', 'summary', debouncedJobSelectorSearch],
+        queryKey: ['jobs', 'include_children', 'summary', debouncedJobSelectorSearch, categoryVisibility.ngs, categoryVisibility.alignments],
         queryFn: ({ signal }) => fetchJobs({
             include_children: true,
             limit: 100,
             summary: true,
             q: debouncedJobSelectorSearch || undefined,
+            exclude_ngs: !categoryVisibility.ngs,
+            exclude_alignments: !categoryVisibility.alignments,
         }, undefined, signal),
     });
     const {
@@ -2051,7 +2064,9 @@ function ResultsViewerContent() {
         }
         return baseJobs.map((job: Job) => job.id === routedJob.id ? routedJob : job);
     }, [jobsData?.data.jobs, routedJob]);
-    const nonNgsJobs = useMemo(() => jobs.filter((j: Job) => !isNgsJob(j)), [jobs]);
+    const selectorJobs = useMemo(() => jobs.filter((j: Job) => isCategoryVisible(j, categoryVisibility)), [jobs, categoryVisibility]);
+    // Native NGS and family alignment results have their own workspaces.
+    const nonNgsJobs = useMemo(() => jobs.filter((j: Job) => !isNgsJob(j) && jobCategory(j) !== 'alignments'), [jobs]);
     const jobsById = useMemo(
         () => new Map(nonNgsJobs.map((job: Job) => [job.id, job])),
         [nonNgsJobs],
@@ -2125,7 +2140,7 @@ function ResultsViewerContent() {
         return `${activeJob.parent_job_id}:${getLineageFamily(activeJob)}`;
     }, [activeJob, selectableLineageChildJobIds]);
     const jobSelectorOptions = useMemo<JobSelectorOption[]>(() => {
-        const sortedJobs = [...nonNgsJobs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        const sortedJobs = [...selectorJobs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
         const batchMap = new Map<string, { msaJob: Job | null; children: Job[]; totalDesigns: number }>();
         const childJobIds = new Set<string>();
         const lineageGroups = new Map<string, {
@@ -2136,6 +2151,9 @@ function ResultsViewerContent() {
         }>();
 
         sortedJobs.forEach((job) => {
+            // NGS and alignment outputs are routed to their own result surfaces;
+            // do not collapse their jobs into protein design lineage groups.
+            if (jobCategory(job) !== 'other') return;
             if (job.parent_job_id) {
                 childJobIds.add(job.id);
             }
@@ -2197,15 +2215,16 @@ function ResultsViewerContent() {
             const batchData = job.batch_id ? batchMap.get(job.batch_id) : null;
             const hasChildren = Boolean(batchData && batchData.children.length > 0);
             const displayDesigns = (() => {
+                if (jobCategory(job) === 'alignments') return 'Family alignment';
+                if (jobCategory(job) === 'ngs') return 'NGS results';
                 if (isRFD3GenerationResultJob(job)) return 'RFD3 generation';
-                const rfd3CandidateLabel = getRFD3LocalRedesignCandidateLabel(job);
-                if (rfd3CandidateLabel) return `Requested: ${rfd3CandidateLabel}`;
                 if (isPostRfantibodyStage(job)) {
                     const rawCount = Number(job.awaiting_payload?.raw_candidate_count || 0);
                     const screenedCount = Number(job.awaiting_payload?.filtered_candidate_count || 0);
                     if (screenedCount > 0) return `Raw ${rawCount.toLocaleString()} / Screened ${screenedCount.toLocaleString()}`;
                     if (rawCount > 0) return `Raw ${rawCount.toLocaleString()}`;
                 }
+                if (!hasChildren && !job.design_count && isNativeBinderGeneration(job)) return 'Native results';
                 const total = hasChildren ? (batchData?.totalDesigns || 0) : (job.design_count || 0);
                 return `${total.toLocaleString()} designs`;
             })();
@@ -2254,7 +2273,7 @@ function ResultsViewerContent() {
         });
 
         return [...regularOptions, ...lineageOptions].sort((a, b) => b.createdAt - a.createdAt);
-    }, [jobsById, nonNgsJobs, selectableLineageChildJobIds]);
+    }, [jobsById, selectorJobs, selectableLineageChildJobIds]);
     const filteredJobSelectorOptions = useMemo(() => {
         const query = jobSelectorSearch.trim().toLowerCase();
         if (!query) return jobSelectorOptions;
@@ -2285,18 +2304,13 @@ function ResultsViewerContent() {
             isAntibodyRefinementMode(mode)
         );
     }, [activeJob]);
-    const isProteinLocalRedesignContext = useMemo(() => {
-        if (!activeJob) return false;
-        const modelId = String(activeJob.model_id || '').toLowerCase();
-        const mode = String(activeJob.mode || '').toLowerCase();
-        const rfdMode = String(activeJob.params?.rfd_mode || '').toLowerCase();
-        return modelId === 'protein_local_redesign' || mode === 'local_redesign' || rfdMode === 'protein_local_redesign';
-    }, [activeJob]);
-    const isProteinLocalRedesignReviewContext = useMemo(
-        () => isProteinLocalRedesignContext && Boolean(activeJob?.awaiting_input) && Boolean(activeJob?.awaiting_stage),
-        [activeJob?.awaiting_input, activeJob?.awaiting_stage, isProteinLocalRedesignContext],
-    );
-    const showReviewWorkingSetPanel = isAntibodyContext || isProteinLocalRedesignReviewContext;
+    // A Resequence loop paused at its validation gate reuses the working-set panel (select designs,
+    // Continue Workflow, optional FrustraMPNN). Antibody jobs keep their own refinement wording.
+    const isResequenceReviewContext = Boolean(activeJob?.awaiting_input)
+        && String(activeJob?.awaiting_stage || '').toLowerCase() === 'post_structure_validation'
+        && activeJob?.model_id === 'protein_modification_experimental'
+        && activeJob?.mode === 'region_redesign';
+    const showReviewWorkingSetPanel = isAntibodyContext || isResequenceReviewContext;
     const showBinderTargetConfidence = useMemo(() => hasExplicitBinderTargetRoles(activeJob), [activeJob]);
     const rfRawCount = Number(activeJob?.awaiting_payload?.raw_candidate_count || 0);
     const rfFilteredCount = Number(activeJob?.awaiting_payload?.filtered_candidate_count || 0);
@@ -2363,6 +2377,8 @@ function ResultsViewerContent() {
     useEffect(() => {
         if (routedJob && isNgsJob(routedJob)) {
             navigate(ngsResultHref(routedJob.id, location.search), { replace: true });
+        } else if (routedJob && jobCategory(routedJob) === 'alignments') {
+            navigate(`/alignments/jobs/${encodeURIComponent(routedJob.id)}${location.search}`, { replace: true });
         }
     }, [routedJob, location.search, navigate]);
 
@@ -2420,11 +2436,17 @@ function ResultsViewerContent() {
                 ['design_id', 'artifact_id', 'target_state', 'native_candidate', 'native_scope', 'native_page', 'result_model', 'candidate_id', 'invocation_id', 'frustrampnn_scope'].forEach(key => params.delete(key));
             }
             const query = params.toString();
-            navigate(`/designs/${newId}${query ? `?${query}` : ''}`, replace ? { replace: true } : undefined);
+            const selected = jobs.find(job => job.id === newId);
+            const destination = selected && jobCategory(selected) === 'alignments'
+                ? `/alignments/jobs/${encodeURIComponent(newId)}${query ? `?${query}` : ''}`
+                : selected && isNgsJob(selected)
+                    ? ngsResultHref(newId, query ? `?${query}` : '')
+                    : `/designs/${newId}${query ? `?${query}` : ''}`;
+            navigate(destination, replace ? { replace: true } : undefined);
         } else {
             navigate('/designs', replace ? { replace: true } : undefined);
         }
-    }, [navigate, location.search, selectedJobId]);
+    }, [navigate, location.search, selectedJobId, jobs]);
     useEffect(() => {
         if (!showJobSelectorMenu) return;
         const handlePointerDown = (event: MouseEvent) => {
@@ -2559,7 +2581,6 @@ function ResultsViewerContent() {
             && !isShapeResultJob(activeJob)
             && activeJob.model_id !== 'molecular_dynamics'
             && !isRFD3GenerationResultJob(activeJob)
-            && !isRFD3LocalRedesignResultJob(activeJob)
             && !reviewSelectionRequired,
     });
     // A failed retry can be paused while hidden/offline. It is not still loading.
@@ -2622,7 +2643,7 @@ function ResultsViewerContent() {
     });
     const selectedDesign = selectedDesignError ? undefined : selectedDesignDetailData ?? designs.find(d => d.id === selectedDesignId);
     useEffect(() => {
-        if (requestedDesignId && selectedDesignDetailData?.id === requestedDesignId && supportsViewerCapability(selectedDesignDetailData, 'structure_viewer')) setActiveTab('structure');
+        if (requestedDesignId && requestedDesignId !== internalDesignSelection.current && selectedDesignDetailData?.id === requestedDesignId && supportsViewerCapability(selectedDesignDetailData, 'structure_viewer')) setActiveTab('structure');
     }, [requestedDesignId, selectedDesignDetailData?.id]);
     const selectedDesignUnsupported = isUnsupportedResult(selectedDesign);
     const selectedDesignUnsupportedReason = getUnsupportedResultReason(selectedDesign);
@@ -2647,7 +2668,12 @@ function ResultsViewerContent() {
     const selectedDesignCanRunContactMap = isAnalyzerAvailable(selectedDesign, 'contact_map');
     const visibleReviewTabs = useMemo(() => {
         const visibleIds = new Set(getVisibleReviewTabs(selectedDesign));
-        return REVIEW_TAB_DEFINITIONS.filter((tab) => visibleIds.has(tab.id));
+        const tabs = REVIEW_TAB_DEFINITIONS.filter((tab) => visibleIds.has(tab.id));
+        // Structure prediction reads inspection-first: Overview → Structure → Charts.
+        const producer = String(selectedDesign?.provenance?.producer_model_id ?? '');
+        if (!STRUCTURE_PREDICTION_MODELS.has(producer)) return tabs;
+        const order: TabId[] = ['overview', 'structure', 'charts', 'table', 'compare_designs', 'compare'];
+        return [...tabs].sort((a, b) => (order.indexOf(a.id) + 1 || 99) - (order.indexOf(b.id) + 1 || 99));
     }, [selectedDesign]);
     const tableReviewCapabilities = useMemo(
         () => orderedDesigns.reduce(
@@ -3209,7 +3235,7 @@ function ResultsViewerContent() {
     }, [currentPage, pageSize, sourceScopedDesigns, useClientSourcePagination]);
     // A validator's producer owns its result semantics, not the enclosing workflow.
     const predictionModelId = String(selectedDesign?.provenance?.producer_model_id ?? activeJob?.model_id ?? '');
-    const predictionDataTable = ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId);
+    const predictionDataTable = STRUCTURE_PREDICTION_MODELS.has(predictionModelId);
     const tableHasNativeConfidence = ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) || tableDesigns.some(canonicalScalars);
     const legacyTableScalars = usePredictionScalars(tableDesigns, activeTab === 'table' && !nativeResults);
     // Inspection uses the selected detail document; table cells stay page-bound.
@@ -3281,24 +3307,23 @@ function ResultsViewerContent() {
     const nativeGenerationCount = nativeGeneration?.schema === 'bms.rfd3.generation.read-model.v1'
         && nativeGeneration.job_id === activeJob?.id ? nativeGeneration.counts.generated : undefined;
     const isNativeGeneration = isRFD3GenerationResultJob(activeJob);
-    const nativeRedesignQuery = useQuery({
-        queryKey: ['rfd3-local-redesign', activeJob?.id],
-        queryFn: () => fetchRFD3LocalRedesign(activeJob!.id),
-        enabled: isRFD3LocalRedesignResultJob(activeJob),
-        retry: false,
+    // Registered native generations publish records, not Design rows; design_count stays 0.
+    const publishedNativeJob = !isNativeGeneration && isNativeBinderGeneration(activeJob);
+    const publishedNativeTotalQuery = useQuery({
+        queryKey: ['native-generation-total', activeJob?.id, activeJob?.status],
+        queryFn: ({ signal }) => fetchNativeBinderGeneration(activeJob!.id, 0, 1, signal),
+        enabled: publishedNativeJob && activeJob?.status === 'completed',
+        retry: false, refetchOnWindowFocus: false,
     });
-    const nativeRedesign = nativeRedesignQuery.data?.data;
-    const nativeRedesignCount = nativeRedesign?.schema === 'bms.rfd3.local-redesign.read-model.v1'
-        && nativeRedesign.job_id === activeJob?.id ? nativeRedesign.candidates.length : undefined;
-    const activeRFD3CandidateLabel = isRFD3LocalRedesignResultJob(activeJob)
-        ? nativeRedesignCount == null ? 'Candidate count unavailable' : `${nativeRedesignCount.toLocaleString()} published candidates`
-        : null;
+    // Reward-table and timing rows are observations, not generated candidates; the page reports the
+    // molecular count separately, and the raw total is the fallback when it does not.
+    const publishedNativeTotal = publishedNativeTotalQuery.data?.record_counts?.molecular_records ?? publishedNativeTotalQuery.data?.total;
     const activeBadgeLabel = useMemo(() => {
         if (activeJob?.model_id === 'bindcraft2') return 'Campaign results';
         if (isShapeResultJob(activeJob)) return 'Native Shape results';
         if (nativeSequenceResultKind(activeJob)) return 'Native sequence results';
         if (isNativeGeneration) return nativeGenerationCount == null ? 'Generated count unavailable' : `${nativeGenerationCount.toLocaleString()} generated candidates`;
-        if (activeRFD3CandidateLabel) return activeRFD3CandidateLabel;
+        if (publishedNativeJob) return publishedNativeTotal == null ? 'Native results' : `${publishedNativeTotal.toLocaleString()} generated candidates`;
         if (isPostRFantibodyReview && reviewSelectionRequired) {
             return 'Select a review source';
         }
@@ -3309,7 +3334,7 @@ function ResultsViewerContent() {
             return `${tableDesigns.length.toLocaleString()} visible`;
         }
         return `${totalDesigns.toLocaleString()} designs`;
-    }, [activeJob, isNativeGeneration, nativeGenerationCount, activeCurrentSetLabel, activeRFD3CandidateLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
+    }, [activeJob, isNativeGeneration, nativeGenerationCount, publishedNativeJob, publishedNativeTotal, activeCurrentSetLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
     const paginationSubject = isPostRFantibodyReview
         ? reviewSelectionRequired
             ? 'outputs'
@@ -5318,6 +5343,23 @@ function ResultsViewerContent() {
         },
     });
 
+    const [frustraLoopTarget, setFrustraLoopTarget] = useState<string | null>(null);
+    const frustraLoopMutation = useMutation({
+        mutationFn: async () => {
+            if (!selectedJobId) throw new Error('Select a resequence job first.');
+            const chosen = new Set(selectedDesignIds);
+            const names = designs.filter(design => chosen.has(design.id) && design.pdb_path)
+                .map(design => String(design.pdb_path).split('/').pop() as string);
+            if (!names.length) throw new Error('Select at least one design to analyze.');
+            return analyzeLoopCandidates(selectedJobId, names, { execution_target_id: frustraLoopTarget, launch_context_id: destinationLaunchContextId, frustrampnn_settings: frustrampnnSettings });
+        },
+        onSuccess: (response) => {
+            setIterationMessage({ kind: 'success', text: `FrustraMPNN analysis queued for ${response.data.analyses.length} design(s).` });
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+        },
+        onError: (error) => setIterationMessage({ kind: 'error', text: getErrorMessage(error) }),
+    });
+
     const launchBusy = launchIterationMutation.isPending || launchManualMutagenesisMutation.isPending || continueProteinLocalReviewMutation.isPending;
     const manualMutationSetCount = manualMutagenesisConfig.mutation_sets_text
         .split('\n')
@@ -5330,7 +5372,9 @@ function ResultsViewerContent() {
     const viewerShellClassName = showDataHubLanding
         ? 'mx-auto w-full max-w-[1180px]'
         : 'w-full';
-    const resultModelSelector = activeJob && resultModelHierarchy.length > 1 ? (
+    const resultModelSelector = <>
+        {activeJob?.status === 'awaiting_input' && activeJob.awaiting_payload?.component_checkpoint && <CheckpointReview key={`${activeJob.id}:${activeJob.awaiting_payload.component_checkpoint.checkpoint_sha256}`} job={activeJob} launchContextId={destinationLaunchContextId} />}
+        {activeJob && resultModelHierarchy.length > 1 ? (
         <nav aria-label="Workflow model results" className="flex flex-wrap gap-2 text-xs">
             {resultModelHierarchy.map((item) => <button
                 key={item.modelId}
@@ -5340,7 +5384,7 @@ function ResultsViewerContent() {
                 className={`rounded-lg border px-3 py-1.5 font-semibold ${resultSurface === item.modelId ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300 hover:border-slate-500'}`}
             >{item.label}</button>)}
         </nav>
-    ) : null;
+    ) : null}</>;
 
     if (activeJob && !['conformational_mapping', 'confornets_experimental'].includes(activeJob.model_id)
         && !designsLoading && new URLSearchParams(location.search).has('result_model')
@@ -5380,13 +5424,16 @@ function ResultsViewerContent() {
 
     const showResultFamily = !!activeJob && (
         ['bindcraft2', 'boltzgen', 'ppiflow', 'rfantibody', 'template_antibody_denovo', 'binder_refinement'].includes(activeJob.model_id)
-        || !!nativeSequenceResultKind(activeJob) || isRFD3GenerationResultJob(activeJob) || isRFD3LocalRedesignResultJob(activeJob)
+        || !!nativeSequenceResultKind(activeJob) || isRFD3GenerationResultJob(activeJob)
+        || isNativeBinderGeneration(activeJob)
         || !!(activeJob.lineage_root_job_id || activeJob.selection_source_job_id || activeJob.source_stage_job_id
             || activeJob.params?.lineage_root_job_id || activeJob.params?.iteration_source_root_job_id));
-    const selectedCandidateDocuments = activeJob ? { ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } } : {}) } : {};
+    const selectedCandidateDocuments = activeJob ? { ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}), ...(returnParams.get('model_number') !== null ? { model: Number(returnParams.get('model_number')) } : {}) } } : {}) } : {};
     const selectedCandidateControls = activeJob && <>
         <BinderSelectedControls key={`binder-${activeJob.id}`}
             sourceJobId={activeJob.id} selectedDesignIds={selectedDesignIds} selectedNativeSources={selectedNativeSources}
+            operationScope={isRFD3GenerationResultJob(activeJob) || ['rfd4_proteina', 'complexa'].includes(activeJob.model_id) || ['disco', 'laproteina'].includes(activeJob.params?.backend ?? activeJob.params?.generator) ? 'whole_composition' : undefined}
+            projectDraftRef={returnParams.get('project_id') && returnParams.get('setup_context_id') ? { project_id: returnParams.get('project_id')!, setup_context_id: returnParams.get('setup_context_id')! } : undefined}
             launchContextId={destinationLaunchContextId}
             candidateDocuments={selectedCandidateDocuments}
             inspectDesignId={exactArtifactId ? requestedDesignId : undefined}
@@ -5405,6 +5452,19 @@ function ResultsViewerContent() {
             onOpenJob={handleSelectJob}
         />}
     </>;
+
+    const mdHandoffAvailable = Boolean(activeJob && selectedDesign && activeJob.status === 'completed'                                     && activeJob.model_id !== 'bindcraft2' && !isNativeBinderGeneration(activeJob)                                     && !isAntibodyContext && !hasExplicitBinderTargetRoles(activeJob)                                     && !activeJob.mode.includes('binder') && !activeJob.model_id.includes('binder')                                     && !['blind_pose', 'interface_context'].includes(activeJob.mode)                                     && !activeJob.provenance?.binder_round_request && !activeJob.provenance?.binder_round_step);
+    const mdHandoffButton = (primary = false) => activeJob && selectedDesign ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => selectedDesign && activeJob && navigate(mdRoute({ kind: 'design', job_id: selectedDesign.job_id ?? activeJob.id, design_id: selectedDesign.id,
+                                            document: { ...(selectedCandidateDocuments[selectedDesign.id] ?? {}),
+                                                ...(returnParams.get('model_number') ? { model: Number(returnParams.get('model_number')) } : {}) } }))}
+                                        className={primary ? "spw-button spw-primary" : "rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100 hover:bg-cyan-500/20"}
+                                    >
+                                        Use as MD starting structure
+                                    </button>
+    ) : null;
 
     // Keep the query/selection owner mounted while a lazy workspace loads.
     // Suspending above this owner reconnects its scope-reset effects on reveal.
@@ -5429,20 +5489,7 @@ function ResultsViewerContent() {
                         <div className="mt-3">{resultModelSelector}</div>
                         {activeJob && (
                             <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-300">
-                                {selectedDesign && activeJob.status === 'completed'
-                                    && activeJob.model_id !== 'bindcraft2' && !isNativeBinderGeneration(activeJob)
-                                    && !isAntibodyContext && !hasExplicitBinderTargetRoles(activeJob)
-                                    && !activeJob.mode.includes('binder') && !activeJob.model_id.includes('binder')
-                                    && !['blind_pose', 'interface_context'].includes(activeJob.mode)
-                                    && !activeJob.provenance?.binder_round_request && !activeJob.provenance?.binder_round_step && (
-                                    <button
-                                        type="button"
-                                        onClick={() => navigate(mdRoute(activeJob.id, selectedDesign.id))}
-                                        className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100 hover:bg-cyan-500/20"
-                                    >
-                                        Use as MD starting structure
-                                    </button>
-                                )}
+                                {mdHandoffAvailable && !(predictionDataTable && activeTab === 'overview') && mdHandoffButton()}
                                 {formatLineagePathSummary(
                                     activeJob.stage_family,
                                     activeJob.stage_mode,
@@ -5498,6 +5545,7 @@ function ResultsViewerContent() {
                             {showJobSelectorMenu && (
                                 <div className="absolute right-0 z-50 mt-2 w-[min(520px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/98 shadow-2xl shadow-slate-950/70 backdrop-blur">
                                     <div className="border-b border-slate-800 p-3">
+                                        <JobCategoryFilter value={categoryVisibility} onChange={setCategoryVisibility} />
                                         <input
                                             autoFocus
                                             type="text"
@@ -5609,9 +5657,6 @@ function ResultsViewerContent() {
                     selectedNativeSources={selectedNativeSources.length || (nativeSelection.jobId === selectedJobId && nativeSelection.changed) ? selectedNativeSources : undefined}
                     candidateDocuments={Object.keys(selectedCandidateDocuments).length || (designSelection.jobId === selectedJobId && designSelection.changed) || (nativeSelection.jobId === selectedJobId && nativeSelection.changed) ? selectedCandidateDocuments : undefined}
                     launchContextId={destinationLaunchContextId} />}
-                {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && (
-                    <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
-                )}
 
                 {activeJob?.sequence_design && (
                     <ProteinDesignPanel title="Sequence design" description="Generation results remain unchanged. Each follow-on opens in its model’s native result view.">
@@ -5675,10 +5720,8 @@ function ResultsViewerContent() {
                         </>
                     ) : isRFD3GenerationResultJob(activeJob) ? (
                         <RFD3GenerationResultsPane key={activeJob.id} jobId={activeJob.id} />
-                    ) : isRFD3LocalRedesignResultJob(activeJob) ? (
-                        <RFD3LocalRedesignResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : activeJob.model_id === 'molecular_dynamics' ? (
-                        <MDResultsPane key={activeJob.id} jobId={activeJob.id} />
+                        <MDResultsPane key={activeJob.id} jobId={activeJob.id} returnTo={typeof activeJob.params?.intent === 'object' && activeJob.params.intent !== null && 'return_to' in activeJob.params.intent && typeof activeJob.params.intent.return_to === 'string' ? activeJob.params.intent.return_to : undefined} />
                     ) : designsError && !nativeResults ? (
                         <DataViewerQueryError
                             title="Results could not be loaded"
@@ -5790,12 +5833,12 @@ function ResultsViewerContent() {
                                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                                         <div>
                                             <div className="text-sm font-medium text-indigo-100">
-                                                {isProteinLocalRedesignReviewContext ? 'Review Working Set' : 'Antibody Refinement'}
+                                                {isAntibodyContext ? 'Antibody Refinement' : 'Review Working Set'}
                                             </div>
                                             <p className="mt-1 text-xs text-slate-400">
-                                                {isProteinLocalRedesignReviewContext
-                                                    ? 'Filter/promote outputs, then continue the paused PLR workflow.'
-                                                    : 'Promote visible, filtered, or top-ranked outputs into antibody refinement.'}
+                                                {isAntibodyContext
+                                                    ? 'Promote visible, filtered, or top-ranked outputs into antibody refinement.'
+                                                    : 'Select designs, then continue the paused workflow or optionally analyze them with FrustraMPNN.'}
                                             </p>
                                         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                                             <span className="rounded-full border border-indigo-500/30 bg-slate-900/70 px-2 py-1 text-indigo-100">
@@ -6121,6 +6164,18 @@ function ResultsViewerContent() {
                                             >
                                                 Continue Workflow
                                             </button>
+                                        )}
+                                        {!isAntibodyContext && activeJob?.awaiting_stage === 'post_structure_validation' && (
+                                            <><ExecutionTargetPicker value={frustraLoopTarget ?? ''} onChange={setFrustraLoopTarget} disabled={frustraLoopMutation.isPending} />
+                                            <button
+                                                type="button"
+                                                onClick={() => frustraLoopMutation.mutate()}
+                                                disabled={selectedDesignIds.length === 0 || frustraLoopMutation.isPending}
+                                                className="flex items-center gap-1.5 rounded-lg border border-cyan-500/60 bg-cyan-500/20 px-4 py-2 text-xs font-semibold text-cyan-100 disabled:opacity-50"
+                                                title="Optional: run FrustraMPNN on the highlighted designs for guidance. Does not change this workflow."
+                                            >
+                                                Analyze with FrustraMPNN
+                                            </button></>
                                         )}
                                         {!workflowOnlyRefinement && isAntibodyContext && (
                                             <>
@@ -6772,7 +6827,11 @@ function ResultsViewerContent() {
                                     ) : (
                                         <>
                                     {/* OVERVIEW TAB */}
-                                    {activeTab === 'overview' && ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && <div className="p-4"><StructurePredictionResults summaryOnly modelId={predictionModelId} designs={inspectionDesigns} selectedDesignId={selectedDesignId} onSelectDesign={selectDesign} /></div>}
+                                    {activeTab === 'overview' && predictionDataTable && activeJob && <div className="p-4"><StructurePredictionWorkspace job={activeJob}
+                                        designs={inspectionDesigns} totalDesigns={totalDesigns} selectedDesignId={selectedDesignId} onSelectDesign={selectDesign}
+                                        onOpenStructure={() => setActiveTab('structure')} onCompare={() => setActiveTab('compare_designs')}
+                                        actions={mdHandoffAvailable ? mdHandoffButton(true) : null}
+                                        operationIds={selectedDesignIds} onOperationToggle={(id, checked) => setSelectedDesignIds(ids => checked ? (ids.includes(id) ? ids : [...ids, id]) : ids.filter(item => item !== id))} /></div>}
                                     {activeTab === 'overview' && !['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && overviewStats && (
                                         <div className="p-6 space-y-6">
                                             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
@@ -7834,7 +7893,7 @@ function ResultsViewerContent() {
                                                                     {selectedDesign.frustration_csv_relpath && (
                                                                         <div className="flex items-center gap-2">
                                                                             <a
-                                                                                href={buildFileStreamUrl(selectedDesign.frustration_csv_relpath)}
+                                                                                href={resolveApiResourceUrl(buildFileStreamUrl(selectedDesign.frustration_csv_relpath))}
                                                                                 target="_blank"
                                                                                 rel="noreferrer"
                                                                                 className="rounded-lg border border-slate-600 px-2.5 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
@@ -7842,7 +7901,7 @@ function ResultsViewerContent() {
                                                                                 Open CSV
                                                                             </a>
                                                                             <a
-                                                                                href={buildFileDownloadUrl(selectedDesign.frustration_csv_relpath)}
+                                                                                href={resolveApiResourceUrl(buildFileDownloadUrl(selectedDesign.frustration_csv_relpath))}
                                                                                 className="rounded-lg border border-slate-600 px-2.5 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
                                                                             >
                                                                                 Download CSV
@@ -8953,13 +9012,16 @@ function ResultsViewerContent() {
                                     )}
 
                                     {/* Compare Designs Pane */}
-                                    {activeTab === 'compare_designs' && (
+                                    {activeTab === 'compare_designs' && <>
                                         <DesignComparePane
                                             designs={designs}
                                             selectedDesignIds={selectedDesignIds}
                                             onSelectedDesignIdsChange={setSelectedDesignIds}
                                         />
-                                    )}
+                                        {activeJob && isRFD3GenerationResultJob(activeJob) && (
+                                            <NativeBinderComparison jobIds={[activeJob.id]} selectedDesignIds={selectedDesignIds} />
+                                        )}
+                                    </>}
 
                                     {/* CHARTS TAB - Full Analytics Dashboard */}
                                     {activeTab === 'charts' && (

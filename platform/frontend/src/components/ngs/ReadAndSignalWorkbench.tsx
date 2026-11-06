@@ -70,10 +70,10 @@ function message(reason: unknown): string {
 }
 
 function stateBadge(state: string): string {
-    if (state === 'ready' || state === 'independent') return 'bg-emerald-500/20 text-emerald-300';
-    if (state === 'preparable' || state === 'requested' || state === 'running') return 'bg-amber-500/20 text-amber-200';
-    if (state === 'failed' || state === 'unavailable') return 'bg-rose-500/20 text-rose-200';
-    return 'bg-slate-500/20 text-slate-200';
+    if (state === 'ready' || state === 'independent') return 'bg-[color-mix(in_srgb,var(--success)_20%,transparent)] text-[var(--success)]';
+    if (state === 'preparable' || state === 'requested' || state === 'running') return 'bg-[color-mix(in_srgb,var(--warning)_20%,transparent)] text-[var(--warning)]';
+    if (state === 'failed' || state === 'unavailable') return 'bg-[color-mix(in_srgb,var(--error)_20%,transparent)] text-[var(--error)]';
+    return 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)]';
 }
 
 function integer(value: string): number | null {
@@ -190,6 +190,17 @@ export function ReadAndSignalWorkbench({
     const externalMoveSourceHistory = useMemo(
         () => externalMoveSources.filter((item) => item.move_source_id !== displayedActiveExternalMoveSource?.move_source_id),
         [displayedActiveExternalMoveSource?.move_source_id, externalMoveSources],
+    );
+
+    // Failed job-sourced move tables (e.g. rejected by a since-fixed validator) can be re-validated.
+    const retryableJobMoveSources = useMemo(
+        () => moveSources.filter((item) => (
+            item.source_job_id
+            && item.state === 'failed'
+            && item.attempt_number < 3
+            && !moveSources.some((candidate) => candidate.predecessor_move_source_id === item.move_source_id)
+        )),
+        [moveSources],
     );
 
     const identityKey = `${datasetId}:${runId}:${observedGeneration}:${alignmentJobId}:${alignmentSession?.session_id || ''}:${referenceRevisionId || ''}:${viewerSession?.viewer_session_id || ''}`;
@@ -998,7 +1009,7 @@ export function ReadAndSignalWorkbench({
                         Save session
                     </button>
                 </div>
-                {error && <div role="alert" className="rounded border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-200">{error}</div>}
+                {error && <div role="alert" className="rounded border border-[color-mix(in_srgb,var(--error)_40%,transparent)] bg-[color-mix(in_srgb,var(--error)_10%,transparent)] px-2 py-1 text-[11px] text-[var(--error)]">{error}</div>}
             </header>
 
             <div data-signal-workbench-scroll onWheel={(event) => event.stopPropagation()} className="flex-1 min-h-0 overflow-y-scroll overscroll-contain [scrollbar-gutter:stable] p-3 space-y-3">
@@ -1030,7 +1041,7 @@ export function ReadAndSignalWorkbench({
                     </div>
                     <div role="listbox" aria-label="Eligible reads" className="max-h-48 space-y-1 overflow-y-auto rounded border border-[var(--border-primary)] p-1">
                         {filteredEligibleReads.map((read) => (
-                            <button key={read.read_id} type="button" role="option" aria-selected={read.read_id === readId.trim()} onClick={() => { setReadId(read.read_id); setSelectedRead(read); }} className={`block w-full rounded px-2 py-1 text-left text-[10px] ${read.read_id === readId.trim() ? 'bg-sky-500/20 text-sky-100' : 'hover:bg-[var(--bg-secondary)]'}`}>
+                            <button key={read.read_id} type="button" role="option" aria-selected={read.read_id === readId.trim()} onClick={() => { setReadId(read.read_id); setSelectedRead(read); }} className={`block w-full rounded px-2 py-1 text-left text-[10px] ${read.read_id === readId.trim() ? 'bg-[color-mix(in_srgb,var(--accent-primary)_20%,transparent)] text-[var(--accent-primary)]' : 'hover:bg-[var(--bg-secondary)]'}`}>
                                 <span className="block font-medium">{formatAlignmentReadSummary(read)}</span>
                                 <span className="block truncate text-[var(--text-muted)]">{read.contig}:{read.start_1based} · {read.strand}</span>
                             </button>
@@ -1139,6 +1150,19 @@ export function ReadAndSignalWorkbench({
                             </div>
                         </details>
                     )}
+                    {retryableJobMoveSources.map((item) => (
+                        <div key={item.move_source_id} data-retryable-job-move-source className="flex flex-wrap items-center gap-1 break-all text-[10px] text-[var(--text-secondary)]">
+                            <span>Basecall move table <code>{item.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(item.state)}`}>{item.state}</span> · {item.reason_code}</span>
+                            <button
+                                type="button"
+                                onClick={() => void createFreshExternalMoveSourceAttempt(item.move_source_id)}
+                                disabled={busy}
+                                className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40"
+                            >
+                                Re-validate
+                            </button>
+                        </div>
+                    ))}
                 </section>
 
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
@@ -1170,7 +1194,7 @@ export function ReadAndSignalWorkbench({
                     <div className="rounded border border-[var(--border-primary)] p-2 text-[10px] space-y-1">
                         <div>Calibration <span className={`rounded px-1 ${stateBadge(calibration?.state || (compatibleProfile ? 'ready' : 'unavailable'))}`}>{calibration?.state || (compatibleProfile ? 'approved profile ready' : 'not requested')}</span></div>
                         <div className="break-all text-[var(--text-secondary)]">{calibration?.reason_code || (compatibleProfile ? 'exact approved profile available' : 'fresh click will request deterministic calibration')}</div>
-                        {calibration?.failure_message && <div className="text-rose-200">{calibration.failure_code}: {calibration.failure_message}</div>}
+                        {calibration?.failure_message && <div className="text-[var(--error)]">{calibration.failure_code}: {calibration.failure_message}</div>}
                         {calibration?.artifact && <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg-secondary)] p-1 text-[9px]">{JSON.stringify({
                             artifact_id: calibration.artifact.calibration_artifact_id,
                             artifact_sha256: calibration.artifact.artifact_sha256,
@@ -1217,7 +1241,7 @@ export function ReadAndSignalWorkbench({
                                 if (candidate.value === 'pileup') {
                                     setRenderParams((current) => ({ ...current, loose_bound: false }));
                                 }
-                            }} disabled={candidate.disabled} className={`rounded border px-2 py-1 text-[10px] disabled:opacity-40 ${mode === candidate.value ? 'border-[var(--accent-secondary)] text-[var(--accent-secondary)]' : 'border-[var(--border-primary)]'}`}>{candidate.label}</button>
+                            }} disabled={candidate.disabled} className={`rounded border px-2 py-1 text-[10px] disabled:opacity-40 ${mode === candidate.value ? 'border-[var(--accent-secondary)] text-[var(--text-action)]' : 'border-[var(--border-primary)]'}`}>{candidate.label}</button>
                         ))}
                         {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && <button type="button" onClick={() => setAdvancedOpen((value) => !value)} className="ml-auto rounded border border-[var(--border-primary)] px-2 py-1 text-[10px]">{advancedOpen ? 'Hide' : 'Render settings'}</button>}
                     </div>
@@ -1270,11 +1294,11 @@ export function ReadAndSignalWorkbench({
                         </div>
                     )}
                     {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && <div className="flex items-center gap-2">
-                        <button type="button" onClick={() => void render()} disabled={busy || !mappingArtifact} className="rounded bg-[var(--accent-secondary)] px-3 py-1.5 text-xs text-white disabled:opacity-40">{busy ? 'Working…' : `Render ${mode}`}</button>
+                        <button type="button" onClick={() => void render()} disabled={busy || !mappingArtifact} className="rounded bg-[var(--accent-primary)] px-3 py-1.5 text-xs text-[var(--text-on-accent)] disabled:opacity-40">{busy ? 'Working…' : `Render ${mode}`}</button>
                         {viewJob && <span className={`rounded px-1.5 py-0.5 text-[10px] ${stateBadge(viewJob.state)}`}>{viewJob.state}: {viewJob.reason_code}</span>}
                         {viewJob && !TERMINAL_STATES.has(viewJob.state) && <button type="button" onClick={() => void cancelViewForIdentity(viewJob)} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px]">Cancel render</button>}
                     </div>}
-                    {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && viewJob?.failure_message && <div className="text-[10px] text-rose-200">{viewJob.failure_code}: {viewJob.failure_message}</div>}
+                    {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && viewJob?.failure_message && <div className="text-[10px] text-[var(--error)]">{viewJob.failure_code}: {viewJob.failure_message}</div>}
                     {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && (artifactUrl ? (
                         <iframe
                             title="Bounded Squigualiser artifact"

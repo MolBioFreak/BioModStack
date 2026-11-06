@@ -59,9 +59,6 @@ modes:
       - fampnn_batch_size
       - fampnn_repack_last
       - fampnn_extra_config
-      - fixed_positions
-      - fampnn_mutation_top_n
-      - fampnn_mutation_min_log_odds_delta
   - id: fixed_backbone
     name: Fixed Backbone Redesign
     description: Redesign sequence while keeping specific residues fixed
@@ -98,13 +95,6 @@ modes:
       - fampnn_seq_only
       - fampnn_num_steps
       - fampnn_extra_config
-      - design_chain
-      - target_chain
-      - fampnn_fix_target_sidechains
-      - fampnn_batch_size
-      - fampnn_repack_last
-      - fampnn_mutation_top_n
-      - fampnn_mutation_min_log_odds_delta
   - id: binder_design
     name: Binder Sequence Design
     description: Design binder sequences against a fixed target
@@ -141,10 +131,6 @@ modes:
       - fampnn_batch_size
       - fampnn_repack_last
       - fampnn_extra_config
-      - fixed_positions
-      - fampnn_mutation_top_n
-      - fampnn_mutation_min_log_odds_delta
-
 params:
   - name: seqs_per_design
     type: integer

@@ -56,7 +56,8 @@ test('all selection-consuming panels preserve or explicitly reject origin-spanni
 
     assert.match(alignmentPanelSource, /createSelectionSnapshot/);
     assert.match(alignmentPanelSource, /wrappingSelection/);
-    assert.match(alignmentPanelSource, /scalar-offset selection alignment/);
+    assert.match(alignmentPanelSource, /value="selection" disabled=\{!selectionRange\}/);
+    assert.match(alignmentPanelSource, /This selection crosses the origin/);
     assert.doesNotMatch(alignmentPanelSource, /Math\.min\(selection\.start/);
 
     assert.match(editPanelSource, /createSelectionSnapshot/);

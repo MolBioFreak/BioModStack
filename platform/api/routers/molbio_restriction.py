@@ -441,6 +441,10 @@ class InlineDNASource(StrictResponse):
     name: str = Field(min_length=1, max_length=128, pattern=r".*\S.*")
     dna: str = Field(min_length=1, max_length=MAX_INLINE_SEQUENCE_LENGTH)
     topology: Literal["linear", "circular"]
+    molecule_strandedness: Literal["single", "double", "unknown"] = Field(
+        default="double",
+        description="Inline DNA defaults to an explicitly assumed duplex; single/unknown substrates cannot produce duplex digest fragments.",
+    )
 
 
 class MolecularRevisionSource(StrictResponse):
@@ -1108,6 +1112,8 @@ class _ResolvedRevisionSource:
     sequence: str
     is_circular: bool | None
     topology: str | None
+    molecule_strandedness: str = "double"
+    has_staggered_ends: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1220,6 +1226,14 @@ async def _resolve_revision_source(
     if document is None or revision is None or revision.document_id != document.id:
         raise _error(404, "source_revision_not_found", "molecular revision was not found")
     snapshot = revision.snapshot if isinstance(revision.snapshot, dict) else {}
+    provenance = revision.provenance if isinstance(getattr(revision, "provenance", None), dict) else {}
+    digest_geometry = provenance.get("geometry") if provenance.get("schema") == "bms.molbio.restriction-digest-fragment-provenance.v1" else None
+    is_digest_fragment = isinstance(digest_geometry, dict)
+    has_staggered_ends = is_digest_fragment and any(
+        isinstance(digest_geometry.get(side), dict)
+        and digest_geometry[side].get("kind") in {"five_prime_overhang", "three_prime_overhang"}
+        for side in ("left_end", "right_end")
+    )
     return _ResolvedRevisionSource(
         document_id=str(document.id),
         document_name=str(document.name),
@@ -1231,6 +1245,8 @@ async def _resolve_revision_source(
         sequence=str(snapshot.get("sequence") or ""),
         is_circular=(snapshot.get("is_circular") if isinstance(snapshot.get("is_circular"), bool) else None),
         topology=(snapshot.get("topology") if snapshot.get("topology") in {"linear", "circular"} else None),
+        molecule_strandedness=str(snapshot.get("molecule_strandedness") or ("double" if is_digest_fragment else "unknown")),
+        has_staggered_ends=has_staggered_ends,
     )
 
 
@@ -1319,7 +1335,7 @@ def _complete_analysis_pipeline(
     )
     canonical_bytes = response.model_dump_json(by_alias=True).encode("utf-8")
     if len(canonical_bytes) > MAX_RESPONSE_BYTES:
-        raise AnalysisLimitError("analysis response exceeds byte limit")
+        raise AnalysisLimitError("analysis response exceeds byte limit", budget="response_bytes", limit=MAX_RESPONSE_BYTES, observed=len(canonical_bytes))
     return canonical_bytes
 
 
@@ -1388,6 +1404,13 @@ def _complete_digest_pipeline(
     if payload.catalog.expected_catalog_sha256 != view.content_sha256:
         raise _error(409, "catalog_digest_mismatch", "restriction catalog digest does not match")
     sequence, topology, source_receipt = _analysis_source(payload.source, resolved_revision)
+    strandedness = payload.source.molecule_strandedness if isinstance(payload.source, InlineDNASource) else (
+        resolved_revision.molecule_strandedness if resolved_revision else "unknown"
+    )
+    if strandedness != "double":
+        raise _error(422, "unsupported_digest_substrate", "Digest simulation requires confirmed double-stranded DNA. Single-stranded or unknown substrates are not supported.")
+    if resolved_revision and resolved_revision.has_staggered_ends:
+        raise _error(422, "unsupported_digest_substrate", "Redigestion of a fragment with retained overhangs is not supported. Preserve its duplex ends or perform an explicit end-repair operation first.")
     simulation, canonical = _simulate_normalized_digest_canonical(
         sequence=sequence, source_sha=source_receipt.content_sha256, topology=topology, catalog=view,
         records=_digest_records(view, payload.enzyme_ids),

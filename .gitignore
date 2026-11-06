@@ -20,6 +20,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
+# Generated alignment package build output
+/packages/bms-alignment-core/build/
+/packages/bms-alignment-core/*.egg-info/
+
 # Node/build caches
 node_modules/
 node_modules/.tmp/
@@ -95,3 +99,7 @@ htmlcov/
 /.ngs_latest_papers/
 .idea/
 .DS_Store
+
+# A virtualenv is a host artifact, never a tracked path (a committed symlink
+# here once made the canonical checkout link to itself).
+platform/api/.venv

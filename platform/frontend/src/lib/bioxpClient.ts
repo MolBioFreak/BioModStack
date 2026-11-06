@@ -1,3 +1,4 @@
+import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query';
 
@@ -1699,6 +1700,17 @@ export function assertBioXpOperatorActionV2Request(request: BioXpOperatorActionV
             || request.inputs.y > BIOXP_Y_ABSOLUTE_MAX_STEPS)) {
         throw new Error('XY absolute positions must fit signed int32');
     }
+    if (request.action_id === 'oem.xy.move_sequence') {
+        if (Object.keys(request.inputs).join(',') !== 'targets' || !Array.isArray(request.inputs.targets)
+            || request.inputs.targets.length < 1 || request.inputs.targets.length > BIOXP_XY_SEQUENCE_MAX_TARGETS) {
+            throw new Error(`Move sequence inputs must contain 1 to ${BIOXP_XY_SEQUENCE_MAX_TARGETS} targets only`);
+        }
+        request.inputs.targets.forEach(assertBioXpXYTarget);
+    }
+    if (request.action_id === 'oem.xy.retarget') {
+        if (Object.keys(request.inputs).join(',') !== 'target') throw new Error('Retarget inputs must contain target only');
+        assertBioXpXYTarget(request.inputs.target);
+    }
 }
 
 interface BioXpOperatorActionV2Envelope {
@@ -1710,7 +1722,7 @@ interface BioXpOperatorActionV2Envelope {
 }
 
 export type BioXpOperatorActionV2Request =
-    | (BioXpOperatorActionV2Envelope & { action_id: 'meta.activate_motion' | 'meta.recover_motion_non_homing'; inputs: Record<string, never> })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'meta.activate_motion' | 'meta.deactivate_motion' | 'meta.recover_motion_non_homing'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_steps' | 'oem.z.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_absolute' | 'oem.z.move_absolute'; inputs: { position_steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.manual_panel_home' | 'oem.z.manual_home' | 'oem.z.diagnostic_home_axis' | 'oem.z.clear' | 'oem.xy.home' | 'oem.deck.collect_authority'; inputs: Record<string, never> })
@@ -1719,7 +1731,23 @@ export type BioXpOperatorActionV2Request =
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_absolute'; inputs: { target_steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.manual_panel_home'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_location'; inputs: { target: string; camera_offset: boolean } })
-    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_well'; inputs: { location_id: number; well: string | number; position_flag: 0 | 1 | 2 } });
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_well'; inputs: { location_id: number; well: string | number; position_flag: 0 | 1 | 2 } })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.xy.move_sequence'; inputs: { targets: BioXpXYTarget[] } })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.xy.retarget'; inputs: { target: BioXpXYTarget } });
+
+/** Fast lane / Retarget target: a named destination, a well, or raw XY. */
+export type BioXpXYTarget = { target: string; camera_offset: boolean } | { location_id: number; well: string | number } | { x: number; y: number };
+export const BIOXP_XY_SEQUENCE_MAX_TARGETS = 64;
+
+function assertBioXpXYTarget(value: BioXpXYTarget): void {
+    const target = value as Record<string, unknown>;
+    const keys = Object.keys(target).sort().join(',');
+    const int32 = (n: unknown) => Number.isSafeInteger(n) && (n as number) >= BIOXP_Y_ABSOLUTE_MIN_STEPS && (n as number) <= BIOXP_Y_ABSOLUTE_MAX_STEPS;
+    const valid = keys === 'camera_offset,target' ? typeof target.target === 'string' && /^[A-Z0-9][A-Z0-9_]*$/.test(target.target) && typeof target.camera_offset === 'boolean'
+        : keys === 'location_id,well' ? Number.isSafeInteger(target.location_id) && (typeof target.well === 'string' || Number.isSafeInteger(target.well))
+            : keys === 'x,y' && int32(target.x) && int32(target.y);
+    if (!valid) throw new Error('Each target must be {target, camera_offset}, {location_id, well} or {x, y}');
+}
 
 export interface BioXpOperatorInterruptV1Request {
     expected_connection_generation: number;
@@ -1779,7 +1807,7 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
             assertBioXpOperatorActionV2Request(request);
             const { action_id: actionId, ...body } = request;
             const path = `/api/bioxp/operator-controls/v2/actions/${encodeURIComponent(actionId)}`;
-            return (await ((actionId === 'oem.deck.move_to_location' || actionId === 'oem.deck.move_to_well')
+            return (await (BIOXP_DECK_LANE_ACTION_IDS.includes(actionId)
                 ? api.post<BioXpOperatorReceiptV2>(path, body, { timeout: 12000 })
                 : api.post<BioXpOperatorReceiptV2>(path, body))).data;
         },
@@ -1793,8 +1821,14 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
 
 export const useInvokeBioXpOperatorActionV2 = () => useInvokeBioXpOperatorActionV2Mutation();
 
+/** Deck click lane: Full report (named/well moves), Fast lane (sequence) and Retarget. */
+export const BIOXP_DECK_LANE_ACTION_IDS: readonly string[] = ['oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.xy.move_sequence', 'oem.xy.retarget'];
+type BioXpDeckLaneActionId = 'oem.deck.move_to_location' | 'oem.deck.move_to_well' | 'oem.xy.move_sequence' | 'oem.xy.retarget';
+const isDeckLaneRequest = (request: BioXpOperatorActionV2Request): request is Extract<BioXpOperatorActionV2Request, { action_id: BioXpDeckLaneActionId }> =>
+    BIOXP_DECK_LANE_ACTION_IDS.includes(request.action_id);
+
 export interface BioXpDeckSubmission {
-    request: Extract<BioXpOperatorActionV2Request, { action_id: 'oem.deck.move_to_location' | 'oem.deck.move_to_well' }>;
+    request: Extract<BioXpOperatorActionV2Request, { action_id: BioXpDeckLaneActionId }>;
     state: 'submitting' | 'accepted' | 'uncertain' | 'rejected' | 'not_sent';
     commandId?: string;
     receipt?: BioXpOperatorReceiptV2;
@@ -1893,7 +1927,7 @@ export const useInvokeBioXpDeckActionV2 = (generation = 0, active = false) => {
         },
         submit: (request: BioXpOperatorActionV2Request) => {
             if (!active || request.expected_connection_generation !== generation
-                || (request.action_id !== 'oem.deck.move_to_location' && request.action_id !== 'oem.deck.move_to_well')) return false;
+                || !isDeckLaneRequest(request)) return false;
             if (reserved.current !== null || sending.current !== null) return false;
             assertBioXpOperatorActionV2Request(request);
             reserved.current = request.idempotency_key;
@@ -1968,7 +2002,7 @@ export const bioXpDeckRecoveryResolution = (receipt: (BioXpOperatorReceiptV2 & P
         || !Number.isSafeInteger(value.transition_sequence) || value.transition_sequence < 1
         || value.command_id !== receipt?.command_id || receipt.terminal !== true
         || !['failed', 'ambiguous', 'interrupted', 'stopped', 'aborted', 'cancelled'].includes(receipt.status)
-        || !['oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.deck._mov_execution', 'oem.deck._finite_operation'].includes(receipt.action_id)) {
+        || !['oem.deck.move_to_location', 'oem.deck.move_to_well', 'oem.deck._mov_execution', 'oem.deck._finite_operation', 'oem.xy.move_sequence', 'oem.xy.retarget'].includes(receipt.action_id)) {
         throw new Error('Invalid deck recovery resolution');
     }
     return value;
@@ -2096,11 +2130,14 @@ export const useBioXpOperatorReceiptV2 = (
     commandId: string | null,
     connectionGeneration: number,
     enabled = true,
+    // Fast lane/Retarget completions are not in the robot's update feed; read the
+    // one in-flight receipt until it is terminal.
+    pollUntilTerminalMs?: number,
 ) => {
     useBioXpOperatorUpdates(connectionGeneration, enabled && Boolean(commandId));
     return useQuery({
         queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt', commandId, connectionGeneration],
-        queryFn: async ({ signal }) => {
+        queryFn: async ({ signal }): Promise<BioXpOperatorReceiptV2> => {
             const receipt = (
             await api.get<BioXpOperatorReceiptV2>(
                 `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
@@ -2110,6 +2147,9 @@ export const useBioXpOperatorReceiptV2 = (
             if (receipt.command_id !== commandId) throw new Error('Receipt command identity mismatch');
             return receipt;
         },
+        refetchInterval: (query: { state: { data?: BioXpOperatorReceiptV2 } }) =>
+            pollUntilTerminalMs && enabled && query.state.data?.terminal !== true ? pollUntilTerminalMs : false,
+        refetchIntervalInBackground: false,
         enabled: enabled && Boolean(commandId) && connectionGeneration > 0,
         gcTime: 0,
         retry: false,
@@ -2720,7 +2760,7 @@ export async function stopBioXpCameraStream(connectionGeneration: number): Promi
 
 export function buildBioXpCameraMjpegUrl(connectionGeneration: number, streamId?: string | null): string {
     const owner = streamId ? `&stream_id=${encodeURIComponent(streamId)}` : '';
-    return `${BIOXP_CAMERA_ENDPOINTS.mjpeg}?expected_generation=${encodeURIComponent(String(connectionGeneration))}${owner}`;
+    return resolveApiResourceUrl(`${BIOXP_CAMERA_ENDPOINTS.mjpeg}?expected_generation=${encodeURIComponent(String(connectionGeneration))}${owner}`);
 }
 
 export async function fetchBioXpCameraFrame(connectionGeneration: number): Promise<BioXpCameraImage> {
@@ -2908,6 +2948,82 @@ export const useAssessBioXpOperatorAction = () => {
         },
         onSuccess: (_receipt, variables) => {
             refreshBioXpHistoryCaches(queryClient, variables.connectionGeneration);
+            void queryClient.invalidateQueries({ queryKey: operatorCatalogKey });
+        },
+    });
+};
+
+
+// --- Deck record (record-only correction; the robot moves nothing) ---------
+export interface BioXpDeckStateV1 {
+    schema_version: 'bioxp.operator_deck_state.v1';
+    semantic: {
+        current_location?: string | null; tip_loaded?: boolean | null;
+        plate_on_gantry?: number | null; semantic_state_revision?: number;
+        movable_plate_locations?: Record<string, string>;
+        [key: string]: unknown;
+    };
+    movable_objects: Record<string, { location: string; source: 'sqlite_record' | 'provider_machine_status' }>;
+    physical_observation: false;
+}
+
+export interface BioXpTipTrayRowV1 {
+    tray: number; tray_id: number; unavailable?: string;
+    occupancy?: boolean[]; tips_present?: number | null; four_channel_groups_available?: number | null;
+    tip_type?: 'T10' | 'T50' | 'T200' | 'T201' | null;
+    [key: string]: unknown;
+}
+
+export interface BioXpTipTraysV1 { schema_version: 'bioxp.operator_tip_trays.v1'; trays: BioXpTipTrayRowV1[]; physical_observation: false }
+
+export interface BioXpDeckRecordRequestV1 {
+    expected_connection_generation: number;
+    record_id?: string;
+    reason?: string;
+    movable_objects?: Record<string, string>;
+    tip_trays?: Array<{ tray: number; tips?: 'full' | 'empty' | string[]; tip_type?: 10 | 50 | 200 }>;
+    gantry?: string;
+}
+
+export interface BioXpDeckRecordResultV1 {
+    schema_version: 'bioxp.operator_deck_record_result.v1';
+    record_id: string; motion_commanded: false; physical_observation: false;
+    warnings?: Array<{ code: string; objects?: string[]; message?: string }>;
+    [key: string]: unknown;
+}
+
+export const bioXpDeckRecordKey = (generation: number) => ['bioxp', 'operator-controls', 'deck-record', generation] as const;
+
+export const useBioXpDeckState = (generation: number, enabled = true) => useQuery({
+    queryKey: [...bioXpDeckRecordKey(generation), 'state'],
+    queryFn: async ({ signal }) => (await api.get<BioXpDeckStateV1>('/api/bioxp/operator-controls/deck/state', { signal })).data,
+    enabled: enabled && generation > 0,
+    retry: false,
+    refetchInterval: enabled ? 15_000 : false,
+    refetchOnWindowFocus: false,
+});
+
+export const useBioXpTipTrays = (generation: number, enabled = true) => useQuery({
+    queryKey: [...bioXpDeckRecordKey(generation), 'tip-trays'],
+    queryFn: async ({ signal }) => (await api.get<BioXpTipTraysV1>('/api/bioxp/operator-controls/tip-trays', { signal })).data,
+    enabled: enabled && generation > 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+});
+
+export const useRecordBioXpDeck = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        retry: false,
+        networkMode: 'always',
+        mutationFn: async (request: BioXpDeckRecordRequestV1) => {
+            const hasChange = (request.movable_objects && Object.keys(request.movable_objects).length > 0)
+                || (request.tip_trays && request.tip_trays.length > 0) || request.gantry != null;
+            if (!hasChange) throw new Error('Choose at least one change to record.');
+            return (await api.post<BioXpDeckRecordResultV1>('/api/bioxp/operator-controls/deck/record', request)).data;
+        },
+        onSettled: (_result, _error, request) => {
+            void queryClient.invalidateQueries({ queryKey: bioXpDeckRecordKey(request.expected_connection_generation) });
             void queryClient.invalidateQueries({ queryKey: operatorCatalogKey });
         },
     });

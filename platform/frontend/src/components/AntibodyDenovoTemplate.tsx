@@ -3214,10 +3214,11 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         </BindCraft2Campaign>
     ) : null;
 
+    if (bc2Workspace) return bc2Workspace;
+
     return (
         <>
-        {bc2Workspace}
-        <div hidden={Boolean(bc2Workspace)}>
+        <div>
         <BinderWorkflowWorkspace
             title={isRefinementMode ? 'Antibody Refinement' : 'De Novo Binder Design'}
             description={<><button type="button" onClick={onBack}>← Back</button><span className="ml-3">Model-native settings; optional operations remain explicit.</span></>}

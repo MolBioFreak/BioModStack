@@ -49,7 +49,7 @@ def test_writable_cwd_selected_cache_native_fallback_and_unchanged_options(tmp_p
 
     def run(cmd, **kwargs):
         seen.append(cmd)
-        assert cmd[1] == str(source / "runner/inference.py")
+        assert cmd[1:4] == [str(ROOT / "scripts/run_disco_inference.py"), "--observe-native", str(source)]
         assert f"effort={effort}" in cmd
         assert "experiment=designable" in cmd
         assert f"use_deepspeed_evo_attention={str(attention).lower()}" in cmd
@@ -68,6 +68,7 @@ def test_writable_cwd_selected_cache_native_fallback_and_unchanged_options(tmp_p
             assert Path(env[key]).is_relative_to(output if cache_mode == "unset" else shared)
             if key in supplied:
                 assert env[key] == supplied[key]
+        return wrapper.subprocess.CompletedProcess(cmd, 0)
 
     monkeypatch.setattr(wrapper.subprocess, "run", run)
     wrapper.main()

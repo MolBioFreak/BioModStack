@@ -1,10 +1,7 @@
-import type { WorkflowPlan } from './bioxpWorkflowPlan';
 import type { BioXpManualStep } from './bioxpManualPipetting';
 
 export type DraftObject = { [key: string]: DraftValue };
 export type DraftValue = null | boolean | number | string | DraftValue[] | DraftObject;
-export type WorkflowDraftRow = { step_id: string; intent: DraftObject; required_capability?: string | null };
-export type WorkflowDraft = { schema: 'bms.bioxp-workflow-draft.v1'; steps: WorkflowDraftRow[]; editor_state: DraftObject };
 export type NativeDraft<T> = T extends number ? number | string : T extends object ? { [K in keyof T]: NativeDraft<T[K]> } : T;
 export const isDraftObject = (value: unknown): value is DraftObject => !!value && typeof value === 'object' && !Array.isArray(value);
 
@@ -72,19 +69,4 @@ export function mergeDraftEdits(original: DraftObject, before: DraftObject, afte
             ? mergeDraftEdits(original[key], before[key], value) : value;
     }
     return result;
-}
-
-export function readWorkflowDraft(value: unknown): WorkflowDraft | WorkflowPlan {
-    if (!isDraftObject(value) || (value.schema !== 'bms.bioxp-workflow-draft.v1' && value.schema !== 'bms.bioxp-workflow-draft.v2') || !Array.isArray(value.steps) || !isDraftObject(value.editor_state)
-        || Object.keys(value).some(k => !['schema', 'steps', 'editor_state', ...(value.schema === 'bms.bioxp-workflow-draft.v2' ? ['deck_plan'] : [])].includes(k))) throw new Error('Unsupported workflow draft envelope.');
-    if (value.schema === 'bms.bioxp-workflow-draft.v2' && (!isDraftObject(value.deck_plan)
-        || !['labware', 'materials', 'assignments'].every(key => Array.isArray((value.deck_plan as DraftObject)[key])))) throw new Error('Invalid workflow deck plan.');
-    const ids = new Set<string>();
-    for (const row of value.steps) {
-        if (!isDraftObject(row) || typeof row.step_id !== 'string' || !row.step_id.trim() || ids.has(row.step_id) || !isDraftObject(row.intent)
-            || Object.keys(row).some(k => !['step_id', 'intent', 'required_capability'].includes(k))
-            || Object.hasOwn(row, 'required_capability') && row.required_capability !== null && typeof row.required_capability !== 'string') throw new Error('Invalid workflow draft row.');
-        ids.add(row.step_id);
-    }
-    return value as unknown as WorkflowDraft | WorkflowPlan;
 }
