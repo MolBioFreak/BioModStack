@@ -3916,8 +3916,10 @@ class PrimerTmInput(BaseModel):
 class PrimerTmResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal["primer-tm-result-v1"] = "primer-tm-result-v1"
-    effective_settings: PrimerTmSettings
-    effective_input: PrimerTmInput
+    # Historical results did not record thermodynamic provenance. Keep it
+    # unknown on read; current calculations always supply the resolved receipt.
+    effective_settings: Optional[PrimerTmSettings] = None
+    effective_input: Optional[PrimerTmInput] = None
     id: Optional[str] = None
     name: Optional[str] = None
     sequence: str

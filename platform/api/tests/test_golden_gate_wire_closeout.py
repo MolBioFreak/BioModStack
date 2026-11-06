@@ -5,6 +5,8 @@ so a response serializer cannot silently change opaque JSON/QC scalar types.
 """
 import io
 import json
+import os
+from copy import deepcopy
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -89,8 +91,7 @@ async def test_current_browser_native_preview_save_reopen_export_import(tmp_path
         got = await client.get(BASE + '/' + operation, params=calls[2]['params'])
         assert got.status_code == 200, got.text
         assert exact(got.json()) == exact(saved.json())
-        # Current wrappers forward the actual returned preview, not an old
-        # recorded result lacking now-required native thermodynamic provenance.
+        # Forward the actual returned preview, including its native receipt.
         exported = await client.post(calls[3]['url'], json=preview.json())
         assert exported.status_code == 200, exported.text
         with ZipFile(io.BytesIO(exported.content)) as archive:
@@ -100,24 +101,85 @@ async def test_current_browser_native_preview_save_reopen_export_import(tmp_path
             json=project_workflow(document, 'portable').model_dump(mode='json'))
         assert imported.status_code == 200, imported.text
         assert exact(expand_workflow(imported.json(), 'result')) == exact(native)
+        evidence = os.environ.get('BMS_GG_CURRENT_CAPTURE')
+        if evidence:
+            Path(evidence).write_text(json.dumps(dict(
+                request=expand_workflow(calls[0]['body'], 'request'),
+                preview=expand_workflow(preview.json(), 'result'), normalized=preview.json(),
+                save_request=expand_workflow(calls[1]['body'], 'save'),
+                saved=expanded, saved_normalized=saved.json(),
+                document=document, imported=imported.json()), ensure_ascii=False, indent=2) + '\n')
 
 
-def test_captured_historical_export_lacks_required_tm_provenance():
-    """Pin why historical replay cannot simply be asserted to equal a new run."""
+def historical_result():
+    root = Path(__file__).resolve().parents[2] / 'frontend/tests/fixtures/golden-gate'
+    return expand_workflow(json.loads((root / 'wire-historical-result.json').read_text()), 'result')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('provenance', ['absent', 'null', 'partial'])
+async def test_historical_export_import_preserves_unknown_tm_provenance(tmp_path, monkeypatch, provenance):
     from services.assembly.golden_gate_workflow_types import WorkflowResult
-    calls = browser_capture()
-    historical = expand_workflow(calls[3]['body'], 'result')
-    with pytest.raises(ValidationError) as error:
-        WorkflowResult.model_validate(historical)
-    missing = {e['loc'] for e in error.value.errors()}
-    assert missing == {
-        ('solutions', 0, 'design', 'primers', i, 'tm', field)
-        for i in (0, 1) for field in ('effective_settings', 'effective_input')}
+    historical = historical_result()
+    for primer in historical['solutions'][0]['design']['primers']:
+        assert 'effective_settings' not in primer['tm']
+        assert 'effective_input' not in primer['tm']
+        if provenance == 'null':
+            primer['tm'].update(effective_settings=None, effective_input=None)
+        elif provenance == 'partial':
+            primer['tm']['effective_input'] = None
+    # Defaults add only unknown/null evidence, never inferred calculation inputs.
+    expected = WorkflowResult.model_validate(historical).model_dump(mode='json')
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Historical receiving must not recompute science')
+    monkeypatch.setattr('routers.molbio_ops.calculate_primer_tm_result', forbidden)
+    monkeypatch.setattr('routers.molbio_golden_gate_design.run_workflow', forbidden)
+    monkeypatch.setattr('services.assembly.golden_gate_workflow_persistence.run_workflow', forbidden)
+    async with native_store(tmp_path / 'legacy.db', initialize=True) as (client, _):
+        historical_document = dict(schema_version='bms.golden-gate-workflow-portable.v1', result=historical)
+        for value, params in ((historical_document, {}),
+                              (project_workflow(historical_document, 'portable').model_dump(mode='json'), {'view': 'normalized'})):
+            imported = await client.post(BASE + '/import', params=params, json=value)
+            assert imported.status_code == 200, imported.text
+            received = expand_workflow(imported.json(), 'result') if params else imported.json()
+            assert exact(received) == exact(expected)
+        archives = []
+        for value in (historical, project_workflow(historical, 'result').model_dump(mode='json')):
+            exported = await client.post(BASE + '/export', json=value)
+            assert exported.status_code == 200, exported.text
+            with ZipFile(io.BytesIO(exported.content)) as archive:
+                archives.append({n: archive.read(n) for n in archive.namelist()})
+                document = json.loads(archive.read('workflow.json'))
+            assert exact(document['result']) == exact(expected)
+            for value, params in ((document, {}), (project_workflow(document, 'portable').model_dump(mode='json'), {'view': 'normalized'})):
+                imported = await client.post(BASE + '/import', params=params, json=value)
+                assert imported.status_code == 200, imported.text
+                received = expand_workflow(imported.json(), 'result') if params else imported.json()
+                assert exact(received) == exact(expected)
+        assert archives[0] == archives[1]
+    # Preserve old observations as historical evidence, not current science.
+    design = expected['solutions'][0]['design']
+    assert design['digests'][0]['fragments'][0]['wraps_origin'] is True
+    assert [p['qc']['off_target_site_count'] for p in design['primers']] == [0, 0]
+    for primer in design['primers']:
+        assert primer['tm']['effective_settings'] is None
+        assert primer['tm']['effective_input'] is None
+
+
+def test_current_science_and_present_provenance_remain_validated():
+    from services.assembly.golden_gate_workflow_types import WorkflowResult
     native = run_workflow(REQUEST_ADAPTER.validate_python(
-        expand_workflow(calls[0]['body'], 'request'))).model_dump(mode='json')
-    old_design = historical['solutions'][0]['design']
-    new_design = native['solutions'][0]['design']
-    assert old_design['digests'][0]['fragments'][0]['wraps_origin'] is True
-    assert new_design['digests'][0]['fragments'][0]['wraps_origin'] is False
-    assert [p['qc']['off_target_site_count'] for p in old_design['primers']] == [0, 0]
-    assert [p['qc']['off_target_site_count'] for p in new_design['primers']] == [None, None]
+        expand_workflow(browser_capture()[0]['body'], 'request'))).model_dump(mode='json')
+    design = native['solutions'][0]['design']
+    assert design['digests'][0]['fragments'][0]['wraps_origin'] is False
+    assert [p['qc']['off_target_site_count'] for p in design['primers']] == [None, None]
+    for primer in design['primers']:
+        assert primer['tm']['effective_settings'] is not None
+        assert primer['tm']['effective_input']['sequence'] == primer['annealing_sequence']
+    for field, value in [('effective_settings', {'na_mM': -1}),
+                         ('effective_input', {'sequence': 'ACGT', 'undocumented': True}),
+                         ('effective_settings', {'undocumented': True})]:
+        invalid = deepcopy(native)
+        invalid['solutions'][0]['design']['primers'][0]['tm'][field] = value
+        with pytest.raises(ValidationError):
+            WorkflowResult.model_validate(invalid)

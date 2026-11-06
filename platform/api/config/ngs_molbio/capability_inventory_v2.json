@@ -2979,7 +2979,7 @@
       ],
       "entrypoint_owner": "services.assembly.golden_gate_workflow.run_workflow",
       "exposure_state": "internal",
-      "inventory_sha256": "2a0a9d282fbb1e080f9e037f03e4977e546858abb9b7847ac47c02a3ee9de7e8",
+      "inventory_sha256": "25d1b6d4acec28483baa819509a9f61182e04272bf8f576f26f81633a3127e94",
       "label": "Golden Gate raw design",
       "launch_mode": "domain_operation",
       "materializer_owner": "services.assembly.golden_gate_workflow_persistence.resolve_sources",
@@ -2997,7 +2997,7 @@
         "idempotency_key"
       ],
       "parameter_schema_id": "bms.golden-gate-workflow-save.v1",
-      "parameter_schema_sha256": "07454f82d8fe2f4692cd2003d604fb69593588de1d001f6b971080fc147a7f09",
+      "parameter_schema_sha256": "206518c8a557dfc4ef4395f19416bf152705b14413b9ec6c867ad06e76ec44a2",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -3069,7 +3069,7 @@
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "6861e7636f1a180499dd6700d321830ac178d340141cb9c1aadfa7a3dd0d9edf",
+  "content_sha256": "a36722fd9339359fda36e84fe1dc318a97df7ad0735c6ae7dfcc1d5f6fa7413f",
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",
@@ -3095,7 +3095,7 @@
   ],
   "payload_ownership_manifest_sha256": "a0a8e0ae952565e5f8dacbd84567e65853c8fbd1ab6b1bb7454ceefcab4aa6cb",
   "schema": "bms.ngs-molbio.capability-inventory.v2",
-  "schema_registry_sha256": "6ce43d919cf950349f02afc7e526dce6b8d01f8288972b7af84052bf14d6f52e",
+  "schema_registry_sha256": "0e8f19e06ca63e987017633053f60211c7e57ba18baa05f5a67f2b28c21bce21",
   "schema_version": 2,
   "source_pin_sha256": "c24afa91cc42054da3899c0f9a024769be96b444a444e8ab714443836856f1a4"
 }

@@ -11,7 +11,6 @@ from sqlalchemy import select, text
 
 from molbio_models import MolecularOperation, MolecularOperationInput, MolecularRevision
 from routers import molbio_end_operations
-from services.assembly import restriction_cloning_persistence as persistence
 from services.molbio_persistence import current_molecular_revision
 from test_cloning_connected_api_acceptance import empty_store
 from test_molbio_branches import make_client, counts
@@ -111,6 +110,7 @@ async def test_suggest_prepare_save_cold_reopen_and_reuse(tmp_path, monkeypatch,
                 assert not (await session.execute(text("PRAGMA foreign_key_check"))).all()
                 assert (await session.execute(text("SELECT name FROM sqlite_master WHERE type='trigger'"))).all()
         await engine.dispose()
+        from services.assembly import restriction_cloning_persistence as persistence
         monkeypatch.setattr(persistence, "selected_restriction_cloning", lambda *_: pytest.fail("Cold read/retry must not recompute a preparation"))
         async with make_client(sessions) as client:
             client._transport.app.include_router(molbio_end_operations.router)

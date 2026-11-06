@@ -4834,8 +4834,8 @@ export interface PrimerTmInput {
 
 export interface PrimerTmResult {
     schema_version?: 'primer-tm-result-v1';
-    effective_input?: PrimerTmInput;
-    effective_settings?: PrimerTmSettings;
+    effective_input?: PrimerTmInput | null;
+    effective_settings?: PrimerTmSettings | null;
     id?: string | null;
     name?: string | null;
     sequence: string;

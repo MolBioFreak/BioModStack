@@ -1462,8 +1462,7 @@
           "type": "integer"
         },
         "origin_wrapping_candidates": {
-          "const": false,
-          "default": false,
+          "default": true,
           "title": "Origin Wrapping Candidates",
           "type": "boolean"
         },

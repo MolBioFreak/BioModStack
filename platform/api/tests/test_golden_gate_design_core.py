@@ -281,5 +281,15 @@ def test_json_roundtrip_references_and_closed_contract():
 
 
 def test_schema_matches_the_typed_authority():
-    schema = Path(__file__).resolve().parents[3] / "schemas/ngs_molbio/molbio-assembly-golden_gate-design-v1.schema.json"
-    assert json.loads(schema.read_text()) == GoldenGateDesignRequest.model_json_schema()
+    from pydantic import TypeAdapter
+    from services.assembly.golden_gate_workflow_types import SaveDesignRequest, WorkflowRequest
+    root = Path(__file__).resolve().parents[3] / "schemas/ngs_molbio"
+    schemas = {
+        "molbio-assembly-golden_gate-design-v1.schema.json": GoldenGateDesignRequest.model_json_schema(),
+        "molbio-golden-gate-workflow-request-v1.schema.json": TypeAdapter(WorkflowRequest).json_schema(),
+        "molbio-golden-gate-workflow-save-v1.schema.json": SaveDesignRequest.model_json_schema(),
+    }
+    for name, expected in schemas.items():
+        stored = json.loads((root / name).read_text())
+        expected.update({key: stored[key] for key in ("$schema", "$id") if key in stored})
+        assert stored == expected, name
