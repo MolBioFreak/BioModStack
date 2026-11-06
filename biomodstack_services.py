@@ -1390,6 +1390,11 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             "BMS_PLANNOTATE_ENV", "BMS_PLANNOTATE_BIN",
         ) if os.environ.get(key)
     )
+    from biomodstack_runtime_profile import asset_publication_environment
+    publication_environment = "\n        ".join(
+        "Environment=" + systemd_value(f"{key}={value}")
+        for key, value in asset_publication_environment().items()
+    )
     from biomodstack_local_resources import configured_local_policy
     local_policy = configured_local_policy()
     shared_data_root = Path(str(resolved.get("data_root", Path("/mnt/BioModStack")))).expanduser().resolve()
@@ -1492,6 +1497,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
             Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={runtime_image_store}")}
             Environment=BMS_RUNTIME_IMAGE_LANE=production
+            {publication_environment}
             {_runtime_reference_directive(runtime_image_store, 'production')}
             Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_PORT={PRODUCTION_WORKFLOW_ADAPTER_PORT}")}
             Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
@@ -1771,6 +1777,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         {("Environment=" + systemd_value(f"BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}")) if dev_ngs_runtime_sif else ""}
         Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={runtime_image_store}")}
         Environment=BMS_RUNTIME_IMAGE_LANE=development
+        {publication_environment}
         {_runtime_reference_directive(runtime_image_store, 'development')}
         {ont_runtime_environment}
         Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
@@ -1837,6 +1844,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         {("Environment=" + systemd_value(f"BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}")) if dev_ngs_runtime_sif else ""}
         Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={runtime_image_store}")}
         Environment=BMS_RUNTIME_IMAGE_LANE=development
+        {publication_environment}
         {_runtime_reference_directive(runtime_image_store, 'development')}
         Environment={systemd_value(f"BMS_WEIGHTS={dev_weights_root}")}
         Environment={systemd_value(f"BMS_COLABFOLD_DB={dev_colabfold_db}")}

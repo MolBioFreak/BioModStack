@@ -431,3 +431,18 @@ def test_cli_plan_is_dry_run_and_apply_is_explicit(setup, tmp_path):
                             capture_output=True, text=True, check=True)
     assert json.loads(result.stdout)["reclaimed_bytes"] == 0
     assert not obj.exists()
+
+
+def test_semantic_runtime_image_selector_keys_are_publishable(setup):
+    source, store, digest, _ = setup
+    spec = {"BMS_RUNTIME_IMAGE_BOLTZ2_SIF": {"source": str(source), "sha256": digest}}
+    env = publisher.publish_references(store, "development", spec)
+    assert "BMS_RUNTIME_IMAGE_BOLTZ2_SIF=" + str(lifecycle.object_path(store, digest)) in env.read_text()
+
+
+@pytest.mark.parametrize("key", ["BMS_RUNTIME_IMAGE_BOLTZ2", "BMS_RUNTIME_IMAGE__SIF", "BMS_OTHER_SIF",
+                                 "bms_runtime_image_boltz2_sif", "BMS_RUNTIME_IMAGE_BOLTZ2_SIF_X"])
+def test_unsupported_selector_keys_are_still_refused(setup, key):
+    source, store, digest, _ = setup
+    with pytest.raises(ValueError, match="supported runtime environment keys"):
+        publisher.publish_references(store, "development", {key: {"source": str(source), "sha256": digest}})
