@@ -1,7 +1,7 @@
 import { digestFragmentsForAssembly } from '../../../lib/digestAssemblyTransfer';
 import type { AssemblyFragmentInput } from '../../../lib/api';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { saveRestrictionDigest, restrictionRecognitionSite, digestCleavages } from '../../../lib/restrictionAnalysis';
+import { saveRestrictionDigest, restrictionRecognitionSite, digestCleavages, type RestrictionCleavageEvent } from '../../../lib/restrictionAnalysis';
 import { restrictionSpecialCase } from '../../../lib/restrictionSpecialCases';
 import type { HighlightedRegion, SelectionInfo, SequenceData } from '../types';
 import type {
@@ -182,6 +182,14 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
         }
     };
     const currentSave = saveState?.simulation === digestSimulation ? saveState : null;
+    // The server lists only the sites that were cut, so keep the list from the run with nothing excluded and show it
+    // while exclusions are applied; otherwise an unchecked site could not be switched back on.
+    const siteListKey = digestSimulation ? JSON.stringify([digestSimulation.source, digestSimulation.selected_enzyme_ids]) : '';
+    const allSites = useRef<{ key: string; sites: RestrictionCleavageEvent[] } | null>(null);
+    if (digestSimulation && !digestSimulation.excluded_cleavage_group_ids?.length) allSites.current = { key: siteListKey, sites: digestCleavages(digestSimulation) };
+    const cleavageSites = !digestSimulation ? []
+        : digestSimulation.excluded_cleavage_group_ids?.length && allSites.current?.key === siteListKey ? allSites.current.sites
+        : digestCleavages(digestSimulation);
         useEffect(() => {
         if (digestSimulation && pendingExcluded.current && simulatedExcluded.simulation === null) {
             setSimulatedExcluded({ simulation: digestSimulation, ids: pendingExcluded.current });
@@ -415,9 +423,9 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
                 {currentSave?.saved && savedOpen && <div data-saved-digest-fragments="true" className="mt-2 space-y-1 rounded border border-slate-700 p-2 text-xs">{currentSave.saved.outputs.map(output => <div key={output.output_edge_id} data-saved-digest-fragment={output.fragment_index} className="flex items-center justify-between gap-2"><span>#{output.fragment_index + 1} · {output.name} · {output.content_length} bp · {output.topology}</span>{onUseInAssembly && <button type="button" className="rounded border px-2" onClick={() => onUseInAssembly(digestFragmentsForAssembly(digestSimulation, [output.fragment_index], sequenceId, sequenceData.name, currentSave.saved))}>Use in assembly</button>}</div>)}</div>}
                 {currentSave?.error && <p role="alert">{currentSave.error}</p>}
             </div>}
-            {digestSimulation && digestCleavages(digestSimulation).length > 0 && <div data-digest-sites="true" className="mt-2 space-y-1 rounded border border-slate-700 p-2 text-xs">
+            {digestSimulation && cleavageSites.length > 0 && <div data-digest-sites="true" className="mt-2 space-y-1 rounded border border-slate-700 p-2 text-xs">
                 <div className="text-slate-300">Cleavage sites (uncheck to leave a site uncut):</div>
-                {digestCleavages(digestSimulation).map(c => <label key={c.contributor_group_id} className="flex items-center gap-2"><input type="checkbox" aria-label={`Cut site ${c.contributor_group_id}`} checked={!excluded.includes(c.contributor_group_id)} onChange={e => setExcluded(e.target.checked ? excluded.filter(id => id !== c.contributor_group_id) : [...excluded, c.contributor_group_id])} />{c.contributing_enzyme_ids.join('/')} · cut after bp {c.top_boundary}</label>)}
+                {cleavageSites.map(c => <label key={c.contributor_group_id} className="flex items-center gap-2"><input type="checkbox" aria-label={`Cut site ${c.contributor_group_id}`} checked={!excluded.includes(c.contributor_group_id)} onChange={e => setExcluded(e.target.checked ? excluded.filter(id => id !== c.contributor_group_id) : [...excluded, c.contributor_group_id])} />{c.contributing_enzyme_ids.join('/')} · cut after bp {c.top_boundary}</label>)}
                 <button type="button" disabled={digestLoading || JSON.stringify([...excluded].sort()) === JSON.stringify([...appliedExcluded].sort())} onClick={() => runDigest(excluded)} className="rounded border px-2 py-1 disabled:opacity-40">Re-digest with selected sites</button>
             </div>}
             {digestSimulation?.not_cuttable?.map(site => <p key={`${site.enzyme_id}:${site.site_start}`} className="mt-1 text-xs text-amber-200">{site.enzyme_id} site at {site.site_start + 1}: not cuttable on this fragment</p>)}

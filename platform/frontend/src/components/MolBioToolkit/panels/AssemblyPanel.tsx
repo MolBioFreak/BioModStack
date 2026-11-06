@@ -210,6 +210,7 @@ function EndOperations({ fragment, onApplied }: { fragment: AssemblyFragmentInpu
                 id: nextFragmentId(), name: `${fragment.name} ${operation.replace(/_/g, ' ')}`, sequence: response.sequence, orientation: 'forward', circular: false,
                 role: fragment.role, left_end: response.left_end, right_end: response.right_end, features: response.features,
                 ...(response.document_id ? { source_sequence_id: response.document_id, source_revision: 1, source_name: fragment.name, source_start: 0, source_end: response.sequence.length } : {}),
+                metadata: { ...(response.revision_id ? { revision_id: response.revision_id } : {}), retained_ends: true },
             });
             setState({});
         } catch (error: UntypedApiValue) {
@@ -655,7 +656,7 @@ export function AssemblyPanel({
         setError(null);
         setFragments((current) => current.map((fragment) => ({
             ...fragment,
-            ...(fragment.metadata?.digest_fragment ? {} : defaultEnds(nextMode)),
+            ...(fragment.metadata?.digest_fragment || fragment.metadata?.retained_ends ? {} : defaultEnds(nextMode)),
         })));
     };
 
