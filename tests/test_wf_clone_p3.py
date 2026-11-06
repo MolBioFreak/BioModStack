@@ -286,6 +286,54 @@ def test_adapter_fails_closed_on_malformed_or_contradictory_outputs(
     assert json.loads(result.stderr)["reason_code"] == reason
 
 
+@pytest.mark.parametrize("native_reason", ["Failed due to insufficient reads", "Failed to polish assembly with Medaka"])
+def test_missing_assembly_explains_native_sample_failure_despite_exit_zero(tmp_path: Path, native_reason: str) -> None:
+    root = tmp_path / "results"
+    adapter_fixture(root)
+    (root / "sample02.final.fasta").unlink()
+    (root / "sample_status.txt").write_text(
+        f"Sample,Assembly completed / failed reason,Length\nsample02,{native_reason},N/A\n"
+    )
+    result = run_adapter(root, tmp_path)
+    assert result.returncode == 2
+    failure = json.loads(result.stderr)
+    assert failure["reason_code"] == "REQUIRED_ARTIFACT_MISSING"
+    assert "missing required final FASTA" in failure["reason"]
+    assert native_reason in failure["reason"]
+    assert "nested execution exit code 0" in failure["reason"]
+    assert not (tmp_path / "adapter.json").exists()
+    assert not (root / "sample02.final.fasta").exists()
+
+
+@pytest.mark.parametrize("status_case", ["absent", "malformed", "other_sample", "completed", "symlink", "duplicate"])
+def test_missing_assembly_does_not_invent_native_failure(tmp_path: Path, status_case: str) -> None:
+    root = tmp_path / "results"
+    adapter_fixture(root)
+    (root / "sample02.final.fasta").unlink()
+    status = root / "sample_status.txt"
+    if status_case == "absent":
+        status.unlink()
+    elif status_case == "malformed":
+        status.write_text("bad\n")
+    elif status_case == "other_sample":
+        status.write_text("Sample,Assembly completed / failed reason,Length\nother,Failed due to insufficient reads,N/A\n")
+    elif status_case == "symlink":
+        outside = tmp_path / "status.txt"
+        outside.write_text("Sample,Assembly completed / failed reason,Length\nsample02,Failed due to insufficient reads,N/A\n")
+        status.unlink()
+        status.symlink_to(outside)
+    elif status_case == "duplicate":
+        nested = root / "nested"
+        nested.mkdir()
+        shutil.copyfile(status, nested / status.name)
+    result = run_adapter(root, tmp_path)
+    assert result.returncode == 2
+    failure = json.loads(result.stderr)
+    assert failure["reason_code"] == "REQUIRED_ARTIFACT_MISSING"
+    assert failure["reason"] == "missing required final FASTA matching '*.final.fasta'"
+    assert not (tmp_path / "adapter.json").exists()
+
+
 def test_adapter_rejects_symlink_and_path_escape(tmp_path: Path) -> None:
     outside = tmp_path / "outside.fasta"
     outside.write_text(">sample02\nACGTACGT\n", encoding="utf-8")

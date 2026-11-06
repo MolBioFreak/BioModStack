@@ -158,9 +158,28 @@ def normalize(args: argparse.Namespace) -> dict[str, Any]:
         authoritative_input(args.source_bai, "authoritative_analysis_bai"),
     ]
 
-    final_fasta = exactly_one(root, "*.final.fasta", "final FASTA")
-    fasta_name, sequence = read_single_fasta(final_fasta)
     sample = args.sample
+    try:
+        final_fasta = exactly_one(root, "*.final.fasta", "final FASTA")
+    except AdapterFailure as exc:
+        # Native Nextflow can exit zero after a sample-level assembly failure.
+        # Explain the absent output using its retained status, without changing
+        # required-artifact validation or treating exit zero as an assembly.
+        if exc.reason_code == "REQUIRED_ARTIFACT_MISSING":
+            try:
+                status_path = optional_one(root, "sample_status.txt", "sample status")
+                status_row = read_rows(status_path, delimiter=",")[0] if status_path else {}
+            except AdapterFailure:
+                status_row = {}  # Optional diagnostics never replace the original failure.
+            status_text = status_row.get("Assembly completed / failed reason", "")
+            if status_row.get("Sample") == sample and status_text.startswith("Failed "):
+                fail(
+                    exc.reason_code,
+                    f"{exc}; upstream sample_status.txt records {status_text!r} "
+                    f"for sample {sample!r} (nested execution exit code {args.execution_exit_code})",
+                )
+        raise
+    fasta_name, sequence = read_single_fasta(final_fasta)
     if fasta_name != sample or final_fasta.name != f"{sample}.final.fasta":
         fail("FASTA_SAMPLE_MISMATCH", f"final FASTA identity {fasta_name!r}/{final_fasta.name!r} does not match sample {sample!r}")
     final_fastq = exactly_one(root, f"{sample}.final.fastq", "final FASTQ")
