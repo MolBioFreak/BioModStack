@@ -1160,6 +1160,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         laneSubmission && laneInFlight ? `Active: ${laneSubmission.request.action_id === 'oem.xy.move_sequence'
             ? laneSubmission.request.inputs.targets.map(deckLaneTargetLabel).join(' → ') : deckLaneTargetLabel(laneSubmission.request.inputs.target)}` : null,
         lanePending.length ? `Queued: ${lanePending.map(deckLaneTargetLabel).join(' → ')}` : null,
+        laneSubmission?.state === 'rejected' || laneSubmission?.state === 'not_sent'
+            ? `Last request refused: ${bioXpErrorText(laneSubmission.error)}` : null,
     ].filter(Boolean).join(' · ') || 'None queued';
     const chooseDeckMoveMode = (mode: DeckMoveMode) => { setDeckMoveMode(mode); setDeckLanePending(null); };
     const mapStationDisabledReason = (target: string) => deckMoveMode === 'full' ? stationDisabledReason(target) : laneDisabledReason(target);

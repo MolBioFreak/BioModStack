@@ -141,6 +141,35 @@ class OperatorDeckMoveToWellInputsV2(BaseModel):
     position_flag: Annotated[StrictInt, Field(ge=0, le=2)]
 
 
+class OperatorXYNamedTargetV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    target: str = Field(min_length=1, max_length=160, pattern=r"^[A-Z0-9][A-Z0-9_]*$")
+    camera_offset: StrictBool
+
+
+class OperatorXYWellTargetV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    location_id: StrictInt
+    well: str | StrictInt
+
+
+OperatorXYTargetV2 = OperatorXYNamedTargetV2 | OperatorXYWellTargetV2 | OperatorMoveXYInputsV2
+
+
+class OperatorXYMoveSequenceInputsV2(BaseModel):
+    """Fast lane: ordered targets; the robot owns resolution, Z clearance and execution."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    targets: list[OperatorXYTargetV2] = Field(min_length=1, max_length=64)
+
+
+class OperatorXYRetargetInputsV2(BaseModel):
+    """Live-deck retarget: the newest destination replaces the current one."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    target: OperatorXYTargetV2
+
+
 def _canonical_board_epoch_map(value: dict[str, int]) -> dict[str, int]:
     if any(not key.isdecimal() or str(int(key)) != key for key in value):
         raise ValueError("board epoch keys must be canonical nonnegative decimal board IDs")

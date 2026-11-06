@@ -28,6 +28,8 @@ from services.bioxp.operator_requests import (
     OperatorMoveStepsInputsV2,
     OperatorMoveXYInputsV2,
     OperatorReportExportRequestV1,
+    OperatorXYMoveSequenceInputsV2,
+    OperatorXYRetargetInputsV2,
     OperatorYMoveAbsoluteInputsV2,
     OperatorYMoveStepsInputsV2,
     PipetteApplicationPlanRequest,
@@ -177,6 +179,8 @@ _V2_NORMAL_INPUT_TYPES = {
     "oem.deck.collect_authority": OperatorEmptyInputsV2,
     "oem.deck.move_to_location": OperatorDeckMoveInputsV1,
     "oem.deck.move_to_well": OperatorDeckMoveToWellInputsV2,
+    "oem.xy.move_sequence": OperatorXYMoveSequenceInputsV2,
+    "oem.xy.retarget": OperatorXYRetargetInputsV2,
 }
 
 
