@@ -48,7 +48,9 @@ class PrimerQcMetrics:
     hairpin_loop_size: int | None
     binding_site_count: int | None
     off_target_site_count: int | None
-    binding_positions: list[dict[str, int | bool]]
+    # Bool must precede int: FastAPI's response schema serialization otherwise
+    # emits reverse_primer_binding as 0/1 while model_dump preserves false/true.
+    binding_positions: list[dict[str, bool | int]]
     warnings: list[str]
 
 

@@ -6,6 +6,10 @@ Regeneration: run the native test with `BMS_GG_WIRE_EVIDENCE=<scratch directory>
 
 Run Node tests with `tsx --test tests/goldenGateWorkflowWire.test.ts`, mounted tests with `vitest run --config vitest.md.config.ts tests/vitest/molbio-sanity-golden-gate-wire.test.tsx tests/vitest/molbio-sanity-golden-gate-workflow.test.tsx`, and native tests with the repository's locked interpreter and scratch/offline environment. Both TS projects must typecheck. Parse fixture JSON as raw text in Vite: object-literal transformation treats `__proto__` differently from real HTTP JSON.
 
+## Current fixture expectations
+
+The paired captures include versioned primer Tm settings/results and effective-input evidence, junction sealing/overlap-Tm fields, unknown (`null`) off-target counts when no intended binding is supplied, and `wraps_origin=false` for the donor fragment spanning bases 9–73 without crossing the origin. Source aliases, compound features, primer sequences, chemistry/settings and original opaque operation/revision IDs are unchanged. The browser's original sparse preview request is preserved; Save/export/import retain the complete current serialized bodies. Native ZIP entries are compared byte-for-byte; JSON-type-sensitive preview assertions additionally distinguish booleans from integers.
+
 ## Wire interface
 
 Native helpers in `services.assembly.golden_gate_workflow_wire`:
