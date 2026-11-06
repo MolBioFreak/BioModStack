@@ -86,6 +86,8 @@
 
 ## Source-commit inventory
 
+120 source commits: 110 already present, 3 ported, 2 superseded and 5 excluded.
+
 The table covers the union of non-merge source commits since the pinned merge-base
 that touch the feature owners, plus explicit shared UI/startup/fixture prerequisites.
 `already-present` means ancestry, a recorded pick, or final supported-owner parity;
@@ -359,10 +361,14 @@ Every file in cad5406 is represented below; no keyword-only patch selection.
 - Direct Vite `createServer` configuration, no listener started: succeeds after
   removing all three task-owned viewer dist directories. All outputs are rebuilt;
   configuration prints `DIRECT_VITE_CONFIG_OK` and closes cleanly.
-- API focused roster: **483 passed, 2 failed, no skips**, 34 files, actual JUnit
+- API focused roster after the final bounded-observation fix: **485 passed, 2 failed, no skips**, 34 files, actual JUnit
   cases counted. Covers cloning/end geometry, retained save/reopen, feature and
   primer mapping, Golden Gate receiving/export, digest migration/attestation and
   populated upgrades, family-MSA edition scope and v22 upgrade/reopen.
+- Additional alignment API roster: **42 passed, 4 skipped**, 10 files. Exercises
+  setup, sources, routes, direction projection, export classification, shared state,
+  discovery and CPU resource handling. The four native receipt/journey cases skip
+  because BMS_TEST_FAMILY_MSA_SIF is not configured; they are not claimed as run.
 - Mounted Molecular Tools / Alignments roster: **412 passed**, 55 suites; every
   requested test file has JUnit cases. The schema-owned typed-nondefault case is
   enabled with the actual AlignmentRequest schema. Serial file execution.
