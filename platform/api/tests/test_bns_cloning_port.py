@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from routers import molbio_ops
 from services.assembly.types import AssemblyError
 from services.restriction_catalog import CatalogUnavailable
+from services.restriction_analysis import AnalysisLimitError, InvalidDNAError
 
 
 def test_cloning_routers_registered_without_restoring_full_product():
@@ -31,7 +32,8 @@ def test_cloning_routers_registered_without_restoring_full_product():
 
 
 @pytest.mark.parametrize("error", [AssemblyError("Unknown restriction enzyme 'missing'"),
-                                   CatalogUnavailable()])
+                                   CatalogUnavailable(), AnalysisLimitError("scan work exceeds analysis limit"),
+                                   InvalidDNAError("analysis input cannot be checked")])
 def test_optional_junction_check_is_evidence_not_a_ligation_gate(monkeypatch, error):
     def unavailable(*args, **kwargs):
         raise error
