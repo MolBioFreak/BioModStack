@@ -479,6 +479,7 @@ async def record_generated_sequence(
     parameters: dict[str, Any] | None = None,
     warnings: list[str] | None = None,
     provenance: dict[str, Any] | None = None,
+    product_provenance: dict[str, Any] | None = None,
     idempotency_key: str | None = None,
     created_by: str | None = None,
     input_revisions: Iterable[
@@ -514,7 +515,7 @@ async def record_generated_sequence(
         session,
         sequence,
         change_kind="operation_result",
-        provenance=provenance,
+        provenance=product_provenance if product_provenance is not None else provenance,
         operation_id=operation.id,
         created_by=SERVER_OWNED_ACTOR,
     )
@@ -707,6 +708,7 @@ async def persist_pcr_experiment(
     notes: str | None,
     review_state: str,
     provenance: dict[str, Any],
+    product_provenance: dict[str, Any] | None = None,
     product_sequence: NucleotideSequence | None = None,
     polymerase_preset_revision_id: str | None = None,
     idempotency_key: str | None = None,
@@ -766,7 +768,7 @@ async def persist_pcr_experiment(
             session,
             product_sequence,
             change_kind="pcr_product",
-            provenance=provenance,
+            provenance=product_provenance if product_provenance is not None else provenance,
             operation_id=operation.id,
             created_by=SERVER_OWNED_ACTOR,
         )

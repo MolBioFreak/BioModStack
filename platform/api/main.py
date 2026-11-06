@@ -25,7 +25,7 @@ from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
 from routers import atomworks_studio, molecular_construction, molecular_geometry
 from routers import binder_blind_pose, binder_continuation
 from routers import ligandmpnn_interface_context, sequence_native, protonpottsmpnn, protonpottsmpnn_prediction
-from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, execution_targets, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, molbio_restriction, molbio_share, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
+from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, execution_targets, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_end_operations, molbio_ngs_experiments, molbio_ops, molbio_restriction, molbio_share, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
 from runtime_policy import (
     WorkflowAdmissionBlocked,
     workflow_launch_block_detail,
@@ -439,7 +439,14 @@ app.include_router(boltzgen.router)
 app.include_router(molbio_ops.router)
 from routers import molbio_golden_gate_design
 app.include_router(molbio_golden_gate_design.router)
+from routers import molbio_gibson_suggest
+app.include_router(molbio_gibson_suggest.router)
 app.include_router(molbio_restriction.router)
+from routers import molbio_relatives
+app.include_router(molbio_relatives.router)
+from routers import molbio_branches
+app.include_router(molbio_branches.router)
+app.include_router(molbio_end_operations.router)
 app.include_router(molbio_share.router)  # tailnet-only guest share grants
 app.include_router(rna_structure.router)
 app.include_router(msa.router)

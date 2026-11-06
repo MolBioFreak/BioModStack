@@ -59,6 +59,52 @@ export function normalizeFeatureRecord(feature: Partial<Feature> & Record<string
     };
 }
 
+/**
+ * Feature from the browser parser (Teselagen) read with inclusive1BasedEnd: 0-based start,
+ * half-open end, ascending location list, wrapped pairs as start > end. Converted to the storage convention:
+ * half-open ends, ordered non-wrapping segments in biological part order.
+ */
+export function browserParsedFeature(raw: Record<string, UntypedApiValue>, fallbackId: string, sequenceLength: number): Feature {
+    const locations: Array<{ start: number; end: number }> = Array.isArray(raw.locations) && raw.locations.length > 0
+        ? raw.locations
+        : [{ start: raw.start, end: raw.end }];
+    let pieces = locations.flatMap((loc) => {
+        const start = Number(loc.start);
+        const end = Number(loc.end);
+        return start >= end && sequenceLength > 0
+            ? [{ start, end: sequenceLength }, { start: 0, end }]
+            : [{ start, end }];
+    });
+    if (raw.strand === -1) pieces = pieces.reverse();
+    return normalizeFeatureRecord({ ...raw, segments: pieces, locations: undefined, start: undefined, end: undefined }, fallbackId);
+}
+
+/** primer_bind features become primers (sites in top-strand order, sequence read from the template). */
+export function primersFromPrimerBindFeatures(
+    features: Feature[],
+    sequence: string,
+): { features: Feature[]; primers: Primer[] } {
+    const primers: Primer[] = [];
+    const rest: Feature[] = [];
+    const complement: Record<string, string> = { A: 'T', C: 'G', G: 'C', T: 'A' };
+    for (const feature of features) {
+        if (feature.type !== 'primer_bind') { rest.push(feature); continue; }
+        const biological = feature.segments && feature.segments.length > 0 ? feature.segments : [{ start: feature.start, end: feature.end }];
+        const sites = (feature.strand === -1 ? [...biological].reverse() : biological)
+            .map((segment) => ({ start: segment.start, end: segment.end, strand: feature.strand }));
+        const top = sites.map((site) => sequence.slice(site.start, site.end)).join('').toUpperCase();
+        const bases = feature.strand === -1
+            ? top.split('').reverse().map((base) => complement[base] ?? base).join('')
+            : top;
+        primers.push({
+            id: feature.id, name: feature.name, sequence: bases, sequenceType: 'dna',
+            start: sites[0].start, end: sites[sites.length - 1].end, strand: feature.strand, sites,
+            notes: feature.notes, provenance: feature.provenance,
+        });
+    }
+    return { features: rest, primers };
+}
+
 export function normalizePrimerRecord(
     primer: Partial<Primer> & Record<string, UntypedApiValue>,
     fallbackId: string,

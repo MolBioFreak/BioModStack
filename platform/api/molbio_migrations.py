@@ -447,8 +447,22 @@ BEGIN
   SELECT RAISE(ABORT, 'restriction digest result integrity violation');
 END
 """.strip()
+_SNAPSHOT_KEY_CHECK_0007 = "OR (SELECT count(*) FROM json_each(revision.snapshot)) != 5\n"
+_SNAPSHOT_KEY_CHECK_0010 = (
+    "OR (SELECT count(*) FROM json_each(revision.snapshot)) NOT IN (5, 6)\n"
+    "          OR (SELECT count(*) FROM json_each(revision.snapshot)) = 6\n"
+    "             AND coalesce(json_type(revision.snapshot, '$.features'), '') != 'array'\n"
+)
+# 0010: a digest child snapshot may carry one optional ``features`` array. Everything else
+# in the 0007 trigger is unchanged, so earlier saved digests stay valid.
+_RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0010 = _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL.replace(
+    _SNAPSHOT_KEY_CHECK_0007, _SNAPSHOT_KEY_CHECK_0010, 1,
+)
+assert _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0010 != _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL
+
+
 def restriction_digest_integrity_trigger_sql() -> str:
-    return _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL
+    return _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0010
 
 
 def _restriction_digest_expected_triggers() -> dict[str, str]:
@@ -460,7 +474,7 @@ def _restriction_digest_expected_triggers() -> dict[str, str]:
             _restriction_digest_immutable_trigger_sql("UPDATE")
         ),
         "molbio_restriction_digest_results_integrity_insert": (
-            _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL
+            _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0010
         ),
     }
 
@@ -589,7 +603,10 @@ def restriction_digest_migration_attestation() -> dict[str, object]:
         ).hexdigest(),
         "trigger_sha256": {
             name: hashlib.sha256(sql.encode("utf-8")).hexdigest()
-            for name, sql in _restriction_digest_expected_triggers().items()
+            for name, sql in {
+                **_restriction_digest_expected_triggers(),
+                "molbio_restriction_digest_results_integrity_insert": _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL,
+            }.items()
         },
     }
 
@@ -638,6 +655,15 @@ async def apply_restriction_digest_result_migration(connection: AsyncConnection)
         raise MigrationVerificationError(
             "Restriction digest migration foreign-key verification failed"
         )
+
+
+async def apply_restriction_digest_child_features_migration(connection: AsyncConnection) -> None:
+    """0010: replace the digest-result trigger so a child snapshot may carry ``features``."""
+
+    await connection.execute(text(
+        "DROP TRIGGER IF EXISTS molbio_restriction_digest_results_integrity_insert"
+    ))
+    await connection.execute(text(_RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL_0010))
 
 
 async def _acquire_destination_extraction_lock(destination: Path) -> int:

@@ -615,6 +615,26 @@ async def _migration_revision_digest_index(connection: AsyncConnection) -> None:
     ))
 
 
+async def _migration_operation_edge_revision_indexes(connection: AsyncConnection) -> None:
+    """Forward-only lookup indexes for revision relatives; no scientific rows change."""
+    await connection.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_molecular_operation_inputs_revision "
+        "ON molecular_operation_inputs (revision_id)"
+    ))
+    await connection.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_molecular_operation_outputs_revision "
+        "ON molecular_operation_outputs (revision_id)"
+    ))
+
+
+async def _migration_digest_child_features(connection: AsyncConnection) -> None:
+    """Allow optional mapped features on saved digest child snapshots."""
+
+    from molbio_migrations import apply_restriction_digest_child_features_migration
+
+    await apply_restriction_digest_child_features_migration(connection)
+
+
 MOLBIO_MIGRATIONS: tuple[Migration, ...] = (
     ("0001_initial", "create Mol Bio owned schema", _migration_initial),
     ("0002_append_only_guards", "enforce append-only scientific history", _migration_append_only_guards),
@@ -647,6 +667,16 @@ MOLBIO_MIGRATIONS: tuple[Migration, ...] = (
         "0008_revision_digest_index",
         "index immutable revision digest reuse",
         _migration_revision_digest_index,
+    ),
+    (
+        "0009_operation_edge_revision_indexes",
+        "index operation edges by revision for relatives and chooser reads",
+        _migration_operation_edge_revision_indexes,
+    ),
+    (
+        "0010_digest_child_features",
+        "allow mapped features on saved digest child snapshots",
+        _migration_digest_child_features,
     ),
 )
 

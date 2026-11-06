@@ -196,6 +196,7 @@ class MolecularOperationInput(MolBioBase):
     __tablename__ = "molecular_operation_inputs"
     __table_args__ = (
         UniqueConstraint("operation_id", "position", name="uq_molecular_operation_input_position"),
+        Index("ix_molecular_operation_inputs_revision", "revision_id"),
     )
 
     id = Column(String(36), primary_key=True)
@@ -214,6 +215,7 @@ class MolecularOperationOutput(MolBioBase):
     __tablename__ = "molecular_operation_outputs"
     __table_args__ = (
         UniqueConstraint("operation_id", "position", name="uq_molecular_operation_output_position"),
+        Index("ix_molecular_operation_outputs_revision", "revision_id"),
     )
 
     id = Column(String(36), primary_key=True)

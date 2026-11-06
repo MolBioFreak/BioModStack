@@ -51,7 +51,7 @@ test('all selection-consuming panels preserve or explicitly reject origin-spanni
     assert.match(primerPanelSource, /createSelectionSnapshot/);
     assert.match(primerPanelSource, /buildSelectionPrimer/);
     assert.match(primerPanelSource, /Pinned to selected locus/);
-    assert.match(primerPanelSource, /Rotate Origin First/);
+    assert.match(primerPanelSource, /Use Set origin first/);
     assert.doesNotMatch(primerPanelSource, /Math\.min\(selection\.start/);
 
     assert.match(alignmentPanelSource, /createSelectionSnapshot/);

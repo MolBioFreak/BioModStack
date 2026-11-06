@@ -5,6 +5,7 @@ import {
 } from '../../../lib/api';
 import type { HistoryEntry } from '../hooks/useSequenceHistory';
 import type { SequenceData } from '../types';
+import { HistoryRelatives, type HistoryRelativeActions } from './HistoryRelatives';
 
 interface WorkspaceSummary {
     id: string;
@@ -23,6 +24,9 @@ interface HistoryPanelProps {
     activeWorkspaceId: string;
     onActivateWorkspace: (workspaceId: string) => void;
     revisionHref: (sequenceId: string, revisionId: string) => string;
+    /** Exact revision on view (read-only); otherwise the current revision is used. */
+    exactRevisionId?: string | null;
+    relativeActions?: Omit<HistoryRelativeActions, 'revisionHref'>;
 }
 
 function humanizeOperation(value?: string | null): string | null {
@@ -38,6 +42,8 @@ export function HistoryPanel({
     activeWorkspaceId,
     onActivateWorkspace,
     revisionHref,
+    exactRevisionId = null,
+    relativeActions,
 }: HistoryPanelProps) {
     const [serverRevisions, setServerRevisions] = useState<MolecularRevisionSummary[]>([]);
     const [serverLoading, setServerLoading] = useState(false);
@@ -80,6 +86,8 @@ export function HistoryPanel({
             .finally(() => { if (!controller.signal.aborted) setServerLoading(false); });
         return () => controller.abort();
     }, [selectedSequenceId, offset, pageRequest]);
+
+    const relativesRevisionId = exactRevisionId ?? serverRevisions.find((revision) => revision.is_current)?.revision_id ?? null;
 
     return (
         <div className="space-y-4 p-3 text-sm">
@@ -176,6 +184,13 @@ export function HistoryPanel({
                     </button>
                 )}
             </section>
+
+            {relativeActions && selectedSequenceId && (
+                <HistoryRelatives
+                    revisionId={relativesRevisionId}
+                    actions={{ ...relativeActions, revisionHref }}
+                />
+            )}
 
             <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3">
                 <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Open Workspaces</div>

@@ -101,7 +101,7 @@ async def test_one_http_batch_all_results_save_reopen_export_and_next_stage(tmp_
         for event in events[1:-1]:
             assert event.result.solutions[0].design.solutions[0].sequence == expected
             native, _ = combination(body, int(event.index))
-            assert event.result == run_workflow(native)
+            assert event.result.model_dump() == run_workflow(native).model_dump()
             fixed = freeze_selection(event.result, event.result.selected_solution_id)
             saved = await client.post(URL + '/save', json=SaveDesignRequest(selection=fixed, name='batch ' + event.index, idempotency_key=event.index).model_dump(mode='json'))
             assert saved.status_code == 200, saved.text

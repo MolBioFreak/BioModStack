@@ -154,10 +154,14 @@ async def test_registered_revision_contract_and_project_adapters(tmp_path):
         assert 'operation_id=' in operation_receipt['reopen_uri']
 
 
+# The native primer owner counts the full tailed PCR product (payload + both tails), not the payload.
+TAILED_INSERT_LENGTH = 86
+
+
 def test_native_automatic_primer_selection_preserves_requested_and_effective():
     data = request().model_dump(mode='json')
     data['automatic_primers'] = [dict(part_id='insert', settings=dict(primer_min_length=20, primer_max_length=20,
-        product_min_length=len(B), product_max_length=len(B), flank_search_span=20,
+        product_min_length=TAILED_INSERT_LENGTH, product_max_length=TAILED_INSERT_LENGTH, flank_search_span=20,
         gc_min_percent=0, gc_max_percent=100, gc_clamp_min=0, max_poly_x=100, tm_max_delta_c=100))]
     result = run_workflow(REQUEST_ADAPTER.validate_python(data))
     assert not result.diagnostics

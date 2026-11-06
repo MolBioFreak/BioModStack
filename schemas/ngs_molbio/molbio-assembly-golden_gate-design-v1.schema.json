@@ -182,6 +182,16 @@
           ],
           "default": null,
           "title": "Protruding Strand"
+        },
+        "five_prime_phosphate": {
+          "default": "unknown",
+          "enum": [
+            "unknown",
+            "phosphorylated",
+            "unphosphorylated"
+          ],
+          "title": "Five Prime Phosphate",
+          "type": "string"
         }
       },
       "required": [
@@ -565,6 +575,12 @@
       "additionalProperties": false,
       "description": "Same fields/defaults/ranges as the global Tm contract; reject typos.",
       "properties": {
+        "schema_version": {
+          "const": "primer-tm-settings-v1",
+          "default": "primer-tm-settings-v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
         "algorithm": {
           "default": "nn_santalucia_hicks_2004",
           "title": "Algorithm",

@@ -1,0 +1,150 @@
+{
+ "catalog_id": "biopython-rebase-404-bms-v1",
+ "catalog_sha": "e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f",
+ "molecular_documents": [
+  {
+   "created_at": "2026-11-06 00:25:21.804021",
+   "current_revision_id": "source-revision",
+   "deleted_at": null,
+   "document_kind": "dna",
+   "id": "source-document",
+   "name": "source"
+  },
+  {
+   "created_at": "2026-11-06 00:25:23.104006",
+   "current_revision_id": "9f4fa10c-d4d5-43f2-b872-b89b8dcf0d54",
+   "deleted_at": null,
+   "document_kind": "dna",
+   "id": "fc600147-616d-42e2-8933-98ab831cc627",
+   "name": "pre0010 1"
+  },
+  {
+   "created_at": "2026-11-06 00:25:23.104010",
+   "current_revision_id": "6833f518-36fc-4328-bb3b-99e7a8e87ddd",
+   "deleted_at": null,
+   "document_kind": "dna",
+   "id": "66165efa-f301-4a0b-b9ca-800d3dca15ff",
+   "name": "pre0010 2"
+  }
+ ],
+ "molecular_operation_inputs": [
+  {
+   "id": "a1709283-4049-46a6-8e51-170fb75c2018",
+   "operation_id": "4761f55f-467e-4962-a5b5-ea1cf23c9e0c",
+   "position": 0,
+   "revision_id": "source-revision",
+   "role": "digest_source",
+   "snapshot": "{\"content_sha256\": \"a03f9ec698c4a88b924b9e548f9b56fe6146b5153ae76413d9bfb9b1470ebb1b\", \"name\": \"source\", \"sequence_id\": \"source-document\"}"
+  }
+ ],
+ "molecular_operation_outputs": [
+  {
+   "id": "8a76c363-938a-4799-b396-4900a1330a11",
+   "operation_id": "4761f55f-467e-4962-a5b5-ea1cf23c9e0c",
+   "position": 0,
+   "revision_id": "9f4fa10c-d4d5-43f2-b872-b89b8dcf0d54",
+   "role": "digest_fragment",
+   "snapshot": "{\"fragment_index\":0,\"name\":\"pre0010 1\",\"simulation_sha256\":\"8628d75c21111431e5f58373e35e62cd62b1788ef065fd0f4de9bb7b29da4a3a\"}"
+  },
+  {
+   "id": "ffde87d4-5375-4366-9f85-4edd53475d2e",
+   "operation_id": "4761f55f-467e-4962-a5b5-ea1cf23c9e0c",
+   "position": 1,
+   "revision_id": "6833f518-36fc-4328-bb3b-99e7a8e87ddd",
+   "role": "digest_fragment",
+   "snapshot": "{\"fragment_index\":1,\"name\":\"pre0010 2\",\"simulation_sha256\":\"8628d75c21111431e5f58373e35e62cd62b1788ef065fd0f4de9bb7b29da4a3a\"}"
+  }
+ ],
+ "molecular_operations": [
+  {
+   "created_at": "2026-11-06 00:25:23.103126",
+   "created_by": null,
+   "id": "4761f55f-467e-4962-a5b5-ea1cf23c9e0c",
+   "idempotency_key": "pre0010-fixture",
+   "implementation": "services.restriction_digest.simulate_digest",
+   "implementation_version": "1.1.0",
+   "operation_kind": "restriction_digest",
+   "parameters": "{\"schema\": \"bms.molbio.restriction-digest-operation-parameters.v1\", \"selected_enzyme_ids\": [\"EcoRI\"], \"persistence_mode\": \"operation_and_fragments\", \"fragment_name_prefix\": \"pre0010\", \"simulation_sha256\": \"8628d75c21111431e5f58373e35e62cd62b1788ef065fd0f4de9bb7b29da4a3a\", \"save_request_receipt\": \"{\\\"catalog\\\":{\\\"catalog_id\\\":\\\"biopython-rebase-404-bms-v1\\\",\\\"expected_catalog_sha256\\\":\\\"e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f\\\"},\\\"enzyme_ids\\\":[\\\"EcoRI\\\"],\\\"fragment_name_prefix\\\":\\\"pre0010\\\",\\\"idempotency_key\\\":\\\"pre0010-fixture\\\",\\\"persistence_mode\\\":\\\"operation_and_fragments\\\",\\\"schema\\\":\\\"bms.molbio.restriction-digest-save-request.v1\\\",\\\"simulation_sha256\\\":\\\"8628d75c21111431e5f58373e35e62cd62b1788ef065fd0f4de9bb7b29da4a3a\\\",\\\"source\\\":{\\\"expected_content_sha256\\\":\\\"a03f9ec698c4a88b924b9e548f9b56fe6146b5153ae76413d9bfb9b1470ebb1b\\\",\\\"kind\\\":\\\"molecular_revision\\\",\\\"revision_id\\\":\\\"source-revision\\\",\\\"sequence_id\\\":\\\"source-document\\\",\\\"topology\\\":\\\"circular\\\"}}\"}",
+   "provenance": "{\"source_revision_id\": \"source-revision\", \"catalog_id\": \"biopython-rebase-404-bms-v1\", \"catalog_sha256\": \"e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f\", \"request_sha256\": \"ce7cb984be7fa33a2a4d2ba71e78a2e9a1f26bb089b8e3220bfdab093b9b7dbe\"}",
+   "request_fingerprint": "a616b5dbf3583c2f4ca9c7df781a10ce3ea1de08d1b671bfafca4ece2aeea592",
+   "status": "completed",
+   "warnings": "[]"
+  }
+ ],
+ "molecular_revisions": [
+  {
+   "change_kind": "created",
+   "content_length": 45,
+   "content_sha256": "a03f9ec698c4a88b924b9e548f9b56fe6146b5153ae76413d9bfb9b1470ebb1b",
+   "created_at": "2026-11-06 00:25:21.804717",
+   "created_by": "test",
+   "document_id": "source-document",
+   "id": "source-revision",
+   "operation_id": null,
+   "provenance": "{}",
+   "revision_number": 1,
+   "snapshot": "{\"sequence_type\": \"dna\", \"sequence\": \"GGAATTCTTTTTGGATCCAAAAACCCGGGTTTTTGAATTCAAAAA\", \"is_circular\": true, \"molecule_strandedness\": \"double\"}"
+  },
+  {
+   "change_kind": "restriction_digest_fragment",
+   "content_length": 33,
+   "content_sha256": "3f306ca6603bb2c0642b5e0ea08702180dba52011cae756dec4d1d466b40cf28",
+   "created_at": "2026-11-06 00:25:23.104514",
+   "created_by": null,
+   "document_id": "fc600147-616d-42e2-8933-98ab831cc627",
+   "id": "9f4fa10c-d4d5-43f2-b872-b89b8dcf0d54",
+   "operation_id": "4761f55f-467e-4962-a5b5-ea1cf23c9e0c",
+   "provenance": "{\"fragment_index\":0,\"geometry\":{\"bottom_end_boundary\":39,\"bottom_end_boundary_normalized\":39,\"bottom_end_winding\":0,\"bottom_start_boundary\":6,\"bottom_start_boundary_normalized\":6,\"bottom_start_winding\":0,\"contributing_enzyme_ids\":[\"EcoRI\"],\"fragment_index\":0,\"left_end\":{\"bottom_boundary\":6,\"bottom_boundary_unwrapped\":6,\"bottom_winding\":0,\"contributing_enzyme_ids\":[\"EcoRI\"],\"contributor_group_id\":\"sha256:fc8e4e871bf79aa847cf9cf3b2c115d4d45d381c3c23511c62917becf784af01\",\"contributors\":[{\"enzyme_id\":\"EcoRI\",\"event_ordinal\":0,\"occurrence_id\":\"sha256:4f6d9d002fccaa98afbafe64688079b599164cea624ca8288d403a746014b1e3\",\"orientation\":\"forward\"}],\"enzyme_created\":true,\"kind\":\"five_prime_overhang\",\"length_nt\":4,\"overhang_sequence_5to3\":\"AATT\",\"protruding_strand\":\"top\",\"side\":\"left\",\"top_boundary\":2,\"top_boundary_unwrapped\":2,\"top_winding\":0},\"lineage_cleavage_group_ids\":[\"sha256:fc8e4e871bf79aa847cf9cf3b2c115d4d45d381c3c23511c62917becf784af01\",\"sha256:d10f850475b3ea166e20c7b6ef2ec9065042ea57a4c05e7142d8fc6f78ffbee8\"],\"reference_span_bp\":33,\"right_end\":{\"bottom_boundary\":39,\"bottom_boundary_unwrapped\":39,\"bottom_winding\":0,\"contributing_enzyme_ids\":[\"EcoRI\"],\"contributor_group_id\":\"sha256:d10f850475b3ea166e20c7b6ef2ec9065042ea57a4c05e7142d8fc6f78ffbee8\",\"contributors\":[{\"enzyme_id\":\"EcoRI\",\"event_ordinal\":0,\"occurrence_id\":\"sha256:337c98200c549a0ffe180c8e89d3f6ed0867a5cb67b854d6c088fb52b67f944b\",\"orientation\":\"forward\"}],\"enzyme_created\":true,\"kind\":\"five_prime_overhang\",\"length_nt\":4,\"overhang_sequence_5to3\":\"AATT\",\"protruding_strand\":\"bottom\",\"side\":\"right\",\"top_boundary\":35,\"top_boundary_unwrapped\":35,\"top_winding\":0},\"source_segments\":[[2,35]],\"top_end_boundary\":35,\"top_end_boundary_normalized\":35,\"top_end_winding\":0,\"top_start_boundary\":2,\"top_start_boundary_normalized\":2,\"top_start_winding\":0,\"top_strand_sequence\":\"AATTCTTTTTGGATCCAAAAACCCGGGTTTTTG\",\"topology\":\"linear\",\"wraps_origin\":false},\"operation_id\":\"4761f55f-467e-4962-a5b5-ea1cf23c9e0c\",\"schema\":\"bms.molbio.restriction-digest-fragment-provenance.v1\",\"simulation_sha256\":\"8628d75c21111431e5f58373e35e62cd62b1788ef065fd0f4de9bb7b29da4a3a\",\"source_revision_id\":\"source-revision\"}",
+   "revision_number": 1,
+   "snapshot": "{\"is_circular\":false,\"name\":\"pre0010 1\",\"sequence\":\"AATTCTTTTTGGATCCAAAAACCCGGGTTTTTG\",\"sequence_type\":\"dna\",\"topology\":\"linear\"}"
+  },
+  {
+   "change_kind": "restriction_digest_fragment",
+   "content_length": 12,
+   "content_sha256": "d8c92408632cc348008356cc7a536dae4dadb7a57b8e50ed0f04453ea50fbf78",
+   "created_at": "2026-11-06 00:25:23.104675",
+   "created_by": null,
+   "document_id": "66165efa-f301-4a0b-b9ca-800d3dca15ff",
+   "id": "6833f518-36fc-4328-bb3b-99e7a8e87ddd",
+   "operation_id": "4761f55f-467e-4962-a5b5-ea1cf23c9e0c",
+   "provenance": "{\"fragment_index\":1,\"geometry\":{\"bottom_end_boundary\":51,\"bottom_end_boundary_normalized\":6,\"bottom_end_winding\":1,\"bottom_start_boundary\":39,\"bottom_start_boundary_normalized\":39,\"bottom_start_winding\":0,\"contributing_enzyme_ids\":[\"EcoRI\"],\"fragment_index\":1,\"left_end\":{\"bottom_boundary\":39,\"bottom_boundary_unwrapped\":39,\"bottom_winding\":0,\"contributing_enzyme_ids\":[\"EcoRI\"],\"contributor_group_id\":\"sha256:d10f850475b3ea166e20c7b6ef2ec9065042ea57a4c05e7142d8fc6f78ffbee8\",\"contributors\":[{\"enzyme_id\":\"EcoRI\",\"event_ordinal\":0,\"occurrence_id\":\"sha256:337c98200c549a0ffe180c8e89d3f6ed0867a5cb67b854d6c088fb52b67f944b\",\"orientation\":\"forward\"}],\"enzyme_created\":true,\"kind\":\"five_prime_overhang\",\"length_nt\":4,\"overhang_sequence_5to3\":\"AATT\",\"protruding_strand\":\"top\",\"side\":\"left\",\"top_boundary\":35,\"top_boundary_unwrapped\":35,\"top_winding\":0},\"lineage_cleavage_group_ids\":[\"sha256:d10f850475b3ea166e20c7b6ef2ec9065042ea57a4c05e7142d8fc6f78ffbee8\",\"sha256:fc8e4e871bf79aa847cf9cf3b2c115d4d45d381c3c23511c62917becf784af01\"],\"reference_span_bp\":12,\"right_end\":{\"bottom_boundary\":6,\"bottom_boundary_unwrapped\":6,\"bottom_winding\":0,\"contributing_enzyme_ids\":[\"EcoRI\"],\"contributor_group_id\":\"sha256:fc8e4e871bf79aa847cf9cf3b2c115d4d45d381c3c23511c62917becf784af01\",\"contributors\":[{\"enzyme_id\":\"EcoRI\",\"event_ordinal\":0,\"occurrence_id\":\"sha256:4f6d9d002fccaa98afbafe64688079b599164cea624ca8288d403a746014b1e3\",\"orientation\":\"forward\"}],\"enzyme_created\":true,\"kind\":\"five_prime_overhang\",\"length_nt\":4,\"overhang_sequence_5to3\":\"AATT\",\"protruding_strand\":\"bottom\",\"side\":\"right\",\"top_boundary\":2,\"top_boundary_unwrapped\":2,\"top_winding\":0},\"source_segments\":[[35,45],[0,2]],\"top_end_boundary\":47,\"top_end_boundary_normalized\":2,\"top_end_winding\":1,\"top_start_boundary\":35,\"top_start_boundary_normalized\":35,\"top_start_winding\":0,\"top_strand_sequence\":\"AATTCAAAAAGG\",\"topology\":\"linear\",\"wraps_origin\":true},\"operation_id\":\"4761f55f-467e-4962-a5b5-ea1cf23c9e0c\",\"schema\":\"bms.molbio.restriction-digest-fragment-provenance.v1\",\"simulation_sha256\":\"8628d75c21111431e5f58373e35e62cd62b1788ef065fd0f4de9bb7b29da4a3a\",\"source_revision_id\":\"source-revision\"}",
+   "revision_number": 1,
+   "snapshot": "{\"is_circular\":false,\"name\":\"pre0010 2\",\"sequence\":\"AATTCAAAAAGG\",\"sequence_type\":\"dna\",\"topology\":\"linear\"}"
+  }
+ ],
+ "restriction_digest_results": [
+  {
+   "catalog_id": "biopython-rebase-404-bms-v1",
+   "catalog_sha256": "e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f",
+   "created_at": "2026-11-06 00:25:23.106244",
+   "id": "f7540588-ddce-4ecc-b50c-5527545cbc05",
+   "operation_id": "4761f55f-467e-4962-a5b5-ea1cf23c9e0c",
+   "request_sha256": "ce7cb984be7fa33a2a4d2ba71e78a2e9a1f26bb089b8e3220bfdab093b9b7dbe",
+   "result": "{\"catalog_id\":\"biopython-rebase-404-bms-v1\",\"catalog_sha256\":\"e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f\",\"operation_id\":\"4761f55f-467e-4962-a5b5-ea1cf23c9e0c\",\"outputs\":[{\"content_length\":33,\"content_sha256\":\"3f306ca6603bb2c0642b5e0ea08702180dba52011cae756dec4d1d466b40cf28\",\"document_id\":\"fc600147-616d-42e2-8933-98ab831cc627\",\"fragment_index\":0,\"name\":\"pre0010 1\",\"output_edge_id\":\"8a76c363-938a-4799-b396-4900a1330a11\",\"revision_id\":\"9f4fa10c-d4d5-43f2-b872-b89b8dcf0d54\",\"topology\":\"linear\"},{\"content_length\":12,\"content_sha256\":\"d8c92408632cc348008356cc7a536dae4dadb7a57b8e50ed0f04453ea50fbf78\",\"document_id\":\"66165efa-f301-4a0b-b9ca-800d3dca15ff\",\"fragment_index\":1,\"name\":\"pre0010 2\",\"output_edge_id\":\"ffde87d4-5375-4366-9f85-4edd53475d2e\",\"revision_id\":\"6833f518-36fc-4328-bb3b-99e7a8e87ddd\",\"topology\":\"linear\"}],\"request_sha256\":\"ce7cb984be7fa33a2a4d2ba71e78a2e9a1f26bb089b8e3220bfdab093b9b7dbe\",\"result_sha256\":\"8628d75c21111431e5f58373e35e62cd62b1788ef065fd0f4de9bb7b29da4a3a\",\"schema\":\"bms.molbio.restriction-digest-saved-result.v1\",\"simulation\":{\"activity_assessment\":\"not_evaluated\",\"analysis_algorithm_id\":\"bms-restriction-analysis\",\"analysis_algorithm_version\":\"2.1.0\",\"analysis_result_sha256\":\"5aedb0d4bf07ea9c26b1b78359c2e7f8034cae580d1a0ded24d399a4f64271e3\",\"catalog\":{\"analysis_enabled\":true,\"bounds\":{\"analysis_cache_maximum_entries\":32,\"analysis_cache_maximum_result_weight_bytes\":8388608,\"analysis_cache_maximum_total_weight_bytes\":67108864,\"analysis_event_maximum\":50000,\"analysis_explicit_enzyme_maximum\":256,\"analysis_inline_sequence_max_length\":5000000,\"analysis_occurrence_maximum\":25000,\"analysis_region_maximum\":128,\"analysis_response_maximum_bytes\":33554432,\"analysis_scan_pattern_maximum\":1056,\"analysis_scan_work_maximum\":32000000,\"default_limit\":50,\"maximum_limit\":250,\"query_max_length\":128},\"catalog_id\":\"biopython-rebase-404-bms-v1\",\"catalog_sha256\":\"e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f\",\"counts\":{\"commercial_geometry_ready\":623,\"geometry_ready\":754,\"nicking\":4,\"total\":1092,\"two_event_double_strand\":25,\"unknown_geometry\":334},\"digest_enabled\":true,\"resource_policy\":{\"actual_scan_pattern_maximum\":1056,\"cache_entry_maximum\":32,\"cache_result_weight_maximum_bytes\":8388608,\"cache_total_weight_maximum_bytes\":67108864,\"cache_weight_formula_id\":\"canonical-json-entry-and-complete-cache-graph\",\"cache_weight_formula_version\":\"2.0.0\",\"cancellation_policy\":\"worker_continues_and_capacity_is_retained_until_completion\",\"event_maximum\":50000,\"explicit_enzyme_maximum\":256,\"occurrence_maximum\":25000,\"policy_version\":\"1.1.0\",\"queue_policy\":\"reject_when_all_workers_busy\",\"region_maximum\":128,\"response_base_budget_bytes\":65536,\"response_event_budget_bytes\":1024,\"response_maximum_bytes\":33554432,\"response_occurrence_budget_bytes\":2048,\"scan_work_formula_id\":\"candidate-starts-times-motif-width\",\"scan_work_formula_version\":\"1.0.0\",\"scan_work_maximum\":32000000,\"schema\":\"bms.molbio.restriction-analysis-resource-policy.v1\",\"sequence_length_maximum\":5000000,\"timeout_seconds\":60,\"worker_concurrency\":2},\"resource_policy_sha256\":\"790b363a2b6928fa6a7cd371ff7add77e46b36a3c8f987af49ef7ae6c434499f\",\"source_age_notice\":\"The catalog derives from Biopython 1.87 and REBASE EMBOSS release 404 (2024); review a newer checked-in release before treating it as up-to-date source coverage.\",\"source_age_years\":2,\"source_release\":\"REBASE_EMBOSS_404_2024\",\"source_year\":2024,\"supplier_code_notice\":\"Supplier codes are historical source metadata only; they are not current availability claims.\"},\"cleavage_state\":\"fragmented\",\"cleavages\":[{\"bottom_boundary\":6,\"bottom_boundary_unwrapped\":6,\"bottom_winding\":0,\"cleavage_index\":0,\"contributing_enzyme_ids\":[\"EcoRI\"],\"contributor_group_id\":\"sha256:fc8e4e871bf79aa847cf9cf3b2c115d4d45d381c3c23511c62917becf784af01\",\"contributors\":[{\"enzyme_id\":\"EcoRI\",\"event_ordinal\":0,\"occurrence_id\":\"sha256:4f6d9d002fccaa98afbafe64688079b599164cea624ca8288d403a746014b1e3\",\"orientation\":\"forward\"}],\"overhang_kind\":\"five_prime\",\"overhang_length_nt\":4,\"top_boundary\":2,\"top_boundary_unwrapped\":2,\"top_winding\":0},{\"bottom_boundary\":39,\"bottom_boundary_unwrapped\":39,\"bottom_winding\":0,\"cleavage_index\":1,\"contributing_enzyme_ids\":[\"EcoRI\"],\"contributor_group_id\":\"sha256:d10f850475b3ea166e20c7b6ef2ec9065042ea57a4c05e7142d8fc6f78ffbee8\",\"contributors\":[{\"enzyme_id\":\"EcoRI\",\"event_ordinal\":0,\"occurrence_id\":\"sha256:337c98200c549a0ffe180c8e89d3f6ed0867a5cb67b854d6c088fb52b67f944b\",\"orientation\":\"forward\"}],\"overhang_kind\":\"five_prime\",\"overhang_length_nt\":4,\"top_boundary\":35,\"top_boundary_unwrapped\":35,\"top_winding\":0}],\"digest_algorithm_id\":\"bms-restriction-duplex-digest\",\"digest_algorithm_version\":\"1.1.0\",\"fragments\":[{\"bottom_end_boundary\":39,\"bottom_end_boundary_normalized\":39,\"bottom_end_winding\":0,\"bottom_start_boundary\":6,\"bottom_start_boundary_normalized\":6,\"bottom_start_winding\":0,\"contributing_enzyme_ids\":[\"EcoRI\"],\"fragment_index\":0,\"left_end\":{\"bottom_boundary\":6,\"bottom_boundary_unwrapped\":6,\"bottom_winding\":0,\"contributing_enzyme_ids\":[\"EcoRI\"],\"contributor_group_id\":\"sha256:fc8e4e871bf79aa847cf9cf3b2c115d4d45d381c3c23511c62917becf784af01\",\"contributors\":[{\"enzyme_id\":\"EcoRI\",\"event_ordinal\":0,\"occurrence_id\":\"sha256:4f6d9d002fccaa98afbafe64688079b599164cea624ca8288d403a746014b1e3\",\"orientation\":\"forward\"}],\"enzyme_created\":true,\"kind\":\"five_prime_overhang\",\"length_nt\":4,\"overhang_sequence_5to3\":\"AATT\",\"protruding_strand\":\"top\",\"side\":\"left\",\"top_boundary\":2,\"top_boundary_unwrapped\":2,\"top_winding\":0},\"lineage_cleavage_group_ids\":[\"sha256:fc8e4e871bf79aa847cf9cf3b2c115d4d45d381c3c23511c62917becf784af01\",\"sha256:d10f850475b3ea166e20c7b6ef2ec9065042ea57a4c05e7142d8fc6f78ffbee8\"],\"reference_span_bp\":33,\"right_end\":{\"bottom_boundary\":39,\"bottom_boundary_unwrapped\":39,\"bottom_winding\":0,\"contributing_enzyme_ids\":[\"EcoRI\"],\"contributor_group_id\":\"sha256:d10f850475b3ea166e20c7b6ef2ec9065042ea57a4c05e7142d8fc6f78ffbee8\",\"contributors\":[{\"enzyme_id\":\"EcoRI\",\"event_ordinal\":0,\"occurrence_id\":\"sha256:337c98200c549a0ffe180c8e89d3f6ed0867a5cb67b854d6c088fb52b67f944b\",\"orientation\":\"forward\"}],\"enzyme_created\":true,\"kind\":\"five_prime_overhang\",\"length_nt\":4,\"overhang_sequence_5to3\":\"AATT\",\"protruding_strand\":\"bottom\",\"side\":\"right\",\"top_boundary\":35,\"top_boundary_unwrapped\":35,\"top_winding\":0},\"source_segments\":[[2,35]],\"top_end_boundary\":35,\"top_end_boundary_normalized\":35,\"top_end_winding\":0,\"top_start_boundary\":2,\"top_start_boundary_normalized\":2,\"top_start_winding\":0,\"top_strand_sequence\":\"AATTCTTTTTGGATCCAAAAACCCGGGTTTTTG\",\"topology\":\"linear\",\"wraps_origin\":false},{\"bottom_end_boundary\":51,\"bottom_end_boundary_normalized\":6,\"bottom_end_winding\":1,\"bottom_start_boundary\":39,\"bottom_start_boundary_normalized\":39,\"bottom_start_winding\":0,\"contributing_enzyme_ids\":[\"EcoRI\"],\"fragment_index\":1,\"left_end\":{\"bottom_boundary\":39,\"bottom_boundary_unwrapped\":39,\"bottom_winding\":0,\"contributing_enzyme_ids\":[\"EcoRI\"],\"contributor_group_id\":\"sha256:d10f850475b3ea166e20c7b6ef2ec9065042ea57a4c05e7142d8fc6f78ffbee8\",\"contributors\":[{\"enzyme_id\":\"EcoRI\",\"event_ordinal\":0,\"occurrence_id\":\"sha256:337c98200c549a0ffe180c8e89d3f6ed0867a5cb67b854d6c088fb52b67f944b\",\"orientation\":\"forward\"}],\"enzyme_created\":true,\"kind\":\"five_prime_overhang\",\"length_nt\":4,\"overhang_sequence_5to3\":\"AATT\",\"protruding_strand\":\"top\",\"side\":\"left\",\"top_boundary\":35,\"top_boundary_unwrapped\":35,\"top_winding\":0},\"lineage_cleavage_group_ids\":[\"sha256:d10f850475b3ea166e20c7b6ef2ec9065042ea57a4c05e7142d8fc6f78ffbee8\",\"sha256:fc8e4e871bf79aa847cf9cf3b2c115d4d45d381c3c23511c62917becf784af01\"],\"reference_span_bp\":12,\"right_end\":{\"bottom_boundary\":6,\"bottom_boundary_unwrapped\":6,\"bottom_winding\":0,\"contributing_enzyme_ids\":[\"EcoRI\"],\"contributor_group_id\":\"sha256:fc8e4e871bf79aa847cf9cf3b2c115d4d45d381c3c23511c62917becf784af01\",\"contributors\":[{\"enzyme_id\":\"EcoRI\",\"event_ordinal\":0,\"occurrence_id\":\"sha256:4f6d9d002fccaa98afbafe64688079b599164cea624ca8288d403a746014b1e3\",\"orientation\":\"forward\"}],\"enzyme_created\":true,\"kind\":\"five_prime_overhang\",\"length_nt\":4,\"overhang_sequence_5to3\":\"AATT\",\"protruding_strand\":\"bottom\",\"side\":\"right\",\"top_boundary\":2,\"top_boundary_unwrapped\":2,\"top_winding\":0},\"source_segments\":[[35,45],[0,2]],\"top_end_boundary\":47,\"top_end_boundary_normalized\":2,\"top_end_winding\":1,\"top_start_boundary\":35,\"top_start_boundary_normalized\":35,\"top_start_winding\":0,\"top_strand_sequence\":\"AATTCAAAAAGG\",\"topology\":\"linear\",\"wraps_origin\":true}],\"limitations\":[\"Sequence-based geometry for a fully double-stranded DNA substrate. Methylation, reaction conditions, enzyme activity and digestion efficiency are not evaluated.\"],\"occurrences\":[{\"activity_assessment\":\"not_evaluated\",\"canonical_name\":\"EcoRI\",\"certainty\":\"definite\",\"double_strand_events\":[{\"activity_assessment\":\"not_evaluated\",\"bottom_boundary\":6,\"bottom_boundary_unwrapped\":6,\"bottom_winding\":0,\"contributor_group_id\":\"sha256:fc8e4e871bf79aa847cf9cf3b2c115d4d45d381c3c23511c62917becf784af01\",\"enzyme_id\":\"EcoRI\",\"event_ordinal\":0,\"methylation_context\":\"unknown\",\"occurrence_id\":\"sha256:4f6d9d002fccaa98afbafe64688079b599164cea624ca8288d403a746014b1e3\",\"orientation\":\"forward\",\"overhang_kind\":\"five_prime\",\"overhang_length_nt\":4,\"overhang_sequence_5to3\":\"AATT\",\"overhang_source_strand\":\"top\",\"protruding_strand\":\"top\",\"status\":\"complete\",\"top_boundary\":2,\"top_boundary_unwrapped\":2,\"top_winding\":0}],\"enzyme_id\":\"EcoRI\",\"limitations\":[],\"matched_reference_sequence\":\"GAATTC\",\"methylation_context\":\"unknown\",\"nicks\":[],\"occurrence_id\":\"sha256:4f6d9d002fccaa98afbafe64688079b599164cea624ca8288d403a746014b1e3\",\"occurrence_ordinal\":0,\"orientation\":\"forward\",\"recognition_pattern\":\"GAATTC\",\"site_end_unwrapped\":7,\"site_segments\":[[1,7]],\"site_start\":1,\"wraps_origin\":false},{\"activity_assessment\":\"not_evaluated\",\"canonical_name\":\"EcoRI\",\"certainty\":\"definite\",\"double_strand_events\":[{\"activity_assessment\":\"not_evaluated\",\"bottom_boundary\":39,\"bottom_boundary_unwrapped\":39,\"bottom_winding\":0,\"contributor_group_id\":\"sha256:d10f850475b3ea166e20c7b6ef2ec9065042ea57a4c05e7142d8fc6f78ffbee8\",\"enzyme_id\":\"EcoRI\",\"event_ordinal\":0,\"methylation_context\":\"unknown\",\"occurrence_id\":\"sha256:337c98200c549a0ffe180c8e89d3f6ed0867a5cb67b854d6c088fb52b67f944b\",\"orientation\":\"forward\",\"overhang_kind\":\"five_prime\",\"overhang_length_nt\":4,\"overhang_sequence_5to3\":\"AATT\",\"overhang_source_strand\":\"top\",\"protruding_strand\":\"top\",\"status\":\"complete\",\"top_boundary\":35,\"top_boundary_unwrapped\":35,\"top_winding\":0}],\"enzyme_id\":\"EcoRI\",\"limitations\":[],\"matched_reference_sequence\":\"GAATTC\",\"methylation_context\":\"unknown\",\"nicks\":[],\"occurrence_id\":\"sha256:337c98200c549a0ffe180c8e89d3f6ed0867a5cb67b854d6c088fb52b67f944b\",\"occurrence_ordinal\":1,\"orientation\":\"forward\",\"recognition_pattern\":\"GAATTC\",\"site_end_unwrapped\":40,\"site_segments\":[[34,40]],\"site_start\":34,\"wraps_origin\":false}],\"request_sha256\":\"ce7cb984be7fa33a2a4d2ba71e78a2e9a1f26bb089b8e3220bfdab093b9b7dbe\",\"resource_policy\":{\"cancellation_policy\":\"worker_continues_and_capacity_is_retained_until_completion\",\"fragment_maximum\":4097,\"physical_cut_maximum\":4096,\"policy_version\":\"1.0.0\",\"queue_policy\":\"reject_when_all_workers_busy\",\"saved_output_maximum\":4097,\"schema\":\"bms.molbio.restriction-digest-resource-policy.v1\",\"selected_enzyme_maximum\":64,\"simulation_response_maximum_bytes\":33554432,\"total_fragment_bases_maximum\":10000000,\"worker_concurrency\":2},\"resource_policy_sha256\":\"6fdeb1cf2d0434aca78a03005c9ae4594a3ca1cc73b6802e0e8c08a5d2783e09\",\"schema\":\"bms.molbio.restriction-digest-simulation.v1\",\"selected_enzyme_ids\":[\"EcoRI\"],\"selected_enzymes\":[{\"aliases\":[],\"analysis_capability\":\"digest_simulation\",\"canonical_name\":\"EcoRI\",\"cleavage\":{\"events\":[{\"bottom_offset\":5,\"overhang_kind\":\"five_prime\",\"overhang_length_nt\":4,\"top_offset\":1}],\"nick\":null,\"source_fields\":{\"fst3\":-1,\"fst5\":1,\"scd3\":null,\"scd5\":null},\"status\":\"known_double_strand\"},\"enzyme_id\":\"EcoRI\",\"enzyme_kind\":\"double_strand_endonuclease\",\"exclusion_reason\":null,\"golden_gate_compatible\":false,\"id_policy\":\"canonical_name_v1_casefold_unique\",\"recognition\":{\"length_bp\":6,\"palindromic\":true,\"reverse_complement_alternatives_iupac\":[\"GAATTC\"],\"reverse_complement_iupac\":\"GAATTC\",\"site_alternatives_iupac\":[\"GAATTC\"],\"site_iupac\":\"GAATTC\",\"source_notation\":\"GAATTC\"},\"record_sha256\":\"a7eea4298d2e6acd677e9561d6561f0ec49eb831ca30a0925086520f0191d467\",\"relationships\":{\"equischizomer_group_id\":\"sha256:14f6da34f88ac396119bc3c6c4f55cfc7d3b77ff92e04ef67950fe9abd574c8f\",\"equischizomer_ids\":[],\"isoschizomer_group_id\":\"sha256:0b38eca5e0cd8964752290b06c7111c140b5551e0b4a78f0da90cbc6d17ebbc5\",\"neoschizomer_ids\":[]},\"source\":{\"canonical_name\":\"EcoRI\",\"dictionary_sha256\":\"2a79099295dbad6061ea67a11e053787c591fcb2eb10fc8c0f89ead908dfa02b\",\"embedded_rebase_release\":\"REBASE_EMBOSS_404_2024\",\"kind\":\"biopython_restriction_dictionary\",\"package\":\"biopython\",\"package_version\":\"1.87\",\"page_sha256\":null,\"record_id\":993,\"record_modified_on\":null,\"retrieved_on\":null,\"source_notation\":null,\"uri\":\"https://identifiers.org/rebase:993\"},\"supplier_provenance\":{\"availability_claim\":\"not_evaluated\",\"historical_supplier_codes\":[\"B\",\"C\",\"I\",\"J\",\"K\",\"M\",\"N\",\"O\",\"Q\",\"R\",\"S\",\"V\",\"X\",\"Y\"],\"reported_commercial\":true}}],\"simulation_sha256\":\"8628d75c21111431e5f58373e35e62cd62b1788ef065fd0f4de9bb7b29da4a3a\",\"source\":{\"content_length\":45,\"content_sha256\":\"a03f9ec698c4a88b924b9e548f9b56fe6146b5153ae76413d9bfb9b1470ebb1b\",\"kind\":\"molecular_revision\",\"name\":\"source\",\"revision_id\":\"source-revision\",\"revision_number\":1,\"sequence_id\":\"source-document\",\"topology\":\"circular\"},\"warnings\":[]},\"source_revision_id\":\"source-revision\"}",
+   "result_sha256": "8628d75c21111431e5f58373e35e62cd62b1788ef065fd0f4de9bb7b29da4a3a",
+   "source_revision_id": "source-revision"
+  }
+ ],
+ "save_request": {
+  "catalog": {
+   "catalog_id": "biopython-rebase-404-bms-v1",
+   "expected_catalog_sha256": "e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f"
+  },
+  "enzyme_ids": [
+   "EcoRI"
+  ],
+  "fragment_name_prefix": "pre0010",
+  "idempotency_key": "pre0010-fixture",
+  "persistence_mode": "operation_and_fragments",
+  "schema": "bms.molbio.restriction-digest-save-request.v1",
+  "simulation_sha256": null,
+  "source": {
+   "expected_content_sha256": "a03f9ec698c4a88b924b9e548f9b56fe6146b5153ae76413d9bfb9b1470ebb1b",
+   "kind": "molecular_revision",
+   "revision_id": "source-revision",
+   "sequence_id": "source-document",
+   "topology": "circular"
+  }
+ },
+ "source_sequence": "GGAATTCTTTTTGGATCCAAAAACCCGGGTTTTTGAATTCAAAAA"
+}

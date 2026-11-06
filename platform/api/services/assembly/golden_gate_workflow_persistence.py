@@ -19,6 +19,7 @@ from services.molbio_persistence import (
     _record_inline_sequence_input, add_operation_edges,
 )
 from services.assembly.golden_gate_design import design_material
+from services.assembly.physical_ends import with_unphosphorylated_blunt_ends, write_physical_ends
 from services.assembly.golden_gate_design_types import Material, Feature, Region, InlineSource
 from services.assembly.golden_gate_workflow_types import (
     SaveDesignRequest, SavedDesign, AssembleTask, SplitTask, WorkflowResult, FrozenSelection,
@@ -76,6 +77,13 @@ def _row(material, *, name, operation_id, description=None, product=False, prime
             'start': f.segments[0].start, 'end': f.segments[-1].end} for f in material.features if f.segments],
         primers=primers or [], version=1, operation=KIND if product else None,
         operation_params={'operation_id': operation_id, 'schema_version': 'bms.golden-gate-workup-reference.v1'} if product else None)
+
+
+def _prepared_provenance(material, provenance):
+    """PCR and synthesis preparations are blunt with 5'-OH ends (unmodified primers/oligos)."""
+    if material.stage == 'prepared' and material.transformation in ('pcr', 'synthesis'):
+        return with_unphosphorylated_blunt_ends(provenance, material.transformation)
+    return provenance
 
 
 async def _record_intermediate(session, sequence, *, operation, provenance, created_by=None):
@@ -187,9 +195,9 @@ async def save_workup(session, request: SaveDesignRequest):
             retain = _record_inline_sequence_input if material.stage == 'source' and parent is None else _record_intermediate
             revision = await retain(session,
                 _row(material, name=f'{request.name} {material.id}', operation_id=operation.id), operation=operation,
-                provenance={'material_id': material.id, 'transformation': 'accepted_edit' if parent and material.stage == 'source' else material.transformation,
+                provenance=_prepared_provenance(material, {'material_id': material.id, 'transformation': 'accepted_edit' if parent and material.stage == 'source' else material.transformation,
                     'parent_revision_id': parent.id if parent else None,
-                    'mappings': [m.model_dump(mode='json') for m in material.mappings]}, created_by=None)
+                    'mappings': [m.model_dump(mode='json') for m in material.mappings]}), created_by=None)
         material_revisions[material.id] = revision
     # Every digest outcome is retained, not only the intended/purified subset.
     for digest in design.digests:
@@ -197,11 +205,12 @@ async def save_workup(session, request: SaveDesignRequest):
             material = design_material(design, mid)
             material_revisions[mid] = await _record_intermediate(session,
                 _row(material, name=f'{request.name} {mid}', operation_id=operation.id), operation=operation,
-                provenance={'material_id': mid, 'transformation': 'digest',
+                provenance=write_physical_ends({'material_id': mid, 'transformation': 'digest',
                     'parent_revision_id': material_revisions[material.parent_id].id,
                     'mappings': [m.model_dump(mode='json') for m in material.mappings],
                     'left_end': asdict(material.left_end) if material.left_end else None,
-                    'right_end': asdict(material.right_end) if material.right_end else None}, created_by=None)
+                    'right_end': asdict(material.right_end) if material.right_end else None},
+                    material.left_end, material.right_end, 'golden_gate_digest'), created_by=None)
     product_primers = []
     for primer in design.primers:
         feature = next((f for f in product.features if f.type == 'primer_bind' and f.id.endswith(primer.id + ':binding')), None)

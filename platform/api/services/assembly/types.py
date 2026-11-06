@@ -6,6 +6,8 @@ from typing import Any, Literal, Optional
 
 
 EndType = Literal["blunt", "sticky_5", "sticky_3"]
+PhosphateState = Literal["unknown", "phosphorylated", "unphosphorylated"]
+SealedState = Literal["both", "one_strand", "none", "unknown"]
 AssemblyMode = Literal["ligation", "gibson", "golden_gate"]
 FragmentOrientation = Literal["forward", "reverse"]
 FragmentPreparation = Literal["pcr", "ready_linear"]
@@ -23,6 +25,9 @@ class FragmentEnd:
     label: Optional[str] = None
     # Physical protruding strand, written 5′→3′; None retains legacy notation.
     protruding_strand: Optional[Literal["top", "bottom"]] = None
+    # State of this end's single 5′ terminus. Omitted from serialization while
+    # unknown, and never decides whether fragments join, save or export.
+    five_prime_phosphate: PhosphateState = "unknown"
 
 
 @dataclass(slots=True)
@@ -42,6 +47,8 @@ class AssemblyFragment:
     left_end: Optional[FragmentEnd] = None
     right_end: Optional[FragmentEnd] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Inline fragments only: stored features in fragment-local top-strand coordinates.
+    features: Optional[list[dict[str, Any]]] = None
 
 
 @dataclass(slots=True)
@@ -60,6 +67,7 @@ class OrientedFragment:
     source_end: Optional[int]
     source_wraps_origin: bool
     metadata: dict[str, Any]
+    features: Optional[list[dict[str, Any]]] = None
 
 
 @dataclass(slots=True)
@@ -77,6 +85,12 @@ class AssemblyJunction:
     junction_sequence: str = ""
     validation: str = "validated"
     notes: list[str] = field(default_factory=list)
+    # Label only: whether the joined strands are sealed. Omitted while unknown.
+    sealed: SealedState = "unknown"
+    # Gibson information only: overlap Tm (model-labelled) and NEB 2/4 rule value.
+    overlap_tm: Optional[float] = None
+    overlap_tm_2_4: Optional[float] = None
+    overlap_tm_model: Optional[str] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +123,12 @@ class GeneratedPrimer:
     tail_sequence: str
     tm: float
     warnings: list[str] = field(default_factory=list)
+    tm_model: str = ""
+    tm_assumptions: dict[str, Any] = field(default_factory=dict)
+    # {"start","end","strand"} of the annealing part on the oriented source core
+    # and on the product; None when no site was found.
+    template_site: Optional[dict[str, int]] = None
+    product_site: Optional[dict[str, int]] = None
 
 
 @dataclass(slots=True)
