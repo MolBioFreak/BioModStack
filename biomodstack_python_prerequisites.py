@@ -115,6 +115,17 @@ def validate_owned_paths(root: Path) -> None:
     for name in MANIFESTS:
         if (root / "manifests" / name).is_symlink() or ((root / "manifests" / name).is_file() and (root / "manifests" / name).stat().st_nlink > 1):
             raise PrerequisiteError("unsafe_path", "Staged manifest must not be a symlink or hard link")
+    # A support-payload re-exec runs under a relocated base interpreter. The
+    # original uv environment still points to the base recorded in pyvenv.cfg,
+    # not necessarily the interpreter running this validation.
+    base_bin = None
+    config = root / "environment/pyvenv.cfg"
+    if config.is_file() and not config.is_symlink():
+        for line in config.read_text().splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key.strip() == "home" and Path(value.strip()).is_absolute():
+                base_bin = Path(value.strip()).resolve()
+                break
     if root.exists():
         for path in root.rglob("*"):
             if not path.is_symlink():
@@ -122,7 +133,7 @@ def validate_owned_paths(root: Path) -> None:
             target = path.resolve()
             if target.is_relative_to(root):
                 continue
-            if path.parent == root / "environment/bin" and path.name in {"python", "python3", f"python{sys.version_info.major}.{sys.version_info.minor}"} and target.is_relative_to(Path(sys.base_prefix).resolve()):
+            if path.parent == root / "environment/bin" and path.name in {"python", "python3", f"python{sys.version_info.major}.{sys.version_info.minor}"} and (target.is_relative_to(Path(sys.base_prefix).resolve()) or target.parent == base_bin):
                 continue  # uv's base-interpreter links, not writable state.
             raise PrerequisiteError("unsafe_path", f"Managed link escapes the external environment: {path}")
 

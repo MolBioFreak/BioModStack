@@ -259,6 +259,38 @@ class PrerequisitesTest(unittest.TestCase):
         (nested / "escape").symlink_to(self.source, target_is_directory=True)
         self.assertEqual(p.prerequisite_report("python-bootstrap", project_root=self.source)["errors"][0]["code"], "unsafe_path")
 
+    def test_relocated_consumer_keeps_original_venv_base_links(self):
+        original_bin = self.base / "original-python/bin"
+        original_bin.mkdir(parents=True)
+        executable = original_bin / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        executable.write_text("original interpreter")
+        env = self.external / "environment"
+        (env / "bin").mkdir(parents=True)
+        (env / "pyvenv.cfg").write_text(f"home = {original_bin}\n")
+        for name in ("python", "python3", executable.name):
+            (env / "bin" / name).symlink_to(executable)
+        with patch.object(sys, "base_prefix", str(self.base / "relocated-python")):
+            p.validate_owned_paths(self.external)
+
+    def test_recorded_venv_base_does_not_allow_unrelated_interpreter(self):
+        env = self.external / "environment"
+        (env / "bin").mkdir(parents=True)
+        (env / "pyvenv.cfg").write_text(f"home = {self.base / 'original-python/bin'}\n")
+        (env / "bin/python").symlink_to(self.base / "unrelated/python")
+        with self.assertRaisesRegex(p.PrerequisiteError, "Managed link escapes"):
+            p.validate_owned_paths(self.external)
+
+    def test_recorded_venv_base_does_not_allow_cache_links(self):
+        original_bin = self.base / "original-python/bin"
+        env = self.external / "environment"
+        env.mkdir(parents=True)
+        (env / "pyvenv.cfg").write_text(f"home = {original_bin}\n")
+        cache = self.external / "cache"
+        cache.mkdir()
+        (cache / "python").symlink_to(original_bin / "python")
+        with self.assertRaisesRegex(p.PrerequisiteError, "Managed link escapes"):
+            p.validate_owned_paths(self.external)
+
     def test_shell_and_direct_cli_plan(self):
         for command in (["bash", str(ROOT / "start_ui.sh"), "python-plan", "--json"],
                         [sys.executable, "-B", str(ROOT / "scripts/manage_desktop_services.py"), "--json", "python-plan"]):
