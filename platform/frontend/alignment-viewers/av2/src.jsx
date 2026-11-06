@@ -4,9 +4,12 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AlignmentViewer, FastaAlignment, AminoAcidColorSchemes, NucleotideColorSchemes, getAlignmentFontDetails, reduxStore } from 'alignment-viewer-2'
 import { setWorldOffset } from 'alignment-viewer-2/dist/js/redux/VirtualizationReducers.js'
+import { displaySequence, projectHighlights } from './projection.mjs'
 
 const payload = JSON.parse(document.getElementById('payload').textContent)
-const { rows, token } = payload
+// Keep the scientific input untouched; only the native renderer projection folds case.
+const { token } = payload
+const rows = payload.rows.map(row => ({...row, aligned: displaySequence(row.aligned)}))
 const channel = 'bms-av2-inline-v1'
 const send = data => window.parent.postMessage({channel, token, ...data}, '*')
 const fasta = rows.map((r, i) => `>row_${i}\n${r.aligned}`).join('\n') + '\n'
@@ -56,20 +59,7 @@ function App() {
     report(); send({type: 'ready'})
     return () => { unsubscribe(); window.removeEventListener('message', receive); window.removeEventListener('bms-av2-style', styled) }
   }, [])
-  const {highlightMatches, omitted} = useMemo(() => {
-  const highlights = {}
-  let omitted = 0
-  const spans = [...(control.marks ?? []), ...(control.selection ? [{index: control.selection.index, start: control.selection.column, end: control.selection.column}] : [])]
-  for (const span of spans) {
-    if (span.index != null && rows.filter(row => row.aligned === rows[span.index]?.aligned).length !== 1) { omitted++; continue }
-    for (const row of span.index == null ? rows : [rows[span.index]]) {
-      if (!row) continue
-      const positions = highlights[row.aligned] ??= []
-      for (let p = span.start; p <= Math.min(span.end, row.aligned.length - 1); p++) positions.push(p)
-    }
-  }
-  return {omitted, highlightMatches: {searchString: JSON.stringify(highlights), posidxsMatchedPerSequence: highlights, highlightColor: {red: 255, green: 165, blue: 0}}}
-  }, [JSON.stringify([control.selection, control.marks])])
+  const {highlightMatches, omitted} = useMemo(() => projectHighlights(rows, control.marks, control.selection), [JSON.stringify([control.selection, control.marks])])
   const update = next => window.dispatchEvent(new CustomEvent('bms-av2-style', {detail: {...style, ...next}}))
   return <><div style={{display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', padding: '6px 8px', fontSize: 13}}><label>Colors <select value={style.colorScheme} onChange={e => update({colorScheme: e.target.value})}>{colorSchemes.list.map(s => <option key={s.key} value={s.key}>{s.commonName}</option>)}</select></label> <label>Zoom <input type="range" min="5" max="24" value={style.zoomLevel} onChange={e => update({zoomLevel: Number(e.target.value)})}/></label>{omitted > 0 && <span>{omitted} row-specific highlights omitted: upstream keys highlights by sequence, not occurrence.</span>}</div>
     <div style={{height: payload.viewerHeight ?? 420, width: '100%', position: 'relative'}}><AlignmentViewer alignment={alignment} zoomLevel={style.zoomLevel} aaColorScheme={AminoAcidColorSchemes.deserialize(style.colorScheme)} ntColorScheme={NucleotideColorSchemes.deserialize(style.colorScheme)} highlightPositionalMatches={highlightMatches} disableSearch disableSearchKeyboardShortcut /></div></>
