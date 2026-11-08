@@ -18,7 +18,7 @@ from .feature_mapping import map_stored_features
 from services.molbio_ops import reverse_complement
 from services.restriction_analysis import analyze_sequence, normalize_dna
 from services.restriction_catalog import CatalogView, RestrictionRecord, catalog_authority
-from services.restriction_digest import DigestFragment, simulate_digest
+from services.restriction_digest import DigestFragment, DigestGeometryError, simulate_digest
 
 from .common import overhangs_compatible
 from .junction_sites import observe_junction_sites, resolve_records
@@ -195,9 +195,14 @@ def _evaluate(catalog: CatalogView, backbone: str, btopo: str, region, insert: s
               selection: dict[str, Any] | None = None,
               force_orientation: str | None = None) -> dict[str, Any] | None:
     # One enzyme used for both vector ends: the single cut linearizes the backbone (one fragment).
-    vector_digest = _digest(catalog, backbone, btopo, _distinct(vector_enzymes))
-    vector = _backbone_piece(vector_digest.fragments, region) if len(vector_digest.fragments) != 1 else vector_digest.fragments[0]
-    insert_digest = _digest(catalog, insert, insert_topology, _distinct(insert_enzymes))
+    try:
+        vector_digest = _digest(catalog, backbone, btopo, _distinct(vector_enzymes))
+        vector = _backbone_piece(vector_digest.fragments, region) if len(vector_digest.fragments) != 1 else vector_digest.fragments[0]
+        insert_digest = _digest(catalog, insert, insert_topology, _distinct(insert_enzymes))
+    except DigestGeometryError:
+        # The digest engine cannot model this enzyme/site geometry (for example a cut at a sequence end).
+        # In a candidate search that pair simply produces no plan; it must not fail the whole request.
+        return None
     payload = _insert_piece(insert_digest.fragments)
     if insert_topology == "circular" or payload_region is not None:
         def contains_payload(fragment):

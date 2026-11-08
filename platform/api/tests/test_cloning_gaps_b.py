@@ -146,3 +146,17 @@ def test_tail_path_short_payload_reports_note_not_a_silent_empty_result():
     result = suggest_restriction_cloning({"backbone_sequence": backbone, "insert_sequence": payload, "enzymes": ["XhoI", "NcoI"]})
     tail = next(p for p in result["proposals"] if p["kind"] == "primer_tail")
     assert tail["selection"]["primers"] == [] and tail["selection"]["primer_notes"]
+
+
+def test_auto_search_skips_pairs_the_digest_engine_cannot_model():
+    """Auto enzyme search must not fail the whole request when one candidate pair has unsupported cut geometry.
+
+    The request is the seed-8 plasmid/payload that returned HTTP 500 (DigestGeometryError: cut-at-terminus) at limit 10.
+    """
+    import json
+    from pathlib import Path
+    body = json.loads((Path(__file__).parent / "cloning_gaps_auto_search_terminus_request.json").read_text())
+    for limit in (3, 10):
+        result = suggest_restriction_cloning({**body, "limit": limit})
+        assert len(result["proposals"]) >= 3, limit
+        assert set(result["proposals"][0]["vector_enzymes"]) == {"EcoRI", "BamHI"}
