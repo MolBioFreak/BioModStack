@@ -170,6 +170,7 @@ class _ParsedRecord:
     accession: str | None = None
     organism: str | None = None
     source_topology: str | None = None
+    topology_source: str = "default"
 
 
 class SequenceImportInputError(ValueError):
@@ -360,6 +361,11 @@ def _features_from_seqrecord(record: Any, *, ordinal: int, sequence_length: int)
     return features
 
 
+def _declared_genbank_topology(annotations: Any) -> str | None:
+    declared = str(annotations.get("topology") or "").strip().lower()
+    return declared if declared in ("circular", "linear") else None
+
+
 def _seqrecord_to_parsed(record: Any, *, ordinal: int) -> _ParsedRecord:
     try:
         sequence = canonicalize_nucleotide_sequence(str(record.seq), "dna", allow_empty=False)
@@ -410,6 +416,7 @@ def _seqrecord_to_parsed(record: Any, *, ordinal: int) -> _ParsedRecord:
         description=description,
         sequence=sequence,
         topology="linear",
+        source_topology=_declared_genbank_topology(annotations),
         features=_features_from_seqrecord(record, ordinal=ordinal, sequence_length=len(sequence)),
         accession=accession,
         organism=organism,
@@ -644,6 +651,9 @@ def _apply_topology(
                 )
             )
         record.topology = mapped or row_topology or record.source_topology or request.topology_default
+        record.topology_source = (
+            "override" if mapped else "file" if (row_topology or record.source_topology) else "default"
+        )
 
 
 def _record_report(record: _ParsedRecord) -> dict[str, Any]:
@@ -656,6 +666,7 @@ def _record_report(record: _ParsedRecord) -> dict[str, Any]:
         "sequence": record.sequence,
         "sequence_type": "dna",
         "topology": record.topology,
+        "topology_source": record.topology_source,
         "length": len(record.sequence),
         "canonical_digest": canonical_digest,
         "content_sha256": canonical_digest,
