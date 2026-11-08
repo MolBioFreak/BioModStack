@@ -496,9 +496,12 @@ def test_compatible_cohesive_pair_reports_hybrid_and_nondirectional_background()
     insert = "GC" + SITES["BglII"] + _random_dna(90, 9, avoid=SITES.values()) + SITES["BglII"] + "GC"
     result = suggest_restriction_cloning({"backbone_sequence": backbone, "insert_sequence": insert,
                                           "enzymes": ["BamHI", "BglII"], "limit": 3})
-    # one vector enzyme cannot give a two-site vector region: no usable pair, with alternatives listed
-    assert result["no_suitable_pair"] is True
-    assert {a["method"] for a in result["alternatives"]} == {"overlap_assembly", "pcr_primer_tails", "synthesis"}
+    # Changed by design (cloning gap 2): one vector enzyme with a compatible-end insert now yields
+    # non-directional proposals, one per insert orientation, instead of "no suitable pair".
+    single = [p for p in result["proposals"] if p["vector_enzymes"] == ["BamHI", "BamHI"] and p["insert_enzymes"] == ["BglII", "BglII"]]
+    assert result["no_suitable_pair"] is False
+    assert sorted(p["insert_orientation"] for p in single) == ["forward", "reverse"]
+    assert all(p["directional"] is False and p["vector_ends_match_each_other"] for p in single)
 
 
 def test_primer_tail_proposal_adds_sites_outside_the_payload_without_editing_the_source():
