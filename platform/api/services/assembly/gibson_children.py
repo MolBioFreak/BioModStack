@@ -13,6 +13,7 @@ from molbio_models import (
 from services.molbio_authority import SERVER_OWNED_ACTOR
 from services.molbio_persistence import sequence_snapshot, sha256_text
 
+from .strandedness import assembled_strandedness
 from .feature_mapping import map_stored_features
 from .physical_ends import with_unphosphorylated_blunt_ends, write_physical_ends
 from .product_content import inline_original_length, oriented_coordinates
@@ -75,6 +76,8 @@ async def save_designed_fragments(session, operation_id: str, result, fragments,
         row = NucleotideSequence(
             id=str(uuid.uuid4()), name=f"{designed.name} ({label})", description=None,
             sequence=designed.sequence, sequence_type="dna", is_circular=False,
+            molecule_strandedness=assembled_strandedness(
+                [(snap or {}).get("molecule_strandedness")] if revision is not None else []),
             length=len(designed.sequence), features=features, primers=[],
             gc_content=round(100 * (designed.sequence.count("G") + designed.sequence.count("C")) / max(len(designed.sequence), 1), 2),
             version=1,

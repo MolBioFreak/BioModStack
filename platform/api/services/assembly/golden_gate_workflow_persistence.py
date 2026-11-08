@@ -18,6 +18,7 @@ from services.molbio_persistence import (
     begin_immediate_molbio_write, create_operation, record_sequence_revision,
     _record_inline_sequence_input, add_operation_edges, sequence_snapshot,
 )
+from services.assembly.strandedness import assembled_strandedness
 from services.assembly.golden_gate_design import design_material
 from services.assembly.physical_ends import with_unphosphorylated_blunt_ends, write_physical_ends
 from services.assembly.golden_gate_design_types import Material, Feature, Region, InlineSource
@@ -70,9 +71,9 @@ def request_sources(request):
     return []
 
 
-def _row(material, *, name, operation_id, description=None, product=False, primers=None):
+def _row(material, *, name, operation_id, description=None, product=False, primers=None, strandedness='double'):
     return NucleotideSequence(id=str(uuid.uuid4()), name=name, description=description,
-        sequence=material.sequence, sequence_type='dna', is_circular=material.topology == 'circular',
+        sequence=material.sequence, sequence_type='dna', molecule_strandedness=strandedness, is_circular=material.topology == 'circular',
         length=len(material.sequence), features=[{**f.model_dump(mode='json'),
             'start': f.segments[0].start, 'end': f.segments[-1].end} for f in material.features if f.segments],
         primers=primers or [], version=1, operation=KIND if product else None,
@@ -250,7 +251,8 @@ async def save_workup(session, request: SaveDesignRequest):
                 'provenance': {'operation_id': operation.id, 'design_primer_id': primer.id, 'tm_basis': 'annealing_footprint'}})
     product_row = _row(Material(sequence=product.sequence, topology=product.topology, features=product.features),
         name=request.name, description=request.description, operation_id=operation.id, product=True,
-        primers=product_primers)
+        primers=product_primers,
+        strandedness=assembled_strandedness(r.snapshot.get(molecule_strandedness) for r in source_revisions.values()))
     product_row.operation_params = {**product_row.operation_params, 'engine': 'golden_gate_design', 'engine_version': '1',
         'fragment_count': len(selection.request.parts), 'primer_count': len(design.primers)}
     product_revision = await retention.record(session, product_row, retain=record_sequence_revision, shelf=True,
