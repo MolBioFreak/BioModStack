@@ -97,19 +97,20 @@ def test_a1d_short_insert_is_built() -> None:
 
 
 def test_digest_linearized_vector_uses_five_prime_protrusion_not_three_prime_flap() -> None:
-    # EcoRI-like 5' AATT on the bottom strand at the right end: counted as homology.
-    insert_head = "GAATTC" + dna(11, 60)
+    # EcoRI-like 5' AATT on the bottom strand at the right end: part of the top span's
+    # cohesive end, counted once and never appended as extra homology.
     vector_top = dna(12, 200)
     protrusion = "AATT"
     vector = AssemblyFragment(
         id="v", name="vector", sequence=vector_top,
         right_end=FragmentEnd(type="sticky_5", overhang=protrusion, protruding_strand="bottom"))
-    # Homology (>= 12 nt) must be the vector's single-stranded end + the insert head.
-    ss = vector_top[-8:] + reverse_complement(protrusion)
+    # Homology (>= 12 nt) is the vector's top-span end, with no protrusion appended.
+    ss = vector_top[-12:]
     insert = AssemblyFragment(id="i", name="insert", sequence=ss + dna(13, 200))
     product = simulate_gibson([vector, insert], circular=False, minimum_overlap=12)
-    assert product.sequence == vector_top + reverse_complement(protrusion) + insert.sequence[len(ss):]
-    assert "counted as homology" in " ".join(product.warnings)
+    assert product.sequence == vector_top + insert.sequence[len(ss):]
+    assert "not counted twice" in " ".join(product.warnings)
+    assert "counted as homology" not in " ".join(product.warnings)
     # A 3' protrusion on the top strand is a flap: trimmed, not counted.
     flap = AssemblyFragment(id="v", name="vector", sequence=vector_top + "GGCC",
                             right_end=FragmentEnd(type="sticky_3", overhang="GGCC", protruding_strand="top"))

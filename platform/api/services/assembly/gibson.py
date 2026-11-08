@@ -14,18 +14,22 @@ from .types import (
 def effective_sequence(fragment: OrientedFragment) -> tuple[str, list[str]]:
     """Top-strand string that takes part in overlap evaluation.
 
-    Only ends with an explicit protruding strand are interpreted. A 5' protrusion
-    on the bottom strand at the right end is single-stranded territory that may
-    serve as homology; a 3' protrusion on the top strand at the right end is an
-    unpaired flap and is not counted. At the left end a top 5' protrusion is part
-    of the top span already and a bottom 3' protrusion is a flap outside it.
+    The top-strand span is the fragment's sequence. A 5' protrusion at either
+    end is already counted once: on the top strand at the left end it is part of
+    the span, and on the bottom strand at the right end it pairs with bases the
+    span carries at the other end of a re-ligated site, so it is never appended
+    as extra homology. A 3' protrusion on the top strand at the right end is an
+    unpaired flap and is not counted; a bottom 3' protrusion at the left end is
+    a flap outside the span.
     """
     sequence, notes = fragment.sequence, []
     right = fragment.right_end
     if right is not None and right.protruding_strand and right.overhang:
         if right.type == "sticky_5" and right.protruding_strand == "bottom":
-            sequence += reverse_complement(right.overhang)
-            notes.append(f"{fragment.name}: right 5' protrusion {right.overhang} counted as homology")
+            notes.append(
+                f"{fragment.name}: right 5' protrusion {right.overhang} is part of the fragment's own span "
+                "and is not counted twice as homology"
+            )
         elif right.type == "sticky_3" and right.protruding_strand == "top" and sequence.endswith(right.overhang):
             sequence = sequence[: -len(right.overhang)]
             notes.append(f"{fragment.name}: right 3' protrusion {right.overhang} is an unpaired flap, not counted")

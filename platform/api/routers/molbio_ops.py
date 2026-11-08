@@ -1077,6 +1077,17 @@ class GibsonAssemblyRequest(BaseModel):
     save_description: Optional[str] = None
 
 
+def _requested_preferred_overlap(request: "GibsonAssemblyRequest") -> Optional[int]:
+    """Preferred overlap for the warning: follows the caller's own overlap choice.
+
+    When the caller set minimum_overlap but left preferred_overlap unset, the
+    default 28 nt must not warn about overlaps at or above what they asked for.
+    """
+    if "preferred_overlap" not in request.model_fields_set and "minimum_overlap" in request.model_fields_set:
+        return request.minimum_overlap
+    return request.preferred_overlap
+
+
 class DnaWeaverPlanRequest(BaseModel):
     target_sequence: str = Field(min_length=1, max_length=2_000_000)
     target_sequence_id: Optional[str] = None
@@ -3149,7 +3160,7 @@ async def simulate_gibson_assembly(request: GibsonAssemblyRequest):
             [build_assembly_fragment(fragment) for fragment in request.fragments],
             circular=request.circular,
             minimum_overlap=request.minimum_overlap,
-            preferred_overlap=request.preferred_overlap,
+            preferred_overlap=_requested_preferred_overlap(request),
             maximum_overlap=request.maximum_overlap,
         )
     except AssemblyError as exc:
@@ -3172,7 +3183,7 @@ async def save_gibson_assembly(
             [build_assembly_fragment(fragment) for fragment in request.fragments],
             circular=request.circular,
             minimum_overlap=request.minimum_overlap,
-            preferred_overlap=request.preferred_overlap,
+            preferred_overlap=_requested_preferred_overlap(request),
             maximum_overlap=request.maximum_overlap,
         )
     except AssemblyError as exc:
