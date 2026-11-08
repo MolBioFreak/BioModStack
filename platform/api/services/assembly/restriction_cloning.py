@@ -61,13 +61,37 @@ def _candidate_records(catalog: CatalogView, names: list[str]) -> list[Restricti
             and r.cleavage.status == "known_double_strand" and r.supplier_provenance.reported_commercial
             and len(r.cleavage.events) == 1]
     best: dict[str, RestrictionRecord] = {}
-    for record in sorted(pool, key=lambda r: (r.canonical_name.lower(),)):
+    # Within an isoschizomer group prefer the widely supplied member, then the name.
+    for record in sorted(pool, key=lambda r: (-_supplier_count(r), r.canonical_name.lower())):
         best.setdefault(record.relationships.isoschizomer_group_id, record)
     return list(best.values())
 
 
+def _supplier_count(record: RestrictionRecord) -> int:
+    return len(record.supplier_provenance.historical_supplier_codes)
+
+
+def _supplier_tier(record: RestrictionRecord) -> int:
+    """0 = commonly stocked cloning enzyme (8+ historical supplier codes) ... 3 = no supplier codes recorded.
+
+    Taken from the loaded catalog's supplier provenance; availability itself is not evaluated.
+    """
+    count = _supplier_count(record)
+    return 0 if count >= 8 else 1 if count >= 3 else 2 if count >= 1 else 3
+
+
+def _pair_tier(*records: RestrictionRecord) -> int:
+    return max(_supplier_tier(r) for r in records)
+
+
 def _single_cutters(sequence: str, topology: str, catalog: CatalogView, records: list[RestrictionRecord]) -> dict[str, dict[str, Any]]:
     """Enzymes with exactly one definite site and one complete cut. Value: cut position and end signature."""
+    return {k: v[0] for k, v in _cutters(sequence, topology, catalog, records, exactly_one=True).items()}
+
+
+def _cutters(sequence: str, topology: str, catalog: CatalogView, records: list[RestrictionRecord],
+             *, exactly_one: bool) -> dict[str, list[dict[str, Any]]]:
+    """Per enzyme, each definite site with one complete cut (cut position, end signature, site start)."""
     analysis = analyze_sequence(sequence=sequence, topology=topology, catalog=catalog, records=records,
                                 include_possible_sites=False)
     per: dict[str, list] = {}
@@ -75,22 +99,45 @@ def _single_cutters(sequence: str, topology: str, catalog: CatalogView, records:
         if occurrence.certainty == "definite":
             per.setdefault(occurrence.enzyme_id, []).append(occurrence)
     counts = {s.enzyme_id: s.recognition_site_count_definite for s in analysis.enzyme_summaries}
-    out: dict[str, dict[str, Any]] = {}
+    out: dict[str, list[dict[str, Any]]] = {}
     for enzyme_id, occurrences in per.items():
-        if len(occurrences) != 1 or counts.get(enzyme_id, 1) != 1:
+        if exactly_one and (len(occurrences) != 1 or counts.get(enzyme_id, 1) != 1):
             continue
-        events = [e for e in occurrences[0].double_strand_events if e.status == "complete"]
-        if len(events) != 1 or events[0].top_boundary is None:
-            continue
-        event = events[0]
-        ovh = event.overhang_sequence_5to3 or ""
-        key = ("blunt",) if event.overhang_kind == "blunt" else (event.overhang_kind, min(ovh, reverse_complement(ovh)))
-        out[enzyme_id] = {"cut": int(event.top_boundary), "key": key, "site_start": occurrence_start(occurrences[0])}
+        sites = []
+        for occurrence in occurrences:
+            events = [e for e in occurrence.double_strand_events if e.status == "complete"]
+            if len(events) != 1 or events[0].top_boundary is None:
+                sites = []
+                break
+            event = events[0]
+            ovh = event.overhang_sequence_5to3 or ""
+            key = ("blunt",) if event.overhang_kind == "blunt" else (event.overhang_kind, min(ovh, reverse_complement(ovh)))
+            sites.append({"cut": int(event.top_boundary), "key": key, "site_start": occurrence_start(occurrence)})
+        if sites:
+            out[enzyme_id] = sites
     return out
 
 
 def occurrence_start(occurrence: Any) -> int:
     return int(occurrence.site_start)
+
+
+def _single_enzyme_pairs(vector_single: dict[str, dict[str, Any]], insert_multi: dict[str, list[dict[str, Any]]],
+                         by_id: dict[str, RestrictionRecord], explicit: bool, start: int, end: int) -> list[tuple[str, str]]:
+    """(vector enzyme, insert enzyme) with equal end signatures whose insert sites flank the payload."""
+    out = []
+    for v_id, v in vector_single.items():
+        for w_id, sites in insert_multi.items():
+            if sites[0]["key"] != v["key"]:
+                continue
+            if explicit:
+                flanked = any(s["cut"] <= start for s in sites) and any(s["cut"] >= end for s in sites)
+            else:
+                flanked = len(sites) == 2 and sites[0]["cut"] < sites[1]["cut"]
+            if flanked:
+                out.append(((_pair_tier(by_id[v_id], by_id[w_id]), v_id != w_id, by_id[v_id].canonical_name, by_id[w_id].canonical_name), v_id, w_id))
+    out.sort(key=lambda t: t[0])
+    return [(v, w) for _k, v, w in out]
 
 
 def _backbone_piece(fragments: tuple[DigestFragment, ...], region: tuple[int, int] | None) -> DigestFragment | None:
@@ -134,6 +181,10 @@ def _try(fragments: list[AssemblyFragment]):
         return None
 
 
+def _distinct(records: Iterable[RestrictionRecord]) -> list[RestrictionRecord]:
+    return list({r.enzyme_id: r for r in records}.values())
+
+
 def _evaluate(catalog: CatalogView, backbone: str, btopo: str, region, insert: str,
               vector_enzymes: tuple[RestrictionRecord, RestrictionRecord],
               insert_enzymes: tuple[RestrictionRecord, RestrictionRecord],
@@ -141,10 +192,12 @@ def _evaluate(catalog: CatalogView, backbone: str, btopo: str, region, insert: s
               payload_region: tuple[int, int] | None = None,
               backbone_features: list[dict[str, Any]] | None = None,
               insert_features: list[dict[str, Any]] | None = None,
-              selection: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    vector_digest = _digest(catalog, backbone, btopo, vector_enzymes)
-    vector = _backbone_piece(vector_digest.fragments, region)
-    insert_digest = _digest(catalog, insert, insert_topology, insert_enzymes)
+              selection: dict[str, Any] | None = None,
+              force_orientation: str | None = None) -> dict[str, Any] | None:
+    # One enzyme used for both vector ends: the single cut linearizes the backbone (one fragment).
+    vector_digest = _digest(catalog, backbone, btopo, _distinct(vector_enzymes))
+    vector = _backbone_piece(vector_digest.fragments, region) if len(vector_digest.fragments) != 1 else vector_digest.fragments[0]
+    insert_digest = _digest(catalog, insert, insert_topology, _distinct(insert_enzymes))
     payload = _insert_piece(insert_digest.fragments)
     if insert_topology == "circular" or payload_region is not None:
         def contains_payload(fragment):
@@ -170,7 +223,8 @@ def _evaluate(catalog: CatalogView, backbone: str, btopo: str, region, insert: s
     if forward is None and reverse is None:
         return None
     orientation = "either" if forward and reverse else "forward" if forward else "reverse"
-    chosen_orientation = selection["insert_orientation"] if selection is not None else ("forward" if forward else "reverse")
+    chosen_orientation = (selection["insert_orientation"] if selection is not None else force_orientation
+                          or ("forward" if forward else "reverse"))
     product = forward if chosen_orientation == "forward" else reverse
     if product is None:
         return None
@@ -182,10 +236,13 @@ def _evaluate(catalog: CatalogView, backbone: str, btopo: str, region, insert: s
     junctions = [{"between": f"{j['left_fragment_id']} → {j['right_fragment_id']}",
                   "regenerated": j["regenerated"], "destroyed": j["destroyed"], "note": j["note"]} for j in observed]
     directional = orientation != "either" and not self_ok
+    if vector_enzymes[0].enzyme_id == vector_enzymes[1].enzyme_id:
+        orientation = chosen_orientation  # single-enzyme cloning: one proposal per insert orientation
     return {
         "vector_enzymes": [r.canonical_name for r in vector_enzymes],
         "insert_enzymes": [r.canonical_name for r in insert_enzymes],
         "directional": directional,
+        "single_enzyme": vector_enzymes[0].enzyme_id == vector_enzymes[1].enzyme_id,
         "insert_orientation": orientation,
         "vector_ends_match_each_other": self_ok,
         "vector_self_ligation": ("possible" if self_ok else "not possible") + (
@@ -250,27 +307,82 @@ def _tailed_insert(body: dict[str, Any], records: tuple[RestrictionRecord, Restr
     }
 
 
+ANNEAL_MIN, ANNEAL_MAX = 18, 35
+TM_TARGET_C, TM_PAIR_LIMIT_C = 62.0, 5.0
+
+
+def _anneal_options(oligo_of_length, ops, limit: int) -> list[dict[str, Any]]:
+    """Each annealing length in range with the owner Tm/GC numbers (same Tm function as the native primer search)."""
+    options = []
+    for length in range(ANNEAL_MIN, limit + 1):
+        anneal = oligo_of_length(length)
+        tm = ops.calculate_primer_tm_result(anneal, sequence_type="dna").tm
+        if tm is None:
+            continue
+        options.append({"anneal": anneal, "length": length, "tm": round(tm, 2), "gc": ops.calculate_gc_percent(anneal),
+                        "clamp": ops._gc_clamp(anneal), "homopolymer": ops._max_homopolymer_run(anneal)})
+    return options
+
+
+def _option_penalty(o: dict[str, Any]) -> float:
+    return (abs(o["tm"] - TM_TARGET_C) + (5.0 if o["clamp"] < 1 else 0.0) + (2.0 if not 35.0 <= o["gc"] <= 65.0 else 0.0)
+            + (2.0 if o["homopolymer"] > 4 else 0.0))
+
+
+def _candidate(option: dict[str, Any], tail: str, start: int, end: int, strand: int, payload: str, ops) -> dict[str, Any]:
+    sequence = tail + option["anneal"]
+    candidate = {"sequence": sequence, "anneal_sequence": option["anneal"], "start": start, "end": end, "strand": strand,
+                 "length": len(sequence), "anneal_length": option["length"], "overhang_length": len(tail), "tm": option["tm"],
+                 "gc_percent": option["gc"], "gc_clamp": option["clamp"], "max_homopolymer": ops._max_homopolymer_run(sequence),
+                 "warnings": list(ops.calculate_primer_tm_result(option["anneal"], sequence_type="dna").warnings)}
+    try:
+        from services.primer_qc import _evaluate_primer_qc_canonical, PRIMER_QC_PROFILE
+        qc = _evaluate_primer_qc_canonical(sequence, sequence_type="dna", template_sequence=payload, circular_template=False,
+                                           min_binding_anneal_length=PRIMER_QC_PROFILE.binding_core_bases, intended_binding=(start, end, strand))
+        for field in ("max_self_complement", "three_prime_self_complement", "max_hairpin_stem", "hairpin_loop_size",
+                      "binding_site_count", "off_target_site_count"):
+            candidate[field] = getattr(qc, field)
+        candidate["warnings"].extend(qc.warnings)
+    except Exception:  # QC metrics are advisory; never lose the primer over them
+        pass
+    return candidate
+
+
 def _primer_choices(body: dict[str, Any], tails: dict[str, str]) -> tuple[list[dict[str, Any]], list[str]]:
-    # Reuse the native primer search, exactly as the Golden Gate automatic-footprint owner does.
-    from routers.molbio_ops import PrimerDesignRequest, design_primer_pairs_for_request
+    """Pick each primer's annealing length independently at its payload end (Tm closest to a common target).
+
+    Forward anneals to payload[0:L]; reverse to rc(payload[-L:]); 5' tails are exactly the prepared tails.
+    A shortfall (Tm spread, GC clamp, GC range) is reported as a note, never as an empty result.
+    """
+    from routers import molbio_ops as ops
     sequence = normalize_dna(body["insert_sequence"])
     start, end = _payload_interval(body, sequence)
     payload = sequence[start:end]
-    anchor = min(24, (len(payload) - 1) // 2)
-    length = len(payload) + len(tails["forward_primer_5prime_tail"]) + len(tails["reverse_primer_5prime_tail"])
-    if length < 40:
-        return [], ["No automatic primer pair: the prepared insert is below the native primer search's product-length range. Exact synthesis DNA and tails remain available."]
-    request = PrimerDesignRequest(sequence=payload, sequence_type="dna", is_circular=False,
-        target_start=anchor, target_end=len(payload) - anchor, flank_search_span=anchor,
-        product_min_length=length, product_max_length=length, max_pairs=1,
-        overhang_forward=tails["forward_primer_5prime_tail"], overhang_reverse=tails["reverse_primer_5prime_tail"])
-    result = design_primer_pairs_for_request(request, "restriction insert")
-    pairs = [pair for pair in result.pairs if pair.product_start == 0 and pair.product_end == len(payload)]
-    notes = list(result.warnings)
-    if not pairs:
-        notes.append("Native primer search found no boundary-preserving pair under its default settings; no source interval was changed. Use the exact prepared synthesis sequence or design explicit primer footprints.")
-        return [], notes
-    return [pairs[0].forward.model_dump(mode="json"), pairs[0].reverse.model_dump(mode="json")], notes
+    n = len(payload)
+    if n < 2 * ANNEAL_MIN:
+        return [], ["No automatic primer pair: the payload is shorter than two minimum annealing regions "
+                    f"({2 * ANNEAL_MIN} nt). Exact synthesis DNA and tails remain available."]
+    limit = min(ANNEAL_MAX, n // 2)
+    forward = _anneal_options(lambda L: payload[:L], ops, limit)
+    reverse = _anneal_options(lambda L: reverse_complement(payload[n - L:]), ops, limit)
+    if not forward or not reverse:
+        return [], ["No automatic primer pair: melting temperature could not be computed for the payload ends."]
+    f_opt, r_opt = min(((f, r) for f in forward for r in reverse),
+                       key=lambda fr: (_option_penalty(fr[0]) + _option_penalty(fr[1]) + 3.0 * abs(fr[0]["tm"] - fr[1]["tm"]),
+                                       fr[0]["length"] + fr[1]["length"]))
+    fwd = _candidate(f_opt, tails["forward_primer_5prime_tail"], 0, f_opt["length"], 1, payload, ops)
+    rev = _candidate(r_opt, tails["reverse_primer_5prime_tail"], n - r_opt["length"], n, -1, payload, ops)
+    notes = ["Primers anneal at the payload ends; each annealing length was chosen independently to bring the annealing-part Tm "
+             f"near {TM_TARGET_C:g} C and the pair together."]
+    delta = abs(f_opt["tm"] - r_opt["tm"])
+    if delta > TM_PAIR_LIMIT_C:
+        notes.append(f"Shortfall: annealing-part Tm differs by {delta:.1f} C (forward {f_opt['tm']}, reverse {r_opt['tm']}); the payload ends do not allow a closer match in {ANNEAL_MIN}-{limit} nt.")
+    for label, o in (("forward", f_opt), ("reverse", r_opt)):
+        if o["clamp"] < 1:
+            notes.append(f"Shortfall: {label} primer annealing part has no G/C in its last 5 nt (no GC clamp).")
+        if not 35.0 <= o["gc"] <= 65.0:
+            notes.append(f"Shortfall: {label} primer annealing GC is {o['gc']}%, outside 35-65%.")
+    return [fwd, rev], notes
 
 
 def selected_restriction_cloning(body: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
@@ -345,9 +457,11 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
                         continue
                     same = (a_id, b_id) == (p_id, q_id)
                     directional_guess = a["key"] != b["key"] and a["key"] != ("blunt",)
-                    rank = (not directional_guess, not same, by_id[a_id].canonical_name, by_id[b_id].canonical_name)
+                    tier = _pair_tier(by_id[a_id], by_id[b_id], by_id[p_id], by_id[q_id])
+                    rank = (not directional_guess, tier, not same, by_id[a_id].canonical_name, by_id[b_id].canonical_name)
                     candidates.append((rank, (a_id, b_id), (p_id, q_id), "existing_flank_sites"))
     candidates.sort(key=lambda c: c[0])
+    by_id_name = {r.canonical_name: r for r in records}
 
     proposals: list[dict[str, Any]] = []
     seen: set[tuple] = set()
@@ -367,18 +481,38 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
         if len(proposals) >= limit * 3:
             break
 
+    # One enzyme (or two with compatible cohesive/blunt ends) cuts the vector once; the insert is flanked by
+    # sites of that enzyme or of an end-compatible one. Non-directional: both orientations are separate proposals.
+    insert_multi = _cutters(insert_full, itopo, catalog, records, exactly_one=False)
+    for v_id, w_id in _single_enzyme_pairs(vector_single, insert_multi, by_id, explicit, start, end)[:60]:
+        for orientation in ("forward", "reverse"):
+            result = _evaluate(catalog, backbone, btopo, region, insert_full, (by_id[v_id], by_id[v_id]), (by_id[w_id], by_id[w_id]),
+                               vector_phosphate, insert_topology=itopo, payload_region=(start, end) if explicit else None,
+                               backbone_features=body.get("backbone_features") or [], insert_features=body.get("insert_features") or [],
+                               force_orientation=orientation)
+            if result is None or (result["selection"]["insert_orientation"] != orientation):
+                continue
+            signature = (result["vector_enzymes"][0], result["insert_enzymes"][0], "single", orientation)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            result["kind"] = "existing_flank_sites"
+            result["primer_tails"] = None
+            proposals.append(result)
+
     # Sites added to the insert through explicit primer tails (never an edit of the source).
     if len(proposals) < limit:
         payload = insert_full[start:end]
         payload_all = analyze_sequence(sequence=payload, topology="linear", catalog=catalog, records=records, include_possible_sites=False)
         payload_hits = {s.enzyme_id for s in payload_all.enzyme_summaries if s.recognition_site_count_definite}
         free = [(k, v) for k, v in vector_single.items() if k not in payload_hits and _tail_site(by_id[k])]
-        free.sort(key=lambda kv: by_id[kv[0]].canonical_name)
+        free.sort(key=lambda kv: (_supplier_tier(by_id[kv[0]]), by_id[kv[0]].canonical_name))
         tail_candidates = []
         for a_id, a in free:
             for b_id, b in free:
                 if a_id != b_id and a["key"] != b["key"]:
                     tail_candidates.append((a_id, b_id))
+        tail_candidates.sort(key=lambda t: _pair_tier(by_id[t[0]], by_id[t[1]]))  # stable: keeps name order within a tier
         for a_id, b_id in tail_candidates[:300]:
             tailed, tailed_features, tails = _tailed_insert(body, (by_id[a_id], by_id[b_id]))
             result = _evaluate(catalog, backbone, btopo, region, tailed, (by_id[a_id], by_id[b_id]), (by_id[a_id], by_id[b_id]), vector_phosphate,
@@ -396,7 +530,10 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
             if len(proposals) >= limit * 3:
                 break
 
-    proposals.sort(key=lambda p: (not p["directional"], p["kind"] == "primer_tail", p["vector_self_ligation"] != "not possible", p["vector_enzymes"]))
+    proposals.sort(key=lambda p: (not p["directional"], p["kind"] == "primer_tail", p["single_enzyme"],
+                                  p["vector_self_ligation"] != "not possible",
+                                  _pair_tier(*(by_id_name[n] for n in p["vector_enzymes"] + p["insert_enzymes"])),
+                                  set(p["vector_enzymes"]) != set(p["insert_enzymes"]), p["vector_enzymes"]))
     proposals = proposals[:limit]
     for proposal in proposals:
         proposal["selection"]["kind"] = proposal["kind"]
