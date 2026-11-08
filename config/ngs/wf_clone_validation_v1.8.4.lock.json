@@ -7,37 +7,37 @@
     "sha256": "e177e6ecaa027a60d2465196f373cd86175202d9105e1f7690ef70eb4b2e522f"
   },
   "containers": {
-    "cache_dir": "/mnt/BioModStack/apptainer/singularity_cache",
+    "cache_dir": "/home/dalab/.local/share/biomodstack/ont-clone-candidate-20261108/released",
     "images": [
       {
         "cache_file": "ontresearch-wf-clone-validation-sha0ebc91d22c0ea5183272af8bf2b96ca51e88ad5d.img",
-        "sha256": "f1a8b4bd4d1e00a12a19e48d9125301803f72759fe391202d1042415c1879937",
+        "sha256": "614934b70ea490712dbb9babb12c7c0565e60c267499c84a38b08cf045b851b5",
         "uri": "docker://ontresearch/wf-clone-validation:sha0ebc91d22c0ea5183272af8bf2b96ca51e88ad5d",
         "label": "wfplasmid"
       },
       {
         "cache_file": "ontresearch-canu-sha50e56c57b7dfcc28ea176895c6ad98b43c607df2.img",
-        "sha256": "7bb99dd38ebdfeaa9785c9617b7c0193f29828753362ec0c11180e353d0cb044",
+        "sha256": "6f35453b17f0cf037f02a94c6bbbb478efcd799459b56b0d6c0d54f90aecc3b9",
         "uri": "docker://ontresearch/canu:sha50e56c57b7dfcc28ea176895c6ad98b43c607df2",
         "label": "canu",
         "assembly_tool": "canu"
       },
       {
         "cache_file": "medaka-2.2.2.img",
-        "sha256": "66ff42ab4839cb711354e11daa24500bf4207a5580b4fd386a257bbb6724f6a7",
+        "sha256": "3234e2c8447db8685b0b7927b84fee7b1c7b097bc3cd5ca9718c3cf9183a4a77",
         "uri": "docker://ontresearch/medaka@sha256:6794e1b293ffa125b4a57a042cbc7f85db2584f34a44ffd415e7eb501684c430",
         "label": "medaka",
         "definition": "../../apptainer/medaka.def"
       },
       {
         "cache_file": "ontresearch-wf-common-shafdd79f8e4a6faad77513c36f623693977b92b08e.img",
-        "sha256": "3371148352b3c8004eb564198184503bd577f1d3ee7a823f1c89bc398adad30f",
+        "sha256": "cb6b7101bde38bc4b200477dae28bbf5e0c2c24617f2818c4fefeb75eceba459",
         "uri": "docker://ontresearch/wf-common:shafdd79f8e4a6faad77513c36f623693977b92b08e",
         "label": "wf_common"
       },
       {
         "cache_file": "ontresearch-plannotate-shae4901fb4353581a26049f564d279edd81fe38805.img",
-        "sha256": "0d7d7beb3f08397b7369cf5b68367dedd17ff49c9360c52b6788e403a99c643c",
+        "sha256": "9d56b3790e3be99a37a2ec2972a1833b4272637b87c6967a7cfbd89643185e3d",
         "uri": "docker://ontresearch/plannotate:shae4901fb4353581a26049f564d279edd81fe38805",
         "label": "plannotate"
       }
