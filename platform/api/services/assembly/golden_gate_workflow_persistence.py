@@ -252,7 +252,7 @@ async def save_workup(session, request: SaveDesignRequest):
     product_row = _row(Material(sequence=product.sequence, topology=product.topology, features=product.features),
         name=request.name, description=request.description, operation_id=operation.id, product=True,
         primers=product_primers,
-        strandedness=assembled_strandedness(r.snapshot.get(molecule_strandedness) for r in source_revisions.values()))
+        strandedness=assembled_strandedness(r.snapshot.get("molecule_strandedness") for r in source_revisions.values()))
     product_row.operation_params = {**product_row.operation_params, 'engine': 'golden_gate_design', 'engine_version': '1',
         'fragment_count': len(selection.request.parts), 'primer_count': len(design.primers)}
     product_revision = await retention.record(session, product_row, retain=record_sequence_revision, shelf=True,
