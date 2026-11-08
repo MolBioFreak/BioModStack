@@ -1,0 +1,531 @@
+{
+  "schema": "bms.ont-four-runtime-consolidation-qualification.v1",
+  "generated_at_utc": "2026-11-08T07:12:45.752102+00:00",
+  "host": "BigBoy (100.88.169.49)",
+  "base_commit": "51d72788bbe90f3cbbefd8be13ed75dc3a52cadd",
+  "policy_source_commit": "9be0ff70d68bd57f4a48c12f4f5caf0af7fc9e5e",
+  "tested_policy_commit": "e5f4149",
+  "selection": "Equal-version current main/test/BNS wrapper inputs; select existing measured BNS images backed by native qualification, not arbitrary upstream latest or image-ID ordering. No rebuild.",
+  "docker_root": "/home/dalab/.local/share/biomodstack/migration/docker-image-import-store",
+  "docker_driver": "overlay2",
+  "images": {
+    "raw": "sha256:ad412e50572d0c9083f5da5105a1b832e3077d8963cf09c8832b196b90ec972a",
+    "view": "sha256:93ff91454aa2246b26e1a4fa9e3cc882ecb21887f57348f5448e848203ca75f6",
+    "sim": "sha256:889b2e077bc7aa065495dcc7a98d7de2b4e82f86a0f3cd26f3d91be2e2596aa2",
+    "comparison": "sha256:d8dc5487691e408da2b4fbfd02083a14968dbe54088e023841ba7ab795df01d9"
+  },
+  "imports": {
+    "ad412e50572d.tar": {
+      "archive_sha256": "49d204eb06c9d772faf4116a6baa1c10126fbfafde43489aa0f936b9f276416a",
+      "config_sha256": "ad412e50572d0c9083f5da5105a1b832e3077d8963cf09c8832b196b90ec972a",
+      "bytes": 2109744128,
+      "imported_id": "sha256:ad412e50572d0c9083f5da5105a1b832e3077d8963cf09c8832b196b90ec972a",
+      "imported_config_sha256": "ad412e50572d0c9083f5da5105a1b832e3077d8963cf09c8832b196b90ec972a",
+      "tags": [],
+      "exact_imported_config_bytes_equal": true
+    },
+    "93ff91454aa2.tar": {
+      "archive_sha256": "21ebccbd92ce0ba120b49566d965cb91db0f624da61b5c4aa1fc33b8d0e604ad",
+      "config_sha256": "93ff91454aa2246b26e1a4fa9e3cc882ecb21887f57348f5448e848203ca75f6",
+      "bytes": 913786368,
+      "imported_id": "sha256:93ff91454aa2246b26e1a4fa9e3cc882ecb21887f57348f5448e848203ca75f6",
+      "imported_config_sha256": "93ff91454aa2246b26e1a4fa9e3cc882ecb21887f57348f5448e848203ca75f6",
+      "tags": [],
+      "exact_imported_config_bytes_equal": true
+    },
+    "889b2e077bc7.tar": {
+      "archive_sha256": "eeebd9cf5e2cf43a754f9cf30c5f1558de2d222c740a088066748f5fef41e5a4",
+      "config_sha256": "889b2e077bc7aa065495dcc7a98d7de2b4e82f86a0f3cd26f3d91be2e2596aa2",
+      "bytes": 345065472,
+      "imported_id": "sha256:889b2e077bc7aa065495dcc7a98d7de2b4e82f86a0f3cd26f3d91be2e2596aa2",
+      "imported_config_sha256": "889b2e077bc7aa065495dcc7a98d7de2b4e82f86a0f3cd26f3d91be2e2596aa2",
+      "tags": [],
+      "exact_imported_config_bytes_equal": true
+    },
+    "d8dc5487691e.tar": {
+      "archive_sha256": "5e6ce355c6cd102ccfaa64bafe842cb8d30f4390c796c88206fe06ce8d62a818",
+      "config_sha256": "d8dc5487691e408da2b4fbfd02083a14968dbe54088e023841ba7ab795df01d9",
+      "bytes": 893836288,
+      "imported_id": "sha256:d8dc5487691e408da2b4fbfd02083a14968dbe54088e023841ba7ab795df01d9",
+      "imported_config_sha256": "d8dc5487691e408da2b4fbfd02083a14968dbe54088e023841ba7ab795df01d9",
+      "tags": [],
+      "exact_imported_config_bytes_equal": true
+    }
+  },
+  "policy_byte_sha256": {
+    "platform/api/config/ont_signal_workbench/comparison_render_runtime_policy_v1.json": "3a2b909840445a6f6173e84888894597fd98c3d939271bc5d569cfbdcad51614",
+    "platform/api/config/ont_signal_workbench/raw_signal_runtime_policy_v1.json": "0ae10d7aeea9496d0509d35cca7ba9e8f187146083ba4af19a17936938568b28",
+    "platform/api/config/ont_signal_workbench/runtime_policy_v1.json": "909b7116f44fb442d071b351b1378dc07aecaea878e4cd6a5a2c3991ffd9dbcd",
+    "platform/api/config/ont_signal_workbench/squigulator_runtime_policy_v1.json": "7c30fc1e3b3ddf368145a5799a4dbce0b293f94bffba552fa0b64943ab62a741"
+  },
+  "source_equivalence": {
+    "commits": [
+      "51d72788bbe90f3cbbefd8be13ed75dc3a52cadd",
+      "9be0ff70d68bd57f4a48c12f4f5caf0af7fc9e5e",
+      "4aeaee783cda69035522a823e80824a86e3512df",
+      "84476f5622e7a8f257f77fd823bd41756544dd94"
+    ],
+    "files": {
+      "docker/ont-raw-signal.Dockerfile": "ea244bd61bfc5decd6f23172f5ab45933642999dc9601691756856e931f72281",
+      "docker/ont-squigualiser.Dockerfile": "2a0cad06c377af65e918428a3ae99374f114a71e8b550d9e4ea058d93c09b812",
+      "docker/ont-squigualiser-comparison.Dockerfile": "aef3a733d4cd6489dd754b6fee61341dc76bb0bf2e3e5c7e8ae52288fa36dcfb",
+      "docker/ont-squigulator.Dockerfile": "802ac9c5c59f3da85d92df38af321e3135b070f65379b868c0aa8d6b6ef06620",
+      "docker/ont-squigualiser-requirements.txt": "d85b091a4240195b162c6ba3dd3cb28936f05124c1aff1adcd2510d0edeec9b6",
+      "docker/ont-squigulator-requirements.txt": "e213003088c1a02e5cd6779152369154503de475c704737c8f268285a5bbfe17",
+      "docker/ont-squigulator-index.c": "6154421edee6a0322231436269bc7207d0b11f91b50160b65c27c9b9c650fbe1",
+      "scripts/ont_raw_signal_validate.py": "4ad9a8796ac5cdbde573a6d41c1c3f4a677bae44a00c5ce4ee85ad6f980697dd",
+      "scripts/ont_raw_signal_lookup.py": "93e77fa1f992b3380d01f81a82aca4956542a21f44dd5e6c246f4aff772e0bd4",
+      "scripts/ont_signal_runtime.py": "36ba9931d2a2a8b758e8978b198de5141d49185c55706586cd57020a7232fe2d",
+      "scripts/ont_signal_comparison_runtime.py": "b67276907768b7138af1a357229594628786975ce2f09be4e4e2b4e9dd9ec2db",
+      "scripts/ont_squigulator_runtime.py": "ff83c9d41ac7eda3aa436721045eeae4a4778461b35e032c67ef3e7fcd9bf9da",
+      "scripts/build_ont_raw_signal_runtime.sh": "c9759b9bdab73f2ddd268ea89157989f18b825689e4aff83bd400482a8a347ef",
+      "scripts/build_ont_squigualiser_comparison_runtime.sh": "cb838c5a12d5b47ef8d59fc0586baeb3e964bda9d30e5b534f9eba63b23801a7",
+      "scripts/build_ont_squigualiser_runtime.sh": "d99ce1e0dfdbf277e94797b75a19800a7246f1da1522b9c8e66f0408e83e5497",
+      "scripts/build_ont_squigulator_runtime.sh": "584b9f8385985842c50bcd1502e34eb47a7f85d9d1558ad2bcb0ee74a57c239d"
+    }
+  },
+  "packaged_byte_equivalence": {
+    "raw_signal_runtime_policy_v1.json": {
+      "image": "sha256:ad412e50572d0c9083f5da5105a1b832e3077d8963cf09c8832b196b90ec972a",
+      "packaged_bytes_equal_candidate": {
+        "/opt/bms/ont_raw_signal_lookup.py": "93e77fa1f992b3380d01f81a82aca4956542a21f44dd5e6c246f4aff772e0bd4",
+        "/opt/bms/ont_raw_signal_validate.py": "4ad9a8796ac5cdbde573a6d41c1c3f4a677bae44a00c5ce4ee85ad6f980697dd"
+      }
+    },
+    "runtime_policy_v1.json": {
+      "image": "sha256:93ff91454aa2246b26e1a4fa9e3cc882ecb21887f57348f5448e848203ca75f6",
+      "packaged_bytes_equal_candidate": {
+        "/opt/bms/ont_signal_runtime.py": "36ba9931d2a2a8b758e8978b198de5141d49185c55706586cd57020a7232fe2d",
+        "/opt/bms/requirements.txt": "d85b091a4240195b162c6ba3dd3cb28936f05124c1aff1adcd2510d0edeec9b6"
+      }
+    },
+    "squigulator_runtime_policy_v1.json": {
+      "image": "sha256:889b2e077bc7aa065495dcc7a98d7de2b4e82f86a0f3cd26f3d91be2e2596aa2",
+      "packaged_bytes_equal_candidate": {
+        "/opt/bms/ont_squigulator_runtime.py": "ff83c9d41ac7eda3aa436721045eeae4a4778461b35e032c67ef3e7fcd9bf9da",
+        "/opt/bms/requirements.txt": "e213003088c1a02e5cd6779152369154503de475c704737c8f268285a5bbfe17"
+      }
+    },
+    "comparison_render_runtime_policy_v1.json": {
+      "image": "sha256:d8dc5487691e408da2b4fbfd02083a14968dbe54088e023841ba7ab795df01d9",
+      "packaged_bytes_equal_candidate": {
+        "/opt/bms/ont_signal_comparison_runtime.py": "b67276907768b7138af1a357229594628786975ce2f09be4e4e2b4e9dd9ec2db",
+        "/opt/bms/requirements.txt": "d85b091a4240195b162c6ba3dd3cb28936f05124c1aff1adcd2510d0edeec9b6"
+      }
+    }
+  },
+  "fixture_provenance": {
+    "source_host": "B4ONTPC 100.66.29.126",
+    "source_root": "/home/ontpc/.local/state/bns-provision/raw-reports/native",
+    "source_scope": "Retained genuine 30-read POD5, reference, Dorado 2.1.2 CPU calls and native alignment from prior ONT qualification; not newly acquired or newly basecalled on BigBoy",
+    "files": {
+      "reads.pod5": "3d01a71a9b421670ee6fbc6bb14ddd55ec1e2f89d23dc4355c5d2d6971098a5d",
+      "reference.fasta": "9bfe4d452999ef4f8f4c726a27780c6293cdf46e142d888cc4a281df0bbc6e7e",
+      "calls.bam": "957f690e38a21e63b8af213a834590c1cd8cbb561a9428ee21e97d79c01a7089",
+      "aligned.bam": "22a6bfa9ff471be71ad1c0ea610cb58e9a17471bb33572473c4c7aac19d9f830"
+    },
+    "source_and_destination_bytes_equal": true,
+    "rna_instrument_fixture": "not found in searched retained owners; no synthetic fixture relabelled"
+  },
+  "native": {
+    "scope": "Fresh native selected-image conversion, mapping, rendering and simulation on retained genuine DNA fixture. No pipeline, basecalling, hardware or remote rental launched.",
+    "parity": {
+      "reads.blow5": {
+        "read_count": 30,
+        "sample_count": 2133331,
+        "all_adc_samples_equal": true,
+        "all_calibrated_pa_samples_equal": true
+      },
+      "reads.slow5": {
+        "read_count": 30,
+        "sample_count": 2133331,
+        "all_adc_samples_equal": true,
+        "all_calibrated_pa_samples_equal": true
+      }
+    },
+    "trailing_stride": {
+      "read_count": 30,
+      "trailing_partial_stride_reads": 23,
+      "maximum_trailing_samples": 5
+    },
+    "mapping": {
+      "validated_move_reads": 30,
+      "reform_records": 30,
+      "realign_records": 30,
+      "calibration": {
+        "kmer_length": 2,
+        "signal_move_offset": 1
+      },
+      "rendered_read_id": "a4382be8-05d1-43c2-a4dd-d2aba6d44bd7",
+      "rendered_read_trailing_unstrided_samples": 2,
+      "region": "eGFP_plasmid:30-90"
+    },
+    "html": {
+      "waveform-html/a4382be8-05d1-43c2-a4dd-d2aba6d44bd7_.html": {
+        "bytes": 5382000,
+        "sha256": "42762fd0e00ed59f2010ac7de2377c54bbccb1f5b19de93852f9d0b807e4ba8a"
+      },
+      "read-view/a4382be8-05d1-43c2-a4dd-d2aba6d44bd7_.html": {
+        "bytes": 1638334,
+        "sha256": "427b7dd80659ce8fab910919b5038c01418381cd8b933d34c319022e53c18145"
+      },
+      "reference-view/7fc28fbc-bda1-410a-b267-c20c38364e68_.html": {
+        "bytes": 1495780,
+        "sha256": "4970b237039cee8ee8d856bda02fda43bc5e6a0743ce2ec81642c70df92bd065"
+      },
+      "comparison/comparison.html": {
+        "bytes": 1713903,
+        "sha256": "eb43495c17e815778e8e349620263209bcb8e7326d04f0b107bd9bfbf21c7635"
+      },
+      "pileup-view/pileup_.html": {
+        "bytes": 2057431,
+        "sha256": "79bc6fde51d311b235bff88531bb1dab7cd01cf6287906a89b0196e938ab959b"
+      }
+    },
+    "comparison": {
+      "path": "/home/dalab/.cache/ont-four-runtime-consolidation/native/comparison/comparison.html",
+      "sha256": "eb43495c17e815778e8e349620263209bcb8e7326d04f0b107bd9bfbf21c7635",
+      "size_bytes": 1713903,
+      "figures": [
+        {
+          "id": "p1001",
+          "x_range_id": "p1380"
+        },
+        {
+          "id": "p1392",
+          "x_range_id": "p1380"
+        }
+      ],
+      "shared_x_range": true,
+      "scope": "Fresh native HTML/Bokeh structure, not browser interaction or API receiving"
+    },
+    "waveform": {
+      "owner": "OntRawSignalWorker._execute",
+      "session_factory": null,
+      "scope": "Native owner SCM_RIGHTS transport and policy admission; no SQL job/claim or API registration fabricated",
+      "read_id": "303311fd-347f-4792-96c3-8a38b9bf487a",
+      "sample_count": 70412,
+      "returned_sample_count": 992,
+      "stride": 71,
+      "all_returned_samples_match_pod5_calibration": true,
+      "receipt": {
+        "argv_sha256": "10f3faf6e7a20fff7282b91884ae1fab9bf6ec9a999fd560bf6d1d295621a1e2",
+        "returncode": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "profiles": [
+      {
+        "profile": "dna-r9-min",
+        "orientation": "forward",
+        "molecule": "dna",
+        "exit": 0,
+        "target_start": 14,
+        "target_end": 140,
+        "manifest_sha256": "2cc52ddc791c05b9010f1d5689564914f75c6ee0365525b19827151b1b079020"
+      },
+      {
+        "profile": "dna-r9-min",
+        "orientation": "reverse",
+        "molecule": "dna",
+        "exit": 0,
+        "target_start": 14,
+        "target_end": 140,
+        "manifest_sha256": "cd8dbfc41b1132cd9bfc2ab87cc12f835c11d3598dc25ff267a219635d1d53bc"
+      },
+      {
+        "profile": "dna-r9-prom",
+        "orientation": "forward",
+        "molecule": "dna",
+        "exit": 0,
+        "target_start": 14,
+        "target_end": 140,
+        "manifest_sha256": "32846f85d42399c850738d3d3f366d88c6aef020793aaec8430c40dce99d0609"
+      },
+      {
+        "profile": "dna-r9-prom",
+        "orientation": "reverse",
+        "molecule": "dna",
+        "exit": 0,
+        "target_start": 14,
+        "target_end": 140,
+        "manifest_sha256": "f3b97a9342f15f21b31c9c358bc38781696a2668ebaf036a70c539dad9e0ed84"
+      },
+      {
+        "profile": "rna-r9-min",
+        "orientation": "forward",
+        "molecule": "rna",
+        "exit": 0,
+        "target_start": 141,
+        "target_end": 14,
+        "manifest_sha256": "7b65ef67491fec004bac16d0bd8248009635a564046ea378ad0146d3c221c490"
+      },
+      {
+        "profile": "rna-r9-min",
+        "orientation": "reverse",
+        "molecule": "rna",
+        "exit": 0,
+        "target_start": 141,
+        "target_end": 14,
+        "manifest_sha256": "eeb3d5ea33dcde4abe13725c534d2d4997d502cf06d9395a9cf24bb9b90727b0"
+      },
+      {
+        "profile": "rna-r9-prom",
+        "orientation": "forward",
+        "molecule": "rna",
+        "exit": 0,
+        "target_start": 141,
+        "target_end": 14,
+        "manifest_sha256": "4ceb2be135aaf9c9994229977798c2de26a9b3d2fabebdbf8accf8a4e537b0c5"
+      },
+      {
+        "profile": "rna-r9-prom",
+        "orientation": "reverse",
+        "molecule": "rna",
+        "exit": 0,
+        "target_start": 141,
+        "target_end": 14,
+        "manifest_sha256": "745d2c770977578f6975ff9d27e366b3d2b946be67db1819bb40717587dd612b"
+      },
+      {
+        "profile": "dna-r10-min",
+        "orientation": "forward",
+        "molecule": "dna",
+        "exit": 0,
+        "target_start": 14,
+        "target_end": 137,
+        "manifest_sha256": "322049961bca7b53bd3e4be353ea43883a8b99a730c7cfcf3b64e385d3e4bd30"
+      },
+      {
+        "profile": "dna-r10-min",
+        "orientation": "reverse",
+        "molecule": "dna",
+        "exit": 0,
+        "target_start": 14,
+        "target_end": 137,
+        "manifest_sha256": "31920eca516a7f9d66f2078cac50554cf3078d35c8a61c5e18dddf6cb7f81e3d"
+      },
+      {
+        "profile": "dna-r10-prom",
+        "orientation": "forward",
+        "molecule": "dna",
+        "exit": 0,
+        "target_start": 14,
+        "target_end": 137,
+        "manifest_sha256": "65f680eda0debafd49940a9a78fff70a1647aec782e01671b46985629b2e5e6e"
+      },
+      {
+        "profile": "dna-r10-prom",
+        "orientation": "reverse",
+        "molecule": "dna",
+        "exit": 0,
+        "target_start": 14,
+        "target_end": 137,
+        "manifest_sha256": "83b0b733ad102cb7d48034c611a552858b5778e4da1911096b5835b05c58945b"
+      },
+      {
+        "profile": "rna004-min",
+        "orientation": "forward",
+        "molecule": "rna",
+        "exit": 0,
+        "target_start": 137,
+        "target_end": 14,
+        "manifest_sha256": "628482aad2224eee88dbad4c12f8abc62f89eeff368f1b6b0f29bd5c52531f44"
+      },
+      {
+        "profile": "rna004-min",
+        "orientation": "reverse",
+        "molecule": "rna",
+        "exit": 0,
+        "target_start": 137,
+        "target_end": 14,
+        "manifest_sha256": "8b24421e8e4a6769092df806de58ea3b7adaea9c421c9300e6cac12a25efdafc"
+      },
+      {
+        "profile": "rna004-prom",
+        "orientation": "forward",
+        "molecule": "rna",
+        "exit": 0,
+        "target_start": 137,
+        "target_end": 14,
+        "manifest_sha256": "4d92e6225f09ed8ba8b890e88a9cbae56c6bfe3f3715558a248d0532618efcc2"
+      },
+      {
+        "profile": "rna004-prom",
+        "orientation": "reverse",
+        "molecule": "rna",
+        "exit": 0,
+        "target_start": 137,
+        "target_end": 14,
+        "manifest_sha256": "7e8f742d8325133b05f1586e7a1a263519f8c41a3132cda34e59236511eeb6dd"
+      }
+    ]
+  },
+  "candidate_readiness": {
+    "scope": "Actual raw_signal_runtime_identity, OntSignalWorker runtime/comparison policy loaders and exact local Docker admission under task-scoped selected-image environment. Does not assert live API environment selection was changed.",
+    "loader_results": {
+      "raw": {
+        "image": "sha256:ad412e50572d0c9083f5da5105a1b832e3077d8963cf09c8832b196b90ec972a",
+        "digest": "ad412e50572d0c9083f5da5105a1b832e3077d8963cf09c8832b196b90ec972a",
+        "tools": {
+          "blue_crab": "0.5.0",
+          "pyslow5": "1.4.0",
+          "slow5tools": "1.4.0"
+        },
+        "network": "none",
+        "policy_sha256": "0ae10d7aeea9496d0509d35cca7ba9e8f187146083ba4af19a17936938568b28"
+      },
+      "view": {
+        "image": "sha256:93ff91454aa2246b26e1a4fa9e3cc882ecb21887f57348f5448e848203ca75f6",
+        "image_digest": "93ff91454aa2246b26e1a4fa9e3cc882ecb21887f57348f5448e848203ca75f6",
+        "upstream_version": "0.7.0",
+        "upstream_commit": "5a2404f1f43bc3227a85475c59b2b77970078b2e",
+        "network": "none",
+        "policy_manifest_sha256": "909b7116f44fb442d071b351b1378dc07aecaea878e4cd6a5a2c3991ffd9dbcd"
+      },
+      "squigulator_producer": {
+        "stage": "squigulator_producer",
+        "image": "sha256:889b2e077bc7aa065495dcc7a98d7de2b4e82f86a0f3cd26f3d91be2e2596aa2",
+        "image_digest": "889b2e077bc7aa065495dcc7a98d7de2b4e82f86a0f3cd26f3d91be2e2596aa2",
+        "policy_sha256": "7c30fc1e3b3ddf368145a5799a4dbce0b293f94bffba552fa0b64943ab62a741",
+        "wrapper_sha256": "ff83c9d41ac7eda3aa436721045eeae4a4778461b35e032c67ef3e7fcd9bf9da"
+      },
+      "squigualiser_comparison_renderer": {
+        "stage": "squigualiser_comparison_renderer",
+        "image": "sha256:d8dc5487691e408da2b4fbfd02083a14968dbe54088e023841ba7ab795df01d9",
+        "image_digest": "d8dc5487691e408da2b4fbfd02083a14968dbe54088e023841ba7ab795df01d9",
+        "policy_sha256": "3a2b909840445a6f6173e84888894597fd98c3d939271bc5d569cfbdcad51614",
+        "wrapper_sha256": "b67276907768b7138af1a357229594628786975ce2f09be4e4e2b4e9dd9ec2db"
+      }
+    }
+  },
+  "tests": {
+    "exit": 0,
+    "test_count": 227,
+    "by_classname": {
+      "tests.test_ont_signal_runtime_contract": 68,
+      "tests.test_ont_signal_comparison_runtime_contract": 53,
+      "tests.test_ont_raw_signal_conversion_automation": 90,
+      "tests.test_ont_slow5_conversion": 4,
+      "tests.test_ont_signal_backend_startup": 12
+    },
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "runtime_integration_enabled": true,
+    "native_mixed_run_fixture": "synthetic two-read/two-run transport control, not instrument evidence",
+    "mixed_run_receipts": [
+      {
+        "path": "/home/dalab/.cache/ont-four-runtime-consolidation/scratch/pytest-of-dalab/pytest-1/test_mixed_run_end_to_end_conv0/semantic-receipt.json",
+        "sha256": "2dd12edf221fe6595a9ec16495c70f79662461634ab67a2c51d883b0f5c572b6",
+        "receipt": {
+          "acquisition_ids": [
+            "1ade58237afcd36581c4aa6531646083fa8bf865",
+            "5bafe1ada15da4aff915c72ecfb152cc53479b19"
+          ],
+          "duplicate_read_ids": 0,
+          "index_opened": true,
+          "indexed_lookup_count": 2,
+          "mapping_contract": "verified_signal_and_full_common_field_contract_exact",
+          "output_identities": {
+            "14e84168825dc5524fd61c441b7a5ad31b71ea16796502fccba679b6448bda45": {
+              "blow5": {
+                "bytes": 43163,
+                "ctime_ns": 1794121052059853073,
+                "device": 61,
+                "inode": 8741363,
+                "mtime_ns": 1794121048657863009,
+                "sha256": "ae09a41c355ed33f6e9aeff9def021c0bcf5873c4fb74587ab4d920068ae4c8a"
+              },
+              "index": {
+                "bytes": 126,
+                "ctime_ns": 1794121052059853073,
+                "device": 61,
+                "inode": 8741535,
+                "mtime_ns": 1794121049456185139,
+                "sha256": "b869f65e5d2bc6ce222c0e08a140f23e5cf5ef870e70964e5825df55f68d7652"
+              }
+            },
+            "fdb1de8a28aad4ed732e9bf10f35faf75b4d1d8518a9385a5c4cceb1c2dc6cb5": {
+              "blow5": {
+                "bytes": 72020,
+                "ctime_ns": 1794121052101852950,
+                "device": 61,
+                "inode": 8741600,
+                "mtime_ns": 1794121050233458249,
+                "sha256": "9ea27a85a7cfe792bf1f165125058cd88415d5731c3daad91c5df04df30714f0"
+              },
+              "index": {
+                "bytes": 126,
+                "ctime_ns": 1794121052101852950,
+                "device": 61,
+                "inode": 8741731,
+                "mtime_ns": 1794121051156732617,
+                "sha256": "cd0c1a1d7e1ade912b5927c198805bb1975b28eedc73354997ed40c37b6df501"
+              }
+            }
+          },
+          "partition_count": 2,
+          "partition_counts": {
+            "14e84168825dc5524fd61c441b7a5ad31b71ea16796502fccba679b6448bda45": 1,
+            "fdb1de8a28aad4ed732e9bf10f35faf75b4d1d8518a9385a5c4cceb1c2dc6cb5": 1
+          },
+          "pod5_archival_equivalence": false,
+          "read_count": 2,
+          "read_metrics": {
+            "bytes": 1624,
+            "contract": "bms.ont.literature-backed-read-metrics.v1",
+            "contract_sha256": "1c8d1fb9928c0b4315a44c1e9f89203dce094fd77f1c9c26bd3e03f06e495633",
+            "row_count": 2,
+            "schema": "bms.ont.raw-read-metrics-jsonl.v1",
+            "sha256": "8c0635c5b3a7e5289029050d27d5a71f11604cfce357c61ee035e02e4e6ea5e7"
+          },
+          "retained_indexed_pair": true,
+          "routing_sha256": "6b63ce2ee766dba2334dbff6a7f92201ee52fb18271ee9a459dfaf95e8943dce",
+          "schema": "bms.ont.raw-signal-semantic-validation.v2",
+          "signal_samples": "bit_exact_int16",
+          "source_only_authority": "immutable_parent_pod5_manifest",
+          "status": "passed",
+          "total_signal_samples_compared": 125266
+        }
+      }
+    ],
+    "junit_sha256": "9d823289b982dd53f13257cfc1bc9ecb634cc52e0b0421c23529227553e5f5a9",
+    "log_sha256": "388861185bf8420cb8c878928388228489b52a023e1048b5e1c6c80f0349ffc8"
+  },
+  "remaining_failed_cases": [],
+  "limitations": [
+    "No acquired RNA fixture was found in searched retained owners; RNA evidence covers native Squigulator profiles in both orientations, not RNA instrument mapping/comparison.",
+    "Native comparison evidence is DNA and verifies artifact/Bokeh model structure, not browser gestures or parent/API receiving.",
+    "Waveform exercises real owner descriptor transport with session_factory=None; no SQL Job, claim or API registration was invented.",
+    "Dorado calls/alignment are retained genuine ONT qualification artifacts, not newly recomputed here.",
+    "Live canonical, service environment, build ledger, wf-clone files, schemas and UI were not modified. Parent owns integration and build-ledger reconciliation."
+  ],
+  "resolved_harness_issues": [
+    "Initial root-mapped namespace could not execute user-owned interpreter; reran namespace as dalab.",
+    "Initial regression run lacked runtime-integration opt-in and candidate cache-directory ownership; enabled exact opt-in and corrected only task-worktree ownership, then reran all 227 cases successfully.",
+    "Initial standalone slow5tools view -O probe was rejected by native help; direct blue-crab POD5 conversion with .slow5 output was exercised instead."
+  ],
+  "evidence_sha256": {
+    "/root/workstation-migration/ont-four-runtime/source-equivalence.json": "83db0b5077c67662e3f2d261621d6b1d2523ff25b282b4d7784ce7073418d8c1",
+    "/root/workstation-migration/ont-four-runtime/source-exports.json": "e345213e6d0467ffc3ea0cf0f560b21a8b26e6c02d027ed793eb464ed2342d07",
+    "/root/workstation-migration/ont-four-runtime/fixture-provenance.json": "ba3ac3f7745952ee2872d0a58ff464873240d37e2cc3bde8441efa47dc29f4f6",
+    "/root/workstation-migration/ont-four-runtime/import-receipt.json": "a54376fb5b7487ec3e31d65c7d1a5208d6fa0c2c06749f5e3f1db3f385718f5b",
+    "/root/workstation-migration/ont-four-runtime/test-summary.json": "bb4ae2dd62f05a99cd22bd973ffb5f8f9718dc6c5b0429e51c0de1da49884d0c",
+    "/root/workstation-migration/ont-four-runtime/policy-byte-shas.json": "0bfe34d044f9f146dde9a3fc2941e0231e0a228812cb19909e044afd5bd77c86",
+    "/root/workstation-migration/ont-four-runtime/packaged-byte-equivalence.json": "ad3ff26e32634d63081763454792ca268466ff49d9c8b7a01469f00f15970729",
+    "/root/workstation-migration/ont-four-runtime/comparison-html-proof.json": "cea7bc3024a4ec1b005d4fe88d24a1e64cb74b96c4a0b089902f28e52c3666f2",
+    "/home/dalab/.cache/ont-four-runtime-consolidation/profiles.json": "360f53d1431fb80c2983b1ccca6fb90e22905ef1bb6661a78940d5ef07f37d6c",
+    "/home/dalab/.cache/ont-four-runtime-consolidation/waveform-owner.json": "d5b53464394172c0cade7f8512538b0f3cdf662ed6c5bb2b1df21997d8b7db76",
+    "/home/dalab/.cache/ont-four-runtime-consolidation/candidate-readiness.json": "7bacc1860eecbc5ac20adbe0558b093f66ba5678c2e0dce90aa0566587056f96",
+    "/home/dalab/.cache/ont-four-runtime-consolidation/native-summary.json": "0ce5d768a434404f751afe9cd1fb402c23318bd66f69a7efd5bec4c7cbaaab27",
+    "/home/dalab/.cache/ont-four-runtime-consolidation/focused-final.xml": "9d823289b982dd53f13257cfc1bc9ecb634cc52e0b0421c23529227553e5f5a9",
+    "/home/dalab/.cache/ont-four-runtime-consolidation/focused-final.log": "388861185bf8420cb8c878928388228489b52a023e1048b5e1c6c80f0349ffc8",
+    "/home/dalab/.cache/ont-four-runtime-consolidation/native-qualify.py": "c1ad5e56d94c4f19435d6cf26af703164962a47d0ebc6f817114d2f463271ed0",
+    "/home/dalab/.cache/ont-four-runtime-consolidation/owner-qualify.py": "64bd52d5c623192ea529aa5bd09611b26c0f7a2664b4e4df3a7aa41170fd2c7d",
+    "/home/dalab/.cache/ont-four-runtime-consolidation/native-qualify.log": "1f427d82bfb3106007662d794ecd246cb70168437d177fdf3cbe653bedbed739",
+    "/home/dalab/.cache/ont-four-runtime-consolidation/owner-qualify.log": "41dfa2a0f7252ac717382ada312f378b3a5b184ea134b5f27ba84259c9cea6ac",
+    "/home/dalab/.cache/ont-four-runtime-consolidation/native/parity-all.py": "f53d7cd223beb85f919f374fbea7c7e04ef2146c962504e9d30a2e204bf771c2"
+  }
+}
