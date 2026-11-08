@@ -1633,6 +1633,7 @@ async def _assembly_source_revision(session: AsyncSession, sequence_id: str, rev
         sequence=sequence, length=len(sequence), name=snapshot.get("name", ""),
         is_circular=bool(snapshot.get("is_circular")), sequence_type=snapshot.get("sequence_type") or "dna",
         features=snapshot.get("features") or [],
+        molecule_strandedness=snapshot.get("molecule_strandedness"),
     )
 
 
@@ -1645,6 +1646,9 @@ def _assembly_product_provenance(product: "AssemblyProduct") -> dict[str, Any]:
     if any(end is not None and (end.type != "blunt" or end.five_prime_phosphate != "unknown") for end in (left, right)):
         provenance = write_physical_ends(provenance, left, right, "assembly_product")
     return provenance
+
+
+from services.assembly.strandedness import assembled_strandedness  # noqa: E402
 
 
 async def persist_assembly_product(
@@ -1881,6 +1885,9 @@ async def persist_assembly_product(
             version=1,
         )
 
+    sequence_row.molecule_strandedness = assembled_strandedness(
+        (resolved[1].molecule_strandedness for resolved in {id(v): v for v in resolved_sources.values()}.values())
+    )
     sequence_row.primers = product_primers or []
 
     await record_generated_sequence(
