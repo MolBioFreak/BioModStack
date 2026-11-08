@@ -7,7 +7,7 @@
     "sha256": "e177e6ecaa027a60d2465196f373cd86175202d9105e1f7690ef70eb4b2e522f"
   },
   "containers": {
-    "cache_dir": "/home/dalab/.local/share/biomodstack/ont-clone-candidate-20261108/released",
+    "cache_dir": "/home/dalab/.local/share/biomodstack/runtime/ont-clone-v1.8.4-bms.2",
     "images": [
       {
         "cache_file": "ontresearch-wf-clone-validation-sha0ebc91d22c0ea5183272af8bf2b96ca51e88ad5d.img",
