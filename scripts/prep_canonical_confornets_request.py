@@ -72,7 +72,10 @@ def _resolved_request_root(request_root: Path) -> tuple[Path, os.stat_result]:
     except OSError as exc:
         raise CanonicalPrepError(f"request root is not resolvable: {exc}") from exc
     allowed_root = trusted_results_root(
-        os.environ.get("BMS_RESULTS_ROOT", "/home/dalab/.biomodstack-dev/bms_results")
+        os.environ.get("BMS_RESULTS_ROOT")
+        or str(
+            Path(os.environ.get("BMS_DATA") or Path.home() / ".biomodstack") / "bms_results"
+        )
     )
     try:
         resolved.relative_to(allowed_root)

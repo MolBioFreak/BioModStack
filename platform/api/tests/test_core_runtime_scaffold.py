@@ -576,7 +576,7 @@ def test_workflow_adapter_script_uses_durable_nextflow_home_not_tmp_cache() -> N
     ).read_text(encoding="utf-8")
 
     assert (
-        'BMS_NEXTFLOW_HOME="${BMS_NEXTFLOW_HOME:-${BMS_DATA:-/mnt/BioModStack}/nextflow}"'
+        'BMS_NEXTFLOW_HOME="${BMS_NEXTFLOW_HOME:-${BMS_DATA:-$HOME/.biomodstack}/nextflow}"'
         in adapter_script
     )
     assert 'export NXF_HOME="${NXF_HOME:-$BMS_NEXTFLOW_HOME}"' in adapter_script

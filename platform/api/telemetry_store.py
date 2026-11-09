@@ -611,7 +611,11 @@ _GPU_COLUMNS = (
 
 def telemetry_db_path() -> Path:
     explicit = os.getenv("BMS_TELEMETRY_DB_PATH")
-    path = Path(explicit).expanduser().resolve() if explicit else Path("/mnt/BioModStack/telemetry/telemetry.sqlite3").resolve()
+    if explicit:
+        path = Path(explicit).expanduser().resolve()
+    else:
+        from paths import get_data_root
+        path = (get_data_root() / "telemetry" / "telemetry.sqlite3").resolve()
     jobs = os.getenv("BMS_DB_PATH")
     if jobs and path == Path(jobs).expanduser().resolve():
         raise ValueError("telemetry database must be separate from the jobs database")

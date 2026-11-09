@@ -16,7 +16,6 @@ from paths import get_allowed_roots, get_container_dir, get_results_dir, resolve
 from services.bindcraft2_native import PIN, _canonical
 from services.bindcraft2_typed import normalize_new_campaign_request, validate_request
 
-IMAGE = Path('/mnt/BioModStack/apptainer/bindcraft2.sif')
 SCRIPT = Path(__file__).resolve().parents[3] / 'scripts/compile_bindcraft2_campaign.py'
 COMPILE_TIMEOUT_SECONDS = 120
 

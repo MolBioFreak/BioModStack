@@ -6,10 +6,12 @@ This is the native **post-candidate, fixed-backbone sequence redesign** runtime,
 
 Run from the repository root:
 
+`$BMS_CONTAINER_DIR` is the configured container directory.
+
 ```bash
 mkdir -p "$TMPDIR/protonpottsmpnn-build"
 APPTAINER_TMPDIR="$TMPDIR/protonpottsmpnn-build" apptainer build \
-  /mnt/BioModStack/apptainer/protonpottsmpnn-09682ab-cuda-locked-20261003.sif \
+  $BMS_CONTAINER_DIR/protonpottsmpnn-09682ab-cuda-locked-20261003.sif \
   apptainer/protonpottsmpnn-cuda.def
 ```
 
@@ -33,7 +35,7 @@ The [EMBL-EBI author's software page](https://www.ebi.ac.uk/thornton-srv/softwar
 apptainer run --cleanenv \
   --env OMP_NUM_THREADS=1,OPENBLAS_NUM_THREADS=1 \
   --bind "$PWD:$PWD" \
-  /mnt/BioModStack/apptainer/protonpottsmpnn-09682ab-cuda-locked-20261003.sif \
+  $BMS_CONTAINER_DIR/protonpottsmpnn-09682ab-cuda-locked-20261003.sif \
   --request /absolute/path/request.json \
   --input /absolute/path/candidate-complex.pdb \
   --out /absolute/path/output --device cpu --n-jobs 1

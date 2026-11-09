@@ -10,8 +10,10 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 
+SCRATCH_ROOT = Path(os.environ.get('BMS_QA_SCRATCH_ROOT') or tempfile.gettempdir()).resolve()
 REPO=Path(__file__).resolve().parents[3]
 HERE=Path(__file__).parent
 P=argparse.ArgumentParser();P.add_argument('--root',type=Path,required=True);P.add_argument('--evidence',type=Path,required=True)
@@ -19,7 +21,9 @@ P.add_argument('--build',type=Path,required=True)
 P.add_argument('--build-binding',type=Path,required=True,
                help='Recorded successful production build: source revision/hashes, bundle hashes, command and exit code')
 a=P.parse_args()
-assert a.root.resolve().is_relative_to(Path('/home/dalab/.hermes/profiles/fresh/cache/scratch'))
+CAPTURE_ROOT=os.environ.get('BMS_QA_CAPTURE_ROOT')
+if not CAPTURE_ROOT: raise SystemExit('BMS_QA_CAPTURE_ROOT must name the directory holding authoring/native-envelope-rfd4_proteina-generate.json')
+assert a.root.resolve().is_relative_to(SCRATCH_ROOT)
 assert not a.root.exists(), 'Use a fresh exclusive run root; never overwrite an attempt'
 a.root.mkdir(parents=True);a.evidence.mkdir(parents=True,exist_ok=True)
 assert not list(a.evidence.iterdir()), 'Use fresh evidence directory'
@@ -85,7 +89,7 @@ x=post('/api/projects/'+pid+'/workflow-setups/'+s['setup']['setup_context_id']+'
 (r/'capture-seed.json').write_text(json.dumps({'source':str(p),'sha256':hashlib.sha256(b).hexdigest(),'response':x},indent=2))
 f=post('/api/projects/'+pid+'/workflow-setups',{'schema':'bms.project-workflow-setup.create.v1','relationship_kind':'follow_up','global_experiment_id':s['setup']['global_experiment_id'],'domain_kind':'protein_in_silico','capability_id':'protein.native.rfd4_proteina.generate'},'POST','fresh-browser-create')
 (r/'fresh.json').write_text(json.dumps(f,indent=2))
-""".replace('ROOT',repr(str(a.root))).replace('CAPTURE',repr('/home/dalab/Documents/BMS/Releases/de-novo-full-20261021/resume-controlled-20261022/complete-20261023/authoring/native-envelope-rfd4_proteina-generate.json'))
+""".replace('ROOT',repr(str(a.root))).replace('CAPTURE',repr(str(Path(CAPTURE_ROOT)/'authoring/native-envelope-rfd4_proteina-generate.json')))
     assert run('prepare',ns+['-c',prepare])==0
     assert run('retained-import',[sys.executable,str(HERE/'denovo_final_retained.py'),'--root',str(a.root)])==0
     for phase in ['authoring','fresh','sources','packing','results']:

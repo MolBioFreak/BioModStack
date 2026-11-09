@@ -12,7 +12,7 @@
 
 **Planning source baseline:** `a917208c46bc06f90a57dde40ef37841138dd3ae` on `origin/test`.
 
-**Planning worktree:** `/home/dalab/worktrees/bms-dev-33-squigulator-spec-20260826`.
+**Planning worktree:** `<worktree>` (`bms-dev-33-squigulator-spec-20260826`).
 
 ---
 

@@ -128,7 +128,7 @@ def test_settings_readback_route_uses_exact_job_receipt(tmp_path, monkeypatch):
 
 
 def test_actual_image_cpu_compilation_and_native_handoff(tmp_path, monkeypatch):
-    if not launch.IMAGE.is_file():
+    if not (launch.get_container_dir() / 'bindcraft2.sif').is_file():
         pytest.skip('pinned BC2 image is unavailable')
     source, settings = setup_source(tmp_path, monkeypatch)
     app = FastAPI()
@@ -144,7 +144,7 @@ def test_actual_image_cpu_compilation_and_native_handoff(tmp_path, monkeypatch):
     assert (tmp_path / 'job/bindcraft2/sources/target_0.fasta').read_bytes() == source.read_bytes()
     root = Path(__file__).resolve().parents[3]
     subprocess.run(['apptainer', 'exec', '--bind', f'{root}:{root}', '--bind', f'{tmp_path}:{tmp_path}',
-                    str(launch.IMAGE), 'python3', str(root / 'scripts/run_bindcraft2_campaign.py'),
+                    str((launch.get_container_dir() / 'bindcraft2.sif')), 'python3', str(root / 'scripts/run_bindcraft2_campaign.py'),
                     handoff['bc2_compilation'], handoff['bc2_campaign_dir'], '--native-source', '/opt/bindcraft'],
                    check=True, capture_output=True, text=True, timeout=120)
     assert (tmp_path / 'job/bindcraft2/native_settings.json').is_file()

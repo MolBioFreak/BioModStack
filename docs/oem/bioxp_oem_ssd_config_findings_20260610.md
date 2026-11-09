@@ -15,7 +15,7 @@ No writes were made to the SSD.
 Evidence folder on workstation:
 
 ```text
-/home/dalab/Desktop/ROBOT/oem_ssd_reinventory_20260610/
+OEM-source/oem_ssd_reinventory_20260610/
 ```
 
 Key generated artifacts:

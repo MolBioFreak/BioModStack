@@ -24,8 +24,8 @@ Run from the isolated checkout root with Hermes Python (`websockets` installed):
 
 ```sh
 python platform/frontend/browser-tests/denovo_final_qualification.py \
-  --root /home/dalab/.hermes/profiles/fresh/cache/scratch/denovo-final-browser/NEW-EXCLUSIVE-RUN \
-  --evidence /home/dalab/Documents/BMS/Releases/de-novo-full-20261021/resume-controlled-20261022/complete-20261023/final-browser-route-repair/NEW-EXCLUSIVE-RUN \
+  --root $BMS_QA_SCRATCH_ROOT/denovo-final-browser/NEW-EXCLUSIVE-RUN \
+  --evidence $BMS_QA_CAPTURE_ROOT/final-browser-route-repair/NEW-EXCLUSIVE-RUN \
   --build /absolute/path/to/production-build \
   --build-binding /absolute/path/to/build-binding.json
 ```

@@ -63,7 +63,7 @@ def test_protenix_binds_a_self_contained_declared_canonical_runtime() -> None:
     assert "cm_api_runtime_dir = System.getenv('BMS_CM_API_RUNTIME_DIR')" in config
     assert 'api_python = System.getenv(\'BMS_API_PYTHON\') ?: "${params.cm_api_runtime_dir}/current/venv/bin/python"' in config
     assert "--bind ${params.cm_api_runtime_dir}:${params.cm_api_runtime_dir}:ro" in module_config
-    assert 'CM_API_RUNTIME_DIR="${BMS_CM_API_RUNTIME_DIR:-${BMS_DATA:-/mnt/BioModStack}/runtime/cm-api-python}"' in launcher
+    assert 'CM_API_RUNTIME_DIR="${BMS_CM_API_RUNTIME_DIR:-${BMS_DATA:-$HOME/.biomodstack}/runtime/cm-api-python}"' in launcher
     assert "uv sync --locked" in launcher
     assert "provision_cm_api_runtime" in launcher
     assert "flock -x 9" in launcher

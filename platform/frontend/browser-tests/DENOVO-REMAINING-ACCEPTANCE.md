@@ -3,9 +3,9 @@
 Runs the production bundle with native scratch routers/SQLite and actual Chrome pointer clicks. No scientific HTTP responses are mocked. Deterministic structure bytes, stored Jobs and the ready worker metadata are **NOT INFERENCE**; the worker has no running transport. The checkpoint comes from `ComponentRuntime` + `open_component_gate`, not the retired RFD3 local-redesign product.
 
 ```sh
-/home/dalab/biomodstack/dev-test-canonical/platform/api/.venv/bin/python \
+$BMS_QA_API_PYTHON \
  platform/frontend/browser-tests/denovo_remaining_qualification.py \
- --root /home/dalab/.hermes/profiles/fresh/cache/scratch/UNIQUE-RUN \
+ --root $BMS_QA_SCRATCH_ROOT/UNIQUE-RUN \
  --build /PATH/TO/PRODUCTION-BUNDLE \
  --retained /PATH/TO/NATIVE-WRITER-PYTEST-ROOT
 ```

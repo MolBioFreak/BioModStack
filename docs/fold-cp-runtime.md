@@ -74,13 +74,15 @@ YAML/CCD routes remain supported. No additional model chemistry is invented.
 
 Run from the repository root so `%files` consumes the tracked patch:
 
+`$BMS_CONTAINER_DIR` is the configured container directory.
+
 ```bash
-sha256sum /mnt/BioModStack/apptainer/boltzgen.sif
+sha256sum $BMS_CONTAINER_DIR/boltzgen.sif
 # Compare with the exact parent digest above before building.
 export APPTAINER_TMPDIR="$TMPDIR/foldcp-1d-build/tmp"
 export APPTAINER_CACHEDIR="$TMPDIR/foldcp-1d-build/cache"
 mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
-apptainer build --fakeroot /mnt/BioModStack/apptainer/<new-name>.sif apptainer/fold_cp.def
+apptainer build --fakeroot $BMS_CONTAINER_DIR/<new-name>.sif apptainer/fold_cp.def
 ```
 
 Use a new filename, never overwrite an existing SIF or move an active alias.

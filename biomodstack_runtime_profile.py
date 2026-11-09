@@ -371,8 +371,16 @@ def _default_dev_data_root() -> Path:
     return Path.home().resolve() / ".biomodstack-dev"
 
 
+def configured_data_root_candidates() -> list[Path]:
+    """Data root named by the install profile, if any (unlocked read; callers may hold the lock)."""
+    configured = _read_install_profile().get("data_root")
+    if isinstance(configured, str) and configured.strip():
+        return [Path(configured)]
+    return []
+
+
 def _candidate_data_roots() -> list[Path]:
-    return [Path("/mnt/BioModStack"), _default_data_root()]
+    return [*configured_data_root_candidates(), _default_data_root()]
 
 
 def _looks_like_data_root(path: Path) -> bool:
@@ -481,7 +489,7 @@ def managed_runtime_storage_paths(resolved: Mapping[str, object], runtime: str) 
         raise ValueError("runtime must be dev or container")
     shared = ("container_dir", "weights_root", "colabfold_db")
     mutable = MUTABLE_RUNTIME_STORAGE_FIELDS
-    shared_root = Path(str(resolved.get("data_root", "/mnt/BioModStack")))
+    shared_root = Path(str(resolved.get("data_root", Path.home() / ".biomodstack")))
     paths = {key: str(resolved.get(key, shared_root / leaf)) for key, leaf in
              zip(shared, ("apptainer", "weights", "colabfold_db"))}
     base_key = "dev_data_root" if runtime == "dev" else "data_root"
@@ -566,8 +574,7 @@ def _legacy_configuration_write(function):
     return wrapped
 
 
-@_consistent_configuration_read
-def load_install_profile() -> dict[str, object]:
+def _read_install_profile() -> dict[str, object]:
     path = get_install_profile_path()
     if not path.exists():
         return {}
@@ -578,6 +585,11 @@ def load_install_profile() -> dict[str, object]:
     if not isinstance(data, Mapping):
         return {}
     return normalize_install_profile(data)
+
+
+@_consistent_configuration_read
+def load_install_profile() -> dict[str, object]:
+    return _read_install_profile()
 
 
 def _coerce_env_int(name: str, default: int, environ: Mapping[str, str] | None = None) -> int:

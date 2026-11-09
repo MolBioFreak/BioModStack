@@ -82,7 +82,7 @@ When this document and an older retry3 task note disagree, this document control
 | Input mode | `fastq` |
 | Job | `31f02bd5-830f-4558-aa78-3873c515de68` |
 | Post-reconciliation hierarchy authority | `0a48230248b1c2001be89a2a099b1cf13773d709d3f7132840194977b681d9e9` |
-| Result root | `/home/dalab/.biomodstack-dev/bms_results/BFX6NB_Q2-01_ont_fastq_qc_acceptance_retry3_20260816_175924` |
+| Result root | `<development data directory>/bms_results/BFX6NB_Q2-01_ont_fastq_qc_acceptance_retry3_20260816_175924` |
 
 ### 4.2 Input and reference identities
 

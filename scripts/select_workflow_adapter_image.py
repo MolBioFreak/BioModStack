@@ -18,7 +18,7 @@ from lib.shared_runtime_images import SharedRuntimeImageError, verify_image
 def select_probe_image(*, containers: Path | None = None) -> Path:
     selector = "BMS_PROTENIX_CONTAINER_PATH"
     containers = containers if containers is not None else Path(os.environ.get("BMS_CONTAINER_DIR") or
-                      str(Path(os.environ.get("BMS_DATA") or "/mnt/BioModStack") / "apptainer"))
+                      str(Path(os.environ.get("BMS_DATA") or Path.home() / ".biomodstack") / "apptainer"))
     root = Path(os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip() or containers / ".image-store")
     if not root.is_absolute() or ".." in root.parts:
         raise ValueError("runtime image store must be an absolute path without traversal")

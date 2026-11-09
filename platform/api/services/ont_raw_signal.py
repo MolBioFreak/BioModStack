@@ -59,7 +59,14 @@ BLOW5_ACQUISITION_PRESSURE_ENV = "BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE"
 EXTERNAL_POD5_ROOT_ENV = "BMS_ONT_EXTERNAL_POD5_ROOT"
 LIVE_CONVERSION_ENABLED_ENV = "BMS_ONT_LIVE_CONVERSION_ENABLED"
 RAW_SIGNAL_RETENTION_POLICY_ENV = "BMS_ONT_RAW_SIGNAL_RETENTION_POLICY"
-BLOW5_DEFAULT_STAGING_ROOT = "/mnt/BioModStack/ont-raw-signal-staging"
+
+
+def blow5_default_staging_root() -> str:
+    """Install default beside the data root; BMS_ONT_RAW_SIGNAL_STAGING_ROOT overrides it."""
+    from paths import get_data_root
+    return str(get_data_root() / "ont-raw-signal-staging")
+
+
 BLOW5_DEFAULT_MIN_FREE_BYTES = 20 * 1024 * 1024 * 1024
 RAW_SIGNAL_RUNTIME_POLICY_PATH = Path(__file__).resolve().parents[1] / "config/ont_signal_workbench/raw_signal_runtime_policy_v1.json"
 
@@ -216,7 +223,7 @@ _RETENTION_POLICIES = ("pod5_and_blow5", "blow5_only")
 
 def retention_settings_path() -> Path:
     """Operator choice beside the raw-signal publication tree; the env value is the install default."""
-    staging = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).expanduser()
+    staging = Path(os.getenv(BLOW5_STAGING_ROOT_ENV) or blow5_default_staging_root()).expanduser()
     return staging.parent / "ont-raw-signal-retention.json"
 
 
@@ -1072,7 +1079,7 @@ def _retain_external_indexed_pair(
     """Acquire a mutable external pair once in the representation publication owner."""
     import tempfile
 
-    configured = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).expanduser()
+    configured = Path(os.getenv(BLOW5_STAGING_ROOT_ENV) or blow5_default_staging_root()).expanduser()
     root = configured.parent / "ont-raw-signal" / _publication_component(run_id, authority="run ID") / str(observed_generation)
     parent_fd = _open_absolute_directory_nofollow(configured.parent)
     try:
@@ -1892,7 +1899,7 @@ def _derivation_resource_snapshot(
 
 
 def _resource_snapshot(source_bytes: int) -> dict[str, Any]:
-    root = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).expanduser()
+    root = Path(os.getenv(BLOW5_STAGING_ROOT_ENV) or blow5_default_staging_root()).expanduser()
     probe = root
     while not probe.exists() and probe != probe.parent:
         probe = probe.parent
@@ -4037,8 +4044,8 @@ def _assert_publication_directory_identity(
 async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJob, source: OntRawSignalRepresentation, commands: dict[str, Any]) -> OntRawSignalRepresentation:
     job = await _fence_active_derivation_claim(session, job.id, str(job.claim_token or ""))
     configured_value = os.getenv(
-        BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT
-    )
+        BLOW5_STAGING_ROOT_ENV
+    ) or blow5_default_staging_root()
     configured_root = Path(configured_value).expanduser()
     if not configured_root.is_absolute() or ".." in configured_root.parts:
         raise ValueError("raw-signal publication staging root must be absolute and lexical")
@@ -4559,7 +4566,7 @@ async def recover_expired_derivations(session: AsyncSession) -> int:
                     run,
                 )
             )
-            final_directory = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).parent / "ont-raw-signal" / row.run_id / str(row.observed_generation) / row.id
+            final_directory = Path(os.getenv(BLOW5_STAGING_ROOT_ENV) or blow5_default_staging_root()).parent / "ont-raw-signal" / row.run_id / str(row.observed_generation) / row.id
             if final_directory.is_dir():
                 try:
                     representation = await publish_derivation(session, row, source, commands)

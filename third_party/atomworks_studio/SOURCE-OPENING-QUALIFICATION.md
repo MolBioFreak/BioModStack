@@ -46,7 +46,7 @@ inference, scientific defaults or parser pins changed.
 ## Executed evidence
 
 Evidence root:
-`/home/dalab/.hermes/profiles/fresh/cache/scratch/atomworks-capture-closeout/`
+`<scratch>/atomworks-capture-closeout/`
 
 | Evidence | Executed result |
 |---|---|

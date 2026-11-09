@@ -7,8 +7,8 @@ This pass paused further runtime changes and re-examined the workstation backup/
 Searched roots:
 
 ```text
-/home/dalab/Desktop/ROBOT
-/home/dalab/biomodstack/biomodstack/docs/oem
+OEM-source
+<repo-root>/docs/oem
 ```
 
 Primary expected OEM runtime files:
@@ -179,8 +179,8 @@ calreference.xml: 1
 Found default/package files:
 
 ```text
-/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/wine_probe/GenBotApp_6_3_0_1_flat/ProcessTime.xml
-/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/wine_probe/GenBotApp_6_3_0_1_flat/calreference.xml
+OEM-source/wine_probe/GenBotApp_6_3_0_1_flat/ProcessTime.xml
+OEM-source/wine_probe/GenBotApp_6_3_0_1_flat/calreference.xml
 ```
 
 The ClickOnce/deploy tree also includes packaged default deploy variants, e.g.:

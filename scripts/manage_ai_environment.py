@@ -55,7 +55,7 @@ def state_root() -> Path:
 
 
 def worktree_root() -> Path:
-    return Path(os.environ.get("BMS_AI_WORKTREE_ROOT", "/home/dalab/worktrees/bms-ai")).resolve()
+    return Path(os.environ.get("BMS_AI_WORKTREE_ROOT", Path.home() / "worktrees" / "bms-ai")).resolve()
 
 
 def receipt_path(environment_id: str) -> Path:

@@ -10,7 +10,7 @@ Before: `.../cache/scratch/denovo-parent-basename-before.log` — `/submit` pass
 
 ## Executed
 
-Evidence prefix: `/home/dalab/.hermes/profiles/fresh/cache/scratch/`.
+Evidence prefix: `$BMS_QA_SCRATCH_ROOT/`.
 
 - `denovo-parent-final4.xml`: real HTTP parent suite **11 passed**; reconciled generation suite **11 passed**; reconciled source suite **11 passed** (**33 passed**). The broader `denovo-parent-final3.xml` run also records the old D20 suite's **5 failures**, all obsolete Sampling disclosure lookups; D20 was not edited or declared passing.
 - `denovo-parent-persistence-final2.xml`: **2 passed**. Reads the same actual mounted unconditional and conditioned Project SQLite store, verifies normalized request hash, native adapter, exact native normalization/settings, immutable scheduler payload after reopening a connection, MODEL/hash and native closure for the partial case, zero run groups and zero Jobs. The conditioned mounted/audit cases and browser read-only harness guard were added concurrently by the parent and preserved.
@@ -23,10 +23,10 @@ Covered: partial/inverse/evaluate/state continuation href receiving; source MODE
 
 ## Rerun
 
-Use a NEW scratch evidence root and an unused loopback port. Python is `/home/dalab/.cache/bms-remote-worker-complete-venv/bin/python`. From repository root:
+Use a NEW scratch evidence root and an unused loopback port. Python is `$BMS_QA_API_PYTHON`. From repository root:
 
 ```sh
-BMS_PARENT_PORT=18879 BMS_PARENT_LIFECYCLE_ROOT=/home/dalab/.hermes/profiles/fresh/cache/scratch/NEW-parent-run /home/dalab/.cache/bms-remote-worker-complete-venv/bin/python platform/frontend/browser-tests/denovo_parent_lifecycle_server.py
+BMS_PARENT_PORT=18879 BMS_PARENT_LIFECYCLE_ROOT=$BMS_QA_SCRATCH_ROOT/NEW-parent-run $BMS_QA_API_PYTHON platform/frontend/browser-tests/denovo_parent_lifecycle_server.py
 ```
 
 Wait for `/acceptance-health`; then in `platform/frontend`, set the same root/port and `BMS_SCHEMA_PYTHON` and run:
@@ -38,16 +38,16 @@ Wait for `/acceptance-health`; then in `platform/frontend`, set the same root/po
 From repository root with the same evidence root:
 
 ```sh
-/home/dalab/.cache/bms-remote-worker-complete-venv/bin/python -m pytest platform/api/tests/test_denovo_parent_mounted_persistence.py -q --basetemp /home/dalab/.hermes/profiles/fresh/cache/scratch/NEW-parent-pytest
+$BMS_QA_API_PYTHON -m pytest platform/api/tests/test_denovo_parent_mounted_persistence.py -q --basetemp $BMS_QA_SCRATCH_ROOT/NEW-parent-pytest
 ```
 
 Locked dependencies are donor symlinks, not a clean reinstall. This leaf's direct runs bind localhost and refuse execution writes; they were not network-namespace isolated. The separately appearing qualification wrapper is not authored or modified by this leaf.
 
 ## Final integrated, namespace-isolated qualification
 
-Superseding the earlier browser-build limitation above, the integration owner built the actual frontend after the placement fix at code commit `4434e081907b27e81ba8d7add08a1f16e3dce5a8`. `tsc -b` and Vite returned zero; build log: `/home/dalab/.hermes/profiles/fresh/cache/scratch/denovo-parent-build-4434e08.log`. Documentation-only commits after that SHA do not change the tested code.
+Superseding the earlier browser-build limitation above, the integration owner built the actual frontend after the placement fix at code commit `4434e081907b27e81ba8d7add08a1f16e3dce5a8`. `tsc -b` and Vite returned zero; build log: `$BMS_QA_SCRATCH_ROOT/denovo-parent-build-4434e08.log`. Documentation-only commits after that SHA do not change the tested code.
 
-Final evidence root: `/home/dalab/.hermes/profiles/fresh/cache/scratch/dn-parent-final-4434e08/`.
+Final evidence root: `$BMS_QA_SCRATCH_ROOT/dn-parent-final-4434e08/`.
 
 - `mounted.json`: **33 passed, 0 failed, 0 skipped** (11 each: ordinary native HTTP parent, reconciled generation, reconciled source).
 - `persistence.xml`: **2 passed, 0 failed, 0 skipped**, auditing the actual mounted unconditional and MODEL-2 partial Project preparations. The core Jobs count and Project run-group count are both zero.
@@ -63,9 +63,9 @@ Reproduce the integrated qualification with a new scratch root and an already su
 
 ```sh
 BMS_PARENT_NETNS="$(readlink /proc/self/ns/net)" \
-BMS_PARENT_LIFECYCLE_ROOT=/home/dalab/.hermes/profiles/fresh/cache/scratch/NEW-isolated-parent \
+BMS_PARENT_LIFECYCLE_ROOT=$BMS_QA_SCRATCH_ROOT/NEW-isolated-parent \
 BMS_PARENT_BROWSER_BUILD=/absolute/path/to/actual-vite-output \
-unshare -Urn /home/dalab/.cache/bms-remote-worker-complete-venv/bin/python \
+unshare -Urn $BMS_QA_API_PYTHON \
 platform/frontend/browser-tests/denovo_parent_lifecycle_qualification.py
 ```
 

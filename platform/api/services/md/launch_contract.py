@@ -410,11 +410,16 @@ def _normalize_topology_include(raw: str) -> PurePosixPath:
     return path
 
 
+def _container_dir() -> Path:
+    from paths import get_container_dir
+    return get_container_dir()
+
+
 def _bound_engine_runtime_identity(engine: str) -> dict[str, Any] | None:
     variable = "BMS_MD_GROMACS_SIF" if engine == "gromacs" else "BMS_MD_OPENMM_SIF"
     default_name = "gromacs-md-2025.3.sif" if engine == "gromacs" else "openmm-md-8.5.2.sif"
     configured = str(os.getenv(variable) or "").strip()
-    path = Path(configured) if configured else Path("/mnt/BioModStack/apptainer") / default_name
+    path = Path(configured) if configured else _container_dir() / default_name
     if not path.is_file() or path.is_symlink():
         return None
     return {"sif_sha256": _memoized_sif_sha256(path), "image_name": default_name}
@@ -442,7 +447,7 @@ def _openmm_runtime_image_path() -> Path | None:
     data_root = str(os.getenv("BMS_DATA") or "").strip()
     if data_root:
         candidates.append(Path(data_root) / "apptainer" / "openmm-md-8.5.2.sif")
-    candidates.append(Path("/mnt/BioModStack/apptainer/openmm-md-8.5.2.sif"))
+    candidates.append(_container_dir() / "openmm-md-8.5.2.sif")
     return next((candidate for candidate in candidates if candidate.is_file()), None)
 
 

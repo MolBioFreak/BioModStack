@@ -74,8 +74,7 @@ Resolved via [platform/api/paths.py](../platform/api/paths.py):
 - inputs root:
   `inputs`
 
-These are usually placed under `BMS_DATA`, which on the current workstation is
-typically `/mnt/BioModStack`.
+These are usually placed under `BMS_DATA`, the configured data root.
 
 ## Global model-result rule
 

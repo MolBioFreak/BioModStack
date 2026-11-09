@@ -56,7 +56,7 @@ binaries are not a fully digest-pinned OS image or complete legal audit.
 ## Retained local handles
 
 All new build/install/test artifacts are under the active fresh-profile scratch:
-`/home/dalab/.hermes/profiles/fresh/cache/scratch/atomworks-patched-host/`.
+`<scratch>/atomworks-patched-host/`.
 
 - `source`: disposable exact-release checkout + tracked S03 patch + actual web build.
 - `supported-venv`: final isolated supported CPU environment.

@@ -266,7 +266,7 @@ Paths are relative to the verified source. These identify implementation/test-co
 - **E09 Project:** `platform/api/schemas.py:JobCreate`; `platform/api/services/protein_project_capabilities.py`, `workflow_adapter_registry.py`; `platform/api/services/global_experiments/workflow_setups.py`, `launch_contexts.py`, `project_datasets.py`, `adapters.py`, `result_surfaces.py`; `platform/api/routers/project_manager.py`; `platform/frontend/src/components/project-manager/ProjectWorkflowSetup.tsx`, `ProteinProjectWorkspace.tsx`.
 - **E10 Compiler/bridge:** `platform/api/services/nextflow.py`, `platform/api/native_components.py`, `platform/api/services/remote_execution/bundle.py`, `cache.py`; `scripts/lib/portable_inputs.py`; `platform/api/tools/bms_remote_worker.py`; `nextflow_schema.json`.
 
-Supporting reviews are outside the repository under `/home/dalab/audits/binder-workflow-ui-spec/`: `review-baseline.json`, `authoring-review.md`, `continuation-review.md`, `bc2-remote-review.md`, `source-selection-review.md`, `project-integration-review.md`, `ppiflow-generation-native-review.md`. The PPIFlow native correction and four-generator clarification supersede earlier seeded-only/five-generator recommendations. Reports are evidence, not scope authority.
+Supporting reviews are outside the repository under an audit directory (`binder-workflow-ui-spec/`): `review-baseline.json`, `authoring-review.md`, `continuation-review.md`, `bc2-remote-review.md`, `source-selection-review.md`, `project-integration-review.md`, `ppiflow-generation-native-review.md`. The PPIFlow native correction and four-generator clarification supersede earlier seeded-only/five-generator recommendations. Reports are evidence, not scope authority.
 
 ## 9. Reconciled acceptance ledger
 

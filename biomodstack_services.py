@@ -1443,7 +1443,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     )
     from biomodstack_local_resources import configured_local_policy
     local_policy = configured_local_policy()
-    shared_data_root = Path(str(resolved.get("data_root", Path("/mnt/BioModStack")))).expanduser().resolve()
+    shared_data_root = Path(str(resolved.get("data_root", Path.home() / ".biomodstack"))).expanduser().resolve()
     # Host support bodies are independent of lane-local BMS_DATA/job state.
     support_payload_root = Path(os.environ.get("BMS_CM_API_RUNTIME_DIR", "").strip() or
         str(Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) /
@@ -1496,7 +1496,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     if mode == CONTAINER_RUNTIME_MODE:
         adapter_runner = root / "scripts" / "run_biomodstack_workflow_adapter.sh"
         core_runner = root / "scripts" / "run_biomodstack_core_runtime.sh"
-        production_state_root = str(resolved.get("data_root", Path("/mnt/BioModStack")))
+        production_state_root = str(resolved.get("data_root", Path.home() / ".biomodstack"))
         production_inputs_dir = str(resolved.get("inputs_dir", Path(production_state_root) / "inputs"))
         production_db_path = str(resolved.get("db_path", Path(production_state_root) / "biomodstack.db"))
         production_work_dir = str(resolved.get("work_dir", Path(production_state_root) / "work"))

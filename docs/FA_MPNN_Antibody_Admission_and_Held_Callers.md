@@ -33,7 +33,7 @@ Other transformations or overlays without this source binding are not treated as
 
 Read-only `unsquashfs -cat -o OFFSET SIF exact/path` extraction; no mount, image execution, model run, checkpoint read, installation, or clean-tree qualification.
 
-RFantibody image `/mnt/BioModStack/apptainer/rfantibody.sif`, offset 61440, checkout `/opt/RFantibody`; parent-reported HEAD ref `2b864664e48c87edac7f119c157f77e5bbad16e9` is not clean-tree proof. The relevant actual file hashes are:
+RFantibody image `$BMS_CONTAINER_DIR/rfantibody.sif` (`$BMS_CONTAINER_DIR` is the configured container directory), offset 61440, checkout `/opt/RFantibody`; parent-reported HEAD ref `2b864664e48c87edac7f119c157f77e5bbad16e9` is not clean-tree proof. The relevant actual file hashes are:
 
 | Relative native file | SHA-256 |
 |---|---|
@@ -43,7 +43,7 @@ RFantibody image `/mnt/BioModStack/apptainer/rfantibody.sif`, offset 61440, chec
 | src/rfantibody/rfdiffusion/inference/ab_pose.py | 215aea008dba95547a294988965b91416e19cf60739a45647c93691e3f77c917 |
 | src/rfantibody/rfdiffusion/parsers.py | 607fbf934c643a8a5da975eb1e7a2f98fd15a2a3ee796f4b057dfae00d1400e1 |
 
-FA-MPNN image `/mnt/BioModStack/apptainer/fampnn.sif`, offset 53248, checkout `/app/fampnn`; parent-reported HEAD `18363df253dbeb7b2cb963daf7a732fbaa25157d` matches the SOW producer dialect. Actual source hashes:
+FA-MPNN image `$BMS_CONTAINER_DIR/fampnn.sif`, offset 53248, checkout `/app/fampnn`; parent-reported HEAD `18363df253dbeb7b2cb963daf7a732fbaa25157d` matches the SOW producer dialect. Actual source hashes:
 
 | Relative native file | SHA-256 |
 |---|---|

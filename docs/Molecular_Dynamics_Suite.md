@@ -135,7 +135,7 @@ Each stage has an atomic state ledger with artifact checksums. Completed stages 
 
 ## Runtime builds
 
-- GROMACS: `nvcr.io/nvidia/gromacs:v2025.3`, pinned base digest `sha256:8ee1822b8a34ace738e000a6c9cf8bc9a8abdbbf49e84506238a427b89ee6daf`; rebuilt SIF `/mnt/BioModStack/apptainer/gromacs-md-2025.3.sif`, 533,737,472 bytes, SHA-256 `97c117ea07496c0d1b13d80be84d33345b89063b47ccfb83f6cbff0145f1385b`.
+- GROMACS: `nvcr.io/nvidia/gromacs:v2025.3`, pinned base digest `sha256:8ee1822b8a34ace738e000a6c9cf8bc9a8abdbbf49e84506238a427b89ee6daf`; rebuilt SIF `$BMS_CONTAINER_DIR/gromacs-md-2025.3.sif` (`$BMS_CONTAINER_DIR` is the configured container directory), 533,737,472 bytes, SHA-256 `97c117ea07496c0d1b13d80be84d33345b89063b47ccfb83f6cbff0145f1385b`.
 - OpenMM reference: `containers/openmm-md/Dockerfile` and `environment.yml`, OpenMM 8.5.2 + CUDA 13.0.
 
 The host CUDA compiler is not used to run either container. Runtime compatibility comes from NVIDIA driver 580.173.02 and containerized CUDA user-space libraries.

@@ -20,7 +20,7 @@ from test_bindcraft2_lifecycle import setup
 
 @pytest.mark.asyncio
 async def test_actual_lifecycle_creation_materializes_and_compiles_every_mode(tmp_path, monkeypatch):
-    if not launch.IMAGE.is_file():
+    if not (launch.get_container_dir() / 'bindcraft2.sif').is_file():
         pytest.skip('installed pinned BC2 settings compiler image unavailable')
     setup(tmp_path, monkeypatch, launch._native_compile)
     monkeypatch.setattr(jobs, 'get_results_dir', lambda: tmp_path)

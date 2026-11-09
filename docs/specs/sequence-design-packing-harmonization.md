@@ -14,7 +14,7 @@ Missing development evidence does not become a launch/continuation gate. No addi
 
 The review at `7ac3c3682a65b4d8b1e6249f51ed3d6baa99feba` was reconciled against `5ce2210ad30fa22a94939d84865d852bcedb4e27`, matching canonical source, API build, frontend build and remote `test`. Reviewed sequence schemas/adapters and the Caliby descriptor were unchanged. Retain intervening remote-delivery and De Novo Design UI improvements.
 
-Caliby's selected sequence-design leaf is implemented. FA-MPNN has retained completed native jobs. The prior review's 12 passing software cases do not establish native Caliby execution. No application tests or science were run for this documentation pass. Detailed evidence: `/home/dalab/.hermes/profiles/fresh/reports/bms-sequence-review-2026-09-25/review.md`.
+Caliby's selected sequence-design leaf is implemented. FA-MPNN has retained completed native jobs. The prior review's 12 passing software cases do not establish native Caliby execution. No application tests or science were run for this documentation pass. Detailed evidence: a review report outside the repository (`bms-sequence-review-2026-09-25/review.md`).
 
 ## Fix list
 

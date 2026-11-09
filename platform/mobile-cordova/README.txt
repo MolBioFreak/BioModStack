@@ -10,12 +10,12 @@ Purpose
 
 Runtime configurations
   cordova.runtime.phone.json
-    apiBaseUrl: https://compute-node.taileb3a90.ts.net
+    apiBaseUrl: https://<your-host>.<tailnet>.ts.net
 
   cordova.runtime.emulator.json
     apiBaseUrl: http://10.0.2.2:8000
 
-  The phone origin is the only production native-update origin accepted by the Android policy. Emulator HTTP is restricted to the emulator build's network-security configuration and is not accepted for native APK downloads.
+  The phone origin is the operator's own Tailscale Serve HTTPS origin, set in their runtime config (apiBaseUrl) and in config.xml (BMS_API_ORIGIN and the access origin). It is the only production native-update origin accepted by the Android policy. Emulator HTTP is restricted to the emulator build's network-security configuration and is not accepted for native APK downloads.
 
 Clean bootstrap and debug build
   cd platform/mobile-cordova
@@ -53,7 +53,7 @@ Native APK update trust model
 
 Android policy
   The native shell fails closed unless all of these are true:
-    - exact HTTPS origin https://compute-node.taileb3a90.ts.net
+    - exact HTTPS origin equal to the operator's Tailscale Serve origin (https://<your-host>.<tailnet>.ts.net, as configured in config.xml BMS_API_ORIGIN)
     - exact stable channel and stable artifact path
     - no redirect, URL userinfo, query, or fragment
     - package org.biomodstack.mobile

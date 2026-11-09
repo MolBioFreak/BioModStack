@@ -123,7 +123,7 @@ def build_score_command(args: argparse.Namespace, score_script: Path, work_root:
     }
     if args.parent_collect_dir:
         bind_roots.add(str(Path(args.parent_collect_dir).resolve()))
-    bind_roots.add("/mnt/BioModStack")
+    bind_roots.add(os.environ.get("BMS_DATA") or str(Path.home() / ".biomodstack"))
     bind_args: list[str] = []
     for bind_root in sorted(bind_roots):
         if Path(bind_root).exists():

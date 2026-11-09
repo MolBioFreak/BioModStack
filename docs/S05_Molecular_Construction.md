@@ -108,7 +108,7 @@ columns are used to position atoms.
 
 ### Actual managed Amber geometry candidate (read-only inspection)
 
-The configured container root points to `/mnt/BioModStack/apptainer`.
+The configured container root points to `$BMS_CONTAINER_DIR`.
 Inspected the existing `md-preparation-v1.sif` read-only via `apptainer exec
 --cleanenv --containall`. Its SHA-256 is
 `625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b`.

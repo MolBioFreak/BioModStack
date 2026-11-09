@@ -1879,9 +1879,9 @@ function ResultsViewerContent() {
         window.addEventListener('bms:binder-documents', syncDocumentRoute);
         return () => window.removeEventListener('bms:binder-documents', syncDocumentRoute);
     }, [selectedJobId, requestedDesignId, location.pathname, location.search, navigate]);
-    const mdRoute = (ref: CandidateRef) => {
+    const mdRoute = (ref: CandidateRef, modelNumber?: number) => {
         const route = buildResultsViewerMolecularDynamicsRoute(ref.job_id, ref.kind === 'design' ? ref.design_id : null, {
-            sourceRef: { kind: 'candidate', id: ref.job_id, candidate_ref: ref },
+            sourceRef: { kind: 'candidate', id: ref.job_id, candidate_ref: ref, ...(modelNumber !== undefined ? { model_number: modelNumber } : {}) },
             returnTo: `${location.pathname}${location.search}${location.hash}`,
         });
         return destinationLaunchContextId ? `${route}&launch_context_id=${encodeURIComponent(destinationLaunchContextId)}` : route;
@@ -5457,9 +5457,17 @@ function ResultsViewerContent() {
     const mdHandoffButton = (primary = false) => activeJob && selectedDesign ? (
                                     <button
                                         type="button"
-                                        onClick={() => selectedDesign && activeJob && navigate(mdRoute({ kind: 'design', job_id: selectedDesign.job_id ?? activeJob.id, design_id: selectedDesign.id,
-                                            document: { ...(selectedCandidateDocuments[selectedDesign.id] ?? {}),
-                                                ...(returnParams.get('model_number') ? { model: Number(returnParams.get('model_number')) } : {}) } }))}
+                                        onClick={() => {
+                                            if (!selectedDesign || !activeJob) return;
+                                            // The MD wire accepts a document only with an artifact_id; a lone model number rides on the source.
+                                            const selected = selectedCandidateDocuments[selectedDesign.id];
+                                            const model = returnParams.get('model_number') ? Number(returnParams.get('model_number')) : undefined;
+                                            const withDocument = Boolean(selected?.artifact_id);
+                                            navigate(mdRoute({
+                                                kind: 'design', job_id: selectedDesign.job_id ?? activeJob.id, design_id: selectedDesign.id,
+                                                ...(withDocument ? { document: { ...selected, ...(model !== undefined ? { model } : {}) } } : {}),
+                                            }, withDocument ? undefined : model));
+                                        }}
                                         className={primary ? "spw-button spw-primary" : "rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100 hover:bg-cyan-500/20"}
                                     >
                                         Use as MD starting structure

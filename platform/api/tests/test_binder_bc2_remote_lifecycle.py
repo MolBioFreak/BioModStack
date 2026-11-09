@@ -28,7 +28,7 @@ def tree_bytes(root):
 
 @pytest_asyncio.fixture
 async def remote_action(tmp_path, monkeypatch):
-    if not launch.IMAGE.is_file():
+    if not (launch.get_container_dir() / 'bindcraft2.sif').is_file():
         pytest.skip('installed pinned BC2 settings compiler image unavailable')
     setup(tmp_path, monkeypatch, launch._native_compile)
     import paths

@@ -8,8 +8,8 @@ Comparison requested: original/fresh phase spec vs actual fresh scaffold impleme
 
 - Original/fresh phase plan: `docs/oem/bioxp_oem_parity_fresh_attempt_phase_plan_20260609.md`
 - Source oracle: `docs/oem/oracle/bioxp_oem_source_oracle_20260609.json`
-- Robot fresh scaffold summary from `/home/molbiofreak/bioxp_re` modules and live route behavior
-- Decompiled OEM anchors under `/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup`
+- Robot fresh scaffold summary from `<robot-repo>` modules and live route behavior
+- Decompiled OEM anchors under `OEM-source/BioXP_SSD_Backup`
 - BMS proxy/card implementation committed as `fb2ba6e`
 
 ## Bottom line

@@ -42,7 +42,7 @@
   },
   "missing_machine_config_status": "Real field config.xml not yet recovered in this phase; treat OEM defaults as source defaults, not proven live calibration.",
   "settings_source": {
-    "ClassBioXPSettings.cs": "/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup/decompiled_src_bioxpcommon/BioXPCommonLib/ClassBioXPSettings.cs",
+    "ClassBioXPSettings.cs": "OEM-source/BioXP_SSD_Backup/decompiled_src_bioxpcommon/BioXPCommonLib/ClassBioXPSettings.cs",
     "CONFIG_FILE_const_line": "169: private const string CONFIG_FILE = \"config.xml\";",
     "axis_limit_default_lines": {
       "x": "250: m_maxXsteps = 80000; min default 0",

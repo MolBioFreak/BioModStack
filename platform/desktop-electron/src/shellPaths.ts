@@ -192,7 +192,6 @@ function resolveStateHome(options: ShellPathOptions): string {
 
 function candidateDataRoots(homeDir: string): string[] {
   return [
-    path.resolve('/mnt/BioModStack'),
     path.join(homeDir, '.biomodstack'),
   ];
 }

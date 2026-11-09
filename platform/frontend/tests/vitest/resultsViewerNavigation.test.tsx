@@ -216,6 +216,23 @@ test.each([null, 'context'])('Results MD handoff preserves explicit destination 
     expect(url.searchParams.has('artifact_id')).toBe(false); // Existing MD seam explicitly uses Design primary.
 });
 
+test('Results MD handoff carries a lone model number on the source, never as an artifact-less document', async () => {
+    const sourceId = '11111111-1111-4111-8111-111111111111';
+    const designId = '22222222-2222-4222-8222-222222222222';
+    const source = { ...job, id: sourceId };
+    const candidate = { ...design(designId, 'boltz2'), job_id: sourceId };
+    await setup(`/designs/${sourceId}?design_id=${designId}&model_number=2`, false, [candidate], source);
+    const mdButton = renderer!.root.findAllByType('button').find(button => text(button) === 'Use as MD starting structure')!;
+    await act(async () => mdButton.props.onClick());
+    await flush();
+    const location = renderer!.root.findAllByType('span').find(node => node.props['data-location'])!.props['data-location'];
+    const url = new URL(location, 'http://test');
+    expect(url.pathname).toBe('/submit');
+    const sourceRef = JSON.parse(url.searchParams.get('source_ref')!);
+    expect(sourceRef).toMatchObject({ kind: 'candidate', id: sourceId, model_number: 2 });
+    expect(sourceRef.candidate_ref).toEqual({ kind: 'design', job_id: sourceId, design_id: designId });
+});
+
 test.each([
     ['bindcraft2', 'campaign', {}],
     ['boltzgen', 'protein_binder', {}],

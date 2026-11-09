@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from biomodstack_runtime_profile import resolve_runtime_paths
+from biomodstack_runtime_profile import configured_data_root_candidates, resolve_runtime_paths
 
 
 def _resolve_path(value: str) -> Path:
@@ -35,7 +35,7 @@ def _runtime_paths() -> dict[str, object]:
 
 def _candidate_data_roots() -> list[Path]:
     return [
-        Path("/mnt/BioModStack"),
+        *configured_data_root_candidates(),
         _default_data_root(),
     ]
 

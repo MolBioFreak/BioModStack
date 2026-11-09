@@ -100,13 +100,13 @@ def test_native_action_options_and_nested_discovery():
 
 def image_run(root, scratch, *args):
     return subprocess.run(['apptainer', 'exec', '--no-home', '--env', 'JAX_PLATFORMS=cpu',
-        '--bind', f'{root}:{root}', '--bind', f'{scratch}:{scratch}', str(launch.IMAGE),
+        '--bind', f'{root}:{root}', '--bind', f'{scratch}:{scratch}', str((launch.get_container_dir() / 'bindcraft2.sif')),
         'python3', *map(str, args)], check=True, capture_output=True, text=True, timeout=120)
 
 
 def test_installed_cpu_transport_relocation_return_and_restart(tmp_path, monkeypatch):
     import shutil
-    if not launch.IMAGE.is_file():
+    if not (launch.get_container_dir() / 'bindcraft2.sif').is_file():
         pytest.skip('installed pinned BC2 image unavailable')
     root = Path(__file__).resolve().parents[3]
     setup(tmp_path, monkeypatch, launch._native_compile)
@@ -140,7 +140,7 @@ def test_installed_cpu_transport_relocation_return_and_restart(tmp_path, monkeyp
 
 
 def test_installed_cpu_lifecycle_and_native_progress_recovery(tmp_path, monkeypatch):
-    if not launch.IMAGE.is_file():
+    if not (launch.get_container_dir() / 'bindcraft2.sif').is_file():
         pytest.skip('installed pinned BC2 image unavailable')
     root = Path(__file__).resolve().parents[3]
     campaign, request = setup(tmp_path, monkeypatch, launch._native_compile)

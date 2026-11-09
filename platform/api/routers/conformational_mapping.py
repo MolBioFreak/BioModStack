@@ -45,6 +45,7 @@ from database import (
     get_session,
 )
 from paths import (
+    _candidate_data_roots,
     get_data_root,
     get_results_dir,
     get_container_dir,
@@ -3712,7 +3713,7 @@ def _resolve_artifact_runtime_alias(path: str | Path) -> Path:
         configured_root = os.getenv(variable, "").strip()
         if configured_root:
             alias_roots.append(Path(configured_root))
-    alias_roots.extend((Path("/mnt/BioModStack"), Path.home() / ".biomodstack"))
+    alias_roots.extend(_candidate_data_roots())
 
     seen: set[str] = set()
     for raw_root in alias_roots:

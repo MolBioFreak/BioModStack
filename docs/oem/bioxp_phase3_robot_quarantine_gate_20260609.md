@@ -39,7 +39,7 @@ molbiofreak@robot -> TCP/SSH timeout to [REDACTED-ROBOT-HOST]:22
 On the robot host, create a backup-bin artifact before touching runtime files:
 
 ```text
-/home/molbiofreak/bioxp_re/backup_bin/oem_homing_iteration_<timestamp>/
+<robot-repo>/backup_bin/oem_homing_iteration_<timestamp>/
   MANIFEST.md
   usb_driver.py
   api.py
@@ -51,7 +51,7 @@ On the robot host, create a backup-bin artifact before touching runtime files:
 Suggested read-only commands once robot access is restored:
 
 ```bash
-cd /home/molbiofreak/bioxp_re
+cd <robot-repo>
 mkdir -p backup_bin/oem_homing_iteration_$(date -u +%Y%m%dT%H%M%SZ)
 git status --short --branch
 git diff -- src/bioxp/usb_driver.py src/bioxp/api.py tests > backup_bin/oem_homing_iteration_<timestamp>/git_diff.patch
@@ -66,8 +66,8 @@ PY
 
 Until that backup exists, the only approved work is docs/spec/test planning. Do **not**:
 
-- edit `/home/molbiofreak/bioxp_re/src/bioxp/usb_driver.py`,
-- edit `/home/molbiofreak/bioxp_re/src/bioxp/api.py`,
+- edit `<robot-repo>/src/bioxp/usb_driver.py`,
+- edit `<robot-repo>/src/bioxp/api.py`,
 - expose new BMS buttons/routes as if robot behavior is fixed,
 - deploy to BMS test/runtime,
 - run live homing.

@@ -29,7 +29,7 @@ No live robot calls were made. Values are source-extracted or prior source-audit
 
 ## Settings source anchors
 
-- `ClassBioXPSettings.cs`: `/home/dalab/Desktop/ROBOT/BioXP 3200 Development Work/BioXP_SSD_Backup/decompiled_src_bioxpcommon/BioXPCommonLib/ClassBioXPSettings.cs`
+- `ClassBioXPSettings.cs`: `OEM-source/BioXP_SSD_Backup/decompiled_src_bioxpcommon/BioXPCommonLib/ClassBioXPSettings.cs`
 - `CONFIG_FILE`: line 169, `config.xml`
 - Default axis limits: X 0..80000 (line 250), Y 0..80000 (line 254), Z 0..160000 (line 258), G 0..15000 (line 262).
 - Door defaults: `TCDoorStallGuardThreshold=6` (line 308), `TC_DOOR_VELOCITY=50` (line 310), `TC_DOOR_ACCELERATION=20` (line 312).

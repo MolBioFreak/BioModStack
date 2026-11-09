@@ -216,7 +216,7 @@ def publish_installed_payload(venv: Path, runtime: Path) -> dict:
     import shutil
     import tempfile
     root = Path(os.environ.get("BMS_CM_API_RUNTIME_DIR") or
-                Path(os.environ.get("BMS_DATA", "/mnt/BioModStack")) / "runtime/cm-api-python")
+                Path(os.environ.get("BMS_DATA") or Path.home() / ".biomodstack") / "runtime/cm-api-python")
     from contextlib import ExitStack
     root.mkdir(parents=True, exist_ok=True)
     with ExitStack() as locks:

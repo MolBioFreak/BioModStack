@@ -33,7 +33,7 @@ test('shell paths prefer a persisted install profile before heuristic data-root 
       BMS_HOME: '/work/biomodstack',
     },
     homeDir: '/home/example',
-    pathExists: (target: string) => target === installProfilePath || target === '/mnt/BioModStack/biomodstack.db',
+    pathExists: (target: string) => target === installProfilePath || target === '/home/example/.biomodstack/biomodstack.db',
     readText: (target: string) => {
       assert.equal(target, installProfilePath);
       return JSON.stringify({
@@ -54,11 +54,11 @@ test('shell paths auto-detect a durable data root before falling back to the rep
       BMS_HOME: '/work/biomodstack',
     },
     homeDir: '/home/example',
-    pathExists: (target: string) => target === '/mnt/BioModStack/biomodstack.db',
+    pathExists: (target: string) => target === '/home/example/.biomodstack/biomodstack.db',
   });
 
-  assert.equal(paths.dataRoot, '/mnt/BioModStack');
-  assert.equal(paths.resultsDir, '/mnt/BioModStack/bms_results');
+  assert.equal(paths.dataRoot, '/home/example/.biomodstack');
+  assert.equal(paths.resultsDir, '/home/example/.biomodstack/bms_results');
 });
 
 test('shell storage uses an explicit persistent partition so Electron keeps its own site data', () => {
@@ -190,7 +190,7 @@ for (const result of ['missing', 'null', '[]', 'broken', '{}', 'heuristic', 'com
       fs.writeFileSync(document, JSON.stringify({ schema_version: 'bms.install.v1', profile: {}, ingress: { mode: 'local-only' } }));
       let injected = false;
       const pathExists = (target: string): boolean => {
-        const trigger = result === 'heuristic' ? target === '/mnt/BioModStack/biomodstack.db' : target.endsWith('/install_profile.json');
+        const trigger = result === 'heuristic' ? target === path.join(home, '.biomodstack', 'biomodstack.db') : target.endsWith('/install_profile.json');
         if (trigger && !injected) {
           injected = true;
           const code = `import sys; from pathlib import Path; sys.path.insert(0,${JSON.stringify(project)}); import biomodstack_configuration as tx
@@ -203,7 +203,7 @@ import json; print(json.dumps(tx.configuration_report('configure',project_root=P
           if (result !== 'committed') assert.equal(receipt.recovery_available, true);
           return result !== 'missing';
         }
-        return fs.existsSync(target) || target === '/mnt/BioModStack/biomodstack.db';
+        return fs.existsSync(target) || target === path.join(home, '.biomodstack', 'biomodstack.db');
       };
       assert.throws(() => resolveShellPaths({ env, homeDir: home, projectRoot: project,
         pathExists, readText: (target) => result === 'committed' ? fs.readFileSync(target, 'utf8') : result }), /Configuration changed/);

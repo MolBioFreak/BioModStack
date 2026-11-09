@@ -153,13 +153,13 @@ if [ -z "$BMS_RESULTS_DIR" ] || [[ "$BMS_RESULTS_DIR" != /* ]]; then
 fi
 export BMS_WORKFLOW_ADAPTER_LANE BMS_WORKFLOW_ADAPTER_PORT BMS_STATE_DIR BMS_DB_PATH BMS_WORK BMS_RESULTS_DIR
 export BMS_RESULTS_ROOT="$BMS_RESULTS_DIR"
-BMS_NEXTFLOW_HOME="${BMS_NEXTFLOW_HOME:-${BMS_DATA:-/mnt/BioModStack}/nextflow}"
+BMS_NEXTFLOW_HOME="${BMS_NEXTFLOW_HOME:-${BMS_DATA:-$HOME/.biomodstack}/nextflow}"
 export BMS_NEXTFLOW_HOME
 export NXF_HOME="${NXF_HOME:-$BMS_NEXTFLOW_HOME}"
 mkdir -p "$NXF_HOME"
 export BMS_CPU_POWER_COLLECTOR_URL="${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:18797/power}"
 BMS_WORKFLOW_ADAPTER_BIND_HOST="${BMS_WORKFLOW_ADAPTER_BIND_HOST:-127.0.0.1}"
-CM_API_RUNTIME_DIR="${BMS_CM_API_RUNTIME_DIR:-${BMS_DATA:-/mnt/BioModStack}/runtime/cm-api-python}"
+CM_API_RUNTIME_DIR="${BMS_CM_API_RUNTIME_DIR:-${BMS_DATA:-$HOME/.biomodstack}/runtime/cm-api-python}"
 
 # This subshell owns the existing lock and every unpublished stage. EXIT runs
 # under errexit (RETURN did not); signals leave the old selected version intact.

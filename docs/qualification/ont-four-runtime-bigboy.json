@@ -6,7 +6,7 @@
   "policy_source_commit": "9be0ff70d68bd57f4a48c12f4f5caf0af7fc9e5e",
   "tested_policy_commit": "e5f4149",
   "selection": "Equal-version current main/test/BNS wrapper inputs; select existing measured BNS images backed by native qualification, not arbitrary upstream latest or image-ID ordering. No rebuild.",
-  "docker_root": "/home/dalab/.local/share/biomodstack/migration/docker-image-import-store",
+  "docker_root": "migration/docker-image-import-store",
   "docker_driver": "overlay2",
   "images": {
     "raw": "sha256:ad412e50572d0c9083f5da5105a1b832e3077d8963cf09c8832b196b90ec972a",
@@ -183,7 +183,7 @@
       }
     },
     "comparison": {
-      "path": "/home/dalab/.cache/ont-four-runtime-consolidation/native/comparison/comparison.html",
+      "path": "ont-four-runtime-consolidation/native/comparison/comparison.html",
       "sha256": "eb43495c17e815778e8e349620263209bcb8e7326d04f0b107bd9bfbf21c7635",
       "size_bytes": 1713903,
       "figures": [
@@ -417,7 +417,7 @@
     "native_mixed_run_fixture": "synthetic two-read/two-run transport control, not instrument evidence",
     "mixed_run_receipts": [
       {
-        "path": "/home/dalab/.cache/ont-four-runtime-consolidation/scratch/pytest-of-dalab/pytest-1/test_mixed_run_end_to_end_conv0/semantic-receipt.json",
+        "path": "ont-four-runtime-consolidation/scratch/pytest-of-dalab/pytest-1/test_mixed_run_end_to_end_conv0/semantic-receipt.json",
         "sha256": "2dd12edf221fe6595a9ec16495c70f79662461634ab67a2c51d883b0f5c572b6",
         "receipt": {
           "acquisition_ids": [
@@ -516,16 +516,16 @@
     "/root/workstation-migration/ont-four-runtime/policy-byte-shas.json": "0bfe34d044f9f146dde9a3fc2941e0231e0a228812cb19909e044afd5bd77c86",
     "/root/workstation-migration/ont-four-runtime/packaged-byte-equivalence.json": "ad3ff26e32634d63081763454792ca268466ff49d9c8b7a01469f00f15970729",
     "/root/workstation-migration/ont-four-runtime/comparison-html-proof.json": "cea7bc3024a4ec1b005d4fe88d24a1e64cb74b96c4a0b089902f28e52c3666f2",
-    "/home/dalab/.cache/ont-four-runtime-consolidation/profiles.json": "360f53d1431fb80c2983b1ccca6fb90e22905ef1bb6661a78940d5ef07f37d6c",
-    "/home/dalab/.cache/ont-four-runtime-consolidation/waveform-owner.json": "d5b53464394172c0cade7f8512538b0f3cdf662ed6c5bb2b1df21997d8b7db76",
-    "/home/dalab/.cache/ont-four-runtime-consolidation/candidate-readiness.json": "7bacc1860eecbc5ac20adbe0558b093f66ba5678c2e0dce90aa0566587056f96",
-    "/home/dalab/.cache/ont-four-runtime-consolidation/native-summary.json": "0ce5d768a434404f751afe9cd1fb402c23318bd66f69a7efd5bec4c7cbaaab27",
-    "/home/dalab/.cache/ont-four-runtime-consolidation/focused-final.xml": "9d823289b982dd53f13257cfc1bc9ecb634cc52e0b0421c23529227553e5f5a9",
-    "/home/dalab/.cache/ont-four-runtime-consolidation/focused-final.log": "388861185bf8420cb8c878928388228489b52a023e1048b5e1c6c80f0349ffc8",
-    "/home/dalab/.cache/ont-four-runtime-consolidation/native-qualify.py": "c1ad5e56d94c4f19435d6cf26af703164962a47d0ebc6f817114d2f463271ed0",
-    "/home/dalab/.cache/ont-four-runtime-consolidation/owner-qualify.py": "64bd52d5c623192ea529aa5bd09611b26c0f7a2664b4e4df3a7aa41170fd2c7d",
-    "/home/dalab/.cache/ont-four-runtime-consolidation/native-qualify.log": "1f427d82bfb3106007662d794ecd246cb70168437d177fdf3cbe653bedbed739",
-    "/home/dalab/.cache/ont-four-runtime-consolidation/owner-qualify.log": "41dfa2a0f7252ac717382ada312f378b3a5b184ea134b5f27ba84259c9cea6ac",
-    "/home/dalab/.cache/ont-four-runtime-consolidation/native/parity-all.py": "f53d7cd223beb85f919f374fbea7c7e04ef2146c962504e9d30a2e204bf771c2"
+    "ont-four-runtime-consolidation/profiles.json": "360f53d1431fb80c2983b1ccca6fb90e22905ef1bb6661a78940d5ef07f37d6c",
+    "ont-four-runtime-consolidation/waveform-owner.json": "d5b53464394172c0cade7f8512538b0f3cdf662ed6c5bb2b1df21997d8b7db76",
+    "ont-four-runtime-consolidation/candidate-readiness.json": "7bacc1860eecbc5ac20adbe0558b093f66ba5678c2e0dce90aa0566587056f96",
+    "ont-four-runtime-consolidation/native-summary.json": "0ce5d768a434404f751afe9cd1fb402c23318bd66f69a7efd5bec4c7cbaaab27",
+    "ont-four-runtime-consolidation/focused-final.xml": "9d823289b982dd53f13257cfc1bc9ecb634cc52e0b0421c23529227553e5f5a9",
+    "ont-four-runtime-consolidation/focused-final.log": "388861185bf8420cb8c878928388228489b52a023e1048b5e1c6c80f0349ffc8",
+    "ont-four-runtime-consolidation/native-qualify.py": "c1ad5e56d94c4f19435d6cf26af703164962a47d0ebc6f817114d2f463271ed0",
+    "ont-four-runtime-consolidation/owner-qualify.py": "64bd52d5c623192ea529aa5bd09611b26c0f7a2664b4e4df3a7aa41170fd2c7d",
+    "ont-four-runtime-consolidation/native-qualify.log": "1f427d82bfb3106007662d794ecd246cb70168437d177fdf3cbe653bedbed739",
+    "ont-four-runtime-consolidation/owner-qualify.log": "41dfa2a0f7252ac717382ada312f378b3a5b184ea134b5f27ba84259c9cea6ac",
+    "ont-four-runtime-consolidation/native/parity-all.py": "f53d7cd223beb85f919f374fbea7c7e04ef2146c962504e9d30a2e204bf771c2"
   }
 }

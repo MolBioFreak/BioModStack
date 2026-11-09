@@ -63,4 +63,4 @@ BMS mirrors the raw route names under `/api/bioxp` and does not rename them into
 
 ## Hard blocker before robot-local implementation
 
-The robot repo backup-bin from Phase 0 is still pending because this sandbox could not resolve the `bioxp` SSH alias. Before touching `/home/molbiofreak/bioxp_re`, create a robot-local backup artifact.
+The robot repo backup-bin from Phase 0 is still pending because this sandbox could not resolve the `bioxp` SSH alias. Before touching `<robot-repo>`, create a robot-local backup artifact.

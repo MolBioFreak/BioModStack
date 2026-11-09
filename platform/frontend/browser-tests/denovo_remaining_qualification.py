@@ -1,10 +1,10 @@
 """Own the isolated real-browser run and preserve every subprocess exit."""
-import argparse,json,os,subprocess,time,shutil,hashlib
+import argparse,json,os,subprocess,sys,time,shutil,hashlib
 from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);p.add_argument('--build',type=Path,required=True);p.add_argument('--retained',type=Path,required=True);a=p.parse_args()
 assert not a.root.exists();a.root.mkdir(parents=True)
 here=Path(__file__).resolve().parent;repo=here.parents[2]
-python='/home/dalab/biomodstack/dev-test-canonical/platform/api/.venv/bin/python'
+python=os.environ.get('BMS_QA_API_PYTHON') or sys.executable
 env={**os.environ,'PYTHONPATH':f'{repo}/platform/api:{repo}:{repo}/scripts','BMS_FINAL_BROWSER_ROOT':str(a.root),'BMS_FINAL_BROWSER_BUILD':str(a.build),'BMS_FINAL_RETAINED_BASE':str(a.retained),'BMS_FINAL_REDESIGN_UNEXECUTABLE':'1','BMS_FINAL_SERVER_SCRIPT':'denovo_remaining_server.py','BMS_FINAL_PARENT_NETNS':os.readlink('/proc/self/ns/net')}
 log=(a.root/'supervisor.log').open('w');commands=[]
 owner=subprocess.Popen(['unshare','--user','--map-root-user','--net',python,str(here/'denovo_final_supervisor.py')],env=env,cwd=repo,stdout=log,stderr=subprocess.STDOUT)

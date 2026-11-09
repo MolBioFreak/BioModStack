@@ -49,8 +49,8 @@ None of the inspected sources supplies that distribution. Adding invented
   `android-beta-006-archive`, with an APK and checksum only; no model/SIF assets.
   This observation does not exclude private unpublished artifacts.
 * Protenix is a worse cache-free starting point: `apptainer/protenix.def` uses
-  `Bootstrap: localimage`, `From: /mnt/BioModStack/apptainer/protenix.sif`, and
-  copies `/home/dalab/.local/bin/uv`. Its upstream code pin does not reconstruct
+  `Bootstrap: localimage`, `From: $BMS_CONTAINER_DIR/protenix.sif` (`$BMS_CONTAINER_DIR` is the configured container directory), and
+  copies `$HOME/.local/bin/uv`. Its upstream code pin does not reconstruct
   its inherited dependency stack. No local SIF was hashed or promoted as a release.
 
 ## Independently verified upstream weight identities

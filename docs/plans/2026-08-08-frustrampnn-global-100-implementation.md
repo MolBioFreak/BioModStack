@@ -32,7 +32,7 @@ The tranche is complete only when gates G0 through G6 pass. Percent averages can
 
 ### In scope
 
-- The pinned `predict` capability in `/mnt/BioModStack/apptainer/frustrampnn.sif`.
+- The pinned `predict` capability in `$BMS_CONTAINER_DIR/frustrampnn.sif` (`$BMS_CONTAINER_DIR` is the configured container directory).
 - Global settings metadata and validation.
 - Uploaded-structure launch and persisted reanalysis.
 - The minimum Structure Prediction settings transport needed to prove that one embedded producer can use the global contract.

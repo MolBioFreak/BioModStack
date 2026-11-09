@@ -37,8 +37,8 @@ The destination is a new 0700 directory; staging refuses an existing destination
 No live configuration is selected until the separate reviewed activation below.
 
 ```sh
-S=/home/dalab/.hermes/profiles/fresh/cache/scratch
-R=/home/dalab/.local/share/biomodstack/runtime/atomworks-studio/closeout-20261028
+S=$TMPDIR
+R=$HOME/.local/share/biomodstack/runtime/atomworks-studio/closeout-20261028
 python3 -B scripts/atomworks_studio_runtime.py \
   --prepared "$S/atomworks-patched-host/supported-venv" \
   --wheel "$S/atomworks-patched-host/supported-venv-package/atomworks_studio-0.0.5-1bms03-py3-none-any.whl" \
@@ -55,7 +55,7 @@ The selected managed `md-preparation-v1.sif` remains external, read-only, and un
 existing `paths.get_container_path()` / container-runtime ownership. The staged
 native leaf verifies its original image/bundle receipts on use. It inherits the
 API's existing `BMS_CONTAINER_DIR`; do not replace/rebuild that image. This host's
-qualified image is `/mnt/BioModStack/apptainer/md-preparation-v1.sif`.
+qualified image is `$BMS_CONTAINER_DIR/md-preparation-v1.sif`.
 
 ## Parent-reviewed activation/cutover — NOT run by the staging task
 
@@ -65,7 +65,7 @@ parent's exact approved release; the synchronizer deploys the current tip, not a
 revision argument. Confirm 18092 is still unused. From the reviewed source root:
 
 ```sh
-R=/home/dalab/.local/share/biomodstack/runtime/atomworks-studio/closeout-20261028
+R=$HOME/.local/share/biomodstack/runtime/atomworks-studio/closeout-20261028
 ss -ltn 'sport = :18092'
 CONFIG=$(python3 -B -c 'from biomodstack_runtime_profile import get_biomodstack_config_dir; print(get_biomodstack_config_dir())')
 # Preserve a prior descriptor if one has appeared; do not overwrite another owner.
@@ -84,7 +84,7 @@ If the reviewed source has already been deployed before descriptor activation,
 the existing manager can regenerate and start API with its normal lifecycle:
 
 ```sh
-cd /home/dalab/biomodstack/dev-test-canonical
+cd <dev-test-canonical checkout>
 python3 -B scripts/manage_desktop_services.py restart-api --runtime dev
 ```
 
