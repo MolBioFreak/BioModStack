@@ -215,6 +215,7 @@ class RestrictionCloningProposal(BaseModel):
     vector_enzymes: list[str]
     insert_enzymes: list[str]
     directional: bool
+    single_enzyme: bool = False
     insert_orientation: Literal["forward", "reverse", "either"]
     vector_ends_match_each_other: bool
     vector_self_ligation: str
