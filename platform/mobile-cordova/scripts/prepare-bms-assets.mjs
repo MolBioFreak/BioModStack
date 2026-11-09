@@ -921,6 +921,29 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         && reportInExactUnit(report, 'biomodstack-frontend.service')
       ));
   };
+  // The installed-payload owner (cm_api_support_runtime.py) publishes one
+  // immutable release containing venv/ and python-runtime/. Do not accept a
+  // generic external Python: argv and the resolved executable must bind to
+  // that exact release, and Development's API and adapter share it.
+  const managedCmRelease = (report) => {
+    const python = report?.argv?.[0];
+    if (typeof python !== 'string' || normalizeAbsolutePath(python) !== python) return null;
+    const match = python.match(/^(\/.+\/runtime\/cm-api-python\/releases\/runtime-[0-9a-f]{64})\/venv\/bin\/python$/);
+    if (!match || report.executable !== `${match[1]}/python-runtime/bin/python3.12`) return null;
+    return match[1];
+  };
+  const validManagedCmModule = (report, args) => {
+    const release = managedCmRelease(report);
+    if (!release || JSON.stringify(report.argv.slice(1)) !== JSON.stringify(['-m', 'uvicorn', ...args])) return false;
+    if (environment === 'development') {
+      const reports = [
+        ...(payload.development_api_listener?.listener_reports || []),
+        ...(payload.workflow_adapter_listener?.listener_reports || []),
+      ];
+      if (!reports.length || !reports.every((item) => managedCmRelease(item) === release)) return false;
+    }
+    return true;
+  };
   const validDevelopmentApiListener = (listener, projectRoot, revision) => {
     const sourceRoot = `${projectRoot}/platform/api`;
     const expectedPort = Number(new URL(expected.apiHealthTarget).port);
@@ -964,7 +987,11 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         ])
         && report.cwd === sourceRoot
         && report.build_revision === revision
-        && Array.isArray(report.argv) && approvedArgv(report.argv)
+        && Array.isArray(report.argv) && (
+          approvedArgv(report.argv)
+          || validManagedCmModule(report, baseArgv.slice(2))
+          || validManagedCmModule(report, reloadArgv.slice(2))
+        )
         && nonEmptyBounded(report.executable, 4096)
         && normalizeAbsolutePath(report.executable) === report.executable
         && report.cmdline === report.argv.join(' ')
@@ -995,17 +1022,26 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         hasExactKeys(report, [
           'pid', 'cwd', 'cmdline', 'argv', 'executable', 'cgroup', 'build_revision',
         ])
-        && report.executable === `${apiRoot}/.venv/bin/python`
         && report.cwd === apiRoot
         && report.build_revision === selectorRevision
-        && report.argv.length === 9
-        && [`${apiRoot}/.venv/bin/python`, `${apiRoot}/.venv/bin/python3`]
-          .includes(normalizeAbsolutePath(report.argv[0]))
-        && normalizeAbsolutePath(report.argv[1]) === `${apiRoot}/.venv/bin/uvicorn`
-        && JSON.stringify(report.argv.slice(2)) === JSON.stringify([
-          'workflow_adapter_app:app', '--port', '18001', '--host', '127.0.0.1',
-          '--no-proxy-headers', '--no-access-log',
-        ])
+        && Array.isArray(report.argv)
+        && (
+          (
+            report.executable === `${apiRoot}/.venv/bin/python`
+            && report.argv.length === 9
+            && [`${apiRoot}/.venv/bin/python`, `${apiRoot}/.venv/bin/python3`]
+              .includes(normalizeAbsolutePath(report.argv[0]))
+            && normalizeAbsolutePath(report.argv[1]) === `${apiRoot}/.venv/bin/uvicorn`
+            && JSON.stringify(report.argv.slice(2)) === JSON.stringify([
+              'workflow_adapter_app:app', '--port', '18001', '--host', '127.0.0.1',
+              '--no-proxy-headers', '--no-access-log',
+            ])
+          )
+          || validManagedCmModule(report, [
+            'workflow_adapter_app:app', '--port', '18001', '--host', '127.0.0.1',
+            '--no-proxy-headers', '--no-access-log',
+          ])
+        )
         && report.cmdline === report.argv.join(' ')
         && reportInExactUnit(report, 'biomodstack-development-workflow-adapter.service')
       ));
