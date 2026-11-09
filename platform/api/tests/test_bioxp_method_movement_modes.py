@@ -151,3 +151,13 @@ def test_catalog_offers_every_holder_target():
                                   holder_move('a', 'LOC_TROUGH_MICRO_ROW_1', location_id=16)])
 def test_bad_holder_moves_do_not_compile(step):
     assert compiled(step)['document'] is None
+
+
+def test_lower_lift_carry_holder_row_to_native_params():
+    steps = [{'step_id': 'l', 'type': 'action', 'action': 'lower', 'inputs': {'operation': 'lower', 'location_id': 16, 'holder_row': 'micro_row_1'}},
+             {'step_id': 'u', 'type': 'action', 'action': 'lift', 'inputs': {'operation': 'lift', 'location_id': 16, 'holder_row': 'micro_row_1', 'height_steps': 2016}},
+             {'step_id': 'o', 'type': 'action', 'action': 'lower', 'inputs': {'operation': 'lower', 'location_id': 1}}]
+    params = [a['params'] for a in actions(compiled(*steps))]
+    assert params == [{'operation': 'lower', 'location_id': 16, 'holder_row': 'micro_row_1'},
+                      {'operation': 'lift', 'location_id': 16, 'holder_row': 'micro_row_1', 'height_steps': 2016},
+                      {'operation': 'lower', 'location_id': 1}]

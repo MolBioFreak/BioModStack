@@ -322,7 +322,7 @@ def _convert(value: Any, schema: dict, field: str = "intent") -> Any:
         props = schema["properties"]
         # Matches the existing nativeIntent explicit-field authoring boundary.
         # Partial-pickup fields are sent only for partial pickups; four-tip pickups stay unchanged.
-        optional = {"keep_channels", "release_lift_mm"} & set(props)
+        optional = {"keep_channels", "release_lift_mm", "holder_row"} & set(props)
         if not (set(props) - optional) <= set(value) <= set(props):
             raise ValueError(f"{field}: missing {sorted(set(props)-set(value))}; unknown {sorted(set(value)-set(props))}")
         result = {k: _convert(v, props[k], k) for k, v in value.items()}

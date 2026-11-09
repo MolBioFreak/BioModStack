@@ -473,6 +473,24 @@
             "title": "Location Id",
             "type": "integer"
           },
+          "holder_row": {
+            "anyOf": [
+              {
+                "enum": [
+                  "micro_row_1",
+                  "micro_row_2",
+                  "pcr_row_1",
+                  "pcr_row_2"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Holder Row"
+          },
           "operation": {
             "const": "lift",
             "title": "Operation",
@@ -606,6 +624,24 @@
           "location_id": {
             "title": "Location Id",
             "type": "integer"
+          },
+          "holder_row": {
+            "anyOf": [
+              {
+                "enum": [
+                  "micro_row_1",
+                  "micro_row_2",
+                  "pcr_row_1",
+                  "pcr_row_2"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Holder Row"
           },
           "operation": {
             "const": "lower",
