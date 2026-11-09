@@ -21,7 +21,7 @@ from services.restriction_analysis import analyze_sequence, normalize_dna
 from services.restriction_catalog import CatalogView, RestrictionRecord, catalog_authority
 from services.restriction_digest import DigestFragment, DigestGeometryError, simulate_digest
 
-from .common import overhangs_compatible
+from .common import orient_fragment, overhangs_compatible
 from .junction_sites import observe_junction_sites, resolve_records
 from .ligation import junction_seal, simulate_ligation
 from .physical_ends import digest_end_to_fragment_end
@@ -316,6 +316,9 @@ def _evaluate(catalog: CatalogView, backbone: str, btopo: str, region, insert: s
         "vector_end_seal": seal,
         "vector_length": len(vector.top_strand_sequence),
         "insert_payload_length": len(payload.top_strand_sequence),
+        # Top-strand length the insert adds to the product in the chosen orientation. A reversed insert contributes
+        # the other strand of its duplex, so this differs from insert_payload_length by the cohesive-end difference.
+        "insert_contributed_length": len(orient_fragment(chosen_insert).sequence),
         "product_length": len(product.sequence),
         "product_sequence": product.sequence,
         "vector_source_segments": vector.source_segments,

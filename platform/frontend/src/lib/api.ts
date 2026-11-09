@@ -3798,7 +3798,7 @@ export interface SuggestRestrictionProposal {
     vector_enzymes: string[]; insert_enzymes: string[];
     directional: boolean; insert_orientation: 'forward' | 'reverse' | 'either';
     vector_ends_match_each_other: boolean; vector_self_ligation: string; vector_end_seal: string;
-    vector_length: number; insert_payload_length: number; product_length: number; product_sequence: string;
+    vector_length: number; insert_payload_length: number; insert_contributed_length: number; product_length: number; product_sequence: string;
     vector_source_segments: Array<[number, number]>; insert_source_segments: Array<[number, number]>;
     assembly_request: LigationAssemblyRequest; selection: RestrictionCloningSelection;
     prepared_insert_sequence?: string | null;
