@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { deckBounds, deckPark, deckRegions, deckResources, deckSize, deckStations, selectedDeckWells,
+import { deckBounds, deckPark, deckRegions, deckResources, deckSize, deckStations, holderMarkers, selectedDeckWells, type HolderTarget,
     type BioXpDeckSelection, type DeckBounds, type DeckResource, type DeckSelectionMode, type DeckWell } from '../lib/bioxpWorkflowDeck';
 import './BioXpWorkflowDeck.css';
 
@@ -28,12 +28,16 @@ export type BioXpWorkflowDeckProps = {
     activityKinds?: Record<string, Record<string, 'source' | 'destination' | 'tip' | 'touch'>>;
     /** Drawn above stations so stage arrows never appear to end under another plate. */
     annotations?: React.ReactNode;
+    /** Catalog Bulk reagent holder destinations with native XY. Live clicks send the exact named target. */
+    holderTargets?: HolderTarget[];
 };
 const fullView: DeckBounds = { x: 0, y: 0, ...deckSize };
 const modes: DeckSelectionMode[] = ['well', 'range', 'row', 'column'];
 
 /** Shared presentation. Authoring defaults remain selection-only; live intents are explicit callbacks. */
-export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, connections, compact = false, canvas = false, tipOccupancy, contents, activity, activityLabels, activityKinds, annotations }: BioXpWorkflowDeckProps) {
+export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live, resources = deckResources, overlay, connections, compact = false, canvas = false, tipOccupancy, contents, activity, activityLabels, activityKinds, annotations, holderTargets }: BioXpWorkflowDeckProps) {
+    const holder = holderMarkers(holderTargets ?? []);
+    const holderRows = holder.filter((marker, index) => holder.findIndex(other => other.row === marker.row) === index);
     const id = useId();
     const svg = useRef<SVGSVGElement>(null);
     const anchor = useRef<{ station: string; well: string } | null>(null);
@@ -228,6 +232,30 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                     {region.layers.map(layer => <polygon key={layer.name} className={`bwd-region-${layer.name}`} points={layer.points.map(p => `${p.x},${p.y}`).join(' ')} />)}
                     <text className="bwd-map-label" x={region.bounds.x} y={region.bounds.y - 15}>{region.label}</text>
                 </g>)}
+                {holder.length > 0 && <g className="bwd-holder" aria-label="Bulk reagent holder positions">
+                    {holderRows.map(row => <text key={row.row} className="bwd-holder-label" x={row.x} y={row.y - (row.kind === 'micro' ? 16 : 11)} textAnchor="middle">{row.short}</text>)}
+                    {holder.map(marker => {
+                        const interactive = !!live && !readOnly;
+                        const blocked = interactive ? live!.stationDisabledReason(marker.target) : null;
+                        const last = marker.channels[marker.channels.length - 1];
+                        return <g key={marker.target} className={`bwd-holder-target${selection.station === marker.target ? ' is-active' : ''}`} data-holder-target={marker.target}
+                            role={interactive ? 'button' : 'img'} tabIndex={interactive ? 0 : undefined} aria-label={interactive ? `Move to ${marker.label}` : marker.label}
+                            aria-disabled={interactive ? !!blocked : undefined}
+                            onClick={interactive ? event => activate(event, () => chooseStation(marker.target)) : undefined}
+                            onKeyDown={interactive ? event => keyboardStation(event, marker.target) : undefined}
+                            onFocus={() => setHover(marker.label)} onMouseEnter={() => setHover(marker.label)}>
+                            <title>{blocked ?? marker.label}</title>
+                            {marker.kind === 'micro' ? <>
+                                <rect className="bwd-holder-body" x={marker.x - 11} y={marker.y - 11} width="22" height={last.y - marker.y + 22} rx="11" />
+                                {marker.channels.map((tube, index) => <circle key={index} className="bwd-holder-tube" cx={tube.x} cy={tube.y} r="7.5" />)}
+                                <rect className="bwd-hit" x={marker.x - 11} y={marker.y - 11} width="22" height={last.y - marker.y + 22} rx="11" />
+                            </> : <>
+                                <circle className="bwd-holder-well" cx={marker.x} cy={marker.y} r="5.5" />
+                                <circle className="bwd-hit" cx={marker.x} cy={marker.y} r="8" />
+                            </>}
+                        </g>;
+                    })}
+                </g>}
                 <g className={`bwd-park${selection.station === deckPark.id ? ' is-active' : ''}`} role={readOnly ? 'img' : 'button'} tabIndex={readOnly ? undefined : 0} aria-label="Select Park target" aria-pressed={selection.station === deckPark.id} aria-disabled={live ? !!live.stationDisabledReason(deckPark.id) : undefined} onClick={e => activate(e, () => chooseStation(deckPark.id))} onKeyDown={e => keyboardStation(e, deckPark.id)}>
                     <title>{live?.stationDisabledReason(deckPark.id) ?? 'Park target'}</title>
                     <circle cx={deckPark.point[0]} cy={deckPark.point[1]} r="6" /><text className="bwd-map-label" x={deckPark.point[0] + 12} y={deckPark.point[1] + 4}>Gantry park</text>
@@ -236,7 +264,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                     {deckResources.filter(resource => resource.kind !== 'strip').map(resource => moveButton(resource.id, resource.label,
                         resource.bounds.x + resource.bounds.width - 55, resource.bounds.y - 41))}
                     {deckRegions.map(region => moveButton(region.id, region.label,
-                        region.bounds.x + region.bounds.width - 84, region.bounds.y + 12))}
+                        region.id === 'LOC_TROUGH' && holder.length ? region.bounds.x + 6 : region.bounds.x + region.bounds.width - 84, region.bounds.y + 12))}
                     {moveButton(deckPark.id, deckPark.label, deckPark.point[0] - 86, deckPark.point[1] - 15)}
                 </g>}
                 {live?.selectedStation && (chosenBounds || live.selectedStation === deckPark.id) &&

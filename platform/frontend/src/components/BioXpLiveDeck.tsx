@@ -16,6 +16,8 @@ export type BioXpLiveDeckProps = {
     stale: boolean;
     selection: BioXpDeckSelection;
     selectedDestination?: BioXpDeckDestinationV1 | null;
+    /** Current robot destination catalog; holder rows/wells with native XY are drawn on the map. */
+    destinations?: BioXpDeckDestinationV1[];
     cameraControls?: React.ReactNode;
     onMoveToStation: (target: string) => void;
     onMoveToWell: (locationId: number, well: string) => void;
@@ -50,10 +52,11 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
     const { resources, calibrated } = activeDeckResources(settings);
     const destination = props.selectedDestination;
     // Selection is display-only; preserve the exact native target for submission.
-    const selectedStation = destination ? deckStations.find(station => station.id === destination.target
+    const holderTargets = (props.destinations ?? []).filter(option => option.xy != null);
+    const selectedStation = destination && destination.xy == null ? deckStations.find(station => station.id === destination.target
         || destination.aliases.includes(station.id) || station.locationId === destination.location_id) : undefined;
-    const selectedCoordinates = !selectedStation && destination
-        ? settings?.active_motion_positions?.find(row => row.location_id === destination.target)?.base_coordinates : undefined;
+    const selectedCoordinates = destination?.xy ?? (!selectedStation && destination
+        ? settings?.active_motion_positions?.find(row => row.location_id === destination.target)?.base_coordinates : undefined);
     const selectedPoint = selectedCoordinates && Number.isFinite(selectedCoordinates.x) && Number.isFinite(selectedCoordinates.y)
         ? projectDeckPoint(selectedCoordinates.x, selectedCoordinates.y) : null;
     const [observation, setObservation] = useState(() => ({ generation, update: updates.data,
@@ -81,7 +84,7 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
         <div className="bld-workspace">
             <div className="bld-map-pane bioxp-method-map">
                 <BioXpWorkflowDeck canvas selection={selection} onChange={() => { /* Authoring selection is not a live intent. */ }}
-                    resources={resources} tipOccupancy={props.tipOccupancy} live={{ onStation: props.onMoveToStation, onWell: props.onMoveToWell, selectedStation: selectedStation?.id,
+                    resources={resources} tipOccupancy={props.tipOccupancy} holderTargets={holderTargets} live={{ onStation: props.onMoveToStation, onWell: props.onMoveToWell, selectedStation: selectedStation?.id,
                         stationDisabledReason: props.stationDisabledReason, wellDisabledReason: props.wellDisabledReason, onBlocked: props.onBlockedMove }}
                     overlay={<>{selectedPoint && <g className="bld-chosen-point" data-selected-destination={destination?.target}
                         aria-label={`Selected destination: ${destination?.label}`}>
@@ -102,7 +105,7 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
                         <path className="bld-gantry-anchor" d={`M ${point[0] - 7} ${point[1]} H ${point[0] + 7} M ${point[0]} ${point[1] - 7} V ${point[1] + 7}`} />
                         {reference && <g data-testid="alignment-reference"><circle className="bld-alignment" cx={reference[0]} cy={reference[1]} r="9" /><title>Published alignment-reference projection, not measured tip contact</title></g>}
                     </g> : null}</>} />
-                <div className="bld-legend"><span>Solid cross: reported gantry</span><span>Ring: alignment reference</span><span>Outlined station / well: requested destination</span><span className="bld-selection-key">Amber outline: dropdown selection</span></div>
+                <div className="bld-legend"><span>Solid cross: reported gantry</span><span>Ring: alignment reference</span><span>Outlined station / well: requested destination</span><span className="bld-selection-key">Amber outline: dropdown selection</span>{holderTargets.length > 0 && <span>Bulk reagent holder: M1/M2 four-tube rows · P1/P2 eight-well PCR rows</span>}</div>
                 <p className="bld-note">Intermittent controller observations. Gun housings and deck outlines are schematic; tips and occupancy are not inferred.</p>
                 {geometry.isError && <p role="status">Geometry read unavailable. Showing {settings ? 'last known geometry' : 'the reference layout'}; the robot evaluates movement requests.</p>}
             </div>
@@ -124,7 +127,7 @@ export function BioXpLiveDeck(props: BioXpLiveDeckProps) {
                     <dl><dt>Published alignment</dt><dd>{tipLabel}</dd><dt>Alignment projection</dt><dd>{reference ? 'Source-addressing reference; not a physical measurement' : 'Unavailable'}</dd>
                         <dt>Recorded location</dt><dd>{dashboard?.deck?.current_location ?? 'Unavailable'}{dashboard?.deck?.current_well != null ? ` · well ID ${dashboard.deck.current_well}` : ''}</dd>
                         <dt>Selected destination</dt><dd>{destination?.label ?? 'None'}</dd>
-                        <dt>Requested destination</dt><dd title={selection.station || undefined}>{deckStations.find(s => s.id === selection.station)?.label ?? (selection.station || 'None')}{selection.wells.length ? ` · ${selection.wells.join(', ')}` : ''}</dd></dl>
+                        <dt>Requested destination</dt><dd title={selection.station || undefined}>{deckStations.find(s => s.id === selection.station)?.label ?? props.destinations?.find(d => d.target === selection.station)?.label ?? (selection.station || 'None')}{selection.wells.length ? ` · ${selection.wells.join(', ')}` : ''}</dd></dl>
                     <p className="bld-note">Recorded location and requested destination do not establish arrival.</p>
                 </section>
             </aside>

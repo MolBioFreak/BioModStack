@@ -156,7 +156,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         <div hidden={!show('move', 'lower', 'lift')} className="grid gap-3 sm:grid-cols-4">
             <label>Station<select aria-label="Station" className="block w-full bg-slate-950 p-2" value={destinations.some(d => String(d.location_id) === location) ? location : ''} onChange={e => setLocation(e.target.value)}>
                 <option value="">Select a station</option>
-                {destinations.map(d => <option key={d.target} value={d.location_id}>{d.label}</option>)}
+                {destinations.filter(d => d.xy == null).map(d => <option key={d.target} value={d.location_id}>{d.label}</option>)}
             </select></label>
             <label hidden={!show('move')}>Reference well<select aria-label="Reference well" className="block w-full bg-slate-950 p-2" value={well} onChange={e => setWell(e.target.value)}>
                 <option value="">Select a well</option>{wells.map(value => <option key={value}>{value}</option>)}

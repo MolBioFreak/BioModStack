@@ -15,7 +15,7 @@ const PLATE_ORDINALS = ['POOL_PLATE', 'OUTPUT_PLATE', 'REAGENT_PLATE', 'BIO_SECU
 export const OBJECT_LABELS: Record<string, string> = {
     OUTPUT_COVER: 'Output cover', REAGENT_COVER: 'Reagent cover', BIO_SECURITY_COVER: 'Biosecurity cover',
     POOL_PLATE: 'Pool plate', OUTPUT_PLATE: 'Output plate', REAGENT_PLATE: 'Reagent plate',
-    STRIP_ONE: 'Strip 1', STRIP_TWO: 'Strip 2', STRIP_THREE: 'Strip 3', STRIP_FOUR: 'Strip 4', TROUGH: 'Trough',
+    STRIP_ONE: 'Strip 1', STRIP_TWO: 'Strip 2', STRIP_THREE: 'Strip 3', STRIP_FOUR: 'Strip 4', TROUGH: 'Bulk reagent holder',
 };
 const LOCATION_LABELS: Record<string, string> = {
     LOC_OC_COVER: 'Output chiller', LOC_OC_COVER_STORAGE: 'Output cover storage',

@@ -67,7 +67,7 @@ export function BioXpLldProfiles({ generation, connected, visible = true }: { ge
 type DepthEntry = { tip_type: number | null; location: string | null; plate_type: string | null; offset_mm: number; source: string; saved_at?: string };
 type DepthTable = { entries: DepthEntry[]; standard: { offset_mm: number; label: string; source: string }[]; max_mm: number };
 const DEPTH_STATIONS: [string, string][] = [['LOC_RC', 'Reagent chiller (RC)'], ['LOC_OC', 'Output chiller (OC)'], ['LOC_TC', 'Thermal cycler'],
-    ['LOC_STRIP1', 'Strip 1'], ['LOC_STRIP2', 'Strip 2'], ['LOC_STRIP3', 'Strip 3'], ['LOC_STRIP4', 'Strip 4'], ['LOC_TROUGH', 'Trough'], ['LOC_MS', 'Magnet station']];
+    ['LOC_STRIP1', 'Strip 1'], ['LOC_STRIP2', 'Strip 2'], ['LOC_STRIP3', 'Strip 3'], ['LOC_STRIP4', 'Strip 4'], ['LOC_TROUGH', 'Bulk reagent holder'], ['LOC_MS', 'Magnet station']];
 const PLATE_SUGGESTIONS = ['thermo-4483485-enduraplate-fast', 'thermo-4483354-enduraplate', 'ont-barcode-96'];
 const stationName = (id: string | null) => id === null ? 'Any station' : (DEPTH_STATIONS.find(([v]) => v === id)?.[1] ?? id);
 
@@ -134,7 +134,7 @@ function Target({ destinations, location, setLocation, well, setWell, prefix }: 
     return <div className="flex flex-wrap gap-3">
         <label>Station<select aria-label={`${prefix} station`} value={location} onChange={e => setLocation(e.target.value)} className="ml-2">
             <option value="">Select a station</option>
-            {destinations.map(d => <option key={d.target} value={d.location_id}>{d.label}</option>)}
+            {destinations.filter(d => d.xy == null).map(d => <option key={d.target} value={d.location_id}>{d.label}</option>)}
         </select></label>
         <label>Well<select aria-label={`${prefix} row`} value={row} onChange={e => setWell(e.target.value + col)} className="ml-2">{ROWS.map(r => <option key={r}>{r}</option>)}</select>
             <select aria-label={`${prefix} column`} value={col} onChange={e => setWell(row + e.target.value)} className="ml-1">{Array.from({ length: 12 }, (_, i) => <option key={i}>{i + 1}</option>)}</select></label>

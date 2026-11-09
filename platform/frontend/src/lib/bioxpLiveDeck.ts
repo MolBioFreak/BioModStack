@@ -28,10 +28,10 @@ export function poseFromAxisObservations(observation: AxisObservations | null): 
         x: x.position_steps, y: y.position_steps, z: z?.position_steps ?? null,
         observedAt: Math.min(x.observed_at, y.observed_at), reference: 'Controller position readback', snapshotId: null };
 }
-import { deckBounds, deckResources, projectDeckPoint, type DeckResource } from './bioxpWorkflowDeck';
+import { HEAD_CHANNEL_PITCH_STEPS, deckBounds, deckResources, projectDeckPoint, type DeckResource } from './bioxpWorkflowDeck';
 
 /** Mechanical pitch, not a location's addressing factor. OEM four-head line: +Y. */
-export const GUN_SPACING_STEPS = 4264;
+export const GUN_SPACING_STEPS = HEAD_CHANNEL_PITCH_STEPS;
 export function gunCenters(x: number, y: number) {
     return Array.from({ length: 4 }, (_, channel) => ({ channel, point: projectDeckPoint(x, y + channel * GUN_SPACING_STEPS) }));
 }

@@ -6,6 +6,7 @@ import { api } from '../../src/lib/api';
 import { BioXpLiveDeck, type BioXpLiveDeckProps } from '../../src/components/BioXpLiveDeck';
 import { BioXpWorkflowDeck } from '../../src/components/BioXpWorkflowDeck';
 import destinations from '../fixtures/bioxp_deck_admission_catalog.json';
+import holderCatalog from '../fixtures/bioxp_bulk_holder_destinations.json';
 import type { BioXpDeckDestinationV1, BioXpOperatorDashboardV2 } from '../../src/lib/bioxpClient';
 import { deckResources, deckStations, projectDeckPoint } from '../../src/lib/bioxpWorkflowDeck';
 
@@ -280,4 +281,38 @@ it('shades tip racks from recorded occupancy and keeps every well position', asy
     expect(host.querySelectorAll('[data-station="TECANRACK2"] .bwd-tip')).toHaveLength(96);
     expect(host.querySelector('[data-station="TECANRACK1"][data-well="B1"] .bwd-ring')!.getAttribute('cx'))
         .toBe(host.querySelector('[data-station="TECANRACK1"][data-well="B1"] .bwd-core')!.getAttribute('cx'));
+});
+
+it('draws Bulk reagent holder rows and PCR wells at catalog XY and moves to the exact named target', async () => {
+    const options = structuredClone(holderCatalog.destination_options) as unknown as BioXpDeckDestinationV1[];
+    await render({ destinations: options });
+    const drawn = options.filter(o => o.xy && (o.holder_row!.startsWith('micro') || o.well_number != null)).map(o => o.target);
+    const markers = [...host.querySelectorAll('[data-holder-target]')];
+    expect(markers.map(m => m.getAttribute('data-holder-target')).sort()).toEqual([...drawn].sort());
+    expect(markers).toHaveLength(18);
+    for (const option of options.filter(o => o.xy && o.well_number != null)) {
+        const [x, y] = projectDeckPoint(option.xy!.x, option.xy!.y);
+        const ring = host.querySelector(`[data-holder-target="${option.target}"] .bwd-holder-well`)!;
+        expect(Number(ring.getAttribute('cx'))).toBeCloseTo(x); expect(Number(ring.getAttribute('cy'))).toBeCloseTo(y);
+    }
+    expect(host.querySelectorAll('[data-holder-target="LOC_TROUGH_MICRO_ROW_1"] .bwd-holder-tube')).toHaveLength(4);
+    expect(host.querySelectorAll('svg g[data-move-to]')).toHaveLength(13);
+    expect(el('Select Bulk reagent holder')).toBeTruthy();
+    for (const marker of markers) {
+        station.mockClear();
+        await act(async () => marker.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
+        expect(station.mock.calls).toEqual([[marker.getAttribute('data-holder-target')]]);
+    }
+    station.mockClear();
+    await act(async () => markers[0].dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' })));
+    expect(station).toHaveBeenCalledTimes(1);
+    await render({ destinations: options, selectedDestination: options.find(o => o.target === 'LOC_TROUGH_PCR_ROW_2_WELL_2')! });
+    const chosen = host.querySelector('g[data-selected-destination="LOC_TROUGH_PCR_ROW_2_WELL_2"] circle')!;
+    const [sx, sy] = projectDeckPoint(82262, 64110);
+    expect(Number(chosen.getAttribute('cx'))).toBeCloseTo(sx); expect(Number(chosen.getAttribute('cy'))).toBeCloseTo(sy);
+    expect(host.querySelector('[data-selected-station]')).toBeNull();
+    station.mockClear();
+    await render({ destinations: options, stationDisabledReason: () => 'Native action unavailable' });
+    await act(async () => host.querySelector('[data-holder-target="LOC_TROUGH_MICRO_ROW_1"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
+    expect(station).not.toHaveBeenCalled(); expect(well).not.toHaveBeenCalled(); expect(api.post).not.toHaveBeenCalled();
 });

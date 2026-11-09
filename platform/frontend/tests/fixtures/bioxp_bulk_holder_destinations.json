@@ -1,0 +1,579 @@
+{
+ "source": "Live BMS GET /api/bioxp/operator-controls/v2/catalog view=full, 2026-11-09; native 1e288434f602, BMS ab594b9d9019; LOC_TROUGH plus holder rows/wells",
+ "destination_options": [
+  {
+   "target": "LOC_TROUGH",
+   "label": "Bulk reagent holder",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_MICRO_ROW_1",
+   "label": "Bulk reagent holder / MICRO row 1",
+   "xy": {
+    "x": 85555,
+    "y": 63278
+   },
+   "holder_row": "micro_row_1",
+   "well_number": null,
+   "channel_wells": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_MICRO_ROW_2",
+   "label": "Bulk reagent holder / MICRO row 2",
+   "xy": {
+    "x": 90262,
+    "y": 63278
+   },
+   "holder_row": "micro_row_2",
+   "well_number": null,
+   "channel_wells": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_1",
+   "label": "Bulk reagent holder / PCR row 1",
+   "xy": {
+    "x": 80162,
+    "y": 61978
+   },
+   "holder_row": "pcr_row_1",
+   "well_number": null,
+   "channel_wells": [
+    1,
+    3,
+    5,
+    7
+   ],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_1_WELL_1",
+   "label": "Bulk reagent holder / PCR row 1 / well 1",
+   "xy": {
+    "x": 80162,
+    "y": 61978
+   },
+   "holder_row": "pcr_row_1",
+   "well_number": 1,
+   "channel_wells": [
+    1,
+    3,
+    5,
+    7
+   ],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_1_WELL_2",
+   "label": "Bulk reagent holder / PCR row 1 / well 2",
+   "xy": {
+    "x": 80162,
+    "y": 64110
+   },
+   "holder_row": "pcr_row_1",
+   "well_number": 2,
+   "channel_wells": [
+    2,
+    4,
+    6,
+    8
+   ],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_1_WELL_3",
+   "label": "Bulk reagent holder / PCR row 1 / well 3",
+   "xy": {
+    "x": 80162,
+    "y": 66242
+   },
+   "holder_row": "pcr_row_1",
+   "well_number": 3,
+   "channel_wells": [],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_1_WELL_4",
+   "label": "Bulk reagent holder / PCR row 1 / well 4",
+   "xy": {
+    "x": 80162,
+    "y": 68374
+   },
+   "holder_row": "pcr_row_1",
+   "well_number": 4,
+   "channel_wells": [],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_1_WELL_5",
+   "label": "Bulk reagent holder / PCR row 1 / well 5",
+   "xy": {
+    "x": 80162,
+    "y": 70506
+   },
+   "holder_row": "pcr_row_1",
+   "well_number": 5,
+   "channel_wells": [],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_1_WELL_6",
+   "label": "Bulk reagent holder / PCR row 1 / well 6",
+   "xy": {
+    "x": 80162,
+    "y": 72638
+   },
+   "holder_row": "pcr_row_1",
+   "well_number": 6,
+   "channel_wells": [],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_1_WELL_7",
+   "label": "Bulk reagent holder / PCR row 1 / well 7",
+   "xy": {
+    "x": 80162,
+    "y": 74770
+   },
+   "holder_row": "pcr_row_1",
+   "well_number": 7,
+   "channel_wells": [],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_1_WELL_8",
+   "label": "Bulk reagent holder / PCR row 1 / well 8",
+   "xy": {
+    "x": 80162,
+    "y": 76902
+   },
+   "holder_row": "pcr_row_1",
+   "well_number": 8,
+   "channel_wells": [],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_2",
+   "label": "Bulk reagent holder / PCR row 2",
+   "xy": {
+    "x": 82262,
+    "y": 61978
+   },
+   "holder_row": "pcr_row_2",
+   "well_number": null,
+   "channel_wells": [
+    1,
+    3,
+    5,
+    7
+   ],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_2_WELL_1",
+   "label": "Bulk reagent holder / PCR row 2 / well 1",
+   "xy": {
+    "x": 82262,
+    "y": 61978
+   },
+   "holder_row": "pcr_row_2",
+   "well_number": 1,
+   "channel_wells": [
+    1,
+    3,
+    5,
+    7
+   ],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_2_WELL_2",
+   "label": "Bulk reagent holder / PCR row 2 / well 2",
+   "xy": {
+    "x": 82262,
+    "y": 64110
+   },
+   "holder_row": "pcr_row_2",
+   "well_number": 2,
+   "channel_wells": [
+    2,
+    4,
+    6,
+    8
+   ],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_2_WELL_3",
+   "label": "Bulk reagent holder / PCR row 2 / well 3",
+   "xy": {
+    "x": 82262,
+    "y": 66242
+   },
+   "holder_row": "pcr_row_2",
+   "well_number": 3,
+   "channel_wells": [],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_2_WELL_4",
+   "label": "Bulk reagent holder / PCR row 2 / well 4",
+   "xy": {
+    "x": 82262,
+    "y": 68374
+   },
+   "holder_row": "pcr_row_2",
+   "well_number": 4,
+   "channel_wells": [],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_2_WELL_5",
+   "label": "Bulk reagent holder / PCR row 2 / well 5",
+   "xy": {
+    "x": 82262,
+    "y": 70506
+   },
+   "holder_row": "pcr_row_2",
+   "well_number": 5,
+   "channel_wells": [],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_2_WELL_6",
+   "label": "Bulk reagent holder / PCR row 2 / well 6",
+   "xy": {
+    "x": 82262,
+    "y": 72638
+   },
+   "holder_row": "pcr_row_2",
+   "well_number": 6,
+   "channel_wells": [],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_2_WELL_7",
+   "label": "Bulk reagent holder / PCR row 2 / well 7",
+   "xy": {
+    "x": 82262,
+    "y": 74770
+   },
+   "holder_row": "pcr_row_2",
+   "well_number": 7,
+   "channel_wells": [],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  },
+  {
+   "target": "LOC_TROUGH_PCR_ROW_2_WELL_8",
+   "label": "Bulk reagent holder / PCR row 2 / well 8",
+   "xy": {
+    "x": 82262,
+    "y": 76902
+   },
+   "holder_row": "pcr_row_2",
+   "well_number": 8,
+   "channel_wells": [],
+   "calibration_axes": [
+    "x",
+    "y"
+   ],
+   "station_target": "LOC_TROUGH",
+   "aliases": [],
+   "location_id": 16,
+   "branch_kind": "ordinary",
+   "camera_offset_option": true,
+   "source_anchors": [
+    "ClassControlInterface.btnLOC1_Click:1932-1959",
+    "ClassControlInterface.moveTo:3691-3716"
+   ],
+   "enabled": true,
+   "disabled_reason": null
+  }
+ ]
+}

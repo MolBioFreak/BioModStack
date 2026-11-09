@@ -577,6 +577,13 @@ export interface BioXpDeckDestinationV1 {
     source_anchors: string[];
     enabled: boolean;
     disabled_reason: string | null;
+    /** Bulk reagent holder row/well extensions: native catalog XY only (no Z). */
+    xy?: { x: number; y: number } | null;
+    holder_row?: string | null;
+    well_number?: number | null;
+    channel_wells?: number[];
+    calibration_axes?: string[];
+    station_target?: string;
 }
 
 export interface BioXpOperatorControlCatalogV2 {

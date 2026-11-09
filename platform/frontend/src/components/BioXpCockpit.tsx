@@ -1412,6 +1412,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                         dashboard={catalogV2Query.data?.dashboard} stale={showingLastKnown || !linkHealthy}
                         selection={liveDeckIntent?.generation === generation ? liveDeckIntent.selection : { station: '', wells: [] }}
                         selectedDestination={selectedDeckDestination}
+                        destinations={deckDestinations}
                         onMoveToStation={clickDeckStation} onMoveToWell={clickDeckWell}
                         onBlockedMove={requestBlockedMove} preparation={<BioXpMovePreparation state={movePreparation} />}
                         stationDisabledReason={target => {
@@ -1461,7 +1462,10 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                             className="mt-1 w-full rounded border p-2"
                             style={{ color: 'var(--text-primary)', background: 'var(--bg-primary)', borderColor: 'var(--border-primary)' }}>
                             {selectedDeckDestination == null && <option value="">Choose a destination</option>}
-                            {deckDestinations.map(destination => <option key={destination.target} value={destination.target}>{destination.label}</option>)}
+                            {deckDestinations.filter(destination => destination.xy == null).map(destination => <option key={destination.target} value={destination.target}>{destination.label}</option>)}
+                            {deckDestinations.some(destination => destination.xy != null) && <optgroup label="Bulk reagent holder">
+                                {deckDestinations.filter(destination => destination.xy != null).map(destination => <option key={destination.target} value={destination.target}>{destination.label.replace(/^Bulk reagent holder \/ /, '')}</option>)}
+                            </optgroup>}
                         </select>
                     </label>
                     <label className="flex items-center gap-2">
