@@ -27,6 +27,8 @@ type Molecule = { name: string; sequence: string; circular: boolean; features?: 
 type TargetChoice = 'current' | 'saved' | 'pasted';
 
 const GG_ENZYMES = ['BsaI', 'BsmBI', 'Esp3I', 'BbsI', 'SapI', 'PaqCI', 'BtgZI'];
+/** "EcoRI + BamHI", or "EcoRI (single enzyme)" when both ends use the same enzyme. */
+export const enzymePairLabel = (enzymes: string[]) => enzymes.length > 1 && enzymes.every((e) => e === enzymes[0]) ? `${enzymes[0]} (single enzyme)` : enzymes.join(' + ');
 const numbers = (text: string) => text.split(/[\s,]+/).filter(Boolean).map(Number).filter(Number.isFinite);
 
 async function moleculeFromItem(item: ChooserItem): Promise<Molecule> {
@@ -235,7 +237,7 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
                 ))}
             </div>
 
-            <fieldset className="space-y-1">
+            <fieldset className="min-w-0 space-y-1">
                 <legend className="text-slate-300">{method === 'restriction' ? 'Backbone' : 'Target (what you want to end up with)'}</legend>
                 <select aria-label="Target molecule" className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={targetChoice} onChange={(e) => setTargetChoice(e.target.value as TargetChoice)}>
                     <option value="current">Open molecule: {sequenceData.name}</option>
@@ -253,13 +255,13 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
                 </div>}
             </fieldset>
 
-            {method !== 'golden_gate' && <fieldset className="space-y-1">
+            {method !== 'golden_gate' && <fieldset className="min-w-0 space-y-1">
                 <legend className="text-slate-300">{method === 'restriction' ? 'Insert (first source is used)' : 'Sources to build from'}</legend>
                 <p className="text-slate-500">Only the molecules selected here are searched.</p>
                 <label className="flex items-center gap-1 text-slate-300"><input type="checkbox" checked={useCurrentSource} onChange={(e) => setUseCurrentSource(e.target.checked)} /> Current molecule ({sequenceData.name})</label>
                 <FragmentChooser label="Add saved source" onPick={pick((m) => setSources((list) => [...list, m]))} />
-                <ul>{sources.map((m, i) => <li key={`${m.revision_id}-${i}`} className="flex justify-between text-slate-300">{m.name} · {m.sequence.length} bp
-                    <button type="button" className="text-slate-400" onClick={() => setSources((list) => list.filter((_, j) => j !== i))}>Remove</button></li>)}</ul>
+                <ul>{sources.map((m, i) => <li key={`${m.revision_id}-${i}`} className="flex min-w-0 justify-between gap-2 text-slate-300"><span className="min-w-0 truncate" title={m.name}>{m.name} · {m.sequence.length} bp</span>
+                    <button type="button" className="shrink-0 text-slate-400" onClick={() => setSources((list) => list.filter((_, j) => j !== i))}>Remove</button></li>)}</ul>
             </fieldset>}
 
             {method === 'gibson' && <div className="flex flex-wrap gap-3">
@@ -316,7 +318,7 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
             {method === 'restriction' && restriction && <div className="space-y-2">
                 {restriction.no_suitable_pair && <p className="text-slate-400">No suitable enzyme pair found. Alternatives: {restriction.alternatives.map((a) => a.note).join(' ')}</p>}
                 <ul className="space-y-2">{restriction.proposals.map((p, i) => <li key={i} className="space-y-1 rounded border border-slate-700 bg-slate-950/60 p-2">
-                    <div className="font-medium text-slate-100">#{i + 1} Vector: {p.vector_enzymes.join(' + ')} · Insert: {p.insert_enzymes.join(' + ')}{p.kind === 'primer_tail' ? ' (via primer tails)' : ''}</div>
+                    <div className="font-medium text-slate-100">#{i + 1} Vector: {enzymePairLabel(p.vector_enzymes)} · Insert: {enzymePairLabel(p.insert_enzymes)}{p.insert_orientation === 'forward' || p.insert_orientation === 'reverse' ? ` · insert ${p.insert_orientation}` : ''}{p.kind === 'primer_tail' ? ' (via primer tails)' : ''}</div>
                     <div className="text-slate-300">{p.directional ? 'Directional' : 'Not directional'} · insert orientation: {p.insert_orientation} · vector self-ligation: {p.vector_self_ligation}</div>
                     <div className="text-slate-400">Vector {p.vector_length} bp + insert {p.insert_payload_length} bp → product {p.product_length} bp</div>
                     <div className="text-slate-500">Retained backbone: {p.vector_source_segments.map(([a, b]) => `${a}–${b}`).join(', ')} · {p.kind === 'primer_tail' ? 'prepared insert' : 'donor'}: {p.insert_source_segments.map(([a, b]) => `${a}–${b}`).join(', ')}</div>

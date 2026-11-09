@@ -50,6 +50,10 @@ function isSeqVizRenderTarget(target: EventTarget | null): target is Element {
 // COLOR PALETTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/** SeqViz chops the circular-map name into 30-character lines (orphaning a trailing ")"), so keep it on one line. */
+export const CIRCULAR_CAPTION_MAX = 30;
+export const circularCaptionName = (name: string) => name.length > CIRCULAR_CAPTION_MAX ? `${name.slice(0, 17)}…${name.slice(-12)}` : name;
+
 export type ColorPaletteName =
     | 'classic'      // Traditional 4-color scheme
     | 'gc_at'        // GC vs AT grouping (blue/red)
@@ -1062,7 +1066,7 @@ export function SequenceViewer({
             )}
             <SeqViz
                 key={`${viewerSequenceKey}:selection-reset-${selectionResetVersion}`}
-                name={sequenceData.name}
+                name={circularCaptionName(sequenceData.name)}
                 seq={displaySequence}
                 seqType={seqVizSeqType}
                 annotations={annotations}

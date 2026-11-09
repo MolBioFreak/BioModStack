@@ -426,7 +426,7 @@ export function MolecularInputModal({
                                         >
                                             <div className="flex items-start justify-between gap-3">
                                                 <div className="min-w-0">
-                                                    <div className="truncate text-base font-semibold text-slate-100">{sequence.name}</div>
+                                                    <div className="truncate text-base font-semibold text-slate-100" title={sequence.name}>{sequence.name}</div>
                                                     {sequence.description && (
                                                         <div className="mt-1 line-clamp-2 text-sm text-slate-400">{sequence.description}</div>
                                                     )}

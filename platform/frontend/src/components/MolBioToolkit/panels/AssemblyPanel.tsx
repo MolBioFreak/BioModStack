@@ -1215,7 +1215,7 @@ export function AssemblyPanel({
             )}
 
             {!(mode === 'gibson' && gibsonWorkflow === 'design') && result && (
-                <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                <div ref={(el) => el?.scrollIntoView?.({ block: 'nearest' })} className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                             <div className="font-medium text-slate-100">{result.message}</div>

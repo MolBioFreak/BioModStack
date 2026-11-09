@@ -320,7 +320,7 @@ export function SequenceLibrary({
                             data-molbio-mobile-touch-target={mobile ? 'true' : undefined}
                             className={`min-w-0 flex-1 border-b border-slate-800 p-3 text-left transition-colors hover:bg-slate-800 ${mobile ? 'min-h-12' : ''} ${selectedId === seq.id ? 'bg-slate-700' : ''}`}
                         >
-                            <div className="font-medium text-slate-200 truncate">{seq.name}</div>
+                            <div className="line-clamp-2 break-words font-medium text-slate-200" title={seq.name}>{seq.name}</div>
                             <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
                                 <span>{seq.length.toLocaleString()} {sequenceUnitLabel(seq.sequence_type === 'rna' ? 'rna' : 'dna')}</span>
                                 <span>•</span>
