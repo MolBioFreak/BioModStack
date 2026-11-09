@@ -6,7 +6,7 @@ import * as api from '../../src/lib/api';
 import { AssemblyPanel } from '../../src/components/MolBioToolkit/panels/AssemblyPanel';
 import { FragmentChooser } from '../../src/components/MolBioToolkit/FragmentChooser';
 import { enzymePairLabel, junctionLines, proposalPairLabel } from '../../src/components/MolBioToolkit/panels/SuggestPlan';
-import { circularCaptionName } from '../../src/components/MolBioToolkit/SequenceViewer';
+import { circularCaptionName, linearBreakReservePx } from '../../src/components/MolBioToolkit/SequenceViewer';
 
 vi.mock('../../src/lib/api', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../../src/lib/api')>()),
@@ -57,7 +57,7 @@ describe('Molecular Tools layout fixes (class/text checks only; pixels are cover
     it('restriction proposal headings include orientation and single-enzyme wording', async () => {
         const proposal = (o: 'forward' | 'reverse') => ({
             kind: 'direct', vector_enzymes: ['EcoRI', 'EcoRI'], insert_enzymes: ['EcoRI', 'EcoRI'], directional: false, insert_orientation: o,
-            vector_self_ligation: 'possible', vector_length: 10, insert_payload_length: 5, product_length: 15, product_sequence: 'ACGT',
+            vector_self_ligation: 'possible', vector_length: 10, insert_payload_length: 5, insert_contributed_length: 5, product_length: 15, product_sequence: 'ACGT',
             vector_source_segments: [[0, 10]], insert_source_segments: [[0, 5]], assembly_request: { fragments: [], circular: true },
             selection: { primers: [], primer_notes: [] }, junction_sites: [],
         });
@@ -112,6 +112,13 @@ describe('Molecular Tools layout fixes (class/text checks only; pixels are cover
         expect(src).toContain("'GC n/a'");
         expect(src).toContain('.dna files are supported');
         expect(src).not.toContain('`.dna`');
+    });
+
+    it('linear constructs reserve room for the LINEAR BREAK marker; circular ones and the linear-only view do not', () => {
+        expect(linearBreakReservePx(false, 'both')).toBe(112);
+        expect(linearBreakReservePx(false, 'circular')).toBe(112);
+        expect(linearBreakReservePx(false, 'linear')).toBe(0);
+        expect(linearBreakReservePx(true, 'both')).toBe(0);
     });
 
     it('proposal helpers: shared pair is named once, identical junctions collapse', () => {

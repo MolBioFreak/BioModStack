@@ -118,7 +118,7 @@ describe('Suggest plan', () => {
         vi.mocked(api.suggestRestrictionCloning).mockResolvedValue({ data: {
             proposals: [{
                 kind: 'primer_tail', vector_enzymes: ['EcoRI', 'BamHI'], insert_enzymes: ['EcoRI', 'BamHI'], directional: true, insert_orientation: 'forward',
-                vector_ends_match_each_other: false, vector_self_ligation: 'not possible', vector_end_seal: 'both', vector_length: 3000, insert_payload_length: 500, product_length: 3500,
+                vector_ends_match_each_other: false, vector_self_ligation: 'not possible', vector_end_seal: 'both', vector_length: 3000, insert_payload_length: 500, insert_contributed_length: 500, product_length: 3500,
                 // Presentation-only stub; actual native transport/chemistry is exercised by the connected handoff suite.
                 product_sequence: 'ACGT', vector_source_segments: [[0, 3000]], insert_source_segments: [[0, 500]],
                 assembly_request: { fragments: [], circular: true },

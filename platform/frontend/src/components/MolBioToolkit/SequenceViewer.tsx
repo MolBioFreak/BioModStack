@@ -56,6 +56,9 @@ function isSeqVizRenderTarget(target: EventTarget | null): target is Element {
  * slice so the slices fall exactly on the line breaks. Nothing is dropped.
  */
 export const CIRCULAR_CAPTION_MAX = 30;
+/** The LINEAR BREAK marker (badge, stem, arrow, caption) is 101 px tall at top-2; keep that band free so it never covers ring letters. */
+export const LINEAR_BREAK_RESERVE_PX = 112;
+export const linearBreakReservePx = (circular: boolean, mode: string): number => (!circular && mode !== 'linear' ? LINEAR_BREAK_RESERVE_PX : 0);
 export const circularCaptionName = (name: string, maxChars: number = CIRCULAR_CAPTION_MAX): string => {
     const limit = Math.max(8, Math.min(CIRCULAR_CAPTION_MAX, Math.floor(maxChars)));
     if (name.length <= limit) return name;
@@ -987,6 +990,7 @@ export function SequenceViewer({
             ref={viewerRef}
             className={`sequence-viewer ${className || ''}`}
             style={{
+                paddingTop: linearBreakReservePx(sequenceData.circular, resolvedViewerMode) || undefined,
                 height: '100%',
                 width: '100%',
                 position: 'relative',
