@@ -132,7 +132,7 @@ export function FragmentChooser({ onPick, kinds, label = 'Add from saved molecul
         return <button type="button" className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-200" onClick={() => setOpen(true)}>{label}</button>;
     }
     return (
-        <section aria-label="Fragment chooser" className="space-y-2 rounded border border-slate-700 bg-slate-900/60 p-2 text-xs">
+        <section aria-label="Fragment chooser" className="min-w-0 max-w-full space-y-2 rounded border border-slate-700 bg-slate-900/60 p-2 text-xs">
             <div className="flex gap-2">
                 <input
                     aria-label="Search saved molecules"
@@ -141,19 +141,19 @@ export function FragmentChooser({ onPick, kinds, label = 'Add from saved molecul
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                 />
-                <button type="button" className="px-2 text-slate-400" onClick={() => setOpen(false)}>Close</button>
+                <button type="button" className="shrink-0 px-2 text-slate-400" onClick={() => setOpen(false)}>Close</button>
             </div>
             {error && <p role="alert" className="text-red-300">Unable to load molecules: {error}</p>}
-            <ul className="max-h-60 space-y-1 overflow-y-auto">
+            <ul className="max-h-60 min-w-0 space-y-1 overflow-y-auto">
                 {items.map((item) => (
                     <li key={`${item.document_id}:${item.revision_id}`}>
                         <button
                             type="button"
-                            className="flex w-full items-center justify-between gap-2 rounded border border-slate-800 bg-slate-950/70 px-2 py-1 text-left hover:border-cyan-700"
+                            className="flex w-full min-w-0 items-center justify-between gap-2 rounded border border-slate-800 bg-slate-950/70 px-2 py-1 text-left hover:border-cyan-700"
                             onClick={() => onPick(item)}
                         >
-                            <span className="min-w-0 truncate text-slate-200">{item.name} <span className="text-slate-500">r{item.revision_number}</span></span>
-                            <span className="shrink-0 text-slate-400">{item.length.toLocaleString()} bp · {item.topology} · {chooserOriginLabel(item)}</span>
+                            <span className="min-w-0 flex-1 truncate text-slate-200" title={`${item.name} r${item.revision_number}`}>{item.name} <span className="text-slate-500">r{item.revision_number}</span></span>
+                            <span className="min-w-0 max-w-[55%] truncate text-slate-400" title={`${item.length.toLocaleString()} bp · ${item.topology} · ${chooserOriginLabel(item)}`}>{item.length.toLocaleString()} bp · {item.topology} · {chooserOriginLabel(item)}</span>
                         </button>
                     </li>
                 ))}
