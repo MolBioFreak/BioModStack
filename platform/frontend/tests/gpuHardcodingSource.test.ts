@@ -28,7 +28,7 @@ function readSource(relativePath: string): string {
     return readFileSync(join(process.cwd(), relativePath), 'utf8');
 }
 
-test('production GPU controls do not expose DALAB-specific GPU labels or VRAM spec constants', () => {
+test('production GPU controls do not expose site-specific GPU labels or VRAM spec constants', () => {
     for (const relativePath of productionGpuControlFiles) {
         const source = readSource(relativePath);
         for (const marker of localRigMarkers) {

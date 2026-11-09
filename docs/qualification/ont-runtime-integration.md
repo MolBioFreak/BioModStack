@@ -1,4 +1,4 @@
-# BigBoy ONT runtime integration — 2026-11-08
+# ONT runtime integration — 2026-11-08
 
 Adopts the four measured OCI policies and five independently qualified clone SIF editions, retaining upstream identities, model hashes, scientific settings and existing native admission owners. The build ledger now agrees with those measured artifacts and the active Dorado 2.1.2 SIF/actual definition input. The permanent clone cache is `$HOME/.local/share/biomodstack/runtime/ont-clone-v1.8.4-bms.2`; no selector requires a task worktree. API pLannotate 2.0.0 uses the durable host selector `$HOME/.local/share/biomodstack/runtime/plannotate-2.0.0/bin/plannotate`, referencing the qualified installed environment without relocating conda prefixes.
 

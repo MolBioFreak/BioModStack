@@ -1,4 +1,4 @@
-# BigBoy wf-clone candidate (review required)
+# wf-clone candidate (review required)
 
 Base: `51d72788bbe90f3cbbefd8be13ed75dc3a52cadd`. This task worktree does not change canonical source, live runtime selectors, services, SQL Jobs, or the shared build ledger.
 
@@ -8,7 +8,7 @@ Keep current branch scientific settings and deterministic wf-clone source `a575d
 
 The original five branch edition SIFs were unavailable in the audited local stores and configured HF content-addressed image endpoints (all five authenticated HEADs returned 404). The existing provision owner supplies no alternate exact-byte release source; the origin GitHub release inventory has only an Android APK release, not these SIFs. Original installed clone caches contain the upstream hashes, not branch edition hashes.
 
-The user-approved alternative is B4ONTPC's independently compiled, same-source/tool edition, previously qualified on 35 real-read native tasks. Source SIFs were freshly hashed at `<ontpc-home>/.local/state/bns-provision/clone-build/`. This candidate changes only the five measured SIF hashes and task-owned receiving cache location; it never relabels upstream bytes as edition bytes. The existing provisioner/validator remain the admission owners.
+The user-approved alternative is the source ONT host's independently compiled, same-source/tool edition, previously qualified on 35 real-read native tasks. Source SIFs were freshly hashed at `<source-home>/.local/state/bns-provision/clone-build/`. This candidate changes only the five measured SIF hashes and task-owned receiving cache location; it never relabels upstream bytes as edition bytes. The existing provisioner/validator remain the admission owners.
 
 ## Required dual framework
 
@@ -18,13 +18,13 @@ Native offline probes confirmed both identities. The embedded launcher still ret
 
 ## Native annotation is a separate contract
 
-API pLannotate 2.0.0 was absent. A fresh environment was installed from current `docker/plannotate-conda-linux-64.lock` (SHA-256 `4a71bb86c72c7fb53da4974ce3fbb9034786c30676c37b847158bffbe3a56bae`): 214/214 package URLs and SHA-256 records match, with repository-pinned micromamba SHA-256 `c04571cfb0750e5432d530a3068b8fcd232ebed3133358e056e59a90b9852b00`. Only the existing database data payload was reused; all 20 manifest files verify, and its manifest matches B4ONTPC's payload (`1167ae6d730591d1b311e78f86f25ed6f913b0fb5b05d9e52123ffd6569d7eb4`).
+API pLannotate 2.0.0 was absent. A fresh environment was installed from current `docker/plannotate-conda-linux-64.lock` (SHA-256 `4a71bb86c72c7fb53da4974ce3fbb9034786c30676c37b847158bffbe3a56bae`): 214/214 package URLs and SHA-256 records match, with repository-pinned micromamba SHA-256 `c04571cfb0750e5432d530a3068b8fcd232ebed3133358e056e59a90b9852b00`. Only the existing database data payload was reused; all 20 manifest files verify, and its manifest matches the source ONT host's payload (`1167ae6d730591d1b311e78f86f25ed6f913b0fb5b05d9e52123ffd6569d7eb4`).
 
 The existing BNS native wrapper is installed at the task prefix's `annotation/bin/plannotate`; environment prefix is `annotation/micromamba/envs/plannotate`. Real full-database annotation of the explicit 10,488-base fixture preserved sequence and produced 23 GenBank features, 23 CSV records and a nonempty HTML map. Actual versions: pLannotate 2.0.0, BLAST 2.17.0, DIAMOND 2.2.4, Python 3.12.13. This does not replace the workflow pLannotate image, whose version is independently qualified.
 
 ## Qualification and activation boundary
 
-Target receiving and native execution qualification are complete: all five receiving SIF hashes equal the freshly measured B4ONTPC edition, both Flye/Canu selected-closure validators pass, all five Medaka archive hashes and native model-resolution controls pass, and the existing provisioning owner admits the exact cache. The actual generated task export prelude validates with Nextflow 25.10.0 build 10289; substituting the embedded outer launcher fails with the expected NEXTFLOW_VERSION_MISMATCH (25.10.1 build 10547). Actual nested and outer logs independently confirm those respective engine identities.
+Target receiving and native execution qualification are complete: all five receiving SIF hashes equal the freshly measured source-host edition, both Flye/Canu selected-closure validators pass, all five Medaka archive hashes and native model-resolution controls pass, and the existing provisioning owner admits the exact cache. The actual generated task export prelude validates with Nextflow 25.10.0 build 10289; substituting the embedded outer launcher fails with the expected NEXTFLOW_VERSION_MISMATCH (25.10.1 build 10547). Actual nested and outer logs independently confirm those respective engine identities.
 
 The retained-real-read PhiX run completed 36/36 native tasks with zero failed, ignored, cached, or retried tasks. It produced nonempty final FASTA/FASTQ, annotated GenBank/BED, BAM/index, BCF/index, alignment/assembly statistics and a 2,517,762-byte report. Final native file hashes and sample_status were read back. Receipts, binaries, generated exports and fixtures stay outside Git at `~/.local/share/biomodstack/ont-clone-candidate-20261108/`; see `qualification-summary.json`, `native-final-readback.json` and `receiving-progress.json`.
 

@@ -9,7 +9,7 @@ import {
     listGpuCatalogEntries,
 } from '../src/components/gpuCatalog.js';
 
-test('buildGpuCatalog uses live non-DALAB GPU names, sparse indices, and memory totals', () => {
+test('buildGpuCatalog uses live non-site-specific GPU names, sparse indices, and memory totals', () => {
     const catalog = buildGpuCatalog([
         { index: 2, name: 'NVIDIA A100-SXM4-80GB', memory_total_mb: 81920 },
         { index: 7, name: 'NVIDIA L40S', memory_total_mb: 46068 },

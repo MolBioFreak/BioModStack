@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import hashlib
 import json
 import re
@@ -55,7 +56,7 @@ def protenix_layout(repo: Path, obs: Path) -> None:
     ).total_seconds()
     command = [
         "apptainer", "exec", "--nv", "--containall", "--writable-tmpfs",
-        "--env", "CUDA_VISIBLE_DEVICES=2", "--bind", f"{repo}:/workspace:ro",
+        "--env", f"CUDA_VISIBLE_DEVICES={os.environ.get('BMS_PROBE_CUDA_DEVICE', '0')}", "--bind", f"{repo}:/workspace:ro",
         "--bind", f"{base}:/evidence", str(image), "python3",
         "/workspace/scripts/run_protenix_inference.py", "--input", "/evidence/input.json",
         "--out_dir", "/evidence/output", "--model_name", "protenix-v2", "--seeds",

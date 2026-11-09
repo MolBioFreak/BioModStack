@@ -637,20 +637,27 @@ def _fan_control_display() -> str:
     return os.getenv("BMS_NVIDIA_SETTINGS_DISPLAY", os.getenv("DISPLAY", ":0")) or ":0"
 
 
+def _session_runtime_dir() -> Path:
+    return Path(os.getenv("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+
+
 def _fan_control_xauthority() -> str:
     candidates = [
         os.getenv("BMS_NVIDIA_SETTINGS_XAUTHORITY"),
         os.getenv("XAUTHORITY"),
-        "/run/user/1000/gdm/Xauthority",
+        str(_session_runtime_dir() / "gdm" / "Xauthority"),
         str(Path.home() / ".Xauthority"),
     ]
     for candidate in candidates:
         if not candidate:
             continue
         path = Path(candidate)
-        if path.exists():
-            return str(path)
-    return "/run/user/1000/gdm/Xauthority"
+        try:
+            if path.exists():
+                return str(path)
+        except OSError:
+            continue
+    return str(Path.home() / ".Xauthority")
 
 
 def _run_nvidia_settings_query(args: List[str], timeout: int = 10) -> tuple[bool, str]:

@@ -61,7 +61,7 @@ sudo MINKNOW_SYSTEMD_SERVICE=custom-minknow.service ./config/mk1d-reconnect/inst
 ```
 
 The installer uses the actual native BMS API service user—by default the
-validated invoking `SUDO_USER`, falling back to `dalab`—and renders the systemd
+validated invoking `SUDO_USER`, or `BMS_NATIVE_API_USER` when set—and renders the systemd
 socket with that user's **primary group**. It does not create a separate
 `bms-mk1d-recovery` group. The root-owned helper, socket/service units, and
 recovery Compose/config files remain root-owned. `/etc/biomodstack/mk1d-reconnect.env`

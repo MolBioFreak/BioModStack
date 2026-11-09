@@ -1,7 +1,7 @@
 {
   "schema": "bms.ont-four-runtime-consolidation-qualification.v1",
   "generated_at_utc": "2026-11-08T07:12:45.752102+00:00",
-  "host": "BigBoy (100.88.169.49)",
+  "host": "qualification host",
   "base_commit": "51d72788bbe90f3cbbefd8be13ed75dc3a52cadd",
   "policy_source_commit": "9be0ff70d68bd57f4a48c12f4f5caf0af7fc9e5e",
   "tested_policy_commit": "e5f4149",
@@ -115,9 +115,9 @@
     }
   },
   "fixture_provenance": {
-    "source_host": "B4ONTPC 100.66.29.126",
-    "source_root": "/home/ontpc/.local/state/bns-provision/raw-reports/native",
-    "source_scope": "Retained genuine 30-read POD5, reference, Dorado 2.1.2 CPU calls and native alignment from prior ONT qualification; not newly acquired or newly basecalled on BigBoy",
+    "source_host": "source ONT host",
+    "source_root": "<source-home>/.local/state/bns-provision/raw-reports/native",
+    "source_scope": "Retained genuine 30-read POD5, reference, Dorado 2.1.2 CPU calls and native alignment from prior ONT qualification; not newly acquired or newly basecalled on the qualification host",
     "files": {
       "reads.pod5": "3d01a71a9b421670ee6fbc6bb14ddd55ec1e2f89d23dc4355c5d2d6971098a5d",
       "reference.fasta": "9bfe4d452999ef4f8f4c726a27780c6293cdf46e142d888cc4a281df0bbc6e7e",
@@ -417,7 +417,7 @@
     "native_mixed_run_fixture": "synthetic two-read/two-run transport control, not instrument evidence",
     "mixed_run_receipts": [
       {
-        "path": "ont-four-runtime-consolidation/scratch/pytest-of-dalab/pytest-1/test_mixed_run_end_to_end_conv0/semantic-receipt.json",
+        "path": "ont-four-runtime-consolidation/scratch/pytest-of-user/pytest-1/test_mixed_run_end_to_end_conv0/semantic-receipt.json",
         "sha256": "2dd12edf221fe6595a9ec16495c70f79662461634ab67a2c51d883b0f5c572b6",
         "receipt": {
           "acquisition_ids": [
@@ -503,7 +503,7 @@
     "Live canonical, service environment, build ledger, wf-clone files, schemas and UI were not modified. Parent owns integration and build-ledger reconciliation."
   ],
   "resolved_harness_issues": [
-    "Initial root-mapped namespace could not execute user-owned interpreter; reran namespace as dalab.",
+    "Initial root-mapped namespace could not execute user-owned interpreter; reran namespace as the service user.",
     "Initial regression run lacked runtime-integration opt-in and candidate cache-directory ownership; enabled exact opt-in and corrected only task-worktree ownership, then reran all 227 cases successfully.",
     "Initial standalone slow5tools view -O probe was rejected by native help; direct blue-crab POD5 conversion with .slow5 output was exercised instead."
   ],
