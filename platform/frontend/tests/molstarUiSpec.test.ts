@@ -38,3 +38,11 @@ test('embedded controls and sequence stay inside the clipped viewer bounds', () 
     assert.match(source, /controlsDisplay:\s*'landscape'/);
     assert.match(source, /regionState:\s*\{ left: 'collapsed', top: 'full', right: 'hidden', bottom: 'hidden' \}/);
 });
+
+test('Molstar viewers open view-only; the controls wrench stays available but is not pre-activated', () => {
+    // layoutShowControls=false: tools panel closed on load.
+    assert.match(source, /showControls:\s*false/);
+    assert.doesNotMatch(source, /showControls:\s*!hideControls/);
+    // viewportShowControls=true: the wrench button itself is still offered.
+    assert.match(source, /\[PluginConfig\.Viewport\.ShowControls,\s*true\]/);
+});
