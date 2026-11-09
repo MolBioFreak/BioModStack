@@ -3,7 +3,7 @@ import { RepairWorkspaceContext, RepairWorkspaceClassSelection } from './repairW
 import { transferMode, switchTransferMode, transferFootprint } from '../lib/repairWorkspaceTransfer';
 import type { MethodCatalog, MethodValue } from '../lib/bioxpMethods';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
-import { deckResources, deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
+import { HOLDER_TARGET_OPTIONS, deckResources, deckStations, type BioXpDeckSelection } from '../lib/bioxpWorkflowDeck';
 import { BioXpSchemaVariantContext } from './BioXpSchemaInput';
 import { MethodFields, object } from './BioXpMethodFields';
 import './BioXpMethodPipettingEditor.css';
@@ -45,10 +45,22 @@ export function BioXpMethodPipettingEditor({ node, onChange, catalog, selection,
     if (action === 'move') {
         const station = deckStations.find(s => s.locationId != null && String(s.locationId) === String(inputs.location_id));
         const flag = scalar(inputs.position_flag);
+        const holderTarget = typeof inputs.target === 'string' ? inputs.target : '';
+        const choose = (value: string) => {
+            const { location_id: _location, well, position_flag, target: _target, ...rest } = inputs;
+            if (value.startsWith('holder:')) { onChange({ ...node, inputs: { ...rest, target: value.slice(7) } }); return; }
+            const next = deckStations.find(s => s.id === value);
+            if (next?.locationId == null) return;
+            const kept = holderTarget ? {} : { ...(well !== undefined ? { well } : {}), ...(position_flag !== undefined ? { position_flag } : {}) };
+            onChange({ ...node, inputs: { ...rest, ...kept, location_id: next.locationId } });
+        };
         return <section aria-label="Move settings" className="bioxp-plan-leaf">
-            <label>Station<select aria-label="Move station" value={station?.id ?? ''} onChange={e => { const target = deckStations.find(s => s.id === e.target.value); if (target?.locationId != null) patch({ location_id: target.locationId }); }}><option value="">{inputs.location_id != null ? `Saved location ${String(inputs.location_id)}` : 'Choose a station…'}</option>{deckStations.filter(s => s.locationId != null).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label>
+            <label>Station<select aria-label="Move station" value={holderTarget ? `holder:${holderTarget}` : station?.id ?? ''} onChange={e => choose(e.target.value)}><option value="">{inputs.location_id != null ? `Saved location ${String(inputs.location_id)}` : 'Choose a station…'}</option>{deckStations.filter(s => s.locationId != null).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                <optgroup label="Bulk reagent holder">{HOLDER_TARGET_OPTIONS.map(o => <option key={o.target} value={`holder:${o.target}`}>{o.label}</option>)}</optgroup></select></label>
+            {holderTarget ? <p className="text-xs">Bulk reagent holder position: XY only, at travel height. Holder heights are not calibrated.</p> : <>
             <label>Reference well<input aria-label="Move reference well" value={scalar(inputs.well)} onChange={e => patch({ well: e.target.value })} /></label>
             <label>Move height<select aria-label="Move height" value={flag} onChange={e => patch({ position_flag: e.target.value })}><option value="">Choose height…</option><option value="0">Clearance height</option><option value="1">Calibrated high</option><option value="2">Calibrated low</option>{flag !== '' && !['0', '1', '2'].includes(String(flag)) && <option value={flag}>Saved value: {flag}</option>}</select></label>
+            </>}
             <label>Movement<select aria-label="Movement" value={inputs.movement === undefined ? 'full' : String(inputs.movement)} onChange={e => patch({ movement: e.target.value })}><option value="full">Full</option><option value="fast">Fast lane</option>{inputs.movement !== undefined && !['full', 'fast'].includes(String(inputs.movement)) && <option value={String(inputs.movement)}>Saved value: {String(inputs.movement)}</option>}</select></label>
             {advanced}
         </section>;

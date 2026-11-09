@@ -11,7 +11,7 @@ import json
 import operator
 from typing import NoReturn
 
-from bioxp_method_model import validate_method
+from bioxp_method_model import validate_method, HOLDER_TARGETS
 from bioxp_workflow_authoring import WorkflowPreviewRequest, preview, native_intent, _NATIVE
 
 VERSION = 'bms-method-compiler.v1'
@@ -370,6 +370,18 @@ def native_values(value, field=''):
     return value
 
 
+def holder_target(intent):
+    """Bulk reagent holder move: an exact native named XY target (no calibrated holder heights)."""
+    extra = set(intent) - {'operation', 'target', 'position_flag'}
+    if extra:
+        raise ValueError(f'Holder moves use target only; remove {sorted(extra)}')
+    if intent['target'] not in HOLDER_TARGETS:
+        raise ValueError(f"Unknown Bulk reagent holder position {intent['target']!r}")
+    if intent.get('position_flag') not in (None, 0, '0'):
+        raise ValueError('Bulk reagent holder positions have no calibrated heights; they move at travel height only')
+    return {'target': intent['target'], 'camera_offset': False}
+
+
 def emit_rows(rows):
     """Reuse the existing emitter per occurrence; retain host-only native gates."""
     document = deepcopy(_NATIVE['document_template'])
@@ -384,6 +396,9 @@ def emit_rows(rows):
             targets = []
             for member in row['sequence']:
                 try:
+                    if 'target' in member['intent']:
+                        targets.append(holder_target(member['intent']))
+                        continue
                     step = native_intent({**member['intent'], 'position_flag': 0})
                 except (ValueError, TypeError, OverflowError) as exc:
                     issues.append({'step_id': member['step_id'], 'message': str(exc)})
@@ -615,6 +630,9 @@ def compile_method(request):
                     continue
                 if fast:
                     row = {**row, 'intent': {'operation': 'move_sequence'}, 'sequence': [{'step_id': row['step_id'], 'intent': intent}], '_fast_key': key}
+                elif occurrence['action'] == 'move' and 'target' in intent:
+                    # Full lane holder move: its own one-target native sequence, so it stops and reports per step.
+                    row = {**row, 'intent': {'operation': 'move_sequence'}, 'sequence': [{'step_id': row['step_id'], 'intent': intent}], '_fast_key': None}
                 rows.append((row, cost))
             if sum(cost for _, cost in rows) > MAX_ACTIONS:
                 fail('Native expansion exceeds 100000 actions', code='resource_limit')

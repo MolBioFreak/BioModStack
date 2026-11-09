@@ -1,6 +1,8 @@
 """Workflow move-step movement setting: full (default) vs fast-lane grouping."""
 from copy import deepcopy
 
+import pytest
+
 from bioxp_method_compiler import compile_method
 from bioxp_method_model import method_catalog
 
@@ -113,3 +115,39 @@ def test_catalog_publishes_the_movement_setting():
     entry = next(a for a in method_catalog()['actions'] if a['action'] == 'move')
     assert entry['inputs']['properties']['movement']['enum'] == ['full', 'fast']
     assert 'movement' not in entry['inputs']['required']
+
+
+def holder_move(sid, target, movement=None, **extra):
+    inputs = {'target': target, **extra}
+    if movement is not None:
+        inputs['movement'] = movement
+    return {'step_id': sid, 'type': 'action', 'action': 'move', 'inputs': inputs}
+
+
+def test_fast_holder_and_well_moves_share_one_sequence():
+    [action] = actions(compiled(move('a', 'A1', 'fast'), holder_move('b', 'LOC_TROUGH_MICRO_ROW_1', 'fast'),
+                                holder_move('c', 'LOC_TROUGH_PCR_ROW_2_WELL_2', 'fast')))
+    assert action['params'] == {'operation': 'move_sequence', 'targets': [
+        {'location_id': 0, 'well': 'A1'}, {'target': 'LOC_TROUGH_MICRO_ROW_1', 'camera_offset': False},
+        {'target': 'LOC_TROUGH_PCR_ROW_2_WELL_2', 'camera_offset': False}]}
+    assert [m['step_id'] for m in action['metadata']['bms_method']['sequence']] == ['a', 'b', 'c']
+
+
+def test_full_holder_moves_are_separate_reported_actions():
+    emitted = actions(compiled(holder_move('a', 'LOC_TROUGH_MICRO_ROW_2'), holder_move('b', 'LOC_TROUGH_PCR_ROW_1_WELL_1', 'full'), move('c', 'C1')))
+    assert [a['params'] for a in emitted] == [
+        {'operation': 'move_sequence', 'targets': [{'target': 'LOC_TROUGH_MICRO_ROW_2', 'camera_offset': False}]},
+        {'operation': 'move_sequence', 'targets': [{'target': 'LOC_TROUGH_PCR_ROW_1_WELL_1', 'camera_offset': False}]},
+        {'operation': 'move', 'location_id': 0, 'well': 'C1', 'position_flag': 1}]
+
+
+def test_catalog_offers_every_holder_target():
+    entry = next(a for a in method_catalog()['actions'] if a['action'] == 'move')
+    assert len(entry['inputs']['properties']['target']['enum']) == 20
+
+
+@pytest.mark.parametrize('step', [holder_move('a', 'LOC_TROUGH_PCR_ROW_3', 'fast'),
+                                  holder_move('a', 'LOC_TROUGH_MICRO_ROW_1', 'fast', position_flag=2),
+                                  holder_move('a', 'LOC_TROUGH_MICRO_ROW_1', location_id=16)])
+def test_bad_holder_moves_do_not_compile(step):
+    assert compiled(step)['document'] is None

@@ -1284,7 +1284,11 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     };
     const jogSliderMax = (axis: Axis | 'y') => {
         const hint = jogDistances(axis);
-        return hint ? Math.max(hint.negative, hint.positive) : undefined;
+        if (hint) return Math.max(hint.negative, hint.positive);
+        // Position unreported (e.g. invalid Y reply): bound the draft slider by the published travel span.
+        const telemetry = displayTelemetry?.axes.find(item => item.axis === axis);
+        const span = typeof telemetry?.min_steps === 'number' && typeof telemetry?.max_steps === 'number' ? telemetry.max_steps - telemetry.min_steps - 40 : NaN;
+        return Number.isFinite(span) && span > 0 ? span : undefined;
     };
     const axisPresentation = (axis: Axis | 'y') => {
         const telemetry = displayTelemetry?.axes.find(item => item.axis === axis);

@@ -68,3 +68,10 @@ export function holderMarkers(targets: HolderTarget[]): HolderMarker[] {
         return [{ target: target.target, label: target.label, kind: micro ? 'micro' : 'pcr', row, short: `${micro ? 'M' : 'P'}${row.slice(-1)}`, x, y, channels }];
     });
 }
+
+/** Native named holder targets (fixed robot catalog keys); coordinates stay robot-owned. */
+export const HOLDER_TARGET_OPTIONS: { target: string; label: string }[] = ['MICRO', 'PCR'].flatMap(kind => [1, 2].flatMap(row =>
+    (kind === 'MICRO' ? [0] : [0, 1, 2, 3, 4, 5, 6, 7, 8]).map(well => ({
+        target: `LOC_TROUGH_${kind}_ROW_${row}${well ? `_WELL_${well}` : ''}`,
+        label: `${kind === 'MICRO' ? 'Micro (4x)' : 'PCR (8x)'} row ${row}${well ? ` · well ${well}` : kind === 'PCR' ? ' · anchor (well 1)' : ''}`,
+    }))));

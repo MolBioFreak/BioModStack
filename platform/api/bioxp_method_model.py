@@ -4,6 +4,10 @@ import json
 from bioxp_workflow_authoring import discovery
 
 SCHEMA = 'bms.bioxp-method.v1'
+# Native Bulk reagent holder named XY targets (robot oem_deck_catalog.public_target_keys).
+# Names only; the robot resolves coordinates from its saved holder calibration.
+HOLDER_TARGETS = [f'LOC_TROUGH_{kind}_ROW_{row}{suffix}' for kind in ('MICRO', 'PCR') for row in (1, 2)
+                  for suffix in ([''] if kind == 'MICRO' else [''] + [f'_WELL_{well}' for well in range(1, 9)])]
 EXPRESSION_OPS = ('literal', 'param', 'arg', 'loop_index', 'loop_item', 'add', 'sub', 'mul', 'div', 'eq', 'ne', 'lt', 'le', 'gt', 'ge', 'and', 'or', 'not')
 
 
@@ -200,6 +204,10 @@ def method_catalog():
         'effects': 'Group-of-four pickup; unneeded tips go straight back into their rack wells'})
     for entry in actions:
         if entry['action'] == 'move':
+            entry['inputs']['properties']['target'] = {'enum': HOLDER_TARGETS, 'title': 'Bulk reagent holder position',
+                'description': 'XY-only named holder row/well, moved at travel height. Replaces location_id, well and position_flag.'}
+            entry['inputs']['anyOf'] = [{'required': list(entry['inputs'].get('required', []))}, {'required': ['target']}]
+            entry['inputs']['required'] = []
             entry['inputs']['properties']['movement'] = {'enum': ['full', 'fast'], 'title': 'Movement',
                 'description': 'Omitted is full (move, stop and report each). Consecutive fast moves run as one sequence at travel height; position_flag is not used.'}
         if entry['action'] in {'plate_move', 'move_cover', 'plate_catch', 'plate_release', 'plate_press', 'gripper_catch', 'gripper_release', 'gripper_press'}:
