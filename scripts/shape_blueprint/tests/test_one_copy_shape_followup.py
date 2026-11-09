@@ -19,8 +19,9 @@ from test_one_copy_shape_handoffs import ROOT, SCRIPTS, document, descriptor, sh
 
 
 def nextflow(tmp_path, workflow, *, module_root=ROOT):
-    jar = Path('/home/dalab/.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar')
-    assert jar.is_file(), 'offline installed Nextflow required'
+    jar = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR', str(Path.home() / '.nextflow' / 'framework' / '25.10.1' / 'nextflow-25.10.1-one.jar')))
+    if not jar.is_file():
+        pytest.skip('offline installed Nextflow required (set BMS_TEST_NEXTFLOW_JAR)')
     binary = tmp_path / 'bin'
     binary.mkdir()
     shim = binary / 'python3'

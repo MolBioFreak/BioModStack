@@ -1231,7 +1231,7 @@ def test_production_tailnet_proxy_rejects_unrelated_host_listener(monkeypatch, t
 
 def _configured_storage_mounts(monkeypatch):
     import biomodstack_runtime_profile as runtime_profile
-    resolved = runtime_profile.resolve_runtime_paths(profile={"data_root": "/mnt/BioModStack"}, environ={})
+    resolved = runtime_profile.resolve_runtime_paths(profile={"data_root": "/data/bms"}, environ={})
     monkeypatch.setattr(runtime_profile, "resolve_installed_core_runtime_paths", lambda root: resolved)
     return sorted([
         {"type": "bind", "source": m["source"], "destination": m["target"],

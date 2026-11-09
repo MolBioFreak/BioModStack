@@ -51,11 +51,11 @@ def client_for(
     root: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    identity: str | None = 'christian@example.com',
+    identity: str | None = 'user@example.com',
     trusted_proxy: str = 'testclient',
 ) -> TestClient:
     monkeypatch.setenv('BMS_MOBILE_APK_TRUSTED_PROXY_HOSTS', trusted_proxy)
-    monkeypatch.setenv('BMS_MOBILE_APK_ALLOWED_TAILSCALE_USERS', 'christian@example.com')
+    monkeypatch.setenv('BMS_MOBILE_APK_ALLOWED_TAILSCALE_USERS', 'user@example.com')
     monkeypatch.setattr(mobile_apk_updates, 'get_mobile_apk_updates_dir', lambda: root)
     app = FastAPI()
     app.include_router(mobile_apk_updates.router, prefix='/api')
@@ -100,7 +100,7 @@ def test_missing_and_forged_tailscale_identity_are_rejected(monkeypatch: pytest.
     with client_for(
         tmp_path,
         monkeypatch,
-        identity='christian@example.com',
+        identity='user@example.com',
         trusted_proxy='127.0.0.1',
     ) as client:
         response = client.get('/api/mobile-apk/channels/stable/manifest')
@@ -121,7 +121,7 @@ def test_apk_update_authentication_fails_closed_when_proxy_policy_is_unconfigure
     with TestClient(app, base_url='https://api.example.test') as client:
         response = client.get(
             '/api/mobile-apk/channels/stable/manifest',
-            headers={'Tailscale-User-Login': 'christian@example.com'},
+            headers={'Tailscale-User-Login': 'user@example.com'},
         )
     assert response.status_code == 503
 

@@ -37,7 +37,8 @@ def test_artifact_download_resolves_host_storage_path_before_descriptor_pinning(
     artifact = runtime_root / "final" / "native.cif"
     artifact.parent.mkdir(parents=True)
     artifact.write_bytes(b"data_authoritative_structure\n")
-    persisted_host_root = Path("/mnt/BioModStack")
+    persisted_host_root = Path("/data/bms")
+    monkeypatch.setenv("BMS_DATA", str(persisted_host_root))  # alias root recognised by the product
 
     monkeypatch.setattr(cm_router, "get_data_root", lambda: runtime_root)
     descriptor = _open_verified_artifact_descriptor(

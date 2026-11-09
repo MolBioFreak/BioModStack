@@ -40,7 +40,7 @@ sys.exit(exit_code)
         'params.'+key+' = '+json.dumps(str(value)) for key, value in {
             'laproteina_evaluation_input_closure': closure, 'out_dir': output,
             'container_dir': tmp_path/'inert-images', 'weights_root': tmp_path/'weights', 'code_root': ROOT, 'gpu_id': 0}.items()))
-    jar = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR', '/home/dalab/.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar'))
+    jar = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR', str(Path.home()/'.nextflow'/'framework'/'25.10.1'/'nextflow-25.10.1-one.jar')))
     env = {**os.environ, 'PATH': str(bindir)+':'+os.environ['PATH'], 'NXF_OFFLINE': 'true',
            'NXF_HOME': str(tmp_path/'nxf-home'), 'NXF_DISABLE_CHECK_LATEST': 'true', 'BMS_LA_INERT_EXIT': str(native_exit)}
     command = ['java', '-jar', str(jar), '-C', str(config), 'run', str(ROOT/'workflows/laproteina_evaluation.nf'), '-work-dir', str(tmp_path/'work')]

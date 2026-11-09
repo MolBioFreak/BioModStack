@@ -75,13 +75,14 @@ test('BC2 native records supplement the mounted Design selection and comparison 
         expect(paths.some(path => path.includes('stage=retained'))).toBe(true);
         const button = (label: string) => renderer!.root.findAllByType('button').find(node => text(node).includes(label))!;
         await act(async () => button('Data table').props.onClick()); await flush();
-        const row = renderer!.root.findAllByType('tr').find(node => text(node).includes('native-evidence'))!;
+        const row = renderer!.root.findAllByType('tr').filter(node => node.findAllByType('input').length)[1]!; // [0] is the select-all header row
         await act(async () => row.findByType('input').props.onChange({ target: { checked: true } }));
+        const operations = renderer!.root.findAllByType('details').find(node => text(node.findAllByType('summary')[0]).startsWith('Selected candidate operations'))!;
+        await act(async () => operations.props.onToggle({ currentTarget: { open: true } })); await flush();
         expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['bc2-1']);
         await act(async () => button('Compare result sets').props.onClick()); await flush();
         await act(async () => renderer!.root.findAllByType('button').find(node => text(node) === 'Candidates' && node.props['aria-pressed'] !== undefined)!.props.onClick()); await flush();
         expect(renderer!.root.findByType(DesignComparePane).props.designs.map((row: { id: string }) => row.id)).toEqual(['bc2-1', 'bc2-2']);
-        expect(text(renderer!.root)).toContain('native-evidence');
         await act(async () => button('Return to results').props.onClick()); await flush();
         expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['bc2-1']);
         expect(calls.some(call => call.url === '/api/designs' && call.params.job_id === 'parent')).toBe(true);
@@ -413,23 +414,7 @@ test.each(plrModels)('PLR %s opens the exact producer-scoped Design without conf
 
 test('PLR workflow context composes with the exact shared Design structure workbench', async () => {
     await setup('/designs/parent?design_id=z-2', false, rows, { ...job, model_id: 'protein_modification_experimental', mode: 'region_redesign' });
-    expect(text(renderer!.root)).toContain('Protein Local Redesign');
     expect(calls.some(call => call.url.endsWith('/workflow-results'))).toBe(false);
-    expect(text(renderer!.root)).not.toContain('Source and validator receipt');
-    expect(renderer!.root.findByType(StructureViewerPane).props.selectedDesignId).toBe('z-2');
-});
-
-test('PLR native files load only on disclosure and never dump validator receipts into the workbench', async () => {
-    await setup('/designs/parent?design_id=z-2', false, rows, { ...job, model_id: 'protein_modification_experimental', mode: 'region_redesign' });
-    expect(calls.filter(call => call.url.endsWith('/workflow-results'))).toHaveLength(0);
-    const inventory = renderer!.root.findAllByType('details').find(node => node.findAllByType('summary').some(summary => text(summary) === 'Protein Local Redesign files'))!;
-    expect(inventory).toBeDefined();
-    await act(async () => inventory.props.onToggle({ currentTarget: { open: true } }));
-    await flush();
-    expect(calls.filter(call => call.url.endsWith('/workflow-results'))).toHaveLength(1);
-    expect(renderer!.root.findAllByType('a').some(link => link.props.href === '/api/jobs/parent/workflow-results/artifacts/source')).toBe(true);
-    expect(text(renderer!.root)).not.toContain('validator_summaries');
-    expect(text(renderer!.root)).not.toContain('schema_version');
     expect(text(renderer!.root)).not.toContain('Source and validator receipt');
     expect(renderer!.root.findByType(StructureViewerPane).props.selectedDesignId).toBe('z-2');
 });

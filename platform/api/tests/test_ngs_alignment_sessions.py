@@ -1433,7 +1433,7 @@ def test_alignment_access_rotation_admits_exact_secure_proxy_origin(
     def request(
         origin: str,
         *,
-        server: tuple[str, int] = ("compute-node.taileb3a90.ts.net", 443),
+        server: tuple[str, int] = ("node.example.ts.net", 443),
         tailnet_user: str | None = None,
     ) -> Request:
         host = server[0] if server[1] == 443 else f"{server[0]}:{server[1]}"
@@ -1457,12 +1457,12 @@ def test_alignment_access_rotation_admits_exact_secure_proxy_origin(
         })
 
     router._require_local_development_browser(
-        request("https://compute-node.taileb3a90.ts.net"),
+        request("https://node.example.ts.net"),
         "job-a",
     )
     router._require_local_development_browser(
         request(
-            "https://compute-node.taileb3a90.ts.net",
+            "https://node.example.ts.net",
             server=("127.0.0.1", 18002),
             tailnet_user="operator@example.com",
         ),
@@ -1471,7 +1471,7 @@ def test_alignment_access_rotation_admits_exact_secure_proxy_origin(
     with pytest.raises(router.OntNgsRouteError) as missing_tailnet_identity:
         router._require_local_development_browser(
             request(
-                "https://compute-node.taileb3a90.ts.net",
+                "https://node.example.ts.net",
                 server=("127.0.0.1", 18002),
             ),
             "job-a",

@@ -12,9 +12,17 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _caliby_image():
+    explicit = os.environ.get("BMS_TEST_CALIBY_IMAGE")
+    if explicit:
+        return Path(explicit)
+    container_dir = os.environ.get("BMS_CONTAINER_DIR")
+    return Path(container_dir) / "caliby.sif" if container_dir else None
+
+
 def test_all_checkpoint_selectors_match_installed_native_source(tmp_path):
-    image = Path(os.environ.get("BMS_TEST_CALIBY_IMAGE", "/mnt/BioModStack/apptainer/caliby.sif"))
-    if not image.is_file() or not shutil.which("apptainer"):
+    image = _caliby_image()
+    if image is None or not image.is_file() or not shutil.which("apptainer"):
         pytest.skip("Installed Caliby image required; no downloads")
     native = json.loads(subprocess.check_output([
         "apptainer", "exec", str(image), "python", "-c",

@@ -55,6 +55,7 @@ beforeEach(() => {
             const id = url.match(/^\/api\/models\/([^/]+)$/)?.[1];
             if (id && catalogs[id]) { if (failInventory) throw new Error('Fixture discovery unavailable'); return response(useReal ? realInventories[id] : catalogs[id]); }
             if (url === '/api/execution-targets') return response([ready]);
+            if (url === '/api/molecular-construction/schema') throw new Error('Construction schema is outside this fixture');
             if (url.includes('/system')) return response({ gpus: [], gpu_error: null });
             if (url.includes('user-templates')) return response(saved);
             if (url.endsWith('/runtime-inventory')) return response(null);
@@ -88,7 +89,7 @@ function reveal(input: Element) { let ancestor = input.parentElement; while (anc
 async function edit(name: string, value: string) { const input = control(name); await act(async () => { reveal(input); Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value')!.set!.call(input, value); input.dispatchEvent(new Event(input.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); await settle(); }
 async function toggle(name: string) { await act(async () => { reveal(control(name)); (control(name) as HTMLInputElement).click(); }); await settle(); }
 async function click(text: string, within: ParentNode = document) { const button = [...within.querySelectorAll<HTMLButtonElement>('button')].find(e => e.textContent?.trim() === text && !e.closest('[hidden]')); expect(button, text).toBeTruthy(); await act(async () => button!.click()); await settle(); }
-async function openSettings() { await click('Sequence Design'); }
+async function openSettings() { await click([...document.querySelectorAll('button')].some(e => e.textContent?.trim() === 'Optional operations') ? 'Optional operations' : 'Sequence Design'); }
 const job = () => posts.filter(row => row.url === '/api/jobs').at(-1)!.body;
 const active = { schema_version: 1, enabled: true, model_id: 'fampnn', params: { fampnn_seed: 0, fampnn_psce_threshold: null, fampnn_repack_last: false, fixed_positions: '' } };
 
@@ -125,12 +126,12 @@ it('keeps OFF compact and puts primary sampling ahead of collapsed native expert
 });
 
 it.each(['rfd3', 'disco', 'laproteina'])('%s uses section navigation, defaults off and submits only active designer settings through the real helper', async generator => {
-    await mount(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator }} />);
+    await mount(<ProteinModificationTemplate onBack={() => {}} initialValues={{ generator, target_lengths: '120' }} />);
     expect((control('Enable optional operations') as HTMLInputElement).checked).toBe(false);
     expect(control('Enable optional operations').closest('[hidden]')).not.toBeNull();
     await click('Generate candidates'); expect(job().sequence_design).toMatchObject({ schema_version: 2, enabled: false });
     await openSettings(); expect(control('Enable optional operations').closest('[hidden]')).toBeNull();
-    await toggle('Enable optional operations'); await click('Add Sequence design'); await click('Add fampnn call');
+    await toggle('Enable optional operations'); await click('Add Sequence design'); await click('Add FA-MPNN');
     await edit('fampnn_seed', '7'); await edit('fampnn_seed', '0'); await edit('fampnn_psce_threshold', ''); await toggle('fampnn_repack_last');
     await click('Generate candidates');
     const envelope = job().sequence_design;

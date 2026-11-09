@@ -15,7 +15,7 @@ import model_registry as mr
 from paths import resolve_weight_dependency
 from services.runtime_acquisition import _layouts
 
-# Digests of the generations already installed under /mnt/BioModStack/weights/layouts.
+# Digests of the generations already installed in a deployed weights root (layouts/).
 INSTALLED_LAYOUTS = {
     "laproteina": "46b67aee0f2639e3b9dd844f6f01edd90edc07d6369e3153637b0ef4684b5d9f",
     "complexa": "83251bdd523240ebf9ecba634a0acf38835c58eacf8a0a4877fae4c2ed8366f5",

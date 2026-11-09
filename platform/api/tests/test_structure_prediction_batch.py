@@ -256,7 +256,7 @@ def test_protenix_fixed_target_geometry_does_not_require_global_template_db() ->
     params = _normalize_structure_geometry_params(
         {
             "protenix_target_geometry_mode": "frozen",
-            "fixed_target_source_path": "/home/dalab/biomodstack/biomodstack/rcsb/2lgv.pdb",
+            "fixed_target_source_path": "/data/bms/rcsb/2lgv.pdb",
             "fixed_target_source_chains": "A",
         }
     )

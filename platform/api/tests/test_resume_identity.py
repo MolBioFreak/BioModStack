@@ -325,8 +325,8 @@ def test_nextflow_history_status_for_run_dir_matches_current_attempt() -> None:
 
 
 def test_plan_output_dir_cleanup_preserves_shared_resume_directory() -> None:
-    shared = "/mnt/BioModStack/bms_results/RBX1 beta large_20260314_235055"
-    unique = "/mnt/BioModStack/bms_results/RBX1 beta large_resumed_refinement_20260315_234903"
+    shared = "/data/bms/bms_results/RBX1 beta large_20260314_235055"
+    unique = "/data/bms/bms_results/RBX1 beta large_resumed_refinement_20260315_234903"
 
     deletable, preserved = _plan_output_dir_cleanup(
         [shared, unique, shared],
@@ -357,7 +357,7 @@ def test_plan_output_dir_cleanup_preserves_shared_resume_directory() -> None:
 
 
 def test_plan_output_dir_cleanup_preserves_shared_child_directory_once() -> None:
-    shared_child = "/mnt/BioModStack/bms_results/antibody_batch - RFA 1/10_20260314_235105"
+    shared_child = "/data/bms/bms_results/antibody_batch - RFA 1/10_20260314_235105"
 
     deletable, preserved = _plan_output_dir_cleanup(
         [shared_child, shared_child],

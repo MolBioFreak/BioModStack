@@ -1,4 +1,5 @@
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import React, { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -43,7 +44,7 @@ async function click(text: string) { const item = [...document.querySelectorAll(
 async function edit(label: string, value: string) { const item = document.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(`[aria-label="${label}"]`)!; expect(item).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(item), 'value')!.set!.call(item, value); item.dispatchEvent(new Event(item.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); }); }
 
 it('managed import/edit/save/cold reopen reaches real normalizer and native prep', async () => {
-    scratch = mkdtempSync(join(process.env.TMPDIR!, 'disco-import-'));
+    scratch = mkdtempSync(join(tmpdir(), 'disco-import-'));
     mkdirSync(join(scratch, 'inputs/native/ligands'), { recursive: true });
     const ligand = join(scratch, 'inputs/native/ligands/context.sdf');
     writeFileSync(ligand, 'retained ligand bytes\n');

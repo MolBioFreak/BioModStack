@@ -18,7 +18,13 @@ import sys
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-IMAGES = Path('/mnt/BioModStack/apptainer')
+
+
+def images_dir():
+    configured = os.environ.get('BMS_CONTAINER_DIR')
+    if not configured or not Path(configured).is_dir():
+        pytest.skip('BMS_CONTAINER_DIR (installed apptainer image directory) not set or absent; never download')
+    return Path(configured)
 
 
 def module(name):
@@ -29,7 +35,7 @@ def module(name):
 
 
 def native(image, code, *args, env=None):
-    path = IMAGES / image
+    path = images_dir() / image
     if not path.is_file() or not shutil.which('apptainer'):
         pytest.skip('Installed pinned image and apptainer required; never download')
     cmd = ['apptainer', 'exec', '--cleanenv', '--no-home', '--bind', str(ROOT) + ',' + os.environ['TMPDIR']]
@@ -100,7 +106,7 @@ def test_caliby_real_nextflow_leaf_and_installed_api(tmp_path):
     binary.mkdir()
     binds = f'{cache}:/cache,{weights.parent}:/weights/caliby/model_params,{ROOT},{tmp_path}'
     shim = binary / 'python3'
-    shim.write_text('#!/bin/sh\nexec apptainer exec --cleanenv --bind ' + shlex.quote(binds) + ' --env ' + shlex.quote('PYTHONPATH=' + str(fixture)) + ' ' + str(IMAGES / 'caliby.sif') + ' python "$@"\n')
+    shim.write_text('#!/bin/sh\nexec apptainer exec --cleanenv --bind ' + shlex.quote(binds) + ' --env ' + shlex.quote('PYTHONPATH=' + str(fixture)) + ' ' + str(images_dir() / 'caliby.sif') + ' python "$@"\n')
     shim.chmod(0o755)
     workflow = tmp_path / 'transport.nf'
     workflow.write_text(f"include {{ RunShapeCaliby }} from '{ROOT}/modules/shape_blueprint'\nworkflow {{ RunShapeCaliby(Channel.of(tuple('{'a' * 64}', file('{source_pdb}'))), 1, 19, file('{request_file.parent}')) }}\n")
@@ -405,7 +411,7 @@ ESMFold2InputBuilder.fold=inert_fold
     shim = binary / 'python3'
     shim.write_text('#!/bin/sh\nexec apptainer exec --cleanenv --no-home --bind ' + shlex.quote(str(ROOT) + ',' + str(tmp_path)) +
                    ' --env ' + shlex.quote('PYTHONPATH=' + str(fixture)) + ' --env ' + shlex.quote('HOME=' + str(cache)) +
-                   ' --env ' + shlex.quote('TMPDIR=' + str(cache)) + ' ' + str(IMAGES / 'esmfold2.sif') + ' python "$@"\n')
+                   ' --env ' + shlex.quote('TMPDIR=' + str(cache)) + ' ' + str(images_dir() / 'esmfold2.sif') + ' python "$@"\n')
     shim.chmod(0o755)
     workflow = tmp_path / 'transport.nf'
     workflow.write_text(f"include {{ ESMFold2Predict }} from '{ROOT}/modules/esmfold2_experimental'\nworkflow {{ ESMFold2Predict(Channel.of(tuple([shape_settings:[num_diffusion_samples:2,num_loops:2,num_sampling_steps:7,seed:0,local_files_only:true]], 'INERT', 'native_seq'))) }}\n")

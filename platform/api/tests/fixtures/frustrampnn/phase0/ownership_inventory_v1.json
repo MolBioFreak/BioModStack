@@ -259,11 +259,11 @@
     }
   ],
   "runtime_identity": {
-    "adapter_python": "/home/dalab/.biomodstack-dev/runtime/cm-api-python/current/venv/bin/python",
-    "adapter_python_realpath": "/home/dalab/.biomodstack-dev/runtime/cm-api-python/releases/runtime-zXbdo7/python-runtime/bin/python3.12",
+    "adapter_python": "/data/bms/dev/runtime/cm-api-python/current/venv/bin/python",
+    "adapter_python_realpath": "/data/bms/dev/runtime/cm-api-python/releases/runtime-zXbdo7/python-runtime/bin/python3.12",
     "adapter_python_sha256": "9544d2a29138833e6177d45dbc57468d37710b5080c901fbb579d53f251cdd6f",
     "adapter_runtime_python_version": "3.12",
-    "ambient_adapter_import_root": "/home/dalab/biomodstack/shape-blueprint-v1/platform/api",
+    "ambient_adapter_import_root": "/data/bms/shape-blueprint-v1/platform/api",
     "analysis_plane_help_exit": 0,
     "analysis_plane_sha256": "84f30d0448079eec07beb26b0956d687abbad5a2b5037864ee2b5c32eba8a8a3",
     "checkpoint_path": "/opt/frustrampnn_weights/megascale.ckpt",
@@ -275,7 +275,7 @@
     "python_version": "3.10.12",
     "readiness_note": "snapshot evidence only, not runtime configuration; ambient adapter import root is outside the canonical worktree and remains a Phase 2 provenance gate",
     "sif_bytes": 10201653248,
-    "sif_path": "/mnt/BioModStack/apptainer/frustrampnn.sif",
+    "sif_path": "/data/bms/apptainer/frustrampnn.sif",
     "sif_regular": true,
     "sif_sha256": "c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
     "sif_symlink": false,

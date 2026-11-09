@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import sys
 from dataclasses import replace
@@ -11,10 +12,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / "config/ngs/dorado_v1.3.1.lock.json"
-FIXTURES = Path(
-    "/mnt/BioModStack/ngs/fixtures/"
-    "dorado-v1.3.1-7c84b01de1e46d4c5b2d5208fc430f27579a6c22"
-)
+
+
+def _fixtures() -> Path:
+    configured = os.environ.get("BMS_TEST_DORADO_FIXTURES")
+    if not configured or not Path(configured).is_dir():
+        pytest.skip("BMS_TEST_DORADO_FIXTURES (dorado v1.3.1 pod5 fixture directory) not set or absent")
+    return Path(configured)
 
 
 def _load_module():
@@ -34,8 +38,8 @@ def _preflight(module, pod5: Path, **overrides):
         "molecule": "dna",
         "quality": "hac",
         "mode": "simplex",
-        "model_root": Path("/mnt/BioModStack/models/dorado/1.3.1"),
-        "runtime_sif": Path("/home/dalab/biomodstack/biomodstack/apptainer/dorado.sif"),
+        "model_root": Path("/data/bms/models/dorado/1.3.1"),
+        "runtime_sif": Path("/data/bms/apptainer/dorado.sif"),
         "modified_bases": "none",
         "barcode_kit": None,
         "sample_sheet": None,
@@ -96,7 +100,7 @@ def test_runtime_scientific_tools_are_version_bound(monkeypatch, tmp_path: Path)
 
 def test_real_dna_and_rna_fixtures_are_chemistry_qualified() -> None:
     module = _load_module()
-    dna = _preflight(module, FIXTURES / "barcode")
+    dna = _preflight(module, _fixtures() / "barcode")
     assert dna["schema"] == "biomodstack.dorado_preflight.v1"
     assert dna["inputs"]["sample_rates"] == [5000]
     assert dna["inputs"]["read_count"] == 7
@@ -108,7 +112,7 @@ def test_real_dna_and_rna_fixtures_are_chemistry_qualified() -> None:
 
     rna = _preflight(
         module,
-        FIXTURES / "rna",
+        _fixtures() / "rna",
         molecule="rna",
         quality="sup",
     )
@@ -118,8 +122,8 @@ def test_real_dna_and_rna_fixtures_are_chemistry_qualified() -> None:
 
 def test_chemistry_rejects_missing_sequencing_kit_metadata() -> None:
     module = _load_module()
-    files = module._pod5_files(FIXTURES / "barcode", set())
-    inventory, _read_ids = module._read_pod5_inventory(files, FIXTURES / "barcode")
+    files = module._pod5_files(_fixtures() / "barcode", set())
+    inventory, _read_ids = module._read_pod5_inventory(files, _fixtures() / "barcode")
     inventory["sequencing_kits"] = []
     with pytest.raises(ValueError, match="sequencing kits"):
         module._validate_chemistry(module.load_lock(LOCK), "dna", inventory)
@@ -128,12 +132,12 @@ def test_chemistry_rejects_missing_sequencing_kit_metadata() -> None:
 def test_dna_rejects_4000hz_rna_fixture_and_mixed_inputs(tmp_path: Path) -> None:
     module = _load_module()
     with pytest.raises(ValueError, match="sample rate"):
-        _preflight(module, FIXTURES / "rna", molecule="dna")
+        _preflight(module, _fixtures() / "rna", molecule="dna")
 
     mixed = tmp_path / "mixed"
     mixed.mkdir()
-    shutil.copy2(next((FIXTURES / "barcode").glob("*.pod5")), mixed / "dna.pod5")
-    shutil.copy2(next((FIXTURES / "rna").glob("*.pod5")), mixed / "rna.pod5")
+    shutil.copy2(next((_fixtures() / "barcode").glob("*.pod5")), mixed / "dna.pod5")
+    shutil.copy2(next((_fixtures() / "rna").glob("*.pod5")), mixed / "rna.pod5")
     with pytest.raises(ValueError, match="mixed|sample rate"):
         _preflight(module, mixed)
 
@@ -153,18 +157,18 @@ def test_pod5_inventory_rejects_fast5_empty_and_symlink_escape(tmp_path: Path) -
 
     escaped = tmp_path / "escaped"
     escaped.mkdir()
-    (escaped / "outside.pod5").symlink_to(next((FIXTURES / "barcode").glob("*.pod5")))
+    (escaped / "outside.pod5").symlink_to(next((_fixtures() / "barcode").glob("*.pod5")))
     with pytest.raises(ValueError, match="symlink"):
         _preflight(module, escaped)
 
 
 def test_duplex_requires_confined_valid_pairs_and_rejects_rna(tmp_path: Path) -> None:
     module = _load_module()
-    duplex_root = FIXTURES / "duplex"
+    duplex_root = _fixtures() / "duplex"
     with pytest.raises(ValueError, match="pairs"):
         _preflight(module, duplex_root, mode="duplex")
     with pytest.raises(ValueError, match="duplex.*RNA|RNA.*duplex"):
-        _preflight(module, FIXTURES / "rna", molecule="rna", mode="duplex")
+        _preflight(module, _fixtures() / "rna", molecule="rna", mode="duplex")
 
     source_pairs = duplex_root / "pairs.txt"
     accepted = _preflight(module, duplex_root, mode="duplex", pairs=source_pairs)
@@ -182,7 +186,7 @@ def test_barcode_and_sample_sheet_are_fail_closed(tmp_path: Path) -> None:
     pod5_root = tmp_path / "pod5"
     pod5_root.mkdir()
     _copy_pod5_with_experiment(
-        next((FIXTURES / "barcode").glob("*.pod5")),
+        next((_fixtures() / "barcode").glob("*.pod5")),
         pod5_root / "barcoded.pod5",
         "BMS_P4_SAMPLE",
     )
@@ -249,7 +253,7 @@ def test_sample_sheet_rejects_pod5_without_dorado_experiment_metadata(tmp_path: 
     module = _load_module()
     pod5_root = tmp_path / "pod5"
     pod5_root.mkdir()
-    shutil.copy2(next((FIXTURES / "barcode").glob("*.pod5")), pod5_root)
+    shutil.copy2(next((_fixtures() / "barcode").glob("*.pod5")), pod5_root)
     sheet = pod5_root / "sample_sheet.csv"
     sheet.write_text(
         "experiment_id,kit,flow_cell_id,barcode,alias\n"
@@ -345,7 +349,7 @@ def test_asset_verification_detects_tampered_model(tmp_path: Path) -> None:
 
 def test_min_qscore_zero_is_preserved_and_out_of_range_fails() -> None:
     module = _load_module()
-    payload = _preflight(module, FIXTURES / "barcode", min_qscore=0)
+    payload = _preflight(module, _fixtures() / "barcode", min_qscore=0)
     assert payload["execution_policy"]["min_qscore"] == 0
     with pytest.raises(ValueError, match="min_qscore"):
-        _preflight(module, FIXTURES / "barcode", min_qscore=31)
+        _preflight(module, _fixtures() / "barcode", min_qscore=31)

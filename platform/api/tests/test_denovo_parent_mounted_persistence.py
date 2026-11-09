@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import tempfile
 
 import pytest
 
@@ -16,7 +17,7 @@ import pytest
 @pytest.mark.parametrize('receipt_name', ['project-prepared.json', 'source-project-prepared.json'])
 def test_mounted_parent_immutable_preparation_and_no_execution(receipt_name):
     root = Path(os.environ['BMS_PARENT_LIFECYCLE_ROOT']).resolve()
-    assert root.is_relative_to(Path('/home/dalab/.hermes/profiles/fresh/cache/scratch'))
+    assert root.is_relative_to(Path(tempfile.gettempdir()).resolve())
     prepared = json.loads((root / receipt_name).read_text())['data']
     emitted = prepared['draft']['native_job_request']
     with sqlite3.connect(f'file:{root / "project.db"}?mode=ro', uri=True) as db:

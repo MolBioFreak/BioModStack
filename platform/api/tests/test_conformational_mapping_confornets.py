@@ -817,7 +817,7 @@ def test_cm4_014_unknown_zero_runtime_identity_quarantines_resume(tmp_path: Path
 def test_cm4_015_behavioral_disposable_nextflow_probe(tmp_path: Path) -> None:
     if os.environ.get("BMS_RUN_CM_NEXTFLOW_PROBE") != "1":
         pytest.skip("set BMS_RUN_CM_NEXTFLOW_PROBE=1 for the disposable runtime probe")
-    nextflow_bin = Path("/home/dalab/.local/lib/nextflow/25.10.1/nextflow")
+    nextflow_bin = Path(os.environ.get("BMS_NEXTFLOW_BIN") or Path.home() / ".local" / "lib" / "nextflow" / "25.10.1" / "nextflow")
     if not nextflow_bin.is_file():
         pytest.skip("managed Nextflow is unavailable")
 

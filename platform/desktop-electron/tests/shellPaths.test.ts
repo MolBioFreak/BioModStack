@@ -14,7 +14,7 @@ test('shell paths respect explicit environment overrides for project, data, and 
       BMS_DATA: '/srv/biomodstack-data',
       XDG_STATE_HOME: '/state-root',
     },
-    homeDir: '/home/christian',
+    homeDir: '/home/example',
   });
 
   assert.equal(paths.projectRoot, '/work/biomodstack');
@@ -27,12 +27,12 @@ test('shell paths respect explicit environment overrides for project, data, and 
 });
 
 test('shell paths prefer a persisted install profile before heuristic data-root detection', () => {
-  const installProfilePath = '/home/christian/.config/biomodstack/install_profile.json';
+  const installProfilePath = '/home/example/.config/biomodstack/install_profile.json';
   const options = {
     env: {
       BMS_HOME: '/work/biomodstack',
     },
-    homeDir: '/home/christian',
+    homeDir: '/home/example',
     pathExists: (target: string) => target === installProfilePath || target === '/mnt/BioModStack/biomodstack.db',
     readText: (target: string) => {
       assert.equal(target, installProfilePath);
@@ -53,7 +53,7 @@ test('shell paths auto-detect a durable data root before falling back to the rep
     env: {
       BMS_HOME: '/work/biomodstack',
     },
-    homeDir: '/home/christian',
+    homeDir: '/home/example',
     pathExists: (target: string) => target === '/mnt/BioModStack/biomodstack.db',
   });
 

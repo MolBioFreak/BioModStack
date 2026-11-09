@@ -152,7 +152,7 @@ it('bounded overview guidance does not advertise a nonexistent All page size', a
     expect(text(tree.root)).not.toContain('Use `All`');
 });
 it('historical non-RFA empty view uses generic retained-results guidance', async () => {
-    total = 0; job = { ...job, model_id: 'boltzgen', mode: 'ligand_binder' }; await mount();
+    total = 0; job = { ...job, model_id: 'proteinmpnn', mode: 'sequence_design' }; await mount();
     expect(text(tree.root)).toContain('No persisted design rows or review-summary metadata');
     expect(text(tree.root)).not.toContain('RFA review rows');
 });

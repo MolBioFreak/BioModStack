@@ -1011,7 +1011,7 @@ it('SPEC M3 manual refresh shares deferred pending timer GET', async () => {
     client.clear();
 });
 it('fresh 23-artifact fixture set is exact and hash-bound to the synthetic exporter', () => {
-    expect(createHash('sha256').update(combinedText('manifest.json')).digest('hex')).toBe('5cf6125b12cdd341bd83fcff4c0b9d2b00086c152b8eb9ae4f6e1680dfec575a');
+    expect(createHash('sha256').update(combinedText('manifest.json')).digest('hex')).toBe('edaa2eb8e38971fe91613820e76954eba0359af055555009d59c1d5f963ae5e7');
     expect(combinedManifest.wire).toHaveLength(16);
     expect(combinedManifest.strict_projections).toHaveLength(7);
     const artifacts = [...combinedManifest.wire, ...combinedManifest.strict_projections];

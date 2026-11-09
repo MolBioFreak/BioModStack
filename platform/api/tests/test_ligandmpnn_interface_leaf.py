@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[3]
 RUNNER = ROOT / 'scripts/run_ligandmpnn_interface_context.py'
 STAGER = ROOT / 'scripts/stage_ligandmpnn_interface_context.py'
 WORKFLOW = ROOT / 'workflows/ligandmpnn_interface_context.nf'
-JAR = Path('/home/dalab/.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar')
+JAR = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR', str(Path.home() / '.nextflow' / 'framework' / '25.10.1' / 'nextflow-25.10.1-one.jar')))
 
 
 def load(path, name):
@@ -82,8 +82,8 @@ def run_nextflow(tmp_path, records, *, native=False):
     cmd = ['java', '-jar', str(JAR), 'run', str(WORKFLOW), '-profile', 'workstation_ryzen7960x',
            '-w', str(tmp_path / 'work'), '--interface_context_manifest', str(manifest),
            '--out_dir', str(output), '--code_root', str(ROOT),
-           '--container_dir', str(Path(os.environ.get('BMS_TEST_FOUNDRY_IMAGE',
-                                                     '/mnt/BioModStack/apptainer/foundry.sif')).parent)]
+           '--container_dir', str(Path(os.environ['BMS_TEST_FOUNDRY_IMAGE']).parent if os.environ.get('BMS_TEST_FOUNDRY_IMAGE')
+                else tmp_path / 'containers')]
     result = subprocess.run(cmd, cwd=tmp_path, env=env, text=True,
                             capture_output=True, timeout=300 if native else 120)
     assert result.returncode == 0, result.stdout + '\n' + result.stderr

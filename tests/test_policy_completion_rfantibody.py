@@ -7,12 +7,13 @@ import subprocess
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-JAR = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR', '/home/dalab/.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar'))
+JAR = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR', str(Path.home() / '.nextflow' / 'framework' / '25.10.1' / 'nextflow-25.10.1-one.jar')))
 
 
 @pytest.mark.parametrize('case', ['inference', 'framework', 'checkpoint', 'config', 'native_operation'])
 def test_selected_rf_module_reaches_native_owner_without_synthetic_gate(tmp_path, case):
-    assert JAR.is_file(), 'Pinned offline Nextflow JAR is required for this compiler fixture'
+    if not JAR.is_file():
+        pytest.skip('Pinned offline Nextflow JAR is required for this compiler fixture (set BMS_TEST_NEXTFLOW_JAR)')
     native = tmp_path / 'native'
     native.mkdir()
     scripts = tmp_path / 'code/scripts'; scripts.mkdir(parents=True)

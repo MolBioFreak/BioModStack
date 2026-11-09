@@ -114,6 +114,7 @@ let root: Root;
 let container: HTMLDivElement;
 let client: QueryClient;
 
+const detourSnapshots = new Map<string, unknown>();
 beforeEach(() => {
     apiMocks.get.mockReset();
     apiMocks.post.mockReset();
@@ -127,6 +128,8 @@ beforeEach(() => {
             return response({ schema: 'bms.md.chemistry-profile-inventory.v1', catalog_digest: hash('c'), profiles: [profile], selectable_profile_ids: [profile.id], count: 1, bounded: true });
         }
         if (url === '/api/user-sequences') return response([]);
+        if (url === `/api/user-sequences/${sequenceId}`) return response({ id: sequenceId, name: 'Candidate A', sequence: 'ACDEFG', description: null, length: 6, organism: null, uniprot_id: null, ncbi_id: null, is_preset: false, created_at: '2026-08-26T00:00:00Z', updated_at: null });
+        if (url.startsWith('/api/molecular-dynamics/prediction-detours/')) return response(detourSnapshots.get(url.split('/').pop()!));
         if (url === '/api/molecular-dynamics/prediction-jobs/66666666-6666-4666-8666-666666666666/source-candidates') {
             return response({
                 schema_version: 'bms.md.prediction-source-candidates.v1',
@@ -141,6 +144,7 @@ beforeEach(() => {
         if (url === '/api/user-sequences') {
             return response({ id: sequenceId, name: body.name, sequence: body.sequence, description: null, length: 6, organism: null, uniprot_id: null, ncbi_id: null, is_preset: false, created_at: '2026-08-26T00:00:00Z', updated_at: null });
         }
+        if (url === '/api/molecular-dynamics/prediction-detours') { detourSnapshots.set(draftId, structuredClone(body)); return response({ id: draftId }); }
         throw new Error(`unexpected POST ${url}`);
     });
     vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(draftId);

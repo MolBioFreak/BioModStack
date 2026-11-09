@@ -235,9 +235,9 @@ def test_install_profile_put_persists_and_returns_snapshot(monkeypatch) -> None:
         return {"data_root": "/srv/biomodstack"}
 
     snapshot = {
-        "profile_path": "/home/christian/.config/biomodstack/install_profile.json",
-        "compat_env_path": "/home/christian/.biomodstack/env.sh",
-        "core_runtime_env_path": "/home/christian/.config/biomodstack/core-runtime.env",
+        "profile_path": "/home/example/.config/biomodstack/install_profile.json",
+        "compat_env_path": "/home/example/.biomodstack/env.sh",
+        "core_runtime_env_path": "/home/example/.config/biomodstack/core-runtime.env",
         "profile": {"data_root": "/srv/biomodstack"},
         "resolved": {"data_root": "/srv/biomodstack", "db_path": "/srv/biomodstack/biomodstack.db"},
     }

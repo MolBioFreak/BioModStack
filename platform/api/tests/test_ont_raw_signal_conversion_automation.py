@@ -46,10 +46,15 @@ from migrations.seal_ont_external_source_identity import migrate as seal_externa
 from services import ont_raw_signal, ont_raw_signal_worker, ont_run_control
 from services.ont_raw_signal_worker import OntRawSignalWorker
 
-QUALIFICATION_ROOT = Path("/mnt/BioModStack/ont-raw-signal-qualification/BFX6NB_1_JAN26-EL-Q2-01/subset-pod5")
+_QUALIFICATION_DIR = os.environ.get("BMS_TEST_ONT_QUALIFICATION_POD5_DIR")
+QUALIFICATION_ROOT = Path(_QUALIFICATION_DIR) if _QUALIFICATION_DIR else None
 QUALIFICATION_PARTITIONS = (
-    QUALIFICATION_ROOT / "14e84168825dc5524fd61c441b7a5ad31b71ea16796502fccba679b6448bda45.pod5",
-    QUALIFICATION_ROOT / "fdb1de8a28aad4ed732e9bf10f35faf75b4d1d8518a9385a5c4cceb1c2dc6cb5.pod5",
+    ()
+    if QUALIFICATION_ROOT is None
+    else (
+        QUALIFICATION_ROOT / "14e84168825dc5524fd61c441b7a5ad31b71ea16796502fccba679b6448bda45.pod5",
+        QUALIFICATION_ROOT / "fdb1de8a28aad4ed732e9bf10f35faf75b4d1d8518a9385a5c4cceb1c2dc6cb5.pod5",
+    )
 )
 
 
@@ -64,8 +69,11 @@ def _load_validator():
 
 def _write_mixed_pod5(path: Path) -> tuple[str, list[Any]]:
     reads = []
+    if not QUALIFICATION_PARTITIONS:
+        pytest.skip("BMS_TEST_ONT_QUALIFICATION_POD5_DIR not set (qualification subset pod5 directory)")
     for source in QUALIFICATION_PARTITIONS:
-        assert source.is_file(), source
+        if not source.is_file():
+            pytest.skip(f"qualification pod5 partition unavailable: {source.name}")
         with pod5.Reader(source) as reader:
             reads.append(next(reader.reads()).to_read())
     assert len({repr(read.run_info) for read in reads}) == 2

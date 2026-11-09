@@ -49,7 +49,7 @@ def test_maturation_child_running_reservation_keeps_fractional_floor_with_low_li
 
 def test_maturation_child_pack_does_not_fit_four_x8_children_on_one_5090(monkeypatch) -> None:
     # Keep this packing test independent from the workstation's live GPU index
-    # mapping.  On Christian's host GPU 0 is the 5060 Ti, while this fixture
+    # mapping.  On a host whose GPU 0 is the smaller card, while this fixture
     # intentionally models a heavy-capable 5090 at index 0.
     monkeypatch.setattr(
         gpu_orchestrator,

@@ -92,15 +92,15 @@ def test_checkpoint_resume_compiles_with_the_bound_nextflow_launcher(tmp_path, m
 def test_checkpoint_context_is_placed_with_the_launch_path_map():
     from tools import bms_remote_worker as worker
     envelope = {"path_map": {
-        "/home/dalab/.biomodstack-dev": "/root/bms/attempts/a/data",
-        "/home/dalab/.biomodstack-dev/bms_results/job": "/root/bms/attempts/a/results",
-        "/home/dalab/code": "/root/bms/attempts/a/materialized/source",
+        "/home/example/.biomodstack-dev": "/root/bms/attempts/a/data",
+        "/home/example/.biomodstack-dev/bms_results/job": "/root/bms/attempts/a/results",
+        "/home/example/code": "/root/bms/attempts/a/materialized/source",
     }}
     context = {"artifact_root": "/root/bms/attempts/a/results", "parent": {
         "id": "job", "output_dir": "/root/bms/attempts/a/results",
-        "params": {"out_dir": "/home/dalab/.biomodstack-dev/bms_results/job", "code_root": "/home/dalab/code",
-                   "data_root": "/home/dalab/.biomodstack-dev", "msa_cache_dir": "/home/dalab/.biomodstack-dev/msa_cache",
-                   "plr_designable_positions": "A30-40", "gpus": 1, "paths": ["/home/dalab/code/x", "relative/y", "/elsewhere/../z"]}}}
+        "params": {"out_dir": "/home/example/.biomodstack-dev/bms_results/job", "code_root": "/home/example/code",
+                   "data_root": "/home/example/.biomodstack-dev", "msa_cache_dir": "/home/example/.biomodstack-dev/msa_cache",
+                   "plr_designable_positions": "A30-40", "gpus": 1, "paths": ["/home/example/code/x", "relative/y", "/elsewhere/../z"]}}}
     placed = worker._placed_checkpoint_context(envelope, context)
     params = placed["parent"]["params"]
     assert params["out_dir"] == "/root/bms/attempts/a/results"
@@ -109,5 +109,5 @@ def test_checkpoint_context_is_placed_with_the_launch_path_map():
     assert params["msa_cache_dir"] == "/root/bms/attempts/a/data/msa_cache"
     assert params["plr_designable_positions"] == "A30-40" and params["gpus"] == 1
     assert params["paths"] == ["/root/bms/attempts/a/materialized/source/x", "relative/y", "/elsewhere/../z"]
-    assert context["parent"]["params"]["out_dir"].startswith("/home/dalab")  # the retained context is not rewritten
+    assert context["parent"]["params"]["out_dir"].startswith("/home/example")  # the retained context is not rewritten
     assert placed["parent"]["output_dir"] == context["parent"]["output_dir"] and placed["artifact_root"] == context["artifact_root"]

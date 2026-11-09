@@ -1248,7 +1248,7 @@ describe('mounted Molecular Dynamics Gen 2 launcher', () => {
         await click('Vast · Worker');
         const beforeProvision = apiMocks.post.mock.calls.length;
         await click('Preview artifact downloads');
-        await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Scientific launch restrictions remain separate.')); });
+        await act(async () => { await vi.waitFor(() => expect(container.querySelector('[aria-label="Unsaved workflow provisioning"] h4')?.getAttribute('title')).toContain('Scientific launch restrictions remain separate.')); });
         expect(apiMocks.post.mock.calls.length).toBe(beforeProvision + 1);
         const provisionCall = apiMocks.post.mock.calls.at(-1);
         await click('Local');

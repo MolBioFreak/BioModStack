@@ -16,8 +16,8 @@ from services.frustrampnn.settings import default_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 NEXTFLOW_IMAGE = "nextflow/nextflow:25.10.1"
-API_RUNTIME = Path("/home/dalab/.biomodstack-dev/runtime/cm-api-python/current/venv/bin/python")
-HOST_RUNTIME = Path("/home/dalab/.biomodstack-dev")
+HOST_RUNTIME = Path.home() / ".biomodstack-dev"
+API_RUNTIME = HOST_RUNTIME / "runtime" / "cm-api-python" / "current" / "venv" / "bin" / "python"
 
 
 def _runtime_ready() -> bool:

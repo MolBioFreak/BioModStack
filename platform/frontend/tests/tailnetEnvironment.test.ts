@@ -10,10 +10,10 @@ import {
 } from '../src/runtime/tailnetEnvironment';
 
 test('Tailnet detection and Stats Toolkit entry stay same-origin on the stable hostname', () => {
-  assert.equal(isTailnetHostname('compute-node.taileb3a90.ts.net'), true);
+  assert.equal(isTailnetHostname('node.example.ts.net'), true);
   assert.equal(isTailnetHostname('127.0.0.1'), false);
   assert.equal(
-    resolveStatsToolkitEntryUrl('http://127.0.0.1:18180/stats/', 'compute-node.taileb3a90.ts.net'),
+    resolveStatsToolkitEntryUrl('http://127.0.0.1:18180/stats/', 'node.example.ts.net'),
     '/stats/embed/?ui=66882da',
   );
   assert.equal(

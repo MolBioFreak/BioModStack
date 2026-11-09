@@ -14,13 +14,21 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 
 
+def _caliby_image():
+    explicit = os.environ.get("BMS_TEST_CALIBY_IMAGE")
+    if explicit:
+        return Path(explicit)
+    container_dir = os.environ.get("BMS_CONTAINER_DIR")
+    return Path(container_dir) / "caliby.sif" if container_dir else None
+
+
 @pytest.mark.parametrize("mode", ["ensemble_design", "sidechain_pack"])
 def test_standalone_real_shell_and_installed_native_api(tmp_path, mode):
     """Real leaf shell + installed API; downstream scientific kernels are inert."""
     import importlib.util
-    image = Path(os.environ.get("BMS_TEST_CALIBY_IMAGE", "/mnt/BioModStack/apptainer/caliby.sif"))
+    image = _caliby_image()
     jars = sorted((Path.home() / ".nextflow/framework").glob("*/nextflow-*-one.jar"))
-    if not image.is_file() or not shutil.which("apptainer") or not jars:
+    if image is None or not image.is_file() or not shutil.which("apptainer") or not jars:
         pytest.skip("Installed Caliby image and Nextflow required; no downloads")
     spec = importlib.util.spec_from_file_location("standalone_caliby", REPO / "platform/api/services/caliby_native.py")
     contract = importlib.util.module_from_spec(spec)
@@ -186,8 +194,8 @@ def test_standalone_installed_packing_fixes_sequence_mask(tmp_path):
     from collections import defaultdict
     from types import SimpleNamespace
 
-    image = Path(os.environ.get("BMS_TEST_CALIBY_IMAGE", "/mnt/BioModStack/apptainer/caliby.sif"))
-    if not image.is_file() or not shutil.which("apptainer"):
+    image = _caliby_image()
+    if image is None or not image.is_file() or not shutil.which("apptainer"):
         pytest.skip("Installed Caliby image required; no downloads")
     sources = json.loads(subprocess.check_output([
         "apptainer", "exec", str(image), "python", "-c",

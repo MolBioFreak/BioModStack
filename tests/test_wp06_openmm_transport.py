@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def run_openmm(tmp_path, monkeypatch, requested, *, marked=True, transport=True):
-    jar = Path('/home/dalab/.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar')
+    jar = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR', str(Path.home() / '.nextflow' / 'framework' / '25.10.1' / 'nextflow-25.10.1-one.jar')))
     if not jar.is_file():
         pytest.skip('installed native Nextflow jar unavailable')
     pdb = tmp_path / 'input.pdb'

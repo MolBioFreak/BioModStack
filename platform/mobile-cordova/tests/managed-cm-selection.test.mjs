@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { validateTailnetSelectionPayload } from '../scripts/prepare-bms-assets.mjs';
 const actual = JSON.parse(readFileSync(new URL('./fixtures/development-managed-cm-selection.json', import.meta.url)));
-const origin = 'https://bigboy.taileb3a90.ts.net';
+const origin = 'https://node.example.ts.net';
 test('actual HTTPS Development selection accepts installed shared CM Python module launches', () => {
   assert.doesNotThrow(() => validateTailnetSelectionPayload(actual, 'development', origin));
 });

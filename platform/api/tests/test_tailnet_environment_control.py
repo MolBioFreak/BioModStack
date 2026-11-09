@@ -22,7 +22,7 @@ def tailnet_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[
 
     # Entering TestClient starts the adapter using its import-time database
     # engine. Route-only tests must not open an unrelated ambient database.
-    client = TestClient(app, base_url="https://compute-node.taileb3a90.ts.net")
+    client = TestClient(app, base_url="https://node.example.ts.net")
     try:
         yield client
     finally:

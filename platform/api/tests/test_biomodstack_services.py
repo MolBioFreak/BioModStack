@@ -167,9 +167,9 @@ def test_runtime_descriptor_for_container_mode(tmp_path: Path, monkeypatch) -> N
         services,
         "install_profile_snapshot",
         lambda profile=None, project_root=None: {
-            "profile_path": "/home/christian/.config/biomodstack/install_profile.json",
-            "compat_env_path": "/home/christian/.biomodstack/env.sh",
-            "core_runtime_env_path": "/home/christian/.config/biomodstack/core-runtime.env",
+            "profile_path": "/home/example/.config/biomodstack/install_profile.json",
+            "compat_env_path": "/home/example/.biomodstack/env.sh",
+            "core_runtime_env_path": "/home/example/.config/biomodstack/core-runtime.env",
             "profile": {"data_root": "/srv/biomodstack"},
             "resolved": {
                 "data_root": "/srv/biomodstack",
@@ -754,8 +754,8 @@ def test_mobile_update_publisher_unit_is_outside_both_runtime_targets(tmp_path: 
         "install_profile_snapshot",
         lambda project_root=None: {
             "resolved": {
-                "data_root": "/mnt/BioModStack",
-                "db_path": "/mnt/BioModStack/biomodstack.db",
+                "data_root": "/data/bms",
+                "db_path": "/data/bms/biomodstack.db",
             }
         },
     )
@@ -787,8 +787,8 @@ def test_mobile_update_publisher_unit_is_outside_both_runtime_targets(tmp_path: 
     assert f"Before={services.TAILNET_GLOBAL_SERVICE}" in unit
     assert f"PartOf={services.DEV_TARGET_UNIT}" not in unit
     assert f"PartOf={services.TARGET_UNIT}" not in unit
-    assert "Environment=BMS_MOBILE_UI_UPDATES_DIR=/mnt/BioModStack/mobile-ui-updates" in unit
-    assert "Environment=BMS_MOBILE_APK_UPDATES_DIR=/mnt/BioModStack/mobile-apk-updates" in unit
+    assert "Environment=BMS_MOBILE_UI_UPDATES_DIR=/data/bms/mobile-ui-updates" in unit
+    assert "Environment=BMS_MOBILE_APK_UPDATES_DIR=/data/bms/mobile-apk-updates" in unit
     assert "Environment=BMS_MOBILE_UPDATE_PUBLISHER_PORT=18003" in unit
     assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_mobile_update_publisher.sh'}" in unit
     assert service_name not in development_units[services.DEV_TARGET_UNIT]
@@ -1057,7 +1057,7 @@ def test_biomodstack_api_process_detection_uses_cmdline_or_cwd(tmp_path: Path) -
     expected_dev_port = services.runtime_api_port("dev", project_root=project_root)
 
     assert services.is_biomodstack_api_process(
-        cmdline=f"/usr/bin/python3 /home/dalab/.local/bin/uvicorn main:app --port {expected_dev_port} --host 127.0.0.1",
+        cmdline=f"/usr/bin/python3 /home/example/.local/bin/uvicorn main:app --port {expected_dev_port} --host 127.0.0.1",
         cwd=str(api_dir),
         project_root=project_root,
     )
@@ -1271,7 +1271,7 @@ def test_cleanup_legacy_listener_kills_matching_ancestor_chain(monkeypatch, tmp_
 
     cmdlines = {
         9100: "python -c 'from multiprocessing.spawn import spawn_main'",
-        9101: f"/usr/bin/python3 /home/dalab/.local/bin/uvicorn main:app --port {services.API_PORT} --host 127.0.0.1 --reload-dir {api_dir}",
+        9101: f"/usr/bin/python3 /home/example/.local/bin/uvicorn main:app --port {services.API_PORT} --host 127.0.0.1 --reload-dir {api_dir}",
         9102: f"uv run uvicorn main:app --port {services.API_PORT} --host 127.0.0.1 --reload-dir {api_dir}",
     }
     cwd = {9100: None, 9101: None, 9102: None}
