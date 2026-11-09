@@ -2111,6 +2111,49 @@ def ensure_target_enabled(project_root: Path | None = None, runtime_mode: str | 
     run_systemctl("enable", runtime_target_unit(runtime_mode), project_root=project_root)
 
 
+def dev_autostart_enabled(project_root: Path | None = None) -> bool | None:
+    """True/False when the Development target is (not) enabled for session start; None if it is not installed or unreadable."""
+    try:
+        result = run_systemctl("is-enabled", DEV_TARGET_UNIT, check=False, project_root=project_root)
+    except (FileNotFoundError, OSError):
+        return None
+    state = (result.stdout or "").strip()
+    if state == "enabled":
+        return True
+    if state == "disabled":
+        return False
+    return None
+
+
+def user_linger_enabled() -> bool | None:
+    """Whether this account's user manager (and so an enabled Development target) starts at boot, before anyone logs in."""
+    try:
+        result = subprocess.run(
+            ["loginctl", "show-user", str(os.getuid()), "--property=Linger", "--value"],
+            check=False, capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return None
+    value = (result.stdout or "").strip().lower()
+    return True if value == "yes" else False if value == "no" else None
+
+
+def set_dev_autostart(enabled: bool, project_root: Path | None = None) -> bool | None:
+    """Enable or disable starting the Development target with the user session. Running services are left alone."""
+    if dev_autostart_enabled(project_root) is None:
+        raise ServiceManagerError(
+            f"{DEV_TARGET_UNIT} is not installed for this account yet; press Start once with Dev selected."
+        )
+    result = run_systemctl("enable" if enabled else "disable", DEV_TARGET_UNIT, check=False, project_root=project_root)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        raise ServiceManagerError(
+            f"systemctl --user {'enable' if enabled else 'disable'} {DEV_TARGET_UNIT} failed"
+            + (f": {detail[-1]}" if detail else "")
+        )
+    return dev_autostart_enabled(project_root)
+
+
 def ensure_mobile_update_publisher_running(
     project_root: Path | None = None,
     *,

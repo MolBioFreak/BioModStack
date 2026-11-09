@@ -45,7 +45,9 @@ from biomodstack_services import (  # noqa: E402
     DEV_RUNTIME_MODE,
     FRONTEND_LOG as FRONTEND_LOG_PATH,
     WORKFLOW_ADAPTER_LOG as WORKFLOW_ADAPTER_LOG_PATH,
+    ServiceManagerError,
     build_launch_ui_command,
+    dev_autostart_enabled,
     operator_frontend_url,
     operator_runtime_mode,
     runtime_api_url,
@@ -55,7 +57,9 @@ from biomodstack_services import (  # noqa: E402
     save_runtime_port_settings,
     storage_compute_settings,
     save_storage_compute_settings,
+    set_dev_autostart,
     STORAGE_COMPUTE_APPLY_NOTICE,
+    user_linger_enabled,
 )
 
 # Service-control scripts must belong to the checkout that supplied this panel.
@@ -1501,6 +1505,18 @@ class BioModStackPanel(Adw.Application):
         )
         group.add(autostart_row_widget)
 
+        dev_boot_widget, self.dev_autostart_row = build_toggle_row(
+            Adw,
+            Gtk,
+            title="Start Development at boot",
+            subtitle="Checking…",
+            active=False,
+            handler=self._on_dev_autostart_toggle,
+        )
+        self.dev_autostart_row_widget = dev_boot_widget
+        group.add(dev_boot_widget)
+        self._update_dev_autostart_row()
+
         notif_row_widget, self.notif_row = build_toggle_row(
             Adw,
             Gtk,
@@ -1532,6 +1548,43 @@ X-GNOME-Autostart-enabled=true
             if AUTOSTART_PATH.exists():
                 AUTOSTART_PATH.unlink()
     
+    def _on_dev_autostart_toggle(self, row, param):
+        if getattr(self, "_dev_autostart_syncing", False):
+            return
+        try:
+            set_dev_autostart(bool(row.get_active()), project_root=PROJECT_ROOT)
+        except (ServiceManagerError, OSError) as exc:
+            show_notification("Boot start not changed", str(exc))
+            if hasattr(self, "action_status_row"):
+                self.action_status_row.set_subtitle(f"Boot start not changed: {exc}")
+        self._update_dev_autostart_row()
+
+    def _update_dev_autostart_row(self) -> None:
+        """Show the real systemd state; never leave the switch out of step with it."""
+        row = getattr(self, "dev_autostart_row", None)
+        if row is None:
+            return
+        enabled = dev_autostart_enabled(project_root=PROJECT_ROOT)
+        if enabled is None:
+            subtitle = "Development services are not installed for this account yet. Press Start once with Dev selected."
+        elif not enabled:
+            subtitle = "Off. Development starts only when you press Start."
+        elif user_linger_enabled():
+            subtitle = "On. Development starts at boot, before anyone logs in."
+        else:
+            subtitle = "On. Development starts when this account logs in at boot."
+        self._dev_autostart_syncing = True
+        try:
+            if hasattr(row, "set_active"):
+                row.set_active(bool(enabled))
+            if hasattr(row, "set_sensitive"):
+                row.set_sensitive(enabled is not None)
+            widget = getattr(self, "dev_autostart_row_widget", None)
+            if widget is not None and hasattr(widget, "set_subtitle"):
+                widget.set_subtitle(subtitle)
+        finally:
+            self._dev_autostart_syncing = False
+
     def _on_notifications_toggle(self, row, param):
         self.config["notifications"] = row.get_active()
         save_config(self.config)
@@ -1544,6 +1597,7 @@ X-GNOME-Autostart-enabled=true
         self._update_db_info()
         self._update_bioxp_row()
         self._update_dev_updates_control()
+        self._update_dev_autostart_row()
         return True  # Keep timer running
 
     def _refresh_status_once(self):

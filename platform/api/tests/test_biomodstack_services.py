@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -2054,3 +2055,72 @@ def test_ensure_user_units_skips_reload_when_systemd_is_current(monkeypatch, tmp
     monkeypatch.setattr(services, "units_need_daemon_reload", lambda names, project_root=None: True)
     services.ensure_user_units(tmp_path)
     assert reloads == [tmp_path]
+
+
+# ---- Development start-at-boot toggle -------------------------------------------------------------------------------
+def _fake_systemctl(monkeypatch, states, calls, fail=None):
+    def run(*args, check=True, capture_output=True, project_root=None):
+        calls.append(args)
+        if args[0] == "is-enabled":
+            return subprocess.CompletedProcess(args, 0 if states["state"] == "enabled" else 1, stdout=states["state"] + "\n", stderr="")
+        if fail and args[0] in fail:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="Failed to enable unit: Access denied\n")
+        if args[0] == "enable":
+            states["state"] = "enabled"
+        if args[0] == "disable":
+            states["state"] = "disabled"
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(services, "run_systemctl", run)
+
+
+def test_dev_autostart_reads_the_real_unit_state(monkeypatch) -> None:
+    calls: list = []
+    for state, expected in (("enabled", True), ("disabled", False), ("not-found", None), ("static", None)):
+        _fake_systemctl(monkeypatch, {"state": state}, calls)
+        assert services.dev_autostart_enabled() is expected
+    assert all(c == ("is-enabled", services.DEV_TARGET_UNIT) for c in calls)
+
+
+def test_dev_autostart_is_unknown_when_systemctl_is_missing(monkeypatch) -> None:
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("systemctl")
+
+    monkeypatch.setattr(services, "run_systemctl", missing)
+    assert services.dev_autostart_enabled() is None
+
+
+def test_set_dev_autostart_enables_and_disables_only_the_dev_target(monkeypatch) -> None:
+    calls: list = []
+    states = {"state": "disabled"}
+    _fake_systemctl(monkeypatch, states, calls)
+    assert services.set_dev_autostart(True) is True
+    assert services.set_dev_autostart(False) is False
+    verbs = [c for c in calls if c[0] in {"enable", "disable"}]
+    assert verbs == [("enable", services.DEV_TARGET_UNIT), ("disable", services.DEV_TARGET_UNIT)]
+    # nothing is started, stopped or restarted by the toggle
+    assert not [c for c in calls if c[0] in {"start", "stop", "restart", "daemon-reload", "kill"}]
+
+
+def test_set_dev_autostart_reports_systemctl_failure_and_missing_install(monkeypatch) -> None:
+    calls: list = []
+    _fake_systemctl(monkeypatch, {"state": "disabled"}, calls, fail={"enable"})
+    with pytest.raises(services.ServiceManagerError, match="Access denied"):
+        services.set_dev_autostart(True)
+    calls.clear()
+    _fake_systemctl(monkeypatch, {"state": "not-found"}, calls)
+    with pytest.raises(services.ServiceManagerError, match="not installed"):
+        services.set_dev_autostart(True)
+    assert not [c for c in calls if c[0] in {"enable", "disable"}]
+
+
+def test_user_linger_reads_loginctl(monkeypatch) -> None:
+    for out, expected in (("yes\n", True), ("no\n", False), ("", None)):
+        monkeypatch.setattr(services.subprocess, "run", lambda *a, _o=out, **k: subprocess.CompletedProcess(a, 0, stdout=_o, stderr=""))
+        assert services.user_linger_enabled() is expected
+
+    def missing(*a, **k):
+        raise FileNotFoundError("loginctl")
+
+    monkeypatch.setattr(services.subprocess, "run", missing)
+    assert services.user_linger_enabled() is None
