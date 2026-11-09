@@ -127,6 +127,7 @@ function molstarCommonJsBuildResolver(): Plugin {
 }
 
 const devApiTarget = process.env.BMS_DEV_API_PROXY_TARGET || 'http://127.0.0.1:18002'
+const devExtraAllowedHosts = (process.env.BMS_DEV_ALLOWED_HOSTS || '').split(',').map(host => host.trim()).filter(Boolean)
 const devApiProxySecret = process.env.BMS_DEV_API_PROXY_SECRET?.trim() || ''
 const devMk1dReconnectProxySecret = process.env.BMS_DEV_MK1D_RECONNECT_PROXY_SECRET?.trim() || ''
 const buildRevision = /^[0-9a-f]{40}$/.test(process.env.VITE_BMS_BUILD_SHA?.trim() || '')
@@ -209,7 +210,10 @@ export default defineConfig(({ mode }) => ({
     port: 18082,
     origin: 'http://127.0.0.1:18082',
     strictPort: true,
-    allowedHosts: ['bigboy.taileb3a90.ts.net'],
+    // Any tailnet name (the Tailscale Serve front door) is allowed, matching
+    // isTailnetHostname() in src/runtime/tailnetEnvironment.ts. Extra hosts for
+    // other setups come from BMS_DEV_ALLOWED_HOSTS (comma separated).
+    allowedHosts: ['.ts.net', ...devExtraAllowedHosts],
     // Prevent watching pipeline directories that can have millions of files
     watch: {
       ignored: [
