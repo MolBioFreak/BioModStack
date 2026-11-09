@@ -29,6 +29,18 @@ type TargetChoice = 'current' | 'saved' | 'pasted';
 const GG_ENZYMES = ['BsaI', 'BsmBI', 'Esp3I', 'BbsI', 'SapI', 'PaqCI', 'BtgZI'];
 /** "EcoRI + BamHI", or "EcoRI (single enzyme)" when both ends use the same enzyme. */
 export const enzymePairLabel = (enzymes: string[]) => enzymes.length > 1 && enzymes.every((e) => e === enzymes[0]) ? `${enzymes[0]} (single enzyme)` : enzymes.join(' + ');
+/** One heading label: the shared pair when vector and insert use the same ends, otherwise both. */
+export const proposalPairLabel = (p: Pick<SuggestRestrictionProposal, 'vector_enzymes' | 'insert_enzymes'>) => (
+    p.vector_enzymes.length === p.insert_enzymes.length && p.vector_enzymes.every((e, k) => e === p.insert_enzymes[k])
+        ? enzymePairLabel(p.vector_enzymes)
+        : `Vector: ${enzymePairLabel(p.vector_enzymes)} · Insert: ${enzymePairLabel(p.insert_enzymes)}`
+);
+/** Junction lines; identical junctions collapse into one line. */
+export const junctionLines = (sites: SuggestRestrictionProposal['junction_sites']): string[] => {
+    const text = (j: SuggestRestrictionProposal['junction_sites'][number]) => `regenerated ${j.regenerated.join(', ') || 'none'} · destroyed ${j.destroyed.join(', ') || 'none'}`;
+    if (sites.length > 1 && sites.every((j) => text(j) === text(sites[0]))) return [`Both junctions: ${text(sites[0])}`];
+    return sites.map((j) => `${j.between}: ${text(j)}`);
+};
 const numbers = (text: string) => text.split(/[\s,]+/).filter(Boolean).map(Number).filter(Number.isFinite);
 
 async function moleculeFromItem(item: ChooserItem): Promise<Molecule> {
@@ -260,7 +272,7 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
                 <p className="text-slate-500">Only the molecules selected here are searched.</p>
                 <label className="flex items-center gap-1 text-slate-300"><input type="checkbox" checked={useCurrentSource} onChange={(e) => setUseCurrentSource(e.target.checked)} /> Current molecule ({sequenceData.name})</label>
                 <FragmentChooser label="Add saved source" onPick={pick((m) => setSources((list) => [...list, m]))} />
-                <ul>{sources.map((m, i) => <li key={`${m.revision_id}-${i}`} className="flex min-w-0 justify-between gap-2 text-slate-300"><span className="min-w-0 truncate" title={m.name}>{m.name} · {m.sequence.length} bp</span>
+                <ul>{sources.map((m, i) => <li key={`${m.revision_id}-${i}`} className="flex min-w-0 justify-between gap-2 text-slate-300"><span className="min-w-0 break-words" title={m.name}>{m.name} · {m.sequence.length} bp</span>
                     <button type="button" className="shrink-0 text-slate-400" onClick={() => setSources((list) => list.filter((_, j) => j !== i))}>Remove</button></li>)}</ul>
             </fieldset>}
 
@@ -318,22 +330,25 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
             {method === 'restriction' && restriction && <div className="space-y-2">
                 {restriction.no_suitable_pair && <p className="text-slate-400">No suitable enzyme pair found. Alternatives: {restriction.alternatives.map((a) => a.note).join(' ')}</p>}
                 <ul className="space-y-2">{restriction.proposals.map((p, i) => <li key={i} className="space-y-1 rounded border border-slate-700 bg-slate-950/60 p-2">
-                    <div className="font-medium text-slate-100">#{i + 1} Vector: {enzymePairLabel(p.vector_enzymes)} · Insert: {enzymePairLabel(p.insert_enzymes)}{p.insert_orientation === 'forward' || p.insert_orientation === 'reverse' ? ` · insert ${p.insert_orientation}` : ''}{p.kind === 'primer_tail' ? ' (via primer tails)' : ''}</div>
-                    <div className="text-slate-300">{p.directional ? 'Directional' : 'Not directional'} · insert orientation: {p.insert_orientation} · vector self-ligation: {p.vector_self_ligation}</div>
-                    <div className="text-slate-400">Vector {p.vector_length} bp + insert {p.insert_payload_length} bp → product {p.product_length} bp</div>
-                    <div className="text-slate-500">Retained backbone: {p.vector_source_segments.map(([a, b]) => `${a}–${b}`).join(', ')} · {p.kind === 'primer_tail' ? 'prepared insert' : 'donor'}: {p.insert_source_segments.map(([a, b]) => `${a}–${b}`).join(', ')}</div>
-                    {p.junction_sites.map((j, k) => <div key={k} className="text-slate-400">{j.between}: regenerated {j.regenerated.join(', ') || 'none'} · destroyed {j.destroyed.join(', ') || 'none'}</div>)}
-                    {p.primer_tails && <div className="space-y-1 text-slate-300">
-                        <div>Forward primer 5′ tail: <code>{p.primer_tails.forward_primer_5prime_tail}</code> <button type="button" className="text-cyan-300" onClick={() => copy(p.primer_tails!.forward_primer_5prime_tail)}>Copy</button></div>
-                        <div>Reverse primer 5′ tail: <code>{p.primer_tails.reverse_primer_5prime_tail}</code> <button type="button" className="text-cyan-300" onClick={() => copy(p.primer_tails!.reverse_primer_5prime_tail)}>Copy</button></div>
-                        <div className="text-slate-500">{p.primer_tails.note}</div>
-                    </div>}
-                    {p.selection.primers.map((primer) => <div key={primer.strand} className="break-all text-slate-300">{primer.strand === 1 ? 'Forward' : 'Reverse'} primer: <code>{primer.sequence}</code> <button type="button" className="text-cyan-300" onClick={() => copy(primer.sequence)}>Copy primer</button></div>)}
-                    {p.selection.primer_notes.map((note, j) => <p key={j} className="text-slate-500">{note}</p>)}
-                    {p.prepared_insert_sequence && <button type="button" className="mr-3 text-cyan-300" onClick={() => copy(p.prepared_insert_sequence!)}>Copy prepared insert DNA</button>}
-                    <button type="button" className="text-cyan-300" onClick={() => copy(p.product_sequence)}>Copy product DNA</button>
-                    <p className="text-slate-500">Prepare creates reusable fragment children. Save the final construct in Ligation.</p>
-                    <button type="button" disabled={busy} className="rounded bg-violet-600 px-2 py-1 text-white disabled:opacity-50" onClick={() => void useRestriction(p, i)}>Prepare fragments and use this plan</button>
+                    <div className="font-medium text-slate-100">#{i + 1} {proposalPairLabel(p)}{p.insert_orientation === 'forward' || p.insert_orientation === 'reverse' ? ` · insert ${p.insert_orientation}` : ''}{p.kind === 'primer_tail' ? ' (via primer tails)' : ''}</div>
+                    <div className="text-slate-300">{p.directional ? 'Directional' : 'Not directional'}{p.insert_orientation === 'forward' || p.insert_orientation === 'reverse' ? '' : ` · insert orientation: ${p.insert_orientation}`} · vector self-ligation: {p.vector_self_ligation}</div>
+                    <div className="text-slate-400">Vector {p.vector_length} bp · insert payload {p.insert_payload_length} bp · product {p.product_length} bp</div>
+                    {junctionLines(p.junction_sites).map((line, k) => <div key={k} className="text-slate-400">{line}</div>)}
+                    <details className="text-slate-500"><summary className="cursor-pointer">Segments</summary>Retained backbone: {p.vector_source_segments.map(([a, b]) => `${a}–${b}`).join(', ')} · {p.kind === 'primer_tail' ? 'prepared insert' : 'donor'}: {p.insert_source_segments.map(([a, b]) => `${a}–${b}`).join(', ')}</details>
+                    {p.selection.primers.map((primer) => <div key={primer.strand} className="break-all text-slate-300">{primer.strand === 1 ? 'Forward' : 'Reverse'} primer: <code>{primer.sequence}</code> <button type="button" className="ml-2 text-cyan-300" onClick={() => copy(primer.sequence)}>Copy primer</button></div>)}
+                    {(p.primer_tails || p.selection.primer_notes.length > 0) && <details className="text-slate-500"><summary className="cursor-pointer">Primer tails and notes</summary>
+                        {p.primer_tails && <div className="space-y-1">
+                            <div className="break-all">Forward 5′ tail: <code>{p.primer_tails.forward_primer_5prime_tail}</code> <button type="button" className="ml-2 text-cyan-300" onClick={() => copy(p.primer_tails!.forward_primer_5prime_tail)}>Copy</button></div>
+                            <div className="break-all">Reverse 5′ tail: <code>{p.primer_tails.reverse_primer_5prime_tail}</code> <button type="button" className="ml-2 text-cyan-300" onClick={() => copy(p.primer_tails!.reverse_primer_5prime_tail)}>Copy</button></div>
+                            <p>{p.primer_tails.note}</p>
+                        </div>}
+                        {p.selection.primer_notes.map((note, j) => <p key={j}>{note}</p>)}
+                    </details>}
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {p.prepared_insert_sequence && <button type="button" className="rounded border border-slate-600 px-2 py-0.5 text-cyan-300" onClick={() => copy(p.prepared_insert_sequence!)}>Copy prepared insert DNA</button>}
+                    <button type="button" className="rounded border border-slate-600 px-2 py-0.5 text-cyan-300" onClick={() => copy(p.product_sequence)}>Copy product DNA</button>
+                    <button type="button" disabled={busy} title="Creates reusable fragment children; save the final construct in Ligation." className="rounded bg-violet-600 px-2 py-1 text-white disabled:opacity-50" onClick={() => void useRestriction(p, i)}>Prepare fragments and use this plan</button>
+                    </div>
                 </li>)}</ul>
                 {restriction.notes.map((n, i) => <p key={i} className="text-slate-500">{n}</p>)}
             </div>}

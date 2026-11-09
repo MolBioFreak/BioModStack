@@ -74,7 +74,7 @@ function MiniPreview({ circular, sequenceType, length, featureCount }: { circula
             <div className="flex items-center gap-2 text-[11px] text-slate-500">
                 <span>{length.toLocaleString()}</span>
                 <span>•</span>
-                <span>{featureCount} features</span>
+                <span>{featureCount} {featureCount === 1 ? 'feature' : 'features'}</span>
             </div>
             <div className="h-2 rounded-full bg-slate-800 overflow-hidden border border-slate-700">
                 <div className="h-full rounded-full" style={{ width, backgroundColor: accent }} />
@@ -426,9 +426,9 @@ export function MolecularInputModal({
                                         >
                                             <div className="flex items-start justify-between gap-3">
                                                 <div className="min-w-0">
-                                                    <div className="truncate text-base font-semibold text-slate-100" title={sequence.name}>{sequence.name}</div>
+                                                    <div className="break-words text-base font-semibold text-slate-100 [overflow-wrap:anywhere]" title={sequence.name}>{sequence.name}</div>
                                                     {sequence.description && (
-                                                        <div className="mt-1 line-clamp-2 text-sm text-slate-400">{sequence.description}</div>
+                                                        <div className="mt-1 line-clamp-2 break-words text-sm text-slate-400" title={sequence.description}>{sequence.description}</div>
                                                     )}
                                                 </div>
                                                 <TopologyBadge circular={sequence.is_circular} />
@@ -441,7 +441,7 @@ export function MolecularInputModal({
                                                         {sequence.entity_kind.replace(/_/g, ' ')}
                                                     </span>
                                                 )}
-                                                {sequence.organism && (
+                                                {sequence.organism && /[\p{L}\p{N}]/u.test(sequence.organism) && (
                                                     <span className="rounded-full bg-slate-700 px-2 py-0.5 text-[11px] text-slate-300">
                                                         {sequence.organism}
                                                     </span>
@@ -458,7 +458,7 @@ export function MolecularInputModal({
                                             </div>
 
                                             <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
-                                                <span>GC {sequence.gc_content?.toFixed(1) ?? 'n/a'}%</span>
+                                                <span>{sequence.gc_content != null ? `GC ${sequence.gc_content.toFixed(1)}%` : 'GC n/a'}</span>
                                                 <span>{sequence.updated_at ? new Date(sequence.updated_at).toLocaleString() : new Date(sequence.created_at).toLocaleString()}</span>
                                             </div>
                                         </button>
@@ -476,7 +476,7 @@ export function MolecularInputModal({
                             >
                                 <div className="text-3xl">🧬</div>
                                 <div className="mt-3 text-base font-medium text-slate-200">Import construct file</div>
-                                <div className="mt-1 text-sm text-slate-400">GenBank, FASTA, and SnapGene `.dna` are supported.</div>
+                                <div className="mt-1 text-sm text-slate-400">GenBank, FASTA, and SnapGene .dna files are supported.</div>
                                 <div className="mt-4 text-xs text-slate-500">Click to choose a file, save it to the construct library, and open it in the editor.</div>
                             </div>
                             <input
@@ -639,7 +639,7 @@ export function MolecularInputModal({
                                             >
                                                 <div className="min-w-0">
                                                     <div className="flex items-center gap-2">
-                                                        <div className="truncate text-base font-medium text-slate-100">{primer.name}</div>
+                                                        <div className="break-words text-base font-medium text-slate-100 [overflow-wrap:anywhere]" title={primer.name}>{primer.name}</div>
                                                         {primer.is_favorite && <span className="text-amber-400">★</span>}
                                                     </div>
                                                     <div className="mt-1 font-mono text-xs text-slate-400 break-all">{primer.sequence}</div>
@@ -706,7 +706,7 @@ export function MolecularInputModal({
                                 >
                                     <div className="flex items-start justify-between gap-3">
                                         <div className="min-w-0">
-                                            <div className="truncate text-base font-semibold text-slate-100">{demo.name}</div>
+                                            <div className="break-words text-base font-semibold text-slate-100 [overflow-wrap:anywhere]" title={demo.name}>{demo.name}</div>
                                             {demo.description && (
                                                 <div className="mt-1 text-sm text-slate-400">{demo.description}</div>
                                             )}

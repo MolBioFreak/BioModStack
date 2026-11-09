@@ -135,7 +135,7 @@ describe('Suggest plan', () => {
             insert_revision_id: 'rev-src', insert_topology: 'linear', vector_five_prime_phosphate: 'unknown', limit: 3,
         });
         const text = host.textContent ?? '';
-        for (const part of ['EcoRI + BamHI', 'insert orientation: forward', 'vector self-ligation: not possible', 'regenerated EcoRI', 'GCGCGCGAATTC', 'GCGCGCGGATCC']) expect(text).toContain(part);
+        for (const part of ['EcoRI + BamHI', 'insert forward', 'vector self-ligation: not possible', 'regenerated EcoRI', 'GCGCGCGAATTC', 'GCGCGCGGATCC']) expect(text).toContain(part);
     });
 
     it('shows an API error as text', async () => {

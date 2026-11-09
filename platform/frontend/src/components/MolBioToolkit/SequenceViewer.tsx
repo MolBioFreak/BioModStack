@@ -50,9 +50,39 @@ function isSeqVizRenderTarget(target: EventTarget | null): target is Element {
 // COLOR PALETTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** SeqViz chops the circular-map name into 30-character lines (orphaning a trailing ")"), so keep it on one line. */
+/**
+ * SeqViz cuts the circular-map name into fixed 30-character slices (mid-word, orphaning a trailing ")").
+ * Wrap the full name at separators into lines of at most `maxChars` and pad each line to the 30-character
+ * slice so the slices fall exactly on the line breaks. Nothing is dropped.
+ */
 export const CIRCULAR_CAPTION_MAX = 30;
-export const circularCaptionName = (name: string) => name.length > CIRCULAR_CAPTION_MAX ? `${name.slice(0, 17)}…${name.slice(-12)}` : name;
+export const circularCaptionName = (name: string, maxChars: number = CIRCULAR_CAPTION_MAX): string => {
+    const limit = Math.max(8, Math.min(CIRCULAR_CAPTION_MAX, Math.floor(maxChars)));
+    if (name.length <= limit) return name;
+    const tokens: string[] = [];
+    for (const t of name.match(/[^ \-_,|]+[ \-_,|]*|[ \-_,|]+/g) ?? [name]) {
+        for (let i = 0; i < t.length; i += limit) tokens.push(t.slice(i, i + limit));
+    }
+    const fill = (width: number): string[] => {
+        const out: string[] = [];
+        let cur = '';
+        for (const t of tokens) {
+            if (cur && (cur + t).trimEnd().length > width) { out.push(cur); cur = t; } else cur += t;
+        }
+        if (cur) out.push(cur);
+        return out;
+    };
+    // fewest lines at the full limit, then the narrowest width that still fits in that many lines (balanced lines)
+    const need = fill(limit).length;
+    let lo = 1;
+    let hi = limit;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (fill(mid).length <= need) hi = mid; else lo = mid + 1;
+    }
+    const lines = fill(lo);
+    return lines.map((line, i) => (i < lines.length - 1 ? line.trimEnd().padEnd(CIRCULAR_CAPTION_MAX, ' ') : line.trimEnd())).join('');
+};
 
 export type ColorPaletteName =
     | 'classic'      // Traditional 4-color scheme
@@ -1066,7 +1096,7 @@ export function SequenceViewer({
             )}
             <SeqViz
                 key={`${viewerSequenceKey}:selection-reset-${selectionResetVersion}`}
-                name={circularCaptionName(sequenceData.name)}
+                name={circularCaptionName(sequenceData.name, viewerSize.width > 0 ? Math.floor(((resolvedViewerMode === 'both' ? viewerSize.width / 2 : viewerSize.width) - 24) / 7.8) : CIRCULAR_CAPTION_MAX)}
                 seq={displaySequence}
                 seqType={seqVizSeqType}
                 annotations={annotations}

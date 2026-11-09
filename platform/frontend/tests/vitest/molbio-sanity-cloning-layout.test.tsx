@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../src/lib/api';
 import { AssemblyPanel } from '../../src/components/MolBioToolkit/panels/AssemblyPanel';
 import { FragmentChooser } from '../../src/components/MolBioToolkit/FragmentChooser';
-import { enzymePairLabel } from '../../src/components/MolBioToolkit/panels/SuggestPlan';
+import { enzymePairLabel, junctionLines, proposalPairLabel } from '../../src/components/MolBioToolkit/panels/SuggestPlan';
 import { circularCaptionName } from '../../src/components/MolBioToolkit/SequenceViewer';
 
 vi.mock('../../src/lib/api', async (importOriginal) => ({
@@ -43,7 +43,8 @@ describe('Molecular Tools layout fixes (class/text checks only; pixels are cover
         expect(button('Close')!.className).toContain('shrink-0');
         const spans = [...section.querySelectorAll('li button > span')] as HTMLElement[];
         expect(spans).toHaveLength(2);
-        for (const s of spans) { expect(s.className).toContain('truncate'); expect(s.className).toContain('min-w-0'); expect(s.title).not.toBe(''); }
+        for (const s of spans) { expect(s.className).toContain('break-words'); expect(s.className).toContain('min-w-0'); expect(s.className).not.toContain('truncate'); expect(s.title).not.toBe(''); }
+        expect(spans[0].parentElement!.className).toContain('flex-col');
         expect(spans[0].title).toContain('A very long saved molecule name');
         expect(spans[1].title).toContain('1,800 bp');
     });
@@ -69,9 +70,15 @@ describe('Molecular Tools layout fixes (class/text checks only; pixels are cover
         await click('Suggest');
         const heads = [...host.querySelectorAll('li div.font-medium')].map((d) => d.textContent);
         expect(heads).toEqual([
-            '#1 Vector: EcoRI (single enzyme) · Insert: EcoRI (single enzyme) · insert forward',
-            '#2 Vector: EcoRI (single enzyme) · Insert: EcoRI (single enzyme) · insert reverse',
+            '#1 EcoRI (single enzyme) · insert forward',
+            '#2 EcoRI (single enzyme) · insert reverse',
         ]);
+        const card = host.querySelector('li div.font-medium')!.parentElement!;
+        expect(card.textContent).not.toContain('Prepare creates reusable');
+        expect(card.textContent).not.toContain('insert orientation');
+        expect([...card.querySelectorAll('details')].map((d) => d.querySelector('summary')!.textContent)).toContain('Segments');
+        expect(card.querySelector('details')!.textContent).toContain('Retained backbone');
+        expect(card.querySelector('button[title^="Creates reusable"]')).not.toBeNull();
     });
 
     it('Golden Gate sub-mode switches are separate styled buttons in a wrapping row', async () => {
@@ -85,11 +92,33 @@ describe('Molecular Tools layout fixes (class/text checks only; pixels are cover
         expect(b.className).toContain('bg-slate-800');
     });
 
-    it('circular map caption stays within SeqViz one-line limit and keeps its closing paren', () => {
-        const long = 'CGV-vector-EcoRI-BamHI (1.8 kb)';
-        const out = circularCaptionName(long);
-        expect(out.length).toBeLessThanOrEqual(30);
-        expect(out.endsWith('(1.8 kb)')).toBe(true);
+    it('circular map caption keeps the whole name, wraps at separators and survives SeqViz 30-character slicing', () => {
+        const slices = (s: string) => (s.match(/[\s\S]{1,30}/g) ?? []).map((x) => x.trim());
+        for (const name of ['CGV-vector-EcoRI-BamHI (1.8 kb)', 'CGV-donor-EcoRI-payload140-EcoRI', 'UI-PASS Gibson EcoRI-vector (2,206 bp)', 'A'.repeat(70)]) {
+            for (const max of [30, 21, 12]) {
+                const lines = slices(circularCaptionName(name, max));
+                expect(lines.join('').replace(/ /g, '')).toBe(name.replace(/ /g, ''));
+                for (const line of lines) { expect(line.length).toBeLessThanOrEqual(max); expect(line.startsWith(')')).toBe(false); }
+            }
+        }
+        expect(slices(circularCaptionName('CGV-vector-EcoRI-BamHI (1.8 kb)', 30))).toEqual(['CGV-vector-EcoRI-', 'BamHI (1.8 kb)']);
         expect(circularCaptionName('pUC19')).toBe('pUC19');
+    });
+
+    it('Acquire dialog names wrap instead of truncating, and the lone-chip / plural / GC text is correct', async () => {
+        const src = (await import('node:fs')).readFileSync((await import('node:path')).resolve(process.cwd(), 'src/components/MolBioToolkit/MolecularInputModal.tsx'), 'utf8');
+        expect(src).not.toMatch(/className="truncate text-base font-(semibold|medium) text-slate-100"/);
+        expect(src).toContain("featureCount === 1 ? 'feature' : 'features'");
+        expect(src).toContain("'GC n/a'");
+        expect(src).toContain('.dna files are supported');
+        expect(src).not.toContain('`.dna`');
+    });
+
+    it('proposal helpers: shared pair is named once, identical junctions collapse', () => {
+        expect(proposalPairLabel({ vector_enzymes: ['EcoRI', 'BamHI'], insert_enzymes: ['EcoRI', 'BamHI'] })).toBe('EcoRI + BamHI');
+        expect(proposalPairLabel({ vector_enzymes: ['BamHI'], insert_enzymes: ['BglII'] })).toBe('Vector: BamHI · Insert: BglII');
+        const site = (between: string, d: string[] = []) => ({ between, regenerated: ['EcoRI'], destroyed: d, note: '' });
+        expect(junctionLines([site('vector → insert'), site('insert → vector')])).toEqual(['Both junctions: regenerated EcoRI · destroyed none']);
+        expect(junctionLines([site('vector → insert'), site('insert → vector', ['BamHI'])])).toHaveLength(2);
     });
 });
