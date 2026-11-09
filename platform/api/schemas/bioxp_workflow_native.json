@@ -1,5 +1,5 @@
 {
-  "source_commit": "e4decce4308235148b8bb2cb21046309fcbcfed6",
+  "source_commit": "dbb664a970360f79c9f1d86e6f9aa3ea87b15b45",
   "request": {
     "$defs": {
       "AreaPoint": {
@@ -765,6 +765,39 @@
           "position_flag"
         ],
         "title": "ManualMove",
+        "type": "object"
+      },
+      "ManualMoveSequence": {
+        "additionalProperties": false,
+        "description": "Fast-lane endpoint sequence; raw {x,y} targets are not workflow inputs.",
+        "properties": {
+          "operation": {
+            "const": "move_sequence",
+            "title": "Operation",
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/_NamedTarget"
+                },
+                {
+                  "$ref": "#/$defs/_WellTarget"
+                }
+              ]
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "operation",
+          "targets"
+        ],
+        "title": "ManualMoveSequence",
         "type": "object"
       },
       "MetricOffset": {
@@ -1724,6 +1757,51 @@
         ],
         "title": "VesselReference",
         "type": "object"
+      },
+      "_NamedTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "camera_offset": {
+            "title": "Camera Offset",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "target",
+          "camera_offset"
+        ],
+        "title": "_NamedTarget",
+        "type": "object"
+      },
+      "_WellTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "location_id": {
+            "title": "Location Id",
+            "type": "integer"
+          },
+          "well": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Well"
+          }
+        },
+        "required": [
+          "location_id",
+          "well"
+        ],
+        "title": "_WellTarget",
+        "type": "object"
       }
     },
     "additionalProperties": false,
@@ -1749,6 +1827,7 @@
               "measure_fluid_height": "#/$defs/ManualMeasureFluidHeight",
               "mix": "#/$defs/ManualMix",
               "move": "#/$defs/ManualMove",
+              "move_sequence": "#/$defs/ManualMoveSequence",
               "profile_pickup": "#/$defs/ProfilePickup",
               "source_aspirate_air": "#/$defs/SourceAir",
               "source_calwith_fluid": "#/$defs/ManualCalwithFluid",
@@ -1763,6 +1842,9 @@
           "oneOf": [
             {
               "$ref": "#/$defs/ManualMove"
+            },
+            {
+              "$ref": "#/$defs/ManualMoveSequence"
             },
             {
               "$ref": "#/$defs/ManualLower"

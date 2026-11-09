@@ -1,5 +1,5 @@
 {
-  "source_commit": "6b996d76b6d21dd67354c259ddd6a6ea9d56c5d6",
+  "source_commit": "dbb664a970360f79c9f1d86e6f9aa3ea87b15b45",
   "application": {
     "$defs": {
       "AccountingContext": {
@@ -10179,11 +10179,42 @@
               "title": "Floor Clearance Steps",
               "type": "integer"
             },
+            "plate_type": {
+              "anyOf": [
+                {
+                  "maxLength": 80,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plate Type"
+            },
             "search_speed_native": {
               "default": 300,
               "exclusiveMinimum": 0,
               "title": "Search Speed Native",
               "type": "integer"
+            },
+            "holder_row": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "micro_row_1",
+                    "micro_row_2",
+                    "pcr_row_1",
+                    "pcr_row_2"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Holder Row"
             },
             "z_motor_current": {
               "default": 25,
@@ -10191,7 +10222,7 @@
               "type": "integer"
             },
             "sensing": {
-              "default": "hybrid",
+              "default": "pressure",
               "enum": [
                 "pressure",
                 "capacitive",
@@ -14904,6 +14935,39 @@
           "title": "ManualMove",
           "type": "object"
         },
+        "ManualMoveSequence": {
+          "additionalProperties": false,
+          "description": "Fast-lane endpoint sequence; raw {x,y} targets are not workflow inputs.",
+          "properties": {
+            "operation": {
+              "const": "move_sequence",
+              "title": "Operation",
+              "type": "string"
+            },
+            "targets": {
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/_NamedTarget"
+                  },
+                  {
+                    "$ref": "#/$defs/_WellTarget"
+                  }
+                ]
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "title": "Targets",
+              "type": "array"
+            }
+          },
+          "required": [
+            "operation",
+            "targets"
+          ],
+          "title": "ManualMoveSequence",
+          "type": "object"
+        },
         "MetricOffset": {
           "additionalProperties": false,
           "properties": {
@@ -15861,6 +15925,51 @@
           ],
           "title": "VesselReference",
           "type": "object"
+        },
+        "_NamedTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "target": {
+              "title": "Target",
+              "type": "string"
+            },
+            "camera_offset": {
+              "title": "Camera Offset",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "target",
+            "camera_offset"
+          ],
+          "title": "_NamedTarget",
+          "type": "object"
+        },
+        "_WellTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "location_id": {
+              "title": "Location Id",
+              "type": "integer"
+            },
+            "well": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "title": "Well"
+            }
+          },
+          "required": [
+            "location_id",
+            "well"
+          ],
+          "title": "_WellTarget",
+          "type": "object"
         }
       },
       "additionalProperties": false,
@@ -15886,6 +15995,7 @@
                 "measure_fluid_height": "#/$defs/ManualMeasureFluidHeight",
                 "mix": "#/$defs/ManualMix",
                 "move": "#/$defs/ManualMove",
+                "move_sequence": "#/$defs/ManualMoveSequence",
                 "profile_pickup": "#/$defs/ProfilePickup",
                 "source_aspirate_air": "#/$defs/SourceAir",
                 "source_calwith_fluid": "#/$defs/ManualCalwithFluid",
@@ -15900,6 +16010,9 @@
             "oneOf": [
               {
                 "$ref": "#/$defs/ManualMove"
+              },
+              {
+                "$ref": "#/$defs/ManualMoveSequence"
               },
               {
                 "$ref": "#/$defs/ManualLower"
@@ -17103,11 +17216,42 @@
               "title": "Floor Clearance Steps",
               "type": "integer"
             },
+            "plate_type": {
+              "anyOf": [
+                {
+                  "maxLength": 80,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plate Type"
+            },
             "search_speed_native": {
               "default": 300,
               "exclusiveMinimum": 0,
               "title": "Search Speed Native",
               "type": "integer"
+            },
+            "holder_row": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "micro_row_1",
+                    "micro_row_2",
+                    "pcr_row_1",
+                    "pcr_row_2"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Holder Row"
             },
             "z_motor_current": {
               "default": 25,
@@ -17115,7 +17259,7 @@
               "type": "integer"
             },
             "sensing": {
-              "default": "hybrid",
+              "default": "pressure",
               "enum": [
                 "pressure",
                 "capacitive",
@@ -21124,6 +21268,24 @@
               "title": "Location Id",
               "type": "integer"
             },
+            "holder_row": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "micro_row_1",
+                    "micro_row_2",
+                    "pcr_row_1",
+                    "pcr_row_2"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Holder Row"
+            },
             "expected": {
               "default": true,
               "title": "Expected",
@@ -21229,7 +21391,7 @@
               "type": "string"
             },
             "sensing": {
-              "default": "hybrid",
+              "default": "pressure",
               "enum": [
                 "pressure",
                 "capacitive",
@@ -21237,6 +21399,19 @@
               ],
               "title": "Sensing",
               "type": "string"
+            },
+            "plate_type": {
+              "anyOf": [
+                {
+                  "maxLength": 80,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plate Type"
             }
           },
           "required": [
@@ -21296,11 +21471,42 @@
               "title": "Floor Clearance Steps",
               "type": "integer"
             },
+            "plate_type": {
+              "anyOf": [
+                {
+                  "maxLength": 80,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plate Type"
+            },
             "search_speed_native": {
               "default": 300,
               "exclusiveMinimum": 0,
               "title": "Search Speed Native",
               "type": "integer"
+            },
+            "holder_row": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "micro_row_1",
+                    "micro_row_2",
+                    "pcr_row_1",
+                    "pcr_row_2"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Holder Row"
             },
             "z_motor_current": {
               "default": 25,
@@ -21308,7 +21514,7 @@
               "type": "integer"
             },
             "sensing": {
-              "default": "hybrid",
+              "default": "pressure",
               "enum": [
                 "pressure",
                 "capacitive",
@@ -26052,11 +26258,42 @@
                 "title": "Floor Clearance Steps",
                 "type": "integer"
               },
+              "plate_type": {
+                "anyOf": [
+                  {
+                    "maxLength": 80,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Plate Type"
+              },
               "search_speed_native": {
                 "default": 300,
                 "exclusiveMinimum": 0,
                 "title": "Search Speed Native",
                 "type": "integer"
+              },
+              "holder_row": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "micro_row_1",
+                      "micro_row_2",
+                      "pcr_row_1",
+                      "pcr_row_2"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Holder Row"
               },
               "z_motor_current": {
                 "default": 25,
@@ -26064,7 +26301,7 @@
                 "type": "integer"
               },
               "sensing": {
-                "default": "hybrid",
+                "default": "pressure",
                 "enum": [
                   "pressure",
                   "capacitive",
@@ -34597,6 +34834,38 @@
             "title": "AnalysisResult",
             "type": "object"
           },
+          "BulkReagentHolder": {
+            "additionalProperties": false,
+            "properties": {
+              "micro_row_1": {
+                "$ref": "#/$defs/HolderXY"
+              },
+              "micro_row_2": {
+                "$ref": "#/$defs/HolderXY"
+              },
+              "pcr_row_1": {
+                "$ref": "#/$defs/HolderXY"
+              },
+              "pcr_row_2": {
+                "$ref": "#/$defs/HolderXY"
+              },
+              "pcr_y_pitch": {
+                "exclusiveMinimum": 0,
+                "maximum": 2147483647,
+                "title": "Pcr Y Pitch",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "micro_row_1",
+              "micro_row_2",
+              "pcr_row_1",
+              "pcr_row_2",
+              "pcr_y_pitch"
+            ],
+            "title": "BulkReagentHolder",
+            "type": "object"
+          },
           "CalibrationComparison": {
             "properties": {
               "positions": {
@@ -34849,17 +35118,25 @@
             "additionalProperties": false,
             "properties": {
               "positions": {
+                "default": [],
                 "items": {
                   "$ref": "#/$defs/PositionCalibrationPatch"
                 },
-                "minItems": 1,
                 "title": "Positions",
                 "type": "array"
+              },
+              "bulk_reagent_holder": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/BulkReagentHolder"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
               }
             },
-            "required": [
-              "positions"
-            ],
             "title": "CalibrationSettingsPatch",
             "type": "object"
           },
@@ -35133,6 +35410,58 @@
               "calibration_run"
             ],
             "title": "HeightDecisionResult",
+            "type": "object"
+          },
+          "HolderXY": {
+            "additionalProperties": false,
+            "description": "Operator-aligned row XY plus optional operator-measured row Z.\n\nz_low: tube/well bottom with the reference (T50) tip, measured by touching it.\nz_high: optional search/lift start; omitted means ordinary travel height.\nNo height is inherited from the legacy LOC_TROUGH row.",
+            "properties": {
+              "x": {
+                "maximum": 2147483647,
+                "minimum": -2147483648,
+                "title": "X",
+                "type": "integer"
+              },
+              "y": {
+                "maximum": 2147483647,
+                "minimum": -2147483648,
+                "title": "Y",
+                "type": "integer"
+              },
+              "z_low": {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": -2147483648,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Z Low"
+              },
+              "z_high": {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": -2147483648,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Z High"
+              }
+            },
+            "required": [
+              "x",
+              "y"
+            ],
+            "title": "HolderXY",
             "type": "object"
           },
           "MassObservation": {
