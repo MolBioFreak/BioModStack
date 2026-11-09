@@ -206,6 +206,41 @@ def _select_pdb_model(raw: bytes, number: int) -> bytes:
     return b''.join(kept)
 
 
+def _chem_comp_type(component_id: str, gemmi) -> str:
+    """CCD-style ``_chem_comp.type`` for a component name.
+
+    Gemmi writes ``.`` for every component unless a monomer library is loaded.
+    Mol* and other mmCIF readers decide which residues are polymer from this
+    column, so a blank column leaves a protein with zero polymer residues and
+    no ribbon. Gemmi's own residue table is the same classification the CCD uses
+    for the standard polymer types; anything it cannot place stays a
+    non-polymer, which is also the CCD default for ligands, ions and water.
+    """
+    if component_id == 'GLY':
+        return 'peptide linking'  # the CCD types achiral glycine without an L/D prefix
+    info = gemmi.find_tabulated_residue(component_id)
+    if info is None:
+        return 'non-polymer'
+    if info.is_amino_acid():
+        return 'D-peptide linking' if str(info.kind).rsplit('.', 1)[-1] == 'AAD' else 'L-peptide linking'
+    if info.is_nucleic_acid():
+        return 'DNA linking' if str(info.kind).rsplit('.', 1)[-1] == 'DNA' else 'RNA linking'
+    return 'non-polymer'
+
+
+def _fill_blank_chem_comp_types(columns: dict, gemmi) -> dict:
+    """Fill only blank (``.``/``?``) component types; keep every supplied value."""
+    ids = columns.get('_chem_comp.id')
+    if not ids:
+        return columns
+    existing = columns.get('_chem_comp.type') or []
+    columns['_chem_comp.type'] = [
+        (existing[i] if i < len(existing) and existing[i] not in ('.', '?') else _chem_comp_type(component, gemmi))
+        for i, component in enumerate(ids)
+    ]
+    return columns
+
+
 def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, output_format: str,
                              model_number: int | None = None,
                              verified_original_sha256: str | None = None) -> dict:
@@ -365,7 +400,8 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
                 model.num = number
             converted.setup_entities()
             converted.assign_label_seq_id()
-            converted_columns = MMCIF2Dict(io.StringIO(converted.make_mmcif_document().as_string()))
+            converted_columns = _fill_blank_chem_comp_types(
+                MMCIF2Dict(io.StringIO(converted.make_mmcif_document().as_string())), gemmi)
             if model_number is not None:
                 converted_columns = _select_cif_model(converted_columns, model_number)
             writer = RetainedCifIO(); writer.set_dict(converted_columns)
