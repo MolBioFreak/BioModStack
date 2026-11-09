@@ -886,7 +886,7 @@ export function AssemblyPanel({
                 ))}
             </div>
 
-            {mode === 'golden_gate' && <div><button onClick={() => setRawGoldenGate(false)}>Manual / prepared fragments</button><button onClick={() => setRawGoldenGate(true)}>Raw design / evaluate / optimize / split</button></div>}
+            {mode === 'golden_gate' && <div className="flex flex-wrap gap-2"><button type="button" className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${!rawGoldenGate ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`} onClick={() => setRawGoldenGate(false)}>Manual / prepared fragments</button><button type="button" className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${rawGoldenGate ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`} onClick={() => setRawGoldenGate(true)}>Raw design / evaluate / optimize / split</button></div>}
             {mode === 'golden_gate' && rawGoldenGate ? <Suspense fallback={<p>Loading Golden Gate workflow…</p>}><GoldenGateWorkflowWorkspace sequenceData={sequenceData} options={goldenGateOptions} onLoadProduct={onLoadProduct} operationId={goldenGateOperationId} suggested={suggestedGoldenGate} /></Suspense> : <>
             {mode === 'gibson' && (
                 <>

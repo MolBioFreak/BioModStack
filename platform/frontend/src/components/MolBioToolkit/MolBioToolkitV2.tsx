@@ -599,7 +599,8 @@ function WorkspaceTabs({
                     <div
                         key={tab.id}
                         data-workspace-id={tab.id}
-                        className={`group flex min-w-[12rem] items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
+                        title={tab.title || 'Untitled'}
+                        className={`group flex min-w-[12rem] max-w-[20rem] shrink-0 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
                             tab.id === activeId
                                 ? 'border-cyan-500/50 bg-slate-800 text-slate-100'
                                 : 'border-slate-700 bg-slate-900/70 text-slate-400 hover:border-slate-500 hover:text-slate-200'
