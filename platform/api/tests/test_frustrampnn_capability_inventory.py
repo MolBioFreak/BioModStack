@@ -125,8 +125,13 @@ def test_pinned_frustrampnn_capability_inventory_is_complete_and_content_bound()
     assert recorded_sha256 == hashlib.sha256(rfc8785.dumps(hash_preimage)).hexdigest()
 
     runtime = inventory["runtime_identity"]
-    assert runtime == {
-        "image_path": FRUSTRAMPNN_RUNTIME_IDENTITY.configured_sif_path,
+    # image_path records where the sealed probe ran, not where an installation keeps
+    # the image; the product's own check (load_capability_inventory) excludes it for
+    # the same reason, so the installed location must not decide this test.
+    inventory_image = runtime["image_path"]
+    assert Path(inventory_image).is_absolute()
+    assert Path(inventory_image).name == FRUSTRAMPNN_RUNTIME_IDENTITY.sif_name
+    assert {key: value for key, value in runtime.items() if key != "image_path"} == {
         "image_sha256": FRUSTRAMPNN_RUNTIME_IDENTITY.sif_sha256,
         "executable_path": FRUSTRAMPNN_RUNTIME_IDENTITY.executable_path,
         "executable_sha256": FRUSTRAMPNN_RUNTIME_IDENTITY.executable_sha256,
@@ -143,7 +148,7 @@ def test_pinned_frustrampnn_capability_inventory_is_complete_and_content_bound()
     assert help_evidence["command"] == [
         "apptainer",
         "exec",
-        "/mnt/BioModStack/apptainer/frustrampnn.sif",
+        inventory_image,
         "/opt/venv/bin/frustrampnn",
         "predict",
         "--help",
@@ -165,7 +170,7 @@ def test_pinned_frustrampnn_capability_inventory_is_complete_and_content_bound()
         assert option["disposition_reason"]
 
     for required_text in (
-        "apptainer exec /mnt/BioModStack/apptainer/frustrampnn.sif /opt/venv/bin/frustrampnn predict --help",
+        f"apptainer exec {inventory_image} /opt/venv/bin/frustrampnn predict --help",
         FRUSTRAMPNN_RUNTIME_IDENTITY.sif_sha256,
         FRUSTRAMPNN_RUNTIME_IDENTITY.executable_path,
         FRUSTRAMPNN_RUNTIME_IDENTITY.checkpoint_id,

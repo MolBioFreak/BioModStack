@@ -5,7 +5,7 @@
     <author email="noreply@example.com" href="https://biomodstack.invalid">BioModStack</author>
     <content src="index.html" />
     <access origin="https://localhost" />
-    <access origin="https://bigboy.taileb3a90.ts.net" />
+    <access origin="https://node.example.ts.net" />
     <access origin="http://10.0.2.2:8000" />
     <allow-navigation href="https://localhost/*" />
     <allow-intent href="http://*/*" />
@@ -18,7 +18,7 @@
     <preference name="AndroidXEnabled" value="true" />
     <preference name="GradlePluginKotlinEnabled" value="true" />
     <preference name="GradlePluginKotlinVersion" value="1.9.24" />
-    <preference name="BMS_API_ORIGIN" value="https://bigboy.taileb3a90.ts.net" />
+    <preference name="BMS_API_ORIGIN" value="https://node.example.ts.net" />
     <preference name="scheme" value="https" />
     <preference name="hostname" value="localhost" />
     <preference name="android-minSdkVersion" value="24" />
