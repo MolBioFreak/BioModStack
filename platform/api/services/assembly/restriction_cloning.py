@@ -9,6 +9,7 @@ the source sequences are never edited.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import asdict, replace
 from hashlib import sha256
 from typing import Any, Iterable
@@ -43,12 +44,25 @@ def _receipt(catalog: CatalogView, sequence: str, topology: str) -> tuple[dict[s
     return source, receipt
 
 
+# One suggest request digests the same sequence with the same enzymes many times (both insert orientations,
+# the same vector pair against several insert pairs, the tail path reusing the vector pair). The memo lives
+# only for the duration of one request and returns the identical immutable result.
+_DIGEST_MEMO: ContextVar[dict | None] = ContextVar("restriction_cloning_digest_memo", default=None)
+
+
 def _digest(catalog: CatalogView, sequence: str, topology: str, records: Iterable[RestrictionRecord]):
     records = list(records)
+    memo = _DIGEST_MEMO.get()
+    key = (sequence, topology, tuple(r.enzyme_id for r in records))
+    if memo is not None and key in memo:
+        return memo[key]
     source, receipt = _receipt(catalog, sequence, topology)
-    return simulate_digest(sequence=sequence, topology=topology, catalog=catalog, records=records,
-                           selected_enzyme_ids=[r.enzyme_id for r in records], source_receipt=source,
-                           catalog_receipt=receipt, persisted_identity=False)
+    result = simulate_digest(sequence=sequence, topology=topology, catalog=catalog, records=records,
+                             selected_enzyme_ids=[r.enzyme_id for r in records], source_receipt=source,
+                             catalog_receipt=receipt, persisted_identity=False)
+    if memo is not None:
+        memo[key] = result
+    return result
 
 
 def _candidate_records(catalog: CatalogView, names: list[str]) -> list[RestrictionRecord]:
@@ -119,11 +133,22 @@ def _single_cutters(sequence: str, topology: str, catalog: CatalogView, records:
     return {k: v[0] for k, v in _cutters(sequence, topology, catalog, records, exactly_one=True).items()}
 
 
+def _analyze(sequence: str, topology: str, catalog: CatalogView, records: list[RestrictionRecord]):
+    """Definite-site analysis, shared within one suggest request (the insert is read for single cutters and for all cutters)."""
+    memo = _DIGEST_MEMO.get()
+    key = ("analysis", sequence, topology, tuple(r.enzyme_id for r in records))
+    if memo is not None and key in memo:
+        return memo[key]
+    result = analyze_sequence(sequence=sequence, topology=topology, catalog=catalog, records=records, include_possible_sites=False)
+    if memo is not None:
+        memo[key] = result
+    return result
+
+
 def _cutters(sequence: str, topology: str, catalog: CatalogView, records: list[RestrictionRecord],
              *, exactly_one: bool) -> dict[str, list[dict[str, Any]]]:
     """Per enzyme, each definite site with one complete cut (cut position, end signature, site start)."""
-    analysis = analyze_sequence(sequence=sequence, topology=topology, catalog=catalog, records=records,
-                                include_possible_sites=False)
+    analysis = _analyze(sequence, topology, catalog, records)
     per: dict[str, list] = {}
     for occurrence in analysis.occurrences:
         if occurrence.certainty == "definite":
@@ -215,6 +240,12 @@ def _distinct(records: Iterable[RestrictionRecord]) -> list[RestrictionRecord]:
     return list({r.enzyme_id: r for r in records}.values())
 
 
+def _junction_sites(product, names: list[str]) -> list[dict[str, Any]]:
+    observed = observe_junction_sites(product, names) if len(names) <= 4 else []
+    return [{"between": f"{j['left_fragment_id']} → {j['right_fragment_id']}",
+             "regenerated": j["regenerated"], "destroyed": j["destroyed"], "note": j["note"]} for j in observed]
+
+
 def _evaluate(catalog: CatalogView, backbone: str, btopo: str, region, insert: str,
               vector_enzymes: tuple[RestrictionRecord, RestrictionRecord],
               insert_enzymes: tuple[RestrictionRecord, RestrictionRecord],
@@ -223,7 +254,8 @@ def _evaluate(catalog: CatalogView, backbone: str, btopo: str, region, insert: s
               backbone_features: list[dict[str, Any]] | None = None,
               insert_features: list[dict[str, Any]] | None = None,
               selection: dict[str, Any] | None = None,
-              force_orientation: str | None = None) -> dict[str, Any] | None:
+              force_orientation: str | None = None,
+              lazy_junctions: bool = False) -> dict[str, Any] | None:
     # One enzyme used for both vector ends: the single cut linearizes the backbone (one fragment).
     try:
         vector_digest = _digest(catalog, backbone, btopo, _distinct(vector_enzymes))
@@ -267,13 +299,11 @@ def _evaluate(catalog: CatalogView, backbone: str, btopo: str, region, insert: s
     seal, _notes = junction_seal(vector_fragment.right_end, vector_fragment.left_end)
     self_ok, _why = overhangs_compatible(vector_fragment.right_end, vector_fragment.left_end)
     names = sorted({r.canonical_name for r in (*vector_enzymes, *insert_enzymes)})
-    observed = observe_junction_sites(product, names) if len(names) <= 4 else []
-    junctions = [{"between": f"{j['left_fragment_id']} → {j['right_fragment_id']}",
-                  "regenerated": j["regenerated"], "destroyed": j["destroyed"], "note": j["note"]} for j in observed]
+    junctions = None if lazy_junctions else _junction_sites(product, names)
     directional = orientation != "either" and not self_ok
     if vector_enzymes[0].enzyme_id == vector_enzymes[1].enzyme_id:
         orientation = chosen_orientation  # single-enzyme cloning: one proposal per insert orientation
-    return {
+    result = {
         "vector_enzymes": [r.canonical_name for r in vector_enzymes],
         "insert_enzymes": [r.canonical_name for r in insert_enzymes],
         "directional": directional,
@@ -299,6 +329,9 @@ def _evaluate(catalog: CatalogView, backbone: str, btopo: str, region, insert: s
                       "insert_fragment_index": payload.fragment_index,
                       "insert_orientation": chosen_orientation},
     }
+    if lazy_junctions:
+        result["_lazy_junctions"] = (product, names)  # filled for the returned proposals only
+    return result
 
 
 def _tail_site(record: RestrictionRecord) -> str | None:
@@ -450,6 +483,18 @@ def selected_restriction_cloning(body: dict[str, Any], selection: dict[str, Any]
 
 
 def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
+    token = _DIGEST_MEMO.set({})
+    try:
+        return _suggest_restriction_cloning(body)
+    finally:
+        _DIGEST_MEMO.reset(token)
+
+
+def _evaluate_lazy(*args, **kwargs):
+    return _evaluate(*args, lazy_junctions=True, **kwargs)
+
+
+def _suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
     backbone = normalize_dna(body["backbone_sequence"])
     insert_full = normalize_dna(body["insert_sequence"])
     btopo = body.get("backbone_topology", "circular")
@@ -501,7 +546,7 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
     proposals: list[dict[str, Any]] = []
     seen: set[tuple] = set()
     for _rank, (a_id, b_id), (p_id, q_id), kind in candidates[:200]:
-        result = _evaluate(catalog, backbone, btopo, region, insert_full, (by_id[a_id], by_id[b_id]), (by_id[p_id], by_id[q_id]), vector_phosphate,
+        result = _evaluate_lazy(catalog, backbone, btopo, region, insert_full, (by_id[a_id], by_id[b_id]), (by_id[p_id], by_id[q_id]), vector_phosphate,
                            insert_topology=itopo, payload_region=(start, end) if explicit else None,
                            backbone_features=body.get("backbone_features") or [], insert_features=body.get("insert_features") or [])
         if result is None:
@@ -521,7 +566,7 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
     insert_multi = _cutters(insert_full, itopo, catalog, records, exactly_one=False)
     for v_id, w_id in _single_enzyme_pairs(vector_single, insert_multi, by_id, explicit, start, end)[:60]:
         for orientation in ("forward", "reverse"):
-            result = _evaluate(catalog, backbone, btopo, region, insert_full, (by_id[v_id], by_id[v_id]), (by_id[w_id], by_id[w_id]),
+            result = _evaluate_lazy(catalog, backbone, btopo, region, insert_full, (by_id[v_id], by_id[v_id]), (by_id[w_id], by_id[w_id]),
                                vector_phosphate, insert_topology=itopo, payload_region=(start, end) if explicit else None,
                                backbone_features=body.get("backbone_features") or [], insert_features=body.get("insert_features") or [],
                                force_orientation=orientation)
@@ -542,8 +587,11 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
     if classic_count() < limit:
         tail_added = 0
         payload = insert_full[start:end]
-        payload_all = analyze_sequence(sequence=payload, topology="linear", catalog=catalog, records=records, include_possible_sites=False)
-        payload_hits = {s.enzyme_id for s in payload_all.enzyme_summaries if s.recognition_site_count_definite}
+        # Only enzymes that cut the vector exactly once can be tail candidates, so scan the payload for those alone.
+        payload_hits: set[str] = set()
+        if vector_single:
+            payload_all = _analyze(payload, "linear", catalog, [by_id[k] for k in vector_single])
+            payload_hits = {s.enzyme_id for s in payload_all.enzyme_summaries if s.recognition_site_count_definite}
         free = [(k, v) for k, v in vector_single.items() if k not in payload_hits and _tail_site(by_id[k])]
         free.sort(key=lambda kv: (_enzyme_rank(by_id[kv[0]]), by_id[kv[0]].canonical_name))
         tail_candidates = []
@@ -554,7 +602,7 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
         tail_candidates.sort(key=lambda t: _pair_tier(by_id[t[0]], by_id[t[1]]))  # stable: keeps name order within a tier
         for a_id, b_id in tail_candidates[:300]:
             tailed, tailed_features, tails = _tailed_insert(body, (by_id[a_id], by_id[b_id]))
-            result = _evaluate(catalog, backbone, btopo, region, tailed, (by_id[a_id], by_id[b_id]), (by_id[a_id], by_id[b_id]), vector_phosphate,
+            result = _evaluate_lazy(catalog, backbone, btopo, region, tailed, (by_id[a_id], by_id[b_id]), (by_id[a_id], by_id[b_id]), vector_phosphate,
                                backbone_features=body.get("backbone_features") or [], insert_features=tailed_features)
             if result is None:
                 continue
@@ -579,6 +627,10 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
         if not _is_duplicate(proposal, deduped):
             deduped.append(proposal)
     proposals = deduped[:limit]
+    for proposal in proposals:
+        lazy = proposal.pop("_lazy_junctions", None)
+        if lazy is not None:
+            proposal["junction_sites"] = _junction_sites(*lazy)
     for proposal in proposals:
         proposal["selection"]["kind"] = proposal["kind"]
         primers, notes = _primer_choices(body, proposal["primer_tails"]) if proposal["primer_tails"] else ([], [])
