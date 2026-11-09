@@ -37,6 +37,11 @@ def cases():
         holder = copy.deepcopy(HOLDER)
         holder['pcr_row_1'][field] = 1
         invalid.append({'bulk_reagent_holder': holder})
+    for row, accepted_z in (({'z_low': 120000}, True), ({'z_low': 120000, 'z_high': 100000}, True),
+                            ({'z_high': 500}, False), ({'z_low': 1000, 'z_high': 1000}, False), ({'z_low': True}, False)):
+        holder = copy.deepcopy(HOLDER)
+        holder['micro_row_1'].update(row)
+        (valid.append(({'bulk_reagent_holder': holder}, True)) if accepted_z else invalid.append({'bulk_reagent_holder': holder}))
     for value in (True, '2132', 1.5, 0, -1, 2147483648, None):
         invalid.append({'bulk_reagent_holder': {**HOLDER, 'pcr_y_pitch': value}})
     for value in (True, '0', 1.5, None, -2147483649, 2147483648):
