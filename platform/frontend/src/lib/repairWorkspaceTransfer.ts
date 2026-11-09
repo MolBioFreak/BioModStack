@@ -26,3 +26,17 @@ export function transferFootprint(reference: unknown, channels: unknown[], geome
     });
     return rows.some(row => row === null) ? null : rows as { channel: number; well: string }[];
 }
+
+
+/** Display-only configured holder addressing; pump selection never repositions the shared head. */
+export function holderTransferFootprint(target: string, selected: unknown[]) {
+    const match = /^LOC_TROUGH_(MICRO|PCR)_ROW_([12])(?:_WELL_([1-8]))?$/.exec(target);
+    if (!match) return null;
+    const first = Number(match[3] || 1), micro = match[1] === 'MICRO';
+    const result = selected.map(channel => {
+        if (!Number.isInteger(channel) || Number(channel) < 0 || Number(channel) > 3) return null;
+        const well = micro ? Number(channel) + 1 : first + Number(channel) * 2;
+        return well > (micro ? 4 : 8) ? null : { channel: Number(channel), well: `${micro ? 'tube' : 'well'} ${well}` };
+    });
+    return result.some(row => row === null) ? null : result as { channel: number; well: string }[];
+}

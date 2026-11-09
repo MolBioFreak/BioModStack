@@ -145,7 +145,8 @@ export function BioXpMethodDeckWorkbench({ method, onChange, catalog, rootSchema
     const adoptEndpoint = (key: 'source' | 'destination') => {
         if (!endpointReady || action !== 'transfer') return;
         const labware = plan.labware.filter(l => plateBoundEndpoint({}, l.id, plan, stageState)?.station === station!.id);
-        updateInputs({ ...inputs, [key]: { ...object(inputs[key]), station: station!.id, location_id: station!.locationId, wells: [...selection.wells], ...(labware.length === 1 ? { labware_id: labware[0].id } : {}) } });
+        const { target: _target, holder_row: _row, ...endpoint } = object(inputs[key]);
+        updateInputs({ ...inputs, [key]: { ...endpoint, station: station!.id, location_id: station!.locationId, wells: [...selection.wells], ...(labware.length === 1 ? { labware_id: labware[0].id } : {}) } });
     };
     const endpointText = (key: string) => {
         const endpoint = object(inputs[key]);
