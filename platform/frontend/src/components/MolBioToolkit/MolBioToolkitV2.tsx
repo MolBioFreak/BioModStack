@@ -585,22 +585,22 @@ function WorkspaceTabs({
         if (rail && active) {
             const railBox = rail.getBoundingClientRect();
             const activeBox = active.getBoundingClientRect();
-            if (activeBox.left < railBox.left) {
-                rail.scrollLeft += activeBox.left - railBox.left;
-            } else if (activeBox.right > railBox.right) {
-                rail.scrollLeft += activeBox.right - railBox.right;
+            if (activeBox.top < railBox.top) {
+                rail.scrollTop += activeBox.top - railBox.top;
+            } else if (activeBox.bottom > railBox.bottom) {
+                rail.scrollTop += activeBox.bottom - railBox.bottom;
             }
         }
     }, [activeId, tabs]);
     return (
         <div className="shrink-0 border-b border-slate-700 bg-slate-900/80 px-2 py-1">
-            <div ref={railRef} className="flex gap-2 overflow-x-auto pb-1">
+            <div ref={railRef} className="flex max-h-28 flex-wrap gap-2 overflow-y-auto pb-1">
                 {tabs.map((tab) => (
                     <div
                         key={tab.id}
                         data-workspace-id={tab.id}
                         title={tab.title || 'Untitled'}
-                        className={`group flex min-w-[12rem] max-w-[20rem] shrink-0 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
+                        className={`group flex max-w-full shrink-0 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
                             tab.id === activeId
                                 ? 'border-cyan-500/50 bg-slate-800 text-slate-100'
                                 : 'border-slate-700 bg-slate-900/70 text-slate-400 hover:border-slate-500 hover:text-slate-200'

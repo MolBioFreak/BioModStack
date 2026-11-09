@@ -149,11 +149,11 @@ export function FragmentChooser({ onPick, kinds, label = 'Add from saved molecul
                     <li key={`${item.document_id}:${item.revision_id}`}>
                         <button
                             type="button"
-                            className="flex w-full min-w-0 items-center justify-between gap-2 rounded border border-slate-800 bg-slate-950/70 px-2 py-1 text-left hover:border-cyan-700"
+                            className="flex w-full min-w-0 flex-col items-start gap-0.5 rounded border border-slate-800 bg-slate-950/70 px-2 py-1 text-left hover:border-cyan-700"
                             onClick={() => onPick(item)}
                         >
-                            <span className="min-w-0 flex-1 truncate text-slate-200" title={`${item.name} r${item.revision_number}`}>{item.name} <span className="text-slate-500">r{item.revision_number}</span></span>
-                            <span className="min-w-0 max-w-[55%] truncate text-slate-400" title={`${item.length.toLocaleString()} bp · ${item.topology} · ${chooserOriginLabel(item)}`}>{item.length.toLocaleString()} bp · {item.topology} · {chooserOriginLabel(item)}</span>
+                            <span className="min-w-0 max-w-full break-words text-slate-200" title={`${item.name} r${item.revision_number}`}>{item.name} <span className="text-slate-500">r{item.revision_number}</span></span>
+                            <span className="min-w-0 max-w-full break-words text-slate-400" title={`${item.length.toLocaleString()} bp · ${item.topology} · ${chooserOriginLabel(item)}`}>{item.length.toLocaleString()} bp · {item.topology} · {chooserOriginLabel(item)}</span>
                         </button>
                     </li>
                 ))}
