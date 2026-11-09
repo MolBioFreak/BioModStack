@@ -209,7 +209,7 @@ export default defineConfig(({ mode }) => ({
     port: 18082,
     origin: 'http://127.0.0.1:18082',
     strictPort: true,
-    allowedHosts: ['compute-node.taileb3a90.ts.net'],
+    allowedHosts: ['bigboy.taileb3a90.ts.net'],
     // Prevent watching pipeline directories that can have millions of files
     watch: {
       ignored: [
