@@ -141,10 +141,8 @@ def wf_clone_container_config(lock_path: str | Path, assembly_tool: str = "flye"
     """
     lock_path = Path(lock_path).resolve()
     lock = json.loads(lock_path.read_text())
-    from scripts.validate_wf_clone_runtime import selected_images
-    cache = Path(lock['containers']['cache_dir'])
-    if not cache.is_absolute():
-        cache = lock_path.parent / cache
+    from scripts.validate_wf_clone_runtime import resolve_lock_path, selected_images
+    cache = resolve_lock_path(lock_path, lock['containers']['cache_dir'])
     def groovy(value):
         return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
     lines = [task_container_config(shell_options=('-euo', 'pipefail')), 'process {']

@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
+from phase0_roots import build_root, container_dir, results_dir, weights_root
 from verify_phase0_contract_report import classify_contract_report
 from verify_protenix_layout_report import classify_layout_report
 
@@ -267,13 +268,13 @@ def freeze_identity(repo: Path, cache: dict[Path, str]) -> dict[str, Any]:
     head_result = run_readonly(["git", "rev-parse", "HEAD"], cwd=repo)
     head = head_result["output_utf8"].strip() if head_result["exit_code"] == 0 else None
     files = [
-        ("protenix_image", Path("/mnt/BioModStack/apptainer/protenix.sif")),
-        ("confornets_image", Path("/mnt/BioModStack/apptainer/confornets-canonical-4c2d104b3d5c7474c5a5799ca7ac0a24ac9c74267693e234b47aae20638e200a.sif")),
-        ("frustrampnn_image", Path("/mnt/BioModStack/apptainer/frustrampnn.sif")),
-        ("protenix_v2_checkpoint", Path("/mnt/BioModStack/weights/protenix/checkpoint/protenix-v2.pt")),
-        ("confornets_openfold3_checkpoint", Path("/mnt/BioModStack/weights/openfold3/of3-p2-155k.pt")),
-        ("confornets_toy_state", Path("/mnt/BioModStack/build/confornets/confornets_sandbox/opt/confornets/repo/toy_assets/toy_benchmark/confornet/TM_0287v2_6QV1_B.pt")),
-        ("usalign_candidate", Path("/mnt/BioModStack/build/confornets/confornets_sandbox/opt/confornets/packages/USalign")),
+        ("protenix_image", container_dir() / "protenix.sif"),
+        ("confornets_image", container_dir() / "confornets-canonical-4c2d104b3d5c7474c5a5799ca7ac0a24ac9c74267693e234b47aae20638e200a.sif"),
+        ("frustrampnn_image", container_dir() / "frustrampnn.sif"),
+        ("protenix_v2_checkpoint", weights_root() / "protenix/checkpoint/protenix-v2.pt"),
+        ("confornets_openfold3_checkpoint", weights_root() / "openfold3/of3-p2-155k.pt"),
+        ("confornets_toy_state", build_root() / "confornets/confornets_sandbox/opt/confornets/repo/toy_assets/toy_benchmark/confornet/TM_0287v2_6QV1_B.pt"),
+        ("usalign_candidate", build_root() / "confornets/confornets_sandbox/opt/confornets/packages/USalign"),
     ]
     runtime_files = {label: identity_file(label, path, cache) for label, path in files}
     scripts: dict[str, Any] = {}
@@ -623,7 +624,7 @@ def classify_frustrampnn(vector_id: str, obs: Path, identity: dict[str, Any]) ->
                         resolved_source.relative_to(obs.resolve(strict=True))
                         evidence_tier = "fresh authenticated"
                     except ValueError:
-                        resolved_source.relative_to(Path("/mnt/BioModStack/bms_results").resolve(strict=True))
+                        resolved_source.relative_to(results_dir().resolve(strict=True))
                     source_ok = source.is_file() and not source.is_symlink() and sha256_file(source, {}) == report["source_sha256"]
                 except (OSError, ValueError):
                     source_ok = False

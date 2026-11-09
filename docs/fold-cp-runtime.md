@@ -82,7 +82,7 @@ sha256sum $BMS_CONTAINER_DIR/boltzgen.sif
 export APPTAINER_TMPDIR="$TMPDIR/foldcp-1d-build/tmp"
 export APPTAINER_CACHEDIR="$TMPDIR/foldcp-1d-build/cache"
 mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
-apptainer build --fakeroot $BMS_CONTAINER_DIR/<new-name>.sif apptainer/fold_cp.def
+apptainer build --fakeroot --build-arg container_dir=$BMS_CONTAINER_DIR $BMS_CONTAINER_DIR/<new-name>.sif apptainer/fold_cp.def
 ```
 
 Use a new filename, never overwrite an existing SIF or move an active alias.

@@ -80,7 +80,7 @@ process RunCloneValidation {
     def modelValidator = shellQuote("${codeRoot}/scripts/validate_clone_input_model.py")
     def validator = shellQuote("${codeRoot}/scripts/validate_wf_clone_runtime.py")
     def lock = shellQuote(lockPath)
-    def wfCloneSingularityCache = runtimeLock.containers.cache_dir
+    def wfCloneSingularityCache = "\$(${apiPython} ${validator} --lock ${lock} --resolve containers.cache_dir)"
     def wfCloneNxfHome = (params.wf_clone_nxf_home ?: System.getenv("NXF_HOME") ?: "${System.getenv('HOME')}/.nextflow").toString()
     """
     set -euo pipefail
@@ -120,7 +120,7 @@ PY
 
     mkdir -p wf_clone_out
     set +e
-    "\${BMS_NEXTFLOW_EXECUTABLE:-${runtimeLock.nextflow.executable}}" -log wf_clone.log run ${shellQuote(runtimeLock.patched_source.path)} \
+    "\${BMS_NEXTFLOW_EXECUTABLE:-${runtimeLock.nextflow.executable}}" -log wf_clone.log run "\$(${apiPython} ${validator} --lock ${lock} --resolve patched_source.path)" \
         -offline \
         -executor.cpus ${task.cpus} ${nestedMemory} \
         --disable_ping \

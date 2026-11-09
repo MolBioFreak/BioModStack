@@ -1,4 +1,7 @@
 # Protenix - Blackwell-compatible rebuild
+# Build arguments: container_dir (the install's container directory) and uv_binary
+# (path to a host uv executable), e.g.
+#   apptainer build --build-arg container_dir=$BMS_CONTAINER_DIR --build-arg uv_binary=$(command -v uv) <output>.sif apptainer/protenix.def
 # Rebuild strategy:
 # - Start from the currently deployed Protenix image to preserve official stack deps.
 # - Bake Protenix + cu128 Torch directly into the image with uv-managed installs.
@@ -6,10 +9,10 @@
 #   in the base image cannot target compute_120.
 # - Pin the upstream Protenix source revision that includes Protenix-v2 model support.
 Bootstrap: localimage
-From: /mnt/BioModStack/apptainer/protenix.sif
+From: {{ container_dir }}/protenix.sif
 
 %files
-    /home/dalab/.local/bin/uv /root/miniconda3/bin/uv
+    {{ uv_binary }} /root/miniconda3/bin/uv
 
 %post
     set -eu

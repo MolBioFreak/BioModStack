@@ -1,5 +1,6 @@
+# Build: apptainer build --build-arg container_dir=$BMS_CONTAINER_DIR <output>.sif apptainer/fold_cp.def
 Bootstrap: localimage
-From: /mnt/BioModStack/apptainer/boltzgen.sif
+From: {{ container_dir }}/boltzgen.sif
 
 %files
     apptainer/patches/fold-cp/prediction-cli-cp-topology.patch /opt/fold-cp-cli-cp-topology.patch

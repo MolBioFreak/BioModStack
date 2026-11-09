@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -80,6 +81,41 @@ export function buildMobileViewportContent(runtime = {}) {
   ].join(', ');
 }
 
+const IMAGE_ID_PATTERN = /^sha256:[0-9a-f]{64}$/;
+
+export function normalizeManagedRuntime(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const apiImageId = String(raw.apiImageId || '').trim();
+  const webImageId = String(raw.webImageId || '').trim();
+  const dataRoot = String(raw.dataRoot || '').trim().replace(/\/+$/, '');
+  if (!IMAGE_ID_PATTERN.test(apiImageId) || !IMAGE_ID_PATTERN.test(webImageId) || !dataRoot.startsWith('/')) return null;
+  return { apiImageId, webImageId, dataRoot };
+}
+
+export function parseManagedRuntimeReceipt(text) {
+  const values = {};
+  for (const line of String(text).split('\n')) {
+    const match = /^(BMS_MANAGED_API_IMAGE_ID|BMS_MANAGED_WEB_IMAGE_ID|BMS_HOST_DATA)=(.*)$/.exec(line.trim());
+    if (match) values[match[1]] = match[2].trim();
+  }
+  return normalizeManagedRuntime({
+    apiImageId: values.BMS_MANAGED_API_IMAGE_ID, webImageId: values.BMS_MANAGED_WEB_IMAGE_ID, dataRoot: values.BMS_HOST_DATA,
+  });
+}
+
+export async function readManagedRuntimeReceipt(env = process.env) {
+  const fromEnvironment = normalizeManagedRuntime({
+    apiImageId: env.BMS_MANAGED_API_IMAGE_ID, webImageId: env.BMS_MANAGED_WEB_IMAGE_ID, dataRoot: env.BMS_HOST_DATA,
+  });
+  if (fromEnvironment) return fromEnvironment;
+  const receiptPath = env.BMS_CORE_RUNTIME_ENV || path.join(os.homedir(), '.config', 'biomodstack', 'core-runtime.env');
+  try {
+    return parseManagedRuntimeReceipt(await fs.readFile(receiptPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 export function normalizeConfig(raw) {
   if (!raw || typeof raw !== 'object') {
     throw new Error('Runtime config must be a JSON object');
@@ -130,6 +166,7 @@ export function normalizeConfig(raw) {
     uiUpdateManifestPath,
     shellApiVersion: Number.isInteger(shellApiVersion) && shellApiVersion > 0 ? shellApiVersion : 1,
     bundledUiVersion,
+    managedRuntime: normalizeManagedRuntime(raw.managedRuntime),
   };
 }
 
@@ -522,7 +559,7 @@ export function buildBundleDescriptor(html, options = {}) {
   };
 }
 
-export function validateTailnetSelectionPayload(payload, environment, trustedOrigin) {
+export function validateTailnetSelectionPayload(payload, environment, trustedOrigin, managedRuntime = null) {
   const expected = environment === 'development'
     ? {
       frontendTarget: 'http://127.0.0.1:18082',
@@ -546,6 +583,12 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
   const revisionPattern = /^[0-9a-f]{40}$/;
   const digestPattern = /^sha256:[0-9a-f]{64}$/;
   const containerIdPattern = /^[0-9a-f]{64}$/;
+  // Production container identity comes from this installation's release receipt
+  // (embedded at build time); without it a production selection is refused.
+  const pins = managedRuntime && typeof managedRuntime === 'object' ? managedRuntime : {};
+  const managedRuntimeValid = digestPattern.test(String(pins.apiImageId || ''))
+    && digestPattern.test(String(pins.webImageId || ''))
+    && typeof pins.dataRoot === 'string' && pins.dataRoot.startsWith('/') && pins.dataRoot.length > 1;
   const nonEmptyBounded = (value, limit = 512) => (
     typeof value === 'string' && value.trim().length > 0 && value.length <= limit
   );
@@ -640,16 +683,16 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       const container = byName.get(name);
       const expectedIdentity = name === 'biomodstack-api'
         ? {
-          imageId: 'sha256:74bf34e32e2f5d0f72d3f6d117c1b4877c169e7a62c0da06ea05b75d5e0cd12c',
+          imageId: pins.apiImageId,
           cmdline: '/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 18000',
           cwd: '/app/platform/api',
           mounts: [{
-            type: 'bind', source: '/mnt/BioModStack', destination: '/var/lib/biomodstack',
+            type: 'bind', source: pins.dataRoot, destination: '/var/lib/biomodstack',
             mode: 'rw', rw: true, propagation: 'rprivate',
           }],
         }
         : {
-          imageId: 'sha256:7e79b645349216a2457cd2f64af53beb26d9041c7911ed8438d6708239017c3e',
+          imageId: pins.webImageId,
           cmdline: '/docker-entrypoint.sh nginx -g daemon off;',
           cwd: '/',
           mounts: [],
@@ -1306,6 +1349,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         !== JSON.stringify(payload.development_frontend_listener?.listener_reports)
     ) reject();
   } else {
+    if (!managedRuntimeValid) reject();
     const proxy = payload.tailnet_production_proxy;
     if (
       !validContainerSet(payload.managed_api_runtime, ['biomodstack-api'], localBuild.revision)
@@ -1546,7 +1590,7 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
       const detail = payload && payload.detail ? String(payload.detail) : 'HTTP ' + response.status;
       throw new Error('Environment selection failed: ' + detail);
     }
-    validateTailnetSelectionPayload(payload, environment, configured.origin);
+    validateTailnetSelectionPayload(payload, environment, configured.origin, runtime.managedRuntime);
     const remoteUiUrl = new URL(String(runtime.remoteUiUrl || configured.origin + '/'));
     if (remoteUiUrl.origin !== configured.origin) {
       throw new Error('Remote UI origin does not match the authenticated Tailnet control origin.');
@@ -2999,6 +3043,7 @@ export async function patchIndexHtml(indexPath, runtimeConfig = {}) {
 export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const runtimeConfig = normalizeConfig(await readJson(args.config));
+  if (!runtimeConfig.managedRuntime) runtimeConfig.managedRuntime = await readManagedRuntimeReceipt();
   const frontendDir = await resolveFrontendDir(runtimeConfig.frontendCheckout);
   const packageJsonPath = path.join(frontendDir, 'package.json');
   const nodeModulesPath = path.join(frontendDir, 'node_modules');

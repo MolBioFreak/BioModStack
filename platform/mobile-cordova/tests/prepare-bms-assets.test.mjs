@@ -6,6 +6,15 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import * as prepareAssets from '../scripts/prepare-bms-assets.mjs';
 
+const MANAGED_RUNTIME = {
+  apiImageId: 'sha256:' + 'a1'.repeat(32),
+  webImageId: 'sha256:' + 'b2'.repeat(32),
+  dataRoot: '/srv/bms-data',
+};
+const validateSelection = (payload, environment, origin) => (
+  prepareAssets.validateTailnetSelectionPayload(payload, environment, origin, MANAGED_RUNTIME)
+);
+
 import {
   buildBundleDescriptor,
   buildMobileShellCss,
@@ -121,8 +130,8 @@ function exactCurrentSelectionReceipt(environment) {
     pid,
     cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope`,
     image_id: name === 'biomodstack-api'
-      ? 'sha256:74bf34e32e2f5d0f72d3f6d117c1b4877c169e7a62c0da06ea05b75d5e0cd12c'
-      : 'sha256:7e79b645349216a2457cd2f64af53beb26d9041c7911ed8438d6708239017c3e',
+      ? MANAGED_RUNTIME.apiImageId
+      : MANAGED_RUNTIME.webImageId,
     cmdline: name === 'biomodstack-api'
       ? '/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000'
       : '/docker-entrypoint.sh nginx -g daemon off;',
@@ -131,7 +140,7 @@ function exactCurrentSelectionReceipt(environment) {
     process_reports: [containerProcessReport(name, marker, pid)],
     readonly_rootfs: false,
     mounts: name === 'biomodstack-api' ? [{
-      type: 'bind', source: '/mnt/BioModStack', destination: '/var/lib/biomodstack',
+      type: 'bind', source: MANAGED_RUNTIME.dataRoot, destination: '/var/lib/biomodstack',
       mode: 'rw', rw: true, propagation: 'rprivate',
     }] : [],
   });
@@ -157,8 +166,8 @@ function exactCurrentSelectionReceipt(environment) {
     listener_inode_owners: { [inode]: [pid] },
     container_host_pids: [pid],
     runtime_image_id: name === 'biomodstack-api'
-      ? 'sha256:74bf34e32e2f5d0f72d3f6d117c1b4877c169e7a62c0da06ea05b75d5e0cd12c'
-      : 'sha256:7e79b645349216a2457cd2f64af53beb26d9041c7911ed8438d6708239017c3e',
+      ? MANAGED_RUNTIME.apiImageId
+      : MANAGED_RUNTIME.webImageId,
     runtime_cmdline: name === 'biomodstack-api'
       ? '/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000'
       : '/docker-entrypoint.sh nginx -g daemon off;',
@@ -399,6 +408,7 @@ test('normalizeConfig fills in phone-friendly mobile viewport defaults while pre
     uiUpdateManifestPath: '/api/mobile-ui/channels/phone/manifest',
     shellApiVersion: 1,
     bundledUiVersion: 'bundled',
+    managedRuntime: null,
   });
   assert.ok(config.mobileMinimumScale < config.mobileInitialScale);
 });
@@ -702,10 +712,10 @@ test('remote-live loader preserves a compatible downloaded bundle and activates 
 test('selection response contract accepts exact development and production receipts and rejects cross-environment identities', () => {
   const receipt = exactCurrentSelectionReceipt;
 
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.doesNotThrow(() => validateSelection(
     receipt('development'), 'development', 'https://node.example.ts.net',
   ));
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.doesNotThrow(() => validateSelection(
     receipt('production'), 'production', 'https://node.example.ts.net',
   ));
   // The managed launcher execs `python -m uvicorn` directly (no uv/script shim).
@@ -715,7 +725,7 @@ test('selection response contract accepts exact development and production recei
     report.cmdline = report.argv.join(' ');
   }
   moduleDevelopment.api_listeners = moduleDevelopment.development_api_listener.listener_reports;
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.doesNotThrow(() => validateSelection(
     moduleDevelopment, 'development', 'https://node.example.ts.net',
   ));
   const reloadDevelopment = receipt('development');
@@ -732,7 +742,7 @@ test('selection response contract accepts exact development and production recei
   );
   reloadReport.cmdline = reloadReport.argv.join(' ');
   reloadDevelopment.api_listeners = reloadDevelopment.development_api_listener.listener_reports;
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.doesNotThrow(() => validateSelection(
     reloadDevelopment, 'development', 'https://node.example.ts.net',
   ));
 
@@ -741,7 +751,7 @@ test('selection response contract accepts exact development and production recei
   unapprovedReport.argv.push('--proxy-headers');
   unapprovedReport.cmdline = unapprovedReport.argv.join(' ');
   unapprovedDevelopment.api_listeners = unapprovedDevelopment.development_api_listener.listener_reports;
-  assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.throws(() => validateSelection(
     unapprovedDevelopment, 'development', 'https://node.example.ts.net',
   ));
   const reorderedMount = receipt('production');
@@ -754,18 +764,18 @@ test('selection response contract accepts exact development and production recei
   reorderedMount.container_runtime.containers.find(
     (item) => item.name === 'biomodstack-api',
   ).mounts[0] = { ...reordered };
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.doesNotThrow(() => validateSelection(
     reorderedMount, 'production', 'https://node.example.ts.net',
   ));
   const fractionalTimestamp = receipt('production');
   fractionalTimestamp.health.local_api.payload.build.build_time = '2026-07-27T05:29:07.904235Z';
   fractionalTimestamp.health.tailnet_api.payload.build.build_time = '2026-07-27T05:29:07.904235Z';
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.doesNotThrow(() => validateSelection(
     fractionalTimestamp, 'production', 'https://node.example.ts.net',
   ));
 
   const multiWorker = receipt('production');
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.doesNotThrow(() => validateSelection(
     multiWorker, 'production', 'https://node.example.ts.net',
   ));
   const swappedWorkerMap = structuredClone(multiWorker);
@@ -773,7 +783,7 @@ test('selection response contract accepts exact development and production recei
     { container_pid: 1, host_pid: 203 },
     { container_pid: 27, host_pid: 202 },
   ];
-  assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.throws(() => validateSelection(
     swappedWorkerMap, 'production', 'https://node.example.ts.net',
   ));
 
@@ -798,7 +808,7 @@ test('selection response contract accepts exact development and production recei
   rogueWebListener.listener_inode_owners[180801].push(999);
   rogueWebListener.listener_reports.push(rogueWebReport);
   rogueWebOwner.frontend_listeners = rogueWebListener.listener_reports;
-  assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.throws(() => validateSelection(
     rogueWebOwner, 'production', 'https://node.example.ts.net',
   ));
 
@@ -818,7 +828,7 @@ test('selection response contract accepts exact development and production recei
   proxy.listener_inode_owners[180811].push(999);
   proxy.listener_reports.push(rogueProxyReport);
   rogueProxyOwner.tailnet_production_proxy_listeners = proxy.listener_reports;
-  assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.throws(() => validateSelection(
     rogueProxyOwner, 'production', 'https://node.example.ts.net',
   ));
 
@@ -1006,7 +1016,7 @@ test('selection response contract accepts exact development and production recei
   ]) {
     const malformed = receipt('production');
     mutation(malformed);
-    assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
+    assert.throws(() => validateSelection(
       malformed, 'production', 'https://node.example.ts.net',
     ));
   }
@@ -1022,7 +1032,7 @@ test('selection response contract accepts exact development and production recei
   ]) {
     const malformed = receipt('development');
     mutation(malformed);
-    assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
+    assert.throws(() => validateSelection(
       malformed, 'development', 'https://node.example.ts.net',
     ));
   }
@@ -1030,14 +1040,14 @@ test('selection response contract accepts exact development and production recei
 
 test('selection receipt requires both mobile update routes on the independent publisher', () => {
   const receipt = exactCurrentSelectionReceipt('development');
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.doesNotThrow(() => validateSelection(
     receipt, 'development', 'https://node.example.ts.net',
   ));
 
   for (const path of ['/api/mobile-ui', '/api/mobile-apk']) {
     const coupled = exactCurrentSelectionReceipt('development');
     coupled.serve_handlers[path].Proxy = `http://127.0.0.1:18000${path}`;
-    assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
+    assert.throws(() => validateSelection(
       coupled, 'development', 'https://node.example.ts.net',
     ));
   }
@@ -1109,7 +1119,7 @@ print(json.dumps(closures, sort_keys=True))
     production.workflow_adapter_listener,
     exactCurrentSelectionReceipt('production').workflow_adapter_listener,
   );
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.doesNotThrow(() => validateSelection(
     JSON.parse(JSON.stringify(production)),
     'production',
     'https://node.example.ts.net',
@@ -1137,7 +1147,7 @@ print(json.dumps(closures, sort_keys=True))
     development,
     exactCurrentSelectionReceipt('development'),
   );
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+  assert.doesNotThrow(() => validateSelection(
     development,
     'development',
     'https://node.example.ts.net',
@@ -1196,7 +1206,7 @@ test('selection contract follows the API health verdict instead of mirroring its
     payload.readiness.checks.restriction_products = { ready: true, required: true, status: 'evidence_unavailable' };
     payload.readiness.checks.telemetry_collection.future_sample_count = 0;
   }
-  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(evolved, 'development', origin));
+  assert.doesNotThrow(() => validateSelection(evolved, 'development', origin));
 
   for (const mutation of [
     (value) => { value.health.local_api.payload.status = 'degraded'; },
@@ -1211,7 +1221,7 @@ test('selection contract follows the API health verdict instead of mirroring its
     const malformed = structuredClone(evolved);
     mutation(malformed);
     assert.throws(
-      () => prepareAssets.validateTailnetSelectionPayload(malformed, 'development', origin),
+      () => validateSelection(malformed, 'development', origin),
       /mismatched runtime identity/,
       mutation.toString(),
     );
@@ -1555,4 +1565,32 @@ test('Update UI downloads when the channel publishes a different bundle or none 
     assert.equal(calls.installs, 1, JSON.stringify(pluginStatus));
     assert.match(statusNode.textContent, /Installed UI 0\.4\.14/);
   }
+});
+
+test('production selection trusts only the identity this install embedded at build time', () => {
+  const production = exactCurrentSelectionReceipt('production');
+  const origin = 'https://node.example.ts.net';
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(production, 'production', origin, MANAGED_RUNTIME));
+  for (const missing of [null, undefined, {}, { ...MANAGED_RUNTIME, apiImageId: 'mutable:latest' }, { ...MANAGED_RUNTIME, dataRoot: 'relative' }]) {
+    assert.throws(() => prepareAssets.validateTailnetSelectionPayload(production, 'production', origin, missing), /mismatched runtime identity/);
+  }
+  for (const other of [{ ...MANAGED_RUNTIME, apiImageId: 'sha256:' + 'c3'.repeat(32) }, { ...MANAGED_RUNTIME, webImageId: 'sha256:' + 'c3'.repeat(32) }, { ...MANAGED_RUNTIME, dataRoot: '/srv/other' }]) {
+    assert.throws(() => prepareAssets.validateTailnetSelectionPayload(production, 'production', origin, other), /mismatched runtime identity/);
+  }
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(exactCurrentSelectionReceipt('development'), 'development', origin));
+});
+
+test('the managed runtime comes from the launcher receipt or the environment, never from constants', async () => {
+  const receipt = [
+    'BMS_MANAGED_API_IMAGE_ID=' + MANAGED_RUNTIME.apiImageId,
+    'BMS_MANAGED_WEB_IMAGE_ID=' + MANAGED_RUNTIME.webImageId,
+    'BMS_HOST_DATA=' + MANAGED_RUNTIME.dataRoot + '/',
+    'BMS_STATE_DIR=/ignored',
+  ].join('\n');
+  assert.deepEqual(prepareAssets.parseManagedRuntimeReceipt(receipt), MANAGED_RUNTIME);
+  assert.equal(prepareAssets.parseManagedRuntimeReceipt('BMS_HOST_DATA=/srv/x'), null);
+  assert.deepEqual(await prepareAssets.readManagedRuntimeReceipt({
+    BMS_MANAGED_API_IMAGE_ID: MANAGED_RUNTIME.apiImageId, BMS_MANAGED_WEB_IMAGE_ID: MANAGED_RUNTIME.webImageId, BMS_HOST_DATA: MANAGED_RUNTIME.dataRoot,
+  }), MANAGED_RUNTIME);
+  assert.equal(await prepareAssets.readManagedRuntimeReceipt({ BMS_CORE_RUNTIME_ENV: '/nonexistent/core-runtime.env' }), null);
 });

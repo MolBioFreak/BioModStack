@@ -64,8 +64,34 @@ def require_string(parent: dict[str, Any], key: str) -> str:
     return value
 
 
+def _shared_data_root() -> Path:
+    """Shared (production) data root: BMS_HOST_DATA, else the install profile, else ~/.biomodstack."""
+    configured = os.environ.get("BMS_HOST_DATA", "").strip()
+    if configured:
+        return Path(configured)
+    repo = str(Path(__file__).resolve().parents[1])
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    from biomodstack_runtime_profile import configured_data_root_candidates
+    candidates = configured_data_root_candidates()
+    return candidates[0] if candidates else Path.home() / ".biomodstack"
+
+
+def _runtime_home() -> Path:
+    base = os.environ.get("XDG_DATA_HOME", "").strip() or str(Path.home() / ".local" / "share")
+    return Path(base) / "biomodstack" / "runtime"
+
+
+def expand_lock_location(raw: str) -> str:
+    """A lock names installation locations symbolically; identities (digests) stay in the lock."""
+    for token, root in (("${BMS_SHARED_DATA}", _shared_data_root), ("${BMS_RUNTIME_HOME}", _runtime_home)):
+        if raw == token or raw.startswith(token + "/"):
+            return str(root() / raw[len(token):].lstrip("/"))
+    return raw
+
+
 def resolve_lock_path(lock_path: Path, raw: str) -> Path:
-    candidate = Path(raw)
+    candidate = Path(expand_lock_location(raw))
     return candidate if candidate.is_absolute() else (lock_path.parent / candidate).resolve()
 
 
@@ -220,14 +246,23 @@ def validate_runtime(lock_path: Path, selected_model: str, assembly_tool: str = 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lock", required=True, type=Path)
-    parser.add_argument("--model", required=True)
+    parser.add_argument("--model")
     parser.add_argument("--assembly-tool", choices=("flye", "canu"), default="flye")
-    parser.add_argument("--output", required=True)
-    return parser.parse_args()
+    parser.add_argument("--output")
+    parser.add_argument("--resolve", choices=("patched_source.path", "containers.cache_dir"),
+                        help="print this lock location resolved for this installation and exit")
+    args = parser.parse_args()
+    if not args.resolve and not (args.model and args.output):
+        parser.error("--model and --output are required unless --resolve is given")
+    return args
 
 
 def main() -> int:
     args = parse_args()
+    if args.resolve:
+        section, key = args.resolve.split(".")
+        print(resolve_lock_path(args.lock, str(load_object(args.lock)[section][key])))
+        return 0
     try:
         provenance = validate_runtime(args.lock, args.model, args.assembly_tool)
     except ValidationFailure as exc:
