@@ -129,7 +129,6 @@ def test_pinned_frustrampnn_capability_inventory_is_complete_and_content_bound()
     # the image; the product's own check (load_capability_inventory) excludes it for
     # the same reason, so the installed location must not decide this test.
     inventory_image = runtime["image_path"]
-    assert Path(inventory_image).is_absolute()
     assert Path(inventory_image).name == FRUSTRAMPNN_RUNTIME_IDENTITY.sif_name
     assert {key: value for key, value in runtime.items() if key != "image_path"} == {
         "image_sha256": FRUSTRAMPNN_RUNTIME_IDENTITY.sif_sha256,

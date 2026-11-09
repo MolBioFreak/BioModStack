@@ -69,7 +69,7 @@
       ],
       "properties": {
         "image_path": {
-          "const": "/mnt/BioModStack/apptainer/frustrampnn.sif"
+          "const": "$BMS_CONTAINER_DIR/frustrampnn.sif"
         },
         "image_sha256": {
           "$ref": "#/$defs/sha256"
