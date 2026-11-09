@@ -1137,11 +1137,42 @@
             "title": "Floor Clearance Steps",
             "type": "integer"
           },
+          "plate_type": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Plate Type"
+          },
           "search_speed_native": {
             "default": 300,
             "exclusiveMinimum": 0,
             "title": "Search Speed Native",
             "type": "integer"
+          },
+          "holder_row": {
+            "anyOf": [
+              {
+                "enum": [
+                  "micro_row_1",
+                  "micro_row_2",
+                  "pcr_row_1",
+                  "pcr_row_2"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Holder Row"
           },
           "z_motor_current": {
             "default": 25,
@@ -1149,7 +1180,7 @@
             "type": "integer"
           },
           "sensing": {
-            "default": "hybrid",
+            "default": "pressure",
             "enum": [
               "pressure",
               "capacitive",
@@ -5158,6 +5189,24 @@
             "title": "Location Id",
             "type": "integer"
           },
+          "holder_row": {
+            "anyOf": [
+              {
+                "enum": [
+                  "micro_row_1",
+                  "micro_row_2",
+                  "pcr_row_1",
+                  "pcr_row_2"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Holder Row"
+          },
           "expected": {
             "default": true,
             "title": "Expected",
@@ -5263,7 +5312,7 @@
             "type": "string"
           },
           "sensing": {
-            "default": "hybrid",
+            "default": "pressure",
             "enum": [
               "pressure",
               "capacitive",
@@ -5271,6 +5320,19 @@
             ],
             "title": "Sensing",
             "type": "string"
+          },
+          "plate_type": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Plate Type"
           }
         },
         "required": [
@@ -5330,11 +5392,42 @@
             "title": "Floor Clearance Steps",
             "type": "integer"
           },
+          "plate_type": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Plate Type"
+          },
           "search_speed_native": {
             "default": 300,
             "exclusiveMinimum": 0,
             "title": "Search Speed Native",
             "type": "integer"
+          },
+          "holder_row": {
+            "anyOf": [
+              {
+                "enum": [
+                  "micro_row_1",
+                  "micro_row_2",
+                  "pcr_row_1",
+                  "pcr_row_2"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Holder Row"
           },
           "z_motor_current": {
             "default": 25,
@@ -5342,7 +5435,7 @@
             "type": "integer"
           },
           "sensing": {
-            "default": "hybrid",
+            "default": "pressure",
             "enum": [
               "pressure",
               "capacitive",

@@ -15,6 +15,7 @@ import re
 from typing import Annotated, Any, Literal
 
 from jsonschema import Draft202012Validator
+from bioxp_holder_endpoints import HOLDER_TARGETS, holder_row
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_serializer, field_validator, model_serializer, model_validator
 
 
@@ -91,6 +92,16 @@ class TransferEndpoint(Structure):
     station: str
     location_id: int | str
     wells: list[str]
+    target: str | None = Field(default=None, json_schema_extra={"enum": HOLDER_TARGETS})
+
+    @model_validator(mode="after")
+    def holder_identity(self):
+        if "target" in self.model_fields_set:
+            if self.target not in HOLDER_TARGETS:
+                raise ValueError("target: expected an exact Bulk reagent holder target")
+            if self.station != "LOC_TROUGH" or str(self.location_id) != "16":
+                raise ValueError("holder target requires station LOC_TROUGH and location_id 16")
+        return self
 
 
 class WorkflowTransferIntent(Structure):
@@ -356,6 +367,11 @@ def _convert(value: Any, schema: dict, field: str = "intent") -> Any:
 
 
 def native_intent(intent: dict) -> dict:
+    if intent.get("operation") == "move" and "target" in intent:
+        if set(intent) != {"operation", "target", "camera_offset"} or intent["camera_offset"] is not False:
+            raise ValueError("named holder move requires target and camera_offset false only")
+        holder_row(intent["target"])
+        return deepcopy(intent)
     step = _convert(intent, _SCHEMA["properties"]["steps"]["items"])
     if "location_id" in step and (str(step["location_id"]) not in _NATIVE["locations"] or step["location_id"] == 32):
         raise ValueError("location_id: expected OEM locationID, not UNKNOWN")
@@ -393,14 +409,21 @@ def expand_transfer(intent: dict) -> list[tuple[dict, int, str, str]]:
                 {"operation": operation, "channels": t.channels, "volume_ul": t.volume_ul, "speed": intent[f"{operation}_speed"]},
                 {"operation": "lift", "location_id": endpoint.location_id, "height_steps": intent[f"{side}_lift_height_steps"]},
             ]
+            if endpoint.target is not None:
+                steps[0] = {"operation": "move", "target": endpoint.target, "camera_offset": False}
+                for index in (1, 3):
+                    steps[index]["holder_row"] = holder_row(endpoint.target)
             converted = [native_intent(s) for s in steps]
-            station = _NATIVE["locations"][str(converted[0]["location_id"])]
+            station = _NATIVE["locations"][str(int(endpoint.location_id))]
             expanded.extend((s, pair, station, well) for s in converted)
     return expanded
 
 
 def _actions(step: dict) -> list[tuple[str, dict]]:
     op = step["operation"]
+    if op == "move" and "target" in step:
+        return [("pipette_position", {"operation": "move_sequence", "targets": [
+            {"target": step["target"], "camera_offset": False}]})]
     if op in ("move", "lower", "lift"):
         return [("pipette_position", step)]
     if op not in ("aspirate", "dispense", "mix"):

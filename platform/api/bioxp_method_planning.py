@@ -485,10 +485,11 @@ def liquid_detection_settings(value):
 def positioned_transfer_recipes(inputs, detected_wells=None):
     """Position around a resolved recipe; the native owner alone expands strokes.
 
-    detected_wells carries (location_id, well) pairs already searched in this run,
-    so first-draw detection runs once per source well across the whole method.
+    detected_wells carries legacy (location_id, well) pairs or named holder
+    (holder, target, channel) identities already searched across this method.
     """
-    from bioxp_workflow_authoring import native_intent
+    from bioxp_workflow_authoring import native_intent, TransferEndpoint
+    from bioxp_holder_endpoints import holder_row
     allowed = {'source', 'destination', 'channels', 'volume_ul', 'aspirate_speed', 'recipe',
                'source_position_flag', 'destination_position_flag',
                'source_lift_height_steps', 'destination_lift_height_steps', 'liquid_detection',
@@ -497,8 +498,7 @@ def positioned_transfer_recipes(inputs, detected_wells=None):
         raise ValueError(f'Unsupported class Transfer fields: {sorted(set(inputs) - allowed)}')
     source, destination = inputs['source'], inputs['destination']
     for endpoint in (source, destination):
-        if set(endpoint) - {'station', 'location_id', 'wells'}:
-            raise ValueError('Unsupported Transfer endpoint fields')
+        TransferEndpoint.model_validate(endpoint)
     names = {'source_position_flag': 'source move height', 'destination_position_flag': 'destination move height',
              'source_lift_height_steps': 'source lift height', 'destination_lift_height_steps': 'destination lift height'}
     missing = [label for key, label in names.items() if key not in inputs]
@@ -523,6 +523,11 @@ def positioned_transfer_recipes(inputs, detected_wells=None):
         def position(operation, side, well):
             endpoint = inputs[side]
             params = {'operation': operation, 'location_id': endpoint['location_id']}
+            if 'target' in endpoint:
+                if operation == 'move':
+                    return {'operation': 'position', 'positioning': native_intent({
+                        'operation': 'move', 'target': endpoint['target'], 'camera_offset': False})}
+                params['holder_row'] = holder_row(endpoint['target'])
             if operation == 'move':
                 params.update(well=well, position_flag=inputs[side + '_position_flag'])
             elif operation == 'lift':
@@ -532,10 +537,14 @@ def positioned_transfer_recipes(inputs, detected_wells=None):
         # Search precedes ordinary calibrated lowering; authored retraction and
         # post-dispense motions precede ordinary lifts. Never reorder the arrays.
         key = (int(source['location_id']), str(sw).upper())
-        detect = detection['when'] == 'every_draw' or (detection['when'] == 'first_draw' and key not in detected_wells)
+        # Named alignment plus selected physical channels is distinct from a legacy
+        # trough reference and from every other holder alignment. Do not mark the
+        # unselected tubes searched when one channel draws.
+        keys = {('holder', source['target'], channel) for channel in inputs['channels']} if 'target' in source else {key}
+        detect = detection['when'] == 'every_draw' or (detection['when'] == 'first_draw' and not keys <= detected_wells)
         if detect and recipe.get('aspiration_tracking') is None:
             # The search replaces the calibrated lower: Z stops on each channel's surface.
-            detected_wells.add(key)
+            detected_wells.update(keys)
             planned = inputs.get('source_liquid_channels')
             expected_ul = (inputs.get('source_expected_ul') or [None] * (pair + 1))[pair]
             geometry = inputs.get('source_vessel_geometry') or {}
@@ -545,12 +554,14 @@ def positioned_transfer_recipes(inputs, detected_wells=None):
                      'tolerance_fraction': float(detection['mismatch_tolerance_percent']) / 100,
                      'response': detection['mismatch_response']} if expected_ul else None
             recipe['liquid_detection'] = {'location_id': key[0], 'expected': bool(detection['expected']),
+                **({'holder_row': holder_row(source['target'])} if 'target' in source else {}),
                 'on_contact_delay_ms': int(detection['on_contact_delay_ms']),
                 **({'volume_check': check} if check else {}),
                 **({'expected_channels': planned[pair]} if detection['expected'] and planned else {}),
                 'mode': detection['mode'], 'start_mode': detection['start_mode'],
                 'search_speed_native': detection['search_speed_native'], 'sensing': detection['sensing'],
-                'detection_id': f'pair-{pair}-{key[1]}', **detection_steps,
+                'detection_id': (f"pair-{pair}-{source['target']}-channels-" + '-'.join(map(str, sorted(inputs['channels']))))
+                    if 'target' in source else f'pair-{pair}-{key[1]}', **detection_steps,
                 # Source plate profile, so the robot can apply a saved plate-type depth offset.
                 **({'plate_type': str(inputs['source_plate_type'])} if inputs.get('source_plate_type') else {})}
             recipe['before_liquid'] = recipe.get('before_liquid', [])
@@ -684,8 +695,10 @@ def prepare_occurrences(occurrences, method, dependencies):
                 if not samples or len(endpoints[0]) * samples != len(endpoints[1]):
                     raise ValueError('Source/destination head-reference pair count differs')
                 inputs['channel_transfers'] = [
-                    {'channel': src['channel'], 'source': {'labware_id': src['labware_id'], 'well': src['well']},
-                     'destination': {'labware_id': dst['labware_id'], 'well': dst['well']},
+                    {'channel': src['channel'], 'source': {'labware_id': src['labware_id'], 'well': src['well'],
+                                **({'target': inputs['source']['target']} if 'target' in inputs['source'] else {})},
+                     'destination': {'labware_id': dst['labware_id'], 'well': dst['well'],
+                                     **({'target': inputs['destination']['target']} if 'target' in inputs['destination'] else {})},
                      'volume_ul': inputs['volume_ul'], 'pair_index': pair // samples,
                      **({'aliquot_index': pair % samples} if multi is not None else {})}
                     for pair, destinations in enumerate(endpoints[1])

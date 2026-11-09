@@ -436,6 +436,9 @@ def emit_rows(rows):
                         lift_row = {'step_id': row['step_id'], 'intent': {'operation': 'lift',
                             'location_id': intent['destination']['location_id'],
                             'height_steps': intent['destination_lift_height_steps']}}
+                        if 'target' in intent['destination']:
+                            from bioxp_holder_endpoints import holder_row
+                            lift_row['intent']['holder_row'] = holder_row(intent['destination']['target'])
                         if 'required_capability' in row:
                             lift_row['required_capability'] = row['required_capability']
                         lifted = preview(WorkflowPreviewRequest.model_validate({'draft': {

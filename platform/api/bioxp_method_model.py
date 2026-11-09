@@ -4,10 +4,7 @@ import json
 from bioxp_workflow_authoring import discovery
 
 SCHEMA = 'bms.bioxp-method.v1'
-# Native Bulk reagent holder named XY targets (robot oem_deck_catalog.public_target_keys).
-# Names only; the robot resolves coordinates from its saved holder calibration.
-HOLDER_TARGETS = [f'LOC_TROUGH_{kind}_ROW_{row}{suffix}' for kind in ('MICRO', 'PCR') for row in (1, 2)
-                  for suffix in ([''] if kind == 'MICRO' else [''] + [f'_WELL_{well}' for well in range(1, 9)])]
+from bioxp_holder_endpoints import HOLDER_TARGETS
 EXPRESSION_OPS = ('literal', 'param', 'arg', 'loop_index', 'loop_item', 'add', 'sub', 'mul', 'div', 'eq', 'ne', 'lt', 'le', 'gt', 'ge', 'and', 'or', 'not')
 
 
