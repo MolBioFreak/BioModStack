@@ -222,6 +222,7 @@ class RestrictionCloningProposal(BaseModel):
     vector_end_seal: str
     vector_length: int
     insert_payload_length: int
+    insert_contributed_length: int
     product_length: int
     product_sequence: str
     vector_source_segments: list[tuple[int, int]]
