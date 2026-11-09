@@ -31,6 +31,10 @@ vi.mock('../../src/structureViewer/runtime/StructureSceneController', () => ({
         }
         async reconcileScene() { return controllerState.reconcileResult; }
         subscribe() { return () => undefined; }
+        subscribeMeasurementResults() { return () => undefined; }
+        getMeasurementResults() { return []; }
+        diagnostics() { return { completedSceneGeneration: 0 }; }
+        getEntityType() { return undefined; }
         async dispose() { return undefined; }
     },
 }));
@@ -81,7 +85,7 @@ describe('Mol* public load-state contract', () => {
         const style = document.createElement('style');
         style.textContent = '[data-theme="midnight"] { --bg-primary: #0b1020; } [data-theme="light"] { --bg-primary: #ffffff; }';
         document.head.append(style);
-        localStorage.setItem('bms-theme', 'midnight');
+        localStorage.setItem('biomodstack-theme', 'midnight');
         function SwitchTheme() {
             const { setTheme } = useTheme();
             return <button onClick={() => setTheme('light')}>Light theme</button>;
@@ -102,7 +106,7 @@ describe('Mol* public load-state contract', () => {
             expect(controllerState.loadedScenes).toHaveLength(1);
         } finally {
             style.remove();
-            localStorage.removeItem('bms-theme');
+            localStorage.removeItem('biomodstack-theme');
             document.documentElement.removeAttribute('data-theme');
         }
     });

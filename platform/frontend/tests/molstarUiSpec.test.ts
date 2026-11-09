@@ -16,27 +16,31 @@ const paneSource = readFileSync(
     'utf8',
 );
 
-test('BMS Molstar UI specs exclude process-global query-symbol behaviors', () => {
+test('BMS Molstar UI specs keep the stock behaviors and exclude process-global query-symbol behaviors', () => {
     assert.doesNotMatch(source, /PluginSpec\.Behavior\(MAQualityAssessment/);
-    assert.match(source, /PluginBehaviors\.CustomProps\.AccessibleSurfaceArea/);
-    assert.match(source, /filter\(/);
+    // Stock Mol* behaviors are kept whole (commit 7a87fca restored them); BMS only adds its own.
+    assert.match(source, /\.\.\.\(defaults\.behaviors \?\? \[\]\)/);
+    assert.doesNotMatch(source, /AccessibleSurfaceArea/);
+    assert.match(source, /PluginSpec\.Behavior\(MolViewSpec\)/);
     assert.match(source, /BmsPLDDTQualityAssessment/);
 });
 
-test('full viewers expose Molstar settings while compact viewers can explicitly hide them', () => {
-    assert.match(source, /ShowSettings,\s*!hideControls/);
-    assert.match(source, /ShowSelectionMode,\s*!hideControls/);
-    assert.match(source, /ShowAnimation,\s*!hideControls/);
-    assert.match(source, /left:\s*hideControls\s*\?\s*'none'/);
-    assert.match(source, /right:\s*hideControls\s*\?\s*'none'/);
+test('every viewer keeps the stock Molstar viewport buttons; hideControls no longer removes tools', () => {
+    for (const button of ['ShowExpand', 'ShowControls', 'ShowSettings', 'ShowSelectionMode', 'ShowAnimation']) {
+        assert.match(source, new RegExp(`\\[PluginConfig\\.Viewport\\.${button},\\s*true\\]`));
+    }
+    assert.doesNotMatch(source, /ShowSettings,\s*!hideControls/);
+    assert.doesNotMatch(source, /left:\s*hideControls\s*\?\s*'none'/);
+    assert.doesNotMatch(source, /right:\s*hideControls\s*\?\s*'none'/);
     assert.match(viewerSource, /hideControls\s*=\s*false/);
     assert.match(paneSource, /<StructureWorkbench[\s\S]*?mode="standard"[\s\S]*?height="100%"/);
-    assert.doesNotMatch(paneSource, /<StructureWorkbench[\s\S]{0,500}?mode="standard"[\s\S]{0,500}?hideControls/);
+    // A standard-mode workbench may pass hideControls={false} (the default) but never hides controls.
+    assert.doesNotMatch(paneSource, /<StructureWorkbench[\s\S]{0,500}?mode="standard"[\s\S]{0,500}?hideControls=\{(?!false\})/);
 });
 
-test('embedded controls and sequence stay inside the clipped viewer bounds', () => {
-    assert.match(source, /controlsDisplay:\s*'landscape'/);
-    assert.match(source, /regionState:\s*\{ left: 'collapsed', top: 'full', right: 'hidden', bottom: 'hidden' \}/);
+test('embedded controls and sequence stay responsive inside the viewer bounds once opened', () => {
+    assert.match(source, /controlsDisplay:\s*'reactive'/);
+    assert.match(source, /regionState:\s*\{ left: 'collapsed', top: 'full', right: 'full', bottom: 'full' \}/);
 });
 
 test('Molstar viewers open view-only; the controls wrench stays available but is not pre-activated', () => {
