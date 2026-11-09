@@ -9,6 +9,7 @@ import pytest
 
 import biomodstack_tailnet as tailnet
 
+REAL_VALIDATED_WORKFLOW_ADAPTER_LISTENER = tailnet._validated_workflow_adapter_listener
 REAL_SERVICE_OWNERSHIP_SNAPSHOT = tailnet._service_ownership_snapshot
 REAL_RESTORE_SERVICE_OWNERSHIP = tailnet._restore_service_ownership
 REAL_VALIDATED_RUNTIME_CONTAINER_LISTENER = tailnet._validated_runtime_container_listener
@@ -2049,3 +2050,16 @@ def test_managed_adapter_exact_installed_identity(monkeypatch, tmp_path, bad):
     if bad == "revision": report["build_revision"] = "b" * 40
     if bad == "unit": report["cgroup"] += "-wrong"
     assert tailnet._adapter_identity_policy_matches(tmp_path, "owner@example.com", runtime_revision=revision, reports=[report]) is (bad is None)
+
+def test_managed_adapter_receipt_preserves_observed_executable(monkeypatch, tmp_path):
+    python = tmp_path / "installed/runtime/python-runtime/bin/python3.12"
+    report = {"pid": 101, "argv": ["managed-python", "-m", "uvicorn"], "executable": str(python)}
+    closure = {"listener_reports": [report]}
+    monkeypatch.setattr(tailnet, "_installed_api_python", lambda root: (python, True))
+    monkeypatch.setattr(tailnet, "_host_listener_closure", lambda port: {"listener_reports": [dict(report)]})
+    monkeypatch.setattr(tailnet, "_adapter_identity_policy_matches", lambda *args, **kwargs: True)
+    monkeypatch.setattr(tailnet, "_tailnet_owner_login", lambda: "owner@example.com")
+    monkeypatch.setattr(tailnet, "_git_revision", lambda root: "a" * 40)
+    receipt = REAL_VALIDATED_WORKFLOW_ADAPTER_LISTENER(tmp_path, "a" * 40)
+    assert receipt["listener_reports"][0]["executable"] == str(python)
+    assert receipt["listener_reports"][0]["argv"] == report["argv"]
