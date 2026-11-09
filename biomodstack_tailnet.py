@@ -1488,6 +1488,7 @@ def _validated_workflow_adapter_listener(
     closure = confirmed
     reports = confirmed_reports
     api_root = root / "platform" / "api"
+    managed_python = _installed_api_python(root)[1]
     canonical_reports: list[dict[str, object]] = []
     for report in reports:
         if not isinstance(report, Mapping):
@@ -1496,7 +1497,8 @@ def _validated_workflow_adapter_listener(
         if not isinstance(argv, list):
             raise TailnetEnvironmentError("workflow adapter listener argv is unavailable")
         canonical = dict(report)
-        canonical["executable"] = str(api_root / ".venv" / "bin" / "python")
+        if not managed_python:
+            canonical["executable"] = str(api_root / ".venv" / "bin" / "python")
         canonical["cmdline"] = " ".join(str(item) for item in argv)
         canonical_reports.append(canonical)
     closure["listener_reports"] = canonical_reports
