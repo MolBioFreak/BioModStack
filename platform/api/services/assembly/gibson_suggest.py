@@ -20,6 +20,7 @@ from .feature_mapping import region_positions, stored_to_features
 from .feature_types import Material
 from .pydna_gibson import design_gibson
 from .region_match import Matcher, Piece, Source, cover_target, reverse_complement
+from .repeat_breakpoints import RepeatAnalysis, choose_boundaries
 from .types import AssemblyError, AssemblyFragment
 
 SMALL_MATCH = 150  # matched pieces shorter than this may be absorbed into synthesis (variant 3)
@@ -141,8 +142,16 @@ def _snap_protected(pieces: list[Piece], protected: list[tuple[int, int]], notes
     return [p for p in pieces if p.end > p.start]
 
 
-def _split(pieces: list[Piece], cuts: list[int], cap: int | None) -> list[Piece]:
-    """Cut matched pieces at fixed boundaries and into PCR-sized chunks. New DNA stays whole."""
+MIN_PCR_PIECE = 100
+
+
+def _split(pieces: list[Piece], cuts: list[int], cap: int | None, analysis: RepeatAnalysis | None = None,
+           repeat_info: dict[str, Any] | None = None) -> list[Piece]:
+    """Cut matched pieces at fixed boundaries and into PCR-sized chunks. New DNA stays whole.
+
+    With a repeat analysis the chunk boundaries keep out of repeated sequence and keep the copies of a repeat in one PCR
+    product wherever a layout exists; otherwise the chunks are equal.
+    """
     out: list[Piece] = []
     for piece in pieces:
         if not piece.is_match:
@@ -150,6 +159,23 @@ def _split(pieces: list[Piece], cuts: list[int], cap: int | None) -> list[Piece]
             continue
         edges = sorted({piece.start, piece.end, *(c for c in cuts if piece.start < c < piece.end)})
         for a, b in zip(edges, edges[1:]):
+            inner = None
+            if analysis is not None and cap and b - a > cap:
+                plan = analysis.plan_segment(a, b, min_len=MIN_PCR_PIECE, max_len=cap)
+                if plan.valid is not None:
+                    inner = choose_boundaries(plan.valid, a, b, cap, min_piece=MIN_PCR_PIECE)
+                    if inner is not None and repeat_info is not None:
+                        repeat_info.setdefault("notes", []).extend(n for n in plan.notes if n not in repeat_info.get("notes", []))
+                        repeat_info["uncontained"] = repeat_info.get("uncontained", 0) + len(plan.uncontained)
+                        repeat_info["needed"] = max(repeat_info.get("needed", 0), plan.needed)
+                        if plan.uncontained:
+                            exact = analysis.smallest_max_len_keeping_repeats_whole(min_len=MIN_PCR_PIECE, start=max(cap + 1, plan.needed), segment=(a, b))
+                            if exact:
+                                repeat_info["exact"] = max(repeat_info.get("exact", 0), exact)
+            if inner is not None:
+                bounds = [a, *inner, b]
+                out.extend(piece.sub(x, y) for x, y in zip(bounds, bounds[1:]))
+                continue
             count = -(-(b - a) // cap) if cap else 1
             step = -(-(b - a) // count)
             out.extend(piece.sub(x, min(x + step, b)) for x in range(a, b, step))
@@ -297,6 +323,14 @@ def suggest_gibson(req: SuggestRequest) -> SuggestResult:
                 protected_spans.append(positions)
     origin = min(cuts) if cuts and req.target.circular else None
     base = cover_target(target, [], circular=req.target.circular, origin=origin, matcher=matcher)
+    if (req.target.circular and req.max_pcr_length and not cuts and not protected_spans
+            and len(base.pieces) == 1 and base.pieces[0].is_match and base.pieces[0].end - base.pieces[0].start > req.max_pcr_length):
+        # One source covers the whole circular target, so where the construct starts is free: start it where the repeats can stay whole.
+        trial = RepeatAnalysis(target[base.rotation:] + target[:base.rotation], circular=True,
+                               overlap=req.overlap + req.overlap % 2, min_anneal=req.min_anneal)
+        best = trial.plan(min_len=MIN_PCR_PIECE, max_len=req.max_pcr_length) if trial.has_repeats else None
+        if best is not None and best.restricts and best.origin:
+            base = cover_target(target, [], circular=True, origin=(base.rotation + best.origin) % n, matcher=matcher)
     rotation = base.rotation
     rotated = target[rotation:] + target[:rotation] if req.target.circular else target
     notes: list[str] = []
@@ -304,7 +338,12 @@ def suggest_gibson(req: SuggestRequest) -> SuggestResult:
               for span in protected_spans if span]
     pieces = _snap_protected(base.pieces, ranges, notes)
     shift = [(c - rotation) % n for c in cuts]
-    pieces = _split(pieces, [c for c in shift if c], req.max_pcr_length)
+    repeat_info: dict[str, Any] = {}
+    analysis = None
+    if req.max_pcr_length and any(p.is_match and p.end - p.start > req.max_pcr_length for p in pieces):
+        analysis = RepeatAnalysis(rotated, circular=req.target.circular, overlap=req.overlap + req.overlap % 2, min_anneal=req.min_anneal)
+    pieces = _split(pieces, [c for c in shift if c], req.max_pcr_length, analysis, repeat_info)
+    notes.extend(n for n in repeat_info.get("notes", []) if n not in notes)
     if not req.allow_synthesis and any(not p.is_match for p in pieces):
         return SuggestResult(proposals=[], diagnostics=["Part of the target is not found in the supplied sources "
                                                         "and synthesis is not allowed"])
@@ -329,7 +368,13 @@ def suggest_gibson(req: SuggestRequest) -> SuggestResult:
         try:
             result = _evaluate(request, rotated, req.target.circular)
         except AssemblyError as exc:
-            diagnostics.append(f"Variant {variant} not offered: {exc}")
+            if repeat_info.get("uncontained"):
+                diagnostics.append(
+                    f"Variant {variant} not offered: {' '.join(repeat_info['notes'])} Raise the PCR length limit to "
+                    f"{repeat_info.get('exact') or repeat_info['needed']} bp or more so those copies can share one PCR product. ({exc})"
+                )
+            else:
+                diagnostics.append(f"Variant {variant} not offered: {exc}")
             continue
         counts = {"pcr": sum(f.preparation == "pcr" for f in outs),
                   "synthesis": sum(f.preparation == "synthesis" for f in outs),

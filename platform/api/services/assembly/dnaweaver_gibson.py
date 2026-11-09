@@ -15,6 +15,7 @@ from pydna.dseqrecord import Dseqrecord
 from .common import orient_fragment
 from .gibson import simulate_gibson
 from .pydna_gibson import _candidate_sequence
+from .repeat_breakpoints import RepeatAnalysis
 from .types import AssemblyError, AssemblyFragment, AssemblyProduct
 
 ENGINE = "dnaweaver"
@@ -84,6 +85,8 @@ def _ordered_vendor_fragments_from_quote(
     *,
     circular: bool,
     overlap_length: int,
+    origin: int = 0,
+    original_length: int | None = None,
 ) -> tuple[list[AssemblyFragment], list[dict[str, int]]]:
     segments = sorted(assembly_plan.items())
     if len(segments) < 2:
@@ -120,15 +123,18 @@ def _ordered_vendor_fragments_from_quote(
                 },
             )
         )
-        intervals.append(
-            {
-                "fragment_index": index,
-                "start": int(start),
-                "end": int(end),
-                "core_length": int(end) - int(start),
-                "order_length": len(purchase_sequence),
-            }
-        )
+        interval = {
+            "fragment_index": index,
+            "start": int(start),
+            "end": int(end),
+            "core_length": int(end) - int(start),
+            "order_length": len(purchase_sequence),
+        }
+        if origin and original_length:
+            # the plan started at `origin` of the submitted target: also give the core in the submitted coordinates
+            interval["target_start"] = (int(start) + origin) % original_length
+            interval["target_end"] = (int(end) + origin - 1) % original_length + 1
+        intervals.append(interval)
     return fragments, intervals
 
 
@@ -365,7 +371,14 @@ def plan_vendor_gibson(
         raise AssemblyError("Vendor price and lead time must be non-negative")
 
     dw = _dnaweaver()
-    try:
+
+    def _quote(sequence: str, allowed: Any, witness: list[int] = ()) -> Any:
+        method_kwargs: dict[str, Any] = {}
+        if allowed is not None:
+            method_kwargs["cut_location_constraints"] = [
+                lambda _sequence, _allowed=allowed: (lambda index: bool(_allowed[index]))
+            ]
+            method_kwargs["suggest_cuts"] = sorted(set(analysis.suggested_cuts(allowed)) | set(witness))
         vendor = dw.CommercialDnaOffer(
             name=vendor_name,
             sequence_constraints=[
@@ -384,32 +397,72 @@ def plan_vendor_gibson(
                 max_segment_length=max_fragment_length,
                 max_fragments=50,
                 duration=0,
+                **method_kwargs,
             ),
             supplier=vendor,
             coarse_grain=10,
             fine_grain=1,
         )
-        quote = station.get_quote(target, with_assembly_plan=True)
+        return station.get_quote(sequence, with_assembly_plan=True)
+
+    # Breakpoints: stay out of repeated sequence and keep the copies of a repeat in one fragment where a layout allows it.
+    analysis = RepeatAnalysis(target, circular=circular, overlap=overlap_length)
+    # DNA Weaver never cuts a piece of exactly max_segment_length (its end is exclusive), so plan with one base less.
+    usable_max = max_fragment_length - 1
+    cut_plan = analysis.plan(min_len=min_fragment_length, max_len=usable_max, shown_max=max_fragment_length)
+    origin = cut_plan.origin if (circular and cut_plan.restricts) else 0
+    working = target[origin:] + target[:origin] if origin else target
+    repeat_notes = list(cut_plan.notes)
+    quote = None
+    try:
+        quote = _quote(working, cut_plan.valid if cut_plan.restricts else None, cut_plan.witness)
     except Exception as exc:
-        detail = str(exc).strip() or type(exc).__name__
-        raise AssemblyError(f"DNA Weaver planning failed: {detail}") from None
-    if not quote.accepted or not quote.assembly_plan:
+        if not cut_plan.restricts:
+            detail = str(exc).strip() or type(exc).__name__
+            raise AssemblyError(f"DNA Weaver planning failed: {detail}") from None
+    if cut_plan.restricts and (quote is None or not quote.accepted or not quote.assembly_plan):
+        # no plan under the repeat rules: fall back to the unrestricted plan rather than refuse
+        repeat_notes = ["Repeat-aware breakpoints left no feasible layout; the plan uses unrestricted breakpoints."]
+        origin, working, cut_plan = 0, target, None
+        try:
+            quote = _quote(target, None)
+        except Exception as exc:
+            detail = str(exc).strip() or type(exc).__name__
+            raise AssemblyError(f"DNA Weaver planning failed: {detail}") from None
+    if quote is None or not quote.accepted or not quote.assembly_plan:
         raise AssemblyError(
-            f"DNA Weaver could not produce a vendor plan: {quote.message or 'no accepted plan'}"
+            f"DNA Weaver could not produce a vendor plan: {getattr(quote, 'message', None) or 'no accepted plan'}"
         )
 
     fragments, intervals = _ordered_vendor_fragments_from_quote(
-        target,
+        working,
         quote.assembly_plan,
         circular=circular,
         overlap_length=overlap_length,
+        origin=origin,
+        original_length=len(target),
     )
-    product, exact_count = _validate_with_pydna(
-        fragments,
-        target=target,
-        circular=circular,
-        overlap_length=overlap_length,
-    )
+    try:
+        product, exact_count = _validate_with_pydna(
+            fragments,
+            target=target,
+            circular=circular,
+            overlap_length=overlap_length,
+        )
+    except AssemblyError as exc:
+        if cut_plan is not None and cut_plan.uncontained:
+            exact = analysis.smallest_max_len_keeping_repeats_whole(
+                min_len=min_fragment_length, start=max(usable_max + 1, cut_plan.needed)
+            )
+            advice = (
+                f"Set the maximum fragment length to {exact + 1} bp or more so the copies of every repeat share a fragment"
+                if exact
+                else "No maximum fragment length within twice your setting keeps every repeat in one fragment"
+            )
+            raise AssemblyError(
+                f"{' '.join(cut_plan.notes)} {advice}, or assemble the construct hierarchically. (pydna: {exc})"
+            ) from None
+        raise
     planner_version = version("dnaweaver")
     validator_version = version("pydna")
     planning_parameters = {
@@ -427,6 +480,18 @@ def plan_vendor_gibson(
         circular=circular,
         overlap_length=overlap_length,
     )
+    if repeat_notes:
+        quality_checks.append(
+            {
+                "check_id": "repeat_breakpoints",
+                "status": "advisory",
+                "detail": " ".join(repeat_notes),
+                "repeated_bases": int(analysis.rep_mask.sum()),
+                "contained_repeat_groups": len(cut_plan.contained) if cut_plan is not None else 0,
+                "split_repeat_groups": len(cut_plan.uncontained) if cut_plan is not None else 0,
+            }
+        )
+        quality_warnings.append(f"ADVISORY: {' '.join(repeat_notes)}")
     plan_checksum = _plan_checksum(
         target_checksum=target_checksum,
         circular=circular,
