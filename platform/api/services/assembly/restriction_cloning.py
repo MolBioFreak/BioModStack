@@ -80,8 +80,38 @@ def _supplier_tier(record: RestrictionRecord) -> int:
     return 0 if count >= 8 else 1 if count >= 3 else 2 if count >= 1 else 3
 
 
-def _pair_tier(*records: RestrictionRecord) -> int:
-    return max(_supplier_tier(r) for r in records)
+def _is_classic(record: RestrictionRecord) -> bool:
+    """Well supplied, a 6+ base unambiguous recognition site, and cohesive (non-blunt) ends (from the catalog record)."""
+    site = record.recognition.site_iupac
+    events = record.cleavage.events
+    return (_supplier_tier(record) == 0 and record.recognition.length_bp >= 6 and len(site) >= 6
+            and set(site.upper()) <= set("ACGT")
+            and bool(events) and all(e.overhang_kind != "blunt" and e.overhang_length_nt > 0 for e in events))
+
+
+def _enzyme_rank(record: RestrictionRecord) -> tuple[int, int]:
+    """(0 classic cloning enzyme | 1 well supplied but 4-base/blunt/ambiguous | 2 poorly supplied, supplier tier)."""
+    tier = _supplier_tier(record)
+    return (0 if _is_classic(record) else 1 if tier == 0 else 2, tier)
+
+
+def _pair_tier(*records: RestrictionRecord) -> tuple[int, int]:
+    return max(_enzyme_rank(r) for r in records)
+
+
+def _proposal_rank(proposal: dict[str, Any], by_name: dict[str, RestrictionRecord]) -> tuple[int, int]:
+    return _pair_tier(*(by_name[n] for n in proposal["vector_enzymes"] + proposal["insert_enzymes"]))
+
+
+def _same_circular_product(a: str, b: str) -> bool:
+    return len(a) == len(b) and (a in b + b or reverse_complement(a) in b + b)
+
+
+def _is_duplicate(result: dict[str, Any], kept: Iterable[dict[str, Any]]) -> bool:
+    """Same unordered vector pair, insert pair, orientation and circular product (rotation or reverse complement)."""
+    key = (frozenset(result["vector_enzymes"]), frozenset(result["insert_enzymes"]), result["insert_orientation"])
+    return any((frozenset(k["vector_enzymes"]), frozenset(k["insert_enzymes"]), k["insert_orientation"]) == key
+               and _same_circular_product(result["product_sequence"], k["product_sequence"]) for k in kept)
 
 
 def _single_cutters(sequence: str, topology: str, catalog: CatalogView, records: list[RestrictionRecord]) -> dict[str, dict[str, Any]]:
@@ -477,7 +507,7 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
         if result is None:
             continue
         signature = (result["vector_enzymes"][0], result["vector_enzymes"][1], result["insert_enzymes"][0], result["insert_enzymes"][1])
-        if signature in seen:
+        if signature in seen or _is_duplicate(result, proposals):
             continue
         seen.add(signature)
         result["kind"] = kind
@@ -498,7 +528,7 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
             if result is None or (result["selection"]["insert_orientation"] != orientation):
                 continue
             signature = (result["vector_enzymes"][0], result["insert_enzymes"][0], "single", orientation)
-            if signature in seen:
+            if signature in seen or _is_duplicate(result, proposals):
                 continue
             seen.add(signature)
             result["kind"] = "existing_flank_sites"
@@ -506,12 +536,16 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
             proposals.append(result)
 
     # Sites added to the insert through explicit primer tails (never an edit of the source).
-    if len(proposals) < limit:
+    def classic_count() -> int:
+        return sum(1 for p in proposals if _proposal_rank(p, by_id_name)[0] == 0)
+
+    if classic_count() < limit:
+        tail_added = 0
         payload = insert_full[start:end]
         payload_all = analyze_sequence(sequence=payload, topology="linear", catalog=catalog, records=records, include_possible_sites=False)
         payload_hits = {s.enzyme_id for s in payload_all.enzyme_summaries if s.recognition_site_count_definite}
         free = [(k, v) for k, v in vector_single.items() if k not in payload_hits and _tail_site(by_id[k])]
-        free.sort(key=lambda kv: (_supplier_tier(by_id[kv[0]]), by_id[kv[0]].canonical_name))
+        free.sort(key=lambda kv: (_enzyme_rank(by_id[kv[0]]), by_id[kv[0]].canonical_name))
         tail_candidates = []
         for a_id, a in free:
             for b_id, b in free:
@@ -525,21 +559,26 @@ def suggest_restriction_cloning(body: dict[str, Any]) -> dict[str, Any]:
             if result is None:
                 continue
             signature = (result["vector_enzymes"][0], result["vector_enzymes"][1], "tail")
-            if signature in seen:
+            if signature in seen or _is_duplicate(result, proposals):
                 continue
             seen.add(signature)
             result["kind"] = "primer_tail"
             result["primer_tails"] = tails
             result["prepared_insert_sequence"] = tailed
             proposals.append(result)
-            if len(proposals) >= limit * 3:
+            tail_added += 1
+            if tail_added >= limit * 3:
                 break
 
-    proposals.sort(key=lambda p: (not p["directional"], p["kind"] == "primer_tail", p["single_enzyme"],
-                                  p["vector_self_ligation"] != "not possible",
-                                  _pair_tier(*(by_id_name[n] for n in p["vector_enzymes"] + p["insert_enzymes"])),
+    proposals.sort(key=lambda p: (not p["directional"], _proposal_rank(p, by_id_name)[0], p["kind"] == "primer_tail",
+                                  p["single_enzyme"], p["vector_self_ligation"] != "not possible",
+                                  _proposal_rank(p, by_id_name)[1],
                                   set(p["vector_enzymes"]) != set(p["insert_enzymes"]), p["vector_enzymes"]))
-    proposals = proposals[:limit]
+    deduped: list[dict[str, Any]] = []
+    for proposal in proposals:
+        if not _is_duplicate(proposal, deduped):
+            deduped.append(proposal)
+    proposals = deduped[:limit]
     for proposal in proposals:
         proposal["selection"]["kind"] = proposal["kind"]
         primers, notes = _primer_choices(body, proposal["primer_tails"]) if proposal["primer_tails"] else ([], [])

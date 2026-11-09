@@ -10,7 +10,7 @@ from io import StringIO
 from typing import Any, Literal, Mapping
 
 from Bio import SeqIO
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictInt, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 from sqlalchemy import func, select
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -136,6 +136,11 @@ class SequenceImportRequest(BaseModel):
     source_provider: Literal["upload", "paste", "ncbi", "library"] | None = None
     source_id: str | None = Field(default=None, max_length=255)
 
+    @field_validator("topology_overrides", mode="before")
+    @classmethod
+    def accept_json_object_keys(cls, value: Any) -> Any:
+        return _int_ordinal_keys(value)
+
     @model_validator(mode="after")
     def require_one_source(self) -> "SequenceImportRequest":
         source_format = normalize_source_format(self.source_format)
@@ -222,6 +227,20 @@ def source_digest(request: SequenceImportRequest) -> str:
     if source_format in {"fasta", "genbank", "csv"}:
         return hashlib.sha256((request.source_text or "").encode("utf-8")).hexdigest()
     return hashlib.sha256(_canonical_json(_source_payload(request)).encode("utf-8")).hexdigest()
+
+
+def _int_ordinal_keys(value: Any) -> Any:
+    """JSON object keys are always strings: turn all-digit keys into ints, leave anything else to strict validation."""
+    if not isinstance(value, dict):
+        return value
+    out: dict[Any, Any] = {}
+    for key, topology in value.items():
+        if isinstance(key, str) and key.isascii() and key.isdigit():
+            key = int(key)
+        if key in out and out[key] != topology:
+            return value  # conflicting spellings of one ordinal: leave to existing validation
+        out[key] = topology
+    return out
 
 
 def _normalized_topology_overrides(
