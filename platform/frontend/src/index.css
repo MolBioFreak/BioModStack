@@ -642,6 +642,41 @@ html.bms-cordova-compact [data-bms-telemetry-lines='true'] {
   top: 0 !important;
 }
 
+/* Dashboard's Settings footer is a flex sibling, not a queue overlay.
+   Other mobile workspaces retain their existing dock/viewport contract. */
+html.bms-cordova-compact [data-bms-mobile-dock-flow='true'] .bms-mobile-operations-dock {
+  position: static;
+  flex-shrink: 0;
+  width: calc(100% - 1.5rem);
+  margin: 0.75rem auto;
+}
+
+html.bms-cordova-compact [data-bms-mobile-dock-flow='true'] .bms-layout-main {
+  min-height: 0;
+  padding-bottom: 0;
+}
+
+/* The compact desktop row has 16rem + 18rem minimum-width slider groups.
+   On the phone, keep the same controls but let each group own a full row. */
+html.bms-cordova-compact [data-bms-gpu-inline-controls='true'] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html.bms-cordova-compact [data-bms-gpu-inline-controls='true'] > div {
+  min-width: 0;
+  width: 100%;
+}
+
+html.bms-cordova-compact [data-bms-gpu-process-chips='true'] {
+  margin-left: 0;
+  justify-content: flex-start;
+}
+
+html.bms-cordova-compact [data-bms-gpu-inline-controls='true'] > button {
+  justify-self: start;
+}
+
 /* Keep the phone's controls visible without spending two rows in landscape. */
 @media (min-width: 700px) and (max-height: 500px) {
   [data-molbio-mobile-toolbar='true'] {

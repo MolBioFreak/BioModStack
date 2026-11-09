@@ -359,7 +359,7 @@ function GpuCompactProcessChips({ gpu }: { gpu: GPUStatus }) {
     const hiddenCount = Math.max(0, processes.length - visibleProcesses.length);
 
     return (
-        <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
+        <div data-bms-gpu-process-chips="true" className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
             {visibleProcesses.map((process) => (
                 <div
                     key={`${process.pid}-${process.name}`}
@@ -475,7 +475,7 @@ function GpuInlinePowerControl({
 
     if (compact) {
         return (
-            <div className="mb-1 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] px-2 py-1.5">
+            <div data-bms-gpu-inline-controls="true" className="mb-1 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] px-2 py-1.5">
                 <div className="flex min-w-[16rem] flex-[1.25] items-center gap-2">
                     <span className="inline-flex min-w-[3.2rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] px-2 py-1 text-center text-[10px] font-medium text-[var(--text-secondary)]">
                         {gpu.power_draw_w.toFixed(1)}W

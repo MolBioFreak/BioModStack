@@ -510,6 +510,7 @@ export function Layout({ children }: LayoutProps) {
     return (
         <div
             className="h-screen flex flex-col transition-colors duration-300 overflow-x-hidden"
+            data-bms-mobile-dock-flow={location.pathname === '/' ? 'true' : undefined}
             style={{
                 background: `linear-gradient(to bottom right, var(--bg-gradient-from), var(--bg-gradient-via), var(--bg-gradient-to))`
             }}
