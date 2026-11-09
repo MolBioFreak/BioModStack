@@ -999,6 +999,34 @@ def _listener_bind_addresses(port: int) -> set[str]:
     return addresses
 
 
+def _installed_api_python(root: Path) -> tuple[Path, bool]:
+    """Resolve the launcher's installed Python/CM publication with its owner.
+
+    Use its own interpreter, as python_runtime_guard does after host migration.
+    Never infer expected identity from the process being checked.
+    """
+    from biomodstack_runtime_profile import load_host_selectors
+    selectors = load_host_selectors()
+    selected = os.environ.get("BMS_PYTHON_ROOT") or selectors.get("BMS_PYTHON_ROOT")
+    if not selected:
+        from biomodstack_python_prerequisites import resolve_python_environment
+        resolved = resolve_python_environment(root)
+    else:
+        environment = dict(os.environ, BMS_PYTHON_ROOT=selected)
+        probe = subprocess.run(
+            [str(Path(selected) / "environment/bin/python"), "-B", "-c",
+             "import json,sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);"
+             "from biomodstack_python_prerequisites import resolve_python_environment;"
+             "r=resolve_python_environment(Path(sys.argv[1]));"
+             "print(json.dumps(None if r is None else {'python':r['python']}))",
+             str(root)], cwd=root, env=environment, check=True, capture_output=True, text=True,
+        )
+        resolved = json.loads(probe.stdout)
+    if resolved is not None:
+        return Path(resolved["python"]), True
+    return root / "platform/api/.venv/bin/python", False
+
+
 def _adapter_identity_policy_matches(
     root: Path,
     login: str,
@@ -1011,7 +1039,8 @@ def _adapter_identity_policy_matches(
         return False
     expected_cwd = str((root / "platform" / "api").resolve())
     expected_revision = _git_revision(root)
-    expected_python = (root / "platform" / "api" / ".venv" / "bin" / "python").resolve()
+    selected_python, managed_python = _installed_api_python(root)
+    expected_python = selected_python.resolve()
     expected_uvicorn = (root / "platform" / "api" / ".venv" / "bin" / "uvicorn").resolve()
     expected_args = [
         "workflow_adapter_app:app",
@@ -1034,10 +1063,15 @@ def _adapter_identity_policy_matches(
             isinstance(pid, int)
             and report.get("cwd") == expected_cwd
             and executable == expected_python
-            and len(argv) == 9
-            and Path(argv[0]).resolve() == expected_python
-            and Path(argv[1]).resolve() == expected_uvicorn
-            and argv[2:] == expected_args
+            and (
+                (managed_python and len(argv) == 10
+                 and argv[0] == str(selected_python)
+                 and argv[1:3] == ["-m", "uvicorn"] and argv[3:] == expected_args)
+                or (not managed_python and len(argv) == 9
+                    and Path(argv[0]).resolve() == expected_python
+                    and Path(argv[1]).resolve() == expected_uvicorn
+                    and argv[2:] == expected_args)
+            )
             and report.get("build_revision") == runtime_revision
             and _process_in_exact_systemd_unit(report.get("cgroup", ""), WORKFLOW_ADAPTER_SERVICE)
             and _pid_environment_value(pid, "BMS_TAILNET_CONTROL_SOURCE_REVISION") == expected_revision
@@ -1511,7 +1545,7 @@ def _validated_development_api_listener(
     if not isinstance(reports, list) or not reports:
         raise TailnetEnvironmentError("development API listener ownership reports are unavailable")
     expected_cwd = str((root / "platform" / "api").resolve())
-    expected_python = (root / "platform" / "api" / ".venv" / "bin" / "python").resolve()
+    expected_python = _installed_api_python(root)[0].resolve()
     expected_state = str((Path.home() / ".biomodstack-dev").resolve())
     expected_db = str((Path(expected_state) / "biomodstack.db").resolve())
     for report in reports:

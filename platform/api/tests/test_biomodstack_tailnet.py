@@ -44,6 +44,7 @@ def _nginx_process_report(
 
 @pytest.fixture(autouse=True)
 def _isolate_live_service_ownership(monkeypatch) -> None:
+    monkeypatch.setattr(tailnet, "_installed_api_python", lambda root: (root / "platform/api/.venv/bin/python", False))
     empty = tailnet.ServiceOwnershipSnapshot(files={}, active={})
     monkeypatch.setattr(tailnet, "_service_ownership_snapshot", lambda root, spec: empty)
     monkeypatch.setattr(tailnet, "_restore_service_ownership", lambda snapshot, root, mutations=None: None)
@@ -185,6 +186,7 @@ def test_adapter_policy_pins_and_verifies_loopback_binding(monkeypatch, tmp_path
 
 
 def test_adapter_identity_and_policy_must_match_one_listener(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(tailnet, "_installed_api_python", lambda root: (root / "platform/api/.venv/bin/python", False))
     revision = "a" * 40
     expected_cwd = str((tmp_path / "platform" / "api").resolve())
     expected_python = (tmp_path / "platform" / "api" / ".venv" / "bin" / "python").resolve()
@@ -2021,3 +2023,29 @@ def test_managed_api_rejects_coherent_extra_container_process(monkeypatch) -> No
         REAL_VALIDATED_RUNTIME_CONTAINER_LISTENER(
             runtime, container_name="biomodstack-api", port=8000,
         )
+
+@pytest.mark.parametrize("bad", [None, "argv", "executable", "cwd", "revision", "unit", "source", "login", "proxy", "bind"])
+def test_managed_adapter_exact_installed_identity(monkeypatch, tmp_path, bad):
+    revision = "a" * 40
+    python = tmp_path / "installed/releases/runtime-123/venv/bin/python"
+    report = {"pid": 101, "cwd": str(tmp_path / "platform/api"),
+              "executable": str(python), "build_revision": revision,
+              "cgroup": f"0::/user.slice/user-1000.slice/user@1000.service/app.slice/{tailnet.WORKFLOW_ADAPTER_SERVICE}",
+              "argv": [str(python), "-m", "uvicorn", "workflow_adapter_app:app", "--port", "18001", "--host", "127.0.0.1", "--no-proxy-headers", "--no-access-log"]}
+    env = {"BMS_TAILNET_CONTROL_SOURCE_REVISION": revision,
+           "BMS_TAILNET_CONTROL_ALLOWED_TAILSCALE_USERS": "owner@example.com",
+           "BMS_TAILNET_CONTROL_TRUSTED_PROXY_HOSTS": "127.0.0.1,::1",
+           "BMS_WORKFLOW_ADAPTER_BIND_HOST": "127.0.0.1"}
+    monkeypatch.setattr(tailnet, "_installed_api_python", lambda root: (python, True))
+    monkeypatch.setattr(tailnet, "_git_revision", lambda root: revision)
+    monkeypatch.setattr(tailnet, "_listener_bind_addresses", lambda port: {"127.0.0.1"})
+    monkeypatch.setattr(tailnet, "_pid_environment_value", lambda pid, key: env.get(key))
+    for key, field in [("source", "BMS_TAILNET_CONTROL_SOURCE_REVISION"), ("login", "BMS_TAILNET_CONTROL_ALLOWED_TAILSCALE_USERS"), ("proxy", "BMS_TAILNET_CONTROL_TRUSTED_PROXY_HOSTS"), ("bind", "BMS_WORKFLOW_ADAPTER_BIND_HOST")]:
+        if bad == key:
+            env[field] = "wrong"
+    if bad == "argv": report["argv"][2] = "http.server"
+    if bad == "executable": report["executable"] = "/usr/bin/python3"
+    if bad == "cwd": report["cwd"] = "/wrong"
+    if bad == "revision": report["build_revision"] = "b" * 40
+    if bad == "unit": report["cgroup"] += "-wrong"
+    assert tailnet._adapter_identity_policy_matches(tmp_path, "owner@example.com", runtime_revision=revision, reports=[report]) is (bad is None)
