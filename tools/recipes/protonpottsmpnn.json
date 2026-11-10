@@ -1,0 +1,21 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "protonpottsmpnn",
+  "name": "ProtonPottsMPNN (pH redesign)",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/christian-creator/ProtonPottsMPNN"
+  },
+  "notes": "See docs/protonpottsmpnn-runtime.md. The image includes HBPLUS, whose manual carries academic and non-commercial terms: read them before commercial use. apptainer/protonpottsmpnn.def is the CPU variant. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "protonpottsmpnn.sif",
+      "def": "apptainer/protonpottsmpnn-cuda.def",
+      "approx_size_gb": 8
+    }
+  ],
+  "weights": []
+}

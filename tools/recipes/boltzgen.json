@@ -1,0 +1,65 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "boltzgen",
+  "name": "BoltzGen and Fold-CP",
+  "label": "starting-point",
+  "modules": [
+    "design",
+    "structure_prediction"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/HannesStark/boltzgen",
+    "also": [
+      "https://github.com/NVIDIA-BioNeMo/boltz-cp",
+      "https://github.com/jwohlwend/boltz"
+    ]
+  },
+  "license": {
+    "id": "MIT",
+    "url": "https://github.com/HannesStark/boltzgen/blob/main/LICENSE"
+  },
+  "notes": "boltzgen.def installs a PyTorch nightly, which upstream withdraws after a while; pin a release if that step fails. fold-cp.sif and boltzgen-ligand-parser.sif are built on top of boltzgen.sif. The ligand-parser definition checks the hash of the file it patches and stops if your BoltzGen build differs. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "boltzgen.sif",
+      "def": "apptainer/boltzgen.def",
+      "approx_size_gb": 12
+    },
+    {
+      "filename": "fold-cp.sif",
+      "def": "apptainer/fold_cp.def",
+      "approx_size_gb": 12,
+      "needs": [
+        "boltzgen.sif"
+      ],
+      "build_args": {
+        "container_dir": "{container_dir}"
+      }
+    },
+    {
+      "filename": "boltzgen-ligand-parser.sif",
+      "def": "apptainer/boltzgen-ligand-parser.def",
+      "approx_size_gb": 12,
+      "needs": [
+        "boltzgen.sif"
+      ],
+      "build_args": {
+        "base_image": "{container_dir}/boltzgen.sif"
+      }
+    }
+  ],
+  "weights": [
+    {
+      "id": "boltzgen",
+      "required": true,
+      "present_if": [
+        "boltzgen/boltzgen1_diverse.ckpt"
+      ],
+      "fetch": {
+        "type": "manual",
+        "instructions": "Download the BoltzGen artifacts from the upstream Hugging Face repositories listed in the BoltzGen README into <weights>/boltzgen: boltzgen1_diverse.ckpt, boltzgen1_adherence.ckpt, boltzgen1_ifold.ckpt, boltz2_conf_final.ckpt, boltz2_aff.ckpt and mols.zip."
+      },
+      "approx_size_gb": 8
+    }
+  ]
+}

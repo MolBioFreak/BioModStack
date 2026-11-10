@@ -1,0 +1,21 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "md-analysis",
+  "name": "MD analysis (MDAnalysis)",
+  "label": "starting-point",
+  "modules": [
+    "molecular_dynamics"
+  ],
+  "upstream": {
+    "homepage": "https://www.mdanalysis.org"
+  },
+  "notes": "CPU only. No weights. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "md-analysis-1.0.0.sif",
+      "def": "containers/md-analysis/md-analysis-1.0.0.def",
+      "approx_size_gb": 1
+    }
+  ],
+  "weights": []
+}

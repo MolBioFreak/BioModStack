@@ -1,0 +1,34 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "rfantibody",
+  "name": "RFantibody",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/RosettaCommons/RFantibody"
+  },
+  "notes": "Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "rfantibody.sif",
+      "def": "apptainer/rfantibody.def",
+      "approx_size_gb": 12,
+      "run_definition_test": false
+    }
+  ],
+  "weights": [
+    {
+      "id": "rfantibody",
+      "required": true,
+      "present_if": [
+        "rfantibody/rfantibody_repo/weights/RFdiffusion_Ab.pt"
+      ],
+      "fetch": {
+        "type": "manual",
+        "instructions": "Clone https://github.com/RosettaCommons/RFantibody into <weights>/rfantibody/rfantibody_repo and run its include/download_weights.sh, so that weights/RFdiffusion_Ab.pt and the other checkpoints sit inside the clone."
+      }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "unidock",
+  "name": "Uni-Dock",
+  "label": "starting-point",
+  "modules": [
+    "docking"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/dptech-corp/Uni-Dock"
+  },
+  "notes": "No weights. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "unidock.sif",
+      "def": "apptainer/unidock.def",
+      "approx_size_gb": 8
+    }
+  ],
+  "weights": []
+}

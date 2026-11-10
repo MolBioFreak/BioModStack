@@ -1,0 +1,55 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "rfdpoly",
+  "name": "RFDpoly (nucleic acid and polymer design)",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/RosettaCommons/RFDpoly"
+  },
+  "notes": "Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "rfdpoly_v2.sif",
+      "def": "apptainer/rfdpoly.def",
+      "approx_size_gb": 12
+    }
+  ],
+  "weights": [
+    {
+      "id": "rfdpoly",
+      "required": true,
+      "present_if": [
+        "rfdpoly/train_session2024-07-08_1720455712_BFF_3.00.pt",
+        "rfdpoly/train_session2024-06-27_1719522052_BFF_7.00.pt"
+      ],
+      "fetch": {
+        "type": "url",
+        "files": [
+          {
+            "url": "https://files.ipd.uw.edu/pub/2025_RFDpoly/train_session2024-07-08_1720455712_BFF_3.00.pt",
+            "dest": "rfdpoly/train_session2024-07-08_1720455712_BFF_3.00.pt"
+          },
+          {
+            "url": "https://files.ipd.uw.edu/pub/2025_RFDpoly/train_session2024-06-27_1719522052_BFF_7.00.pt",
+            "dest": "rfdpoly/train_session2024-06-27_1719522052_BFF_7.00.pt"
+          }
+        ]
+      },
+      "approx_size_gb": 2
+    },
+    {
+      "id": "rfdpoly-repo",
+      "required": true,
+      "present_if": [
+        "rfdpoly/rfdpoly_repo"
+      ],
+      "fetch": {
+        "type": "manual",
+        "instructions": "Clone https://github.com/RosettaCommons/RFDpoly into <weights>/rfdpoly/rfdpoly_repo."
+      }
+    }
+  ]
+}

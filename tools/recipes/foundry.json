@@ -1,0 +1,103 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "foundry",
+  "name": "Foundry (RFdiffusion3, RoseTTAFold3, LigandMPNN) and Shape RFD3",
+  "label": "starting-point",
+  "modules": [
+    "design",
+    "structure_prediction"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/RosettaCommons/foundry"
+  },
+  "notes": "rc-foundry 0.1.9 from PyPI. shape_rfd3.sif is built on top of foundry.sif. The definitions apptainer/foundry-schedule.def and apptainer/shape-rfd3-schedule.def patch an older base image and are not needed when building from foundry.def. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "foundry.sif",
+      "def": "apptainer/foundry.def",
+      "approx_size_gb": 12
+    },
+    {
+      "filename": "shape_rfd3.sif",
+      "def": "apptainer/shape_rfd3.def",
+      "approx_size_gb": 12,
+      "needs": [
+        "foundry.sif"
+      ],
+      "build_args": {
+        "container_dir": "{container_dir}"
+      }
+    }
+  ],
+  "weights": [
+    {
+      "id": "rfd3",
+      "required": true,
+      "present_if": [
+        "foundry/checkpoints/rfd3_foundry_2025_12_01_remapped.ckpt"
+      ],
+      "fetch": {
+        "type": "url",
+        "files": [
+          {
+            "url": "https://files.ipd.uw.edu/pub/rfd3/rfd3_foundry_2025_12_01_remapped.ckpt",
+            "dest": "foundry/checkpoints/rfd3_foundry_2025_12_01_remapped.ckpt"
+          }
+        ]
+      },
+      "license": {
+        "id": "BSD-3-Clause",
+        "url": "https://github.com/RosettaCommons/foundry/blob/production/LICENSE.md"
+      },
+      "approx_size_gb": 3
+    },
+    {
+      "id": "mpnn",
+      "required": true,
+      "present_if": [
+        "foundry/checkpoints/ligandmpnn_v_32_010_25.pt",
+        "foundry/checkpoints/solublempnn_v_48_020.pt"
+      ],
+      "fetch": {
+        "type": "url",
+        "files": [
+          {
+            "url": "https://files.ipd.uw.edu/pub/ligandmpnn/ligandmpnn_v_32_010_25.pt",
+            "dest": "foundry/checkpoints/ligandmpnn_v_32_010_25.pt"
+          },
+          {
+            "url": "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_020.pt",
+            "dest": "foundry/checkpoints/solublempnn_v_48_020.pt"
+          }
+        ]
+      },
+      "license": {
+        "id": "BSD-3-Clause",
+        "url": "https://github.com/RosettaCommons/foundry/blob/production/LICENSE.md"
+      },
+      "approx_size_gb": 0.1
+    },
+    {
+      "id": "rf3",
+      "required": true,
+      "present_if": [
+        "foundry/checkpoints/rf3_foundry_01_24_latest_remapped.ckpt"
+      ],
+      "fetch": {
+        "type": "url",
+        "files": [
+          {
+            "url": "https://files.ipd.uw.edu/pub/rf3/rf3_foundry_01_24_latest_remapped.ckpt",
+            "dest": "foundry/checkpoints/rf3_foundry_01_24_latest_remapped.ckpt",
+            "sha256": "364ef592fd8042a9cf4176d045015190f8322f961ccca38d891b20ca578d3bb0"
+          }
+        ]
+      },
+      "license": {
+        "id": "BSD-3-Clause",
+        "url": "https://github.com/RosettaCommons/foundry/blob/production/LICENSE.md"
+      },
+      "approx_size_gb": 3
+    }
+  ]
+}

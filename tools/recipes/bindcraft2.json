@@ -1,0 +1,21 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "bindcraft2",
+  "name": "BindCraft2",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/PacesaLab/BindCraft2"
+  },
+  "notes": "The image includes the MPNN weights upstream ships. AlphaFold2 parameters come from the af2 tool (<weights>/alphafold/params). Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "bindcraft2.sif",
+      "def": "apptainer/bindcraft2.def",
+      "approx_size_gb": 12
+    }
+  ],
+  "weights": []
+}

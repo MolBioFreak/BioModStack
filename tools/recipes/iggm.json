@@ -1,0 +1,22 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "iggm",
+  "name": "IgGM (antibody design)",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/TencentAI4S/IgGM"
+  },
+  "notes": "The image holds no checkpoints; IgGM fetches its own on first use, as upstream does. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "iggm.sif",
+      "def": "apptainer/iggm.def",
+      "approx_size_gb": 10,
+      "run_definition_test": false
+    }
+  ],
+  "weights": []
+}

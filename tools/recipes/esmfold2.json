@@ -1,0 +1,33 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "esmfold2",
+  "name": "ESMFold2",
+  "label": "starting-point",
+  "modules": [
+    "structure_prediction"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/Biohub/esm"
+  },
+  "notes": "Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "esmfold2.sif",
+      "def": "apptainer/esmfold2.def",
+      "approx_size_gb": 12
+    }
+  ],
+  "weights": [
+    {
+      "id": "esmfold2",
+      "required": true,
+      "present_if": [
+        "esmfold2/hf_home/hub"
+      ],
+      "fetch": {
+        "type": "manual",
+        "instructions": "Model files are read from <weights>/esmfold2/hf_home (a Hugging Face cache). See docs/ESMFold2_Acquisition_Release_Gap.md for which upstream repositories and revisions to download into it."
+      }
+    }
+  ]
+}

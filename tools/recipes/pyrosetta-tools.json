@@ -1,0 +1,26 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "pyrosetta-tools",
+  "name": "PyRosetta tools (binder refinement)",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://www.pyrosetta.org"
+  },
+  "license": {
+    "id": "PyRosetta",
+    "url": "https://www.pyrosetta.org/home/licensing-pyrosetta"
+  },
+  "notes": "The build installs PyRosetta with upstream's pyrosetta-installer. PyRosetta is free for academic use only; commercial use needs a licence from the University of Washington. You are accepting that licence by building this. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "pyrosetta_tools.sif",
+      "def": "apptainer/pyrosetta_tools.def",
+      "approx_size_gb": 8,
+      "run_definition_test": false
+    }
+  ],
+  "weights": []
+}

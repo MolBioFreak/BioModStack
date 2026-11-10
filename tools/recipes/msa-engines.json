@@ -1,0 +1,26 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "msa-engines",
+  "name": "Alignment engines (MAFFT, MUSCLE, FAMSA, TWILIGHT)",
+  "label": "starting-point",
+  "modules": [
+    "alignment"
+  ],
+  "upstream": {
+    "homepage": "https://mafft.cbrc.jp/alignment/software/",
+    "also": [
+      "https://github.com/rcedgar/muscle",
+      "https://github.com/refresh-bio/FAMSA",
+      "https://github.com/TurakhiaLab/TWILIGHT"
+    ]
+  },
+  "notes": "CPU only. No weights. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "msa_engines.sif",
+      "def": "apptainer/msa_engines.def",
+      "approx_size_gb": 2
+    }
+  ],
+  "weights": []
+}

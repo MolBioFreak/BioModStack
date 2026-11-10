@@ -1,0 +1,22 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "frustrampnn",
+  "name": "FrustraMPNN",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/schoederlab/frustraMPNN"
+  },
+  "notes": "frustrampnn.def installs a PyTorch nightly; pin a release if that step fails. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "frustrampnn.sif",
+      "def": "apptainer/frustrampnn.def",
+      "approx_size_gb": 10,
+      "run_definition_test": false
+    }
+  ],
+  "weights": []
+}

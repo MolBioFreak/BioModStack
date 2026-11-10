@@ -1,0 +1,44 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "ont-clone-validation",
+  "name": "ONT plasmid validation runtime (wf-clone-validation, medaka, plannotate)",
+  "label": "starting-point",
+  "modules": [
+    "ont"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/epi2me-labs/wf-clone-validation",
+    "also": [
+      "https://github.com/nanoporetech/medaka",
+      "https://github.com/mmcguffi/pLannotate"
+    ]
+  },
+  "notes": "Runs scripts/provision_wf_clone_runtime.py, which pulls Oxford Nanopore's published images named in config/ngs/wf_clone_validation_v1.8.4.lock.json and builds medaka from apptainer/medaka.def. The script checks each file against the hash in the lock; an image converted on your machine can differ from that hash, and the script then stops. For Canu assembly run the script yourself with --assembly-tool canu. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "ont-clone-v1.8.4",
+      "approx_size_gb": 6,
+      "script": {
+        "argv": [
+          "python3",
+          "scripts/provision_wf_clone_runtime.py",
+          "--lock",
+          "config/ngs/wf_clone_validation_v1.8.4.lock.json"
+        ],
+        "check_argv": [
+          "python3",
+          "-c",
+          "import json,subprocess,sys,pathlib\nlock='config/ngs/wf_clone_validation_v1.8.4.lock.json'\nd=subprocess.run([sys.executable,'scripts/validate_wf_clone_runtime.py','--lock',lock,'--resolve','containers.cache_dir'],capture_output=True,text=True).stdout.strip()\nimgs=[i for i in json.load(open(lock))['containers']['images'] if i.get('assembly_tool')!='canu']\nsys.exit(0 if d and all((pathlib.Path(d)/i['cache_file']).is_file() for i in imgs) else 1)"
+        ]
+      },
+      "sources": [
+        "docker://ontresearch/wf-clone-validation",
+        "docker://ontresearch/medaka",
+        "docker://ontresearch/wf-common",
+        "docker://ontresearch/plannotate",
+        "apptainer/medaka.def"
+      ]
+    }
+  ],
+  "weights": []
+}

@@ -1,0 +1,48 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "af2",
+  "name": "AlphaFold2 initial guess",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/PapenfussLab/dl_binder_design",
+    "also": [
+      "https://github.com/google-deepmind/alphafold"
+    ]
+  },
+  "notes": "Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "af2.sif",
+      "def": "apptainer/af2.def",
+      "approx_size_gb": 10,
+      "run_definition_test": false
+    }
+  ],
+  "weights": [
+    {
+      "id": "alphafold-params",
+      "required": true,
+      "present_if": [
+        "alphafold/params/params_model_1_ptm.npz"
+      ],
+      "fetch": {
+        "type": "url",
+        "files": [
+          {
+            "url": "https://storage.googleapis.com/alphafold/alphafold_params_2022-12-06.tar",
+            "dest": "alphafold/params/alphafold_params_2022-12-06.tar",
+            "extract": "tar"
+          }
+        ]
+      },
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://github.com/google-deepmind/alphafold#model-parameters-license"
+      },
+      "approx_size_gb": 6
+    }
+  ]
+}

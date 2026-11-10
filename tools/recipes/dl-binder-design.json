@@ -1,0 +1,83 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "dl-binder-design",
+  "name": "RFdiffusion and ProteinMPNN (dl_binder_design)",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/PapenfussLab/dl_binder_design",
+    "also": [
+      "https://github.com/RosettaCommons/RFdiffusion",
+      "https://github.com/dauparas/ProteinMPNN"
+    ]
+  },
+  "notes": "One image serves both RFdiffusion and ProteinMPNN. ProteinMPNN weights come inside the image. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "dl_binder_design.sif",
+      "def": "apptainer/dl_binder_design.def",
+      "approx_size_gb": 10,
+      "run_definition_test": false
+    }
+  ],
+  "weights": [
+    {
+      "id": "rfdiffusion",
+      "required": true,
+      "present_if": [
+        "rfd/Base_ckpt.pt",
+        "rfd/Complex_base_ckpt.pt",
+        "rfd/Complex_Fold_base_ckpt.pt",
+        "rfd/InpaintSeq_ckpt.pt",
+        "rfd/InpaintSeq_Fold_ckpt.pt",
+        "rfd/ActiveSite_ckpt.pt",
+        "rfd/Base_epoch8_ckpt.pt",
+        "rfd/Complex_beta_ckpt.pt"
+      ],
+      "fetch": {
+        "type": "url",
+        "files": [
+          {
+            "url": "https://files.ipd.uw.edu/pub/RFdiffusion/6f5902ac237024bdd0c176cb93063dc4/Base_ckpt.pt",
+            "dest": "rfd/Base_ckpt.pt"
+          },
+          {
+            "url": "https://files.ipd.uw.edu/pub/RFdiffusion/e29311f6f1bf1af907f9ef9f44b8328b/Complex_base_ckpt.pt",
+            "dest": "rfd/Complex_base_ckpt.pt"
+          },
+          {
+            "url": "https://files.ipd.uw.edu/pub/RFdiffusion/60f09a193fb5e5ccdc4980417708dbab/Complex_Fold_base_ckpt.pt",
+            "dest": "rfd/Complex_Fold_base_ckpt.pt"
+          },
+          {
+            "url": "https://files.ipd.uw.edu/pub/RFdiffusion/74f51cfb8b440f50d70878e05361d8f0/InpaintSeq_ckpt.pt",
+            "dest": "rfd/InpaintSeq_ckpt.pt"
+          },
+          {
+            "url": "https://files.ipd.uw.edu/pub/RFdiffusion/76d00716416567174cdb7ca96e208296/InpaintSeq_Fold_ckpt.pt",
+            "dest": "rfd/InpaintSeq_Fold_ckpt.pt"
+          },
+          {
+            "url": "https://files.ipd.uw.edu/pub/RFdiffusion/5532d2e1f3a4738decd58b19d633b3c3/ActiveSite_ckpt.pt",
+            "dest": "rfd/ActiveSite_ckpt.pt"
+          },
+          {
+            "url": "https://files.ipd.uw.edu/pub/RFdiffusion/12fc204edeae5b57713c5ad7dcb97d39/Base_epoch8_ckpt.pt",
+            "dest": "rfd/Base_epoch8_ckpt.pt"
+          },
+          {
+            "url": "https://files.ipd.uw.edu/pub/RFdiffusion/f572d396fae9206628714fb2ce00f72e/Complex_beta_ckpt.pt",
+            "dest": "rfd/Complex_beta_ckpt.pt"
+          }
+        ]
+      },
+      "license": {
+        "id": "BSD-3-Clause",
+        "url": "https://github.com/RosettaCommons/RFdiffusion/blob/main/LICENSE"
+      },
+      "approx_size_gb": 4
+    }
+  ]
+}

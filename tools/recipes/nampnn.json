@@ -1,0 +1,33 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "nampnn",
+  "name": "NA-MPNN (nucleic acid sequence design)",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/baker-laboratory/NA-MPNN"
+  },
+  "notes": "nampnn.def installs a PyTorch nightly; pin a release if that step fails. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "nampnn.sif",
+      "def": "apptainer/nampnn.def",
+      "approx_size_gb": 10
+    }
+  ],
+  "weights": [
+    {
+      "id": "nampnn",
+      "required": true,
+      "present_if": [
+        "nampnn/NA-MPNN"
+      ],
+      "fetch": {
+        "type": "manual",
+        "instructions": "Clone https://github.com/baker-laboratory/NA-MPNN into <weights>/nampnn/NA-MPNN; the model files ship in that repository."
+      }
+    }
+  ]
+}

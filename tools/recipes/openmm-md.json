@@ -1,0 +1,33 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "openmm-md",
+  "name": "OpenMM replica engine",
+  "label": "starting-point",
+  "modules": [
+    "molecular_dynamics"
+  ],
+  "upstream": {
+    "homepage": "https://openmm.org",
+    "also": [
+      "https://github.com/openmm/pdbfixer"
+    ]
+  },
+  "notes": "openmm-md-8.5.2.sif is built from a Dockerfile with Docker or Podman, then converted to a .sif. openmm.sif is the older relaxation image. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "openmm-md-8.5.2.sif",
+      "docker": {
+        "file": "containers/openmm-md/Dockerfile",
+        "tag": "biomodstack/openmm-md:8.5.2",
+        "context": "containers/openmm-md"
+      },
+      "approx_size_gb": 6
+    },
+    {
+      "filename": "openmm.sif",
+      "def": "apptainer/openmm.def",
+      "approx_size_gb": 6
+    }
+  ],
+  "weights": []
+}

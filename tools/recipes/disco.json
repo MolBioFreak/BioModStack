@@ -1,0 +1,33 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "disco",
+  "name": "DISCO",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/DISCO-design/DISCO"
+  },
+  "notes": "Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "disco.sif",
+      "def": "apptainer/disco.def",
+      "approx_size_gb": 12
+    }
+  ],
+  "weights": [
+    {
+      "id": "disco",
+      "required": true,
+      "present_if": [
+        "disco/DISCO.pt"
+      ],
+      "fetch": {
+        "type": "manual",
+        "instructions": "Download DISCO.pt from the location named in the DISCO README and place it at <weights>/disco/DISCO.pt."
+      }
+    }
+  ]
+}

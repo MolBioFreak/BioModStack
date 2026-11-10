@@ -1,0 +1,98 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "laproteina",
+  "name": "La-Proteina (backbone and all-atom generation)",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/NVIDIA-Digital-Bio/la-proteina"
+  },
+  "notes": "Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "laproteina.sif",
+      "def": "apptainer/laproteina.def",
+      "approx_size_gb": 10
+    }
+  ],
+  "weights": [
+    {
+      "id": "laproteina",
+      "required": true,
+      "present_if": [
+        "laproteina/AE1_ucond_512.ckpt",
+        "laproteina/AE2_ucond_800.ckpt",
+        "laproteina/AE3_motif.ckpt",
+        "laproteina/LD1_ucond_notri_512.ckpt",
+        "laproteina/LD2_ucond_tri_512.ckpt",
+        "laproteina/LD3_ucond_notri_800.ckpt",
+        "laproteina/LD4_motif_idx_aa.ckpt",
+        "laproteina/LD5_motif_idx_tip.ckpt",
+        "laproteina/LD6_motif_uidx_aa.ckpt",
+        "laproteina/LD7_motif_uidx_tip.ckpt"
+      ],
+      "fetch": {
+        "type": "url",
+        "files": [
+          {
+            "url": "https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ae1_ucond_512.ckpt/versions/1.0/files/AE1_ucond_512.ckpt",
+            "dest": "laproteina/AE1_ucond_512.ckpt",
+            "sha256": "898da17022cdeaaaea7caace41c8b6fe7bfcb78be4876b0113127eb9bb1527e6"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ae2_ucond_800.ckpt/versions/1.0/files/AE2_ucond_800.ckpt",
+            "dest": "laproteina/AE2_ucond_800.ckpt",
+            "sha256": "fb782e242d881dc33239a1a9eb5056943f4559f4ae22314a99acff650e9939e7"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ae3_motif.ckpt/versions/1.0/files/AE3_motif.ckpt",
+            "dest": "laproteina/AE3_motif.ckpt",
+            "sha256": "63b1358c5459e968628094fdc9a2a6a95ac003606fcf7b1a3a21174458a69734"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld1_ucond_notri_512.ckpt/versions/1.0/files/LD1_ucond_notri_512.ckpt",
+            "dest": "laproteina/LD1_ucond_notri_512.ckpt",
+            "sha256": "6d9ec013f73be6bc305876a02f2aa5dbf3183a938332bac9262aa30f8c963f66"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld2_ucond_tri_512.ckpt/versions/1.0/files/LD2_ucond_tri_512.ckpt",
+            "dest": "laproteina/LD2_ucond_tri_512.ckpt",
+            "sha256": "6650b6df1e26077cebc78c970edfb6c3fb8c8f5d8a40688024b5d02485867199"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld3_ucond_notri_800.ckpt/versions/1.0/files/LD3_ucond_notri_800.ckpt",
+            "dest": "laproteina/LD3_ucond_notri_800.ckpt",
+            "sha256": "7c026d7cb853f8f6c9d02d8df31db4f419183044d5553638e82ce6c933a6699a"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld4_motif_idx_aa.ckpt/versions/1.0/files/LD4_motif_idx_aa.ckpt",
+            "dest": "laproteina/LD4_motif_idx_aa.ckpt",
+            "sha256": "8bd61de905c62bbe6b26c2669694e413e547c23d7a91515de965371cddd7db7d"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld5_motif_idx_tip.ckpt/versions/1.0/files/LD5_motif_idx_tip.ckpt",
+            "dest": "laproteina/LD5_motif_idx_tip.ckpt",
+            "sha256": "dd0a888c2fe69715c1fb246339375f464c2d442a46566199191371ddcde9f441"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld6_motif_uidx_aa.ckpt/versions/1.0/files/LD6_motif_uidx_aa.ckpt",
+            "dest": "laproteina/LD6_motif_uidx_aa.ckpt",
+            "sha256": "9c52db67d2fec4b30134cd8c15132732f188bf1e82d72c9adc3c941086dcf589"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/resources/nvidia/clara/ld7_motif_uidx_tip.ckpt/versions/1.0/files/LD7_motif_uidx_tip.ckpt",
+            "dest": "laproteina/LD7_motif_uidx_tip.ckpt",
+            "sha256": "6b4a5f15dfabbe5594550c9d3042b3770bb9ee11632101b392cdda6a304fb393"
+          }
+        ]
+      },
+      "license": {
+        "id": "NVIDIA-Open-Model-License",
+        "url": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/"
+      },
+      "approx_size_gb": 32
+    }
+  ]
+}

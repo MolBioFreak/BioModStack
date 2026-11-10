@@ -1,0 +1,74 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "complexa",
+  "name": "Proteina-Complexa (binder design)",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/NVIDIA-BioNeMo/Proteina-Complexa"
+  },
+  "notes": "Also uses the RoseTTAFold3 checkpoint from the foundry tool (weights id rf3). Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "complexa.sif",
+      "def": "apptainer/complexa.def",
+      "approx_size_gb": 12
+    }
+  ],
+  "weights": [
+    {
+      "id": "complexa",
+      "required": true,
+      "present_if": [
+        "complexa/complexa.ckpt",
+        "complexa/complexa_ae.ckpt",
+        "complexa/complexa_ame.ckpt",
+        "complexa/complexa_ame_ae.ckpt",
+        "complexa/complexa_ligand.ckpt",
+        "complexa/complexa_ligand_ae.ckpt"
+      ],
+      "fetch": {
+        "type": "url",
+        "files": [
+          {
+            "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa.ckpt",
+            "dest": "complexa/complexa.ckpt",
+            "sha256": "589db1741f29838c7961386f6b873087238c72682e56189b89e0ae02610c19e9"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa_ae.ckpt",
+            "dest": "complexa/complexa_ae.ckpt",
+            "sha256": "35f8865efd269995eeaf1670e1c1085acfe2988c40abdeda8e09a0e15eb40816"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame.ckpt",
+            "dest": "complexa/complexa_ame.ckpt",
+            "sha256": "d11319693d024d0427abc356a86350a694a1cb7dceb8db642c8041e5a20a9f7b"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame_ae.ckpt",
+            "dest": "complexa/complexa_ame_ae.ckpt",
+            "sha256": "63b1358c5459e968628094fdc9a2a6a95ac003606fcf7b1a3a21174458a69734"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand.ckpt",
+            "dest": "complexa/complexa_ligand.ckpt",
+            "sha256": "8175213eac5ec6433fed1756d055ce3f867129bfdb033040e1a0560ca558bfe5"
+          },
+          {
+            "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand_ae.ckpt",
+            "dest": "complexa/complexa_ligand_ae.ckpt",
+            "sha256": "898da17022cdeaaaea7caace41c8b6fe7bfcb78be4876b0113127eb9bb1527e6"
+          }
+        ]
+      },
+      "license": {
+        "id": "NVIDIA-Open-Model-License",
+        "url": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/"
+      },
+      "approx_size_gb": 19
+    }
+  ]
+}

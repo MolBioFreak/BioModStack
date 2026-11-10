@@ -214,4 +214,77 @@ def test_shipped_recipes_are_valid_and_point_at_existing_definitions():
     assert recipes
     for recipe in recipes.values():
         for image in recipe["images"]:
-            assert (ROOT / image["def"]).is_file(), image["def"]
+            source = biomodstack_tools._image_source(image)
+            if source is not None:
+                assert (ROOT / source).is_file(), source
+            if image["kind"] == "script":
+                assert (ROOT / image["script"]["argv"][1]).is_file(), image["script"]["argv"]
+
+
+FAKE_DOCKER = """#!/bin/bash
+# Stand-in for docker: an image exists once it was built.
+echo "docker $@" >> "$FAKE_CALLS"
+case "$1 $2" in
+  "build "*) for a in "$@"; do prev2="$prev"; prev="$a"; [ "$prev2" = "--tag" ] && touch "$FAKE_DOCKER_DIR/$(echo "$a" | tr '/:' '__')"; done ;;
+  "image inspect") [ -e "$FAKE_DOCKER_DIR/$(echo "${@: -1}" | tr '/:' '__')" ] || exit 1; echo sha256:abc ;;
+  "image rm") rm -f "$FAKE_DOCKER_DIR/$(echo "$3" | tr '/:' '__')" ;;
+esac
+exit 0
+"""
+
+
+def _add_recipe(install, tool, images):
+    project = install.tmp / "project"
+    (project / "tools" / "recipes" / f"{tool}.json").write_text(json.dumps({
+        "schema": "bms.tool-recipe.v1", "id": tool, "name": tool, "label": "starting-point", "modules": ["ont"],
+        "upstream": {"homepage": "https://example.org"}, "images": images, "weights": []}))
+    return project
+
+
+def test_dockerfile_image_is_built_with_docker_and_needs_no_apptainer(install):
+    project = _add_recipe(install, "signal", [{"docker": {"file": "docker/signal.Dockerfile", "tag": "example/signal:1"},
+                                               "smoke": [{"name": "version", "argv": ["signal", "--version"]}]}])
+    (project / "docker").mkdir()
+    (project / "docker" / "signal.Dockerfile").write_text("FROM example\n")
+    images = install.tmp / "docker-images"
+    images.mkdir()
+    extra = {"FAKE_DOCKER_DIR": str(images)}
+    code, plan = install("plan", "signal", extra={**extra, "BMS_TOOLS_CONTAINER_RUNTIME": "not-a-runtime"})
+    assert code == 3 and plan["blockers"][0]["reason_code"] == "docker_missing"
+    docker = install.tmp / "bin" / "docker"
+    docker.write_text(FAKE_DOCKER)
+    docker.chmod(docker.stat().st_mode | stat.S_IEXEC)
+    code, plan = install("plan", "signal", extra=extra)
+    assert code == 0 and plan["steps"][0]["kind"] == "docker" and not plan["steps"][0]["already_present"]
+    code, status = install("build", "signal", extra=extra)
+    assert code == 0 and status["status"] == "ready", status
+    calls = install.calls.read_text()
+    assert "docker build --file" in calls and "--tag example/signal:1" in calls
+    assert "docker run --rm --network none example/signal:1 signal --version" in calls
+    assert not (install.data / "apptainer" / "signal.sif").exists()
+    code, listing = install("list", extra=extra)
+    assert {t["tool"]: t["status"] for t in listing["tools"]}["signal"] == "ready"
+    code, _ = install("remove", "signal", extra=extra)
+    assert code == 0 and not list(images.iterdir())
+
+
+def test_image_built_on_another_image_waits_for_its_base(install):
+    project = _add_recipe(install, "layered", [{"filename": "layered.sif", "def": "apptainer/layered.def",
+                                                "needs": ["base.sif"], "build_args": {"base": "{container_dir}/base.sif"}}])
+    (project / "apptainer" / "layered.def").write_text("Bootstrap: localimage\nFrom: {{ base }}\n")
+    code, status = install("build", "layered")
+    assert code == 3 and status["reason_code"] == "base_image_missing" and "base.sif" in status["message"]
+    (install.data / "apptainer").mkdir(parents=True, exist_ok=True)
+    (install.data / "apptainer" / "base.sif").write_text("base")
+    code, status = install("build", "layered")
+    assert code == 0 and status["status"] == "ready"
+    assert f"--build-arg base={install.data / 'apptainer' / 'base.sif'}" in install.calls.read_text()
+
+
+def test_build_input_that_is_not_shipped_blocks_with_instructions(install):
+    project = _add_recipe(install, "packed", [{"filename": "packed.sif", "def": "apptainer/demo.def",
+                                               "requires_files": ["apptainer/env.tar.gz"],
+                                               "requires_note": "Pack the environment first."}])
+    code, plan = install("plan", "packed")
+    assert code == 3 and plan["blockers"][0]["reason_code"] == "build_input_missing"
+    assert "Pack the environment first." in plan["blockers"][0]["message"]

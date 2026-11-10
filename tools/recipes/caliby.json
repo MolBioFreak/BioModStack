@@ -1,0 +1,72 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "caliby",
+  "name": "Caliby (sequence design)",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/ProteinDesignLab/caliby"
+  },
+  "license": {
+    "id": "Apache-2.0",
+    "url": "https://github.com/ProteinDesignLab/caliby/blob/main/LICENSE"
+  },
+  "notes": "Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "caliby.sif",
+      "def": "apptainer/caliby.def",
+      "approx_size_gb": 10
+    }
+  ],
+  "weights": [
+    {
+      "id": "caliby",
+      "required": true,
+      "present_if": [
+        "caliby/model_params/caliby/caliby.ckpt",
+        "caliby/model_params/caliby/caliby_packer_000.ckpt",
+        "caliby/model_params/caliby/caliby_packer_010.ckpt",
+        "caliby/model_params/caliby/caliby_packer_030.ckpt",
+        "caliby/model_params/caliby/soluble_caliby.ckpt"
+      ],
+      "fetch": {
+        "type": "url",
+        "files": [
+          {
+            "url": "https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/caliby.ckpt",
+            "dest": "caliby/model_params/caliby/caliby.ckpt",
+            "sha256": "4a1c22c5f1c62c62a3aa9c1e6bec65e63a37faeccad5cd6b7d94536cedb1ee74"
+          },
+          {
+            "url": "https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/caliby_packer_000.ckpt",
+            "dest": "caliby/model_params/caliby/caliby_packer_000.ckpt",
+            "sha256": "2cbdfd97ed562524cf03873b87c6ea5183ddf78d7626d5b1c030ff74b45652be"
+          },
+          {
+            "url": "https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/caliby_packer_010.ckpt",
+            "dest": "caliby/model_params/caliby/caliby_packer_010.ckpt",
+            "sha256": "1e437578ffb7a4e97fc41de38cc9862ad48cd6300e73611e1b1b1801c7027b99"
+          },
+          {
+            "url": "https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/caliby_packer_030.ckpt",
+            "dest": "caliby/model_params/caliby/caliby_packer_030.ckpt",
+            "sha256": "760cc5c4bcf4708ac6d5add3ce5163cfeaeb7a319470ee0f8eb16d498d2142d2"
+          },
+          {
+            "url": "https://huggingface.co/ProteinDesignLab/caliby-weights/resolve/a51f011f4ec7ffe2daad3ab9b2bfb67ff628a096/caliby/soluble_caliby.ckpt",
+            "dest": "caliby/model_params/caliby/soluble_caliby.ckpt",
+            "sha256": "49a720458cb86625a74e73ad2a3351c9b91b06c0371040b85896aad507820c98"
+          }
+        ]
+      },
+      "license": {
+        "id": "Apache-2.0",
+        "url": "https://huggingface.co/ProteinDesignLab/caliby-weights"
+      },
+      "approx_size_gb": 0.5
+    }
+  ]
+}

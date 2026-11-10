@@ -134,3 +134,28 @@ Rules:
   for anything else that must work.
 - Keep `starting-point` until the recipe has been built from nothing on a clean
   machine, then change it to `builds-from-clean`.
+
+## How an image is produced
+
+Each image in a recipe names exactly one way of getting it.
+
+- `def`: an Apptainer definition in this repository, built with `apptainer build`. Optional `build_args` are passed as `--build-arg`; the text `{container_dir}` in a value becomes this install's container folder. Optional `build_dir` is the folder the build runs in, for definitions that copy files with relative paths.
+- `pull`: an image the tool's own authors publish. `uri` is either `docker://…` (converted to a `.sif`) or an `https://` file with a `sha256`.
+- `docker`: a Dockerfile in this repository (`file`, `tag`, optional `context`), built with Docker or Podman. With a `filename` ending in `.sif` the result is converted to a `.sif`; without one the image stays in Docker under its tag. Set `BMS_TOOLS_CONTAINER_RUNTIME=docker` or `podman` to choose.
+- `script`: a provisioning script in this repository that owns its own layout (`argv` to run it, `check_argv` to tell whether its output is present).
+
+Two more fields apply to any image. `needs` lists `.sif` files that must already be in the container folder, because the image is built on top of them; a missing one stops the build with `base_image_missing`. `requires_files` lists build inputs that are not shipped; a missing one blocks the plan with `build_input_missing` and prints `requires_note`.
+
+New reason codes: `docker_missing`, `base_image_missing`, `build_input_missing`, `image_download_failed`, `image_hash_mismatch`, `adopt_not_applicable`.
+
+## What the shipped recipes cover
+
+Every image BMS uses has a recipe. Only Dorado, Boltz-2, Protenix and GROMACS are labelled `builds-from-clean`. The rest are `starting-point`: written from the definitions and upstream sources in this repository, never built from clean by us.
+
+Known gaps, stated in the recipe notes as well:
+
+- `ont-signal-tools` and `ont-clone-validation`: the signal workbench and the clone-validation validator compare an image id or file hash against a value recorded in this repository. An image you build or convert yourself gets its own id.
+- `md-preparation`: the definition unpacks a conda-pack archive that is not shipped.
+- `confornets`: this repository has no definition for the base image, only for the patch on top of it.
+- Several definitions install a PyTorch nightly, which upstream withdraws after a while. Pin a release if that step fails.
+- Weights marked as a manual step have no single public download address we could pin; the recipe says where to get them and where to put them.

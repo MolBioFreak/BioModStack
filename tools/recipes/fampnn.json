@@ -1,0 +1,21 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "fampnn",
+  "name": "FAMPNN (full-atom sequence design)",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/PapenfussLab/fampnn"
+  },
+  "notes": "Weights come inside the image. fampnn.def installs a PyTorch nightly; pin a release if that step fails. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "fampnn.sif",
+      "def": "apptainer/fampnn.def",
+      "approx_size_gb": 10
+    }
+  ],
+  "weights": []
+}

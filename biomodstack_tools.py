@@ -45,7 +45,15 @@ MODULES = {
     "structure_prediction": ("Structure prediction", False),
     "design": ("Protein and binder design", False),
     "molecular_dynamics": ("Molecular dynamics", False),
+    "docking": ("Small-molecule docking", False),
+    "alignment": ("Family sequence alignment", False),
 }
+
+# How an image is produced. "def": an Apptainer definition in this repository. "pull": an image its
+# upstream publishes (docker:// reference or https file). "docker": a Dockerfile in this repository,
+# built with docker or podman and optionally converted to a .sif. "script": a provisioning script in
+# this repository that owns its own layout.
+IMAGE_KINDS = ("def", "pull", "docker", "script")
 
 
 class ToolError(Exception):
@@ -79,11 +87,43 @@ def _validate_recipe(recipe: dict, path: Path) -> dict:
     need(isinstance(images, list) and images, "at least one image is required")
     for image in images:
         need(isinstance(image, dict), "image must be an object")
+        kinds = [k for k in IMAGE_KINDS if k in image]
+        need(len(kinds) == 1, f"image needs exactly one of {IMAGE_KINDS}")
+        kind = image["kind"] = kinds[0]
+
+        def inside(value, what):
+            need(isinstance(value, str) and value and not Path(value).is_absolute()
+                 and ".." not in Path(value).parts, f"{what} must be a path inside the repository")
+        if kind == "def":
+            inside(image["def"], "image.def")
+        elif kind == "pull":
+            pull = image["pull"]
+            need(isinstance(pull, dict) and str(pull.get("uri", "")).startswith(("docker://", "https://")),
+                 "image.pull.uri must start with docker:// or https://")
+        elif kind == "docker":
+            docker = image["docker"]
+            need(isinstance(docker, dict) and isinstance(docker.get("tag"), str) and docker["tag"],
+                 "image.docker.tag is required")
+            inside(docker.get("file"), "image.docker.file")
+            inside(docker.get("context", "."), "image.docker.context")
+            if "filename" not in image:
+                image["filename"] = docker["tag"]
+        else:
+            script = image["script"]
+            need(isinstance(script, dict) and isinstance(script.get("argv"), list) and script["argv"]
+                 and isinstance(script.get("check_argv"), list) and script["check_argv"],
+                 "image.script needs argv and check_argv")
+            need(isinstance(image.get("filename"), str) and image["filename"], "a script image needs a filename used as its name")
+        image["sif"] = kind in ("def", "pull") or (kind == "docker" and image["filename"].endswith(".sif"))
         name = image.get("filename", "")
-        need(isinstance(name, str) and name.endswith(".sif") and "/" not in name,
-             "image.filename must be a plain .sif file name")
-        need(isinstance(image.get("def"), str) and not Path(image["def"]).is_absolute()
-             and ".." not in Path(image["def"]).parts, "image.def must be a path inside the repository")
+        if image["sif"]:
+            need(isinstance(name, str) and name.endswith(".sif") and "/" not in name,
+                 "image.filename must be a plain .sif file name")
+        for base in image.get("needs", []):
+            need(isinstance(base, str) and base.endswith(".sif") and "/" not in base,
+                 "image.needs must list plain .sif file names")
+        for item in [image.get("build_dir", ".")] + list(image.get("requires_files", [])):
+            inside(item, "image.build_dir and image.requires_files")
         for check in image.get("smoke", []):
             need(isinstance(check.get("argv"), list) and check["argv"], "smoke.argv must be a list")
     for weight in recipe.get("weights", []):
@@ -175,11 +215,52 @@ def _build_running(state_dir: Path, tool: str) -> bool:
 def _recipe_digest(recipe: dict, project_root: Path) -> str:
     digest = hashlib.sha256(json.dumps(recipe, sort_keys=True).encode())
     for image in recipe["images"]:
+        source = _image_source(image)
+        if source is None:
+            continue
         try:
-            digest.update((project_root / image["def"]).read_bytes())
+            digest.update((project_root / source).read_bytes())
         except OSError:
             digest.update(b"missing-def")
     return digest.hexdigest()
+
+
+def _image_source(image: dict) -> str | None:
+    """The file in this repository an image is built from, when there is one."""
+    if image["kind"] == "def":
+        return image["def"]
+    if image["kind"] == "docker":
+        return image["docker"]["file"]
+    return None
+
+
+def _docker() -> str | None:
+    chosen = os.environ.get("BMS_TOOLS_CONTAINER_RUNTIME", "").strip()
+    if chosen:
+        return shutil.which(chosen) if chosen in ("docker", "podman") else None
+    return shutil.which("docker") or shutil.which("podman")
+
+
+def _image_present(image: dict, where: dict[str, Path], project_root: Path = PROJECT_ROOT) -> bool:
+    if image["sif"]:
+        return (where["container_dir"] / image["filename"]).exists()
+    if image["kind"] == "docker":
+        runtime = _docker()
+        return bool(runtime) and subprocess.call(
+            [runtime, "image", "inspect", image["docker"]["tag"]],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL) == 0
+    try:
+        return subprocess.call([str(a) for a in image["script"]["check_argv"]], cwd=project_root,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               stdin=subprocess.DEVNULL, timeout=60) == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _image_where(image: dict, where: dict[str, Path]) -> str:
+    if image["sif"]:
+        return str(where["container_dir"] / image["filename"])
+    return f"{image['kind']}:{image['filename']}"
 
 
 def _weight_present(weight: dict, weights_root: Path) -> bool:
@@ -191,8 +272,8 @@ def tool_status(recipe: dict, where: dict[str, Path], project_root: Path = PROJE
     state = _read_state(where["state_dir"], tool)
     images = []
     for image in recipe["images"]:
-        path = where["container_dir"] / image["filename"]
-        images.append({"filename": image["filename"], "path": str(path), "present": path.exists()})
+        images.append({"filename": image["filename"], "path": _image_where(image, where), "kind": image["kind"],
+                       "present": _image_present(image, where, project_root)})
     weights = [{"id": w["id"], "required": bool(w.get("required", False)),
                 "present": _weight_present(w, where["weights_root"])}
                for w in recipe.get("weights", [])]
@@ -240,20 +321,31 @@ def _free_bytes(path: Path) -> int:
 def tool_plan(recipe: dict, where: dict[str, Path], project_root: Path = PROJECT_ROOT) -> dict:
     blockers = []
     runtime = _apptainer()
-    if not runtime:
+    if not runtime and any(i["sif"] for i in recipe["images"]):
         blockers.append({"reason_code": "apptainer_missing",
                          "message": "Install Apptainer (https://apptainer.org/docs/admin/main/installation.html) and re-run."})
+    if not _docker() and any(i["kind"] == "docker" for i in recipe["images"]):
+        blockers.append({"reason_code": "docker_missing",
+                         "message": "This tool is built from a Dockerfile. Install Docker or Podman and re-run "
+                                    "(set BMS_TOOLS_CONTAINER_RUNTIME=docker or podman to choose)."})
     steps = []
     image_gb = 0.0
     for image in recipe["images"]:
-        definition = project_root / image["def"]
-        if not definition.is_file():
-            blockers.append({"reason_code": "recipe_definition_missing", "message": f"Missing {image['def']}"})
+        source = _image_source(image)
+        if source is not None and not (project_root / source).is_file():
+            blockers.append({"reason_code": "recipe_definition_missing", "message": f"Missing {source}"})
+        for item in image.get("requires_files", []):
+            if not (project_root / item).exists():
+                blockers.append({"reason_code": "build_input_missing",
+                                 "message": f"{image['filename']} needs {item}, which is not shipped. "
+                                            + str(image.get("requires_note", "Create it, then re-run."))})
         image_gb += float(image.get("approx_size_gb", 0))
-        steps.append({"step": f"build:{image['filename']}", "definition": image["def"],
-                      "output": str(where["container_dir"] / image["filename"]),
+        steps.append({"step": f"build:{image['filename']}", "kind": image["kind"],
+                      "definition": source or (image.get("pull") or {}).get("uri")
+                      or " ".join(str(a) for a in image["script"]["argv"]),
+                      "output": _image_where(image, where), "needs": image.get("needs", []),
                       "sources": image.get("sources", []), "approx_size_gb": image.get("approx_size_gb"),
-                      "already_present": (where["container_dir"] / image["filename"]).exists()})
+                      "already_present": _image_present(image, where, project_root)})
     for weight in recipe.get("weights", []):
         fetch = weight["fetch"]
         steps.append({"step": f"weights:{weight['id']}", "method": fetch["type"],
@@ -320,13 +412,21 @@ def _gpu_available() -> bool:
         ["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
 
 
-def _smoke(run: _Run, image: dict, path: Path) -> list[dict]:
+def _smoke(run: _Run, image: dict, path: Path | None) -> list[dict]:
+    results = []
+    gpu = _gpu_available()
+    if not image["sif"]:
+        # A Docker image is checked where it lives, without network; a script owns its own checks.
+        for check in image.get("smoke", []) if image["kind"] == "docker" else []:
+            name = check.get("name") or " ".join(check["argv"][:2])
+            run.command([_docker(), "run", "--rm", "--network", "none", image["docker"]["tag"]] + check["argv"],
+                        step=f"smoke:{image['filename']}:{name}", reason_code="smoke_test_failed")
+            results.append({"check": name, "image": image["filename"], "result": "passed"})
+        return results
     runtime = _apptainer()
     if not runtime:
         raise ToolError("apptainer_missing", "Apptainer is required to check an image.")
-    results = []
-    gpu = _gpu_available()
-    if image.get("run_definition_test", True):
+    if image.get("run_definition_test", image["kind"] == "def"):
         run.command([runtime, "test", path], step=f"smoke:{image['filename']}:definition-test",
                     reason_code="smoke_test_failed")
         results.append({"check": "definition-test", "image": image["filename"], "result": "passed"})
@@ -342,7 +442,7 @@ def _smoke(run: _Run, image: dict, path: Path) -> list[dict]:
     return results
 
 
-def _download(run: _Run, url: str, destination: Path, sha256: str | None) -> None:
+def _download(run: _Run, url: str, destination: Path, sha256: str | None, what: str = "weights") -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_name(destination.name + ".partial")
     offset = partial.stat().st_size if partial.exists() else 0
@@ -356,7 +456,7 @@ def _download(run: _Run, url: str, destination: Path, sha256: str | None) -> Non
             with open(partial, mode) as stream:
                 shutil.copyfileobj(response, stream, 1024 * 1024)
     except OSError as exc:
-        raise ToolError("weights_download_failed", f"{url}: {exc}. Run build again to resume.") from exc
+        raise ToolError(f"{what}_download_failed", f"{url}: {exc}. Run build again to resume.") from exc
     if sha256:
         digest = hashlib.sha256()
         with open(partial, "rb") as stream:
@@ -364,7 +464,7 @@ def _download(run: _Run, url: str, destination: Path, sha256: str | None) -> Non
                 digest.update(block)
         if digest.hexdigest() != sha256:
             partial.unlink()
-            raise ToolError("weights_hash_mismatch", f"{url} does not match the recipe hash; the partial file was removed.")
+            raise ToolError(f"{what}_hash_mismatch", f"{url} does not match the recipe hash; the partial file was removed.")
     os.replace(partial, destination)
 
 
@@ -392,6 +492,12 @@ def _fetch_weights(run: _Run, selected: set[str] | None, accepted: set[str]) -> 
                 target = where["weights_root"] / item["dest"]
                 if not target.exists():
                     _download(run, item["url"], target, item.get("sha256"))
+                if item.get("extract") == "tar":
+                    # An upstream archive: unpacked next to itself, then dropped.
+                    import tarfile
+                    with tarfile.open(target) as archive:
+                        archive.extractall(target.parent, filter="data")
+                    target.unlink()
         else:
             where["weights_root"].mkdir(parents=True, exist_ok=True)
             # Downloaders such as "dorado download" exit 1 when the folder they write into is absent.
@@ -440,18 +546,56 @@ def build_tool(recipe, where, project_root=PROJECT_ROOT, *, replace=False, weigh
         extra = shlex.split(os.environ.get("BMS_TOOLS_APPTAINER_BUILD_FLAGS", ""))
         smoke = []
         for image in recipe["images"]:
-            target = where["container_dir"] / image["filename"]
-            if target.exists() or target.is_symlink():
-                if not replace:
-                    run.log(f"keeping existing {target} (use --replace to rebuild it)")
-                    smoke.extend(_smoke(run, image, target))
+            step = f"build:{image['filename']}"
+            target = where["container_dir"] / image["filename"] if image["sif"] else None
+            present = (target.exists() or target.is_symlink()) if target else _image_present(image, where, project_root)
+            if present and not replace:
+                run.log(f"keeping existing {_image_where(image, where)} (use --replace to rebuild it)")
+                smoke.extend(_smoke(run, image, target))
+                continue
+            for base in image.get("needs", []):
+                if not (where["container_dir"] / base).exists():
+                    raise ToolError("base_image_missing",
+                                    f"{image['filename']} is built on top of {base}, which is not in "
+                                    f"{where['container_dir']}. Build the tool that provides {base} first.")
+            if image["kind"] == "script":
+                run.command(image["script"]["argv"], step=step, reason_code="image_build_failed",
+                            env=env, cwd=project_root)
+                continue
+            if image["kind"] == "docker":
+                docker, spec = _docker(), image["docker"]
+                run.command([docker, "build", "--file", project_root / spec["file"], "--tag", spec["tag"],
+                             project_root / spec.get("context", ".")],
+                            step=step, reason_code="image_build_failed", cwd=project_root)
+                built = subprocess.run([docker, "image", "inspect", "--format", "{{.Id}}", spec["tag"]],
+                                       capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
+                run.log(f"built {spec['tag']} image id {built}")
+                run.save(image_ids={**run.state.get("image_ids", {}), spec["tag"]: built})
+                if not image["sif"]:
+                    smoke.extend(_smoke(run, image, None))
+                    run.save(installed=sorted(set(run.state.get("installed", [])) | {image["filename"]}))
                     continue
+                archive = staging / (image["filename"] + ".docker.tar")
+                run.command([docker, "save", "--output", archive, spec["tag"]], step=step,
+                            reason_code="image_build_failed")
             candidate = staging / image["filename"]
             argv = [_apptainer(), "build", "--force", *extra]
-            for key, value in sorted((image.get("build_args") or {}).items()):
-                argv += ["--build-arg", f"{key}={value}"]
-            run.command(argv + [candidate, project_root / image["def"]], step=f"build:{image['filename']}",
-                        reason_code="image_build_failed", env=env, cwd=project_root)
+            if image["kind"] == "docker":
+                run.command(argv + [candidate, f"docker-archive://{archive}"], step=step,
+                            reason_code="image_build_failed", env=env, cwd=project_root)
+                archive.unlink(missing_ok=True)
+            elif image["kind"] == "pull" and image["pull"]["uri"].startswith("https://"):
+                _download(run, image["pull"]["uri"], candidate, image["pull"].get("sha256"), what="image")
+            elif image["kind"] == "pull":
+                run.command(argv + [candidate, image["pull"]["uri"]], step=step,
+                            reason_code="image_build_failed", env=env, cwd=project_root)
+            else:
+                for key, value in sorted((image.get("build_args") or {}).items()):
+                    value = str(value).replace("{container_dir}", str(where["container_dir"]))
+                    argv += ["--build-arg", f"{key}={value}"]
+                run.command(argv + [candidate, project_root / image["def"]], step=step,
+                            reason_code="image_build_failed", env=env,
+                            cwd=project_root / image.get("build_dir", "."))
             # Checked before it is installed: a failing image never replaces a working one.
             smoke.extend(_smoke(run, {**image, "smoke": [c for c in image.get("smoke", [])]}, candidate))
             os.replace(candidate, target)
@@ -470,9 +614,10 @@ def verify_tool(recipe, where, project_root=PROJECT_ROOT) -> dict:
         run.log("verify")
         smoke = []
         for image in recipe["images"]:
-            path = where["container_dir"] / image["filename"]
-            if not path.exists():
-                raise ToolError("image_missing", f"{path} is not present. Build it or adopt an existing image.")
+            path = where["container_dir"] / image["filename"] if image["sif"] else None
+            if not _image_present(image, where, project_root):
+                raise ToolError("image_missing",
+                                f"{_image_where(image, where)} is not present. Build it or adopt an existing image.")
             smoke.extend(_smoke(run, image, path))
         missing = [w["id"] for w in recipe.get("weights", [])
                    if w.get("required") and not _weight_present(w, where["weights_root"])]
@@ -483,7 +628,10 @@ def verify_tool(recipe, where, project_root=PROJECT_ROOT) -> dict:
 
 
 def adopt_tool(recipe, where, source: Path, project_root=PROJECT_ROOT, *, image_name=None, copy=False) -> dict:
-    names = [i["filename"] for i in recipe["images"]]
+    names = [i["filename"] for i in recipe["images"] if i["sif"]]
+    if not names:
+        raise ToolError("adopt_not_applicable", "This tool has no .sif image to adopt; its images live in Docker or "
+                                                "are placed by a script. Build them yourself, then run verify.")
     name = image_name or (names[0] if len(names) == 1 else None)
     if name not in names:
         raise ToolError("image_name_required", f"This tool has several images; pass --image with one of: {', '.join(names)}")
@@ -509,7 +657,7 @@ def adopt_tool(recipe, where, source: Path, project_root=PROJECT_ROOT, *, image_
     else:
         state["linked"] = sorted(set(state.get("linked", [])) | {name})
     _write_json(state_dir / "state.json", state)
-    if all((where["container_dir"] / n).exists() for n in names):
+    if all(_image_present(i, where, project_root) for i in recipe["images"]):
         return verify_tool(recipe, where, project_root)
     return tool_status(recipe, where, project_root)
 
@@ -520,6 +668,14 @@ def remove_tool(recipe, where, project_root=PROJECT_ROOT) -> dict:
     try:
         removed, kept = [], []
         for image in recipe["images"]:
+            if not image["sif"]:
+                if image["kind"] == "docker" and image["filename"] in run.state.get("installed", []) and _docker():
+                    subprocess.call([_docker(), "image", "rm", image["docker"]["tag"]], stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    removed.append(_image_where(image, where))
+                elif _image_present(image, where, project_root):
+                    kept.append(_image_where(image, where))
+                continue
             path = where["container_dir"] / image["filename"]
             if image["filename"] in run.state.get("linked", []) and path.is_symlink():
                 path.unlink()

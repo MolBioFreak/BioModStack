@@ -1,0 +1,53 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "ont-signal-tools",
+  "name": "ONT raw signal tools (blue-crab, slow5tools, Squigualiser, Squigulator)",
+  "label": "starting-point",
+  "modules": [
+    "ont"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/hasindu2008/slow5tools",
+    "also": [
+      "https://github.com/Psy-Fer/blue-crab",
+      "https://github.com/hiruna72/squigualiser",
+      "https://github.com/hasindu2008/squigulator"
+    ]
+  },
+  "notes": "Four Docker images built from the Dockerfiles in docker/, each from public upstream releases: blue-crab 0.5.0, slow5tools 1.4.0, pyslow5 1.4.0, pod5 0.3.35, squigualiser 0.7.0, squigulator 0.5.0. They stay in Docker (or Podman); no .sif is made. The signal workbench compares the image id with the one in platform/api/config/ont_signal_workbench/*_policy_v1.json, and a local build gets its own id, printed in the build log. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "docker": {
+        "file": "docker/ont-raw-signal.Dockerfile",
+        "tag": "biomodstack/ont-raw-signal:blue-crab-0.5.0-slow5tools-1.4.0",
+        "context": "."
+      },
+      "approx_size_gb": 1
+    },
+    {
+      "docker": {
+        "file": "docker/ont-squigualiser.Dockerfile",
+        "tag": "biomodstack/ont-squigualiser:0.7.0",
+        "context": "."
+      },
+      "approx_size_gb": 1
+    },
+    {
+      "docker": {
+        "file": "docker/ont-squigualiser-comparison.Dockerfile",
+        "tag": "biomodstack/ont-squigualiser-comparison:0.7.0",
+        "context": "."
+      },
+      "approx_size_gb": 1
+    },
+    {
+      "docker": {
+        "file": "docker/ont-squigulator.Dockerfile",
+        "tag": "biomodstack/ont-squigulator:0.5.0",
+        "context": "."
+      },
+      "approx_size_gb": 1
+    }
+  ],
+  "weights": []
+}

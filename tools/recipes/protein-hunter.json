@@ -1,0 +1,24 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "protein-hunter",
+  "name": "Protein Hunter",
+  "label": "starting-point",
+  "modules": [
+    "design"
+  ],
+  "upstream": {
+    "homepage": "https://github.com/yehlincho/Protein-Hunter",
+    "also": [
+      "https://github.com/sokrypton/chai-lab"
+    ]
+  },
+  "notes": "Uses the Boltz weights from the boltz2 tool (<weights>/boltz). Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "protein_hunter.sif",
+      "def": "apptainer/protein_hunter.def",
+      "approx_size_gb": 12
+    }
+  ],
+  "weights": []
+}

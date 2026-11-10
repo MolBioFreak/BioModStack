@@ -1,0 +1,26 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "md-preparation",
+  "name": "MD preparation (AmberTools, OpenMM, ParmEd)",
+  "label": "starting-point",
+  "modules": [
+    "molecular_dynamics"
+  ],
+  "upstream": {
+    "homepage": "https://ambermd.org/AmberTools.php"
+  },
+  "notes": "The definition unpacks a conda-pack archive that is not shipped here, because it is a build product, not source. Not yet built from clean by us: expect to fix things.",
+  "images": [
+    {
+      "filename": "md-preparation-v1.sif",
+      "def": "containers/md-preparation/Apptainer.def",
+      "approx_size_gb": 6,
+      "build_dir": "containers/md-preparation",
+      "requires_files": [
+        "containers/md-preparation/md-preparation-v1.tar.gz"
+      ],
+      "requires_note": "It is a conda-pack archive of a conda-forge environment holding AmberTools 24.8, OpenMM 8.3.1, ParmEd 4.3.0 and GROMACS 2025.3: create that environment, run conda-pack on it, and save the archive under that name."
+    }
+  ],
+  "weights": []
+}
