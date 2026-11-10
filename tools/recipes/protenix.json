@@ -2,7 +2,7 @@
   "schema": "bms.tool-recipe.v1",
   "id": "protenix",
   "name": "Protenix (structure prediction)",
-  "label": "starting-point",
+  "label": "builds-from-clean",
   "modules": ["structure_prediction"],
   "upstream": {"homepage": "https://github.com/bytedance/Protenix"},
   "license": {"id": "Apache-2.0", "url": "https://github.com/bytedance/Protenix/blob/main/LICENSE"},

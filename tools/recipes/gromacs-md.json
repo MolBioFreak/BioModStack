@@ -2,7 +2,7 @@
   "schema": "bms.tool-recipe.v1",
   "id": "gromacs-md",
   "name": "GROMACS (molecular dynamics engine)",
-  "label": "starting-point",
+  "label": "builds-from-clean",
   "modules": ["molecular_dynamics"],
   "upstream": {
     "homepage": "https://www.gromacs.org",
