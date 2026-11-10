@@ -62,6 +62,33 @@ def reverse_complement_end(end: FragmentEnd | None) -> FragmentEnd | None:
     )
 
 
+def require_declared_ends_match_sequence(fragment: AssemblyFragment) -> None:
+    """A top-strand overhang a fragment declares must be the bases its sequence actually has there.
+
+    Joins are built from the sequence bytes, so a declared end that the bytes contradict builds a different
+    junction than the one reported. Runs on the fragment as stored, before any reversal. A bottom-strand
+    overhang is not part of the top bytes, so only its partner end can be checked. An end with no strand label
+    is read as a top overhang only for a left 5' end on a forward fragment (the legacy meaning).
+    """
+    sequence = normalize_sequence(fragment.sequence)
+    forward = (fragment.orientation or "forward") == "forward"
+    left = normalize_end(fragment.left_end)
+    right = normalize_end(fragment.right_end)
+    if left and left.overhang:
+        top = left.protruding_strand == "top" or (left.protruding_strand is None and left.type == "sticky_5" and forward)
+        found = sequence[: len(left.overhang)]
+        if top and found != left.overhang:
+            raise AssemblyError(
+                f"Mismatch detected: {fragment.name} declares left overhang {left.overhang}, sequence starts with {found}"
+            )
+    if right and right.overhang and right.protruding_strand == "top":
+        found = sequence[-len(right.overhang):]
+        if found != right.overhang:
+            raise AssemblyError(
+                f"Mismatch detected: {fragment.name} declares right overhang {right.overhang}, sequence ends with {found}"
+            )
+
+
 def orient_fragment(fragment: AssemblyFragment) -> OrientedFragment:
     sequence = normalize_sequence(fragment.sequence)
     left_end = normalize_end(fragment.left_end)

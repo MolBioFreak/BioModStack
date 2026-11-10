@@ -255,8 +255,8 @@ async def test_linear_sticky_ends_survive_save_and_feed_a_second_ligation(tmp_pa
             return {"type": "sticky_5", "overhang": overhang}
         body_a, body_b = dna(12, 20), dna(13, 20)
         first = [
-            dict(id="a", name="a", sequence=body_a, left_end=sticky("GATC"), right_end=sticky("AATT")),
-            dict(id="b", name="b", sequence=body_b, left_end=sticky("AATT"), right_end=sticky("GATC")),
+            dict(id="a", name="a", sequence="GATC" + body_a, left_end=sticky("GATC"), right_end=sticky("AATT")),
+            dict(id="b", name="b", sequence="AATT" + body_b, left_end=sticky("AATT"), right_end=sticky("GATC")),
         ]
         response = await ligate(client, first)
         assert response.status_code == 200, response.text
