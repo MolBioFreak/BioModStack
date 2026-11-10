@@ -16,19 +16,20 @@ from services.restriction_analysis import AnalysisLimitError, InvalidDNAError
 
 def test_cloning_routers_registered_without_restoring_full_product():
     tree = ast.parse((Path(__file__).parents[1] / "main.py").read_text())
-    included = {
+    included = [
         ast.unparse(node.args[0])
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
         and node.func.attr == "include_router" and node.args
-    }
+    ]
+    assert included.count("molbio_golden_gate_design.router") == 1
     assert {
         "molbio_ops.router", "molbio_golden_gate_design.router",
         "molbio_gibson_suggest.router", "molbio_end_operations.router",
         "molbio_relatives.router", "molbio_branches.router",
-    } <= included
+    } <= set(included)
     assert not {"molbio_share.router", "molecular_construction.router",
-                "atomworks_studio.router", "molecular_geometry.router"} & included
+                "atomworks_studio.router", "molecular_geometry.router"} & set(included)
 
 
 @pytest.mark.parametrize("error", [AssemblyError("Unknown restriction enzyme 'missing'"),
