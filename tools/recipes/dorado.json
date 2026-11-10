@@ -2,7 +2,7 @@
   "schema": "bms.tool-recipe.v1",
   "id": "dorado",
   "name": "Dorado (ONT basecalling, modkit, samtools)",
-  "label": "starting-point",
+  "label": "builds-from-clean",
   "modules": ["ont"],
   "upstream": {
     "homepage": "https://github.com/nanoporetech/dorado",
