@@ -653,6 +653,18 @@ export function Layout({ children }: LayoutProps) {
                                 >
                                     Stats Toolkit
                                 </Link>
+                                <Link
+                                    to="/tools"
+                                    data-bms-primary-nav-active={isActive('/tools') ? 'true' : undefined}
+                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                    style={{
+                                        backgroundColor: isActive('/tools') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/tools') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                    title="Build or adopt the tools this install uses"
+                                >
+                                    Tools
+                                </Link>
 
                                 {showBioXpDevFeature && (
                                     <Link
