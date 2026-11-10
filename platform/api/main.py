@@ -434,6 +434,8 @@ app.include_router(rcsb.router, prefix="/api/rcsb", tags=["rcsb"])
 app.include_router(nucleotide_sequences.router)  # /api/sequences/*
 app.include_router(system.router, prefix="/api", tags=["system"])  # /api/system/*
 app.include_router(telemetry.router, prefix="/api", tags=["telemetry"])
+from routers import tools_installer
+app.include_router(tools_installer.router)  # /api/tools/* - tool installer
 app.include_router(frameworks.router)  # /api/frameworks/* - SAbDab integration
 app.include_router(boltzgen.router)
 app.include_router(molbio_ops.router)
