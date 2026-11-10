@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Literal
-from pydantic import Field, TypeAdapter, create_model, JsonValue
+from pydantic import Field, TypeAdapter, create_model, JsonValue, field_validator
 from routers.molbio_ops import PrimerDesignRequest, SequenceInput
 from services.assembly.golden_gate_design_types import (
     Closed, GoldenGateDesignRequest, GoldenGateDesignResult, EnzymeBinding,
@@ -37,6 +37,13 @@ class SearchControls(Closed):
     unique_classes: bool = True
     exclude_palindromes: bool = True
     ranking_mode: Literal['empirical', 'lexicographic'] = 'empirical'
+
+    @field_validator('unique_classes')
+    @classmethod
+    def _unique_classes_required(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError('Duplicate overhangs are not allowed')
+        return value
 
 class EndInventory(Closed):
     instance_id: str

@@ -1,6 +1,8 @@
 """Shared helpers for validated assembly workflows."""
 from __future__ import annotations
 
+from collections import Counter
+
 from typing import Iterable
 
 from services.molbio_ops import clean_sequence, reverse_complement
@@ -60,6 +62,26 @@ def reverse_complement_end(end: FragmentEnd | None) -> FragmentEnd | None:
         if end.protruding_strand else None,
         five_prime_phosphate=end.five_prime_phosphate,
     )
+
+
+def reverse_complement_text(sequence: str) -> str:
+    return sequence.translate(str.maketrans("ACGTacgt", "TGCAtgca"))[::-1]
+
+
+def require_unique_junction_classes(junctions) -> None:
+    """A Type IIS cut leaves a unique end per site, so a reused overhang class lets junctions compete
+    for the same partner and the tube can assemble in more than one order. A sequence and its reverse
+    complement are the same class."""
+    classes = Counter(
+        min(sequence, reverse_complement_text(sequence))
+        for junction in junctions
+        if (sequence := junction.overhang_sequence)
+    )
+    for sequence, count in classes.items():
+        if count > 1:
+            raise AssemblyError(
+                f"Duplicate overhang detected: {sequence}/{reverse_complement_text(sequence)} used at {count} junctions"
+            )
 
 
 def require_declared_ends_match_sequence(fragment: AssemblyFragment) -> None:

@@ -225,10 +225,9 @@ def test_conflicts_and_mismatched_dataset_are_outcomes():
 
 
 def test_editable_automatic_preferences_do_not_become_manual_restrictions():
-    settings = gg.SearchSettings(unique_classes=False, exclude_palindromes=False, ranking_mode="lexicographic")
+    settings = gg.SearchSettings(exclude_palindromes=False, ranking_mode="lexicographic")
     result = gg.optimize_overhangs(["AATG", "ATAT"], 2, S2, end_length=4, settings=settings)
-    assert len(result["solutions"]) == 3
-    assert any(x["junctions"] == ["ATAT", "ATAT"] for x in result["solutions"])
+    assert [x["junctions"] for x in result["solutions"]] == [["AATG", "ATAT"]]
     assert all(x["f_set"] is None for x in result["solutions"])
 
 
