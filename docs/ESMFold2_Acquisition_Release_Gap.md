@@ -48,10 +48,11 @@ None of the inspected sources supplies that distribution. Adding invented
 * Anonymous GitHub releases API for `MolBioFreak/BioModStack` returned one release,
   `android-beta-006-archive`, with an APK and checksum only; no model/SIF assets.
   This observation does not exclude private unpublished artifacts.
-* Protenix is a worse cache-free starting point: `apptainer/protenix.def` uses
-  `Bootstrap: localimage`, `From: $BMS_CONTAINER_DIR/protenix.sif` (`$BMS_CONTAINER_DIR` is the configured container directory), and
-  copies `$HOME/.local/bin/uv`. Its upstream code pin does not reconstruct
-  its inherited dependency stack. No local SIF was hashed or promoted as a release.
+* Protenix: `apptainer/protenix.def` now builds from public upstream sources
+  (CUDA base image, PyTorch wheels, the Protenix repository at a fixed commit).
+  It has not yet been built from nothing on a clean machine, so its recipe is
+  labelled `starting-point`. The `protenix-v2` checkpoint is not publicly
+  downloadable and has to be supplied by the user.
 
 ## Independently verified upstream weight identities
 

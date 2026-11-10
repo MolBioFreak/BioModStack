@@ -1,0 +1,62 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "protenix",
+  "name": "Protenix (structure prediction)",
+  "label": "starting-point",
+  "modules": ["structure_prediction"],
+  "upstream": {"homepage": "https://github.com/bytedance/Protenix"},
+  "license": {"id": "Apache-2.0", "url": "https://github.com/bytedance/Protenix/blob/main/LICENSE"},
+  "notes": "Code and the shared data files are public. The protenix-v2 checkpoint is not: upstream states its weights are proprietary and its download address refuses anonymous requests, so you must obtain protenix-v2.pt from the rights holder and place it yourself. Prediction needs an NVIDIA GPU.",
+  "images": [
+    {
+      "filename": "protenix.sif",
+      "def": "apptainer/protenix.def",
+      "approx_size_gb": 10,
+      "sources": [
+        "nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04",
+        "https://github.com/bytedance/Protenix @ bd54a05d047b8925a241056f36d619700604068a",
+        "https://download.pytorch.org/whl/cu128 (torch 2.7.1)",
+        "https://github.com/NVIDIA/cutlass @ v3.5.1"
+      ],
+      "smoke": [
+        {"name": "protenix-help", "argv": ["protenix", "--help"]},
+        {"name": "torch-cuda", "gpu": true, "argv": ["python3", "-c", "import torch; assert torch.cuda.is_available()"]}
+      ]
+    }
+  ],
+  "weights": [
+    {
+      "id": "common-data",
+      "required": true,
+      "approx_size_gb": 0.7,
+      "license": {"id": "Apache-2.0", "url": "https://github.com/bytedance/Protenix/blob/main/LICENSE"},
+      "present_if": [
+        "protenix/common/components.cif",
+        "protenix/common/components.cif.rdkit_mol.pkl",
+        "protenix/common/clusters-by-entity-40.txt",
+        "protenix/common/obsolete_release_date.csv"
+      ],
+      "fetch": {
+        "type": "url",
+        "files": [
+          {"url": "https://protenix.tos-cn-beijing.volces.com/common/components.cif", "dest": "protenix/common/components.cif", "sha256": "bb31ae5cf6c8bc669924313077cb4231ee5ffefd3a20118cd14f3ec89f8bb6a5"},
+          {"url": "https://protenix.tos-cn-beijing.volces.com/common/components.cif.rdkit_mol.pkl", "dest": "protenix/common/components.cif.rdkit_mol.pkl", "sha256": "d1cfb71f5993a3ebea7c47877022d7f597bbfbaf86e28a4770e957da6c50cd35"},
+          {"url": "https://protenix.tos-cn-beijing.volces.com/common/clusters-by-entity-40.txt", "dest": "protenix/common/clusters-by-entity-40.txt", "sha256": "1ab4af905e75b382eda8dec59917dc3608bee0729e36b9e71baf860bbe86850c"},
+          {"url": "https://protenix.tos-cn-beijing.volces.com/common/obsolete_release_date.csv", "dest": "protenix/common/obsolete_release_date.csv", "sha256": "a4f3f63ac5d7eebd78b07995cc669b9eccd6f5d8813c9492c9df02868893cf33"}
+        ]
+      }
+    },
+    {
+      "id": "protenix-v2-checkpoint",
+      "required": true,
+      "approx_size_gb": 1.9,
+      "license": {"id": "Protenix-v2-proprietary", "url": "https://github.com/bytedance/Protenix#readme"},
+      "present_if": ["protenix/checkpoint/protenix-v2.pt"],
+      "fetch": {
+        "type": "manual",
+        "source": "rights holder (see the Protenix README)",
+        "instructions": "Obtain protenix-v2.pt from the Protenix rights holder under their terms and place it at <weights_root>/protenix/checkpoint/protenix-v2.pt, then run: tools verify protenix"
+      }
+    }
+  ]
+}
