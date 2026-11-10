@@ -208,6 +208,24 @@ def suggest_parts(request: SuggestRequest, *, resolve_revision: Callable[[str], 
     return SuggestResult(proposals=proposals, enzymes=reports, diagnostics=diagnostics)
 
 
+def _seam_offenders(enzyme, payloads: list[str], labels: dict[int, str], wrap: bool) -> set[int]:
+    """Slots whose label forms a recognition site with the payload bases beside it in the product.
+
+    Slot s sits between payload s-1 and payload s (wrapping when the product is a ring without a vector).
+    """
+    count = len(payloads)
+    reach = max(len(enzyme.site) - 1, 1)
+    offenders = set()
+    for slot, label in labels.items():
+        left = payloads[(slot - 1) % count][-reach:] if wrap or slot > 0 else ""
+        right = payloads[slot % count][:reach] if wrap or slot < count else ""
+        window = (left + label + right).upper()
+        start, end = len(left), len(left) + len(label)
+        if any(o.site_start < end and o.site_end_unwrapped > start for o in _scan(window, "linear", enzyme).occurrences):
+            offenders.add(slot)
+    return offenders
+
+
 def _for_enzyme(request, enzyme, name, geometry, dataset, pieces, vector_material, sites, resolve_revision):
     width = geometry.overhang_length
     vector_info = _vector_ends(request, vector_material, enzyme, resolve_revision) if vector_material is not None else None
@@ -218,14 +236,27 @@ def _for_enzyme(request, enzyme, name, geometry, dataset, pieces, vector_materia
                                        ranking_mode="empirical" if dataset else "lexicographic")
     if free:
         locked = [fixed[s][0] for s in sorted(fixed)]
-        result = fidelity.optimize_overhangs(["".join(x) for x in itertools.product("ACGT", repeat=width)], n_slots,
-                                             dataset, end_length=width, fixed=locked, settings=settings)
-        if not result["solutions"]:
-            raise AssemblyError("; ".join(result["diagnostics"]) or "optimizer found no junction set with the fixed overhangs")
-        assignments = []
-        for solution in result["solutions"]:
-            labels = {s: fixed[s][0] for s in fixed} | dict(zip(free, solution["junctions"][len(locked):]))
-            assignments.append((labels, solution.get("f_set"), solution.get("log_f_set")))
+        payloads = [piece.payload() for piece in pieces]
+        wrap = topology == "circular" and vector_material is None
+        excluded: set[str] = set()
+        while True:
+            result = fidelity.optimize_overhangs(["".join(x) for x in itertools.product("ACGT", repeat=width)], n_slots,
+                                                 dataset, end_length=width, fixed=locked, excluded=sorted(excluded),
+                                                 settings=settings)
+            if not result["solutions"]:
+                raise AssemblyError("; ".join(result["diagnostics"]) or "optimizer found no junction set with the fixed overhangs")
+            assignments, blocked = [], set()
+            for solution in result["solutions"]:
+                labels = {s: fixed[s][0] for s in fixed} | dict(zip(free, solution["junctions"][len(locked):]))
+                bad = _seam_offenders(enzyme, payloads, {s: labels[s] for s in free}, wrap)
+                if bad:
+                    blocked |= {labels[s] for s in bad}
+                else:
+                    assignments.append((labels, solution.get("f_set"), solution.get("log_f_set")))
+            if not blocked:
+                break
+            # a label that would form a recognition site with its neighbours cannot be ligated cleanly: search again without it
+            excluded |= blocked
     else:
         assignments = [({s: fixed[s][0] for s in fixed}, None, None)]
     spacer = request.spacer if request.spacer is not None else "ACGTACGTACGTACGT"[:geometry.spacer_length]
