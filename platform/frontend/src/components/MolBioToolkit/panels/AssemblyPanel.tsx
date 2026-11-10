@@ -5,7 +5,7 @@ import type { RestrictionDigestFragment } from '../../../lib/restrictionAnalysis
 const GoldenGateWorkflowWorkspace = lazy(() => import('./golden-gate/GoldenGateWorkflowWorkspace'));
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useInputOwnership } from './useInputOwnership';
-import { FragmentChooser, fragmentFromChooserItem } from '../FragmentChooser';
+import { FragmentChooser, loadChooserFragment } from '../FragmentChooser';
 import { inlineFragmentFeatures } from '../utils/assemblyFeatures';
 import {
     fetchGoldenGateAssemblyOptions,
@@ -447,6 +447,7 @@ export function AssemblyPanel({
     const goldenGateOperationId = sequenceData.operation === 'golden_gate_design' && typeof sequenceData.operationParams?.operation_id === 'string' ? sequenceData.operationParams.operation_id : undefined;
     useEffect(() => { if (goldenGateOperationId) { setMode('golden_gate'); setRawGoldenGate(true); } }, [goldenGateOperationId]);
     const [fragments, setFragments] = useState<AssemblyFragmentInput[]>([]);
+    const savedFragmentLoads = useRef(Promise.resolve());
     useEffect(() => { if (transferredFragments) { setFragments(structuredClone(transferredFragments)); setMode('ligation'); setRawGoldenGate(false); } }, [transferredFragments]);
     const [gibsonWorkflow, setGibsonWorkflow] = useState<'plan' | 'design' | 'validate'>('plan');
     const [gibsonPreparations, setGibsonPreparations] = useState<Record<string, 'pcr' | 'ready_linear'>>({});
@@ -972,7 +973,16 @@ export function AssemblyPanel({
                     >
                         Add selection
                     </button>
-                    <FragmentChooser label="Add saved fragment" onPick={(item) => addSavedFragment(fragmentFromChooserItem(item))} />
+                    <FragmentChooser label="Add saved fragment" onPick={(item) => {
+                        // Preserve selection order even when an earlier revision read is slower.
+                        savedFragmentLoads.current = savedFragmentLoads.current.then(async () => {
+                            try {
+                                addSavedFragment(await loadChooserFragment(item));
+                            } catch (loadError) {
+                                setError(loadError instanceof Error ? loadError.message : 'Unable to load saved fragment');
+                            }
+                        });
+                    }} />
                 </div>
 
                 <div className="grid gap-2 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)_auto]">
