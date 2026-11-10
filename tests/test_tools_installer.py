@@ -98,6 +98,20 @@ def test_build_needs_license_then_becomes_ready(install):
     assert listing["tools"][0]["status"] == "ready"
 
 
+def test_hand_placed_weights_ask_for_the_file_not_for_a_license(install):
+    path = install.tmp / "project" / "tools" / "recipes" / "demo.json"
+    recipe = json.loads(path.read_text())
+    recipe["weights"][0]["fetch"] = {"type": "manual", "instructions": "Get model from its owner."}
+    path.write_text(json.dumps(recipe))
+    code, status = install("build", "demo")
+    assert code == 3 and status["reason_code"] == "weights_manual_step"
+    assert "Get model from its owner." in status["message"]
+    assert (install.data / "apptainer" / "demo.sif").is_file(), "the image is still built and kept"
+    (install.data / "weights" / "demo" / "model").mkdir(parents=True)
+    code, status = install("verify", "demo")
+    assert code == 0 and status["status"] == "ready"
+
+
 def test_failed_build_reports_reason_and_log_and_leaves_no_image(install):
     code, status = install("build", "demo", extra={"FAKE_FAIL_BUILD": "1"})
     assert code == 3 and status["status"] == "failed"

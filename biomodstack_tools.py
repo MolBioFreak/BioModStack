@@ -375,15 +375,16 @@ def _fetch_weights(run: _Run, selected: set[str] | None, accepted: set[str]) -> 
             continue
         step = f"weights:{weight['id']}"
         run.save(step=step)
+        fetch = weight["fetch"]
+        if fetch["type"] == "manual":
+            # Nothing is downloaded here, so there is no licence for us to ask about: the user obtains the file.
+            raise ToolError("weights_manual_step",
+                            f"{weight['id']} must be placed by hand: {fetch.get('instructions', 'see upstream')}")
         license_id = (weight.get("license") or {}).get("id")
         if license_id and license_id not in accepted:
             raise ToolError("license_not_accepted",
                             f"{weight['id']} is under {license_id} ({(weight.get('license') or {}).get('url', 'see upstream')}). "
                             f"Read it, then re-run with --accept-license {license_id}")
-        fetch = weight["fetch"]
-        if fetch["type"] == "manual":
-            raise ToolError("weights_manual_step",
-                            f"{weight['id']} must be placed by hand: {fetch.get('instructions', 'see upstream')}")
         if fetch["type"] == "url":
             for item in fetch["files"]:
                 target = where["weights_root"] / item["dest"]
