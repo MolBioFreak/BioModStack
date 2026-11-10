@@ -211,7 +211,7 @@ export function stageTimeline(pageLabel: string, actions: MethodValue[], before:
 
 function pauseText(message: string) {
     const m = /remove (residual|the last|last) ([^ ]+)/i.exec(message);
-    return m ? `remove last ${m[2].replace(/^ethanol$/i, 'EtOH')}` : message.split(/[.,]/)[0].slice(0, 28);
+    return m ? `remove last ${m[2].replace(/^ethanol$/i, 'EtOH')}` : message.split(/\s*[(.]/)[0].slice(0, 44);
 }
 /** Join adjacent blocks with identical text so a lane reads as segments, not slots. */
 function merge(blocks: TimelineBlock[]): TimelineBlock[] {
