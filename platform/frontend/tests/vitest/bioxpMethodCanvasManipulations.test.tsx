@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { methodManipulations, nativeChannelFootprint, nativeWellAddress, manipulationText, holderChannelFootprint } from '../../src/lib/bioxpMethodManipulations';
 import type { MethodCompile, MethodValue } from '../../src/lib/bioxpMethods';
+import { stageTimeline } from '../../src/lib/bioxpMethodTimeline';
 const action = (kind: string, params: MethodValue, id = 'a'): MethodValue => ({ action_id: id, kind, params, metadata: { bms_method: { path: '/method/steps/0' } } });
 const result = (actions: MethodValue[]): MethodCompile => ({ document: { stages: [{ actions }] }, issues: [], digest: null });
 const move = (location_id: number, well: unknown) => ({ operation: 'position', positioning: { operation: 'move', location_id, well } });
@@ -139,4 +140,34 @@ it('projects bulk-holder targets and the waste bin as link endpoints', () => {
     const toWaste = methodManipulations(result([pickup([1]), action('pipette_manual_physical', { operation: 'cavro_liquid_recipe', recipe: waste }, 'sup')]), -1);
     expect(toWaste.links.map(l => [l.source.station, l.source.well, l.destination.station])).toEqual([['LOC_MS', 'D5', 'WASTE_BIN']]);
     expect(holderChannelFootprint('LOC_TROUGH_PCR_ROW_2_WELL_2', [0, 1, 3]).wells.map(w => w.station)).toEqual(['LOC_TROUGH_PCR_ROW_2_WELL_2', 'LOC_TROUGH_PCR_ROW_2_WELL_4', 'LOC_TROUGH_PCR_ROW_2_WELL_8']);
+});
+
+
+const tla = (kind: string, params: MethodValue, id = kind): MethodValue => ({ action_id: id, kind, params, metadata: { bms_method: { path: '/method/steps/0' } } });
+const tlMove = (location_id: number, well: string) => ({ operation: 'position', positioning: { operation: 'move', location_id, well } });
+const tlHolder = { operation: 'position', positioning: { operation: 'move', target: 'LOC_TROUGH_MICRO_ROW_1', camera_offset: false } };
+const tlXfer = (from: MethodValue, to: MethodValue, vol: string, ch = 3) => tla('pipette_manual_physical', { operation: 'cavro_liquid_recipe', recipe: { channels: [ch], target_liquid_ul: vol, before_leading_air: [from], before_dispense: [to] } });
+
+it('returns null for pages without waits, holds or pauses', () => {
+    expect(stageTimeline('x', [tla('plate_move', { plate_id: 'PL_OUTPUT', target_location: 'LOC_MS' })], [], () => '', () => undefined)).toBeNull();
+});
+
+it('builds cycler holds, ramps, door state and a marker from a thermal profile', () => {
+    const t = stageTimeline('Incubate', [tla('thermal_profile', { repeat: 1, segments: [
+        { target_temp_c: 30, duration_s: 120, start: 'attainment' }, { target_temp_c: 80, duration_s: 120, start: 'attainment' }] })],
+        [tla('thermal_door', { door_command: 'DC' })], () => '', () => undefined)!;
+    expect(t.lanes[0].blocks.map(b => b.title)).toEqual(['Ramp', 'Hold 30 °C', 'Ramp', 'Hold 80 °C']);
+    expect(t.lanes[1].blocks[0].title).toBe('Closed throughout · heated lid down');
+    expect(t.total).toBe('4:00 of holds + ramps');
+    expect(t.markers[0]).toMatchObject({ station: 'LOC_TC', title: '30 °C 2:00 → 80 °C 2:00 · lid down' });
+});
+
+it('groups reagent draws per destination, labels the bind wait and marks the wells', () => {
+    const actions = (['E5', 'H5']).flatMap(w => [tlXfer(tlHolder, tlMove(1, w === 'E5' ? 'A5' : 'B5'), '27'), tlXfer(tlHolder, tlMove(1, w === 'E5' ? 'A5' : 'B5'), '27'), tla('pipette_aspirate', {})]);
+    const t = stageTimeline('Bind', [...actions, tla('wait', { seconds: 600 }, 'w')], [tla('chiller_setpoint', { bank: 'oc', target_temp_c: 22 })],
+        () => 'Bind DNA 10 min at room temperature', w => w.station.startsWith('LOC_TROUGH') ? 'AXP' : undefined)!;
+    const liquid = t.lanes.find(l => l.id === 'liquid')!.blocks;
+    expect(liquid[0]).toMatchObject({ title: 'AXP → G5', detail: '2 × 27 µL + mix' });
+    expect(liquid.find(b => b.tone === 'wait')).toMatchObject({ title: 'Bind', detail: '10:00 · room temp' });
+    expect(t.markers.find(m => m.tone === 'wait')).toMatchObject({ title: 'Bind 10:00 at RT', wells: ['G5', 'H5'] });
 });

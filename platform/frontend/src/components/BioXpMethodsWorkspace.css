@@ -319,3 +319,23 @@
 .bioxp-method-execution-text textarea { width:100%; box-sizing:border-box; min-height:24rem; max-height:none; resize:vertical; white-space:pre; overflow:auto; font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; }
 .bioxp-method-execution-text p { font-size:12px; line-height:1.5; }
 @media(max-width:640px) { .bioxp-page-navigation { gap:8px; padding:10px; flex-wrap:wrap; } .bioxp-page-navigation label { order:-1; flex-basis:100%; } .bioxp-page-navigation button { flex:1; } .bioxp-page-summary { padding:0 10px; } .bioxp-method-execution-text { margin:10px; } }
+
+/* Stage timeline (display only) */
+.bioxp-stage-timeline { margin:10px 0 14px; padding:12px 14px; border:1px solid var(--border-primary); border-radius:10px; background:rgba(255,255,255,.02); }
+.bioxp-stage-timeline h4 { margin:0 0 8px; font-size:13px; font-weight:600; color:var(--text-secondary); display:flex; justify-content:space-between; gap:12px; }
+.bioxp-tl-grid { display:grid; column-gap:3px; row-gap:4px; align-items:stretch; overflow-x:auto; }
+.bioxp-tl-lane { font-size:11px; color:var(--text-secondary); display:flex; align-items:center; }
+.bioxp-tl-block { border-radius:6px; padding:5px 7px; font-size:12px; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#0b1220; font-weight:600; display:flex; flex-direction:column; justify-content:center; min-width:0; }
+.bioxp-tl-block small { font-weight:500; opacity:.95; font-size:11px; }
+.bioxp-tl-block.is-heat { background:#f59e0b; } .bioxp-tl-block.is-hot { background:#dc2626; color:#fff; }
+.bioxp-tl-block.is-wait { background:#94a3b8; } .bioxp-tl-block.is-mag { background:#60a5fa; } .bioxp-tl-block.is-liquid { background:#2dd4bf; }
+.bioxp-tl-block.is-operator { background:#fbbf24; border:2px dashed #78350f; } .bioxp-tl-block.is-tick { background:#334155; color:#cbd5e1; font-weight:500; }
+.bioxp-tl-block.is-cover { background:#f472b6; } .bioxp-tl-block.is-ramp { background:#fde68a; }
+.bioxp-tl-trace { position:relative; margin-top:22px; grid-row:1; }
+.bioxp-tl-trace svg { display:block; }
+.bioxp-tl-trace span { position:absolute; transform:translateX(-50%); font:600 13px system-ui; white-space:nowrap; pointer-events:none; }
+.bioxp-tl-trace .is-heat { color:#fde68a; } .bioxp-tl-trace .is-hot { color:#fecaca; }
+.bioxp-stage-markers .bioxp-stage-glow { fill:none; stroke-width:3.6; }
+.bioxp-stage-chip rect { fill:#0f172a; stroke-width:2.2; filter:drop-shadow(0 2px 6px #0008); }
+.bioxp-stage-chip text { fill:#fff; font:600 14px system-ui; }
+.bioxp-stage-chip text.is-detail { fill:#cbd5e1; font-weight:500; }
