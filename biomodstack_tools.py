@@ -277,7 +277,17 @@ def _store_image(name: str, container_dir: Path) -> Path | None:
 def _sif_path(image: dict, where: dict[str, Path]) -> Path | None:
     """The image file BMS runs: the one in the container folder, else the managed store's."""
     direct = where["container_dir"] / image["filename"]
-    return direct if direct.exists() else _store_image(image["filename"], where["container_dir"])
+    if direct.exists():
+        return direct
+    if image.get("lock"):  # a lock file in the repository naming the reference build's file
+        try:
+            named = where["container_dir"] / Path(json.loads(
+                (PROJECT_ROOT / image["lock"]).read_text(encoding="utf-8"))["image_filename"]).name
+            if named.exists():
+                return named
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    return _store_image(image["filename"], where["container_dir"])
 
 
 def _image_present(image: dict, where: dict[str, Path], project_root: Path = PROJECT_ROOT) -> bool:

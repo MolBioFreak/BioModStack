@@ -14,7 +14,8 @@
     {
       "filename": "protonpottsmpnn.sif",
       "def": "apptainer/protonpottsmpnn-cuda.def",
-      "approx_size_gb": 8
+      "approx_size_gb": 8,
+      "lock": "apptainer/protonpottsmpnn-runtime.lock.json"
     }
   ],
   "weights": []

@@ -158,6 +158,7 @@ Known gaps, stated in the recipe notes as well:
 - `md-preparation`: the definition unpacks a conda-pack archive that is not shipped.
 - `confornets`: this repository has no definition for the base image, only for the patch on top of it.
 - The definitions install PyTorch releases (2.11.0 for CUDA 12.8), not nightlies.
+- ProtonPottsMPNN runs the reference build named in `apptainer/protonpottsmpnn-runtime.lock.json` when that file is installed, and otherwise a locally built `protonpottsmpnn.sif`, accepted as it is.
 - On a managed install, an image held in the shared image store and a weight set held under `weights/layouts/` count as present.
 - Weights marked as a manual step have no single public download address we could pin; the recipe says where to get them and where to put them.
 

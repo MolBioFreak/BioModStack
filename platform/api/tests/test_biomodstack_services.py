@@ -36,13 +36,16 @@ def owned_listener_preflight(runtime_mode: str) -> dict[str, Any]:
 
 
 @pytest.fixture(autouse=True)
-def _no_recorded_host_installation(monkeypatch):
-    """Rendering units fills unset selectors from this machine's host selectors file.
+def _no_recorded_host_installation(tmp_path, monkeypatch):
+    """Keep this machine's own BMS configuration out of the tests.
 
-    On a provisioned machine that put the real BMS_PYTHON_ROOT into os.environ, and the
-    temp project (which has no uv.lock) then failed against that managed environment.
+    Rendering units fills unset selectors from the host selectors file. On a provisioned
+    machine that put the real BMS_PYTHON_ROOT into os.environ, and the temp project (which
+    has no uv.lock) then failed against that managed environment. The config folder also
+    holds optional service descriptors that add units.
     """
     import biomodstack_runtime_profile as runtime_profile
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "host-config"))
     monkeypatch.setattr(runtime_profile, "load_host_selectors", lambda: {})
     for key in runtime_profile.HOST_SELECTOR_KEYS:
         monkeypatch.delenv(key, raising=False)
