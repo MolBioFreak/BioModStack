@@ -238,6 +238,7 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                         const interactive = !!live && !readOnly;
                         const blocked = interactive ? live!.stationDisabledReason(marker.target) : null;
                         const last = marker.channels[marker.channels.length - 1];
+                        const stage = (well: string) => { const kind = activityKinds?.[marker.target]?.[well]; return kind ? ` is-stage-active is-stage-${kind}` : ''; };
                         return <g key={marker.target} className={`bwd-holder-target${selection.station === marker.target ? ' is-active' : ''}`} data-holder-target={marker.target}
                             role={interactive ? 'button' : 'img'} tabIndex={interactive ? 0 : undefined} aria-label={interactive ? `Move to ${marker.label}` : marker.label}
                             aria-disabled={interactive ? !!blocked : undefined}
@@ -247,10 +248,10 @@ export function BioXpWorkflowDeck({ selection, onChange, readOnly = false, live,
                             <title>{blocked ?? marker.label}</title>
                             {marker.kind === 'micro' ? <>
                                 <rect className="bwd-holder-body" x={marker.x - 11} y={marker.y - 11} width="22" height={last.y - marker.y + 22} rx="11" />
-                                {marker.channels.map((tube, index) => <circle key={index} className="bwd-holder-tube" cx={tube.x} cy={tube.y} r="7.5" />)}
+                                {marker.channels.map((tube, index) => <circle key={index} className={`bwd-holder-tube${stage(String(index + 1))}`} cx={tube.x} cy={tube.y} r="7.5" />)}
                                 <rect className="bwd-hit" x={marker.x - 11} y={marker.y - 11} width="22" height={last.y - marker.y + 22} rx="11" />
                             </> : <>
-                                <circle className="bwd-holder-well" cx={marker.x} cy={marker.y} r="5.5" />
+                                <circle className={`bwd-holder-well${stage('1')}`} cx={marker.x} cy={marker.y} r="5.5" />
                                 <circle className="bwd-hit" cx={marker.x} cy={marker.y} r="8" />
                             </>}
                         </g>;

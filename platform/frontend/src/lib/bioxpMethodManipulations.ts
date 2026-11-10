@@ -26,7 +26,25 @@ export function nativeWellAddress(value: unknown): { row: number; column: number
  * Native 3f1275a: oem_compat/position_table.py, pathing.py; manual pickup uses unadjusted moveTo.
  * Keep this independent of vessel profiles: fixed-head XY is not liquid-volume geometry.
  */
+/** Named Bulk reagent holder target (catalog key). Micro rows: Pn sits over tube n. PCR wells: P1 over the
+ * named well, later channels two wells further each (catalog channel_wells 1,3,5,7). Display only. */
+export function holderChannelFootprint(target: string, selected: number[]) {
+    const found: ManipulatedWell[] = [], notes: string[] = [];
+    const pcr = /^(LOC_TROUGH_PCR_ROW_\d)(?:_WELL_(\d))?$/.exec(target);
+    for (const channel of selected) {
+        if (/^LOC_TROUGH_MICRO_ROW_\d$/.test(target)) found.push({ channel, station: target, well: String(channel + 1) });
+        else if (pcr) {
+            const well = Number(pcr[2] ?? 1) + 2 * channel;
+            if (well <= 8) found.push({ channel, station: `${pcr[1]}_WELL_${well}`, well: '1' });
+            else notes.push(`P${channel + 1}: ${target} channel ${channel + 1} is past PCR well 8.`);
+        } else notes.push(`P${channel + 1}: holder target ${target} has no well projection.`);
+    }
+    return { wells: found, notes };
+}
+
 export function nativeChannelFootprint(location: number, well: unknown, selected: number[], alignment: number | null, unadjusted = false) {
+    // The waste bin is one open region: every channel lands in it.
+    if (location === 6) return { wells: selected.map(channel => ({ channel, station: 'WASTE_BIN', well: 'A1' })), notes: [] };
     const reference = nativeWellAddress(well), resource = deckResources.find(r => r.locationId === location);
     const exempt = unadjusted || [6, 7, 8, 9, 10, 16].includes(location);
     const a = exempt ? 0 : validAlignment(alignment) ? Math.max(0, alignment) : null;
@@ -44,7 +62,7 @@ export function nativeChannelFootprint(location: number, well: unknown, selected
 /** Walk emitted operations in order. No compilation, runtime mutation, liquid accounting or admission. */
 export function methodManipulations(result: MethodCompile | null | undefined, alignment: number | null): MethodManipulations {
     const events: WellManipulation[] = [], links: ManipulationLink[] = [], linkKeys = new Set<string>();
-    let position: { location: number; well: unknown; alignment: number | null; unadjusted?: boolean } | null = null;
+    let position: { location: number; well: unknown; alignment: number | null; unadjusted?: boolean; target?: string } | null = null;
     let loaded: number[] | null = null;
     let motionReference: number | null = alignment, transportReference: number | null = null;
     const tipRacks = object(object(object(result?.simulation).initial_state).tip_racks);
@@ -57,7 +75,7 @@ export function methodManipulations(result: MethodCompile | null | undefined, al
         const call = rows(provenance?.call_path).find(c => String(c.path).startsWith('/method/steps/'));
         const path = String(call?.path ?? sourcePath).replace(/^\/method(?=\/)/, '');
         const emit = (operation: string, selected: number[] | null, liquid?: 'aspirate' | 'dispense') => {
-            const footprint = selected && position ? nativeChannelFootprint(position.location, position.well, selected, position.alignment, position.unadjusted) : { wells: [], notes: [selected === null ? `${operation}: active/loaded channel footprint is unresolved.` : `${operation}: XY well position is not established.`] };
+            const footprint = selected && position ? position.target ? holderChannelFootprint(position.target, selected) : nativeChannelFootprint(position.location, position.well, selected, position.alignment, position.unadjusted) : { wells: [], notes: [selected === null ? `${operation}: active/loaded channel footprint is unresolved.` : `${operation}: XY well position is not established.`] };
             if (selected?.length === 0) return;
             events.push({ actionId, path, operation, ...footprint, ...(liquid ? { liquid } : {}) });
             for (const point of footprint.wells) {
@@ -80,12 +98,14 @@ export function methodManipulations(result: MethodCompile | null | undefined, al
             const op = String(p.operation);
             if (op === 'move') {
                 const location = Number(p.location_id);
-                position = p.location_id != null && Number.isInteger(location) ? { location, well: p.well, alignment: motionReference } : null;
+                position = typeof p.target === 'string' && p.target.startsWith('LOC_TROUGH_') ? { location: 16, well: null, alignment: motionReference, target: p.target }
+                    : p.location_id != null && Number.isInteger(location) ? { location, well: p.well, alignment: motionReference } : null;
                 // Travel itself is not a liquid stroke. Lower/lift use the retained XY, not their Z-calibration location.
             } else if (op === 'move_sequence') {
                 // Fast lane: the head finishes at the last target, at travel height.
                 const last = object(Array.isArray(p.targets) ? p.targets[p.targets.length - 1] : undefined), location = Number(last.location_id);
-                position = last.location_id != null && Number.isInteger(location) ? { location, well: last.well, alignment: motionReference } : null;
+                position = typeof last.target === 'string' && last.target.startsWith('LOC_TROUGH_') ? { location: 16, well: null, alignment: motionReference, target: last.target }
+                    : last.location_id != null && Number.isInteger(location) ? { location, well: last.well, alignment: motionReference } : null;
             } else if (op === 'lower' || op === 'lift') emit(op, loaded);
             else if (op === 'park') position = null;
             else events.push({ actionId, path, operation: op, wells: [], notes: [`Position operation ${op} has no well projection.`] });

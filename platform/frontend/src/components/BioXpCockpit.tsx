@@ -1404,7 +1404,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 {workflowsOpened && <BioXpWorkflowMutationProvider><section className="w-full space-y-4" aria-label="BioXP workflows workspace">
                     <header className="flex items-baseline gap-3"><h2 className="text-lg font-semibold">Workflows</h2>
                         <span className="text-xs text-content-secondary">Editing never moves the robot.</span></header>
-                    <BioXpMethodsWorkspace visible={documentVisible && controlTab === 'workflows'} generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />
+                    <BioXpMethodsWorkspace holderTargets={deckDestinations.filter(destination => destination.xy != null)} visible={documentVisible && controlTab === 'workflows'} generation={generation} connected={linkConnected} controlsEnabled={robotControlReady} />
                 </section></BioXpWorkflowMutationProvider>}
             </div>
             <div role="tabpanel" id="control-panel-live-deck" aria-labelledby="control-tab-live-deck" hidden={controlTab !== 'live-deck'}>

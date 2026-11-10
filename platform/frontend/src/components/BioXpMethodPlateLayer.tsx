@@ -6,7 +6,8 @@ import type { MethodCarryLink } from '../lib/bioxpMethodCanvas';
 const bounds = (station: string | undefined) => deckResources.find(r => r.id === station)?.bounds ?? deckRegions.find(r => r.id === station)?.bounds;
 
 /** Gesture-only projection of the existing saved plan/actions. Never invokes transport. */
-export function BioXpMethodPlateLayer({ plan, stations, selectedPlate, selectedPath, links, onPrepare, onCarry, onSelect }: {
+export function BioXpMethodPlateLayer({ plan, stations, selectedPlate, selectedPath, links, onPrepare, onCarry, onSelect, holderLeft }: {
+    holderLeft?: number;
     plan: WorkflowDeckPlan; stations: Record<string, string>; selectedPlate: string; selectedPath: string;
     links: MethodCarryLink[]; onPrepare: (id: string, station: string) => void;
     onCarry: (id: string, station: string) => void; onSelect: (path: string) => void;
@@ -64,14 +65,27 @@ export function BioXpMethodPlateLayer({ plan, stations, selectedPlate, selectedP
             const boxX = strip >= 0 ? holderX : r.x - 10, boxW = strip >= 0 ? holderW : r.width + 20;
             const name = plate.name || 'Unnamed labware', fits = 8.6 * name.length <= boxW - 16;
             const prepare = () => onPrepare(plate.id, station);
+            const region = deckRegions.find(g => g.id === station)?.bounds;
+            // Wrapped lines inside an open region, left of any drawn holder rows; the space below belongs to the next station.
+            const regionLines = region ? (() => {
+                const width = Math.max(60, (holderLeft !== undefined && holderLeft > region.x + 40 ? holderLeft : region.x + region.width) - region.x - 14);
+                const perLine = Math.max(8, Math.floor(width / 5.6)), lines: string[] = [];
+                for (const word of name.split(/\s+/)) { const last = lines[lines.length - 1]; if (last !== undefined && (last + ' ' + word).length <= perLine) lines[lines.length - 1] = last + ' ' + word; else lines.push(word); }
+                return { x: region.x + 4, y: region.y + 6, width, lines: lines.slice(0, Math.floor((region.height - 10) / 12)) };
+            })() : null;
             return <g key={plate.id} role="button" tabIndex={0} aria-label={`Prepare ${plate.name || 'unnamed labware'}`} aria-pressed={selectedPlate === plate.id} data-labware={plate.id} data-display-station={station} className="bioxp-method-plate"
                 onPointerDown={e => { if (e.button !== 0) return; e.stopPropagation(); suppressClick.current = false; drag.current = { id: plate.id, x: e.clientX, y: e.clientY, moved: false, svg: e.currentTarget.ownerSVGElement }; e.currentTarget.setPointerCapture?.(e.pointerId); }}
                 onPointerCancel={e => { e.stopPropagation(); drag.current = null; suppressClick.current = true; }}
                 onClick={e => { e.stopPropagation(); if (suppressClick.current) { suppressClick.current = false; return; } prepare(); }}
                 onContextMenu={e => { e.preventDefault(); e.stopPropagation(); prepare(); }}
                 onKeyDown={e => { if (e.key === 'Escape') { drag.current = null; suppressClick.current = true; } if (['Enter', ' ', 'ContextMenu'].includes(e.key) || e.shiftKey && e.key === 'F10') { e.preventDefault(); e.stopPropagation(); prepare(); } }}>
+                {regionLines ? <>
+                    <rect x={regionLines.x} y={regionLines.y} width={regionLines.width + 6} height={regionLines.lines.length * 12 + 8} rx="5" />
+                    <text className="bioxp-method-plate-label is-region" x={regionLines.x + 5} y={regionLines.y + 13}>{regionLines.lines.map((line, i) => <tspan key={i} x={regionLines.x + 5} dy={i ? 12 : 0}>{line}</tspan>)}</text>
+                </> : <>
                 <rect x={boxX} y={y - 25} width={boxW} height="32" rx="6" />
                 <text className="bioxp-method-plate-label" x={boxX + boxW / 2} y={y - 4} textAnchor="middle" textLength={strip >= 0 ? Math.min(boxW - 12, 10 * name.length) : fits ? undefined : boxW - 16} lengthAdjust="spacingAndGlyphs">{name}</text>
+                </>}
                 <title>Prepare {plate.name || 'unnamed labware'}. Drag to a destination to add a carry step, or open Move plate. Authoring only.</title>
             </g>;
         })}

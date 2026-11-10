@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { methodManipulations, nativeChannelFootprint, nativeWellAddress, manipulationText } from '../../src/lib/bioxpMethodManipulations';
+import { methodManipulations, nativeChannelFootprint, nativeWellAddress, manipulationText, holderChannelFootprint } from '../../src/lib/bioxpMethodManipulations';
 import type { MethodCompile, MethodValue } from '../../src/lib/bioxpMethods';
 const action = (kind: string, params: MethodValue, id = 'a'): MethodValue => ({ action_id: id, kind, params, metadata: { bms_method: { path: '/method/steps/0' } } });
 const result = (actions: MethodValue[]): MethodCompile => ({ document: { stages: [{ actions }] }, issues: [], digest: null });
@@ -128,4 +128,15 @@ it.runIf(!!process.env.BIOXP_WELL_COMPILED)('receives the actual saved workflow 
     const actions = compiled.document.stages.flatMap((s: any) => s.actions);
     actions.forEach((a: any, i: number) => { if (a.kind === 'tip_eject') expect(actions[i - 1].params).toMatchObject({ operation: 'move', location_id: 6 }); });
     expect(projected.events.flatMap(e => e.notes)).toEqual([]);
+});
+
+it('projects bulk-holder targets and the waste bin as link endpoints', () => {
+    const holderMove = { operation: 'position', positioning: { operation: 'move', target: 'LOC_TROUGH_MICRO_ROW_1', camera_offset: false } };
+    const r = { ...recipe([2]), before_leading_air: [holderMove], before_dispense: [move(1, 'A5')] };
+    const projected = methodManipulations(result([pickup([2]), action('pipette_manual_physical', { operation: 'cavro_liquid_recipe', recipe: r }, 'axp')]), -1);
+    expect(projected.links.map(l => [l.source.station, l.source.well, l.destination.station, l.destination.well])).toEqual([['LOC_TROUGH_MICRO_ROW_1', '3', 'LOC_OC', 'E5']]);
+    const waste = { ...recipe([1]), before_leading_air: [move(0, 'B5')], before_dispense: [move(6, 'A1')] };
+    const toWaste = methodManipulations(result([pickup([1]), action('pipette_manual_physical', { operation: 'cavro_liquid_recipe', recipe: waste }, 'sup')]), -1);
+    expect(toWaste.links.map(l => [l.source.station, l.source.well, l.destination.station])).toEqual([['LOC_MS', 'D5', 'WASTE_BIN']]);
+    expect(holderChannelFootprint('LOC_TROUGH_PCR_ROW_2_WELL_2', [0, 1, 3]).wells.map(w => w.station)).toEqual(['LOC_TROUGH_PCR_ROW_2_WELL_2', 'LOC_TROUGH_PCR_ROW_2_WELL_4', 'LOC_TROUGH_PCR_ROW_2_WELL_8']);
 });

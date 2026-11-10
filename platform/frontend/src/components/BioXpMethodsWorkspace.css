@@ -150,6 +150,7 @@
 .bioxp-method-plate[aria-pressed=true] rect { stroke:var(--accent-primary); stroke-width:3; }
 .bioxp-method-plate:focus .bioxp-method-plate-label,.bioxp-method-plate:hover .bioxp-method-plate-label { fill:var(--accent-primary); }
 .bioxp-method-plate-label { fill:var(--text-primary); font-size:15px; font-weight:600; pointer-events:all; }
+.bioxp-method-plate-label.is-region { font-size:10px; }
 .bioxp-method-carry { cursor:pointer; fill:none; color:var(--text-secondary); }
 .bioxp-method-carry-line { stroke:var(--text-secondary); stroke-width:4; stroke-dasharray:10 7; pointer-events:none; }
 .bioxp-method-link-hit { stroke:transparent; stroke-width:22; pointer-events:stroke; }
@@ -273,6 +274,10 @@
 .bioxp-method-map .bwd-well.is-stage-destination .bwd-ring { stroke:var(--bxs-destination); }
 .bioxp-method-map .bwd-well.is-stage-tip .bwd-ring { stroke:var(--bxs-tip); }
 .bioxp-method-map .bwd-well.is-stage-touch .bwd-ring { stroke:var(--text-secondary); }
+.bioxp-method-map .bwd-holder-tube.is-stage-active,.bioxp-method-map .bwd-holder-well.is-stage-active { stroke-width:3; }
+.bioxp-method-map .bwd-holder-tube.is-stage-source,.bioxp-method-map .bwd-holder-well.is-stage-source { stroke:var(--bxs-source); }
+.bioxp-method-map .bwd-holder-tube.is-stage-destination,.bioxp-method-map .bwd-holder-well.is-stage-destination { stroke:var(--bxs-destination); }
+.bioxp-method-map .bwd-holder-tube.is-stage-tip,.bioxp-method-map .bwd-holder-well.is-stage-tip { stroke:var(--bxs-tip); }
 .bioxp-method-map .bwd-tip { r:1.1px; opacity:.45; }
 .bioxp-method-map .bwd-tip.is-recorded { r:2.6px; opacity:1; fill:var(--text-primary); }
 .bioxp-method-map .bwd-well.has-contents .bwd-core { fill:color-mix(in srgb,var(--bxs-liquid) 55%,var(--bg-secondary)); }
