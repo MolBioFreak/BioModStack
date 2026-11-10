@@ -370,8 +370,7 @@ app.include_router(ont_devices.router, prefix="/api/ont", tags=["ont-devices"])
 app.include_router(ont_runs.router, prefix="/api/ont", tags=["ont-runs"])
 app.include_router(ont_signal_workbench.router, prefix="/api/ont/signal-workbench", tags=["ont-signal-workbench"])
 app.include_router(ont_runs.barcode_router, prefix="/api/jobs", tags=["ont-barcode-units"])
-from routers import molbio_golden_gate_design
-app.include_router(molbio_golden_gate_design.router)
+
 
 @app.get("/api/health")
 async def health_check(deep: bool = False):

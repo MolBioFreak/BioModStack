@@ -50,7 +50,7 @@ export function MobileMolBioToolbar({
             >
                 Constructs
             </button>
-            <div className="min-w-0 px-1 text-sm font-semibold leading-tight text-slate-100 [overflow-wrap:anywhere]" title={constructName}>
+            <div className="min-w-0 truncate px-1 text-sm font-semibold text-slate-100" title={constructName}>
                 {constructName || 'Choose a construct'}
             </div>
             <nav className="col-span-3 grid min-w-0 grid-cols-5 gap-1" aria-label="Mobile MolBio views">
