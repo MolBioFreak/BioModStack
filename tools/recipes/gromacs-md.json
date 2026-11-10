@@ -1,0 +1,25 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "gromacs-md",
+  "name": "GROMACS (molecular dynamics engine)",
+  "label": "starting-point",
+  "modules": ["molecular_dynamics"],
+  "upstream": {
+    "homepage": "https://www.gromacs.org",
+    "also": ["https://catalog.ngc.nvidia.com/orgs/hpc/containers/gromacs"]
+  },
+  "license": {"id": "LGPL-2.1-or-later", "url": "https://manual.gromacs.org/current/index.html#license"},
+  "notes": "Stock NVIDIA-published GROMACS 2025.3 image, pinned by digest, with nothing added. No weights. The preparation and analysis images for the MD workflow are separate tools.",
+  "images": [
+    {
+      "filename": "gromacs-md-2025.3.sif",
+      "def": "containers/gromacs-md/gromacs-md-2025.3.def",
+      "approx_size_gb": 1,
+      "sources": ["nvcr.io/nvidia/gromacs@sha256:8ee1822b8a34ace738e000a6c9cf8bc9a8abdbbf49e84506238a427b89ee6daf"],
+      "smoke": [
+        {"name": "gmx-version", "argv": ["gmx", "--version"]}
+      ]
+    }
+  ],
+  "weights": []
+}

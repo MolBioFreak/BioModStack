@@ -1,0 +1,43 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "boltz2",
+  "name": "Boltz-2 (structure and affinity prediction)",
+  "label": "starting-point",
+  "modules": ["structure_prediction"],
+  "upstream": {
+    "homepage": "https://github.com/jwohlwend/boltz",
+    "also": ["https://github.com/Novel-Therapeutics/boltz-community"]
+  },
+  "license": {"id": "MIT", "url": "https://github.com/jwohlwend/boltz/blob/main/LICENSE"},
+  "notes": "Builds the boltz-community fork at a fixed commit on a CUDA 12.8 base. The definition installs a nightly PyTorch build, which is not pinned, so two builds can differ. Prediction needs an NVIDIA GPU.",
+  "images": [
+    {
+      "filename": "boltz2.sif",
+      "def": "apptainer/boltz2.def",
+      "approx_size_gb": 12,
+      "sources": [
+        "nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04",
+        "https://github.com/Novel-Therapeutics/boltz-community @ 7ebf1be087d4d61a02234c878402838bf3712d8b",
+        "https://download.pytorch.org/whl/nightly/cu128"
+      ],
+      "smoke": [
+        {"name": "boltz-help", "argv": ["boltz", "--help"]},
+        {"name": "torch-cuda", "gpu": true, "argv": ["python", "-c", "import torch; assert torch.cuda.is_available()"]}
+      ]
+    }
+  ],
+  "weights": [
+    {
+      "id": "boltz2-checkpoints",
+      "required": true,
+      "approx_size_gb": 9,
+      "license": {"id": "MIT", "url": "https://github.com/jwohlwend/boltz/blob/main/LICENSE"},
+      "present_if": ["boltz/boltz2_conf.ckpt", "boltz/boltz2_aff.ckpt", "boltz/mols"],
+      "fetch": {
+        "type": "container",
+        "source": "boltz's own downloader (Hugging Face boltz-community/boltz-2)",
+        "argv": ["python", "-c", "from pathlib import Path; from boltz.main import download_boltz2; p = Path('/weights/boltz'); p.mkdir(parents=True, exist_ok=True); download_boltz2(p)"]
+      }
+    }
+  ]
+}
