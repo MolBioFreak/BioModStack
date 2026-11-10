@@ -18,7 +18,7 @@
     "id": "MIT",
     "url": "https://github.com/HannesStark/boltzgen/blob/main/LICENSE"
   },
-  "notes": "boltzgen.def installs a PyTorch nightly, which upstream withdraws after a while; pin a release if that step fails. fold-cp.sif and boltzgen-ligand-parser.sif are built on top of boltzgen.sif. The ligand-parser definition checks the hash of the file it patches and stops if your BoltzGen build differs. Not yet built from clean by us: expect to fix things.",
+  "notes": "boltzgen.def builds BoltzGen at the commit BMS is integrated against, on PyTorch 2.11.0, and applies the ligand-only mmCIF parser fix. fold-cp.sif is built on top of boltzgen.sif. Not yet built from clean by us: expect to fix things.",
   "images": [
     {
       "filename": "boltzgen.sif",
@@ -34,17 +34,6 @@
       ],
       "build_args": {
         "container_dir": "{container_dir}"
-      }
-    },
-    {
-      "filename": "boltzgen-ligand-parser.sif",
-      "def": "apptainer/boltzgen-ligand-parser.def",
-      "approx_size_gb": 12,
-      "needs": [
-        "boltzgen.sif"
-      ],
-      "build_args": {
-        "base_image": "{container_dir}/boltzgen.sif"
       }
     }
   ],

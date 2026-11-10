@@ -1,7 +1,7 @@
 {
   "schema": "bms.tool-recipe.v1",
   "id": "dl-binder-design",
-  "name": "RFdiffusion and ProteinMPNN (dl_binder_design)",
+  "name": "ProteinMPNN (dl_binder_design)",
   "label": "starting-point",
   "modules": [
     "design"
@@ -13,7 +13,7 @@
       "https://github.com/dauparas/ProteinMPNN"
     ]
   },
-  "notes": "One image serves both RFdiffusion and ProteinMPNN. ProteinMPNN weights come inside the image. Not yet built from clean by us: expect to fix things.",
+  "notes": "The image holds dl_binder_design and ProteinMPNN with the ProteinMPNN weights inside; it does not contain RFdiffusion. The optional RFdiffusion checkpoints are the ones BMS binds for RFdiffusion workflows, whose own image (rfdiffusion.sif) has no build definition here yet. Not yet built from clean by us: expect to fix things.",
   "images": [
     {
       "filename": "dl_binder_design.sif",
@@ -25,7 +25,7 @@
   "weights": [
     {
       "id": "rfdiffusion",
-      "required": true,
+      "required": false,
       "present_if": [
         "rfd/Base_ckpt.pt",
         "rfd/Complex_base_ckpt.pt",

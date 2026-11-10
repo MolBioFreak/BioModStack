@@ -35,6 +35,19 @@ def owned_listener_preflight(runtime_mode: str) -> dict[str, Any]:
     }
 
 
+@pytest.fixture(autouse=True)
+def _no_recorded_host_installation(monkeypatch):
+    """Rendering units fills unset selectors from this machine's host selectors file.
+
+    On a provisioned machine that put the real BMS_PYTHON_ROOT into os.environ, and the
+    temp project (which has no uv.lock) then failed against that managed environment.
+    """
+    import biomodstack_runtime_profile as runtime_profile
+    monkeypatch.setattr(runtime_profile, "load_host_selectors", lambda: {})
+    for key in runtime_profile.HOST_SELECTOR_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
 def test_launch_preferences_default_to_browser_and_auto_open(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 

@@ -157,7 +157,8 @@ Known gaps, stated in the recipe notes as well:
 - `ont-signal-tools` and `ont-clone-validation`: the signal workbench and the clone-validation validator compare an image id or file hash against a value recorded in this repository. An image you build or convert yourself gets its own id.
 - `md-preparation`: the definition unpacks a conda-pack archive that is not shipped.
 - `confornets`: this repository has no definition for the base image, only for the patch on top of it.
-- Several definitions install a PyTorch nightly, which upstream withdraws after a while. Pin a release if that step fails.
+- The definitions install PyTorch releases (2.11.0 for CUDA 12.8), not nightlies.
+- On a managed install, an image held in the shared image store and a weight set held under `weights/layouts/` count as present.
 - Weights marked as a manual step have no single public download address we could pin; the recipe says where to get them and where to put them.
 
 ## Locally built images are accepted as they are

@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -241,14 +242,55 @@ def _docker() -> str | None:
     return shutil.which("docker") or shutil.which("podman")
 
 
+# A managed install keeps images in a shared store and names each one with a selector instead of
+# a file under the container folder. These names mirror IMAGE_SELECTORS and the Dorado selector
+# in platform/api/services/remote_execution/images.py; every other image uses the default name.
+_STORE_SELECTORS = {
+    "protonpottsmpnn.sif": "BMS_PROTONPOTTSMPNN_CONTAINER_PATH",
+    "fold-cp.sif": "BMS_FOLD_CP_CONTAINER_PATH",
+    "protenix.sif": "BMS_PROTENIX_CONTAINER_PATH",
+    "confornets-canonical.sif": "BMS_CM_CONFORNETS_CONTAINER_PATH",
+    "frustrampnn.sif": "BMS_FRUSTRAMPNN_SIF",
+    "dorado.sif": "BMS_NGS_RUNTIME_SIF",
+}
+
+
+def _store_image(name: str, container_dir: Path) -> Path | None:
+    selector = _STORE_SELECTORS.get(name, "BMS_RUNTIME_IMAGE_" + re.sub(r"[^A-Za-z0-9]", "_", name).upper())
+    configured = os.environ.get(selector, "").strip()
+    if configured and Path(configured).is_file():
+        return Path(configured)
+    root = Path(os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip() or container_dir / ".image-store")
+    try:
+        state = json.loads((root / "references" / "state.json").read_text(encoding="utf-8"))
+        current, releases = state["current"], state["releases"]
+        lane = os.environ.get("BMS_RUNTIME_IMAGE_LANE") or os.environ.get("BMS_WORKFLOW_ADAPTER_LANE") or "production"
+        for name_ in [lane] + sorted(set(current) - {lane}):
+            path = releases.get(current.get(name_), {}).get("images", {}).get(selector, {}).get("path")
+            if path and Path(path).is_file():
+                return Path(path)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def _sif_path(image: dict, where: dict[str, Path]) -> Path | None:
+    """The image file BMS runs: the one in the container folder, else the managed store's."""
+    direct = where["container_dir"] / image["filename"]
+    return direct if direct.exists() else _store_image(image["filename"], where["container_dir"])
+
+
 def _image_present(image: dict, where: dict[str, Path], project_root: Path = PROJECT_ROOT) -> bool:
     if image["sif"]:
-        return (where["container_dir"] / image["filename"]).exists()
+        return _sif_path(image, where) is not None
     if image["kind"] == "docker":
         runtime = _docker()
-        return bool(runtime) and subprocess.call(
-            [runtime, "image", "inspect", image["docker"]["tag"]],
+        # docker.env names a variable that may point at an existing image; it is tried before the tag.
+        configured = os.environ.get(image["docker"].get("env") or "", "").strip()
+        return bool(runtime) and any(subprocess.call(
+            [runtime, "image", "inspect", reference],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL) == 0
+            for reference in (configured, image["docker"]["tag"]) if reference)
     try:
         return subprocess.call([str(a) for a in image["script"]["check_argv"]], cwd=project_root,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -259,12 +301,28 @@ def _image_present(image: dict, where: dict[str, Path], project_root: Path = PRO
 
 def _image_where(image: dict, where: dict[str, Path]) -> str:
     if image["sif"]:
-        return str(where["container_dir"] / image["filename"])
+        return str(_sif_path(image, where) or where["container_dir"] / image["filename"])
     return f"{image['kind']}:{image['filename']}"
 
 
+def _weight_file(weights_root: Path, rel: str) -> bool:
+    if (weights_root / rel).exists():
+        return True
+    # A managed install keeps a pinned set as layouts/<set>/<sha256>/<member>.
+    parts = Path(rel).parts
+    for split in range(1, len(parts)):
+        try:
+            entries = [e for e in (weights_root / "layouts").joinpath(*parts[:split]).iterdir()
+                       if re.fullmatch(r"[0-9a-f]{64}", e.name)]
+        except OSError:
+            continue
+        if any(e.joinpath(*parts[split:]).exists() for e in entries):
+            return True
+    return False
+
+
 def _weight_present(weight: dict, weights_root: Path) -> bool:
-    return all((weights_root / rel).exists() for rel in weight["present_if"])
+    return all(_weight_file(weights_root, rel) for rel in weight["present_if"])
 
 
 def tool_status(recipe: dict, where: dict[str, Path], project_root: Path = PROJECT_ROOT) -> dict:
@@ -548,10 +606,11 @@ def build_tool(recipe, where, project_root=PROJECT_ROOT, *, replace=False, weigh
         for image in recipe["images"]:
             step = f"build:{image['filename']}"
             target = where["container_dir"] / image["filename"] if image["sif"] else None
-            present = (target.exists() or target.is_symlink()) if target else _image_present(image, where, project_root)
+            found = _sif_path(image, where) if target else None
+            present = (found is not None or target.is_symlink()) if target else _image_present(image, where, project_root)
             if present and not replace:
                 run.log(f"keeping existing {_image_where(image, where)} (use --replace to rebuild it)")
-                smoke.extend(_smoke(run, image, target))
+                smoke.extend(_smoke(run, image, found or target))
                 continue
             for base in image.get("needs", []):
                 if not (where["container_dir"] / base).exists():
@@ -614,7 +673,7 @@ def verify_tool(recipe, where, project_root=PROJECT_ROOT) -> dict:
         run.log("verify")
         smoke = []
         for image in recipe["images"]:
-            path = where["container_dir"] / image["filename"] if image["sif"] else None
+            path = _sif_path(image, where) if image["sif"] else None
             if not _image_present(image, where, project_root):
                 raise ToolError("image_missing",
                                 f"{_image_where(image, where)} is not present. Build it or adopt an existing image.")

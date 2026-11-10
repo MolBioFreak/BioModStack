@@ -6,6 +6,9 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     Version 1.0.0
     Description BoltzGen container for all-atom binder design
 
+%files
+    apptainer/patches/boltzgen/ligand-only-mmcif.patch /opt/bms-patches/ligand-only-mmcif.patch
+
 %post
     export DEBIAN_FRONTEND=noninteractive
     export TZ=America/Chicago
@@ -17,6 +20,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
         wget \
         curl \
         build-essential \
+        patch \
         && rm -rf /var/lib/apt/lists/*
     
     # Python 3.11 (required by BoltzGen >= 0.1.8)
@@ -40,9 +44,8 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     uv venv /opt/venv
     . /opt/venv/bin/activate
     
-    # PyTorch (Stable / CUDA 12.4 for now as Boltz might have specific ver needs, sticking to nightly/12.8 if possible but 12.4 is safer for complex deps)
-    # Actually, let's match the boltz2.def which used nightly/cu128
-    uv pip install --compile torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    # PyTorch release built for CUDA 12.8 (includes RTX 50-series sm_120 kernels).
+    uv pip install --compile torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
     
     # Install BoltzGen dependencies
     # BoltzGen is built on top of Boltz
@@ -53,8 +56,12 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     uv pip install --compile .
     
     # 2. Install BoltzGen
+    # Pinned to the commit BMS is integrated against. The patch lets a ligand-only structure
+    # (no polymer rows) parse; see docs/BoltzGen_Ligand_Parser_Repair.md.
     git clone https://github.com/HannesStark/boltzgen.git /app/boltzgen
     cd /app/boltzgen
+    git checkout --detach 617e549edf70787d899f47bc39e3746d8f10ffff
+    patch --batch --forward src/boltzgen/data/parse/mmcif.py /opt/bms-patches/ligand-only-mmcif.patch
     uv pip install --compile .
     
     # Cleanup
@@ -80,6 +87,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     python3 -c "import torch; print(f'PyTorch: {torch.__version__}')"
     # Verify imports
     python3 -c "import boltz; print(f'Boltz: {boltz.__version__}')"
+    python3 -c 'from boltzgen.data.parse.mmcif import mmcif_from_block; import inspect; assert "eps_loop is not None and eps_loop.length()" in inspect.getsource(mmcif_from_block)'
     # python3 -c "import boltzgen; print('BoltzGen OK')" # Module name might differ
 
 %help

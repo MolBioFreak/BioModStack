@@ -9,7 +9,7 @@
   "upstream": {
     "homepage": "https://github.com/PapenfussLab/fampnn"
   },
-  "notes": "Weights come inside the image. fampnn.def installs a PyTorch nightly; pin a release if that step fails. Not yet built from clean by us: expect to fix things.",
+  "notes": "Weights come inside the image. Not yet built from clean by us: expect to fix things.",
   "images": [
     {
       "filename": "fampnn.sif",

@@ -288,3 +288,31 @@ def test_build_input_that_is_not_shipped_blocks_with_instructions(install):
     code, plan = install("plan", "packed")
     assert code == 3 and plan["blockers"][0]["reason_code"] == "build_input_missing"
     assert "Pack the environment first." in plan["blockers"][0]["message"]
+
+
+def test_managed_store_image_and_layout_weights_count_as_present(install):
+    """A managed install keeps images in the image store and weight sets under layouts/."""
+    store = install.data / "apptainer" / ".image-store"
+    image = store / "objects" / "sha256" / ("a" * 64) / "runtime.sif"
+    image.parent.mkdir(parents=True)
+    image.write_text("image")
+    (store / "references").mkdir()
+    (store / "references" / "state.json").write_text(json.dumps({
+        "current": {"production": "r1"},
+        "releases": {"r1": {"images": {"BMS_RUNTIME_IMAGE_DEMO_SIF": {"path": str(image)}}}}}))
+    (install.data / "weights" / "layouts" / "demo" / ("b" * 64) / "model").mkdir(parents=True)
+    code, listing = install("list")
+    tool = listing["tools"][0]
+    assert code == 0 and tool["status"] == "present-unverified"
+    assert [i["present"] for i in tool["images"]] == [True]
+    assert [w["present"] for w in tool["weights"]] == [True]
+    code, done = install("verify", "demo")
+    assert code == 0 and done["status"] == "ready"
+    assert f"test {image}" in install.calls.read_text()
+    assert not (install.data / "apptainer" / "demo.sif").exists()
+
+
+def test_recipes_install_pytorch_releases_not_nightlies():
+    for definition in sorted((ROOT / "apptainer").glob("*.def")):
+        assert "whl/nightly" not in definition.read_text(), definition.name
+

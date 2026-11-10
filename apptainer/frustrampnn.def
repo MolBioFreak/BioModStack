@@ -21,8 +21,8 @@ From: nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     export VIRTUAL_ENV=/opt/venv
     export PATH="/opt/venv/bin:$PATH"
     
-    # Install PyTorch nightly with CUDA 12.8 (Blackwell sm_120 support)
-    uv pip install --compile torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu128
+    # PyTorch release built for CUDA 12.8 (includes RTX 50-series sm_120 kernels).
+    uv pip install --compile torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
     
     # Install pytorch-lightning and dependencies
     uv pip install --compile pytorch-lightning omegaconf click pandas tqdm

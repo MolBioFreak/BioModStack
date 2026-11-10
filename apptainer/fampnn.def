@@ -24,9 +24,8 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     # clone repository
     git clone https://github.com/PapenfussLab/fampnn.git /app/fampnn && cd /app/fampnn && git checkout 18363df
 
-    # install PyTorch nightly with CUDA 12.8 for RTX 5090 (sm_120) support
-    # CUDA 12.8 nightly builds include sm_120 support for Blackwell architecture
-    uv pip install --compile torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    # PyTorch release built for CUDA 12.8 (includes RTX 50-series sm_120 kernels).
+    uv pip install --compile torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
 
     # install other dependencies
     uv pip install --compile scipy certifi torch-geometric gemmi biopython tqdm natsort omegaconf rdkit einops hydra-core torchtyping dm-tree timm jaxtyping joblib pandas
