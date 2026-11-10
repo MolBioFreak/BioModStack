@@ -186,9 +186,10 @@ def simulate_golden_gate(
     )
     for sequence, count in junction_classes.items():
         if count > 1:
-            warnings.append(
-                f"Junction overhang class {sequence}/{reverse_complement(sequence)} "
-                f"is reused at {count} junctions; alternative ligations may occur"
+            # A Type IIS cut leaves a unique end per site, so a reused overhang class lets junctions compete
+            # for the same partner and the tube can assemble in more than one order.
+            raise AssemblyError(
+                f"Duplicate overhang detected: {sequence}/{reverse_complement(sequence)} used at {count} junctions"
             )
         if sequence == reverse_complement(sequence):
             warnings.append(
