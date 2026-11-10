@@ -1,7 +1,7 @@
 """Validated ligation and sticky-end assembly helpers."""
 from __future__ import annotations
 
-from .common import orient_fragment, overhangs_compatible
+from .common import orient_fragment, overhangs_compatible, require_declared_ends_match_sequence
 from .types import (
     AssemblyError, AssemblyFragment, AssemblyJunction, AssemblyProduct, FragmentEnd, OrientedFragment, SealedState,
 )
@@ -33,9 +33,12 @@ def simulate_ligation(
     if len(fragments) == 0:
         raise AssemblyError("At least one fragment is required for ligation")
 
-    return _ligate_oriented_fragments(
+    product = _ligate_oriented_fragments(
         [orient_fragment(fragment) for fragment in fragments], circular=circular, mode=mode,
     )
+    for fragment in fragments:
+        require_declared_ends_match_sequence(fragment)
+    return product
 
 
 def _ligate_oriented_fragments(

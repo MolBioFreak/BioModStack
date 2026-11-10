@@ -85,8 +85,7 @@ def test_declared_left_overhang_that_the_bytes_do_not_start_with_is_refused():
     fragments = [_frag(0), _frag(1, "TTCG" + BODIES[1]), _frag(2)]
     with pytest.raises(AssemblyError) as caught:
         _simulate(fragments)
-    message = str(caught.value)
-    assert "part 2" in message and "GCTT" in message and "TTCG" in message
+    assert str(caught.value) == "Mismatch detected: part 2 declares left overhang GCTT, sequence starts with TTCG"
 
 
 def test_sequence_without_its_overhang_bytes_is_refused():
@@ -94,11 +93,10 @@ def test_sequence_without_its_overhang_bytes_is_refused():
         _simulate([_frag(0), _frag(1, BODIES[1]), _frag(2)])
 
 
-def test_reverse_complemented_sequence_with_forward_metadata_is_refused_with_a_hint():
+def test_reverse_complemented_sequence_with_forward_metadata_is_refused():
     fragments = [_frag(0), _frag(1, _rc(LABELS[1] + BODIES[1])), _frag(2)]
-    with pytest.raises(AssemblyError) as caught:
+    with pytest.raises(AssemblyError, match="Mismatch detected: part 2"):
         _simulate(fragments)
-    assert "part 2" in str(caught.value) and "reverse" in str(caught.value).lower()
 
 
 def test_linear_assembly_is_checked_the_same_way():

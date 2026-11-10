@@ -220,7 +220,7 @@ def test_results_ligate_after_end_repair():
 def _pair(vector_phosphate, insert_phosphate, ovh="GATC"):
     def frag(i, phos):
         return AssemblyFragment(
-            id=i, name=i, sequence="AAAAAAAAAAAA",
+            id=i, name=i, sequence=ovh + "AAAAAAAA",
             left_end=FragmentEnd(type="sticky_5", overhang=ovh, protruding_strand="top", five_prime_phosphate=phos),
             right_end=FragmentEnd(type="sticky_5", overhang=ovh, protruding_strand="bottom", five_prime_phosphate=phos))
     return frag("vector", vector_phosphate), frag("insert", insert_phosphate)
