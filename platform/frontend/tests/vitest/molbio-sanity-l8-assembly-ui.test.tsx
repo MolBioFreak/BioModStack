@@ -12,7 +12,7 @@ import { parseRestrictionDigestSimulation, simulateRestrictionDigest, saveRestri
 
 vi.mock('../../src/lib/api', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../../src/lib/api')>()),
-    fetchGoldenGateAssemblyOptions: vi.fn(), fetchSavedGibsonWorkups: vi.fn(),
+    fetchGoldenGateAssemblyOptions: vi.fn(), fetchSavedGibsonWorkups: vi.fn(), fetchMolecularRevision: vi.fn(),
     simulateLigationAssembly: vi.fn(), saveLigationAssembly: vi.fn(), simulateGibsonAssembly: vi.fn(), saveGibsonAssembly: vi.fn(),
     planDnaWeaverGibsonAssembly: vi.fn(), saveDnaWeaverGibsonAssembly: vi.fn(),
     designGibsonAssembly: vi.fn(), saveDesignedGibsonAssembly: vi.fn(), endOperations: vi.fn(),
@@ -23,15 +23,11 @@ vi.mock('../../src/components/MolBioToolkit/utils/exportData', async (importOrig
     buildAssemblyPrimersCsv: (rows: Array<{ id: string; tm_model: string }>) => rows.map((r) => `${r.id},${r.tm_model}`).join('\n'),
     buildFragmentsFasta: (rows: Array<{ name: string; sequence: string }>) => rows.map((r) => `>${r.name}\n${r.sequence}`).join('\n'),
 }));
-// l7 owns the real chooser; the panel only needs its two exports.
-vi.mock('../../src/components/MolBioToolkit/FragmentChooser', () => ({
+// Stub only the picker UI; keep the actual immutable-revision loader.
+vi.mock('../../src/components/MolBioToolkit/FragmentChooser', async original => ({
+    ...await original<typeof import('../../src/components/MolBioToolkit/FragmentChooser')>(),
     FragmentChooser: ({ onPick, label }: { onPick: (item: unknown) => void; label?: string }) =>
         <button type="button" onClick={() => onPick({ document_id: 'doc-9', revision_id: 'rev-9', revision_number: 2, name: 'saved child', length: 6 })}>{label}</button>,
-    fragmentFromChooserItem: (item: { document_id: string; revision_id: string; revision_number: number; name: string; length: number }) => ({
-        id: item.revision_id, name: item.name, sequence: 'AATTCG', source_sequence_id: item.document_id, source_revision: item.revision_number,
-        source_start: 0, source_end: item.length, left_end: { type: 'sticky_5', overhang: 'AATT', protruding_strand: 'top' }, right_end: { type: 'blunt', overhang: '' },
-        metadata: { revision_id: item.revision_id },
-    }),
 }));
 
 const fixture = JSON.parse(readFileSync('../api/tests/fixtures/restriction_digest/circular_single_ecori.json', 'utf8'));
@@ -49,6 +45,11 @@ beforeEach(() => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     vi.clearAllMocks();
     vi.mocked(api.fetchSavedGibsonWorkups).mockResolvedValue({ data: [] } as never);
+    vi.mocked(api.fetchMolecularRevision).mockResolvedValue({
+        document_id: 'doc-9', revision_id: 'rev-9', revision_number: 2, document_name: 'saved child', content_length: 6,
+        snapshot: { sequence: 'AATTCG', is_circular: false },
+        provenance: { physical_ends: { left_end: { kind: 'five_prime_overhang', overhang_sequence_5to3: 'AATT', protruding_strand: 'top' }, right_end: { kind: 'blunt' } } },
+    } as never);
     vi.mocked(api.fetchGoldenGateAssemblyOptions).mockResolvedValue({ data: { enzymes: [] } } as never);
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:x') });
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
