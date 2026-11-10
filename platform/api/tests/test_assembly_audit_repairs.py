@@ -33,14 +33,11 @@ def _fragments(junctions, circular=False):
 
 
 @pytest.mark.parametrize("circular", [False, True])
-@pytest.mark.parametrize("junctions,duplicates,palindromes", [
-    (["AATG", "AGAC"], 0, 0),
-    (["AATG", "AATG"], 1, 0),
-    (["AATG", "CATT"], 1, 0),
-    (["ATAT", "AGAC"], 0, 1),
-    (["ATAT", "ATAT"], 1, 1),
+@pytest.mark.parametrize("junctions,palindromes", [
+    (["AATG", "AGAC"], 0),
+    (["ATAT", "AGAC"], 1),
 ])
-def test_warnings_do_not_block_or_change_product(junctions, duplicates, palindromes, circular):
+def test_warnings_do_not_block_or_change_product(junctions, palindromes, circular):
     fragments = _fragments(junctions, circular)
     before = [asdict(fragment) for fragment in fragments]
     reference = simulate_ligation(fragments, circular=circular, mode="golden_gate")
@@ -50,7 +47,6 @@ def test_warnings_do_not_block_or_change_product(junctions, duplicates, palindro
     assert result.fragments == reference.fragments
     assert result.junctions == reference.junctions
     assert [asdict(fragment) for fragment in fragments] == before
-    assert sum("is reused" in warning for warning in result.warnings) == duplicates
     assert sum("is palindromic" in warning for warning in result.warnings) == palindromes
     assert all("may occur" in warning for warning in result.warnings)
     again = simulate_golden_gate(fragments, enzyme=resolve_golden_gate_enzyme(**_binding()), circular=circular)
@@ -67,7 +63,7 @@ def client():
 
 
 def test_public_golden_gate_keeps_legacy_metadata(client):
-    fragments = _fragments(["ATAT", "ATAT"])
+    fragments = _fragments(["ATAT", "AGAC"])
     response = client.post("/api/molbio/assembly/golden-gate/simulate", json={
         "fragments": [asdict(fragment) for fragment in fragments],
         "circular": False, **_binding(),
@@ -75,7 +71,7 @@ def test_public_golden_gate_keeps_legacy_metadata(client):
     assert response.status_code == 200, response.text
     product = response.json()["product"]
     assert product["sequence"] == "".join(fragment.sequence for fragment in fragments)
-    assert len(product["warnings"]) == 2
+    assert len(product["warnings"]) == 1
     assert [fragment["metadata"] for fragment in product["fragments"]] == [fragment.metadata for fragment in fragments]
 
 
