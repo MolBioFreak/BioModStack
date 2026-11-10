@@ -13,7 +13,7 @@ from services.restriction_catalog import (
     catalog_authority,
 )
 
-from .common import orient_fragment
+from .common import normalize_end, normalize_sequence, orient_fragment
 from .ligation import _ligate_oriented_fragments
 from .types import (
     AssemblyError,
@@ -134,6 +134,32 @@ def _site_count(sequence: str, *, circular: bool, enzyme: TypeIISEnzyme) -> int:
     )
 
 
+def _require_declared_ends_match_sequence(fragment, width: int) -> None:
+    """A declared top-strand left overhang must be the bases the sequence actually starts with.
+
+    The product is built from the sequence bytes, so a declared overhang that the bytes do not carry joins
+    the wrong ends or silently builds a different junction. Runs on the fragment as stored, before any
+    reversal. A bottom-strand overhang is not part of the top bytes, and a 5' overhang on a right end never
+    is; every junction is still covered because the next fragment's left end is checked here and ligation
+    already requires the two declared ends of a junction to match.
+    """
+    end = normalize_end(fragment.left_end)
+    strands = (None, "top") if (fragment.orientation or "forward") == "forward" else ("top",)
+    if end is None or end.protruding_strand not in strands:
+        return
+    sequence = normalize_sequence(fragment.sequence)
+    found = sequence[:width]
+    if found == end.overhang:
+        return
+    hint = ""
+    if reverse_complement(sequence)[:width] == end.overhang:
+        hint = "; its reverse complement does match, so the sequence may have been entered on the opposite strand"
+    raise AssemblyError(
+        f"Golden Gate fragment '{fragment.name}' declares left overhang {end.overhang} "
+        f"but its sequence starts with {found}{hint}"
+    )
+
+
 def simulate_golden_gate(
     fragments: list[AssemblyFragment],
     *,
@@ -174,6 +200,8 @@ def simulate_golden_gate(
                 )
 
     product = _ligate_oriented_fragments(oriented, circular=circular, mode="golden_gate")
+    for fragment in fragments:
+        _require_declared_ends_match_sequence(fragment, enzyme.overhang_length)
     warnings = list(product.warnings)
     # Advisory classes only: do not reinterpret end metadata or alter ligation.
     # A sequence and its reverse complement describe the same cohesive-end class.
