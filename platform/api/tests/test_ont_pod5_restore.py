@@ -24,8 +24,9 @@ def _representation(tmp_path: Path, *, state: str = "ready", fmt: str = "blow5")
 def configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[list[str]]:
     monkeypatch.setattr(restore, "get_inputs_dir", lambda: tmp_path / "inputs")
     monkeypatch.setenv("BMS_ONT_CONTAINER_RUNTIME", "podman")
-    monkeypatch.setenv("BMS_ONT_SLOW5TOOLS_IMAGE", "sha256:" + "a" * 64)
-    monkeypatch.setenv("BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST", "a" * 64)
+    monkeypatch.setattr(
+        restore, "local_image_identity", lambda env_name, runtime: ("sha256:" + "a" * 64, "a" * 64)
+    )
     monkeypatch.setattr(restore.shutil, "which", lambda name: "/usr/bin/" + name)
     calls: list[list[str]] = []
     reads = {"count": "12"}

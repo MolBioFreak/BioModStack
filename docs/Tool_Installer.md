@@ -159,3 +159,11 @@ Known gaps, stated in the recipe notes as well:
 - `confornets`: this repository has no definition for the base image, only for the patch on top of it.
 - Several definitions install a PyTorch nightly, which upstream withdraws after a while. Pin a release if that step fails.
 - Weights marked as a manual step have no single public download address we could pin; the recipe says where to get them and where to put them.
+
+## Locally built images are accepted as they are
+
+BMS does not compare an image with an id or file hash recorded in this repository.
+The ONT signal tools run whatever image exists under the tool's tag (the tag the
+recipe builds), and the clone-validation runtime runs the image files that are in
+its cache folder. The id or hash of the image that actually ran is written into the
+job record, together with whether it equals the reference build.

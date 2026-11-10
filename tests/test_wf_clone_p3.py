@@ -125,7 +125,6 @@ def test_runtime_lock_validator_accepts_exact_fixture(tmp_path: Path) -> None:
     [
         ("source_mismatch", "SOURCE_COMMIT_MISMATCH"),
         ("dirty_source", "SOURCE_DIRTY"),
-        ("image_mismatch", "IMAGE_SHA256_MISMATCH"),
         ("image_missing", "IMAGE_MISSING"),
         ("runtime_mismatch", "NEXTFLOW_VERSION_MISMATCH"),
         ("model_mismatch", "MODEL_ID_UNSUPPORTED"),
@@ -140,8 +139,6 @@ def test_runtime_lock_validator_fails_closed(
         lock["patched_source"]["commit"] = "0" * 40  # type: ignore[index]
     elif mutation == "dirty_source":
         (Path(lock["patched_source"]["path"]) / "dirty").write_text("x")  # type: ignore[index]
-    elif mutation == "image_mismatch":
-        lock["containers"]["images"][0]["sha256"] = "0" * 64  # type: ignore[index]
     elif mutation == "image_missing":
         first = lock["containers"]["images"][0]  # type: ignore[index]
         (Path(lock["containers"]["cache_dir"]) / first["cache_file"]).unlink()  # type: ignore[index]
@@ -155,6 +152,20 @@ def test_runtime_lock_validator_fails_closed(
     failure = json.loads(result.stderr)
     assert failure["validation_status"] == "invalid"
     assert failure["reason_code"] == reason
+
+
+def test_locally_built_image_is_accepted_and_its_own_hash_recorded(tmp_path: Path) -> None:
+    lock_path, lock = runtime_fixture(tmp_path)
+    model = str(lock["models"]["default"])  # type: ignore[index]
+    # A local build cannot reproduce the reference file hash.
+    lock["containers"]["images"][0]["sha256"] = "0" * 64  # type: ignore[index]
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+    result = validate(lock_path, model)
+    assert result.returncode == 0, result.stderr
+    images = json.loads(result.stdout)["images"]
+    assert images[0]["matches_reference_build"] is False
+    assert len(images[0]["sha256"]) == 64 and images[0]["sha256"] != "0" * 64
+    assert all(image["matches_reference_build"] for image in images[1:])
 
 
 def test_unselected_canu_and_unused_dorado_directory_are_not_prerequisites(tmp_path):

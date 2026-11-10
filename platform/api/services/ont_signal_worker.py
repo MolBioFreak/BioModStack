@@ -12,7 +12,6 @@ import re
 import shutil
 import socket
 import stat
-import subprocess
 import time
 import tempfile
 import uuid
@@ -42,6 +41,7 @@ from database import (
 from molbio_ngs_models import MolBioNGSReferenceArtifact, MolBioNGSReferenceRevision
 from paths import get_allowed_roots, get_molbio_ngs_reference_root, get_results_dir
 from services import ngs_alignment_sessions, ont_raw_signal, ont_signal_workbench
+from services.ont_local_images import local_image_identity
 from services.container_cli_environment import container_cli_environment as _container_cli_env, container_user_namespace_args
 from services.file_lease_signals import lease_break_generation
 
@@ -626,8 +626,6 @@ class OntSignalWorker:
 
     @staticmethod
     def _runtime_identity() -> dict[str, str]:
-        image = os.environ.get("BMS_ONT_SQUIGUALISER_IMAGE", "").strip()
-        digest = os.environ.get("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", "").strip().lower()
         descriptor = os.open(
             RUNTIME_POLICY_PATH,
             os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -650,16 +648,11 @@ class OntSignalWorker:
             not isinstance(policy, dict)
             or policy.get("schema") != "bms.ont-squigualiser-runtime-policy.v1"
             or policy.get("network") != "none"
-            or policy.get("runtime_id") != policy.get("oci_digest")
-            or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(policy.get("runtime_id", "")))
         ):
             raise RuntimeError("approved runtime policy manifest is invalid")
-        if (
-            image != policy["runtime_id"]
-            or digest != policy["oci_digest"].removeprefix("sha256:")
-            or not HEX64.fullmatch(digest)
-        ):
-            raise RuntimeError("configured Squigualiser identity does not equal approved runtime policy")
+        image, digest = local_image_identity(
+            "BMS_ONT_SQUIGUALISER_IMAGE", os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+        )
         return {
             "image": image,
             "image_digest": digest,
@@ -668,27 +661,6 @@ class OntSignalWorker:
             "network": "none",
             "policy_manifest_sha256": policy_sha256,
         }
-
-    @staticmethod
-    def _assert_local_runtime_image(runtime: str, image: str) -> None:
-        try:
-            result = subprocess.run(
-                [runtime, "image", "inspect", "--format", "{{.Id}}", image],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-                timeout=30,
-                env=_container_cli_env(),
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise RuntimeError("local approved Squigualiser image inspection failed") from exc
-        observed = result.stdout.strip()
-        if runtime == "podman" and re.fullmatch(r"[0-9a-f]{64}", observed):
-            observed = f"sha256:{observed}"
-        if result.returncode != 0 or observed != image:
-            raise RuntimeError("local approved Squigualiser image is absent or diverged")
 
     def _container_command(
         self,
@@ -701,7 +673,6 @@ class OntSignalWorker:
         runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
         if runtime not in {"podman", "docker"}:
             raise RuntimeError("unsupported container runtime")
-        self._assert_local_runtime_image(runtime, identity["image"])
         uid, gid = self._container_user_identity()
         output = Path(os.path.abspath(output_dir))
         broker = Path(os.path.abspath(broker_dir))
@@ -754,15 +725,12 @@ class OntSignalWorker:
             not isinstance(policy, dict)
             or policy.get("schema") != schema
             or policy.get("network") != "none"
-            or policy.get("runtime_id") != policy.get("oci_digest")
-            or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(policy.get("runtime_id", "")))
             or not HEX64.fullmatch(str(policy.get("wrapper_sha256", "")))
         ):
             raise RuntimeError("approved comparison runtime policy is invalid")
-        image = os.environ.get(image_env, "").strip()
-        digest = os.environ.get(image_env + "_DIGEST", "").strip().lower()
-        if image != policy["runtime_id"] or digest != policy["oci_digest"].removeprefix("sha256:"):
-            raise RuntimeError(f"configured {stage} identity diverges from approved policy")
+        image, digest = local_image_identity(
+            image_env, os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+        )
         # The immutable image owns its wrapper, not an unused host-side copy.
         return {"stage": stage, "image": image, "image_digest": digest,
                 "policy_sha256": policy_sha256, "wrapper_sha256": policy["wrapper_sha256"]}
@@ -774,7 +742,6 @@ class OntSignalWorker:
         runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
         if runtime not in {"podman", "docker"}:
             raise RuntimeError("unsupported container runtime")
-        self._assert_local_runtime_image(runtime, identity["image"])
         uid, gid = self._container_user_identity()
         output = Path(os.path.abspath(output_dir))
         broker = Path(os.path.abspath(broker_dir))

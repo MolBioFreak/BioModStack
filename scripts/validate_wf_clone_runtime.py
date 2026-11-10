@@ -213,10 +213,13 @@ def validate_runtime(lock_path: Path, selected_model: str, assembly_tool: str = 
         image_path = cache_dir / cache_file
         if not image_path.is_file() or image_path.is_symlink():
             fail("IMAGE_MISSING", f"locked image is missing or is a symlink: {image_path}")
+        # A pulled or locally built image never reproduces the reference file hash
+        # (the image format embeds build times), so the hash found is recorded, not compared.
         actual_sha = sha256_file(image_path)
-        if actual_sha != expected_sha:
-            fail("IMAGE_SHA256_MISMATCH", f"image {uri} SHA-256 is {actual_sha}, expected {expected_sha}")
-        validated_images.append({"uri": uri, "path": str(image_path), "sha256": actual_sha})
+        validated_images.append({
+            "uri": uri, "path": str(image_path), "sha256": actual_sha,
+            "matches_reference_build": actual_sha == expected_sha,
+        })
 
     models = require_object(lock, "models")
     accepted = models.get("accepted_upstream_ids")

@@ -19,8 +19,8 @@ from typing import Any
 from database import OntRawSignalRepresentation
 from paths import get_inputs_dir
 from services.container_cli_environment import container_cli_environment, container_user_namespace_args
+from services.ont_local_images import local_image_identity
 from services.ont_raw_signal import (
-    BLOW5_CONTAINER_DIGEST_ENV,
     BLOW5_CONTAINER_ENV,
     BLOW5_CONTAINER_RUNTIME_ENV,
 )
@@ -67,13 +67,12 @@ def _blow5_partitions(representation: OntRawSignalRepresentation) -> list[dict[s
 
 def _image() -> tuple[str, str]:
     runtime = os.getenv(BLOW5_CONTAINER_RUNTIME_ENV, "docker").strip() or "docker"
-    image = os.getenv(BLOW5_CONTAINER_ENV, "").strip()
-    digest = os.getenv(BLOW5_CONTAINER_DIGEST_ENV, "").strip()
-    if not image or not digest:
-        raise ValueError("raw-signal container image is not configured")
-    reference = image if image.startswith("sha256:") else f"{image}@sha256:{digest}"
     if shutil.which(runtime) is None:
         raise ValueError(f"container runtime {runtime} is unavailable")
+    try:
+        reference, _digest = local_image_identity(BLOW5_CONTAINER_ENV, runtime)
+    except RuntimeError as exc:
+        raise ValueError("raw-signal container image is not built on this machine") from exc
     return runtime, reference
 
 
