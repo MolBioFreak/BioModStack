@@ -9,6 +9,18 @@ at an image you built yourself.
 This guide is written for a person at a terminal and for an AI assistant or
 script acting on that person's behalf. Every command behaves the same for both.
 
+## Choosing what to install
+
+```sh
+./start_ui.sh tools modules              # the parts you can choose, and what each needs
+./start_ui.sh tools select ont structure_prediction
+./start_ui.sh tools list --selected      # only the tools for what you chose
+```
+
+The interface, the molecular biology tools, the viewer and the robot control
+code are part of the repository and need no build. Every other part needs the
+tools listed against it. A part with no recipe yet shows `no-recipe-yet`.
+
 ## Commands
 
 ```sh
@@ -66,7 +78,7 @@ Reason codes: `apptainer_missing`, `disk_space_low`, `recipe_definition_missing`
 `image_build_failed`, `smoke_test_failed`, `license_not_accepted`,
 `weights_manual_step`, `weights_download_failed`, `weights_hash_mismatch`,
 `weights_incomplete`, `weights_missing`, `image_missing`, `build_already_running`,
-`build_interrupted`, `unknown_tool`, `recipe_invalid`.
+`build_interrupted`, `unknown_tool`, `unknown_module`, `recipe_invalid`.
 
 Weights under a licence are fetched only after you pass
 `--accept-license ID` for the licence shown by `tools plan`.

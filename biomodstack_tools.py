@@ -36,6 +36,18 @@ LABELS = ("builds-from-clean", "starting-point")
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 
+# Parts of BioModStack a person can choose. First-party parts ship in the
+# repository and need no build; the rest are served by recipes naming the module.
+MODULES = {
+    "molecular_tools": ("Molecular biology tools and plasmid viewer", True),
+    "robot": ("Liquid-handler robot control", True),
+    "ont": ("Nanopore sequencing (ONT)", False),
+    "structure_prediction": ("Structure prediction", False),
+    "design": ("Protein and binder design", False),
+    "molecular_dynamics": ("Molecular dynamics", False),
+}
+
+
 class ToolError(Exception):
     def __init__(self, reason_code: str, message: str):
         super().__init__(message)
@@ -59,6 +71,8 @@ def _validate_recipe(recipe: dict, path: Path) -> dict:
     need(isinstance(recipe.get("name"), str) and recipe["name"], "name is required")
     need(recipe.get("label") in LABELS, f"label must be one of {LABELS}")
     need(isinstance(recipe.get("modules"), list) and recipe["modules"], "modules is required")
+    need(all(m in MODULES and not MODULES[m][1] for m in recipe["modules"]),
+         f"modules must be among {sorted(m for m in MODULES if not MODULES[m][1])}")
     upstream = recipe.get("upstream")
     need(isinstance(upstream, dict) and upstream.get("homepage"), "upstream.homepage is required")
     images = recipe.get("images")
@@ -516,6 +530,58 @@ def remove_tool(recipe, where, project_root=PROJECT_ROOT) -> dict:
     return {**status, "removed": removed, "kept_not_installed_by_tools": kept}
 
 
+# -------------------------------------------------------------- modules
+
+def _selection_path(where: dict[str, Path]) -> Path:
+    return where["state_dir"] / "selection.json"
+
+
+def selected_modules(where: dict[str, Path]) -> list[str] | None:
+    """The modules this install chose, or None when nothing was chosen yet."""
+    try:
+        chosen = json.loads(_selection_path(where).read_text(encoding="utf-8")).get("modules")
+    except (OSError, ValueError):
+        return None
+    return [m for m in chosen if m in MODULES] if isinstance(chosen, list) else None
+
+
+def modules_overview(where: dict[str, Path], project_root: Path = PROJECT_ROOT) -> dict:
+    chosen = selected_modules(where)
+    rows = [tool_status(r, where, project_root) for r in load_recipes(project_root).values()]
+    modules = []
+    for key, (title, first_party) in MODULES.items():
+        tools = [{"tool": r["tool"], "status": r["status"]} for r in rows if key in r["modules"]]
+        if first_party:
+            state = "included"
+        elif not tools:
+            state = "no-recipe-yet"
+        elif all(t["status"] == "ready" for t in tools):
+            state = "ready"
+        else:
+            state = "needs-tools"
+        modules.append({"module": key, "title": title, "first_party": first_party,
+                        "selected": first_party or (chosen is not None and key in chosen),
+                        "state": state, "tools": tools})
+    return {"schema": SCHEMA, "selection_made": chosen is not None, "modules": modules}
+
+
+def select_modules(where: dict[str, Path], names: list[str]) -> None:
+    unknown = [n for n in names if n not in MODULES]
+    if unknown:
+        raise ToolError("unknown_module", f"Unknown module: {', '.join(unknown)}. Known: {', '.join(MODULES)}")
+    _write_json(_selection_path(where), {"schema": SCHEMA, "modules": sorted(set(names))})
+
+
+def _render_modules(overview: dict) -> str:
+    lines = [f"{'':<3} {'MODULE':<22} {'STATE':<15} TOOLS"]
+    for row in overview["modules"]:
+        tools = ", ".join(f"{t['tool']} ({t['status']})" for t in row["tools"]) or "-"
+        lines.append(f"{'[x]' if row['selected'] else '[ ]'} {row['module']:<22} {row['state']:<15} {tools}")
+    lines.append("")
+    lines.append("Choose: ./start_ui.sh tools select MODULE [MODULE ...]   then   ./start_ui.sh tools list --selected")
+    return "\n".join(lines)
+
+
 # ------------------------------------------------------------------- CLI
 
 def _render_list(rows: list[dict]) -> str:
@@ -565,7 +631,11 @@ def main(argv=None, project_root: Path = PROJECT_ROOT) -> int:
             command.add_argument("tool")
         command.add_argument("--json", action="store_true", dest="json_output")
         return command
-    add("list", "show every tool and its state on this machine", tool=False)
+    listing = add("list", "show every tool and its state on this machine", tool=False)
+    listing.add_argument("--selected", action="store_true", help="only tools for the modules you chose")
+    add("modules", "show the parts of BioModStack you can choose and what each needs", tool=False)
+    select = add("select", "choose which parts this install uses", tool=False)
+    select.add_argument("modules", nargs="*", metavar="MODULE")
     add("plan", "show what building a tool will fetch, build and need")
     build = add("build", "build the images, fetch selected weights, run the smoke checks")
     build.add_argument("--detach", action="store_true", help="run in the background; follow with status/log")
@@ -591,7 +661,15 @@ def main(argv=None, project_root: Path = PROJECT_ROOT) -> int:
         where = locations(project_root)
         if args.command == "list":
             rows = [tool_status(r, where, project_root) for r in load_recipes(project_root).values()]
+            if args.selected:
+                chosen = set(selected_modules(where) or [])
+                rows = [r for r in rows if chosen & set(r["modules"])]
             return emit({"schema": SCHEMA, "tools": rows}, _render_list(rows))
+        if args.command in ("modules", "select"):
+            if args.command == "select":
+                select_modules(where, args.modules)
+            overview = modules_overview(where, project_root)
+            return emit(overview, _render_modules(overview))
         recipe = get_recipe(args.tool, project_root)
         if args.command == "plan":
             plan = tool_plan(recipe, where, project_root)

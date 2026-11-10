@@ -151,6 +151,28 @@ def test_detached_build_reports_building_and_refuses_a_second_one(install):
     assert status["status"] == "ready"
 
 
+def test_module_selection_is_saved_and_filters_the_tool_list(install):
+    code, overview = install("modules")
+    assert code == 0 and overview["selection_made"] is False
+    by_name = {m["module"]: m for m in overview["modules"]}
+    assert by_name["robot"]["state"] == "included" and by_name["robot"]["selected"] is True
+    assert by_name["ont"]["state"] == "needs-tools" and by_name["ont"]["selected"] is False
+    assert by_name["ont"]["tools"] == [{"tool": "demo", "status": "not-installed"}]
+    assert by_name["design"]["state"] == "no-recipe-yet"
+    code, listing = install("list", "--selected")
+    assert listing["tools"] == []
+    code, overview = install("select", "ont")
+    assert code == 0 and overview["selection_made"] is True
+    assert {m["module"] for m in overview["modules"] if m["selected"]} == {"molecular_tools", "robot", "ont"}
+    code, listing = install("list", "--selected")
+    assert [t["tool"] for t in listing["tools"]] == ["demo"]
+    code, blocked = install("select", "nonsense")
+    assert code == 3 and blocked["reason_code"] == "unknown_module"
+    install("build", "demo", "--accept-license", "DEMO-1.0")
+    code, overview = install("modules")
+    assert {m["module"]: m["state"] for m in overview["modules"]}["ont"] == "ready"
+
+
 def test_unknown_tool_and_missing_runtime_are_blocked_with_reasons(install):
     code, result = install("plan", "nope")
     assert code == 3 and result["reason_code"] == "unknown_tool"
