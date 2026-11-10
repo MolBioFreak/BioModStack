@@ -1,7 +1,9 @@
 """Validated ligation and sticky-end assembly helpers."""
 from __future__ import annotations
 
-from .common import orient_fragment, overhangs_compatible, require_declared_ends_match_sequence
+from .common import (
+    orient_fragment, overhangs_compatible, require_declared_ends_match_sequence, require_unique_junction_classes,
+)
 from .types import (
     AssemblyError, AssemblyFragment, AssemblyJunction, AssemblyProduct, FragmentEnd, OrientedFragment, SealedState,
 )
@@ -38,6 +40,8 @@ def simulate_ligation(
     )
     for fragment in fragments:
         require_declared_ends_match_sequence(fragment)
+    if mode == "golden_gate":
+        require_unique_junction_classes(product.junctions)
     return product
 
 

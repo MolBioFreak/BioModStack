@@ -224,6 +224,8 @@ class SearchSettings:
                 raise ValueError(f"Invalid search setting: {name}")
         if self.ranking_mode not in ("empirical", "lexicographic"):
             raise ValueError("Unknown ranking mode")
+        if not self.unique_classes:
+            raise ValueError("Duplicate overhangs are not allowed")
 
 
 def _search(*, domain_size: int, enumeration: Callable, random_start: Callable,
@@ -268,7 +270,7 @@ def _search(*, domain_size: int, enumeration: Callable, random_start: Callable,
             return None
         candidate = describe(choice)
         junctions = candidate["junctions"]
-        if settings.unique_classes and len({_class(x) for x in junctions}) != len(junctions):
+        if len({_class(x) for x in junctions}) != len(junctions):
             return None
         if settings.exclude_palindromes and any(x == reverse_complement(x) for x in junctions):
             return None
@@ -331,30 +333,27 @@ def optimize_overhangs(candidate_domain: Sequence[str], junction_count: int, dat
             locked.append(x)
     representatives = {}
     for x in sorted(set(candidate_domain)):
-        if _class(x) not in forbidden and (not settings.unique_classes or _class(x) not in {_class(y) for y in locked}):
+        if _class(x) not in forbidden and _class(x) not in {_class(y) for y in locked}:
             if not settings.exclude_palindromes or x != reverse_complement(x):
                 representatives.setdefault(_class(x), x)
     pool = sorted(representatives.values())
     need = junction_count - len(locked)
     conflict = need < 0 or any(_class(x) in forbidden for x in locked)
-    if conflict or (need and not pool) or (settings.unique_classes and need > len(pool)):
+    if conflict or (need and not pool) or need > len(pool):
         size = 0
     else:
-        size = math.comb(len(pool), need) if settings.unique_classes else math.comb(len(pool) + need - 1, need) if need else 1
+        size = math.comb(len(pool), need)
 
     def enumeration():
         if not size:
             return iter(())
-        combinations = itertools.combinations if settings.unique_classes else itertools.combinations_with_replacement
-        return combinations(range(len(pool)), need)
+        return itertools.combinations(range(len(pool)), need)
 
     def start(rng):
-        if settings.unique_classes:
-            return tuple(sorted(rng.sample(range(len(pool)), need)))
-        return tuple(sorted(rng.randrange(len(pool)) for _ in range(need)))
+        return tuple(sorted(rng.sample(range(len(pool)), need)))
 
     def neighbor(choice, rng):
-        remaining = sorted(set(range(len(pool))) - set(choice)) if settings.unique_classes else list(range(len(pool)))
+        remaining = sorted(set(range(len(pool))) - set(choice))
         if not choice or not remaining:
             return choice
         out = list(choice)

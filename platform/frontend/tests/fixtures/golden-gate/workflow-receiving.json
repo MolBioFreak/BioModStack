@@ -7408,7 +7408,7 @@
         "restarts": 8,
         "exact_limit": 10000,
         "alternatives": 5,
-        "unique_classes": false,
+        "unique_classes": true,
         "exclude_palindromes": false,
         "ranking_mode": "lexicographic"
       },
@@ -7490,7 +7490,7 @@
           "restarts": 8,
           "exact_limit": 10000,
           "alternatives": 5,
-          "unique_classes": false,
+          "unique_classes": true,
           "exclude_palindromes": false,
           "ranking_mode": "lexicographic"
         },
@@ -9255,7 +9255,7 @@
           "restarts": 8,
           "exact_limit": 10000,
           "alternatives": 5,
-          "unique_classes": false,
+          "unique_classes": true,
           "exclude_palindromes": false,
           "ranking_mode": "lexicographic"
         },

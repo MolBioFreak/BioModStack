@@ -13,7 +13,7 @@ from services.restriction_catalog import (
     catalog_authority,
 )
 
-from .common import orient_fragment, require_declared_ends_match_sequence
+from .common import orient_fragment, require_declared_ends_match_sequence, require_unique_junction_classes
 from .ligation import _ligate_oriented_fragments
 from .types import (
     AssemblyError,
@@ -179,18 +179,8 @@ def simulate_golden_gate(
     warnings = list(product.warnings)
     # Advisory classes only: do not reinterpret end metadata or alter ligation.
     # A sequence and its reverse complement describe the same cohesive-end class.
-    junction_classes = Counter(
-        min(sequence, reverse_complement(sequence))
-        for junction in product.junctions
-        if (sequence := junction.overhang_sequence)
-    )
-    for sequence, count in junction_classes.items():
-        if count > 1:
-            # A Type IIS cut leaves a unique end per site, so a reused overhang class lets junctions compete
-            # for the same partner and the tube can assemble in more than one order.
-            raise AssemblyError(
-                f"Duplicate overhang detected: {sequence}/{reverse_complement(sequence)} used at {count} junctions"
-            )
+    require_unique_junction_classes(product.junctions)
+    for sequence in {j.overhang_sequence for j in product.junctions if j.overhang_sequence}:
         if sequence == reverse_complement(sequence):
             warnings.append(
                 f"Junction overhang {sequence} is palindromic; alternative ligations "
