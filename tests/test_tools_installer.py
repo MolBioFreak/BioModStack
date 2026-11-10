@@ -35,7 +35,8 @@ def install(tmp_path):
     project = tmp_path / "project"
     (project / "tools" / "recipes").mkdir(parents=True)
     (project / "apptainer").mkdir()
-    for name in ("start_ui.sh", "biomodstack_tools.py", "biomodstack_runtime_profile.py"):
+    for name in ("start_ui.sh", "biomodstack_tools.py", "biomodstack_runtime_profile.py",
+                 "biomodstack_local_resources.py"):
         shutil.copy2(ROOT / name, project / name)
     (project / "apptainer" / "demo.def").write_text("Bootstrap: docker\nFrom: example\n")
     recipe = {
@@ -96,6 +97,15 @@ def test_build_needs_license_then_becomes_ready(install):
     assert install.calls.read_text().count("build ") == 1, "the second run reuses the built image"
     code, listing = install("list")
     assert listing["tools"][0]["status"] == "ready"
+
+
+def test_listing_works_when_the_saved_ram_budget_exceeds_this_process(install):
+    total_gib = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30
+    profile = install.tmp / "config" / "biomodstack" / "install_profile.json"
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    profile.write_text(json.dumps({"local_memory_gib": round(total_gib + 64, 1)}))
+    code, listing = install("list")
+    assert code == 0 and [t["tool"] for t in listing["tools"]] == ["demo"]
 
 
 def test_hand_placed_weights_ask_for_the_file_not_for_a_license(install):

@@ -132,7 +132,9 @@ def locations(project_root: Path = PROJECT_ROOT) -> dict[str, Path]:
     profile_path = profiles.get_install_profile_path()
     if profile_path.exists():
         raw = json.loads(profile_path.read_text(encoding="utf-8"))
-        profiles.validate_install_profile_raw(raw)
+        # Reading where things live is not a request to allocate the saved RAM budget, so the
+        # capacity admission is left to the launcher; a service with a memory cap can still list tools.
+        profiles.validate_install_profile_raw(raw, admit_local_capacity=False)
         profile = profiles.normalize_install_profile(raw)
     paths = profiles.resolve_runtime_paths(project_root=project_root, profile=profile)
     return {"container_dir": Path(str(paths["container_dir"])),
