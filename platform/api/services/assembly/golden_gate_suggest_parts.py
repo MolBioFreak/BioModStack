@@ -266,6 +266,8 @@ def _proposal(request, enzyme, name, binding, dataset, pieces, vector_material, 
     result = run_workflow(task, resolve_revision=resolve_revision)
     candidate = result.solutions[0]
     design = candidate.design
+    if not design.solutions:
+        raise AssemblyError("; ".join(design.diagnostics) or "the prepared parts do not assemble into a product")
     materials = {m.id: m for m in design.materials}
     prepared_rows, pcr = [], []
     for outcome in design.preparations:
