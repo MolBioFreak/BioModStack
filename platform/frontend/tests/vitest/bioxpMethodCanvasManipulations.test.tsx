@@ -158,7 +158,7 @@ it('builds cycler holds, ramps, door state and a marker from a thermal profile',
         [tla('thermal_door', { door_command: 'DC' })], () => '', () => undefined)!;
     expect(t.lanes[0].blocks.map(b => b.title)).toEqual(['Ramp', 'Hold 30 °C', 'Ramp', 'Hold 80 °C']);
     expect(t.lanes[1].blocks[0].title).toBe('Closed throughout · heated lid down');
-    expect(t.total).toBe('4:00 of holds + ramps');
+    expect(t.total).toBe('4:00 of holds, plus ramp time');
     expect(t.markers[0]).toMatchObject({ station: 'LOC_TC', title: '30 °C 2:00 → 80 °C 2:00 · lid down' });
 });
 

@@ -93,7 +93,7 @@ export function stageTimeline(pageLabel: string, actions: MethodValue[], before:
             : { tone: s.c >= 60 ? 'hot' : 'heat', title: `Hold ${s.c} °C`, detail: `${clock(s.seconds)}${s.attainment ? ', timed once at temp' : ''}`, from: s.slot, to: s.slot + 1 }) });
         lanes.push({ id: 'door', label: 'Door', blocks: [{ tone: 'tick', title: closed ? 'Closed throughout · heated lid down' : 'Door open', from: segments[0].slot, to: segments[segments.length - 1].slot + 1 }] });
         markers.push({ station: 'LOC_TC', tone: 'heat', title: holds.map(h => `${h.c} °C ${clock(h.seconds)}`).join(' → ') + (closed ? ' · lid down' : '') });
-        return { title: `Cycler program · ${repeat} pass`, total: `${clock(holds.reduce((t, h) => t + h.seconds, 0))} of holds + ramps`, weights, lanes,
+        return { title: `Cycler program · ${repeat} pass`, total: `${clock(holds.reduce((t, h) => t + h.seconds, 0))} of holds, plus ramp time`, weights, lanes,
             trace: segments.map(s => ({ from: s.slot, to: s.slot + 1, c: s.c, ramp: s.ramp })), markers };
     }
 

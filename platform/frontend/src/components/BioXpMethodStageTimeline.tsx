@@ -61,7 +61,7 @@ function Chip({ x, y, lines, color }: { x: number; y: number; lines: string[]; c
 export function BioXpMethodStageMarkers({ markers, reactions }: { markers: DeckMarker[]; reactions: Record<string, number> }) {
     return <g className="bioxp-stage-markers" aria-label="Timed steps on the deck" pointerEvents="none">
         <defs><pattern id="bioxp-cover-hatch" width="16" height="16" patternUnits="userSpaceOnUse" patternTransform="rotate(135)">
-            <rect width="8" height="16" fill="rgba(244,114,182,.16)" /></pattern></defs>
+            <rect width="8" height="16" fill="rgba(244,114,182,.34)" /></pattern></defs>
         {markers.map((m, i) => {
             const r = deckResources.find(d => d.id === m.station);
             if (!r) return null;
