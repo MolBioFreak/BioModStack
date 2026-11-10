@@ -1,0 +1,56 @@
+{
+  "schema": "bms.tool-recipe.v1",
+  "id": "dorado",
+  "name": "Dorado (ONT basecalling, modkit, samtools)",
+  "label": "starting-point",
+  "modules": ["ont"],
+  "upstream": {
+    "homepage": "https://github.com/nanoporetech/dorado",
+    "also": ["https://github.com/nanoporetech/modkit", "https://github.com/samtools/samtools"]
+  },
+  "license": {"id": "ONT-PL-1.0", "url": "https://github.com/nanoporetech/dorado/blob/master/LICENCE.txt"},
+  "notes": "Dorado 2.1.2 release archive from Oxford Nanopore, modkit 0.6.4, samtools 1.25. Basecalling needs an NVIDIA GPU; the image itself builds and checks without one.",
+  "images": [
+    {
+      "filename": "dorado.sif",
+      "def": "apptainer/dorado.def",
+      "approx_size_gb": 4,
+      "sources": [
+        "nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04",
+        "https://cdn.oxfordnanoportal.com/software/analysis/dorado-2.1.2-linux-x64.tar.gz",
+        "https://github.com/nanoporetech/modkit/releases/download/v0.6.4/modkit_v0.6.4_u16_x86_64.tar.gz",
+        "https://github.com/samtools/samtools/releases/download/1.25/samtools-1.25.tar.bz2"
+      ],
+      "smoke": [
+        {"name": "dorado-version", "argv": ["dorado", "--version"]},
+        {"name": "modkit-version", "argv": ["modkit", "--version"]}
+      ]
+    }
+  ],
+  "weights": [
+    {
+      "id": "hac-v6.0.0",
+      "required": true,
+      "approx_size_gb": 0.1,
+      "license": {"id": "ONT-PL-1.0", "url": "https://github.com/nanoporetech/dorado/blob/master/LICENCE.txt"},
+      "present_if": ["dorado/2.1.2/dna_r10.4.1_e8.2_400bps_hac@v6.0.0"],
+      "fetch": {
+        "type": "container",
+        "source": "dorado download (Oxford Nanopore CDN)",
+        "argv": ["dorado", "download", "--model", "dna_r10.4.1_e8.2_400bps_hac@v6.0.0", "--models-directory", "/weights/dorado/2.1.2"]
+      }
+    },
+    {
+      "id": "sup-v5.2.0",
+      "required": false,
+      "approx_size_gb": 0.3,
+      "license": {"id": "ONT-PL-1.0", "url": "https://github.com/nanoporetech/dorado/blob/master/LICENCE.txt"},
+      "present_if": ["dorado/2.1.2/dna_r10.4.1_e8.2_400bps_sup@v5.2.0"],
+      "fetch": {
+        "type": "container",
+        "source": "dorado download (Oxford Nanopore CDN)",
+        "argv": ["dorado", "download", "--model", "dna_r10.4.1_e8.2_400bps_sup@v5.2.0", "--models-directory", "/weights/dorado/2.1.2"]
+      }
+    }
+  ]
+}

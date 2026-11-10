@@ -13,6 +13,9 @@ if [ "$#" -gt 0 ]; then
 fi
 
 case "$ACTION" in
+    tools)
+        exec python3 -B "$PROJECT_DIR/biomodstack_tools.py" "$@"
+        ;;
     python-plan|python-bootstrap|python-verify|frontend-plan|frontend-bootstrap|frontend-verify|discover|plan|provision-plan|provision|verify|configure-preview|configure|recover|resume)
         exec python3 -B "$MANAGER" "$ACTION" "$@"
         ;;
