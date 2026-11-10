@@ -10,7 +10,7 @@
   "upstream": {
     "homepage": "https://github.com/RosettaCommons/foundry"
   },
-  "notes": "rc-foundry 0.1.9 from PyPI. shape_rfd3.sif is built on top of foundry.sif. The definitions apptainer/foundry-schedule.def and apptainer/shape-rfd3-schedule.def patch an older base image and are not needed when building from foundry.def. Not yet built from clean by us: expect to fix things.",
+  "notes": "rc-foundry 0.1.9 from PyPI. BMS reads the RFdiffusion3 checkpoint as rfd3_latest.ckpt, so the upstream file is saved under that name. shape_rfd3.sif is built on top of foundry.sif. The definitions apptainer/foundry-schedule.def and apptainer/shape-rfd3-schedule.def patch an older base image and are not needed when building from foundry.def. Not yet built from clean by us: expect to fix things.",
   "images": [
     {
       "filename": "foundry.sif",
@@ -34,14 +34,14 @@
       "id": "rfd3",
       "required": true,
       "present_if": [
-        "foundry/checkpoints/rfd3_foundry_2025_12_01_remapped.ckpt"
+        "foundry/checkpoints/rfd3_latest.ckpt"
       ],
       "fetch": {
         "type": "url",
         "files": [
           {
             "url": "https://files.ipd.uw.edu/pub/rfd3/rfd3_foundry_2025_12_01_remapped.ckpt",
-            "dest": "foundry/checkpoints/rfd3_foundry_2025_12_01_remapped.ckpt"
+            "dest": "foundry/checkpoints/rfd3_latest.ckpt"
           }
         ]
       },
@@ -53,7 +53,7 @@
     },
     {
       "id": "mpnn",
-      "required": true,
+      "required": false,
       "present_if": [
         "foundry/checkpoints/ligandmpnn_v_32_010_25.pt",
         "foundry/checkpoints/solublempnn_v_48_020.pt"
@@ -79,7 +79,7 @@
     },
     {
       "id": "rf3",
-      "required": true,
+      "required": false,
       "present_if": [
         "foundry/checkpoints/rf3_foundry_01_24_latest_remapped.ckpt"
       ],
