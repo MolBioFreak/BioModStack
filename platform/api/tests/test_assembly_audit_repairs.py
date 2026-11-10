@@ -21,12 +21,12 @@ def _binding():
 
 
 def _fragments(junctions, circular=False):
-    # Deliberately absent from the top strings: end metadata is not a new
-    # sequence-membership gate (including for historical saved metadata).
+    # The declared left overhang is the first bases of each sequence: Golden Gate refuses a mismatch.
     count = len(junctions) if circular else len(junctions) + 1
+    lefts = [junctions[i-1] if i or circular else "ACGA" for i in range(count)]
     return [AssemblyFragment(
-        id=str(i), name=f"part {i}", sequence="CCCCCCCC",
-        left_end=FragmentEnd("sticky_5", junctions[i-1] if i or circular else "ACGA"),
+        id=str(i), name=f"part {i}", sequence=lefts[i] + "CCCC",
+        left_end=FragmentEnd("sticky_5", lefts[i]),
         right_end=FragmentEnd("sticky_5", junctions[i] if i < len(junctions) else "TCGA"),
         metadata={"legacy_saved": {"end_label": "retained", "unknown": [1, 2]}},
     ) for i in range(count)]
@@ -66,7 +66,7 @@ def client():
         yield result
 
 
-def test_public_golden_gate_keeps_legacy_metadata_and_no_sequence_gate(client):
+def test_public_golden_gate_keeps_legacy_metadata(client):
     fragments = _fragments(["ATAT", "ATAT"])
     response = client.post("/api/molbio/assembly/golden-gate/simulate", json={
         "fragments": [asdict(fragment) for fragment in fragments],
@@ -74,7 +74,7 @@ def test_public_golden_gate_keeps_legacy_metadata_and_no_sequence_gate(client):
     })
     assert response.status_code == 200, response.text
     product = response.json()["product"]
-    assert product["sequence"] == "CCCCCCCC" * 3
+    assert product["sequence"] == "".join(fragment.sequence for fragment in fragments)
     assert len(product["warnings"]) == 2
     assert [fragment["metadata"] for fragment in product["fragments"]] == [fragment.metadata for fragment in fragments]
 
