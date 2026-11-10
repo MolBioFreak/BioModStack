@@ -391,6 +391,9 @@ def _fetch_weights(run: _Run, selected: set[str] | None, accepted: set[str]) -> 
                     _download(run, item["url"], target, item.get("sha256"))
         else:
             where["weights_root"].mkdir(parents=True, exist_ok=True)
+            # Downloaders such as "dorado download" exit 1 when the folder they write into is absent.
+            for expected in weight["present_if"]:
+                (where["weights_root"] / expected).parent.mkdir(parents=True, exist_ok=True)
             image = where["container_dir"] / (fetch.get("image") or recipe["images"][0]["filename"])
             run.command([_apptainer(), "exec", "--bind", f"{where['weights_root']}:/weights", image] + fetch["argv"],
                         step=step, reason_code="weights_download_failed")

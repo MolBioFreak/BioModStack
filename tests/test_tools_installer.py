@@ -23,7 +23,7 @@ case "$1" in
   test) [ -n "${FAKE_FAIL_SMOKE:-}" ] && exit 1; exit 0 ;;
   exec)
     case "$*" in
-      *make-weights*) mkdir -p "$FAKE_WEIGHTS/demo/model" ;;
+      *make-weights*) mkdir "$FAKE_WEIGHTS/demo/model" || exit 1 ;;  # like dorado: the parent must exist
     esac
     exit 0 ;;
 esac
