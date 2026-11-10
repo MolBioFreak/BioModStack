@@ -3264,7 +3264,7 @@ async def simulate_golden_gate_assembly(request: GoldenGateAssemblyRequest):
     except GoldenGateAnalysisLimitError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     except AssemblyError as exc:
-        raise HTTPException(status_code=400, detail="Golden Gate assembly request is invalid") from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     authority = product.golden_gate_authority
     if authority is None:
@@ -3301,7 +3301,7 @@ async def save_golden_gate_assembly(
     except GoldenGateAnalysisLimitError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     except AssemblyError as exc:
-        raise HTTPException(status_code=400, detail="Golden Gate assembly request is invalid") from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     authority = product.golden_gate_authority
     if authority is None:
