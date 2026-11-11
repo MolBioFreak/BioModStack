@@ -90,12 +90,15 @@ test('top-bar utility menus stay compact and action-first', () => {
         'Local runtime switch + start',
         'CoolerControl active.',
         'Per-GPU channel control.',
-        'Default GPU for MSA controls.',
         'POWER LIMITS',
-        'MSA SERVER',
+        '<MsaHub />',
     ]) {
         assert.ok(source.includes(marker), `missing compact topbar copy marker: ${marker}`);
     }
+    // The MSA menu lives in its own hub view; Layout only mounts it.
+    const hubSource = readFileSync(join(process.cwd(), 'src', 'components', 'MsaHubView.tsx'), 'utf8');
+    assert.ok(hubSource.includes('Default GPU for MSA controls.'));
+    assert.ok(!source.includes('MSA SERVER') && !hubSource.includes('MSA SERVER'));
 
     for (const stale of [
         'CoolerControl device backend active.',
