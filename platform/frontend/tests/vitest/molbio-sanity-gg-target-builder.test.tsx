@@ -221,6 +221,7 @@ it('shows native repeat compromises beside the exact-cut proposal', async () => 
         empirical: 'no empirical data', internal_sites: 0, junctions: ['AAAA', 'CCCC'], cuts: [20, 80],
         fragment_lengths: [20, 60, 40], split_request: split.request, pcr_products: [], notes: [message],
         candidate: split.result.solutions[0] }], enzymes: [], diagnostics: [] };
-    await render(); await click('Golden Gate'); await input('Type IIS enzyme', 'native-BsaI'); await click('Recommend cuts');
+    await render(null, { ...seq, sequence: split.request.target.source.sequence, circular: false });
+    await click('Golden Gate'); await input('Type IIS enzyme', 'native-BsaI'); await input('Terminal right fusion', 'TGAC'); await click('Recommend cuts');
     expect(host.textContent).toContain(message);
 });
