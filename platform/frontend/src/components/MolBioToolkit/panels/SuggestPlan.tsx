@@ -23,6 +23,7 @@ import {
 } from '../../../lib/api';
 import type { WorkflowRequest } from '../../../lib/goldenGateWorkflowTypes';
 import { FragmentChooser } from '../FragmentChooser';
+import { PlanCard, PlansList, PrimaryButton, SetupCard, SetupGroup, WorkupBlock, WorkupStage } from './suggest/PlanStages';
 import type { SequenceData, SelectionInfo } from '../types';
 import { SequenceViewer } from '../SequenceViewer';
 import { DEFAULT_VISIBILITY } from '../sequenceViewerConstants';
@@ -76,21 +77,25 @@ function Num({ label, value, onChange }: { label: string; value: number; onChang
 }
 
 function GibsonProposal({ proposal, onUse }: { proposal: SuggestGibsonProposal; onUse: (design: SavedGibsonDesignRequest) => void }) {
-    const primers = (proposal as unknown as { primers?: Array<{ id: string; tm?: number | null }> }).primers;
-    const junctions = (proposal as unknown as { junctions?: Array<{ overlap_length?: number; overlap_tm?: number | null }> }).junctions;
     const synthBp = proposal.fragments.filter((f) => f.preparation === 'synthesis').reduce((n, f) => n + (f.sequence?.length ?? 0), 0);
-    return <li className="space-y-1 rounded border border-slate-700 bg-slate-950/60 p-2">
-        <div className="font-medium text-slate-100">#{proposal.rank} {proposal.summary}</div>
-        <div className="text-slate-400">{proposal.counts.pcr} PCR · {proposal.counts.synthesis} synthesis ({synthBp} bp) · {proposal.counts.existing} existing</div>
-        <ul className="text-slate-300">{proposal.fragments.map((f) => <li key={f.id}>
+    return <PlanCard rank={proposal.rank} featured={proposal.rank === 1} title={proposal.summary}
+        action={<PrimaryButton onClick={() => onUse(proposal.design_request)}>Use this plan</PrimaryButton>}>
+        <div className="text-[#a6b3ca]">{proposal.counts.pcr} PCR · {proposal.counts.synthesis} synthesis ({synthBp} bp) · {proposal.counts.existing} existing</div>
+        <ul className="space-y-0.5 text-[#dbe4f5]">{proposal.fragments.map((f) => <li key={f.id} className="break-words">
             {f.name}: {f.preparation}{f.source ? ` from ${f.source.id} ${f.source.start}–${f.source.end} (${f.source.strand === -1 ? '−' : '+'}${f.source.wraps_origin ? ', across origin' : ''})` : ''}{f.sequence ? ` · ${f.sequence.length} bp` : ''}
         </li>)}</ul>
-        {primers && primers.length > 0 && <div className="text-slate-400">Primer Tm: {primers.map((p) => `${p.id} ${p.tm != null ? p.tm.toFixed(1) : '—'}`).join(', ')} °C</div>}
-        {junctions && junctions.length > 0 && <div className="text-slate-400">Overlaps: {junctions.map((j) => `${j.overlap_length ?? '?'} nt${j.overlap_tm != null ? ` (Tm ${j.overlap_tm.toFixed(1)} °C)` : ''}`).join(', ')}</div>}
-        <div className="text-slate-400">Features kept: {proposal.features.kept.join(', ') || 'none'} · removed: {proposal.features.removed.join(', ') || 'none'} · clipped: {proposal.features.clipped.join(', ') || 'none'}</div>
-        {proposal.notes.map((n, i) => <div key={i} className="text-slate-500">{n}</div>)}
-        <button type="button" className="rounded bg-violet-600 px-2 py-1 text-white" onClick={() => onUse(proposal.design_request)}>Use this plan</button>
-    </li>;
+    </PlanCard>;
+}
+
+function GibsonWorkup({ proposal }: { proposal: SuggestGibsonProposal }) {
+    const primers = (proposal as unknown as { primers?: Array<{ id: string; tm?: number | null }> }).primers;
+    const junctions = (proposal as unknown as { junctions?: Array<{ overlap_length?: number; overlap_tm?: number | null }> }).junctions;
+    return <WorkupBlock title={`#${proposal.rank} workup`}>
+        {primers && primers.length > 0 && <div className="text-[#a6b3ca]">Primer Tm: {primers.map((p) => `${p.id} ${p.tm != null ? p.tm.toFixed(1) : '—'}`).join(', ')} °C</div>}
+        {junctions && junctions.length > 0 && <div className="text-[#a6b3ca]">Overlaps: {junctions.map((j) => `${j.overlap_length ?? '?'} nt${j.overlap_tm != null ? ` (Tm ${j.overlap_tm.toFixed(1)} °C)` : ''}`).join(', ')}</div>}
+        <div className="break-words text-[#a6b3ca]">Features kept: {proposal.features.kept.join(', ') || 'none'} · removed: {proposal.features.removed.join(', ') || 'none'} · clipped: {proposal.features.clipped.join(', ') || 'none'}</div>
+        {proposal.notes.map((n, i) => <div key={i} className="text-[#939fb6]">{n}</div>)}
+    </WorkupBlock>;
 }
 
 function GoldenGateProposal({ proposal, onUse, onEdit, targetSequence, sourceBoundary }: { sourceBoundary?: (cut: number) => number; targetSequence: string; onEdit: (cuts: number[]) => void; proposal: SuggestGoldenGateProposal; onUse: (request: WorkflowRequest) => void }) {
@@ -296,8 +301,10 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                     <button key={value} type="button" onClick={() => setMethod(value)}
                         className={`rounded-full px-3 py-1 ${method === value ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300'}`}>{label}</button>
                 ))}
+                <span aria-disabled="true" className="rounded-full border border-dashed border-[#293a59] px-3 py-1 text-[#939fb6]">Gateway: not available yet</span>
             </div>}
 
+            <SetupCard plain={method === 'golden_gate'}>
             <fieldset className="min-w-0 space-y-1">
                 <legend className="text-slate-300">{method === 'restriction' ? 'Backbone' : 'Target (what you want to end up with)'}</legend>
                 <select aria-label="Target molecule" className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={targetChoice} onChange={(e) => setTargetChoice(e.target.value as TargetChoice)}>
@@ -327,12 +334,14 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                     <button type="button" className="shrink-0 text-slate-400" onClick={() => setSources((list) => list.filter((_, j) => j !== i))}>Remove</button></li>)}</ul>
             </fieldset>}
 
-            {method === 'gibson' && <div className="flex flex-wrap gap-3">
-                <Num label="Overlap (nt)" value={overlap} onChange={setOverlap} />
-                <Num label="Target Tm (°C)" value={targetTm} onChange={setTargetTm} />
-                <Num label="Min anneal (nt)" value={minAnneal} onChange={setMinAnneal} />
-                <Num label="Min match (nt)" value={minMatch} onChange={setMinMatch} />
-            </div>}
+            {method === 'gibson' && <SetupGroup title="Overlaps and primers">
+                <div className="flex flex-wrap gap-3">
+                    <Num label="Overlap (nt)" value={overlap} onChange={setOverlap} />
+                    <Num label="Target Tm (°C)" value={targetTm} onChange={setTargetTm} />
+                    <Num label="Min anneal (nt)" value={minAnneal} onChange={setMinAnneal} />
+                    <Num label="Min match (nt)" value={minMatch} onChange={setMinMatch} />
+                </div>
+            </SetupGroup>}
             {method === 'golden_gate' && <div className="space-y-2">
                 <label className="flex flex-col gap-1 text-slate-400">Type IIS enzyme
                     <select aria-label="Type IIS enzyme" value={selectedEnzyme} onChange={e => setEnzyme(e.target.value)} className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200">
@@ -355,7 +364,7 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                 {discovery.isFetching && <p className="text-slate-400">Loading compatible enzymes…</p>}
                 {discovery.error && <p role="alert">{errorText(discovery.error)}</p>}
             </div>}
-            {method === 'restriction' && <div className="space-y-2">
+            {method === 'restriction' && <SetupGroup title="Enzymes, boundaries and vector ends"><div className="space-y-2">
                 <label className="flex flex-col gap-1 text-slate-400">Enzymes (optional, comma-separated)
                     <input className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={restrictionEnzymes} onChange={(e) => setRestrictionEnzymes(e.target.value)} /></label>
                 <p className="text-slate-500">Optional intervals use zero-based boundaries, with the end excluded. Blank donor bounds use the existing flanking sites, or the whole donor for primer tails.</p>
@@ -369,9 +378,10 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                     <select value={vectorPhosphate} onChange={(e) => setVectorPhosphate(e.target.value as typeof vectorPhosphate)} className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200">
                         <option value="unknown">As digested</option><option value="unphosphorylated">Dephosphorylated</option><option value="phosphorylated">Phosphorylated</option>
                     </select></label>
-            </div>}
+            </div></SetupGroup>}
             {method !== 'restriction' && <label className="flex flex-col gap-1 text-slate-400">Fixed boundaries (positions, comma-separated)
                 <input aria-label="Fixed boundaries" className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={boundaries} onChange={(e) => setBoundaries(e.target.value)} /></label>}
+            </SetupCard>
 
             {method === 'golden_gate' && target && <details open={builder} className="min-w-0 space-y-2">
                 <summary>Target sequence and cut positions</summary>
@@ -387,9 +397,11 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
             <button type="button" disabled={busy} onClick={() => void run()} className="rounded bg-cyan-600 px-3 py-1.5 font-medium text-white disabled:opacity-50">{busy ? 'Working…' : builder ? 'Recommend cuts' : 'Suggest'}</button>
             {error && <p role="alert" className="text-red-300">{error}</p>}
 
-            {method === 'gibson' && gibson && <div className="space-y-2">
-                {gibson.proposals.length === 0 && <p className="text-slate-400">No proposals.</p>}
-                <ul className="space-y-2">{gibson.proposals.map((p) => <GibsonProposal key={p.rank} proposal={p} onUse={onUseGibson} />)}</ul>
+            {method === 'gibson' && gibson && <div className="space-y-3">
+                <PlansList count={gibson.proposals.length} empty={<p className="text-slate-400">No proposals.</p>}>
+                    {gibson.proposals.map((p) => <GibsonProposal key={p.rank} proposal={p} onUse={onUseGibson} />)}
+                </PlansList>
+                {gibson.proposals.length > 0 && <WorkupStage>{gibson.proposals.map((p) => <GibsonWorkup key={p.rank} proposal={p} />)}</WorkupStage>}
                 {gibson.diagnostics.map((d, i) => <p key={i} className="text-slate-500">{d}</p>)}
             </div>}
             {method === 'golden_gate' && goldenGate && <div className="space-y-2">
@@ -398,14 +410,17 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                 <ul className="text-slate-500">{goldenGate.enzymes.map((e) => <li key={e.enzyme_id}>{e.name}: {e.status}{e.internal_sites != null ? ` · ${e.internal_sites} internal sites` : ''}{e.empirical === 'no empirical data' ? ' · no empirical data' : ''}</li>)}</ul>
                 {goldenGate.diagnostics.map((d, i) => <p key={i} className="text-slate-500">{d}</p>)}
             </div>}
-            {method === 'restriction' && restriction && <div className="space-y-2">
+            {method === 'restriction' && restriction && <div className="space-y-3">
                 {restriction.no_suitable_pair && <p className="text-slate-400">No suitable enzyme pair found. Alternatives: {restriction.alternatives.map((a) => a.note).join(' ')}</p>}
-                <ul className="space-y-2">{restriction.proposals.map((p, i) => <li key={i} className="space-y-1 rounded border border-slate-700 bg-slate-950/60 p-2">
-                    <div className="font-medium text-slate-100">#{i + 1} {proposalPairLabel(p)}{p.insert_orientation === 'forward' || p.insert_orientation === 'reverse' ? ` · insert ${p.insert_orientation}` : ''}{p.kind === 'primer_tail' ? ' (via primer tails)' : ''}</div>
-                    <div className="text-slate-300">{p.directional ? 'Directional' : 'Not directional'}{p.insert_orientation === 'forward' || p.insert_orientation === 'reverse' ? '' : ` · insert orientation: ${p.insert_orientation}`} · vector self-ligation: {p.vector_self_ligation}</div>
-                    <div className="text-slate-400">Vector {p.vector_length} bp + insert {p.insert_contributed_length} bp = product {p.product_length} bp</div>
-                    {junctionLines(p.junction_sites).map((line, k) => <div key={k} className="text-slate-400">{line}</div>)}
+                <PlansList count={restriction.proposals.length}>{restriction.proposals.map((p, i) => <PlanCard key={i} rank={i + 1} featured={i === 0}
+                    title={`${proposalPairLabel(p)}${p.insert_orientation === 'forward' || p.insert_orientation === 'reverse' ? ` · insert ${p.insert_orientation}` : ''}${p.kind === 'primer_tail' ? ' (via primer tails)' : ''}`}
+                    action={<button type="button" disabled={busy} title="Creates reusable fragment children; save the final construct in Ligation." className="max-w-full rounded-lg bg-[#83a7ff] px-3 py-1.5 text-center font-semibold text-black disabled:opacity-50" onClick={() => void useRestriction(p, i)}>Prepare fragments and use this plan</button>}>
+                    <div className="text-[#dbe4f5]">{p.directional ? 'Directional' : 'Not directional'}{p.insert_orientation === 'forward' || p.insert_orientation === 'reverse' ? '' : ` · insert orientation: ${p.insert_orientation}`} · vector self-ligation: {p.vector_self_ligation}</div>
+                    <div className="text-[#a6b3ca]">Vector {p.vector_length} bp + insert {p.insert_contributed_length} bp = product {p.product_length} bp</div>
+                    {junctionLines(p.junction_sites).map((line, k) => <div key={k} className="break-words text-[#a6b3ca]">{line}</div>)}
                     <details className="text-slate-500"><summary className="cursor-pointer">Segments</summary>Retained backbone: {p.vector_source_segments.map(([a, b]) => `${a}–${b}`).join(', ')} · {p.kind === 'primer_tail' ? 'prepared insert' : 'donor'}: {p.insert_source_segments.map(([a, b]) => `${a}–${b}`).join(', ')}</details>
+                </PlanCard>)}</PlansList>
+                {restriction.proposals.length > 0 && <WorkupStage>{restriction.proposals.map((p, i) => <WorkupBlock key={i} title={`#${i + 1} ${proposalPairLabel(p)}`}>
                     {p.selection.primers.map((primer) => <div key={primer.strand} className="break-all text-slate-300">{primer.strand === 1 ? 'Forward' : 'Reverse'} primer: <code>{primer.sequence}</code> <button type="button" className="ml-2 text-cyan-300" onClick={() => copy(primer.sequence)}>Copy primer</button></div>)}
                     {(p.primer_tails || p.selection.primer_notes.length > 0) && <details className="text-slate-500"><summary className="cursor-pointer">Primer tails and notes</summary>
                         {p.primer_tails && <div className="space-y-1">
@@ -416,11 +431,10 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                         {p.selection.primer_notes.map((note, j) => <p key={j}>{note}</p>)}
                     </details>}
                     <div className="flex flex-wrap items-center gap-2 pt-1">
-                    {p.prepared_insert_sequence && <button type="button" className="rounded border border-slate-600 px-2 py-0.5 text-cyan-300" onClick={() => copy(p.prepared_insert_sequence!)}>Copy prepared insert DNA</button>}
-                    <button type="button" className="rounded border border-slate-600 px-2 py-0.5 text-cyan-300" onClick={() => copy(p.product_sequence)}>Copy product DNA</button>
-                    <button type="button" disabled={busy} title="Creates reusable fragment children; save the final construct in Ligation." className="rounded bg-violet-600 px-2 py-1 text-white disabled:opacity-50" onClick={() => void useRestriction(p, i)}>Prepare fragments and use this plan</button>
+                        {p.prepared_insert_sequence && <button type="button" className="rounded border border-[#3b4f73] px-2 py-0.5 text-[#83a7ff]" onClick={() => copy(p.prepared_insert_sequence!)}>Copy prepared insert DNA</button>}
+                        <button type="button" className="rounded border border-[#3b4f73] px-2 py-0.5 text-[#83a7ff]" onClick={() => copy(p.product_sequence)}>Copy product DNA</button>
                     </div>
-                </li>)}</ul>
+                </WorkupBlock>)}</WorkupStage>}
                 {restriction.notes.map((n, i) => <p key={i} className="text-slate-500">{n}</p>)}
             </div>}
         </section>
