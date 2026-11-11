@@ -2236,6 +2236,27 @@
           "default": null,
           "title": "Target Fragment Length"
         },
+        "max_homopolymer_run": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional junction-only rule: the full cohesive footprint must avoid longer target homopolymer tracts; target bases are unchanged.",
+          "title": "Max Homopolymer Run"
+        },
+        "homopolymer_junction_buffer": {
+          "default": 0,
+          "description": "Adjacent target bases excluded on each side of a long tract; active only when max_homopolymer_run is set.",
+          "minimum": 0,
+          "title": "Homopolymer Junction Buffer",
+          "type": "integer"
+        },
         "display_origin": {
           "default": 0,
           "minimum": 0,
