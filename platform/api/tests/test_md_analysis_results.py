@@ -566,7 +566,7 @@ def test_replica_reporting_never_pools_frames_as_biological_replicates(
     aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
 
     authoritative_spec = raw_job.params["md_job_spec"]
-    raw_job.params = {"md_job_spec": {**authoritative_spec, "engine": "openmm"}}
+    raw_job.params = {"md_job_spec": {**authoritative_spec, "engine": "other"}}
     with pytest.raises(MDResultError) as protocol_mismatch:
         completion_barrier(job)
     assert protocol_mismatch.value.code == "MD_COMPLETION_BLOCKED"

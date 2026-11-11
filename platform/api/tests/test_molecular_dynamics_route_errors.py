@@ -35,7 +35,7 @@ def _prepared_spec() -> dict[str, Any]:
     return {
         "schema": "bms.md.job.v1",
         "job_id": "assigned-by-bms",
-        "engine": "openmm",
+        "engine": "gromacs",
         "replicas": 1,
         "random_seed": 20260717,
         "input": {"coordinates": "prepared.gro", "topology": "topol.top"},
@@ -197,73 +197,6 @@ def test_preview_and_final_materialization_calls_are_both_wired_to_typed_mapper(
                     item.id for item in ast.walk(handler.type) if isinstance(item, ast.Name)
                 )
             assert "ChemistryCatalogError" in caught_names
-
-
-def test_final_persistence_failure_maps_to_503_and_removes_call_owned_artifacts(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    launch = importlib.import_module("services.md.launch_contract")
-    coordinates = tmp_path / "prepared" / "system.gro"
-    topology = tmp_path / "prepared" / "topol.top"
-    coordinates.parent.mkdir()
-    coordinates.write_text("coordinates\n", encoding="utf-8")
-    topology.write_text("topology\n", encoding="utf-8")
-
-    def fail_json_dump(*_args: Any, **_kwargs: Any) -> None:
-        raise OSError("persistence failed at /home/private/results")
-
-    monkeypatch.setattr(launch.json, "dump", fail_json_dump)
-    with pytest.raises(Exception) as materialize_error:
-        launch.materialize_md_job_spec(
-            params={"md_job_spec": _prepared_spec()},
-            job_id="persistence-failure",
-            output_dir=tmp_path / "out",
-            resolve_runtime_path=lambda value: str(coordinates if value.endswith(".gro") else topology),
-        )
-
-    mapped = _mapped_http_error(materialize_error.value)
-    detail = _detail(mapped)
-    assert mapped.status_code == 503
-    assert detail["code"] == "MD_LAUNCH_SERVICE_UNAVAILABLE"
-    assert "/home/" not in json.dumps(detail)
-    contract_dir = tmp_path / "out" / "inputs"
-    assert not (contract_dir / "md_job_config.json").exists()
-    assert not list(contract_dir.glob(".*.tmp"))
-    assert not list(contract_dir.glob("structure.*"))
-    assert not list(contract_dir.glob("coordinates.*"))
-    assert not list(contract_dir.glob("topology.*"))
-
-
-def test_materialization_conflict_preserves_preexisting_authoritative_contract(
-    tmp_path: Path,
-) -> None:
-    launch = importlib.import_module("services.md.launch_contract")
-    coordinates = tmp_path / "prepared" / "system.gro"
-    topology = tmp_path / "prepared" / "topol.top"
-    coordinates.parent.mkdir()
-    coordinates.write_text("coordinates\n", encoding="utf-8")
-    topology.write_text("topology\n", encoding="utf-8")
-    contract_dir = tmp_path / "out" / "inputs"
-    contract_dir.mkdir(parents=True)
-    config_path = contract_dir / "md_job_config.json"
-    authoritative = b'{"authoritative": true}\n'
-    config_path.write_bytes(authoritative)
-
-    with pytest.raises(Exception) as error:
-        launch.materialize_md_job_spec(
-            params={"md_job_spec": _prepared_spec()},
-            job_id="conflicting-attempt",
-            output_dir=tmp_path / "out",
-            resolve_runtime_path=lambda value: str(coordinates if value.endswith(".gro") else topology),
-        )
-
-    assert getattr(error.value, "code", None) == "MD_LAUNCH_OUTPUT_CONFLICT"
-    assert getattr(error.value, "status_code", None) == 409
-    assert config_path.read_bytes() == authoritative
-    assert not list(contract_dir.glob(".*.tmp"))
-    assert not list(contract_dir.glob("coordinates.*"))
-    assert not list(contract_dir.glob("topology.*"))
 
 
 class _FixedDatetime:

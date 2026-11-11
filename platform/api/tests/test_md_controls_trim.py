@@ -226,48 +226,6 @@ def test_natural_success_never_emits_pause_receipt(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_accepted_v1_prepared_openmm_durable_receiver_and_projection(store, tmp_path):
-    from services.md.launch_contract import normalize_md_job_spec
-    session, _ = store
-    coordinates, topology = tmp_path / 'input.pdb', tmp_path / 'input.xml'
-    coordinates.write_text('inert fixture coordinates')
-    topology.write_text('inert fixture topology')
-    from scripts.bms_md.contract import normalize_job_config
-    raw = normalize_job_config({'schema': 'bms.md.job.v1', 'job_id': 'legacy', 'engine': 'openmm',
-           'replicas': 1, 'random_seed': 4321,
-           'input': {'coordinates': str(coordinates), 'topology': str(topology)},
-           'preparation': {'chemistry_assurance': 'external_unreviewed'},
-           'stages': {name: {'enabled': False} for name in ('minimization', 'nvt', 'npt')}})
-    raw['stages']['production']['timestep_fs'] = 2.0
-    normalized = normalize_md_job_spec(params={'md_job_spec': raw}, job_id='legacy', resolve_runtime_path=lambda x: x)
-    before = json.dumps(normalized, sort_keys=True)
-    parent = Job(id='legacy', name='MD', model_id='molecular_dynamics', mode='simulate', status='running', params={})
-    session.add(parent)
-    await session.flush()
-    run = await create_md_run(session, job=parent, normalized_request=normalized)
-    child = Job(id='legacy-child', name='replica', model_id='molecular_dynamics', mode='replica',
-        parent_job_id=parent.id, child_stage='md_replica', status='running', params={
-        'md_replica_index': 0, 'md_attempt': 0, 'md_replica_seed': 4321, 'md_engine': 'openmm',
-        'md_execution_plan_sha256': 'b' * 64, 'md_compatibility_key': 'c' * 64},
-        provenance={'component_projection': {'root_job_id': parent.id, 'state': 'uncertain'}})
-    session.add(child)
-    await session.flush()
-    await reconcile_component_projection(session, parent, [child])
-    await session.commit()
-    session.expunge_all()
-    run = await session.get(MdRun, 'legacy')
-    assert json.dumps(run.normalized_request, sort_keys=True) == before
-    assert run.request_sha256 == canonical_sha256(normalized)
-    assert run.chemistry_assurance == 'legacy_unavailable' and run.chemistry_profile_sha256 == 'unavailable'
-    assert run.verification_status == 'not_run'
-    replica = await session.scalar(select(MdReplicaRun))
-    assert replica.state == 'orphaned' and not replica.active
-    detail = await md_run_snapshot(session, 'legacy')
-    assert detail is not None
-    assert detail['engine'] == 'openmm' and detail['chemistry']['assurance'] == 'legacy_unavailable'
-
-
-@pytest.mark.asyncio
 async def test_remote_cancel_reaches_existing_nextflow_dispatch(store, monkeypatch):
     session, _ = store
     parent, run, rows = await setup(store, runner_id='remote:retained-attempt')

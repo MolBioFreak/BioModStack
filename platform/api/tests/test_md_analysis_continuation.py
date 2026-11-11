@@ -79,7 +79,7 @@ def test_native_analysis_adapter_and_actual_compiler_never_select_simulation(tmp
     assert invocation.execution_plan.complete, invocation.execution_plan.to_dict()['blockers']
     keys = {component.component_key for component in invocation.execution_plan.metadata.static_components}
     assert 'MD_COMPLETION_BARRIER' in keys
-    assert not keys & {'MD_PREPARE_CONFIG', 'MD_SPAWN_REPLICAS', 'MD_GROMACS_REPLICA', 'MD_OPENMM_REPLICA', 'MD_SPAWN_ANALYSIS'}
+    assert not keys & {'MD_PREPARE_CONFIG', 'MD_SPAWN_REPLICAS', 'MD_GROMACS_REPLICA', 'MD_SPAWN_ANALYSIS'}
     assert invocation.native_parameters['md_analysis_retry_spawn_receipt'] == str(receipt_path)
     manifest = root/'replicas/replica_0/manifest.json'
     manifest.write_bytes(manifest.read_bytes() + b' ')

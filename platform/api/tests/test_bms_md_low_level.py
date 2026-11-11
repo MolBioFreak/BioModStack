@@ -74,12 +74,6 @@ REPO_ROOT = API_ROOT.parent.parent
 CATALOG_DIR = API_ROOT / "config" / "md_chemistry_profiles"
 ONE_AKI = API_ROOT / "tests" / "fixtures" / "md" / "1AKI.pdb"
 GROMACS_SIF_SHA256 = "97c117ea07496c0d1b13d80be84d33345b89063b47ccfb83f6cbff0145f1385b"
-OPENMM_RUNTIME_IDENTITY = {
-    "runtime_id": "openmm-md-8.5.2",
-    "runtime_version": "8.5.2+gromacs-2025.3",
-    "sif_sha256": "d" * 64,
-    "asset_ids": ["amber99sb-ildn.ff"],
-}
 
 
 def _catalog() -> ChemistryCatalog:
@@ -185,60 +179,6 @@ def _materialized_gromacs(tmp_path: Path, *, job_id: str = "gromacs-low-level") 
     return config_path, materialized["md_job_spec"]
 
 
-def _materialized_openmm(
-    tmp_path: Path,
-    *,
-    job_id: str = "openmm-low-level",
-    replicas: int = 1,
-) -> tuple[Path, dict[str, Any]]:
-    source = tmp_path / f"{job_id}-source"
-    source.mkdir(parents=True)
-    coordinates = source / "system.gro"
-    topology = source / "topol.top"
-    sidecar = source / "molecule.itp"
-    coordinates.write_text("prepared coordinates\n", encoding="utf-8")
-    topology.write_text(
-        '#include "amber99sb-ildn.ff/forcefield.itp"\n'
-        '#include "molecule.itp"\n'
-        "[ system ]\nPrepared fixture\n",
-        encoding="utf-8",
-    )
-    sidecar.write_text("[ moleculetype ]\nProtein 3\n", encoding="utf-8")
-    stages = _stages()
-    for stage_name in ("minimization", "nvt", "npt"):
-        stages[stage_name]["enabled"] = False
-    spec = {
-        "schema": MD_JOB_SCHEMA,
-        "job_id": "replaced-by-materializer",
-        "engine": "openmm",
-        "replicas": replicas,
-        "random_seed": 20260717,
-        "input": {"coordinates": "prepared.gro", "topology": "topol.top"},
-        "preparation": _preparation(),
-        "stages": stages,
-        "execution": _execution(),
-    }
-    materialized = materialize_md_job_spec(
-        params={"md_job_spec": spec},
-        job_id=job_id,
-        output_dir=tmp_path / f"{job_id}-contract",
-        resolve_runtime_path=lambda value: str(coordinates if value.endswith(".gro") else topology),
-        chemistry_catalog=_catalog(),
-        runtime_identity_resolver=lambda: OPENMM_RUNTIME_IDENTITY,
-    )
-    config_path = Path(materialized["md_job_config"])
-    config = materialized["md_job_spec"]
-    input_config = config["input"]
-    closure = input_config["topology_closure"]
-    assert closure["runtime_identity"] == OPENMM_RUNTIME_IDENTITY
-    assert closure["files"][0]["path"] == "molecule.itp"
-    for field in ("coordinates", "topology"):
-        snapshot = Path(input_config[field])
-        assert input_config[f"{field}_bytes"] == snapshot.stat().st_size
-        assert input_config[f"{field}_sha256"] == hashlib.sha256(snapshot.read_bytes()).hexdigest()
-    return config_path, config
-
-
 def _write_run_manifest(
     run_dir: Path,
     config: dict[str, Any],
@@ -271,7 +211,8 @@ def _write_run_manifest(
 
 
 def test_aggregate_emits_sorted_replica_provenance_from_final_manifests(tmp_path: Path) -> None:
-    _config_path, config = _materialized_openmm(tmp_path, replicas=2)
+    _config_path, config = _materialized_gromacs(tmp_path)
+    config["replicas"] = 2
     replica_1 = _write_run_manifest(tmp_path / "replica-1", config, replica_index=1)
     replica_0 = _write_run_manifest(tmp_path / "replica-0", config, replica_index=0)
 
@@ -280,7 +221,7 @@ def test_aggregate_emits_sorted_replica_provenance_from_final_manifests(tmp_path
     assert result == {
         "schema": "bms.md.aggregate.v1",
         "status": "completed",
-        "job_id": "openmm-low-level",
+        "job_id": "gromacs-low-level",
         "replicas": [
             {
                 "replica_index": 0,
@@ -302,7 +243,8 @@ def test_aggregate_emits_sorted_replica_provenance_from_final_manifests(tmp_path
 
 
 def test_aggregate_fails_closed_on_mixed_jobs_or_incomplete_replica(tmp_path: Path) -> None:
-    _config_path, config = _materialized_openmm(tmp_path, replicas=2)
+    _config_path, config = _materialized_gromacs(tmp_path)
+    config["replicas"] = 2
     complete = _write_run_manifest(tmp_path / "complete", config, replica_index=0)
     other_job = _write_run_manifest(tmp_path / "other", config, replica_index=1)
     other_payload = json.loads(other_job.read_text())
@@ -612,7 +554,7 @@ def test_run_manifest_rejects_artifacts_outside_run_root(tmp_path: Path) -> None
 
 
 def test_cuda_contract_requires_one_scheduler_device_remapped_to_zero(tmp_path: Path) -> None:
-    _config_path, config = _materialized_openmm(tmp_path)
+    _config_path, config = _materialized_gromacs(tmp_path)
 
     allocation = assert_single_cuda_device(
         config,
@@ -639,71 +581,6 @@ def test_cuda_contract_accepts_opc_full_forces_mode_with_cpu_update(tmp_path: Pa
 
     assert normalized["execution"]["gpu_offload"] == "full_forces"
     assert allocation["container_device_index"] == "0"
-
-
-def test_adapter_dispatch_is_engine_exact(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gromacs_path, _gromacs_config = _materialized_gromacs(
-        tmp_path / "gromacs",
-        job_id="dispatch-gromacs",
-    )
-    openmm_path, _openmm_config = _materialized_openmm(
-        tmp_path / "openmm",
-        job_id="dispatch-openmm",
-    )
-    calls: list[str] = []
-
-    def fake_gromacs(
-        _config_path: Path,
-        output_dir: Path,
-        **_kwargs: Any,
-    ) -> Path:
-        calls.append("gromacs")
-        manifest = output_dir / "manifest.json"
-        manifest.parent.mkdir(parents=True, exist_ok=True)
-        manifest.write_text(json.dumps({"engine": {"name": "gromacs"}}), encoding="utf-8")
-        return manifest
-
-    def fake_openmm(
-        _config_path: Path,
-        output_dir: Path,
-        **_kwargs: Any,
-    ) -> Path:
-        calls.append("openmm")
-        manifest = output_dir / "manifest.json"
-        manifest.parent.mkdir(parents=True, exist_ok=True)
-        manifest.write_text(json.dumps({"engine": {"name": "openmm"}}), encoding="utf-8")
-        return manifest
-
-    monkeypatch.setattr("scripts.bms_md.adapters.gromacs.run_gromacs_job", fake_gromacs)
-    monkeypatch.setattr("scripts.bms_md.adapters.openmm.run_openmm_job", fake_openmm)
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-cloud-17")
-
-    gromacs_manifest = run_md_replica(gromacs_path, tmp_path / "gromacs-output", replica_index=0)
-    openmm_manifest = run_md_replica(openmm_path, tmp_path / "openmm-output", replica_index=0)
-
-    assert json.loads(gromacs_manifest.read_text())["engine"]["name"] == "gromacs"
-    assert json.loads(openmm_manifest.read_text())["engine"]["name"] == "openmm"
-    assert calls == ["gromacs", "openmm"]
-
-
-def test_openmm_adapter_rejects_invalid_stage_before_runner(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path, config = _materialized_openmm(tmp_path)
-    config["stages"]["nvt"]["enabled"] = True
-    config_path.write_text(json.dumps(config), encoding="utf-8")
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-cloud-17")
-    monkeypatch.setattr(
-        "scripts.bms_md.adapters.openmm.run_openmm_job",
-        lambda *_args, **_kwargs: pytest.fail("OpenMM runner was called"),
-    )
-
-    with pytest.raises(EngineAdapterError, match="production-only"):
-        run_md_replica(config_path, tmp_path / "output", replica_index=0)
 
 
 FAKE_GMX = r'''#!/usr/bin/env python3

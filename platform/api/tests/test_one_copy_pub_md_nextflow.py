@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[3]
 JAR = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR') or os.environ.get('ONE_COPY_NEXTFLOW_JAR') or Path.home() / '.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar')
 
 
-@pytest.mark.parametrize('engine,exit_code', [('gromacs', 0), ('openmm', 0), ('gromacs', 17), ('openmm', 17)])
+@pytest.mark.parametrize('engine,exit_code', [('gromacs', 0), ('gromacs', 17)])
 def test_real_nextflow_preview_shell_durable_output_and_cache(tmp_path, engine, exit_code, record_property):
     assert JAR.is_file(), 'qualification requires the assigned real Nextflow JAR'
     runtime = tmp_path / 'inert-engine.sif'

@@ -24,7 +24,7 @@
       "additionalProperties": true,
       "required": ["name", "version", "platform", "runtime"],
       "properties": {
-        "name": {"enum": ["gromacs"]},
+        "name": {"enum": ["gromacs", "openmm"]},
         "version": {"type": "string", "minLength": 1},
         "platform": {"type": "string", "minLength": 1},
         "cuda_enabled": {"type": "boolean"},

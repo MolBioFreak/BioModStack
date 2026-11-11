@@ -447,7 +447,7 @@ def test_v1_profile_selection_requires_exact_id_digest_and_scope(
     ("override", "expected_code"),
     [
         ({"water_model": "spce"}, "MD_CHEMISTRY_COMBINATION_UNSUPPORTED"),
-        ({"engine": "openmm"}, "MD_CHEMISTRY_COMBINATION_UNSUPPORTED"),
+        ({"engine": "other"}, "MD_CHEMISTRY_COMBINATION_UNSUPPORTED"),
         ({"requested_scope": "production"}, "MD_CHEMISTRY_COMBINATION_UNSUPPORTED"),
     ],
 )

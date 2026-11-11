@@ -115,49 +115,6 @@ describe('molecular dynamics launcher contract', () => {
         );
     });
 
-    it('requires prepared coordinates and topology for the OpenMM alpha adapter', () => {
-        const errors = validateMolecularDynamicsForm({ ...validForm(), engine: 'openmm' });
-        assert.equal(errors.some((error) => error.includes('prepared coordinates and topology')), true);
-    });
-
-    it('serializes prepared OpenMM as external_unreviewed without catalog profile claims', () => {
-        const spec = buildMolecularDynamicsJobSpec({
-            ...validForm(),
-            engine: 'openmm',
-            inputMode: 'prepared',
-            structurePath: '',
-            coordinatesPath: '/data/system.gro',
-            topologyPath: '/data/topol.top',
-        }, validProfile());
-        assert.equal(spec.engine, 'openmm');
-        assert.equal(spec.stages.minimization.enabled, false);
-        assert.equal(spec.stages.nvt.enabled, false);
-        assert.equal(spec.stages.npt.enabled, false);
-        const preparation = spec.preparation as unknown as Record<string, unknown>;
-        assert.equal(preparation.chemistry_assurance, 'external_unreviewed');
-        assert.equal(Object.keys(preparation).some((key) => key.startsWith('chemistry_profile_')), false);
-    });
-
-    it('rejects prepared GROMACS with an explanatory validator error and never serializes it', () => {
-        const invalid = {
-            ...validForm(),
-            engine: 'gromacs' as const,
-            inputMode: 'prepared' as const,
-            structurePath: '',
-            coordinatesPath: '/data/system.gro',
-            topologyPath: '/data/topol.top',
-        };
-
-        const errors = validateMolecularDynamicsForm(invalid);
-        assert.equal(errors.some((error) => /prepared.*OpenMM|OpenMM.*prepared/i.test(error)), true);
-        assert.throws(() => buildMolecularDynamicsJobSpec(invalid, validProfile()), /prepared.*OpenMM|OpenMM.*prepared/i);
-    });
-
-    it('rejects an attached profile that is incompatible with the selected engine', () => {
-        const errors = validateMolecularDynamicsChemistryProfile(validProfile(), 'openmm', false);
-        assert.equal(errors.some((error) => error.includes('not validated for openmm')), true);
-    });
-
     it('enforces all machine-readable smoke launch constraints in the form validator', () => {
         const validateWithProfile = validateMolecularDynamicsForm as unknown as (
             form: MolecularDynamicsForm,

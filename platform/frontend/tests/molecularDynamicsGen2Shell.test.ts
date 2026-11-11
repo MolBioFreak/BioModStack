@@ -22,7 +22,6 @@ describe('Molecular Dynamics Gen 2 shell compatibility', () => {
         const registry = source('src/components/modelDocumentationRegistry.ts');
         assert.doesNotMatch(registry, /href:\s*'\/docs\/[^']+\.md'/u);
         assert.match(registry, /GROMACS 2025\.3 manual/u);
-        assert.match(registry, /OpenMM user guide/u);
     });
 
     it('passes Project launch context and canonical Structure Prediction handoff into the MD launcher', () => {

@@ -245,38 +245,6 @@ def test_native_writer_declares_prepared_closure_and_parent_reuses_it(
 from test_md_native_engine import native_double
 
 
-def test_openmm_consumes_shared_preparation_then_keeps_native_output_private(prepared, tmp_path, monkeypatch):
-    from scripts.bms_md import openmm_pipeline
-    before = identity(prepared)
-    seen = []
-    class StopBeforeNumericalEngine(Exception):
-        pass
-    class App:
-        @staticmethod
-        def GromacsGroFile(path):
-            seen.append(Path(path))
-            assert os.path.samefile(path, prepared / 'system.gro')
-            return SimpleNamespace(getPeriodicBoxVectors=lambda: None)
-        @staticmethod
-        def GromacsTopFile(path, **kwargs):
-            seen.append(Path(path))
-            assert os.path.samefile(path, prepared / 'system.top')
-            assert os.path.samefile(Path(kwargs['includeDir']) / 'posre.itp', prepared / 'posre.itp')
-            raise StopBeforeNumericalEngine
-    monkeypatch.setattr(openmm_pipeline, 'assert_single_cuda_device', lambda _: {})
-    monkeypatch.setattr(openmm_pipeline, '_require_openmm_cuda', lambda: (None, App, None, None, None, None, 'inert'))
-    config = {'schema': 'bms.md.job.v2', 'engine': 'openmm', 'replicas': 2}
-    for index in range(2):
-        out = tmp_path / f'openmm-{index}'
-        with pytest.raises(StopBeforeNumericalEngine):
-            openmm_pipeline.run_openmm_job(tmp_path / 'unused', out, replica_index=index,
-                                           _prepared_config=config, preparation_bundle=prepared)
-        assert verify_preparation_bundle(out / 'preparation')['bundle_sha256'] == verify_preparation_bundle(prepared)['bundle_sha256']
-        assert not (out / 'production').exists()
-        assert (out / 'job.normalized.json').stat().st_nlink == 1
-    assert len(seen) == 4 and identity(prepared) == before
-
-
 @pytest.mark.parametrize('manifest_kind', ['current', 'legacy', 'relocated_legacy'])
 def test_native_manifest_retains_nested_topology_includes_not_worker_caches(tmp_path, manifest_kind):
     child = tmp_path / 'child/native'

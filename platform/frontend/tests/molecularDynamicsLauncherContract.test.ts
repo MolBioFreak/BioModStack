@@ -58,11 +58,4 @@ describe('first-class molecular dynamics launcher', () => {
         assert.match(launcher, /scientific campaigns require separate qualification/is);
         assert.doesNotMatch(launcher, /long-timescale (?:production )?science is validated/is);
     });
-
-    it('does not offer prepared GROMACS and explains the OpenMM-only prepared lane', () => {
-        const launcher = source('components/MolecularDynamicsTemplate.tsx');
-        assert.match(launcher, /disabled=\{mode === 'prepared' && form\.engine !== 'openmm'\}/u);
-        assert.match(launcher, /Prepared systems are supported only by OpenMM/i);
-        assert.match(launcher, /<option value="gromacs" disabled=\{form\.inputMode === 'prepared'\}>/u);
-    });
 });

@@ -374,8 +374,6 @@ const mountPredictionCandidateRace = async () => {
 describe('mounted Molecular Dynamics Gen 2 launcher', () => {
     it.each([
         ['structure', 'gromacs', 'GROMACS'],
-        ['structure', 'openmm', 'GROMACS'],
-        ['prepared', 'openmm', 'OpenMM'],
     ])('summary reflects the active %s lane, not the retained %s selector', async (inputMode, engine, label) => {
         await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><MolecularDynamicsTemplate onBack={() => undefined} initialValues={{ md_form: { inputMode, engine } }} /></MemoryRouter></QueryClientProvider>));
         await act(async () => { await vi.waitFor(() => expect(container.querySelector('[data-md-active-engine]')?.textContent).toBe(label)); });

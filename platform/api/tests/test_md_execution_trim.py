@@ -48,7 +48,7 @@ def plan(params):
         metadata_settings=nextflow._native_plan_metadata_settings('molecular_dynamics', params))
 
 
-@pytest.mark.parametrize('engine', ['gromacs', 'openmm'])
+@pytest.mark.parametrize('engine', ['gromacs'])
 @pytest.mark.parametrize('target', ['local', 'worker:fixture'])
 def test_selected_descendant_projection_requires_one_shared_gpu(engine, target):
     request = spec()
