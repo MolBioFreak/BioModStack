@@ -322,6 +322,7 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
     // React mutation state updates on the next render. Reserve submission now,
     // so multiple clicks in one event batch cannot become waiting HTTP calls.
     const normalSubmissionRef = useRef<object | null>(null);
+    const recoverySubmissionRef = useRef(false);
     const reserveNormalSubmission = () => {
         if (normalSubmissionRef.current !== null) return null;
         const token = {};
@@ -818,12 +819,35 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
         mutation.mutate({ actionId, connectionGeneration: generation, ownershipGeneration, inputs });
     };
 
-    const invokeLifecycleAction = (actionId: 'meta.activate_motion' | 'meta.deactivate_motion' | 'meta.recover_motion_non_homing') => {
-        // Motion Off is never held back by sensor or catalog state; the robot decides.
-        if (actionId !== 'meta.deactivate_motion' && v2ActionDisabledReason(actionId) !== null) return;
+    // An operator may request normal preparation even when automatic recovery is
+    // not indicated. Only that exact native condition selects Activate; all other
+    // native denials (including power, latch, Stop and ownership) remain intact.
+    const recoveryAction = v2NormalActionById('meta.recover_motion_non_homing');
+    const requestedRecoveryAction = recoveryAction?.enabled !== true
+        && recoveryAction?.disabled_reason === 'Non-homing recovery is not currently required'
+        ? v2NormalActionById('meta.activate_motion') : recoveryAction;
+    const recoveryDisabledReason = !linkConnected ? 'Connect to control the robot.'
+        : !v2AuthorityCoherent ? 'Current robot control state is unavailable.'
+        : recoverySubmissionRef.current || invokeLifecycleActionMutation.isPending || interruptAnyPending || componentStop.isPending
+            ? 'Controller recovery or Stop submission is in flight; wait for its response.'
+            : requestedRecoveryAction?.enabled === true ? null
+                : requestedRecoveryAction?.disabled_reason ?? 'Robot action unavailable.';
+
+    const invokeLifecycleAction = (requestedActionId: 'meta.activate_motion' | 'meta.deactivate_motion' | 'meta.recover_motion_non_homing') => {
+        const recoveryRequested = requestedActionId === 'meta.recover_motion_non_homing';
+        const actionId = recoveryRequested ? requestedRecoveryAction?.action_id : requestedActionId;
+        // Recovery has its own submission slot: a stuck move response must not
+        // disable the recovery control. The native normal action still arbitrates
+        // live controller ownership and performs its OEM safety checks.
+        if (recoveryRequested ? recoverySubmissionRef.current || recoveryDisabledReason !== null
+            : requestedActionId !== 'meta.deactivate_motion' && v2ActionDisabledReason(requestedActionId) !== null) return;
+        if (actionId !== 'meta.activate_motion' && actionId !== 'meta.deactivate_motion' && actionId !== 'meta.recover_motion_non_homing') return;
         const envelope = v2NormalEnvelope();
         if (!envelope) return;
-        const releaseSubmission = reserveNormalSubmission();
+        const releaseSubmission = recoveryRequested ? (() => {
+            recoverySubmissionRef.current = true;
+            return () => { recoverySubmissionRef.current = false; return true; };
+        })() : reserveNormalSubmission();
         if (!releaseSubmission) return;
         const submittedGeneration = generation;
         const submittedOwnershipGeneration = envelope.expected_ownership_generation;
@@ -1360,8 +1384,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                      aria-label="Enable controllers">Enable</button>
                     <button
                         type="button"
-                        disabled={!linkConnected || v2ActionDisabledReason('meta.recover_motion_non_homing') !== null || busy}
-                        title={v2ActionDisabledReason('meta.recover_motion_non_homing') ?? 'Robot-authoritative non-homing recovery'}
+                        disabled={recoveryDisabledReason !== null}
+                        title={recoveryDisabledReason ?? 'Request non-homing controller preparation; the robot checks live ownership and safety.'}
                         onClick={recoverMotionNonHoming}
                         className="rounded bg-[var(--surface-control,var(--bg-tertiary))] px-4 py-2 font-semibold  disabled:cursor-not-allowed "
                      aria-label="Recover controllers (no homing)">Recover</button>

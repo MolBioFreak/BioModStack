@@ -24,7 +24,8 @@ export function BioXpServiceRestart({ generation }: { generation: number }) {
     const control = useQuery({
         queryKey: ['bioxp', 'service-control', generation],
         queryFn: async ({ signal }) => (await api.get<ServiceControl>('/api/bioxp/service', { signal, timeout: 10000 })).data,
-        staleTime: 30000,
+        staleTime: 0,
+        refetchInterval: 5000,
         retry: false,
         refetchOnWindowFocus: false,
     });
@@ -54,6 +55,7 @@ export function BioXpServiceRestart({ generation }: { generation: number }) {
                 {restart.isPending ? 'Restarting robot service…' : 'Restart robot service'}
             </button>
         </div>
+        {control.data?.available !== true && !control.isPending && <p role="status" className="mt-2 text-sm">{unavailable}</p>}
         {restart.isSuccess && <p role="status" className="mt-2 text-sm">{restart.data.active_state === 'active' && restart.data.sub_state === 'running'
             ? 'Robot service restarted. Controls may take a moment to reconnect. If the BMS link is disconnected, reconnect it.'
             : `Restart request completed; robot service reports ${restart.data.active_state} / ${restart.data.sub_state}. This does not confirm that the robot API is ready.`}</p>}

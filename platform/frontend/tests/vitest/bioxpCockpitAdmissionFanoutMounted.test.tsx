@@ -3734,3 +3734,77 @@ describe('OEM software Abort distinct from addressed Stops', () => {
         expect(state.invokeCalls).toHaveLength(0);
     });
 });
+
+
+describe('operator-requested recovery controls', () => {
+    const render = () => act(async () => root.render(<QueryClientProvider client={geometryClient}><BioXpCockpit /></QueryClientProvider>));
+    const recover = () => container.querySelector<HTMLButtonElement>('[aria-label="Recover controllers (no homing)"]')!;
+    const actions = (reason: string | null = 'Non-homing recovery is not currently required', activateReason: string | null = null) => {
+        const rows = state.v2Catalog.data!.actions as Array<Record<string, unknown>>;
+        state.v2Catalog.data!.actions = rows.filter(row => !['meta.activate_motion', 'meta.recover_motion_non_homing'].includes(String(row.action_id)));
+        for (const [action_id, disabled_reason] of [['meta.activate_motion', activateReason], ['meta.recover_motion_non_homing', reason]]) {
+            (state.v2Catalog.data!.actions as Array<Record<string, unknown>>).push({
+                action_id, disabled_reason, enabled: disabled_reason === null, interrupt: false,
+                request_schema_version: 'bioxp.operator_action_request.v2',
+                response_schema_version: 'bioxp.operator_action_receipt.v2',
+            });
+        }
+    };
+    it.each(['deckInvokePending', 'axisInvokePending'] as const)('allows explicit preparation during a stuck %s without dispatching movement', async pending => {
+        actions(); state[pending] = true;
+        await render();
+        expect(recover().disabled).toBe(false);
+        await act(async () => recover().click());
+        expect(state.lifecycleInvokeCalls).toEqual([expect.objectContaining({ request: expect.objectContaining({
+            action_id: 'meta.activate_motion', expected_connection_generation: 1,
+            expected_ownership_generation: 1, expected_board_epoch_by_board: {}, inputs: {},
+        }) })]);
+        expect(state.deckInvokeCalls).toHaveLength(0);
+        expect(state.yInvokeCalls).toHaveLength(0);
+    });
+    it('keeps native recovery when enabled and deduplicates same-batch deliberate clicks', async () => {
+        actions(null); state.lifecycleDeferred = true; state.deckInvokePending = true;
+        await render();
+        await act(async () => { recover().click(); recover().click(); });
+        expect(state.lifecycleInvokeCalls).toHaveLength(1);
+        expect(state.lifecycleInvokeCalls[0]).toMatchObject({ request: { action_id: 'meta.recover_motion_non_homing' } });
+    });
+    it.each(['Power is off', 'Latch is open', 'Stop is active', 'Controller is owned by another operation'])('preserves native denial: %s', async reason => {
+        actions(reason); await render();
+        expect(recover().disabled).toBe(true); expect(recover().title).toBe(reason);
+        await act(async () => recover().click()); expect(state.lifecycleInvokeCalls).toHaveLength(0);
+    });
+    it.each(['Power is off', 'Latch is open', 'Stop is active'])('does not fall back to denied preparation: %s', async reason => {
+        actions(undefined, reason); await render();
+        expect(recover().disabled).toBe(true); expect(recover().title).toBe(reason);
+        await act(async () => recover().click()); expect(state.lifecycleInvokeCalls).toHaveLength(0);
+    });
+    it.each(['interruptPending', 'componentStopPending', 'lifecycleInvokePending'] as const)('respects pending recovery/Stop %s', async pending => {
+        actions(); state[pending] = true; await render();
+        expect(recover().disabled).toBe(true);
+        await act(async () => recover().click()); expect(state.lifecycleInvokeCalls).toHaveLength(0);
+    });
+    it('keeps service restart available during a stuck deck request and dispatches only inert restart transport', async () => {
+        state.deckInvokePending = true;
+        vi.mocked(api.get).mockImplementation(async url => {
+            if (url === '/api/bioxp/service') return { data: { available: true, detail: null, restart_in_progress: false } };
+            if (url === '/api/bioxp/calibration-settings') return { data: emptyCalibration };
+            throw new Error(`Unexpected inert GET ${url}`);
+        });
+        vi.mocked(api.post).mockReset().mockImplementation(() => new Promise(() => {}));
+        await render(); await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+        const restart = [...container.querySelectorAll('button')].find(b => b.textContent === 'Restart robot service')!;
+        expect(restart.disabled).toBe(false);
+        await act(async () => { restart.click(); restart.click(); });
+        expect(api.post).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(api.post).mock.calls[0][0]).toBe('/api/bioxp/service/restart');
+        expect(state.lifecycleInvokeCalls).toHaveLength(0);
+    });
+    it('explains service target binding denial rather than hiding it in a tooltip', async () => {
+        vi.mocked(api.get).mockImplementation(async () => ({ data: { available: false, detail: 'Robot service restart is not configured for the saved robot profile' } }));
+        await render(); await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+        const panel = container.querySelector('[aria-label="Robot service restart"]')!;
+        expect(panel.querySelector('button')!.disabled).toBe(true);
+        expect(panel.querySelector('[role="status"]')?.textContent).toContain('not configured for the saved robot profile');
+    });
+});
