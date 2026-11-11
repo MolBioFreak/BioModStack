@@ -3758,6 +3758,8 @@ export interface SuggestGoldenGateRequest {
     min_fragment_length?: number;
     max_fragment_length?: number | null;
     avoid_repeats?: boolean;
+    max_homopolymer_run?: number | null;
+    homopolymer_junction_buffer?: number;
     fixed_boundaries: number[];
     preparation_kind: 'synthesis' | 'pcr';
     terminal_right_fusion?: string | null;

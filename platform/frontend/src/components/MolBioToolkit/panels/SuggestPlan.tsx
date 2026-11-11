@@ -152,6 +152,8 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
     const [minLength, setMinLength] = useState('1');
     const [maxLength, setMaxLength] = useState('');
     const [avoidRepeats, setAvoidRepeats] = useState(true);
+    const [maxHomopolymerRun, setMaxHomopolymerRun] = useState('');
+    const [homopolymerBuffer, setHomopolymerBuffer] = useState('0');
     const [preparation, setPreparation] = useState<'synthesis' | 'pcr'>('synthesis');
     const [fusion, setFusion] = useState('');
     const [restrictionEnzymes, setRestrictionEnzymes] = useState('');
@@ -183,7 +185,7 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
         : targetChoice === 'selection' ? selectedTarget : targetChoice === 'saved' ? savedTarget
             : pasteSequence.trim() ? { name: pasteName.trim() || 'Pasted target', sequence: pasteSequence.toUpperCase().replace(/[^A-Z]/g, ''), circular: pasteCircular } : null;
     // Field edits invalidate recommendations; only an explicit action runs the planner.
-    useEffect(() => { request.current++; setGoldenGate(null); setBusy(false); }, [target?.sequence, target?.circular, selectedEnzyme, fragmentCount, boundaries, preparation, fusion, targetLength, minLength, maxLength, avoidRepeats]);
+    useEffect(() => { request.current++; setGoldenGate(null); setBusy(false); }, [target?.sequence, target?.circular, selectedEnzyme, fragmentCount, boundaries, preparation, fusion, targetLength, minLength, maxLength, avoidRepeats, maxHomopolymerRun, homopolymerBuffer]);
     useEffect(() => { setPreviewSelection(null); }, [target?.sequence, target?.circular]);
     const editCuts = (cuts: number[]) => { setBoundaries(cuts.join(', ')); setFragmentCount(String(cuts.length + (target?.circular ? 0 : 1))); setGoldenGate(null); };
     const selectedSources: Molecule[] = [...(useCurrentSource ? [current] : []), ...sources];
@@ -210,6 +212,8 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                 if (mine === request.current) setGibson(data);
             } else if (method === 'golden_gate') {
                 if (!selectedEnzyme) { setError('Choose a compatible Type IIS enzyme.'); return; }
+                if (maxHomopolymerRun !== '' && (!Number.isSafeInteger(Number(maxHomopolymerRun)) || Number(maxHomopolymerRun) < 1)) { setError('Maximum homopolymer run must be a whole number of at least 1, or blank to disable.'); return; }
+                if (homopolymerBuffer === '' || !Number.isSafeInteger(Number(homopolymerBuffer)) || Number(homopolymerBuffer) < 0) { setError('Homopolymer junction buffer must be a whole number of at least 0.'); return; }
                 const fixed = numbers(boundaries);
                 if (boundaries.trim() && (!/^[\d\s,]+$/.test(boundaries) || fixed.some(c => !Number.isInteger(c) || c < 0 || c >= target.sequence.length))) { setError('Enter whole-number cut boundaries within the target.'); return; }
                 const body: SuggestGoldenGateRequest = {
@@ -221,6 +225,8 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                     min_fragment_length: Number(minLength),
                     max_fragment_length: maxLength ? Number(maxLength) : null,
                     avoid_repeats: avoidRepeats,
+                    max_homopolymer_run: maxHomopolymerRun ? Number(maxHomopolymerRun) : null,
+                    homopolymer_junction_buffer: Number(homopolymerBuffer),
                     fragment_count: fragmentCount ? Number(fragmentCount) : numbers(boundaries).length ? numbers(boundaries).length + (target.circular ? 0 : 1) : null,
                     fixed_boundaries: numbers(boundaries),
                     preparation_kind: preparation,
@@ -337,6 +343,7 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                     <label className="flex flex-col gap-1 text-slate-400">Fragment count
                         <input type="number" min={1} className="w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={fragmentCount} onChange={(e) => setFragmentCount(e.target.value)} /></label>
                     {([['Target fragment length (bp)', targetLength, setTargetLength], ['Minimum fragment length (bp)', minLength, setMinLength], ['Maximum fragment length (bp)', maxLength, setMaxLength]] as const).map(([label, value, change]) => <label key={label} className="flex flex-col gap-1 text-slate-400">{label}<input type="number" min={1} value={value} onChange={e => change(e.target.value)} className="w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" /></label>)}
+                    {([['Maximum homopolymer run at junction (nt)', maxHomopolymerRun, setMaxHomopolymerRun, 1], ['Homopolymer junction buffer (bp)', homopolymerBuffer, setHomopolymerBuffer, 0]] as const).map(([label, value, change, min]) => <label key={label} className="flex flex-col gap-1 text-slate-400">{label}<input type="number" min={min} step={1} value={value} onChange={e => change(e.target.value)} className="w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" /></label>)}
                     <label className="flex items-center gap-1 text-slate-300"><input type="checkbox" checked={avoidRepeats} onChange={e => setAvoidRepeats(e.target.checked)} /> Avoid repeats when recommending cuts</label>
                     <label className="flex flex-col gap-1 text-slate-400">Prepared by
                         <select className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={preparation} onChange={(e) => setPreparation(e.target.value as 'synthesis' | 'pcr')}>
@@ -344,6 +351,7 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                     {!target?.circular && <label className="flex flex-col gap-1 text-slate-400">Terminal right fusion (linear target)
                         <input className="w-32 rounded border border-slate-700 bg-slate-950 px-2 py-1 font-mono text-slate-200" value={fusion} onChange={(e) => setFusion(e.target.value)} /><span>Required {compatibleEnzymes.find(e => e.enzyme_id === selectedEnzyme)?.overhang_length ?? ""} nt bottom-strand protrusion, outside the exact target top strand.</span></label>}
                 </div>
+                <p className="text-slate-400">Avoid cut junctions through longer homopolymer tracts (blank maximum disables the rule); the target sequence remains unchanged, not sequence editing or a synthesis guarantee.</p>
                 {discovery.isFetching && <p className="text-slate-400">Loading compatible enzymes…</p>}
                 {discovery.error && <p role="alert">{errorText(discovery.error)}</p>}
             </div>}

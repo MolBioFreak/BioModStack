@@ -20,6 +20,9 @@ const seq = { name: 'opened DNA', sequence, circular: true, sequenceType: 'dna' 
 const original = api.defaults.adapter;
 let host: HTMLDivElement, root: Root, client: QueryClient;
 let suggestion: unknown;
+let workflowResult: unknown;
+let unexpected: string[];
+let pendingSuggestion: Promise<unknown> | null;
 let calls: Array<{ url: string; body: any }>;
 const options = { enzymes: [
     { enzyme_id: 'native-new-enzyme', canonical_name: 'NewTypeIIS', overhang_length: 4 },
@@ -46,6 +49,7 @@ beforeEach(() => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     suggestion = { proposals: [], enzymes: [], diagnostics: [] };
+    workflowResult = fixture.split_target.result; unexpected = []; pendingSuggestion = null;
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } }); calls = [];
     api.defaults.adapter = async config => {
         const url = config.url!;
@@ -54,13 +58,17 @@ beforeEach(() => {
         let data: unknown;
         if (url.endsWith('/golden-gate/options')) data = options;
         else if (url.endsWith('/gibson/workups')) data = [];
-        else if (url.endsWith('/golden-gate/suggest')) data = suggestion;
+        else if (url.endsWith('/golden-gate/suggest')) {
+            expect(typeof config.data).toBe('string');
+            expect(config.method).toBe('post');
+            data = pendingSuggestion ? await pendingSuggestion : suggestion;
+        }
         else if (url.endsWith('/primer-tm/options')) data = fixture.tm_options;
         else if (url.endsWith('/assembly-workups')) data = [];
-        else if (url.endsWith('/design')) data = fixture.split_target.result;
+        else if (url.endsWith('/design')) data = workflowResult;
         else if (url.endsWith('/design/save')) data = fixture.saved;
         else if (url.endsWith('/design/export')) data = new Blob(['Transport-only response; archive bytes qualified by the API owner']);
-        else throw new Error(`Unexpected HTTP ${url}`);
+        else { unexpected.push(url); throw new Error(`Unexpected HTTP ${url}`); }
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
 });
@@ -70,6 +78,7 @@ afterEach(async () => {
         writeFileSync(join(process.env.BMS_GG_TARGET_UI_EVIDENCE, `${expect.getState().currentTestName!.replace(/[^a-z0-9]+/gi, '-').slice(0, 180)}.json`), JSON.stringify(calls, null, 2));
     }
     await act(async () => root.unmount()); client.clear(); host.remove(); api.defaults.adapter = original; vi.restoreAllMocks(); vi.unstubAllGlobals();
+    expect(unexpected).toEqual([]);
 });
 it.each([
     { selection: { start: 26, end: 5 }, expected: sequence.slice(26) + sequence.slice(0, 5) },
@@ -91,6 +100,7 @@ it.each([
         target: { source: { kind: 'inline', sequence: expected, topology: 'linear' } },
         enzymes: ['native-BsaI'], fixed_boundaries: [3, 7], fragment_count: 3,
         target_fragment_length: 6, min_fragment_length: 4, max_fragment_length: 12, avoid_repeats: true,
+        max_homopolymer_run: null, homopolymer_junction_buffer: 0,
     });
     expect(host.textContent).toContain('Cut after bp N = boundary N');
 });
@@ -123,14 +133,20 @@ it('opens target synthesis rather than the prepared-fragment basket and serializ
 });
 
 it('previews recommended cuts on unchanged target DNA, permits exact editing, and hands off to the existing run/save/export owner', async () => {
-    // Native captured split result, not a mock numerical planner. This test qualifies transport and receiving only.
-    const split = fixture.split_target;
+    // Native captured split result with transport-only rule annotations, not recomputed science.
+    // Different API-returned rules prove handoff does not reconstruct them from current UI settings.
+    const split = structuredClone(fixture.split_target);
+    const rules = { max_homopolymer_run: 3, homopolymer_junction_buffer: 1 };
+    Object.assign(split.request, rules); Object.assign(split.result.requested, rules);
+    workflowResult = split.result;
     const target = { ...seq, sequence: split.request.target.source.sequence, circular: false };
     suggestion = { proposals: [{ rank: 1, enzyme_id: split.request.enzyme.enzyme_id, enzyme_name: 'BsaI',
         empirical: 'no empirical data', internal_sites: 0, junction_mode: 'scarless', junctions: ['AAAA', 'CCCC'],
         cuts: [20, 80], fragment_lengths: [20, 60, target.sequence.length - 80],
         split_request: split.request, pcr_products: [], candidate: split.result.solutions[0] }], enzymes: [], diagnostics: [] };
     await render(null, target); await click('Golden Gate');
+    await input('Maximum homopolymer run at junction (nt)', '5');
+    await input('Homopolymer junction buffer (bp)', '2');
     await input('Terminal right fusion', 'TGAC'); await click('Recommend cuts');
     expect(host.querySelector('[aria-label="Target cut preview"]')?.textContent).toContain('20');
     expect(host.querySelector('[data-target-bases]')?.textContent).toBe(target.sequence);
@@ -156,6 +172,7 @@ it('previews recommended cuts on unchanged target DNA, permits exact editing, an
     HTMLAnchorElement.prototype.click = () => {};
     try { await click('Export frozen workup ZIP'); } finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; HTMLAnchorElement.prototype.click = anchorClick; }
     const exported: any = expandGoldenGateWire(calls.find(c => c.url.endsWith('/design/export'))!.body, 'result');
+    expect(exported.requested).toEqual(split.request);
     expect(exported.solutions[0].design.materials.filter((m: any) => m.stage === 'prepared')).toEqual(split.result.solutions[0].design.materials.filter(m => m.stage === 'prepared'));
     await click('Save fixed selected candidate');
     const saved: any = expandGoldenGateWire(calls.find(c => c.url.endsWith('/design/save'))!.body, 'save');
@@ -224,4 +241,79 @@ it('shows native repeat compromises beside the exact-cut proposal', async () => 
     await render(null, { ...seq, sequence: split.request.target.source.sequence, circular: false });
     await click('Golden Gate'); await input('Type IIS enzyme', 'native-BsaI'); await input('Terminal right fusion', 'TGAC'); await click('Recommend cuts');
     expect(host.textContent).toContain(message);
+});
+
+it.each(['current', 'selection'])('serializes configured homopolymer rules for %s without editing target bases', async choice => {
+    await render({ start: 4, end: 20 }); await click('Golden Gate');
+    await input('Target molecule', choice);
+    await input('Maximum homopolymer run at junction (nt)', '5');
+    await input('Homopolymer junction buffer (bp)', '2');
+    await input('Type IIS enzyme', 'native-BsaI');
+    await input('Fixed boundaries', '3, 7');
+    if (choice === 'selection') await input('Terminal right fusion', 'TGAC');
+    await click('Recommend cuts');
+    const expectedSequence = choice === 'current' ? sequence : sequence.slice(4, 20);
+    expect(calls.filter(c => c.url.endsWith('/suggest')).at(-1)!.body).toEqual({
+        target: { id: 'target', source: { kind: 'inline', sequence: expectedSequence, topology: choice === 'current' ? 'circular' : 'linear', features: [] } },
+        enzymes: ['native-BsaI'], fragment_count: choice === 'current' ? 2 : 3,
+        target_fragment_length: null, min_fragment_length: 1, max_fragment_length: null, avoid_repeats: true,
+        max_homopolymer_run: 5, homopolymer_junction_buffer: 2,
+        fixed_boundaries: [3, 7], preparation_kind: 'synthesis', proposals: 3,
+        ...(choice === 'selection' ? { terminal_right_fusion: 'TGAC' } : {}),
+    });
+    expect(host.querySelector('[data-target-bases]')!.textContent).toBe(expectedSequence);
+    expect(host.textContent).toContain('not sequence editing or a synthesis guarantee');
+    await input('Maximum homopolymer run at junction (nt)', '');
+    await input('Homopolymer junction buffer (bp)', '0');
+    await click('Recommend cuts');
+    expect(calls.filter(c => c.url.endsWith('/suggest')).at(-1)!.body).toMatchObject({ max_homopolymer_run: null, homopolymer_junction_buffer: 0 });
+});
+
+it.each([
+    ['Maximum homopolymer run at junction (nt)', '5'],
+    ['Homopolymer junction buffer (bp)', '2'],
+])('invalidates a displayed proposal when %s changes', async (label, value) => {
+    const split = fixture.split_target;
+    suggestion = { proposals: [{ rank: 1, enzyme_id: split.request.enzyme.enzyme_id, enzyme_name: 'BsaI', empirical: 'no empirical data', internal_sites: 0, junctions: [], cuts: [20, 80], fragment_lengths: [20, 60, 40], split_request: split.request, pcr_products: [] }], enzymes: [], diagnostics: [] };
+    await render(null, { ...seq, sequence: split.request.target.source.sequence, circular: false }); await click('Golden Gate');
+    await input('Type IIS enzyme', 'native-BsaI'); await input('Terminal right fusion', 'TGAC'); await click('Recommend cuts');
+    expect(host.textContent).toContain('Use this plan');
+    const before = calls.filter(c => c.url.endsWith('/suggest')).length;
+    await input(label, value);
+    expect(host.textContent).not.toContain('Use this plan');
+    expect(host.querySelector('[aria-label="Target cut preview"]')).toBeNull();
+    expect(calls.filter(c => c.url.endsWith('/suggest'))).toHaveLength(before);
+    await click('Recommend cuts');
+    expect(host.textContent).toContain('Use this plan');
+});
+
+it.each([
+    ['Maximum homopolymer run at junction (nt)', '0'],
+    ['Maximum homopolymer run at junction (nt)', '-1'],
+    ['Maximum homopolymer run at junction (nt)', '2.5'],
+    ['Homopolymer junction buffer (bp)', '-1'],
+    ['Homopolymer junction buffer (bp)', '0.5'],
+    ['Homopolymer junction buffer (bp)', ''],
+])('rejects invalid integer homopolymer setting %s=%s before HTTP', async (label, value) => {
+    await render(); await click('Golden Gate'); await input('Type IIS enzyme', 'native-BsaI');
+    await input(label, value); await click('Recommend cuts');
+    expect(calls.filter(c => c.url.endsWith('/suggest'))).toHaveLength(0);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('whole number');
+});
+
+it.each([
+    ['Maximum homopolymer run at junction (nt)', '4'],
+    ['Homopolymer junction buffer (bp)', '3'],
+])('ignores an in-flight stale suggestion after %s changes', async (label, value) => {
+    const split = fixture.split_target;
+    let resolve!: (value: unknown) => void;
+    pendingSuggestion = new Promise(r => { resolve = r; });
+    await render(); await click('Golden Gate'); await input('Type IIS enzyme', 'native-BsaI');
+    await click('Recommend cuts');
+    expect(host.textContent).toContain('Working…');
+    await input(label, value);
+    await act(async () => { resolve({ proposals: [{ rank: 1, enzyme_id: split.request.enzyme.enzyme_id, enzyme_name: 'BsaI', empirical: 'no empirical data', internal_sites: 0, junctions: [], cuts: [], fragment_lengths: [], split_request: split.request, pcr_products: [] }], enzymes: [], diagnostics: [] }); });
+    expect(host.textContent).not.toContain('Use this plan');
+    expect(host.textContent).not.toContain('Working…');
+    expect(calls.filter(c => c.url.endsWith('/suggest'))).toHaveLength(1);
 });
