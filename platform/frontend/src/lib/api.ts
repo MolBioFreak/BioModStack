@@ -3754,6 +3754,10 @@ export interface SuggestGoldenGateRequest {
     target: SuggestGoldenGateSource;
     enzymes: string[];
     fragment_count?: number | null;
+    target_fragment_length?: number | null;
+    min_fragment_length?: number;
+    max_fragment_length?: number | null;
+    avoid_repeats?: boolean;
     fixed_boundaries: number[];
     preparation_kind: 'synthesis' | 'pcr';
     terminal_right_fusion?: string | null;
@@ -3764,7 +3768,7 @@ export interface SuggestGoldenGateProposal {
     internal_sites: number; junction_mode: string; junctions: string[]; cuts: number[]; fragment_lengths: number[];
     f_set: number | null;
     split_request: Record<string, unknown>;
-    candidate?: { fidelity?: { per_junction?: Array<{ representative: string; probability: number | null }> } };
+    candidate?: { design?: { materials: Array<{ id: string; stage: 'source' | 'prepared' | 'digest'; sequence: string }> }; fidelity?: { per_junction?: Array<{ representative: string; probability: number | null }> } };
     pcr_products: Array<{ part_id: string; tailed_length: number; payload_length: number }>;
     donor_retained_fragment_index: number | null;
 }

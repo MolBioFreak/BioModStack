@@ -155,11 +155,11 @@ function EndEditor({
     return (
         <div className="space-y-1">
             <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">{label}</div>
-            <div className="grid grid-cols-[132px_minmax(0,1fr)] gap-2">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2">
                 <select
                     value={current.type}
                     onChange={(event) => onChange({ ...current, type: event.target.value as AssemblyFragmentEnd['type'] })}
-                    className="rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs"
+                    className="min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs"
                 >
                     <option value="blunt">Blunt</option>
                     <option value="sticky_5">5' sticky</option>
@@ -170,9 +170,10 @@ function EndEditor({
                     disabled={current.type === 'blunt'}
                     onChange={(event) => onChange({ ...current, overhang: event.target.value.toUpperCase().replace(/[^A-Z]/g, '') })}
                     placeholder={current.type === 'blunt' ? 'No overhang' : 'Overhang 5′→3′'}
-                    className="rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs disabled:opacity-50"
+                    className="min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs disabled:opacity-50"
                 />
                 <select aria-label={`${label} notation`} value={current.protruding_strand || ''}
+                    className="col-span-full min-w-0 w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs"
                     disabled={current.type === 'blunt'}
                     onChange={(event) => onChange({ ...current, protruding_strand: (event.target.value || null) as AssemblyFragmentEnd['protruding_strand'] })}>
                     <option value="">Historical / unspecified</option>
@@ -444,8 +445,9 @@ export function AssemblyPanel({
 }: AssemblyPanelProps) {
     const [mode, setMode] = useState<AssemblyMode>('ligation');
     const [rawGoldenGate, setRawGoldenGate] = useState(false);
+    const [targetBuilder, setTargetBuilder] = useState(true);
     const goldenGateOperationId = sequenceData.operation === 'golden_gate_design' && typeof sequenceData.operationParams?.operation_id === 'string' ? sequenceData.operationParams.operation_id : undefined;
-    useEffect(() => { if (goldenGateOperationId) { setMode('golden_gate'); setRawGoldenGate(true); } }, [goldenGateOperationId]);
+    useEffect(() => { if (goldenGateOperationId) { setMode('golden_gate'); setTargetBuilder(false); setRawGoldenGate(true); } }, [goldenGateOperationId]);
     const [fragments, setFragments] = useState<AssemblyFragmentInput[]>([]);
     const savedFragmentLoads = useRef(Promise.resolve());
     useEffect(() => { if (transferredFragments) { setFragments(structuredClone(transferredFragments)); setMode('ligation'); setRawGoldenGate(false); } }, [transferredFragments]);
@@ -845,6 +847,23 @@ export function AssemblyPanel({
         }, savedSequence?.id || null);
     };
 
+    const suggestionPanel = (
+        <SuggestPlan
+            builder={mode === 'golden_gate' && targetBuilder}
+            goldenGateOptions={goldenGateOptions}
+            selection={selection}
+            sequenceData={sequenceData}
+            selectedSequenceId={selectedSequenceId}
+            onUseGibson={restoreGibsonDesign}
+            onUseGoldenGate={(request) => { setMode('golden_gate'); setTargetBuilder(false); setRawGoldenGate(true); setSuggestedGoldenGate({ request }); }}
+            onUseRestriction={(request) => {
+                setMode('ligation'); setRawGoldenGate(false); setFragments(request.fragments);
+                setLigationCircular(request.circular ?? true); setSaveName(request.new_name ?? '');
+                setDnaWeaverPlan(null); setResult(null);
+            }}
+        />
+    );
+
     return (
         <div className="space-y-4 p-3 text-sm">
             <div>
@@ -858,17 +877,7 @@ export function AssemblyPanel({
 
             <SavedGibsonWorkup operationParams={sequenceData.operationParams} />
 
-            <SuggestPlan
-                sequenceData={sequenceData}
-                selectedSequenceId={selectedSequenceId}
-                onUseGibson={restoreGibsonDesign}
-                onUseGoldenGate={(request) => { setMode('golden_gate'); setRawGoldenGate(true); setSuggestedGoldenGate({ request }); }}
-                onUseRestriction={(request) => {
-                    setMode('ligation'); setRawGoldenGate(false); setFragments(request.fragments);
-                    setLigationCircular(request.circular ?? true); setSaveName(request.new_name ?? '');
-                    setDnaWeaverPlan(null); setResult(null);
-                }}
-            />
+            {mode !== 'golden_gate' && suggestionPanel}
 
             <div className="flex flex-wrap gap-2">
                 {[
@@ -887,8 +896,13 @@ export function AssemblyPanel({
                 ))}
             </div>
 
-            {mode === 'golden_gate' && <div className="flex flex-wrap gap-2"><button type="button" className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${!rawGoldenGate ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`} onClick={() => setRawGoldenGate(false)}>Manual / prepared fragments</button><button type="button" className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${rawGoldenGate ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`} onClick={() => setRawGoldenGate(true)}>Raw design / evaluate / optimize / split</button></div>}
-            {mode === 'golden_gate' && rawGoldenGate ? <Suspense fallback={<p>Loading Golden Gate workflow…</p>}><GoldenGateWorkflowWorkspace sequenceData={sequenceData} options={goldenGateOptions} onLoadProduct={onLoadProduct} operationId={goldenGateOperationId} suggested={suggestedGoldenGate} /></Suspense> : <>
+            {mode === 'golden_gate' && <div className="flex flex-wrap gap-2">
+                <button type="button" className={`rounded-full px-3 py-1.5 text-xs font-medium ${targetBuilder ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300'}`} onClick={() => setTargetBuilder(true)}>Build target</button>
+                <button type="button" className={`rounded-full px-3 py-1.5 text-xs font-medium ${!targetBuilder && !rawGoldenGate ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300'}`} onClick={() => { setTargetBuilder(false); setRawGoldenGate(false); }}>Manual / prepared fragments</button>
+                <button type="button" className={`rounded-full px-3 py-1.5 text-xs font-medium ${!targetBuilder && rawGoldenGate ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300'}`} onClick={() => { setTargetBuilder(false); setRawGoldenGate(true); }}>Raw design / evaluate / optimize / split</button>
+            </div>}
+            {mode === 'golden_gate' && targetBuilder && suggestionPanel}
+            {mode === 'golden_gate' && targetBuilder ? null : mode === 'golden_gate' && rawGoldenGate ? <Suspense fallback={<p>Loading Golden Gate workflow…</p>}><GoldenGateWorkflowWorkspace sequenceData={sequenceData} options={goldenGateOptions} onLoadProduct={onLoadProduct} operationId={goldenGateOperationId} suggested={suggestedGoldenGate} /></Suspense> : <>
             {mode === 'gibson' && (
                 <>
                     <div className="grid grid-cols-1 gap-2 rounded-xl border border-slate-700 bg-slate-900/50 p-1.5 sm:grid-cols-3">
@@ -1148,7 +1162,7 @@ export function AssemblyPanel({
 
                         {mode !== 'gibson' && <EndOperations fragment={fragment} onApplied={(child) => { setFragments((current) => [...current, child]); setDnaWeaverPlan(null); }} />}
                         {mode !== 'gibson' && <p className="text-xs text-slate-400">Physical ends: enter each protruding strand 5′→3′; fragment sequence is the original top strand 5′→3′. Reverse rotates the duplex. Historical notation retains legacy behavior.</p>}
-                        <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,260px),1fr))] gap-3">
                             <EndEditor
                                 label="Left end"
                                 value={fragment.left_end || undefined}

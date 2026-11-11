@@ -37,6 +37,7 @@ async function mount() {
     await act(async () => root.render(<QueryClientProvider client={client}><AssemblyPanel sequenceData={seq} selection={null} selectedSequenceId="target-doc" onLoadProduct={() => {}} onLoadSavedWorkup={() => {}} /></QueryClientProvider>));
 }
 beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     vi.resetAllMocks();
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -46,11 +47,12 @@ beforeEach(() => {
     vi.mocked(api.fetchGoldenGateAssemblyOptions).mockResolvedValue({ data: { catalog: { catalog_id: 'test-catalog', catalog_sha256: 'a'.repeat(64) }, enzymes: [{ enzyme_id: 'BsaI', name: 'BsaI', overhang_length: 4 }] } } as never);
     for (const fn of [api.simulateLigationAssembly, api.simulateGibsonAssembly, api.simulateGoldenGateAssembly, api.designGibsonAssembly]) vi.mocked(fn).mockRejectedValue(new Error('end of request capture'));
 });
-afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.restoreAllMocks(); });
+afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it.each(['Ligation', 'Gibson', 'Golden Gate', 'Gibson PCR'])('%s loads saved fragment bases from the selected immutable revision before submitting', async mode => {
     await mount();
     if (mode !== 'Ligation') await click(mode.startsWith('Gibson') ? 'Gibson' : mode);
+    if (mode === 'Golden Gate') await click('Manual / prepared fragments');
     if (mode === 'Gibson') await click('Validate purchased fragments');
     if (mode === 'Gibson PCR') await click('PCR template route (optional)');
     await click('Add saved fragment');
