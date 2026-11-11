@@ -8,7 +8,6 @@ from .adapters import (
     EngineAdapterError,
     EngineUnavailableError,
     GromacsAdapter,
-    OpenMMAdapter,
     ReplicaRequest,
 )
 from .contract import load_verified_job_config
@@ -16,7 +15,6 @@ from .contract import load_verified_job_config
 
 _ADAPTERS: Mapping[str, EngineAdapter] = {
     "gromacs": GromacsAdapter(),
-    "openmm": OpenMMAdapter(),
 }
 
 

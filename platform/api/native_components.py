@@ -74,7 +74,6 @@ PROCESS_CONTRACTS = {
     'modules/esmfold2_experimental.nf:ESMFold2FromPdb': (('ESMFold2', 'gpu'), ('tuple val(producer_meta), path(source_pdb), val(candidate_name)',), ("tuple val(producer_meta), val('esmfold2'), path('esmfold2_results/*.cif'), path('esmfold2_results/*.metrics.json'), emit: typed_results",), (), ("errorStrategy 'ignore'",)),
     'modules/experimental/molecular_dynamics/analyze.nf:MD_ANALYZE_REPLICA': (('MolecularDynamicsAnalysis',), ('tuple val(replica_index), path(replica_dir), val(manifest_sha256)',), ('tuple val(replica_index), path("md_analysis_replica_${replica_index}.json"), emit: reports', 'tuple val(replica_index), path("md_analysis_replica_${replica_index}.artifacts.json"), emit: artifact_manifests', 'tuple val(replica_index), path("md_analysis_replica_${replica_index}.timeseries.parquet"), emit: timeseries', 'tuple val(replica_index), path("md_analysis_replica_${replica_index}.residue_metrics.parquet"), emit: residue_metrics'), (), ('container params.md_analysis_container ?: "${params.data_root}/apptainer/md-analysis-1.0.0.sif"', "errorStrategy 'retry'", 'maxRetries 2')),
     'modules/experimental/molecular_dynamics/gromacs_replica.nf:MD_GROMACS_REPLICA': (('MolecularDynamicsGromacs',), ('tuple val(replica_index), path(normalized_config), path(preparation_bundle)',), ('path "gromacs_replica_${replica_index}_manifest.json", emit: manifest', 'path "replica_${replica_index}", emit: artifacts'), ('scripts/bms_md/aggregate_children.py',), ()),
-    'modules/experimental/molecular_dynamics/openmm_replica.nf:MD_OPENMM_REPLICA': (('MolecularDynamicsOpenMM',), ('tuple val(replica_index), path(normalized_config), path(preparation_bundle)',), ('path "openmm_replica_${replica_index}_manifest.json", emit: manifest', 'path "replica_${replica_index}", emit: artifacts'), ('scripts/bms_md/aggregate_children.py',), ()),
     'modules/experimental/molecular_dynamics/prepare.nf:MD_PREPARE_CONFIG': (('MolecularDynamicsPreparation',), ('path source_config', 'val config_base_dir'), ("path 'normalized_config.json', emit: normalized_config", "path 'md_metadata.json', emit: metadata", "path 'preparation_bundle', emit: preparation_bundle"), (), ()),
     'modules/fampnn.nf:PrepFAMPNN': (('pyrosetta_tools',), ('tuple path(pdb_files), path(json_files)',), ('path ("fampnn_input/*.pdb"), emit: pdbs', 'path ("fampnn_input/*.fampnn_prep.json"), emit: provenance, optional: true', 'path ("*.csv"), emit: csv'), ('lib/FampnnNativeControls.groovy', 'lib/FampnnAnalysisPolicy.groovy', 'scripts/fampnn_native_runtime.py', 'scripts/fampnn_native_binding.py', 'scripts/prep_fampnn_constraints_generic.py', 'scripts/maturation_native_adapter.py', 'scripts/maturation_correspondence.py', 'scripts/analyse_fampnn.py', 'scripts/analyse_fampnn_seq_probs.py'), ()),
     'modules/fampnn.nf:RunFAMPNN': (('FAMPNN', 'gpu_light'), ('tuple val(batch_id), path(pdbs), path(csv), val(gpu_id)', 'val analysis_chain_id', 'val analysis_contract // Trusted workflow-owned envelope, independent of pSCE.'), ('tuple path("results/*.pdb"), path("results/*.json"), emit: pdbs_jsons', 'path "fampnn_output", emit: raw', 'path ("fampnn_metadata_${batch_id}.jsonl"), topic: metadata_ch_fold_seq', 'path ("fampnn_seq_prob_metrics_${batch_id}.jsonl"), emit: seq_prob_metrics, optional: true', 'path "*.log"'), ('scripts/prep_fampnn_constraints_generic.py', 'scripts/fampnn_native_binding.py', 'scripts/maturation_native_adapter.py', 'scripts/maturation_correspondence.py', 'lib/FampnnNativeControls.groovy', 'lib/FampnnAnalysisPolicy.groovy', 'scripts/fampnn_native_runtime.py', 'scripts/analyse_fampnn.py', 'scripts/analyse_fampnn_seq_probs.py'), ()),
@@ -294,7 +293,6 @@ LABEL_ASSETS = {
     'MolecularDynamicsPreparation': ('md-preparation-v1.sif', 'md_preparation_container', None, None),
     'MolecularDynamicsAnalysis': ('md-analysis-1.0.0.sif', 'md_analysis_container', None, None),
     'MolecularDynamicsGromacs': ('gromacs-md-2025.3.sif', 'md_gromacs_container', None, None),
-    'MolecularDynamicsOpenMM': ('openmm-md-8.5.2.sif', 'md_openmm_container', None, None),
     'MolecularDynamicsCpu': ('gromacs-md-2025.3.sif', 'md_gromacs_container', None, None),
     'ESMFold2': ('esmfold2.sif', 'esmf_container_path', 'esmfold2', None),
     'Caliby': ('caliby.sif', None, None, None),
@@ -390,14 +388,13 @@ def native_resource_policy(params, label='CPU'):
     """
     from component_runtime import canonical_bytes
     gpu = label in {'gpu', 'gpu_light', 'process_gpu', 'frustrampnn_gpu',
-                    'MolecularDynamicsGromacs', 'MolecularDynamicsOpenMM'}
+                    'MolecularDynamicsGromacs'}
     cpu_key, mem_key = ('cpus_per_gpu', 'memory_gpu') if gpu else ('cpus', 'memory_cpu')
     fixed = {
         'MolecularDynamicsPreparation': (1, '4 GB', '1h'),
         'MolecularDynamicsCoordinator': (1, '2 GB', '7d'),
         'MolecularDynamicsAnalysis': (4, '12 GB', '4h'),
         'MolecularDynamicsGromacs': (8, '16 GB', '24h'),
-        'MolecularDynamicsOpenMM': (4, '8 GB', '24h'),
         'MolecularDynamicsCpu': (1, '2 GB', '1h'),
         'ShapeEvaluate': (2, '8 GB', None),
     }.get(label)
@@ -875,10 +872,10 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             return True
         cfg = p.get('md_config')
         engine = p.get('md_engine') or (cfg.get('engine') if isinstance(cfg, dict) else None)
-        if engine not in {'gromacs', 'openmm'}:
+        if engine != 'gromacs':
             unresolved('molecular_dynamics', 'dependency_closure', 'scripts/bms_md/contract.py:normalize_job_config',
                        'Bind normalized md_config.engine or native md_engine before selected engine provisioning')
-        engines = [engine] if engine in {'gromacs', 'openmm'} else []
+        engines = [engine] if engine == 'gromacs' else []
         retry = workflow == 'orchestrator' and bool(p.get('md_retry_spawn_receipt'))
         prep = a.chain(['MD_PREPARE_CONFIG']) if workflow == 'orchestrator' and not retry else ()
         from scripts.bms_md.chemistry.prepare import preparation_owner
@@ -886,7 +883,7 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             a.asset('runtime_data', 'md-preparation/env-v1-explicit.txt', 'nextflow.config:params.md_preparation_runtime_lock', 'md_preparation_runtime_lock')
         spawn = a.chain(['MD_SPAWN_REPLICAS'], prep) if prep else ()
         for selected_engine in engines:
-            process = 'MD_GROMACS_REPLICA' if selected_engine == 'gromacs' else 'MD_OPENMM_REPLICA'
+            process = 'MD_GROMACS_REPLICA'
             expansion = None if workflow == 'replica' else {
                 'authority': 'scripts/bms_md/spawn_replicas.py; scripts/bms_md/contract.py',
                 'child_model': 'molecular_dynamics', 'child_mode': 'replica', 'child_stage': 'md_replica',

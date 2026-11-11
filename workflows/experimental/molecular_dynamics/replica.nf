@@ -1,7 +1,6 @@
 nextflow.enable.dsl=2
 
 include { MD_GROMACS_REPLICA } from '../../../modules/experimental/molecular_dynamics/gromacs_replica'
-include { MD_OPENMM_REPLICA } from '../../../modules/experimental/molecular_dynamics/openmm_replica'
 
 params.md_job_config = null
 params.md_replica_index = null
@@ -24,8 +23,6 @@ workflow {
     engine = params.md_engine.toString()
     if (engine == 'gromacs') {
         MD_GROMACS_REPLICA(request)
-    } else if (engine == 'openmm') {
-        MD_OPENMM_REPLICA(request)
     } else {
         error "unsupported MD engine: ${params.md_engine}"
     }

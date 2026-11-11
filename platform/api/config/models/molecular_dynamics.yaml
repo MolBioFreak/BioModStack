@@ -5,17 +5,15 @@ category: molecular_dynamics
 description: >-
   Default-off CUDA-first molecular dynamics with engine-neutral contracts,
   deterministic replicas, checkpoint/restart, checksummed artifacts, and
-  runtime provenance. GROMACS and OpenMM are separate fail-closed adapters;
+  runtime provenance. GROMACS is the only engine;
   enabling this workflow does not imply production or scientific approval.
 container: gromacs-md-2025.3.sif
 workflow: molecular_dynamics
 engine_containers:
   gromacs: gromacs-md-2025.3.sif
-  openmm: openmm-md-8.5.2.sif
 capabilities:
   engines:
     - gromacs
-    - openmm
   accelerator:
     vendor: nvidia
     api: cuda
@@ -24,10 +22,6 @@ capabilities:
     - pdb
     - gro
     - top
-  openmm_initial_scope:
-    prepared_gromacs_topology_only: true
-    stages:
-      - production
 
 modes:
   - id: simulate

@@ -222,7 +222,7 @@ def _trusted_reorchestration_input_resolver(job: Job, contract: dict[str, Any]):
 class ReplicaAttemptCommand(BaseModel):
     replica_index: int = Field(ge=0, le=63)
     attempt: int = Field(ge=0, le=100)
-    engine: str = Field(pattern=r"^(gromacs|openmm)$")
+    engine: str = Field(pattern=r"^gromacs$")
     execution_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     compatibility_key: str = Field(pattern=r"^[0-9a-f]{64}$")
 

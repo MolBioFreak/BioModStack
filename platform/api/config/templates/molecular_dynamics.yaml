@@ -7,8 +7,7 @@ color: "#22C55E"
 experimental: true
 description: >
   Run reproducible biomolecular molecular-dynamics jobs with engine-neutral
-  contracts. GROMACS is the Phase 1 production engine; OpenMM is retained as
-  a separate validation backend rather than silently substituted.
+  contracts. GROMACS is the engine.
 goal: >
   Validate a versioned MD job specification, prepare deterministic topology and
   restart artifacts, execute independent replicas, and publish checksum-bound
@@ -24,7 +23,7 @@ stages:
     tool: BMS MD Contract
     description: Validate the versioned job specification, input structure, engine, force field, replica count, seed policy, and convergence thresholds.
   - name: Prepare
-    tool: GROMACS / OpenMM Adapter
+    tool: GROMACS Adapter
     description: Prepare topology, coordinates, integrator inputs, force-field metadata, and deterministic replica seeds.
   - name: Simulate
     tool: Nextflow Replica Workers
@@ -65,10 +64,8 @@ user_params:
     description: Explicit execution backend. No automatic cross-engine fallback is permitted.
     enum:
       - gromacs
-      - openmm
     enum_labels:
       gromacs: GROMACS (Phase 1 production)
-      openmm: OpenMM (validation backend)
 
   - name: replicas
     ui_group: Runtime
