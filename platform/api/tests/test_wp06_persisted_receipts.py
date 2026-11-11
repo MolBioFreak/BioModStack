@@ -29,53 +29,6 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.mark.asyncio
-async def test_openmm_receipts_persist_through_real_finalizer(admission, tmp_path):
-    from services.result_state_integrity import finalize_successful_job
-    current = Job(id='openmm',name='openmm',model_id='antibody_denovo',mode='validation',
-        status='running',queue_status='running',awaiting_input=False,output_dir=str(tmp_path),
-        params={'openmm_enabled':True},provenance={'core_protein_scientific_contract':1,
-            'core_protein_requested_params':{'openmm_cdr_only':False}})
-    root = tmp_path/'run/openmm/relaxation/fixture'
-    root.mkdir(parents=True)
-    values = {'cdr_only':False,'force_field':'amber14sb','max_iterations':100,
-        'energy_tolerance':50.0,'restraint_mode':'framework','antibody_chain':'H','fix_structure':True}
-    argv = ['--input','input.pdb','--output','relaxed/out.pdb','--output_json','relaxed/out.json']
-    for key,value in values.items():
-        if type(value) is bool:
-            if value: argv.append('--'+key)
-        else: argv.extend(['--'+key,str(value)])
-    settings = {k:{'requested':False if k=='cdr_only' else None, 'effective':v,
-        'origin':'request' if k=='cdr_only' else 'compute_tier' if k in ('max_iterations','energy_tolerance') else 'workflow_default',
-        'scope':'antibody' if k=='cdr_only' else 'model'} for k,v in values.items()}
-    payload = {'schema_version':1,'core_protein_scientific_contract':1,'model':'openmm','argv':argv,
-        'settings':settings,'sources':[{'scope':'structure','sha256':'a'*64}]}
-    source = os.environ.get('BMS_WP06_OPENMM_RECEIPT')
-    if source:
-        payload = json.loads(Path(source).read_bytes())
-    (root/'effective_settings.json').write_bytes(Path(source).read_bytes() if source else json.dumps(payload).encode())
-    (root/'fixture.pdb').write_text('NON_MODEL_FIXTURE_ONLY\n')
-    admission.add_all([current, Design(id='openmm-row',job_id=current.id,name='fixture',pdb_path=str(root/'fixture.pdb'))])
-    await admission.commit()
-    async def ingest(*args,**kwargs): return 1
-    result = await finalize_successful_job(current,str(tmp_path),admission,ingest_fn=ingest)
-    assert result.completed
-    await admission.refresh(current)
-    assert current.provenance.get('core_protein_execution_settings'), 'finalizer lost OpenMM execution receipt'
-    row = await admission.get(Design,'openmm-row')
-    assert row.confidence_metrics['core_protein_execution_settings'] == current.provenance['core_protein_execution_settings']
-    app = FastAPI()
-    app.include_router(jobs.router, prefix='/api/jobs')
-    async def db(): yield admission
-    app.dependency_overrides[get_session] = db
-    async with AsyncClient(transport=ASGITransport(app=app),base_url='http://test') as client:
-        response = await client.get('/api/jobs/openmm/execution-settings')
-        assert response.status_code == 200
-        assert response.json()['status'] == 'ok'
-        if os.environ.get('BMS_WP06_OPENMM_WIRE'):
-            Path(os.environ['BMS_WP06_OPENMM_WIRE']).write_text(response.text)
-
-
-@pytest.mark.asyncio
 async def test_receipt_from_executed_argv_to_persisted_api(admission, monkeypatch, tmp_path):
     msa = tmp_path / 'query.a3m'
     msa.write_text('>q\nACDE\n')

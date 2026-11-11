@@ -193,7 +193,6 @@ def _infer_gpu_process_label(proc_name: str, cmdline: Optional[List[str]]) -> st
         ("rfd3", "RFdiffusion3"),
         ("rfdiffusion", "RFdiffusion"),
         ("rf3", "RoseTTAFold3"),
-        ("openmm", "OpenMM"),
         ("antiberty", "AntiBERTy"),
         ("anarcii", "ANARCII"),
         ("immunebuilder", "ImmuneBuilder"),

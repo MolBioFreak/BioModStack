@@ -150,7 +150,6 @@ include { Compress as CompressBoltz } from '../modules/compress'
 include { MergeUncroppedTarget } from '../modules/merge_uncropped_target.nf'
 include { BoltzFromSequence } from '../modules/structure_prediction.nf'
 include { structure_prediction_wf } from '../modules/structure_prediction.nf'
-include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm.nf'
 include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
 
 def proteinDesignSha256(rawPath) {

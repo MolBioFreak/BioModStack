@@ -483,8 +483,6 @@ async def finalize_successful_job(
                 job_id, output_dir, session,
                 epitope_residues=epitope_residues, commit=False,
             )
-        from services.core_protein_execution_settings import persist_openmm_receipts
-        await persist_openmm_receipts(job, output_dir, session)
         if antibody_closeout is not None:
             expected_count = antibody_closeout['candidate_count']
             direct_count = int(await session.scalar(select(func.count(Design.id)).where(

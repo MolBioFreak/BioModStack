@@ -25,17 +25,6 @@ interface MutagenesisCommonSettings {
     num_parallel_jobs: number;
     msa_reference_sequence?: string;
     ligands?: MutagenesisComponent[];
-    openmm_enabled?: boolean;
-    openmm_compute_tier?: string;
-    openmm_restraint_mode?: string;
-    openmm_mmgbsa_mode?: string;
-    openmm_force_field?: string;
-    openmm_top_n_percentage?: number;
-    openmm_max_iterations?: number;
-    openmm_tolerance?: number;
-    openmm_restraint_strength?: number;
-    openmm_implicit_solvent?: string;
-    openmm_platform?: string;
     run_frustrampnn?: boolean;
 }
 export type MutagenesisPredictorConfig = MutagenesisCommonSettings & (
@@ -77,17 +66,6 @@ export function buildMutagenesisWorkflowRequest(jobNamePrefix: string, variants:
             local_files_only: predictorConfig.esmfold2.local_files_only ?? true,
         }),
         num_parallel_jobs: predictorConfig.num_parallel_jobs,
-        openmm_enabled: predictorConfig.openmm_enabled,
-        openmm_compute_tier: predictorConfig.openmm_compute_tier,
-        openmm_restraint_mode: predictorConfig.openmm_restraint_mode,
-        openmm_mmgbsa_mode: predictorConfig.openmm_mmgbsa_mode,
-        openmm_force_field: predictorConfig.openmm_force_field,
-        openmm_top_n_percentage: predictorConfig.openmm_top_n_percentage,
-        openmm_max_iterations: predictorConfig.openmm_max_iterations,
-        openmm_tolerance: predictorConfig.openmm_tolerance,
-        openmm_restraint_strength: predictorConfig.openmm_restraint_strength,
-        openmm_implicit_solvent: predictorConfig.openmm_implicit_solvent,
-        openmm_platform: predictorConfig.openmm_platform,
         pred_method: predictorConfig.predictor,
         run_frustrampnn: predictorConfig.run_frustrampnn,
         // Complex components: ligands array now includes DNA/RNA with sequence field

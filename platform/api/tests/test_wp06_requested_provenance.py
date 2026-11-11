@@ -17,7 +17,7 @@ from tests.test_core_protein_scientific_admission import admission
 
 KEY = 'core_protein_requested_params'
 
-@pytest.mark.parametrize('key', [KEY, 'openmm_requested_settings_json', 'esmf_requested_settings_json'])
+@pytest.mark.parametrize('key', [KEY, 'esmf_requested_settings_json'])
 def test_request_authority_cannot_be_forged(key):
     with pytest.raises(ValidationError, match='server-owned'):
         JobCreate.model_validate(dict(name='x', model_id='esmfold2', mode='predict', params={key: {}}))
@@ -34,7 +34,6 @@ async def test_pre_registry_request_retained_in_sqlite_and_command(admission, mo
     cmd = helper(row, row.params, row.output_dir)
     payload = json.loads(cmd[cmd.index('--esmf_requested_settings_json') + 1])
     assert payload == original
-    assert json.loads(cmd[cmd.index('--openmm_requested_settings_json') + 1]) == {}
     from fastapi import Request, Response
     row.status = 'failed'
     await admission.commit()

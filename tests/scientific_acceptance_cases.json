@@ -771,26 +771,6 @@
       "limitations": "PT (see layer_limitations)"
     },
     {
-      "id": "A-PT-03",
-      "requirement": "OpenMM false/true/absent produce the expected flag and effective-settings origin.",
-      "evidence_status": "source-indexed; not executed or accepted by this mapping",
-      "tests": [
-        {
-          "selector": "tests/test_wp06_openmm_transport.py::test_antibody_cdr_transport",
-          "layer": "helper / instrumented workflow"
-        },
-        {
-          "selector": "tests/test_wp06_openmm_transport.py::test_null_settings_default_without_false_request_origin",
-          "layer": "helper / instrumented workflow"
-        },
-        {
-          "selector": "tests/test_wp06_openmm_transport.py::test_explicit_settings_and_tier_derivation",
-          "layer": "helper / instrumented workflow"
-        }
-      ],
-      "limitations": "PT (see layer_limitations)"
-    },
-    {
       "id": "A-PT-04",
       "requirement": "Contradictory aliases, invalid bounds/types, and missing required MSA fail before invoking the command.",
       "evidence_status": "source-indexed; not executed or accepted by this mapping",
@@ -805,10 +785,6 @@
         },
         {
           "selector": "tests/test_wp06_parameter_transport.py::test_api_marked_alias_conflict",
-          "layer": "helper / instrumented workflow"
-        },
-        {
-          "selector": "tests/test_wp06_openmm_transport.py::test_invalid_falsey_wrapper_value_never_executes",
           "layer": "helper / instrumented workflow"
         },
         {
@@ -828,12 +804,8 @@
           "layer": "API / disposable persistence"
         },
         {
-          "selector": "platform/api/tests/test_wp06_persisted_receipts.py::test_openmm_receipts_persist_through_real_finalizer",
-          "layer": "API / disposable persistence"
-        },
-        {
-          "selector": "platform/frontend/tests/vitest/wp06ExecutionSettingsMounted.test.tsx::mounted %s job details show persisted ASGI receipt, not raw JSON",
-          "layer": "mounted UI (test.each title template)"
+          "selector": "platform/frontend/tests/vitest/wp06ExecutionSettingsMounted.test.tsx::mounted esmfold2 job details show persisted ASGI receipt, not raw JSON",
+          "layer": "mounted UI"
         },
         {
           "selector": "platform/api/tests/test_closeout_accounting_settings.py::test_component_settings_inventory_first_ingestion",
@@ -1030,7 +1002,7 @@
     "FL": "Synthetic CSV/NPZ/filter inputs. Selected threshold tests must be checked against every requested criterion; zero-bound controls alone do not prove a full below/equal/above matrix. Native ranking means software native-dialect data, not inference.",
     "CA": "Disposable SQLite and synthetic manifest/filter publication; no live finalization or historical repair. Terminal-policy coverage is limited to explicitly exercised owners and race branches.",
     "PR": "Synthetic bound scalar evidence. API numeric availability is covered by source selectors; do not infer complete rendered PPIFlow availability from unrelated analytics UI tests.",
-    "PT": "Instrumented non-model commands; no MSA search, ESMFold2 inference or OpenMM physics. The persisted OpenMM API fixture uses synthetic receipt construction unless an explicit captured receipt is provided; its UI check is not by itself an argv-to-UI chain.",
+    "PT": "Instrumented non-model commands; no MSA search or ESMFold2 inference.",
     "MC": "Sealed native parser/export definitions and synthetic PDBs execute without models; PyRosetta physics is injected. Coverage/formula/frame transport is software evidence only.",
     "AN": "Synthetic persisted/API fixtures and mocked chart drawing/network adapters. Mounted DOM marks/tables are checked, not graphical renderer pixels, live cohorts or historical writes."
   }

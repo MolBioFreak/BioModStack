@@ -109,9 +109,6 @@ PROCESS_CONTRACTS = {
     'modules/ngs/modkit_pileup.nf:ValidateModifiedBaseBam': (('dorado_cpu',), ("tuple path(bam, stageAs: 'modified-base-source.bam'), path(bai, stageAs: 'modified-base-source.bam.bai')",), ('tuple path("modified_base_input.bam"), path("modified_base_input.bam.bai"), emit: bam', 'path "modified_base_tag_check.log", emit: log'), ('scripts/ngs_input_snapshot.sh',), ()),
     'modules/ngs/modkit_pileup.nf:ModkitPileup': (('dorado_cpu',), ("tuple path(bam, stageAs: 'modkit-input.bam'), path(bai, stageAs: 'modkit-input.bam.bai')", "path reference, stageAs: 'modkit-reference.fasta'"), ('path "methylation.bed", emit: bed', 'path "pileup.log", emit: log'), (), ()),
     'modules/ngs/modkit_summary.nf:ModkitSummary': (('dorado_cpu',), ('tuple path(bam), path(bai)',), ('path "modkit_summary.tsv", emit: summary', 'path "summary.log", emit: log'), (), ()),
-    'modules/openmm.nf:OpenMMRelaxation': (('OpenMM', 'gpu'), ('tuple val(batch_id), path(pdbs)', 'val compute_tier', 'val cdr_only', 'val restraint_mode', 'val antibody_chain', 'val force_field'), ('path "relaxed/*.pdb", emit: relaxed_pdbs, optional: true', 'tuple val(batch_id), path("relaxed/*.pdb"), emit: relaxed_with_batch, optional: true', 'path "relaxed/*.json", emit: metrics_json, optional: true', 'path "*.log", emit: logs', 'path "openmm_metadata_${batch_id}.jsonl", emit: metadata, optional: true, topic: metadata_ch_openmm'), (), ()),
-    'modules/openmm.nf:OpenMMScore': (('OpenMM', 'gpu'), ('tuple val(batch_id), path(pdbs)', 'val scoring_mode', 'val binder_chains', 'val target_chains', 'val force_field'), ('path "scores/*.json", emit: scores_json, optional: true', 'path "*.log", emit: logs', 'path "mmgbsa_metadata_${batch_id}.jsonl", emit: metadata, optional: true, topic: metadata_ch_mmgbsa'), (), ()),
-    'modules/openmm.nf:OpenMMDeltaDeltaG': (('OpenMM', 'gpu'), ('tuple val(design_name), path(mutant_pdb), path(wildtype_pdb)', 'val binder_chains', 'val target_chains', 'val force_field'), ('path "${design_name}_ddg.json", emit: ddg_json', 'path "*.log", emit: logs'), (), ()),
     'modules/ppiflow.nf:IdentifyAnchorResidues': (('pyrosetta_tools',), ('tuple val(meta), path(complex_pdb)',), ('tuple val(meta), path(complex_pdb), path("${meta.id}_enriched_complex.pdb"), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), path("${meta.id}_cdr_positions_by_loop.json"), emit: anchor_inputs', 'tuple val(meta), path("${meta.id}_interface_score.json"), emit: interface_scores', 'tuple val(meta), path("${meta.id}_rotamer_enrichment.json"), emit: rotamer_enrichment'), ('scripts/prepare_ppiflow_maturation.py',), ()),
     'modules/ppiflow.nf:RunPartialFlow': (('gpu', 'PPIFlow'), ('tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions), path(cdr_positions_by_loop_json)',), ('tuple val(meta), path("ppiflow_backbones"), path("ppiflow_backbones_manifest.json"), emit: backbones', 'tuple val(meta), path("${meta.id}_ppiflow_accounting.json"), emit: accounting'), ('scripts/anchors_to_ppiflow_positions.py', 'scripts/maturation_native_adapter.py', 'scripts/ppiflow_sample_identity.py', 'scripts/validate_ppiflow_masks.py', 'scripts/validate_ppiflow_roles.py'), ()),
     'modules/ppiflow.nf:PrepMaturationRedesign': (('pyrosetta_tools',), ('tuple val(meta), path(backbone_pdbs), path(anchors_json), path(cdr_positions), path(cdr_positions_by_loop), path(comparison_requests)',), ('tuple val(meta), path("fampnn_input/*.pdb"), path("fampnn.csv"), path("fampnn_transport"), emit: prep',), ('scripts/anchors_to_ppiflow_positions.py', 'scripts/prep_antibody_constraints.py', 'scripts/prep_fampnn_designs.py'), ()),
@@ -311,7 +308,6 @@ LABEL_ASSETS = {
     'DISCO': ('disco.sif', None, None, None),
     'Antiberty': ('antibody_tools.sif', None, None, None),
     'ThermoMPNN': ('stability_tools.sif', None, 'thermompnn', None),
-    'OpenMM': ('openmm.sif', None, None, None),
     'RFDpoly': ('rfdpoly_v2.sif', None, 'rfdpoly', None),
     'nampnn': ('nampnn.sif', None, 'nampnn', None),
     'PPIFlow': ('ppiflow.sif', None, 'ppiflow', 'ppiflow_weights_dir'),
@@ -1237,10 +1233,6 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
                 a.callback('maturation_post_validation', entrypoint + ':SpawnValidatedMaturationJobs')
         else:
             after = a.chain(['FinalizeTerminalAntibodyOutputs'], after)
-        if yes('openmm_enabled'):
-            after = a.chain(['OpenMMRelaxation'], after)
-            if p.get('openmm_compute_tier') == 'full' or p.get('openmm_mmgbsa_mode') != 'off':
-                a.stage('OpenMMScore', after, condition="openmm_compute_tier == 'full' || openmm_mmgbsa_mode != 'off'")
         if p.get('run_immunogenicity_scoring') is not False:
             after = a.chain(['ANTIBERTY_SCORE'], after)
             if p.get('filter_immunogenic') is not False:after = a.chain(['ANTIBERTY_FILTER_STRUCTURES'], after)

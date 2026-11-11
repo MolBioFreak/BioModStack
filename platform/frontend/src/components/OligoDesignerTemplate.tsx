@@ -17,8 +17,6 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { completeCurrentLaunchContext, submitJob } from '../lib/api';
-import { PhysicsRefinementPanel, type PhysicsRefinementSettings } from './PhysicsRefinementPanel';
-import { DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './physicsRefinementSettings';
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
 import { AptamerBrowser, type Aptamer } from './AptamerBrowser';
 import MolstarViewer from './MolstarViewer';
@@ -255,7 +253,6 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     const [boltzRecyclingSteps, setBoltzRecyclingSteps] = useState(3);
     const [boltzNumSamples, setBoltzNumSamples] = useState(1);
     const [showBoltzAdvanced, setShowBoltzAdvanced] = useState(false);
-    const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
 
     // ============================================================================
     // State: Storage Optimization
@@ -432,9 +429,6 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     boltz_sampling_steps: boltzSamplingSteps,
                     boltz_recycling_steps: boltzRecyclingSteps,
                     boltz_num_samples: boltzNumSamples,
-                    // Physics refinement
-                    openmm_enabled: physicsSettings.enabled,
-                    openmm_compute_tier: physicsSettings.computeTier,
                     // Storage
                     keep_intermediates: storageSettings.keep_intermediates,
                     compress_outputs: storageSettings.compress_outputs,
@@ -1096,13 +1090,6 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     )}
                 </div>
             </div>
-
-            {/* Physics Refinement Panel */}
-            <PhysicsRefinementPanel
-                settings={physicsSettings}
-                onSettingsChange={setPhysicsSettings}
-                isAntibody={false}
-            />
 
             {/* Collapsible: Filter Details */}
             <div className="bg-slate-800 rounded-lg p-4">

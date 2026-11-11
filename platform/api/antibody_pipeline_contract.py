@@ -72,8 +72,6 @@ def infer_antibody_artifact_class_from_stage(stage_family: Any, stage_mode: Any)
         return SEQUENCE_DESIGNED_COMPLEX
     if family == "validation":
         return VALIDATED_COMPLEX
-    if family == "openmm":
-        return POST_VALIDATION_REFINED_COMPLEX
     if family == "ppiflow":
         if mode in {"backbone_refine", "generator_backbone_refine", "post_rfantibody", "post_ppiflow"}:
             return BACKBONE_COMPLEX

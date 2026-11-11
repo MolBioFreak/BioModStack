@@ -22,7 +22,7 @@ HERE = Path(__file__).absolute().parent
 GATES = json.loads((HERE / 'scientific_acceptance_gates.json').read_text())
 RECORDED_ENV = frozenset(GATES['wire_files']) | {
     'BMS_TEST_NEXTFLOW_JAR', 'BMS_G09_FAMPNN_SOURCE', 'BMS_G09_PPIFLOW_SOURCE',
-    'BMS_BOLTZGEN_ANALYTICS_WIRES', 'BMS_SCIENTIFIC_VITE_CACHE', 'BMS_WP06_OPENMM_RECEIPT',
+    'BMS_BOLTZGEN_ANALYTICS_WIRES', 'BMS_SCIENTIFIC_VITE_CACHE',
     'BMS_SCIENTIFIC_INVENTORY', 'NXF_OFFLINE', 'NXF_DISABLE_CHECK_LATEST',
     'NXF_PLUGINS_DEFAULT', 'PYTHONPATH', 'PATH', 'TMPDIR',
     'PYTHONDONTWRITEBYTECODE', 'UV_NO_SYNC', 'PYTEST_ADDOPTS',
@@ -231,7 +231,6 @@ def main(argv=None):
                PYTHONPATH=os.pathsep.join([str(HERE), str(root / 'scripts'), str(root / 'platform/api')]),
                NXF_OFFLINE='true', NXF_DISABLE_CHECK_LATEST='true', NXF_PLUGINS_DEFAULT='',
                BMS_SCIENTIFIC_VITE_CACHE=str(output / 'vite-cache'),
-               BMS_WP06_OPENMM_RECEIPT=str(output / 'wires/openmm-command-receipt.json'),
                BMS_BOLTZGEN_ANALYTICS_WIRES=str(output / 'wires/boltzgen'))
     env.update({key: str(output / 'wires' / file) for key, file in GATES['wire_files'].items()})
     before = source_snapshot(root)
@@ -247,9 +246,6 @@ def main(argv=None):
             ('api', GATES['api'], root / 'platform/api', 'api'),
         ):
             report['gates'].append(run_gate(name, pytest_command(python, files, layer), cwd, env, output, files, True))
-            if name == 'root':
-                report['openmm_command_receipt_sha256'] = digest(
-                    require_path(env['BMS_WP06_OPENMM_RECEIPT'], 'fresh Nextflow OpenMM receipt'))
             if name == 'wire-export':
                 save(output / 'fresh-wire-hashes.json', wire_hashes(output, require=True))
         front = root / 'platform/frontend'

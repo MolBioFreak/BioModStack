@@ -4013,7 +4013,6 @@ def _build_manual_mutagenesis_iteration_job(
         "iteration_action": "manual_mutagenesis_round",
         "manual_mutagenesis_config": config.model_dump(),
         "run_frustrampnn": False,
-        "openmm_enabled": False,
     }
 
     if predictor == "protenix":
@@ -4306,7 +4305,6 @@ def _build_cdr_indel_iteration_job(
         "iteration_action": iteration_action,
         "cdr_indel_config": config.model_dump(),
         "run_frustrampnn": False,
-        "openmm_enabled": False,
     }
     if seed_refinement_trigger:
         launch_params["mutation_seed_refinement_trigger"] = seed_refinement_trigger
@@ -4576,7 +4574,6 @@ def _build_antibody_iteration_job(
                 "run_thermompnn": False,
                 "run_stability_scoring": False,
                 "run_af2_backprop": False,
-                "openmm_enabled": False,
                 "interactive_swa": True,
                 "interactive_gating": True,
                 "interactive_gate_stage": "post_structure_validation",
@@ -4601,7 +4598,6 @@ def _build_antibody_iteration_job(
                 "run_thermompnn": False,
                 "run_stability_scoring": False,
                 "run_af2_backprop": False,
-                "openmm_enabled": False,
                 "interactive_swa": True,
                 "interactive_gating": True,
                 "interactive_gate_stage": "post_structure_validation",
@@ -4627,7 +4623,6 @@ def _build_antibody_iteration_job(
                 "run_thermompnn": False,
                 "run_stability_scoring": False,
                 "run_af2_backprop": False,
-                "openmm_enabled": False,
                 "interactive_swa": False,
                 "interactive_gating": False,
                 "interactive_gate_stage": "post_fampnn",
@@ -4660,7 +4655,6 @@ def _build_antibody_iteration_job(
                 "run_thermompnn": False,
                 "run_stability_scoring": False,
                 "run_af2_backprop": False,
-                "openmm_enabled": False,
                 "interactive_swa": False,
                 "interactive_gating": False,
                 "interactive_gate_stage": "post_structure_validation",
@@ -4691,7 +4685,6 @@ def _build_antibody_iteration_job(
                 "run_thermompnn": False,
                 "run_stability_scoring": False,
                 "run_af2_backprop": False,
-                "openmm_enabled": False,
                 "interactive_swa": True,
                 "interactive_gating": True,
                 "interactive_gate_stage": "post_fampnn",
@@ -4715,7 +4708,6 @@ def _build_antibody_iteration_job(
                 "run_thermompnn": False,
                 "run_stability_scoring": False,
                 "run_af2_backprop": False,
-                "openmm_enabled": False,
                 "interactive_swa": False,
                 "interactive_gating": False,
                 "interactive_gate_stage": "post_structure_validation",

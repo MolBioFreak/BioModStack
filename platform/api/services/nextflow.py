@@ -5410,18 +5410,11 @@ def compile_nextflow_invocation(
     # Internal transport, never an operator parameter. The pending trusted Job
     # provenance join must supply the original pre-registry request separately;
     # normalized launch params cannot establish which values were requested.
-    params.pop('openmm_requested_settings_json', None)
     params.pop('esmf_requested_settings_json', None)
     if 'core_protein_scientific_contract' in params and requested_params is not None:
         if not isinstance(requested_params, dict):
-            raise ValueError('OpenMM request provenance must be an object')
+            raise ValueError('request provenance must be an object')
         params['esmf_requested_settings_json'] = json.dumps(requested_params, allow_nan=False, sort_keys=True)
-        openmm_keys = ('cdr_only', 'compute_tier', 'restraint_mode', 'antibody_chain',
-                       'force_field', 'max_iterations', 'energy_tolerance', 'fix_structure')
-        params['openmm_requested_settings_json'] = json.dumps(
-            {'openmm_' + key: requested_params['openmm_' + key]
-             for key in openmm_keys if 'openmm_' + key in requested_params},
-            allow_nan=False, sort_keys=True)
 
     if (
         str(model_id or "").strip().lower() == "protein_modification_experimental"

@@ -487,7 +487,6 @@ include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent
 include { BatchBoltzValidation ; BatchProtenixValidation ; BatchESMFold2Validation } from '../modules/antibody_batch'
 include { PrepareAntibodyFrustraMPNNCandidate ; PublishAntibodyFrustraMPNNCandidate ; AggregateAndReportAntibodyFrustraMPNN ; ReportAntibodyFrustraMPNNNotRequested } from '../modules/antibody_frustrampnn_parent'
 include { FinalizeSequentialValidationOutputs ; FinalizeTerminalAntibodyOutputs } from '../modules/antibody_output_finalization'
-include { AntibodyOpenMMRefinement } from '../modules/antibody_openmm_refinement'
 
 
 process SpawnRFantibodyJobs {
@@ -3304,17 +3303,11 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
     }
 
 
-    if (params.openmm_enabled == true) {
-        AntibodyOpenMMRefinement(validated_structures)
-        refined_structures = AntibodyOpenMMRefinement.out.refined_structures
-    } else {
-        refined_structures = validated_structures
-    }
 
     log.info("Step 4: Scoring immunogenicity with AntiBERTy...")
 
     if (params.run_immunogenicity_scoring != false) {
-        antiberty_input = refined_structures.map { meta, pdb ->
+        antiberty_input = validated_structures.map { meta, pdb ->
             [meta, pdb]
         }
 
@@ -3322,16 +3315,16 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
         immunogenicity_scores = ANTIBERTY_SCORE.out.scores
 
         if (params.filter_immunogenic != false) {
-            antiberty_filter_input = ANTIBERTY_SCORE.out.scores.join(refined_structures)
+            antiberty_filter_input = ANTIBERTY_SCORE.out.scores.join(validated_structures)
             ANTIBERTY_FILTER_STRUCTURES(antiberty_filter_input)
             filtered_structures = ANTIBERTY_FILTER_STRUCTURES.out.filtered_pdb
         }
         else {
-            filtered_structures = refined_structures
+            filtered_structures = validated_structures
         }
     }
     else {
-        filtered_structures = refined_structures
+        filtered_structures = validated_structures
         immunogenicity_scores = Channel.empty()
     }
 
@@ -3380,8 +3373,6 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
 
     def terminalStage = params.run_affinity_maturation == true
         ? 'iggm_affinity_maturation'
-        : params.openmm_enabled == true
-        ? 'openmm_relaxation'
         : params.run_post_validation_maturation == true
             ? 'maturation_post_validation'
             : params.run_structure_validation != false
@@ -3391,8 +3382,6 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                     : 'sequence_design_terminal'
     def terminalMethod = params.run_affinity_maturation == true
         ? 'iggm'
-        : params.openmm_enabled == true
-        ? 'openmm'
         : params.run_post_validation_maturation == true || params.run_ppiflow_maturation == true || params.run_maturation == true
             ? 'ppiflow'
             : params.run_structure_validation != false
