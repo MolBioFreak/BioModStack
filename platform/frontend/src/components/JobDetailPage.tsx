@@ -8,7 +8,6 @@ import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 import { useParams, Link, Navigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { sourceResultReturn } from '../lib/sourceResultReturn';
-import MolstarViewer from './MolstarViewer';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import type { Job } from '../lib/api';
 import { isRFD3GenerationResultJob } from './rfd3GenerationResultsView';

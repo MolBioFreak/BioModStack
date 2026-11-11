@@ -520,7 +520,7 @@ export const retryMDAnalysis = (jobId: string) => api.post<{ schema: 'bms.md.ana
 export interface MDRunDetail {
     schema: 'bms.md.run-detail.v1'; job_id: string; job_status: string; queue_status: string; phase: string; state_version: number;
     chemistry: { profile_id: string; profile_sha256: string; assurance: string; verification_status: string; requested_scope?: string | null };
-    engine: 'gromacs' | 'openmm'; replica_count: number; replica_summary: Record<string, number>;
+    engine: 'gromacs'; replica_count: number; replica_summary: Record<string, number>;
     simulated_time_ps: number; requested_time_ps: number; checkpoint_available: boolean;
     allowed_actions: Array<'pause' | 'resume_dynamics' | 'retry_dynamics' | 'cancel' | 'view_logs' | 'reorchestrate' | 'delete_failed_launch'>;
     action_explanations?: Partial<Record<'resume_dynamics' | 'retry_dynamics', string>>;

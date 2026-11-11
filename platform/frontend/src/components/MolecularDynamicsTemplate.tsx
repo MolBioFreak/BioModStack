@@ -6,7 +6,7 @@ import { savePredictionOperationDetour } from '../lib/binderSelectedRound';
 import { MolecularDynamicsNativeSettings } from './MolecularDynamicsNativeSettings';
 import { hydrateMolecularDynamicsNative, serializeMolecularDynamicsNativeDraft, type MolecularDynamicsNativeDraft, parseMolecularDynamicsNativePreview, type MolecularDynamicsNativeIntent, type MolecularDynamicsNativePreview } from './molecularDynamicsUiState';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
-import { api, prepareExecutionPlacement, completeCurrentLaunchContext, submitJob, type MdLaunchPreviewRequest } from '../lib/api';
+import { api, prepareExecutionPlacement, completeCurrentLaunchContext, type MdLaunchPreviewRequest } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { Gen2StartingStructure } from './Gen2StartingStructure';
 import { Gen2StructureSourceSelector, type Gen2StructureSourceTab } from './Gen2StructureSourceSelector';
@@ -15,7 +15,6 @@ import { Gen2PredictionReturnBridge, type Gen2PredictionCandidate, type Gen2Pred
 import { Gen2WorkflowControl } from './Gen2WorkflowControl';
 import {
     applyMolecularDynamicsProfileDefaults,
-    buildMolecularDynamicsJobSpec,
     buildMolecularDynamicsLaunchIntent,
     buildMolecularDynamicsPredictionHandoff,
     buildMolecularDynamicsPredictionRoute,
@@ -280,7 +279,6 @@ export function MolecularDynamicsTemplate({
     const [isPreviewing, setIsPreviewing] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState('');
-    const [showAdvanced, setShowAdvanced] = useState(false);
     const [placement, setPlacement] = useState(() => prepareExecutionPlacement({
         execution_target_id: Object.hasOwn(initialValues ?? {}, 'execution_target_id')
             ? initialValues!.execution_target_id as string | null : native?.execution_target_id,
@@ -629,7 +627,6 @@ export function MolecularDynamicsTemplate({
 
     const formErrors = useMemo(() => {
         if (nativeEnabled) return [];
-        if (form.inputMode === 'prepared') return validateMolecularDynamicsForm(form);
         const chemistryErrors = chemistryCatalogQuery.isPending
             ? ['Loading the deployed chemistry profile catalog.']
             : chemistryCatalogQuery.isError
@@ -686,7 +683,7 @@ export function MolecularDynamicsTemplate({
         schema_version: 'bms.md.launch-preview-request.v1', intent: intent(),
     });
     const nativeProvisionRequest = (() => {
-        if ((!nativeEnabled && form.inputMode === 'prepared') || !typedReady) return null;
+        if (!typedReady) return null;
         try { return buildLaunchPreviewRequest(); } catch { return null; }
     })();
 
@@ -741,11 +738,6 @@ export function MolecularDynamicsTemplate({
         }
     };
 
-    const buildPreparedWorkflowRequest = () => ({
-        name: form.jobName.trim(), model_id: 'molecular_dynamics', mode: 'simulate',
-        params: { md_job_spec: buildMolecularDynamicsJobSpec(form) },
-    });
-
     const projectDraftJson = JSON.stringify({
         editor_state: {
             ...initialValues,
@@ -772,33 +764,10 @@ export function MolecularDynamicsTemplate({
             md_design_id: designId,
             md_prior_job_id: priorMdJobId,
         },
-        ...(!nativeEnabled && form.inputMode === 'prepared' ? (() => {
-            try { return { native_job_request: buildPreparedWorkflowRequest() }; }
-            catch { return {}; }
-        })() : {}),
     });
     useEffect(() => {
         onDraftChange?.(JSON.parse(projectDraftJson) as Record<string, unknown>);
     }, [onDraftChange, projectDraftJson]);
-
-    // Typed launches use GROMACS; prepared systems use the selected engine.
-    // Chemistry runtime_version identifies preparation, not a simulator version.
-    const activeEngine = form.inputMode === 'prepared' ? form.engine : 'gromacs';
-    const activeEngineLabel = activeEngine === 'openmm' ? 'OpenMM' : 'GROMACS';
-
-    const launchPreparedCompatibility = async () => {
-        setSubmitError('');
-        setIsSubmitting(true);
-        try {
-            const result = await submitJob(buildPreparedWorkflowRequest());
-            await queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate(await completeCurrentLaunchContext(result.data) ?? '/');
-        } catch (error) {
-            setSubmitError(displayError(error, 'Prepared-system compatibility launch failed.'));
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
 
     const activeInspectionSha256 = inspection?.identity.sha256 ?? null;
     const handleViewerLoadState = useMemo(() => {
@@ -827,9 +796,7 @@ export function MolecularDynamicsTemplate({
 
     return (
         <div className="mx-auto w-full space-y-5" data-bms-md-launcher="gen2">
-            <ExecutionTargetPicker {...(nativeEnabled ? { value: placement.execution_target_id, onChange: (execution_target_id: string | null) => { invalidatePreview(); setPlacement(current => ({ ...current, execution_target_id })); } } : {})} workflowRequest={!nativeEnabled && form.inputMode === 'prepared'
-                ? formErrors.length === 0 ? buildPreparedWorkflowRequest() : null
-                : nativeProvisionRequest ? { workflow_type: 'molecular_dynamics', request: nativeProvisionRequest } : null} />
+            <ExecutionTargetPicker {...(nativeEnabled ? { value: placement.execution_target_id, onChange: (execution_target_id: string | null) => { invalidatePreview(); setPlacement(current => ({ ...current, execution_target_id })); } } : {})} workflowRequest={nativeProvisionRequest ? { workflow_type: 'molecular_dynamics', request: nativeProvisionRequest } : null} />
 
             <header className="flex flex-wrap items-start justify-between gap-4">
                 <div>
@@ -837,7 +804,7 @@ export function MolecularDynamicsTemplate({
                     <div className="flex items-center gap-3"><h1 className="text-2xl font-bold text-slate-100">Molecular Dynamics</h1><span className="rounded-full border border-orange-400/30 bg-orange-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-orange-300">Experimental alpha</span></div>
                     <p className="mt-2 max-w-3xl text-sm text-slate-400">Select a starting structure and chemistry, then preview and launch.</p>
                 </div>
-                <ModelDocumentationLinks topics={['gromacs', 'openmm']} title="MD references" compact summary="Product scope, engine references, and chemistry limits remain visible before launch." />
+                <ModelDocumentationLinks topics={['gromacs']} title="MD references" compact summary="Product scope, engine references, and chemistry limits remain visible before launch." />
             </header>
             <Gen2StartingStructure returned={Boolean(returnedPredictionJobId && predictionPage)} />
 
@@ -956,21 +923,17 @@ export function MolecularDynamicsTemplate({
                         {selectedProfile && <div className="mt-4 rounded-lg border border-slate-700 bg-slate-950/50 p-3 text-xs text-slate-400">Engine <span className="text-slate-200">GROMACS</span> · profile chemistry <span className="text-slate-200">{constraints?.force_field} + {constraints?.water_model}</span> · scope <span className="text-slate-200">{selectedProfile.scientific_validation.scope.launch_scope}</span></div>}
                     </section>}
 
-                    {!nativeEnabled && <section className={`${panelClass} p-0`}>
-                        <button type="button" onClick={() => setShowAdvanced((value) => !value)} className="flex w-full items-center justify-between p-5 text-left text-sm font-semibold text-slate-300"><span>Advanced prepared-system compatibility</span><span>{showAdvanced ? '▲' : '▼'}</span></button>
-                        {showAdvanced && <div className="space-y-4 border-t border-slate-800 p-5"><p className="text-xs text-amber-200">Prepared coordinates/topology remain a compatibility lane for the pinned OpenMM adapter. New automatic-preparation launches use the typed workflow above.</p><div className="grid grid-cols-2 gap-2">{(['structure', 'prepared'] as const).map((mode) => <button key={mode} type="button" disabled={mode === 'prepared' && form.engine !== 'openmm'} onClick={() => update('inputMode', mode)} className="rounded border border-slate-700 px-3 py-2 text-xs text-slate-300">{mode === 'structure' ? 'Typed starting structure' : 'Use prepared system'}</button>)}</div><label className={labelClass}>Compatibility engine<select className={inputClass} value={form.engine} onChange={(event) => { const engine = event.target.value as MolecularDynamicsForm['engine']; update('engine', engine); if (engine === 'openmm') update('inputMode', 'prepared'); }}><option value="gromacs" disabled={form.inputMode === 'prepared'}>GROMACS 2025.3</option><option value="openmm">OpenMM 8.5.2</option></select></label>{form.inputMode === 'prepared' && <div className="grid gap-4 md:grid-cols-2"><label className={labelClass}>Coordinates path (.gro)<input className={inputClass} value={form.coordinatesPath} onChange={(event) => update('coordinatesPath', event.target.value)} /></label><label className={labelClass}>Topology path (.top)<input className={inputClass} value={form.topologyPath} onChange={(event) => update('topologyPath', event.target.value)} /></label><p className="md:col-span-2 text-xs text-amber-300/80">Prepared systems are supported only by OpenMM. Declared topology includes are snapshotted into the verified Job closure.</p><button type="button" disabled={formErrors.length > 0 || isSubmitting} onClick={() => void launchPreparedCompatibility()} className="md:col-span-2 rounded-lg border border-amber-400/40 px-3 py-2 text-sm text-amber-200 disabled:opacity-50">Launch prepared-system compatibility job</button></div>}</div>}
-                    </section>}
                 </div>
 
                 <aside className="space-y-4 lg:sticky lg:top-5 lg:self-start">
                     <section className={panelClass}>
                         <h2 className="text-sm font-semibold text-slate-200">Launch summary</h2>
-                        {nativeEnabled ? <p className="mt-3 text-xs text-slate-300">{native?.input.kind} · {native?.stages.length} ordered stages · {native?.replicas} replicas per window · {native?.windows?.length ?? 0} explicit windows. Effective native time and output follow each stage MDP or the compiled TPR.</p> : <dl className="mt-4 space-y-3 text-xs"><div className="flex justify-between gap-3"><dt className="text-slate-500">Source</dt><dd className="max-w-40 truncate text-right text-slate-200">{inspection?.identity.label ?? 'Not inspected'}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Profile admission</dt><dd className={inspection?.admission.state === 'admitted' ? 'text-cyan-300' : 'text-amber-300'}>{inspection?.admission.state ?? 'pending'}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Engine</dt><dd className="text-slate-200" data-md-active-engine>{activeEngineLabel}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Replicas</dt><dd className="text-slate-200">{form.replicas}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Aggregate simulation</dt><dd className="font-semibold text-cyan-300">{scope.aggregateSimulationNs.toLocaleString()} ns</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Steps / replica</dt><dd className="text-slate-200">{scope.productionStepsPerReplica.toLocaleString()}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Total frames</dt><dd className="text-slate-200">{scope.totalTrajectoryFrames.toLocaleString()}</dd></div></dl>}
+                        {nativeEnabled ? <p className="mt-3 text-xs text-slate-300">{native?.input.kind} · {native?.stages.length} ordered stages · {native?.replicas} replicas per window · {native?.windows?.length ?? 0} explicit windows. Effective native time and output follow each stage MDP or the compiled TPR.</p> : <dl className="mt-4 space-y-3 text-xs"><div className="flex justify-between gap-3"><dt className="text-slate-500">Source</dt><dd className="max-w-40 truncate text-right text-slate-200">{inspection?.identity.label ?? 'Not inspected'}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Profile admission</dt><dd className={inspection?.admission.state === 'admitted' ? 'text-cyan-300' : 'text-amber-300'}>{inspection?.admission.state ?? 'pending'}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Engine</dt><dd className="text-slate-200" data-md-active-engine>GROMACS</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Replicas</dt><dd className="text-slate-200">{form.replicas}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Aggregate simulation</dt><dd className="font-semibold text-cyan-300">{scope.aggregateSimulationNs.toLocaleString()} ns</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Steps / replica</dt><dd className="text-slate-200">{scope.productionStepsPerReplica.toLocaleString()}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Total frames</dt><dd className="text-slate-200">{scope.totalTrajectoryFrames.toLocaleString()}</dd></div></dl>}
                     </section>
-                    {form.inputMode === 'structure' && formErrors.length > 0 && <section className="rounded-xl border border-red-500/30 bg-red-500/8 p-4"><h2 className="text-xs font-semibold uppercase tracking-wider text-red-300">Resolve before preview</h2><ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-red-200/80">{formErrors.map((error) => <li key={error}>{error}</li>)}</ul></section>}
+                    {formErrors.length > 0 && <section className="rounded-xl border border-red-500/30 bg-red-500/8 p-4"><h2 className="text-xs font-semibold uppercase tracking-wider text-red-300">Resolve before preview</h2><ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-red-200/80">{formErrors.map((error) => <li key={error}>{error}</li>)}</ul></section>}
                     {submitError && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/8 p-3 text-xs text-red-200">{submitError}</div>}
                     {previewIsCurrent && preview && <section className="rounded-xl border border-cyan-500/30 bg-cyan-500/8 p-4 text-xs text-cyan-100"><div className="font-semibold">Effective request digest</div><p className="mt-2">Execution target: {preview.execution_target_id ?? 'Local'} · Successful result return: {preview.execution_policy.remote_result_policy}</p><div className="mt-2 break-all font-mono text-[10px]">{preview.preview_digest}</div>{preview.execution_plan && <p className="mt-2 break-all">Shared plan: {preview.execution_plan.plan_sha256}<br />Source: {preview.execution_plan.source_identity.revision}<br />Components: {[...preview.execution_plan.metadata.static_components, ...preview.execution_plan.metadata.dynamic_templates].map(row => row.component_key).join(', ')}</p>}{preview.warnings.map((warning) => <div key={warning.code} className="mt-2 text-amber-200">{warning.message}</div>)}{preview.blockers.map((blocker) => <div key={blocker.code} className="mt-2 text-red-200">{blocker.message}</div>)}<details className="mt-3"><summary className="cursor-pointer text-cyan-200">Effective JSON</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-[10px] text-slate-300">{JSON.stringify(preview.effective_request, null, 2)}</pre></details></section>}
-                    {(nativeEnabled || form.inputMode === 'structure') && <><button type="button" disabled={!typedReady || previewRequestIsCurrent || isSubmitting} onClick={() => void previewLaunch()} className="w-full rounded-xl border border-cyan-500/50 px-4 py-3 text-sm font-bold text-cyan-200 disabled:cursor-not-allowed disabled:border-slate-700 disabled:text-slate-500">{previewRequestIsCurrent ? 'Compiling preview…' : 'Preview'}</button><button type="button" disabled={!previewIsCurrent || (preview?.blockers.length ?? 0) > 0 || isSubmitting} onClick={() => void launchTyped()} className="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-500">{isSubmitting ? 'Materializing MD job…' : 'Launch'}</button></>}
+                    {<><button type="button" disabled={!typedReady || previewRequestIsCurrent || isSubmitting} onClick={() => void previewLaunch()} className="w-full rounded-xl border border-cyan-500/50 px-4 py-3 text-sm font-bold text-cyan-200 disabled:cursor-not-allowed disabled:border-slate-700 disabled:text-slate-500">{previewRequestIsCurrent ? 'Compiling preview…' : 'Preview'}</button><button type="button" disabled={!previewIsCurrent || (preview?.blockers.length ?? 0) > 0 || isSubmitting} onClick={() => void launchTyped()} className="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-500">{isSubmitting ? 'Materializing MD job…' : 'Launch'}</button></>}
                     <p className="text-center text-[11px] text-slate-600">Launch creates one scheduler-visible Job. Managed input references are resolved by the server; GPU placement and materialization remain server-owned.</p>
                 </aside>
             </div>
