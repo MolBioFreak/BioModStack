@@ -116,6 +116,8 @@ class SplitTask(Closed):
     min_fragment_length: int = Field(default=1, ge=1)
     max_fragment_length: int | None = Field(default=None, ge=1)
     target_fragment_length: int | None = Field(default=None, ge=1)
+    max_homopolymer_run: int | None = Field(default=None, ge=1, description="Optional junction-only rule: the full cohesive footprint must avoid longer target homopolymer tracts; target bases are unchanged.")
+    homopolymer_junction_buffer: int = Field(default=0, ge=0, description="Adjacent target bases excluded on each side of a long tract; active only when max_homopolymer_run is set.")
     display_origin: int = Field(default=0, ge=0)
     preparation: SplitPreparation
     terminal_right_fusion: str | None = None

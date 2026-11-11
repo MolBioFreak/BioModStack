@@ -18,7 +18,7 @@ from .feature_types import Closed, Material, Region
 from .golden_gate import resolve_golden_gate_enzyme
 from .golden_gate_design import _digest, _scan, preparation_geometry
 from .golden_gate_design_types import DesignMaterial, Source
-from .golden_gate_workflow import material_for, run_workflow
+from .golden_gate_workflow import material_for, run_workflow, _homopolymer_junction_rules
 from .golden_gate_workflow_types import (
     CutWindow, FidelitySettings, SearchControls, SplitPreparation, SplitTask, WorkflowCandidate,
 )
@@ -51,6 +51,8 @@ class SuggestRequest(Closed):
     min_fragment_length: int = Field(default=1, ge=1)
     max_fragment_length: int | None = Field(default=None, ge=1)
     target_fragment_length: int | None = Field(default=None, ge=1)
+    max_homopolymer_run: int | None = Field(default=None, ge=1, description="Optional junction-only rule: the full cohesive footprint must avoid longer target homopolymer tracts; target bases are unchanged.")
+    homopolymer_junction_buffer: int = Field(default=0, ge=0, description="Adjacent target bases excluded on each side of a long tract; active only when max_homopolymer_run is set.")
     avoid_repeats: bool = True
     preparation_kind: str = "synthesis"          # "synthesis" | "pcr"
     clamp: str = "TT"
@@ -256,6 +258,8 @@ def suggest_golden_gate(request: SuggestRequest, *, resolve_revision: Callable[[
                 protected_regions=[CutWindow(start=a, end=b) for a, b in protected],
                 min_fragment_length=request.min_fragment_length, max_fragment_length=request.max_fragment_length,
                 target_fragment_length=request.target_fragment_length,
+                max_homopolymer_run=request.max_homopolymer_run,
+                homopolymer_junction_buffer=request.homopolymer_junction_buffer,
                 preparation=SplitPreparation(kind=request.preparation_kind, clamp=clamp, spacer=spacer),
                 terminal_right_fusion=terminal,
                 fidelity=FidelitySettings(dataset_id=dataset),
@@ -309,6 +313,8 @@ def suggest_golden_gate(request: SuggestRequest, *, resolve_revision: Callable[[
                                    fragment_lengths=choice["fragment_lengths"], f_set=choice.get("f_set"),
                                    split_request=selected_task.model_dump(mode="json"), candidate=candidate, pcr_products=pcr,
                                    notes=_repeat_notes(analysis, selected_cuts, choice["fragment_lengths"], circular) +
+                                       _homopolymer_junction_rules(material, geometry.overhang_length,
+                                           request.max_homopolymer_run, request.homopolymer_junction_buffer)[1] +
                                        (["For this 3-prime enzyme, terminal_right_fusion supplies the external left bottom-strand protrusion; target top-strand bases are unchanged."]
                                         if not circular and geometry.polarity == "three_prime" else []),
                                    donor_retained_fragment_index=donor_index)))

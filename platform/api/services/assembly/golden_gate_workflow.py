@@ -203,6 +203,54 @@ def _split_core(request: SplitTask, material: Material, cuts: list[dict], width:
         target=Target(topology=material.topology, display_origin=origin, exact_sequence=expected))
 
 
+def _homopolymer_junction_rules(material: Material, width: int, maximum: int | None,
+                                buffer: int) -> tuple[set[int] | None, list[str]]:
+    """Mask complete target-axis cohesive footprints, never edit target bases.
+
+    Runs and buffer intervals are half-open; circular terminal runs are one tract.
+    This is an opt-in domain constraint, composed with the existing search mask.
+    """
+    if maximum is None:
+        return None, []
+    import re
+    sequence = material.sequence.upper()
+    n = len(sequence)
+    circular = material.topology == 'circular'
+    runs = [(m.start(), m.end()) for m in re.finditer(r'([ACGT])\1*', sequence)]
+    if (circular and len(runs) > 1 and runs[0][0] == 0 and runs[-1][1] == n
+            and sequence[0] == sequence[-1]):
+        runs = [(runs[-1][0], n + runs[0][1]), *runs[1:-1]]
+    tracts = [(a, b) for a, b in runs if b - a > maximum]
+    delta = [0] * (n + 1)
+    for a, b in tracts:
+        a, b = a - buffer, b + buffer
+        if circular:
+            length = min(n, b - a)
+            a %= n
+            end = a + length
+            delta[a] += 1
+            delta[min(n, end)] -= 1
+            if end > n:
+                delta[0] += 1
+                delta[end - n] -= 1
+        else:
+            delta[max(0, a)] += 1
+            delta[min(n, b)] -= 1
+    blocked, active = [], 0
+    for d in delta[:-1]:
+        active += d
+        blocked.append(bool(active))
+    prefix = [0]
+    for value in blocked + (blocked[:width-1] if circular else []):
+        prefix.append(prefix[-1] + value)
+    allowed = {p for p in range(n if circular else max(0, n-width+1))
+               if p + width < len(prefix) and prefix[p+width] == prefix[p]}
+    notes = ([f'Target homopolymer tracts longer than {maximum} nt: {len(tracts)} unchanged '
+              f'(not domesticated); junction footprints avoid these tracts and {buffer} adjacent nt.']
+             if tracts else [])
+    return allowed, notes
+
+
 def run_workflow(request: WorkflowRequest, *, resolve_revision: Callable[[str], Material] | None = None,
                  allowed_positions: set[int] | None = None) -> WorkflowResult:
     if isinstance(request, AssembleTask):
@@ -223,6 +271,18 @@ def run_workflow(request: WorkflowRequest, *, resolve_revision: Callable[[str], 
     enzyme = resolve_golden_gate_enzyme(enzyme_id=request.enzyme.enzyme_id, catalog_id=request.enzyme.catalog_id,
         expected_catalog_sha256=request.enzyme.catalog_sha256)
     width = preparation_geometry(enzyme).overhang_length
+    rule_positions, rule_notes = _homopolymer_junction_rules(material, width,
+        request.max_homopolymer_run, request.homopolymer_junction_buffer)
+    if rule_positions is not None:
+        exact = {p for p in request.fixed_positions if p is not None}
+        exact.update(w.start for w in request.windows if w.end == w.start + 1)
+        conflicts = sorted(exact - rule_positions)
+        if conflicts:
+            return WorkflowResult(requested=request, diagnostics=[*rule_notes,
+                f'Homopolymer junction rule conflict at exact cut position(s) {conflicts}: '
+                f'full cohesive footprint intersects a tract longer than {request.max_homopolymer_run} nt '
+                f'or its {request.homopolymer_junction_buffer}-nt adjacent buffer; authored cuts are unchanged.'])
+        allowed_positions = rule_positions if allowed_positions is None else allowed_positions & rule_positions
     result = fidelity.optimize_sequence_windows(material.sequence, [(w.start, w.end) for w in request.windows], settings.dataset_id,
         end_length=width, topology=material.topology, fixed_positions=request.fixed_positions, fixed_overhangs=request.fixed_overhangs,
         allowed_positions=allowed_positions,
@@ -230,7 +290,9 @@ def run_workflow(request: WorkflowRequest, *, resolve_revision: Callable[[str], 
         frame_constraints=[(w.start, w.end, w.origin, w.phase) for w in request.frame_constraints],
         min_fragment_length=request.min_fragment_length, max_fragment_length=request.max_fragment_length,
         target_fragment_length=request.target_fragment_length, condition_use=settings.condition_use, settings=search)
-    solutions, diagnostics = [], []
+    solutions, diagnostics = [], list(rule_notes)
+    if rule_positions is not None and not result['solutions']:
+        diagnostics.append('No junction set returned under the explicit homopolymer junction rule and other requested constraints; the rule was not relaxed.')
     for i, choice in enumerate(result['solutions']):
         try:
             core = _split_core(request, material, choice['cuts'], width)
