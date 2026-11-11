@@ -1,7 +1,7 @@
 {
   "schema": "bms.tool-recipe.v1",
   "id": "md-preparation",
-  "name": "MD preparation (AmberTools, OpenMM, ParmEd)",
+  "name": "MD preparation (AmberTools, ParmEd)",
   "label": "starting-point",
   "modules": [
     "molecular_dynamics"

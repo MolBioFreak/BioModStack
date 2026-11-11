@@ -196,7 +196,7 @@ def retain_prepared_file(source: Path, destination: Path) -> None:
     """Retain a verified preparation leaf, never an engine output.
 
     The bundle writer completion-publishes read-only regular files; GROMACS
-    grompp and OpenMM only read these inputs. Legacy writable bundles and
+    grompp only reads these inputs. Legacy writable bundles and
     cross-filesystem placements keep independent bytes. Replace the local name
     atomically so a preparation retry cannot truncate another replica's input.
     """

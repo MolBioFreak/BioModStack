@@ -218,7 +218,7 @@ def test_bc2_action_assets_exclude_unselected_predictor_weights(mode):
     assert assets == expected
 
 
-def test_selected_gromacs_closure_does_not_select_openmm_or_binder_engines():
+def test_selected_gromacs_closure_does_not_select_binder_engines():
     from model_registry import selected_execution_metadata
     metadata = selected_execution_metadata('molecular_dynamics', 'simulate',
         {'md_engine': 'gromacs', 'md_config': {'engine': 'gromacs', 'replicas': 1}},

@@ -8,22 +8,6 @@ This subsystem turns BioModStack's existing structure-relaxation scaffolding int
 
 **Primary production engine: GROMACS 2025.3 with CUDA.**
 
-**Reference/specialized adapter: OpenMM 8.5.2 with CUDA 13.**
-
-A same-system engineering benchmark used the official 95,561-atom GROMACS ADH dodecahedron system, 2 fs steps, PME, 0.9 nm cutoff, and hydrogen-bond constraints. GROMACS and OpenMM read the same coordinates and GROMACS topology. Thermostat/integrator implementations differed, so the comparison measures practical production throughput, not trajectory or floating-point equivalence.
-
-| Host GPU | GROMACS ns/day | OpenMM ns/day | GROMACS advantage |
-|---|---:|---:|---:|
-| RTX 5060 Ti 16 GB | 237.136 | 173.334 | 36.81% |
-| RTX 3090 24 GB (bus 11) | 305.412 | 209.749 | 45.61% |
-| RTX 5090 32 GB | 618.942 | 456.657 | 35.54% |
-| RTX 3090 24 GB (bus e1) | 298.155 | 210.037 | 41.95% |
-| **Four independent replicas** | **1459.645** | **1049.778** | **39.04%** |
-
-The heterogeneous GPUs are scheduled as **independent seeded replicas**, not one mixed-GPU trajectory. This avoids slow-device synchronization and gives the useful aggregate of 1.460 µs/day on this fixture.
-
-Raw benchmark record: `benchmarks/md/adh_engine_comparison_2026-07-17.json`.
-
 ## Public contracts
 
 - Canonical typed Job schema: `bms.md.job.v2`
@@ -63,8 +47,6 @@ The browser submits the complete requested scientific settings as `bms.md.launch
 Profile changes invalidate both admission and preview. Any operator-setting change invalidates the preview. Clones reopen the prior Job-owned immutable input by Job UUID; typed Project requests reopen their original Design source and requested settings. Neither path recovers a browser-visible source path.
 
 ### Compatibility boundary
-
-The prepared-system compatibility lane remains available only for explicitly prepared coordinates/topology through the pinned OpenMM 8.5.2 adapter. It does not use the typed automatic-preparation route and makes no GROMACS profile-admission claim. Generic `bms.md.job.v1` and direct `md_job_config` handling remain compatibility surfaces for existing automation; new browser and agent automatic-preparation submissions use the typed Gen 2 preview/launch routes.
 
 ## API and Nextflow integration
 
@@ -136,6 +118,5 @@ Each stage has an atomic state ledger with artifact checksums. Completed stages 
 ## Runtime builds
 
 - GROMACS: `nvcr.io/nvidia/gromacs:v2025.3`, pinned base digest `sha256:8ee1822b8a34ace738e000a6c9cf8bc9a8abdbbf49e84506238a427b89ee6daf`; rebuilt SIF `$BMS_CONTAINER_DIR/gromacs-md-2025.3.sif` (`$BMS_CONTAINER_DIR` is the configured container directory), 533,737,472 bytes, SHA-256 `97c117ea07496c0d1b13d80be84d33345b89063b47ccfb83f6cbff0145f1385b`.
-- OpenMM reference: `containers/openmm-md/Dockerfile` and `environment.yml`, OpenMM 8.5.2 + CUDA 13.0.
 
 The host CUDA compiler is not used to run either container. Runtime compatibility comes from NVIDIA driver 580.173.02 and containerized CUDA user-space libraries.

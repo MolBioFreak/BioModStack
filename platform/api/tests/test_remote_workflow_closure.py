@@ -752,7 +752,6 @@ def test_selected_native_family_graphs_are_typed_not_placeholders(model, mode, e
 
 @pytest.mark.parametrize('engine,process,image,cpus', [
     ('gromacs', 'MD_GROMACS_REPLICA', 'gromacs-md-2025.3.sif', 8),
-    ('openmm', 'MD_OPENMM_REPLICA', 'openmm-md-8.5.2.sif', 4),
 ])
 @pytest.mark.parametrize('preparation,extra', [
     ('prepared', {}),
