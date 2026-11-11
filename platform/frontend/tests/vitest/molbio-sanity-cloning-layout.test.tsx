@@ -83,6 +83,9 @@ describe('Molecular Tools layout fixes (class/text checks only; pixels are cover
 
     it('Golden Gate sub-mode switches are separate styled buttons in a wrapping row', async () => {
         await render(); await click('Golden Gate');
+        expect(button('Build target')!.className).toContain('bg-violet-600');
+        expect(button('Manual / prepared fragments')!.className).toContain('bg-slate-800');
+        await click('Manual / prepared fragments');
         const a = button('Manual / prepared fragments')!, b = button('Raw design / evaluate / optimize / split')!;
         expect(a.type).toBe('button'); expect(b.type).toBe('button');
         expect(a.parentElement).toBe(b.parentElement);

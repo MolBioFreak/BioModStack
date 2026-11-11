@@ -26,7 +26,11 @@ export function inlineFragmentFeatures(
         let clipped = false;
         for (const part of parts) {
             let run: { start: number; end: number } | null = null;
-            for (let p = part.start; p < part.end; p++) {
+            // Keep one biological run across an origin-spanning source segment.
+            // Its projection may become contiguous in a linear selected-range target.
+            const sourceEnd = part.end < part.start ? part.end + sourceLength : part.end;
+            for (let position = part.start; position < sourceEnd; position++) {
+                const p = part.end < part.start ? position % sourceLength : position;
                 const index = local.get(p);
                 if (index === undefined) { clipped = true; if (run) { segments.push(run); run = null; } continue; }
                 if (run && run.end === index) run.end = index + 1;

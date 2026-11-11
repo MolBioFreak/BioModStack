@@ -1,10 +1,14 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
     fetchMolecularRevision,
+    fetchGoldenGateAssemblyOptions,
+    type SuggestGoldenGateRequest,
     suggestGibsonPlan,
     suggestGoldenGatePlan,
     prepareRestrictionCloning,
     suggestRestrictionCloning,
+    type GoldenGateAssemblyOptionsResponse,
     type LigationAssemblyRequest,
     type SuggestRestrictionRequest,
     type SuggestRestrictionProposal,
@@ -19,14 +23,16 @@ import {
 } from '../../../lib/api';
 import type { WorkflowRequest } from '../../../lib/goldenGateWorkflowTypes';
 import { FragmentChooser } from '../FragmentChooser';
-import type { SequenceData } from '../types';
+import type { SequenceData, SelectionInfo } from '../types';
+import { SequenceViewer } from '../SequenceViewer';
+import { DEFAULT_VISIBILITY } from '../sequenceViewerConstants';
+import { createSelectionSnapshot } from '../utils/selectionActions';
 import { inlineFragmentFeatures } from '../utils/assemblyFeatures';
 
 type Method = 'gibson' | 'golden_gate' | 'restriction';
 type Molecule = { name: string; sequence: string; circular: boolean; features?: SequenceFeature[]; document_id?: string; revision_id?: string; revision_number?: number };
-type TargetChoice = 'current' | 'saved' | 'pasted';
+type TargetChoice = 'current' | 'selection' | 'saved' | 'pasted';
 
-const GG_ENZYMES = ['BsaI', 'BsmBI', 'Esp3I', 'BbsI', 'SapI', 'PaqCI', 'BtgZI'];
 /** "EcoRI + BamHI", or "EcoRI (single enzyme)" when both ends use the same enzyme. */
 export const enzymePairLabel = (enzymes: string[]) => enzymes.length > 1 && enzymes.every((e) => e === enzymes[0]) ? `${enzymes[0]} (single enzyme)` : enzymes.join(' + ');
 /** One heading label: the shared pair when vector and insert use the same ends, otherwise both. */
@@ -87,7 +93,7 @@ function GibsonProposal({ proposal, onUse }: { proposal: SuggestGibsonProposal; 
     </li>;
 }
 
-function GoldenGateProposal({ proposal, onUse }: { proposal: SuggestGoldenGateProposal; onUse: (request: WorkflowRequest) => void }) {
+function GoldenGateProposal({ proposal, onUse, onEdit, targetSequence, sourceBoundary }: { sourceBoundary?: (cut: number) => number; targetSequence: string; onEdit: (cuts: number[]) => void; proposal: SuggestGoldenGateProposal; onUse: (request: WorkflowRequest) => void }) {
     const per = proposal.candidate?.fidelity?.per_junction;
     const empirical = proposal.empirical === 'no empirical data';
     return <li className="space-y-1 rounded border border-slate-700 bg-slate-950/60 p-2">
@@ -97,13 +103,24 @@ function GoldenGateProposal({ proposal, onUse }: { proposal: SuggestGoldenGatePr
             const p = per?.find((x) => x.representative === j || x.representative === j.split('').reverse().join(''))?.probability;
             return `${j}${p != null ? ` (${(p * 100).toFixed(1)}%)` : ''}`;
         }).join(', ')}</div>
+        <div aria-label="Target cut preview" className="text-slate-300">{proposal.cuts.map((cut, i) => <div key={i}>Cut after bp {cut}{sourceBoundary ? ` (source boundary ${sourceBoundary(cut)})` : ''}: <code>{targetSequence.slice(Math.max(0, cut - 8), cut)}|{targetSequence.slice(cut, cut + 8)}</code> · junction {proposal.junctions[i] ?? '—'}</div>)}</div>
+        <button type="button" className="rounded border border-slate-600 px-2 py-1" onClick={() => onEdit(proposal.cuts)}>Edit these cuts</button>
         <div className="text-slate-400">Fragments: {proposal.fragment_lengths.join(', ')} bp · cuts at {proposal.cuts.join(', ')}</div>
+        {!!proposal.notes?.length && <ul aria-label="Planning notes" className="text-slate-400">{proposal.notes.map((note, i) => <li key={i}>{note}</li>)}</ul>}
+        {(proposal.candidate?.design?.materials ?? []).some(m => m.stage === 'prepared') && <details aria-label="Prepared fragment sequences" className="text-slate-300">
+            <summary>Prepared fragments (with removable Type IIS flanks)</summary>
+            {(proposal.candidate?.design?.materials ?? []).filter(m => m.stage === 'prepared').map(m => <div key={m.id}>{m.id} · {m.sequence.length} bp<code className="block max-h-24 overflow-auto break-all">{m.sequence}</code></div>)}
+            <p>Use this plan, then Run Golden Gate task to save or export the fixed workup ZIP, including prepared FASTA. The target sequence above remains unchanged.</p>
+        </details>}
         {proposal.pcr_products.length > 0 && <div className="text-slate-400">PCR: {proposal.pcr_products.map((p) => `${p.part_id} ${p.tailed_length} bp with tails (${p.payload_length} bp payload)`).join(', ')}</div>}
         <button type="button" className="rounded bg-violet-600 px-2 py-1 text-white" onClick={() => onUse(proposal.split_request as unknown as WorkflowRequest)}>Use this plan</button>
     </li>;
 }
 
-export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onUseGoldenGate, onUseRestriction }: {
+export function SuggestPlan({ builder = false, goldenGateOptions, selection, sequenceData, selectedSequenceId, onUseGibson, onUseGoldenGate, onUseRestriction }: {
+    selection?: SelectionInfo | null;
+    builder?: boolean;
+    goldenGateOptions?: GoldenGateAssemblyOptionsResponse | null;
     sequenceData: SequenceData;
     selectedSequenceId: string | null;
     onUseGibson: (design: SavedGibsonDesignRequest) => void;
@@ -124,8 +141,19 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
     const [minAnneal, setMinAnneal] = useState(13);
     const [minMatch, setMinMatch] = useState(30);
     const [boundaries, setBoundaries] = useState('');
-    const [enzymes, setEnzymes] = useState<string[]>(GG_ENZYMES);
+    const [enzyme, setEnzyme] = useState('');
+    const discovery = useQuery({ queryKey: ['molbio-golden-gate-options'], queryFn: async ({ signal }) => (await fetchGoldenGateAssemblyOptions(signal)).data, enabled: open && method === 'golden_gate' && !goldenGateOptions, staleTime: 300000 });
+    const options = goldenGateOptions ?? discovery.data;
+    const compatibleEnzymes = (options?.enzymes ?? []).filter(e => options?.raw_design?.raw_enzyme_adapters.includes(e.canonical_name));
+    const selectedEnzyme = enzyme || compatibleEnzymes[0]?.enzyme_id || '';
+    useEffect(() => { if (builder) { setOpen(true); setMethod('golden_gate'); } }, [builder]);
     const [fragmentCount, setFragmentCount] = useState('');
+    const [targetLength, setTargetLength] = useState('');
+    const [minLength, setMinLength] = useState('1');
+    const [maxLength, setMaxLength] = useState('');
+    const [avoidRepeats, setAvoidRepeats] = useState(true);
+    const [maxHomopolymerRun, setMaxHomopolymerRun] = useState('');
+    const [homopolymerBuffer, setHomopolymerBuffer] = useState('0');
     const [preparation, setPreparation] = useState<'synthesis' | 'pcr'>('synthesis');
     const [fusion, setFusion] = useState('');
     const [restrictionEnzymes, setRestrictionEnzymes] = useState('');
@@ -139,6 +167,7 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
     const [error, setError] = useState<string | null>(null);
     const [gibson, setGibson] = useState<{ proposals: SuggestGibsonProposal[]; diagnostics: string[] } | null>(null);
     const [goldenGate, setGoldenGate] = useState<SuggestGoldenGateResponse | null>(null);
+    const [previewSelection, setPreviewSelection] = useState<SelectionInfo | null>(null);
     const [restriction, setRestriction] = useState<SuggestRestrictionResponse | null>(null);
     const request = useRef(0);
 
@@ -147,9 +176,18 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
         features: inlineFragmentFeatures(sequenceData.features, sequenceData.sequence.length) ?? [],
         document_id: selectedSequenceId ?? undefined,
     };
+    const snapshot = createSelectionSnapshot(selection, sequenceData.sequence, sequenceData.circular);
+    const selectedTarget: Molecule | null = snapshot ? {
+        name: `${sequenceData.name} ${snapshot.coordinateLabel}`, sequence: snapshot.sequence, circular: false,
+        features: inlineFragmentFeatures(sequenceData.features, sequenceData.sequence.length, snapshot.placement) ?? [],
+    } : null;
     const target: Molecule | null = targetChoice === 'current' ? current
-        : targetChoice === 'saved' ? savedTarget
+        : targetChoice === 'selection' ? selectedTarget : targetChoice === 'saved' ? savedTarget
             : pasteSequence.trim() ? { name: pasteName.trim() || 'Pasted target', sequence: pasteSequence.toUpperCase().replace(/[^A-Z]/g, ''), circular: pasteCircular } : null;
+    // Field edits invalidate recommendations; only an explicit action runs the planner.
+    useEffect(() => { request.current++; setGoldenGate(null); setBusy(false); }, [target?.sequence, target?.circular, selectedEnzyme, fragmentCount, boundaries, preparation, fusion, targetLength, minLength, maxLength, avoidRepeats, maxHomopolymerRun, homopolymerBuffer]);
+    useEffect(() => { setPreviewSelection(null); }, [target?.sequence, target?.circular]);
+    const editCuts = (cuts: number[]) => { setBoundaries(cuts.join(', ')); setFragmentCount(String(cuts.length + (target?.circular ? 0 : 1))); setGoldenGate(null); };
     const selectedSources: Molecule[] = [...(useCurrentSource ? [current] : []), ...sources];
     const pick = (apply: (m: Molecule) => void) => (item: ChooserItem) => { void moleculeFromItem(item).then(apply).catch((e) => setError(errorText(e))); };
 
@@ -173,12 +211,23 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
                 const { data } = await suggestGibsonPlan(body);
                 if (mine === request.current) setGibson(data);
             } else if (method === 'golden_gate') {
-                const body = {
+                if (!selectedEnzyme) { setError('Choose a compatible Type IIS enzyme.'); return; }
+                if (maxHomopolymerRun !== '' && (!Number.isSafeInteger(Number(maxHomopolymerRun)) || Number(maxHomopolymerRun) < 1)) { setError('Maximum homopolymer run must be a whole number of at least 1, or blank to disable.'); return; }
+                if (homopolymerBuffer === '' || !Number.isSafeInteger(Number(homopolymerBuffer)) || Number(homopolymerBuffer) < 0) { setError('Homopolymer junction buffer must be a whole number of at least 0.'); return; }
+                const fixed = numbers(boundaries);
+                if (boundaries.trim() && (!/^[\d\s,]+$/.test(boundaries) || fixed.some(c => !Number.isInteger(c) || c < 0 || c >= target.sequence.length))) { setError('Enter whole-number cut boundaries within the target.'); return; }
+                const body: SuggestGoldenGateRequest = {
                     target: { id: 'target', source: target.revision_id
                         ? { kind: 'molecular_revision' as const, revision_id: target.revision_id }
                         : { kind: 'inline' as const, sequence: target.sequence, topology: target.circular ? 'circular' as const : 'linear' as const, features: storedFeatures(target.features) } },
-                    enzymes,
-                    fragment_count: fragmentCount ? Number(fragmentCount) : null,
+                    enzymes: [selectedEnzyme],
+                    target_fragment_length: targetLength ? Number(targetLength) : null,
+                    min_fragment_length: Number(minLength),
+                    max_fragment_length: maxLength ? Number(maxLength) : null,
+                    avoid_repeats: avoidRepeats,
+                    max_homopolymer_run: maxHomopolymerRun ? Number(maxHomopolymerRun) : null,
+                    homopolymer_junction_buffer: Number(homopolymerBuffer),
+                    fragment_count: fragmentCount ? Number(fragmentCount) : numbers(boundaries).length ? numbers(boundaries).length + (target.circular ? 0 : 1) : null,
                     fixed_boundaries: numbers(boundaries),
                     preparation_kind: preparation,
                     ...(fusion.trim() ? { terminal_right_fusion: fusion.trim().toUpperCase() } : {}),
@@ -239,20 +288,21 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
     return (
         <section aria-label="Suggest plan" className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3 text-xs">
             <div className="flex items-center justify-between">
-                <h5 className="font-semibold text-slate-100">Suggest plan</h5>
-                <button type="button" className="px-2 text-slate-400" onClick={() => setOpen(false)}>Close</button>
+                <h5 className="font-semibold text-slate-100">{builder ? 'Golden Gate target builder' : 'Suggest plan'}</h5>
+                {!builder && <button type="button" className="px-2 text-slate-400" onClick={() => setOpen(false)}>Close</button>}
             </div>
-            <div className="flex flex-wrap gap-2">
+            {!builder && <div className="flex flex-wrap gap-2">
                 {([['gibson', 'HiFi / Gibson'], ['golden_gate', 'Golden Gate'], ['restriction', 'Restriction-ligation']] as const).map(([value, label]) => (
                     <button key={value} type="button" onClick={() => setMethod(value)}
                         className={`rounded-full px-3 py-1 ${method === value ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300'}`}>{label}</button>
                 ))}
-            </div>
+            </div>}
 
             <fieldset className="min-w-0 space-y-1">
                 <legend className="text-slate-300">{method === 'restriction' ? 'Backbone' : 'Target (what you want to end up with)'}</legend>
                 <select aria-label="Target molecule" className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={targetChoice} onChange={(e) => setTargetChoice(e.target.value as TargetChoice)}>
                     <option value="current">Open molecule: {sequenceData.name}</option>
+                    <option value="selection" disabled={!snapshot}>Selected range{snapshot ? `: ${snapshot.coordinateLabel}` : " (select bases in the sequence view)"}</option>
                     <option value="saved">Another saved molecule</option>
                     <option value="pasted">Pasted sequence</option>
                 </select>
@@ -267,6 +317,7 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
                 </div>}
             </fieldset>
 
+            {method === 'golden_gate' && <p className="text-slate-400">{target?.sequence.length ?? 0} bp · {target?.circular ? 'circular' : 'linear'}. Cut after bp N = boundary N (not N + 1). Positions are relative to this target{targetChoice === 'selection' && snapshot ? `; target bp 1 starts at source bp ${snapshot.placement.start + 1}` : ''}. Type IIS sites are added to ordered fragments, not to the target DNA.</p>}
             {method !== 'golden_gate' && <fieldset className="min-w-0 space-y-1">
                 <legend className="text-slate-300">{method === 'restriction' ? 'Insert (first source is used)' : 'Sources to build from'}</legend>
                 <p className="text-slate-500">Only the molecules selected here are searched.</p>
@@ -283,17 +334,26 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
                 <Num label="Min match (nt)" value={minMatch} onChange={setMinMatch} />
             </div>}
             {method === 'golden_gate' && <div className="space-y-2">
-                <div className="flex flex-wrap gap-2">{GG_ENZYMES.map((name) => <label key={name} className="flex items-center gap-1 text-slate-300">
-                    <input type="checkbox" checked={enzymes.includes(name)} onChange={(e) => setEnzymes((list) => e.target.checked ? [...list, name] : list.filter((x) => x !== name))} /> {name}</label>)}</div>
+                <label className="flex flex-col gap-1 text-slate-400">Type IIS enzyme
+                    <select aria-label="Type IIS enzyme" value={selectedEnzyme} onChange={e => setEnzyme(e.target.value)} className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200">
+                        {compatibleEnzymes.map(e => <option key={e.enzyme_id} value={e.enzyme_id}>{e.canonical_name} · {e.overhang_length} nt overhang</option>)}
+                    </select>
+                </label>
                 <div className="flex flex-wrap gap-3">
                     <label className="flex flex-col gap-1 text-slate-400">Fragment count
-                        <input className="w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={fragmentCount} onChange={(e) => setFragmentCount(e.target.value)} /></label>
+                        <input type="number" min={1} className="w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={fragmentCount} onChange={(e) => setFragmentCount(e.target.value)} /></label>
+                    {([['Target fragment length (bp)', targetLength, setTargetLength], ['Minimum fragment length (bp)', minLength, setMinLength], ['Maximum fragment length (bp)', maxLength, setMaxLength]] as const).map(([label, value, change]) => <label key={label} className="flex flex-col gap-1 text-slate-400">{label}<input type="number" min={1} value={value} onChange={e => change(e.target.value)} className="w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" /></label>)}
+                    {([['Maximum homopolymer run at junction (nt)', maxHomopolymerRun, setMaxHomopolymerRun, 1], ['Homopolymer junction buffer (bp)', homopolymerBuffer, setHomopolymerBuffer, 0]] as const).map(([label, value, change, min]) => <label key={label} className="flex flex-col gap-1 text-slate-400">{label}<input type="number" min={min} step={1} value={value} onChange={e => change(e.target.value)} className="w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" /></label>)}
+                    <label className="flex items-center gap-1 text-slate-300"><input type="checkbox" checked={avoidRepeats} onChange={e => setAvoidRepeats(e.target.checked)} /> Avoid repeats when recommending cuts</label>
                     <label className="flex flex-col gap-1 text-slate-400">Prepared by
                         <select className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={preparation} onChange={(e) => setPreparation(e.target.value as 'synthesis' | 'pcr')}>
                             <option value="synthesis">Synthesis</option><option value="pcr">PCR</option></select></label>
                     {!target?.circular && <label className="flex flex-col gap-1 text-slate-400">Terminal right fusion (linear target)
-                        <input className="w-32 rounded border border-slate-700 bg-slate-950 px-2 py-1 font-mono text-slate-200" value={fusion} onChange={(e) => setFusion(e.target.value)} /></label>}
+                        <input className="w-32 rounded border border-slate-700 bg-slate-950 px-2 py-1 font-mono text-slate-200" value={fusion} onChange={(e) => setFusion(e.target.value)} /><span>Required {compatibleEnzymes.find(e => e.enzyme_id === selectedEnzyme)?.overhang_length ?? ""} nt bottom-strand protrusion, outside the exact target top strand.</span></label>}
                 </div>
+                <p className="text-slate-400">Avoid cut junctions through longer homopolymer tracts (blank maximum disables the rule); the target sequence remains unchanged, not sequence editing or a synthesis guarantee.</p>
+                {discovery.isFetching && <p className="text-slate-400">Loading compatible enzymes…</p>}
+                {discovery.error && <p role="alert">{errorText(discovery.error)}</p>}
             </div>}
             {method === 'restriction' && <div className="space-y-2">
                 <label className="flex flex-col gap-1 text-slate-400">Enzymes (optional, comma-separated)
@@ -311,9 +371,20 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
                     </select></label>
             </div>}
             {method !== 'restriction' && <label className="flex flex-col gap-1 text-slate-400">Fixed boundaries (positions, comma-separated)
-                <input className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={boundaries} onChange={(e) => setBoundaries(e.target.value)} /></label>}
+                <input aria-label="Fixed boundaries" className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={boundaries} onChange={(e) => setBoundaries(e.target.value)} /></label>}
 
-            <button type="button" disabled={busy} onClick={() => void run()} className="rounded bg-cyan-600 px-3 py-1.5 font-medium text-white disabled:opacity-50">{busy ? 'Working…' : 'Suggest'}</button>
+            {method === 'golden_gate' && target && <details open={builder} className="min-w-0 space-y-2">
+                <summary>Target sequence and cut positions</summary>
+                <p className="text-slate-400">Select bases to place a cut at the selection end, or enter exact boundaries above. Recommendations do not alter the target. Edit cuts, then run again before using a plan.</p>
+                <div aria-label="Target sequence cut editor" className="relative min-w-0 overflow-hidden rounded border border-slate-700" style={{ height: 320 }}>
+                <SequenceViewer viewMode="linear" sequenceData={{ name: target.name, sequence: target.sequence, circular: target.circular, sequenceType: 'dna', features: (target.features ?? []).map((f, i) => ({ ...f, id: f.id ?? `target-${i}`, strand: f.strand === -1 ? -1 : 1 })), primers: [] }} visibility={DEFAULT_VISIBILITY}
+                    selection={previewSelection} onSelection={setPreviewSelection}
+                    highlightedRegions={(goldenGate?.proposals[0]?.cuts ?? numbers(boundaries)).map(c => ({ start: c, end: Math.min(c + 1, target.sequence.length), color: '#8b5cf6' }))} />
+                </div>
+                <button type="button" disabled={!previewSelection} onClick={() => { if (previewSelection) { const boundary = target.circular && previewSelection.end === target.sequence.length ? 0 : previewSelection.end; setBoundaries([...new Set([...numbers(boundaries), boundary])].sort((a, b) => a - b).join(', ')); } }}>Add cut at selection end{previewSelection ? ` (after bp ${previewSelection.end})` : ''}</button>
+                <details><summary>Unchanged target bases</summary><code data-target-bases className="block max-h-24 overflow-auto break-all">{target.sequence}</code></details>
+            </details>}
+            <button type="button" disabled={busy} onClick={() => void run()} className="rounded bg-cyan-600 px-3 py-1.5 font-medium text-white disabled:opacity-50">{busy ? 'Working…' : builder ? 'Recommend cuts' : 'Suggest'}</button>
             {error && <p role="alert" className="text-red-300">{error}</p>}
 
             {method === 'gibson' && gibson && <div className="space-y-2">
@@ -323,8 +394,8 @@ export function SuggestPlan({ sequenceData, selectedSequenceId, onUseGibson, onU
             </div>}
             {method === 'golden_gate' && goldenGate && <div className="space-y-2">
                 {goldenGate.proposals.length === 0 && <p className="text-slate-400">No proposals.</p>}
-                <ul className="space-y-2">{goldenGate.proposals.map((p) => <GoldenGateProposal key={p.rank} proposal={p} onUse={onUseGoldenGate} />)}</ul>
-                <ul className="text-slate-500">{goldenGate.enzymes.map((e) => <li key={e.enzyme_id}>{e.name}: {e.status}{e.empirical === 'no empirical data' ? ' · no empirical data' : ''}</li>)}</ul>
+                <ul className="space-y-2">{goldenGate.proposals.map((p) => <GoldenGateProposal key={p.rank} proposal={p} onUse={onUseGoldenGate} onEdit={editCuts} targetSequence={target?.sequence ?? ''} sourceBoundary={targetChoice === 'selection' && snapshot ? cut => (snapshot.placement.start + cut) % sequenceData.sequence.length : undefined} />)}</ul>
+                <ul className="text-slate-500">{goldenGate.enzymes.map((e) => <li key={e.enzyme_id}>{e.name}: {e.status}{e.internal_sites != null ? ` · ${e.internal_sites} internal sites` : ''}{e.empirical === 'no empirical data' ? ' · no empirical data' : ''}</li>)}</ul>
                 {goldenGate.diagnostics.map((d, i) => <p key={i} className="text-slate-500">{d}</p>)}
             </div>}
             {method === 'restriction' && restriction && <div className="space-y-2">

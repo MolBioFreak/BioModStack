@@ -30,21 +30,20 @@ from .ligation import simulate_ligation
 from .physical_ends import digest_end_to_fragment_end
 from .types import AssemblyError, AssemblyFragment, FragmentEnd, EndType
 
-# Enzymes whose raw PCR/synthesis tails are proven against independent strand-coordinate
-# expectations (tests/test_golden_gate_design_core.py ENZYMES). Prepared mode works for any catalog enzyme.
-RAW_ENZYMES = ("BsaI", "BsmBI", "Esp3I", "BbsI", "SapI", "PaqCI", "BtgZI",
-               "BpiI", "Eco31I", "Bso31I", "LguI", "BspQI", "BfuAI")
-
-
 def preparation_geometry(enzyme: TypeIISEnzyme) -> Geometry:
     """Derive offsets from catalog authority, never an enzyme-name offset map."""
     event = enzyme.record.cleavage.events[0]
-    spacer = event.top_offset - len(enzyme.site)
-    if spacer < 0 or event.bottom_offset <= event.top_offset:
-        raise AssemblyError("Raw preparation adapter requires downstream five-prime cleavage")
-    return Geometry(site=enzyme.site, top_offset=event.top_offset,
-                    bottom_offset=event.bottom_offset, spacer_length=spacer,
-                    overhang_length=event.overhang_length_nt)
+    top, bottom = event.top_offset, event.bottom_offset
+    from Bio.Data.IUPACData import ambiguous_dna_values
+    site = "".join(sorted(ambiguous_dna_values[base])[0] for base in enzyme.site)
+    if max(top, bottom) <= 0:
+        site = reverse_complement(site)
+        top, bottom = len(site) - bottom, len(site) - top
+    spacer = min(top, bottom) - len(site)
+    if spacer < 0 or top == bottom:
+        raise AssemblyError("Recognition site cannot be removed: cleavage intersects the motif or is blunt")
+    return Geometry(site=site, top_offset=top, bottom_offset=bottom, spacer_length=spacer,
+                    overhang_length=event.overhang_length_nt, polarity=event.overhang_kind)
 
 
 _positions = region_positions
@@ -125,8 +124,6 @@ def design_golden_gate(
     enzyme = resolve_golden_gate_enzyme(enzyme_id=request.enzyme.enzyme_id,
         catalog_id=request.enzyme.catalog_id, expected_catalog_sha256=request.enzyme.catalog_sha256)
     geometry = preparation_geometry(enzyme)
-    if any(p.preparation.kind in {"pcr", "synthesis"} for p in request.parts) and enzyme.name not in RAW_ENZYMES:
-        raise AssemblyError("Raw tail adapter not qualified for this enzyme; prepared mode remains available")
     if not request.parts or len({p.id for p in request.parts}) != len(request.parts):
         raise AssemblyError("Parts must be nonempty and have distinct instance IDs")
     if len({s.id for s in request.sources}) != len(request.sources):
@@ -190,15 +187,15 @@ def design_golden_gate(
             for tail in (prep.left, prep.right):
                 if len(tail.spacer) != geometry.spacer_length or len(tail.fusion) != geometry.overhang_length:
                     raise AssemblyError("Spacer/fusion lengths disagree with catalog cleavage geometry")
-            left_tail = prep.left.clamp + enzyme.site + prep.left.spacer + prep.left.fusion
-            right_tail = prep.right.clamp + enzyme.site + prep.right.spacer + reverse_complement(prep.right.fusion)
+            left_tail = prep.left.clamp + geometry.site + prep.left.spacer + prep.left.fusion
+            right_tail = prep.right.clamp + geometry.site + prep.right.spacer + reverse_complement(prep.right.fusion)
             sequence = left_tail + payload + reverse_complement(right_tail)
             coords = [None] * len(left_tail) + positions + [None] * len(right_tail)
             prepared = DesignMaterial(id=f"preparation:{part.id}", sequence=sequence, topology="linear",
                 stage="prepared", parent_id=source.id, transformation=prep.kind,
                 mappings=_mappings(coords, source.id, strand),
                 features=_map_features(source.features, source, coords, strand))
-            expected = prep.left.fusion + payload
+            expected = (prep.left.fusion + payload if geometry.polarity == "five_prime" else payload + prep.right.fusion)
             if prep.kind == "pcr":
                 if max(prep.forward_anneal_length, prep.reverse_anneal_length) > len(payload):
                     raise AssemblyError("Primer footprint is longer than selected template region")
@@ -211,7 +208,7 @@ def design_golden_gate(
                     selected_positions = positions[:len(footprint)] if direction == "forward" else positions[-len(footprint):][::-1]
                     primer_strand = strand if direction == "forward" else -strand
                     primers.append(Primer(id=primer_id, part_id=part.id, direction=direction,
-                        full_sequence=oligo, clamp=tail.clamp, recognition_site=enzyme.site,
+                        full_sequence=oligo, clamp=tail.clamp, recognition_site=geometry.site,
                         spacer=tail.spacer, fusion=tail.fusion if direction == "forward" else reverse_complement(tail.fusion),
                         annealing_sequence=footprint,
                         tm=calculate_primer_tm_result(footprint, "dna", request.primer_settings),
@@ -243,8 +240,8 @@ def design_golden_gate(
             assert isinstance(prep, (PCRPreparation, SynthesisPreparation))
             matches = [row.fragment_index for row in simulation.fragments
                        if row.top_strand_sequence == expected
-                       and row.left_end.overhang_sequence_5to3 == prep.left.fusion
-                       and row.right_end.overhang_sequence_5to3 == reverse_complement(prep.right.fusion)]
+                       and row.left_end.overhang_sequence_5to3 == (prep.left.fusion if geometry.polarity == "five_prime" else reverse_complement(prep.left.fusion))
+                       and row.right_end.overhang_sequence_5to3 == (reverse_complement(prep.right.fusion) if geometry.polarity == "five_prime" else prep.right.fusion)]
             if len(matches) == 1:
                 retained_index = matches[0]
             else:

@@ -49,17 +49,18 @@ const button = (label: string) => [...host.querySelectorAll('button')].find((b) 
 async function click(label: string) { const b = button(label); expect(b, label).toBeDefined(); await act(async () => b!.click()); }
 
 beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     vi.clearAllMocks();
     vi.mocked(api.fetchSavedGibsonWorkups).mockResolvedValue({ data: [] } as never);
-    vi.mocked(api.fetchGoldenGateAssemblyOptions).mockResolvedValue({ data: { enzymes: [] } } as never);
+    vi.mocked(api.fetchGoldenGateAssemblyOptions).mockResolvedValue({ data: { enzymes: [{ enzyme_id: 'BsaI', canonical_name: 'BsaI', overhang_length: 4 }], raw_design: { raw_enzyme_adapters: ['BsaI'] } } } as never);
     vi.mocked(api.fetchMolecularRevision).mockResolvedValue({
         document_id: 'doc-src', revision_id: 'rev-src', revision_number: 3, document_name: 'chosen source',
         snapshot: { sequence: 'GGGGCCCCAAAATTTT', is_circular: false },
     } as never);
 });
-afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.restoreAllMocks(); });
+afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('Suggest plan', () => {
     it('is collapsed and sends no request until opened and run', async () => {
@@ -104,9 +105,10 @@ describe('Suggest plan', () => {
             enzymes: [], diagnostics: [],
         } } as never);
         await render(); await click('Suggest plan'); await click('Golden Gate');
+        await vi.waitFor(async () => { await act(async () => { await new Promise(r => setTimeout(r, 5)); }); expect(host.querySelector<HTMLSelectElement>('[aria-label="Type IIS enzyme"]')?.value).toBe('BsaI'); });
         await click('Suggest');
         const body = vi.mocked(api.suggestGoldenGatePlan).mock.calls[0][0];
-        expect(body).toMatchObject({ enzymes: ['BsaI', 'BsmBI', 'Esp3I', 'BbsI', 'SapI', 'PaqCI', 'BtgZI'], fixed_boundaries: [], preparation_kind: 'synthesis', proposals: 3, target: { id: 'target', source: { kind: 'inline', topology: 'circular' } } });
+        expect(body).toMatchObject({ enzymes: ['BsaI'], fixed_boundaries: [], preparation_kind: 'synthesis', proposals: 3, target: { id: 'target', source: { kind: 'inline', topology: 'circular' } } });
         expect(host.textContent).toContain('(97.0%)');
         expect(host.textContent).toContain('86 bp with tails (60 bp payload)');
         expect(host.textContent).toContain('No empirical data for this enzyme');

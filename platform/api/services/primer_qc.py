@@ -48,8 +48,7 @@ class PrimerQcMetrics:
     hairpin_loop_size: int | None
     binding_site_count: int | None
     off_target_site_count: int | None
-    # Preserve BNS bool-first validation while emitting each native scalar unchanged.
-    binding_positions: SerializeAsAny[list[dict[str, bool | int]]]
+    binding_positions: SerializeAsAny[list[dict[str, int | bool]]]
     warnings: list[str]
 
 

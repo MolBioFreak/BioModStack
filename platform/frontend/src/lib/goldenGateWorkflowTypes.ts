@@ -127,6 +127,8 @@ export type SplitTask = {
   min_fragment_length: number;
   max_fragment_length: number | null;
   target_fragment_length: number | null;
+  max_homopolymer_run?: number | null;
+  homopolymer_junction_buffer?: number;
   display_origin: number;
   preparation: SplitPreparation;
   terminal_right_fusion: string | null;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 from pathlib import Path
 import subprocess
 
@@ -12,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def _runtime_tools() -> tuple[Path, Path]:
     nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
-    samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN", "/home/dalab/micromamba/bin/samtools"))
+    samtools = Path(os.environ.get("BMS_SAMTOOLS_BIN") or shutil.which("samtools") or "samtools")
     if not (nextflow.is_file() and os.access(nextflow, os.X_OK)):
         pytest.skip(f"real Nextflow launcher unavailable: {nextflow}")
     if not (samtools.is_file() and os.access(samtools, os.X_OK)):

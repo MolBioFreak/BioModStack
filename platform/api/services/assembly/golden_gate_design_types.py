@@ -128,7 +128,7 @@ class Geometry(Closed):
     bottom_offset: int
     spacer_length: int
     overhang_length: int
-    polarity: Literal["five_prime"] = "five_prime"
+    polarity: Literal["five_prime", "three_prime"] = "five_prime"
 
 
 class DesignMaterial(Material):

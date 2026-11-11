@@ -111,8 +111,7 @@ describe('DigestPanel backend authority', () => {
         } finally { vi.unstubAllGlobals(); }
     });
 
-    it.each(['', 'https://node.example.ts.net'])('saves a hash-free preview and opens the saved digest on the configured server (%s)', async (apiBase) => {
-        vi.stubGlobal('__BMS_API_BASE_URL__', apiBase);
+    it('saves a hash-free preview from the mounted control and retains retry identity', async () => {
         const preview = { ...simulation, source: { kind: 'molecular_revision', sequence_id: 'source', revision_id: 'revision', content_sha256: 'a'.repeat(64), topology: 'linear' }, catalog, selected_enzyme_ids: ['EcoRI'], simulation_sha256: null } as RestrictionDigestSimulation;
         const transport = vi.fn()
             .mockResolvedValueOnce(new Response(JSON.stringify({ detail: { code: 'analysis_busy' } }), { status: 503 }))

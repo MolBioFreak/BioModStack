@@ -249,7 +249,7 @@ def _golden_gate_geometry_supported(
     motifs: tuple[str, ...],
     events: tuple[CleavageEvent, ...],
 ) -> bool:
-    """Classify the exact external 5' DSB geometry supported by Golden Gate."""
+    """Classify removable external cohesive DSB geometry, not enzyme activity."""
     if (
         enzyme_kind != "double_strand_endonuclease"
         or analysis_capability != "digest_simulation"
@@ -260,13 +260,16 @@ def _golden_gate_geometry_supported(
         return False
     event = events[0]
     motif_length = len(motifs[0])
+    from Bio.Seq import Seq
+    if motifs[0] == str(Seq(motifs[0]).reverse_complement()):
+        return False  # A single directional event cannot orient symmetric recognition.
     external = (
         min(event.top_offset, event.bottom_offset) >= motif_length
         or max(event.top_offset, event.bottom_offset) <= 0
     )
     return (
         external
-        and event.overhang_kind == "five_prime"
+        and event.overhang_kind in {"five_prime", "three_prime"}
         and event.overhang_length_nt > 0
         and abs(event.top_offset - event.bottom_offset) == event.overhang_length_nt
     )
