@@ -107,6 +107,41 @@ async def delete_msa_provider_credential(provider_id: str, request: Request):
         raise HTTPException(status_code=500, detail="Could not clear the provider credential") from None
     return {"success": True, "removed": removed, "provider": _hub_item(provider_id)}
 
+def _controller_provider(provider_id: str) -> str:
+    from services.msa_provider_credentials import get_descriptor
+    if not get_descriptor(_known_provider(provider_id)).needs_controller:
+        raise HTTPException(status_code=422, detail="This provider is not enabled per computer")
+    return provider_id
+
+
+@router.put("/providers/{provider_id}/controller")
+async def enable_msa_provider_controller(provider_id: str, request: Request):
+    """Declare this computer the one that submits public searches for the provider. Nothing is submitted."""
+    from biomodstack_msa_controller import enable_on_this_computer
+    from services.msa_provider_setup import controller_config_path
+    _require_local(request)
+    _controller_provider(provider_id)
+    try:
+        enable_on_this_computer(controller_config_path())
+    except (OSError, ValueError, RuntimeError):
+        raise HTTPException(status_code=500, detail="Could not enable searches on this computer") from None
+    return {"success": True, "provider": _hub_item(provider_id)}
+
+
+@router.delete("/providers/{provider_id}/controller")
+async def disable_msa_provider_controller(provider_id: str, request: Request):
+    """Stop new public searches from this computer. Cached alignments keep working."""
+    from biomodstack_msa_controller import disable_on_this_computer
+    from services.msa_provider_setup import controller_config_path
+    _require_local(request)
+    _controller_provider(provider_id)
+    try:
+        removed = disable_on_this_computer(controller_config_path())
+    except (OSError, ValueError):
+        raise HTTPException(status_code=500, detail="Could not turn off searches on this computer") from None
+    return {"success": True, "removed": removed, "provider": _hub_item(provider_id)}
+
+
 class MSACacheInspection(BaseModel):
     model_id: str
     params: dict

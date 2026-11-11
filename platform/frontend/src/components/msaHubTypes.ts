@@ -5,6 +5,8 @@ export interface MsaHubProvider {
     configured: boolean;
     source: 'environment' | 'saved' | null;
     endpoint_configurable: boolean;
+    needs_controller: boolean;
+    controller_enabled: boolean;
     ready: boolean;
     message: string;
 }
@@ -42,12 +44,15 @@ export function normalizeMsaHubProviders(payload: unknown): MsaHubProvider[] {
             configured: item.configured === true,
             source: item.source === 'environment' || item.source === 'saved' ? item.source : null,
             endpoint_configurable: item.endpoint_configurable === true,
+            needs_controller: item.needs_controller === true,
+            controller_enabled: item.controller_enabled === true,
             ready: item.ready === true,
             message: typeof item.message === 'string' ? item.message : '',
         }));
 }
 
 export function msaProviderKeyStatus(provider: MsaHubProvider): string {
+    if (provider.needs_controller) return provider.controller_enabled ? 'On for this computer' : 'Off';
     if (!provider.needs_key) return 'No key needed';
     if (provider.source === 'environment') return 'Set by environment';
     if (provider.source === 'saved' && provider.configured) return 'Key saved';

@@ -64,9 +64,13 @@ Save and clear are accepted from the local machine only, like the Tools screen's
 
 ### ColabFold
 
-ColabFold needs no key, so the hub has nothing to save for it. Its readiness comes from the controller configuration: `BMS_MSA_CONTROLLER_CONFIG` must name an absolute path to a JSON file with `role` `msa_controller`, `machine_id` equal to this machine's `/etc/machine-id`, `qualified_single_egress` true, an `egress_identity`, and an absolute `state_dir`. The hub does not edit that file.
+ColabFold needs no key. Public searches are sent from one computer per installation, and that computer has to be declared. In the hub, the ColabFold row has a "Use this computer for searches" button; the command line equivalent is `python scripts/manage_msa_providers.py --enable-colabfold`. Either writes `<BMS config dir>/msa-controller.json` for the current machine. Nothing is submitted by enabling it. "Turn off for this computer" or `--disable-colabfold` removes the file.
 
-A job whose alignments are already in the provider cache replays them without this configuration. A job that needs a fresh ColabFold search is refused before queueing when the configuration is missing or does not match the machine. Moving an installation to a new machine or reinstalling its operating system changes `/etc/machine-id`, so the file must be updated afterwards.
+The declaration is tied to `/etc/machine-id`. After moving an installation to another computer or reinstalling its operating system, ColabFold shows as off; press the button again and the existing file is rebound to the new machine, keeping its state directory.
+
+A deployment that wants the file somewhere else sets `BMS_MSA_CONTROLLER_CONFIG` to an absolute path; the hub and the command then act on that file.
+
+A job whose alignments are already in the provider cache replays them whether or not searches are enabled. A job that needs a fresh ColabFold search is refused before queueing while they are off.
 
 ### Local MSA switch
 

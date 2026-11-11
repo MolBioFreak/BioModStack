@@ -84,7 +84,8 @@ def test_routes_never_return_the_key(hub):
     assert items["colabfold_api"]["needs_key"] is False
     assert items["neurosnap_api"] == {
         "id": "neurosnap_api", "label": "Neurosnap API", "needs_key": True, "configured": False,
-        "source": None, "endpoint_configurable": False, "ready": False,
+        "source": None, "endpoint_configurable": False, "needs_controller": False,
+        "controller_enabled": False, "ready": False,
         "message": items["neurosnap_api"]["message"],
     }
     assert "Neurosnap API key" in items["neurosnap_api"]["message"]
@@ -151,3 +152,35 @@ def test_local_start_allowed_when_feature_on(hub, monkeypatch):
     assert response.status_code == 200, response.text
     assert started == ["uniref"]
     msa_server.require_local_msa_enabled()
+
+
+def test_colabfold_is_enabled_per_computer_from_the_hub(hub, tmp_path, monkeypatch):
+    from pathlib import Path
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
+    path = tmp_path / "config" / "biomodstack" / "msa-controller.json"
+    row = lambda: next(i for i in hub.get("/api/msa/providers").json()["items"] if i["id"] == "colabfold_api")
+    assert row()["needs_controller"] is True and row()["controller_enabled"] is False and row()["ready"] is False
+    assert "MSA hub" in row()["message"]
+    assert hub.put("/api/msa/providers/neurosnap_api/controller").status_code == 422
+    assert hub.put("/api/msa/providers/nope/controller").status_code == 404
+    response = hub.put("/api/msa/providers/colabfold_api/controller")
+    assert response.status_code == 200 and response.json()["provider"]["controller_enabled"] is True
+    written = json.loads(path.read_text())
+    assert written["machine_id"] == Path("/etc/machine-id").read_text().strip()
+    assert written["state_dir"] == str((tmp_path / "xdg-state").resolve() / "biomodstack" / "msa-controller")
+    assert _mode(path) == 0o600 and row()["ready"] is True
+    assert not Path(written["state_dir"]).exists()
+    # A declaration copied from another computer is off here and is rebound by repeating the action.
+    path.write_text(json.dumps({**written, "machine_id": "another-computer", "egress_identity": "kept-label"}))
+    assert row()["controller_enabled"] is False
+    assert hub.put("/api/msa/providers/colabfold_api/controller").status_code == 200
+    rebound = json.loads(path.read_text())
+    assert rebound["machine_id"] == written["machine_id"] and rebound["egress_identity"] == "kept-label"
+    assert hub.delete("/api/msa/providers/colabfold_api/controller").json()["removed"] is True
+    assert not path.exists() and row()["controller_enabled"] is False
+
+
+def test_controller_switch_is_local_only(hub, monkeypatch):
+    monkeypatch.setattr(msa, "LOCAL_ADMIN_HOSTS", {"127.0.0.1"})
+    assert hub.put("/api/msa/providers/colabfold_api/controller").status_code == 403
+    assert hub.delete("/api/msa/providers/colabfold_api/controller").status_code == 403

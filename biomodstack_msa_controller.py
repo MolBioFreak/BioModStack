@@ -77,6 +77,71 @@ def validate_controller_config(config_path: Path) -> dict:
     return config
 
 
+def default_controller_config_path() -> Path:
+    """Where the controller declaration lives unless BMS_MSA_CONTROLLER_CONFIG names another file."""
+    from biomodstack_runtime_profile import get_biomodstack_config_dir
+    return get_biomodstack_config_dir() / 'msa-controller.json'
+
+
+def default_controller_state_dir() -> Path:
+    home = os.environ.get('XDG_STATE_HOME') or str(Path.home() / '.local' / 'state')
+    return Path(home).expanduser().resolve() / 'biomodstack' / 'msa-controller'
+
+
+def enable_on_this_computer(config_path: Path) -> dict:
+    """Operator action: declare this computer the one that submits public ColabFold searches.
+
+    Writes (or rebinds) the declaration for the current /etc/machine-id, so a
+    reinstalled or moved installation is re-enabled by repeating the action. An
+    existing file keeps its state directory and egress label. Nothing is submitted.
+    """
+    import socket
+    import tempfile
+    config_path = Path(config_path)
+    try:
+        existing = json.loads(config_path.read_text())
+    except (OSError, ValueError):
+        existing = {}
+    if not isinstance(existing, dict):
+        existing = {}
+    state_dir = existing.get('state_dir')
+    if not isinstance(state_dir, str) or not Path(state_dir).is_absolute():
+        state_dir = str(default_controller_state_dir())
+    config = {
+        'role': 'msa_controller',
+        'machine_id': Path('/etc/machine-id').read_text().strip(),
+        'qualified_single_egress': True,
+        'egress_identity': existing.get('egress_identity') or f'controller:{socket.gethostname()}',
+        'host': PUBLIC_HOST,
+        'state_dir': state_dir,
+    }
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f'.{config_path.name}.', dir=config_path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(json.dumps(config, indent=2, sort_keys=True) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, config_path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+    return validate_controller_config(config_path)
+
+
+def disable_on_this_computer(config_path: Path) -> bool:
+    """Remove the declaration. Cached alignments keep replaying; new public searches stop."""
+    try:
+        Path(config_path).unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def prepare(config_path: Path, request: dict, operation, *, resume_same_request=False):
     """Serialize controller work; opt-in is ONLY for the durable shared client.
 

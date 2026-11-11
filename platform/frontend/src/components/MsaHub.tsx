@@ -151,8 +151,8 @@ function useLocalMsaServer(enabled: boolean, isOpen: boolean): { section: MsaLoc
     };
 }
 
-async function credentialRequest(providerId: string, method: 'PUT' | 'DELETE', body?: Record<string, string>): Promise<void> {
-    const response = await fetch(`/api/msa/providers/${encodeURIComponent(providerId)}/credential`, {
+async function providerRequest(providerId: string, part: 'credential' | 'controller', method: 'PUT' | 'DELETE', body?: Record<string, string>): Promise<void> {
+    const response = await fetch(`/api/msa/providers/${encodeURIComponent(providerId)}/${part}`, {
         method,
         headers: body ? { 'Content-Type': 'application/json' } : undefined,
         body: body ? JSON.stringify(body) : undefined,
@@ -202,9 +202,10 @@ export function MsaHubMenu({ localMsaEnabled }: { localMsaEnabled: boolean }) {
             busyProvider={busyProvider}
             error={error}
             onSaveCredential={(providerId, apiKey, endpoint) => {
-                void change(providerId, () => credentialRequest(providerId, 'PUT', endpoint ? { api_key: apiKey, endpoint } : { api_key: apiKey }));
+                void change(providerId, () => providerRequest(providerId, 'credential', 'PUT', endpoint ? { api_key: apiKey, endpoint } : { api_key: apiKey }));
             }}
-            onClearCredential={(providerId) => { void change(providerId, () => credentialRequest(providerId, 'DELETE')); }}
+            onClearCredential={(providerId) => { void change(providerId, () => providerRequest(providerId, 'credential', 'DELETE')); }}
+            onSetController={(providerId, enabled) => { void change(providerId, () => providerRequest(providerId, 'controller', enabled ? 'PUT' : 'DELETE')); }}
             local={localMsaEnabled ? local.section : null}
         />
     );

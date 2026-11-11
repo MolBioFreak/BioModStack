@@ -47,6 +47,7 @@ const base: MsaHubViewProps = {
     error: null,
     onSaveCredential: noop,
     onClearCredential: noop,
+    onSetController: noop,
     local: null,
 };
 
@@ -107,4 +108,17 @@ test('closed hub renders only the button; an unconfigured provider shows its mes
     assert.equal(msaHubIndicatorClass(missing, null), 'bg-slate-600');
     assert.equal(msaHubIndicatorClass(providers, null), 'bg-blue-400');
     assert.equal(msaHubIndicatorClass(providers, { running: true, allRunning: false }), 'bg-amber-400');
+});
+
+test('a controller provider gets an on/off button for this computer and no key field', () => {
+    const off = normalizeMsaHubProviders({ items: [{ id: 'colabfold_api', label: 'ColabFold API', needs_key: false,
+        needs_controller: true, controller_enabled: false, ready: false, message: 'ColabFold searches are not enabled on this computer.' }] });
+    assert.equal(msaProviderKeyStatus(off[0]), 'Off');
+    const markup = render({ providers: off });
+    assert.ok(markup.includes('Use this computer for searches'));
+    assert.ok(!markup.includes('type="password"'));
+    const on = normalizeMsaHubProviders({ items: [{ id: 'colabfold_api', label: 'ColabFold API', needs_key: false,
+        needs_controller: true, controller_enabled: true, ready: true, message: 'Ready' }] });
+    assert.equal(msaProviderKeyStatus(on[0]), 'On for this computer');
+    assert.ok(render({ providers: on }).includes('Turn off for this computer'));
 });

@@ -29,15 +29,17 @@ export interface MsaHubViewProps {
     error: string | null;
     onSaveCredential: (providerId: string, apiKey: string, endpoint?: string) => void;
     onClearCredential: (providerId: string) => void;
+    onSetController: (providerId: string, enabled: boolean) => void;
     /** Present only when the installation declares the local_msa feature. */
     local: MsaLocalServerSectionProps | null;
 }
 
-function MsaProviderRow({ provider, busy, onSave, onClear }: {
+function MsaProviderRow({ provider, busy, onSave, onClear, onSetController }: {
     provider: MsaHubProvider;
     busy: boolean;
     onSave: MsaHubViewProps['onSaveCredential'];
     onClear: MsaHubViewProps['onClearCredential'];
+    onSetController: MsaHubViewProps['onSetController'];
 }) {
     const fromEnvironment = provider.source === 'environment';
     return (
@@ -47,6 +49,16 @@ function MsaProviderRow({ provider, busy, onSave, onClear }: {
                 <span className="text-xs text-slate-400">{msaProviderKeyStatus(provider)}</span>
             </div>
             <p className="text-xs text-slate-400">{provider.ready ? 'Ready' : provider.message || 'Not ready'}</p>
+            {provider.needs_controller && (
+                <button
+                    type="button"
+                    onClick={() => onSetController(provider.id, !provider.controller_enabled)}
+                    disabled={busy}
+                    className="px-2 py-1 text-xs rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+                >
+                    {provider.controller_enabled ? 'Turn off for this computer' : 'Use this computer for searches'}
+                </button>
+            )}
             {provider.needs_key && (
                 // Uncontrolled on purpose: the typed key is read once on submit and never held in state or props.
                 <form
@@ -242,6 +254,7 @@ export function MsaHubView(props: MsaHubViewProps) {
                                 busy={props.busyProvider !== null}
                                 onSave={props.onSaveCredential}
                                 onClear={props.onClearCredential}
+                                onSetController={props.onSetController}
                             />
                         ))}
                         {props.error && <p role="alert" className="text-xs text-rose-300">{props.error}</p>}

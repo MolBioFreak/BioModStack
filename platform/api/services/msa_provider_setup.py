@@ -81,10 +81,27 @@ def credential_file() -> Path | None:
 
 
 def controller_config_path() -> Path:
+    """BMS_MSA_CONTROLLER_CONFIG when the deployment sets it, else the file the MSA hub writes."""
     value = os.environ.get('BMS_MSA_CONTROLLER_CONFIG')
-    if not value or not Path(value).is_absolute():
-        raise ValueError('Configure BMS_MSA_CONTROLLER_CONFIG as an absolute qualified controller configuration path')
-    return Path(value)
+    if value:
+        if not Path(value).is_absolute():
+            raise ValueError('BMS_MSA_CONTROLLER_CONFIG must be an absolute path')
+        return Path(value)
+    from biomodstack_msa_controller import default_controller_config_path
+    return default_controller_config_path()
+
+
+COLABFOLD_NOT_ENABLED = ('ColabFold searches are not enabled on this computer. Enable them in the MSA hub, '
+                         'or run scripts/manage_msa_providers.py --enable-colabfold')
+
+
+def controller_enabled() -> bool:
+    from biomodstack_msa_controller import validate_controller_config
+    try:
+        validate_controller_config(controller_config_path())
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+        return False
+    return True
 
 
 def _credential_configured() -> bool:
@@ -133,7 +150,7 @@ def provider_readiness() -> dict:
                 config = validate_controller_config(controller_config_path())
                 _directory_blockers('ColabFold controller state', Path(config['state_dir']), errors)
             except (OSError, ValueError, RuntimeError, KeyError, TypeError):
-                errors.append('Configure BMS_MSA_CONTROLLER_CONFIG with qualified single-egress controller settings')
+                errors.append(COLABFOLD_NOT_ENABLED)
         if provider == "neurosnap_api":
             try:
                 configured = _credential_configured()
@@ -167,6 +184,8 @@ def provider_hub_items(readiness: dict | None = None) -> list[dict]:
             "configured": bool(state["configured"]),
             "source": state["source"],
             "endpoint_configurable": descriptor.endpoint_env is not None,
+            "needs_controller": descriptor.needs_controller,
+            "controller_enabled": controller_enabled() if descriptor.needs_controller else False,
             "ready": not blockers,
             "message": "Ready" if not blockers else "; ".join(blockers),
         })

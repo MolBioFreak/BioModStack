@@ -40,10 +40,13 @@ class ProviderDescriptor:
     # Name of the environment variable that overrides the service endpoint, for
     # providers whose endpoint is configurable. None means the endpoint is fixed.
     endpoint_env: str | None = None
+    # True when public submissions go through the single-computer controller
+    # (enabled per installation from the MSA hub) instead of an API key.
+    needs_controller: bool = False
 
 
 PROVIDER_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
-    ProviderDescriptor(id="colabfold_api", label="ColabFold API", needs_key=False),
+    ProviderDescriptor(id="colabfold_api", label="ColabFold API", needs_key=False, needs_controller=True),
     ProviderDescriptor(id="neurosnap_api", label="Neurosnap API", needs_key=True,
                        key_file_env="BMS_NEUROSNAP_API_KEY_FILE"),
 )
