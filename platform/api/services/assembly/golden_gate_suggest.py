@@ -9,7 +9,7 @@ sites and missing datasets are reported, never refused.
 from __future__ import annotations
 
 import math
-from typing import Any, Callable, cast
+from typing import Any, Callable, Literal, cast
 
 from pydantic import Field
 
@@ -18,6 +18,7 @@ from .feature_types import Closed, Material, Region
 from .golden_gate import resolve_golden_gate_enzyme
 from .golden_gate_design import _digest, _scan, preparation_geometry
 from .golden_gate_design_types import DesignMaterial, Source
+from .golden_gate_suggest_prepared import PartReport, order_rows, order_summary
 from .golden_gate_workflow import material_for, run_workflow, _homopolymer_junction_rules
 from .golden_gate_workflow_types import (
     CutWindow, FidelitySettings, SearchControls, SplitPreparation, SplitTask, WorkflowCandidate,
@@ -39,6 +40,10 @@ class PartSpec(Closed):
     left_overhang: str | None = None             # top-axis label of the junction on its left
     right_overhang: str | None = None            # top-axis label of the junction on its right
     name: str | None = None
+    # "auto": a part that already carries one usable pair of enzyme sites (a real digest releases one fragment with
+    # two enzyme-cut cohesive ends) is used as supplied, anything else is bare DNA that receives flanks and overhangs.
+    kind: Literal["auto", "bare", "prepared"] = "auto"
+    retained_fragment_index: int | None = Field(default=None, ge=0)   # pre-configured part with several candidate fragments
 
 
 class SuggestRequest(Closed):
@@ -70,6 +75,7 @@ class SuggestRequest(Closed):
     standard_overhangs: list[str] | None = None  # ordered; fills the junctions that are not already fixed
     linkers: list[str] = Field(default_factory=list)  # linkers[i]: bases between piece i's left overhang and its payload
     circular: bool = True                        # parts mode without a vector
+    order: Literal["given", "auto"] = "given"    # auto: arrange pre-configured parts by their overhangs (needs overhangs on every part)
 
 
 class EnzymeReport(Closed):
@@ -105,12 +111,15 @@ class Proposal(Closed):
     prepared_fragments: list[dict] = Field(default_factory=list)
     final_sequence: str | None = None
     notes: list[str] = Field(default_factory=list)
+    part_order: list[int] = Field(default_factory=list)   # supplied-parts mode: input index of each assembled part, in product order
+    order_summary: dict | None = None                      # what to order: counts and lengths of the prepared fragments
 
 
 class SuggestResult(Closed):
     proposals: list[Proposal]
     enzymes: list[EnzymeReport]
     diagnostics: list[str] = Field(default_factory=list)
+    part_reports: list[PartReport] = Field(default_factory=list)
 
 
 def default_retained_fragment_index(material: Material, enzyme, region: tuple[int, int]) -> int | None:
@@ -297,15 +306,14 @@ def suggest_golden_gate(request: SuggestRequest, *, resolve_revision: Callable[[
             # Replay the selected physical proposal exactly, without running a different advisory search.
             selected_task = task.model_copy(update={"windows": [CutWindow(start=p, end=p+1) for p in selected_cuts],
                                                      "fixed_positions": selected_cuts})
-            prepared = {m.id: m for m in candidate.design.materials}
-            pcr = []
-            for outcome in candidate.design.preparations:
-                if outcome.primer_ids:
-                    part = next(p for p in candidate.fixed_request.parts if p.id == outcome.part_id)
-                    r = part.preparation.region
-                    payload = (r.end - r.start) % n if r.wraps_origin else r.end - r.start
-                    pcr.append(dict(part_id=outcome.part_id, tailed_length=len(prepared[outcome.prepared_material_id].sequence),
-                                    payload_length=payload))
+            payload_lengths = {}
+            for part in candidate.fixed_request.parts:
+                r = getattr(part.preparation, "region", None)
+                if r is not None:
+                    payload_lengths[part.id] = (r.end - r.start) % n if r.wraps_origin else r.end - r.start
+            rows = order_rows(candidate.design, candidate.fixed_request.parts, payload_lengths)
+            pcr = [dict(part_id=row["part_id"], tailed_length=row["tailed_length"], payload_length=row["payload_length"])
+                   for row in rows if row["primers"]]
             found.append((sites, 0 if dataset else 1, -(choice.get("log_f_set") or -math.inf) if dataset else 0,
                           Proposal(rank=0, enzyme_id=name, enzyme_name=enzyme.name, empirical=dataset or NO_DATA,
                                    ranking_mode="empirical" if dataset else "lexicographic", internal_sites=sites,
@@ -317,7 +325,9 @@ def suggest_golden_gate(request: SuggestRequest, *, resolve_revision: Callable[[
                                            request.max_homopolymer_run, request.homopolymer_junction_buffer)[1] +
                                        (["For this 3-prime enzyme, terminal_right_fusion supplies the external left bottom-strand protrusion; target top-strand bases are unchanged."]
                                         if not circular and geometry.polarity == "three_prime" else []),
-                                   donor_retained_fragment_index=donor_index)))
+                                   donor_retained_fragment_index=donor_index, prepared_fragments=rows,
+                                   final_sequence=candidate.design.solutions[0].sequence if candidate.design.solutions else None,
+                                   order_summary=order_summary(rows, request.preparation_kind))))
     found.sort(key=lambda x: x[:3])
     proposals = [p.model_copy(update={"rank": i + 1}) for i, (*_, p) in enumerate(found[:request.proposals])]
     if not proposals:
