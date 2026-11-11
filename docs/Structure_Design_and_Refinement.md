@@ -43,7 +43,7 @@ Current pipeline shape:
 2. sequence design with FAMPNN, AntiFold, or ProteinMPNN
 3. structure validation with Boltz-2, plus workflow-level Protenix validation when explicitly selected by the antibody/structure workflows
 4. downstream scoring and review
-5. optional refinement/maturation branches such as PPIFlow and OpenMM
+5. optional refinement/maturation branches such as PPIFlow
 
 Important notes:
 
@@ -248,7 +248,6 @@ Purpose:
 
 - ThermoMPNN
 - AntiBERTy
-- OpenMM
 - ANARCI / ANARCII
 
 ## Internal-only orchestrator models
