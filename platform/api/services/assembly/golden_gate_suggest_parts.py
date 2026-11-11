@@ -19,7 +19,7 @@ from .common import reverse_complement
 from .feature_mapping import map_features, region_positions
 from .feature_types import Material, Region
 from .golden_gate import resolve_golden_gate_enzyme
-from .golden_gate_design import RAW_ENZYMES, _digest, _scan, preparation_geometry
+from .golden_gate_design import _digest, _scan, preparation_geometry
 from .golden_gate_design_types import (
     DesignMaterial, DonorPreparation, EnzymeBinding, InlineSource, PCRPreparation, Part, Source,
     SynthesisPreparation, Tail, Target,
@@ -190,9 +190,6 @@ def suggest_parts(request: SuggestRequest, *, resolve_revision: Callable[[str], 
         dataset = DATASET_BY_ENZYME.get(enzyme.name)
         report = dict(enzyme_id=name, name=enzyme.name, spacer_length=geometry.spacer_length,
                       overhang_length=geometry.overhang_length, empirical=dataset or NO_DATA)
-        if enzyme.name not in RAW_ENZYMES:
-            reports.append(EnzymeReport(**report, internal_sites=None, status="raw tails not qualified for this enzyme"))
-            continue
         try:
             pieces = _pieces(request, resolve_revision, vector_material is not None, geometry.overhang_length)
             report["internal_sites"] = sites = sum(len(_scan(p.payload(), "linear", enzyme).occurrences) for p in pieces)
@@ -259,7 +256,8 @@ def _for_enzyme(request, enzyme, name, geometry, dataset, pieces, vector_materia
             excluded |= blocked
     else:
         assignments = [({s: fixed[s][0] for s in fixed}, None, None)]
-    spacer = request.spacer if request.spacer is not None else "ACGTACGTACGTACGT"[:geometry.spacer_length]
+    from .golden_gate_suggest import _preparation_tails
+    _, spacer = _preparation_tails(request, enzyme, geometry)
     binding = EnzymeBinding(enzyme_id=name, catalog_id=catalog_authority.require().catalog_id,
                             catalog_sha256=catalog_authority.require().content_sha256)
     made = []
@@ -290,9 +288,13 @@ def _proposal(request, enzyme, name, binding, dataset, pieces, vector_material, 
                        if request.preparation_kind == "pcr" else SynthesisPreparation(**kwargs))
         parts.append(Part(id=f"part-{i + 1}", source_id=source.id, name=piece.name, orientation=orientation, preparation=preparation))
         payload_lengths[f"part-{i + 1}"] = len(piece.payload())
-    expected = None if vector_material is not None else "".join(labels[i] + piece.payload() for i, piece in enumerate(pieces))
+    three_prime = preparation_geometry(enzyme).polarity == "three_prime"
+    expected = None if vector_material is not None else "".join(
+        piece.payload() + labels[right_of(i)] if three_prime and topology == "linear" else labels[i] + piece.payload()
+        for i, piece in enumerate(pieces))
+    origin = len(expected) - len(labels[0]) if expected is not None and three_prime and topology == "circular" else 0
     task = AssembleTask(sources=list(sources.values()), parts=parts, enzyme=binding,
-                        target=Target(topology=topology, exact_sequence=expected),
+                        target=Target(topology=topology, display_origin=origin, exact_sequence=expected),
                         fidelity=FidelitySettings(dataset_id=dataset))
     result = run_workflow(task, resolve_revision=resolve_revision)
     candidate = result.solutions[0]

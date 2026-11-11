@@ -16,7 +16,7 @@ from pydantic import Field
 from services.restriction_catalog import catalog_authority
 from .feature_types import Closed, Material, Region
 from .golden_gate import resolve_golden_gate_enzyme
-from .golden_gate_design import _digest, _scan, preparation_geometry, RAW_ENZYMES
+from .golden_gate_design import _digest, _scan, preparation_geometry
 from .golden_gate_design_types import DesignMaterial, Source
 from .golden_gate_workflow import material_for, run_workflow
 from .golden_gate_workflow_types import (
@@ -50,6 +50,8 @@ class SuggestRequest(Closed):
     protected_feature_ids: list[str] = Field(default_factory=list)
     min_fragment_length: int = Field(default=1, ge=1)
     max_fragment_length: int | None = Field(default=None, ge=1)
+    target_fragment_length: int | None = Field(default=None, ge=1)
+    avoid_repeats: bool = True
     preparation_kind: str = "synthesis"          # "synthesis" | "pcr"
     clamp: str = "TT"
     spacer: str | None = None                    # default: filler of the catalog spacer length
@@ -127,7 +129,11 @@ def default_retained_fragment_index(material: Material, enzyme, region: tuple[in
 def _windows(n: int, circular: bool, width: int, request: SuggestRequest, protected: list[tuple[int, int]]):
     count = request.fragment_count
     if count is None:
-        count = math.ceil(n / request.max_fragment_length) if request.max_fragment_length else max(2, len(request.fixed_boundaries) + (0 if circular else 1))
+        goal = request.target_fragment_length or request.max_fragment_length
+        count = max(1, math.ceil(n / goal)) if goal else max(2, len(request.fixed_boundaries) + (0 if circular else 1))
+        if request.max_fragment_length:
+            count = max(count, math.ceil(n / request.max_fragment_length))
+        count = min(count, max(1, n // request.min_fragment_length))
     cuts = count if circular else count - 1
     fixed = sorted(set(request.fixed_boundaries))
     cuts = max(cuts, len(fixed))
@@ -137,6 +143,72 @@ def _windows(n: int, circular: bool, width: int, request: SuggestRequest, protec
     half = max(width + 1, n // (count * 4))
     slots = sorted([(f, f + 1, f) for f in fixed] + [(max(1 if not circular else 0, p - half), min(n, p + half), None) for p in free])
     return ([CutWindow(start=a, end=b) for a, b, _ in slots], [f for _, _, f in slots])
+
+
+def _preparation_tails(request: SuggestRequest, enzyme, geometry) -> tuple[str, str]:
+    """Choose concrete, site-safe default flanks; explicit authored bytes stay exact."""
+    clamp = request.clamp
+    if request.spacer is not None:
+        return clamp, request.spacer
+    length = geometry.spacer_length
+    candidates = [("ACGT" * ((length + 3) // 4))[:length], *(base * length for base in "ACGT")]
+    for spacer in candidates:
+        scan = _scan(clamp + geometry.site + spacer, "linear", enzyme)
+        locations = {(o.site_start, o.site_end_unwrapped) for o in scan.occurrences}
+        if locations == {(len(clamp), len(clamp) + len(geometry.site))}:
+            return clamp, spacer
+    return clamp, candidates[0]  # actual digest returns the real geometry reason
+
+
+def _repeat_preferences(material: Material, width: int, request: SuggestRequest, windows, fixed):
+    """Advisory masks from the shared repeat owner; never change authored cuts."""
+    from .repeat_breakpoints import RepeatAnalysis
+    n = len(material.sequence)
+    circular = material.topology == "circular"
+    analysis = RepeatAnalysis(material.sequence, circular=circular, overlap=width)
+    if not analysis.has_repeats:
+        return analysis, windows, [None]
+    count = len(windows) + (0 if circular else 1)
+    plan = analysis.plan(min_len=request.min_fragment_length,
+                         max_len=request.max_fragment_length or max(1, math.ceil(n / count * 1.5)))
+    masks = []
+    if plan.valid is not None:
+        masks.append({p for p in range(n) if plan.valid[(p - plan.origin) % n]} | set(request.fixed_boundaries))
+    masks.append({p for p in range(n) if analysis.clean_cuts()[p]} | set(request.fixed_boundaries))
+    masks.append(None)  # preferences are not a new scientific refusal
+    if not any(p is not None for p in fixed) and plan.valid is not None:
+        recommended = sorted((p + plan.origin) % n for p in ([0] if circular else []) + plan.witness)
+        if len(recommended) == len(windows):
+            half = max(width + 1, n // (count * 4))
+            windows = [CutWindow(start=max(0 if circular else 1, p-half), end=min(n, p+half+1)) for p in recommended]
+    return analysis, windows, masks
+
+
+def _repeat_notes(analysis, cuts: list[int], lengths: list[int], circular: bool) -> list[str]:
+    if analysis is None or not analysis.has_repeats:
+        return []
+    notes = []
+    if any(not analysis.clean_cuts()[p] for p in cuts):
+        notes.append("Repeat compromise: selected boundaries include repeated sequence; exact user cuts are unchanged.")
+    else:
+        notes.append("Junctions avoid repeated sequence.")
+    starts = cuts if circular else [0, *cuts]
+    contained, split = 0, 0
+    for family in analysis.families:
+        owners = set()
+        for a, b in family.copies:
+            for position in range(a, b):
+                owners.add(next((i for i, start in enumerate(starts)
+                                 if ((position-start) % analysis.n if circular else position-start) in range(lengths[i])), -1))
+        if len(owners) == 1:
+            contained += 1
+        else:
+            split += 1
+    if contained:
+        notes.append(f"All copies of {contained} repeat group(s) stay within single fragments.")
+    if split:
+        notes.append(f"Repeat compromise: {split} repeat group(s) are split across fragments under the selected boundaries and size constraints.")
+    return notes
 
 
 def request_sources(request: SuggestRequest) -> list[Source]:
@@ -171,28 +243,31 @@ def suggest_golden_gate(request: SuggestRequest, *, resolve_revision: Callable[[
         report = dict(enzyme_id=name, name=enzyme.name, spacer_length=geometry.spacer_length,
                       overhang_length=geometry.overhang_length, internal_sites=sites,
                       empirical=dataset or NO_DATA)
-        raw_ok = enzyme.name in RAW_ENZYMES
-        if not raw_ok:
-            reports.append(EnzymeReport(**report, status="raw tails not qualified for this enzyme"))
-            continue
         try:
             windows, fixed = _windows(n, circular, geometry.overhang_length, request, protected)
             terminal = request.terminal_right_fusion
             if not circular and terminal is None:
                 raise AssemblyError("A linear target needs terminal_right_fusion")
-            spacer = request.spacer if request.spacer is not None else ("ACGTACGTACGT"[:geometry.spacer_length])
+            clamp, spacer = _preparation_tails(request, enzyme, geometry)
             task = SplitTask(task="split_target", target=request.target, enzyme=dict(
                     enzyme_id=name, catalog_id=catalog.catalog_id, catalog_sha256=catalog.content_sha256),
                 windows=windows, fixed_positions=fixed,
                 fixed_overhangs=[terminal] if (not circular and terminal) else [],
                 protected_regions=[CutWindow(start=a, end=b) for a, b in protected],
                 min_fragment_length=request.min_fragment_length, max_fragment_length=request.max_fragment_length,
-                preparation=SplitPreparation(kind=request.preparation_kind, clamp=request.clamp, spacer=spacer),
+                target_fragment_length=request.target_fragment_length,
+                preparation=SplitPreparation(kind=request.preparation_kind, clamp=clamp, spacer=spacer),
                 terminal_right_fusion=terminal,
                 fidelity=FidelitySettings(dataset_id=dataset),
                 search=SearchControls(seed=request.seed, alternatives=request.proposals,
                                       ranking_mode="empirical" if dataset else "lexicographic"))
-            result = run_workflow(task, resolve_revision=resolve_revision)
+            analysis, preferred_windows, masks = (_repeat_preferences(material, geometry.overhang_length, request, windows, fixed)
+                if request.avoid_repeats else (None, windows, [None]))
+            for allowed in masks:
+                effective = task.model_copy(update={"windows": preferred_windows if allowed is not None else windows})
+                result = run_workflow(effective, resolve_revision=resolve_revision, allowed_positions=allowed)
+                if result.solutions:
+                    break
         except (AssemblyError, ValueError) as exc:
             reports.append(EnzymeReport(**report, status=f"no proposal: {exc}"))
             continue
@@ -212,7 +287,12 @@ def suggest_golden_gate(request: SuggestRequest, *, resolve_revision: Callable[[
         donor_index = (default_retained_fragment_index(donor, enzyme, (request.donor_region.start, request.donor_region.end))
                        if donor is not None and request.donor_region is not None else None)
         choices = result.search_result["solutions"]
-        for candidate, choice in zip(result.solutions, choices):
+        for candidate in result.solutions:
+            choice = choices[int(candidate.id.rsplit("-", 1)[1])]
+            selected_cuts = [c["position"] for c in choice["cuts"]]
+            # Replay the selected physical proposal exactly, without running a different advisory search.
+            selected_task = task.model_copy(update={"windows": [CutWindow(start=p, end=p+1) for p in selected_cuts],
+                                                     "fixed_positions": selected_cuts})
             prepared = {m.id: m for m in candidate.design.materials}
             pcr = []
             for outcome in candidate.design.preparations:
@@ -227,7 +307,10 @@ def suggest_golden_gate(request: SuggestRequest, *, resolve_revision: Callable[[
                                    ranking_mode="empirical" if dataset else "lexicographic", internal_sites=sites,
                                    junctions=choice["junctions"], cuts=[c["position"] for c in choice["cuts"]],
                                    fragment_lengths=choice["fragment_lengths"], f_set=choice.get("f_set"),
-                                   split_request=task.model_dump(mode="json"), candidate=candidate, pcr_products=pcr,
+                                   split_request=selected_task.model_dump(mode="json"), candidate=candidate, pcr_products=pcr,
+                                   notes=_repeat_notes(analysis, selected_cuts, choice["fragment_lengths"], circular) +
+                                       (["For this 3-prime enzyme, terminal_right_fusion supplies the external left bottom-strand protrusion; target top-strand bases are unchanged."]
+                                        if not circular and geometry.polarity == "three_prime" else []),
                                    donor_retained_fragment_index=donor_index)))
     found.sort(key=lambda x: x[:3])
     proposals = [p.model_copy(update={"rank": i + 1}) for i, (*_, p) in enumerate(found[:request.proposals])]

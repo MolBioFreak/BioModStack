@@ -162,10 +162,13 @@ def _assemble(request: AssembleTask, resolver):
 def _split_core(request: SplitTask, material: Material, cuts: list[dict], width: int) -> GoldenGateDesignRequest:
     sequence, n = material.sequence, len(material.sequence)
     circular = material.topology == 'circular'
+    enzyme = resolve_golden_gate_enzyme(enzyme_id=request.enzyme.enzyme_id, catalog_id=request.enzyme.catalog_id,
+        expected_catalog_sha256=request.enzyme.catalog_sha256)
+    shift = width if preparation_geometry(enzyme).polarity == 'three_prime' else 0
     starts = [x['position'] for x in cuts]
     if not circular:
         if request.terminal_right_fusion is None or len(request.terminal_right_fusion) != width:
-            raise AssemblyError('Linear target requires an explicit terminal_right_fusion; its bottom protrusion is outside the exact top-strand target')
+            raise AssemblyError('Linear target requires an explicit terminal_right_fusion of the catalog overhang length; its external protrusion is outside the exact top-strand target')
         starts = [0, *starts]
     parts = []
     for i, start in enumerate(starts):
@@ -178,7 +181,13 @@ def _split_core(request: SplitTask, material: Material, cuts: list[dict], width:
         right = (sequence + sequence[:width])[end:end + width] if end < n else request.terminal_right_fusion
         if circular:
             right = (sequence + sequence[:width])[end:end + width]
-        kwargs = dict(region=Region(start=body_start, end=end, wraps_origin=circular and body_start > end),
+        body_end = end
+        if shift and not circular:
+            if i == 0:
+                left, body_start = request.terminal_right_fusion, 0
+            if i == len(starts) - 1:
+                right, body_end = sequence[-width:], n - width
+        kwargs = dict(region=Region(start=body_start, end=body_end, wraps_origin=circular and body_start > body_end),
             left=Tail(clamp=request.preparation.clamp, spacer=request.preparation.spacer, fusion=left),
             right=Tail(clamp=request.preparation.clamp, spacer=request.preparation.spacer, fusion=right))
         if request.preparation.kind == 'pcr':
@@ -188,13 +197,14 @@ def _split_core(request: SplitTask, material: Material, cuts: list[dict], width:
         else:
             preparation = SynthesisPreparation(**kwargs)
         parts.append(Part(id=f'part-{i + 1}', source_id=request.target.id, name=f'Target part {i + 1}', preparation=preparation))
-    origin = (request.display_origin - starts[0]) % n if circular else request.display_origin
+    origin = (request.display_origin - starts[0] - shift) % n if circular else request.display_origin
     expected = sequence[request.display_origin:] + sequence[:request.display_origin] if circular else sequence
     return GoldenGateDesignRequest(sources=[request.target], parts=parts, enzyme=request.enzyme, primer_settings=request.primer_settings,
         target=Target(topology=material.topology, display_origin=origin, exact_sequence=expected))
 
 
-def run_workflow(request: WorkflowRequest, *, resolve_revision: Callable[[str], Material] | None = None) -> WorkflowResult:
+def run_workflow(request: WorkflowRequest, *, resolve_revision: Callable[[str], Material] | None = None,
+                 allowed_positions: set[int] | None = None) -> WorkflowResult:
     if isinstance(request, AssembleTask):
         return _assemble(request, resolve_revision)
     settings = request.fidelity
@@ -215,6 +225,7 @@ def run_workflow(request: WorkflowRequest, *, resolve_revision: Callable[[str], 
     width = preparation_geometry(enzyme).overhang_length
     result = fidelity.optimize_sequence_windows(material.sequence, [(w.start, w.end) for w in request.windows], settings.dataset_id,
         end_length=width, topology=material.topology, fixed_positions=request.fixed_positions, fixed_overhangs=request.fixed_overhangs,
+        allowed_positions=allowed_positions,
         required=request.required, excluded=request.excluded, protected_regions=[(w.start, w.end) for w in request.protected_regions],
         frame_constraints=[(w.start, w.end, w.origin, w.phase) for w in request.frame_constraints],
         min_fragment_length=request.min_fragment_length, max_fragment_length=request.max_fragment_length,

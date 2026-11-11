@@ -63,8 +63,23 @@ def _resolve_from_catalog(catalog: CatalogView, enzyme_id: str) -> TypeIISEnzyme
     motifs = record.recognition.site_alternatives_iupac
     events = record.cleavage.events
     if not record.golden_gate_compatible:
+        if len(motifs) == 1 and motifs[0] == reverse_complement(motifs[0]):
+            raise AssemblyError(
+                f"Golden Gate enzyme '{identity}' has strand-symmetric recognition {motifs[0]}; "
+                "its single directional catalog event cannot specify inward cleavage at both flanks"
+            )
+        if len(events) == 1 and events[0].overhang_length_nt and not (
+            min(events[0].top_offset, events[0].bottom_offset) >= len(motifs[0])
+            or max(events[0].top_offset, events[0].bottom_offset) <= 0
+        ):
+            event = events[0]
+            raise AssemblyError(
+                f"Golden Gate enzyme '{identity}' cuts at {event.top_offset}/{event.bottom_offset} "
+                f"({event.overhang_length_nt} nt {'5-prime' if event.overhang_kind == 'five_prime' else '3-prime'} ends), "
+                "overlapping its recognition site; arbitrary site-free scarless preparation is not supported"
+            )
         raise AssemblyError(
-            f"Golden Gate enzyme '{identity}' is not exact supported external 5-prime cleavage authority"
+            f"Golden Gate enzyme '{identity}' cannot remove its recognition site with one external cohesive double-strand cut"
         )
     event = events[0]
     motif = motifs[0]
@@ -140,8 +155,8 @@ def simulate_golden_gate(
     enzyme: TypeIISEnzyme,
     circular: bool,
 ) -> AssemblyProduct:
-    if len(fragments) < 2:
-        raise AssemblyError("Golden Gate assembly requires at least two fragments")
+    if not fragments or (len(fragments) == 1 and not circular):
+        raise AssemblyError("Golden Gate assembly requires at least two fragments or one circularizing fragment")
 
     try:
         oriented = [orient_fragment(fragment) for fragment in fragments]
@@ -163,9 +178,9 @@ def simulate_golden_gate(
                 raise AssemblyError(
                     f"Golden Gate fragment '{fragment.name}' is missing an explicit {side_name} overhang"
                 )
-            if end.type != "sticky_5":
+            if end.type != ("sticky_5" if enzyme.record.cleavage.events[0].overhang_kind == "five_prime" else "sticky_3"):
                 raise AssemblyError(
-                    f"Golden Gate fragment '{fragment.name}' {side_name} end must be a 5' overhang"
+                    f"Golden Gate fragment '{fragment.name}' {side_name} end polarity disagrees with catalog cleavage"
                 )
             if len(end.overhang) != enzyme.overhang_length:
                 raise AssemblyError(

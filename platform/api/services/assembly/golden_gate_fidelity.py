@@ -322,8 +322,8 @@ def optimize_overhangs(candidate_domain: Sequence[str], junction_count: int, dat
     """
     if type(junction_count) is not int or junction_count < 1:
         raise ValueError("junction_count must be positive")
-    if end_length not in (3, 4):
-        raise ValueError("end_length must be 3 or 4")
+    if type(end_length) is not int or end_length < 1:
+        raise ValueError("end_length must be positive")
     for x in itertools.chain(candidate_domain, required, fixed, excluded):
         _dna(x, end_length)
     forbidden = {_class(x) for x in excluded}
@@ -385,7 +385,7 @@ def sequence_window_domains(sequence: str, windows: Sequence[tuple[int, int]], *
     nonwrapping reference-coordinate intervals; no CDS translation claim is made.
     """
     _dna(sequence)
-    if end_length not in (3, 4) or topology not in ("linear", "circular"):
+    if type(end_length) is not int or end_length < 1 or topology not in ("linear", "circular"):
         raise ValueError("Unsupported length/topology")
     n = len(sequence)
     if n < end_length:
@@ -417,6 +417,7 @@ def sequence_window_domains(sequence: str, windows: Sequence[tuple[int, int]], *
 def optimize_sequence_windows(sequence: str, windows: Sequence[tuple[int, int]], dataset_id: str | None, *,
                               end_length: int, topology: str = "linear",
                               fixed_positions: Sequence[int | None] = (),
+                              allowed_positions: set[int] | None = None,
                               fixed_overhangs: Sequence[str] = (), required: Sequence[str] = (),
                               excluded: Sequence[str] = (), protected_regions: Sequence[tuple[int, int]] = (),
                               frame_constraints: Sequence[tuple[int, int, int, int]] = (),
@@ -442,7 +443,7 @@ def optimize_sequence_windows(sequence: str, windows: Sequence[tuple[int, int]],
         _dna(x, end_length)
     forbidden = {_class(x) for x in excluded}
     for i, domain in enumerate(domains):
-        domains[i] = [x for x in domain if _class(x["sequence"]) not in forbidden and
+        domains[i] = [x for x in domain if (allowed_positions is None or x["position"] in allowed_positions) and _class(x["sequence"]) not in forbidden and
                       (not fixed_positions or fixed_positions[i] is None or x["position"] == fixed_positions[i])]
     size = math.prod(len(x) for x in domains)
     if not domains:
@@ -480,8 +481,20 @@ def optimize_sequence_windows(sequence: str, windows: Sequence[tuple[int, int]],
         out[slot] = rng.randrange(len(domains[slot]))
         return tuple(out)
 
+    def random_start(rng):
+        independent = tuple(rng.randrange(len(d)) for d in domains)
+        if rng.randrange(2) or not domains:
+            return independent
+        # Correlated balanced starts can satisfy tight size bounds that independent
+        # coordinate draws almost never reach. Same native search/objective follows.
+        count = len(domains) + (topology == "linear")
+        origin = domains[0][independent[0]]["position"] if topology == "circular" else 0
+        return tuple(min(range(len(domain)), key=lambda j: abs(domain[j]["position"] -
+                     (origin + (i if topology == "circular" else i + 1) * len(sequence) / count)))
+                     for i, domain in enumerate(domains))
+
     result = _search(domain_size=size, enumeration=lambda: itertools.product(*(range(len(d)) for d in domains)) if size else iter(()),
-                     random_start=lambda rng: tuple(rng.randrange(len(d)) for d in domains),
+                     random_start=random_start,
                      neighbor=neighbor, describe=describe, feasible=feasible, dataset_id=dataset_id,
                      end_length=end_length, condition_use=condition_use, settings=settings)
     result["constraints"] = {"end_length": end_length, "topology": topology, "windows": [list(x) for x in windows],
