@@ -4051,6 +4051,7 @@ export interface GoldenGateAssemblyOptionsResponse {
 
 export interface FetchNucleotideSequencesParams {
     sequence_ids?: string;
+    project_membership?: 'all' | 'unassigned';
     limit?: number;
     offset?: number;
     search?: string;
@@ -4060,8 +4061,13 @@ export interface FetchNucleotideSequencesParams {
     sort_desc?: boolean;
 }
 
-export const fetchNucleotideSequences = (params: FetchNucleotideSequencesParams = {}) =>
-    api.get<NucleotideSequenceListItem[]>('/api/sequences/', { params });
+export const fetchNucleotideSequences = async (params: FetchNucleotideSequencesParams = {}) => {
+    const response = await api.get<NucleotideSequenceListItem[]>('/api/sequences/', { params });
+    if (params.project_membership === 'unassigned' && response.headers['x-bns-sequence-scope'] !== 'unassigned') {
+        throw new Error('The sequence shelf needs the updated Project membership API. Project sequences were hidden.');
+    }
+    return response;
+};
 
 export interface MolBioSequenceRevision {
     id: string;

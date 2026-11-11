@@ -237,7 +237,7 @@ export function SequenceLibrary({
             <div className="flex items-center justify-between p-3 border-b border-slate-700">
                 <div>
                     <h3 className="font-semibold text-slate-200">DNA Sequence Shelf</h3>
-                    <p className="text-xs text-slate-500">{projectScoped && !showAllConstructs ? 'DNA sequences in this Project' : 'All recent DNA sequences'}</p>
+                    <p className="text-xs text-slate-500">{projectScoped && !showAllConstructs ? 'DNA sequences in this Project' : 'Open and recent unassigned DNA sequences'}</p>
                 </div>
                 <button
                     onClick={onRefresh}
@@ -253,7 +253,7 @@ export function SequenceLibrary({
                     </svg>
                 </button>
             </div>
-            {projectScoped && <button type="button" onClick={onToggleAllConstructs} className="border-b border-slate-700 px-3 py-2 text-left text-xs font-semibold text-cyan-300 hover:bg-slate-800">{showAllConstructs ? 'Show Project DNA sequences' : 'All DNA sequences'}</button>}
+            {projectScoped && <button type="button" onClick={onToggleAllConstructs} className="border-b border-slate-700 px-3 py-2 text-left text-xs font-semibold text-cyan-300 hover:bg-slate-800">{showAllConstructs ? 'Show Project DNA sequences' : 'Unassigned DNA sequences'}</button>}
             {onAlign && <div className="border-b border-[var(--border-primary)] p-3 text-xs text-[var(--text-secondary)]">
                 <button type="button" disabled={alignmentBusy || alignmentSequences.length < 2 || mixedMolecules}
                     className="w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 font-semibold text-[var(--text-primary)] disabled:opacity-50"
@@ -298,12 +298,12 @@ export function SequenceLibrary({
                 </div>}
 
                 <div className="border-b border-slate-700 px-3 py-2 text-xs font-semibold text-slate-400">
-                    {projectScoped && !showAllConstructs ? `Project DNA sequences (${sequences.length})` : `Recent DNA sequences (${sequences.length})`}
+                    {projectScoped && !showAllConstructs ? `Project DNA sequences (${sequences.length})` : `Unassigned DNA sequences (${sequences.length})`}
                 </div>
 
                 {sequences.length === 0 ? (
                     <div className="p-4 text-center text-slate-500 text-sm">
-                        <p>No recent constructs</p>
+                        <p>{projectScoped && !showAllConstructs ? 'No DNA sequences in this Project' : 'No unassigned DNA sequences'}</p>
                         <p className="mt-1 text-xs">Use Acquire in the sequence toolbar to search or create one</p>
                     </div>
                 ) : (
@@ -709,8 +709,13 @@ export function MolBioToolkitV2() {
     const openedDeepLinkRef = useRef<string | null>(null);
     // State
     const [digestAssemblyFragments, setDigestAssemblyFragments] = useState<import('../../lib/api').AssemblyFragmentInput[] | null>(null);
-    const [sequences, setSequences] = useState<NucleotideSequenceListItem[]>([]);
-    const [showAllConstructs, setShowAllConstructs] = useState(false);
+    const projectShelfScope = JSON.stringify([workspaceId ?? null, globalExperimentId ?? null, domainExperimentId ?? null, stateRevisionId ?? null]);
+    const [unassignedShelfScope, setUnassignedShelfScope] = useState<string | null>(null);
+    const showAllConstructs = unassignedShelfScope === projectShelfScope;
+    const libraryScope = JSON.stringify([projectShelfScope, showAllConstructs]);
+    const [library, setLibrary] = useState<{ scope: string; items: NucleotideSequenceListItem[] }>({ scope: libraryScope, items: [] });
+    // A scope change hides old rows in the same render, before async effects run.
+    const sequences = library.scope === libraryScope ? library.items : [];
     const [selectedSequenceId, setSelectedSequenceId] = useState<string | null>(null);
     const [shareOpen, setShareOpen] = useState(false);
     const [showInputModal, setShowInputModal] = useState(false);
@@ -1042,12 +1047,13 @@ export function MolBioToolkitV2() {
     const [libraryLoading, setLibraryLoading] = useState(false);
     const libraryControllerRef = useRef(createLatestAsyncResourceController());
     useEffect(() => () => libraryControllerRef.current.dispose(), []);
+    const openShelfIdsKey = JSON.stringify([...new Set(workspaceTabs.flatMap((tab) => tab.sequenceId ? [tab.sequenceId] : []))].sort());
 
     // Load sequence library on mount
     const loadLibrary = useCallback(async () => {
         const controller = libraryControllerRef.current;
         const token = controller.begin();
-        setSequences([]);
+        setLibrary({ scope: libraryScope, items: [] });
         setLibraryLoading(true);
         try {
             if (!showAllConstructs && workspaceId && globalExperimentId && domainExperimentId && stateRevisionId) {
@@ -1056,24 +1062,36 @@ export function MolBioToolkitV2() {
                     queryFn: ({ signal }) => fetchProjectHub(workspaceId, globalExperimentId, domainExperimentId, stateRevisionId, signal),
                     staleTime: 30_000,
                 });
-                if (controller.isCurrent(token)) setSequences(projectHubDNASequencesToConstructShelf(model));
+                if (controller.isCurrent(token)) setLibrary({ scope: libraryScope, items: projectHubDNASequencesToConstructShelf(model) });
                 return;
             }
-            const response = await queryClient.fetchQuery({
-                queryKey: ['molbio-recent-sequence-shelf'],
-                queryFn: () => fetchNucleotideSequences({ limit: 24, sort_by: 'updated_at', sort_desc: true }),
-                staleTime: 0,
-            });
-            if (controller.isCurrent(token)) setSequences(response.data);
+            const openIds = JSON.parse(openShelfIdsKey) as string[];
+            const [response, openResponses] = await Promise.all([
+                queryClient.fetchQuery({
+                    queryKey: ['molbio-recent-sequence-shelf', 'unassigned'],
+                    queryFn: () => fetchNucleotideSequences({ project_membership: 'unassigned', limit: 24, sort_by: 'updated_at', sort_desc: true }),
+                    staleTime: 0,
+                }),
+                Promise.all(Array.from({ length: Math.ceil(openIds.length / 256) }, (_, index) => {
+                    const ids = openIds.slice(index * 256, (index + 1) * 256).join(',');
+                    return queryClient.fetchQuery({
+                        queryKey: ['molbio-recent-sequence-shelf', 'unassigned', ids],
+                        queryFn: () => fetchNucleotideSequences({ project_membership: 'unassigned', sequence_ids: ids, limit: 256 }),
+                        staleTime: 0,
+                    });
+                })),
+            ]);
+            const items = [...new Map([...openResponses.flatMap((page) => page.data), ...response.data].map((item) => [item.id, item])).values()];
+            if (controller.isCurrent(token)) setLibrary({ scope: libraryScope, items });
         } catch (error) {
             if (controller.isCurrent(token)) {
-                setSequences([]);
+                setLibrary({ scope: libraryScope, items: [] });
                 setWorkspaceRestoreNotice(error instanceof Error ? error.message : 'Construct shelf unavailable.');
             }
         } finally {
             if (controller.isCurrent(token)) setLibraryLoading(false);
         }
-    }, [domainExperimentId, globalExperimentId, queryClient, showAllConstructs, stateRevisionId, workspaceId]);
+    }, [domainExperimentId, globalExperimentId, libraryScope, openShelfIdsKey, queryClient, showAllConstructs, stateRevisionId, workspaceId]);
 
     useEffect(() => {
         loadLibrary();
@@ -3382,7 +3400,7 @@ export function MolBioToolkitV2() {
                             width={viewportWidth}
                             projectScoped={Boolean(workspaceId && globalExperimentId && domainExperimentId && stateRevisionId)}
                             showAllConstructs={showAllConstructs}
-                            onToggleAllConstructs={() => setShowAllConstructs((value) => !value)}
+                            onToggleAllConstructs={() => setUnassignedShelfScope(showAllConstructs ? null : projectShelfScope)}
                         />
                     </div>
                 )}
@@ -3521,7 +3539,7 @@ export function MolBioToolkitV2() {
                             width={viewerLayout.leftPanelWidth}
                             projectScoped={Boolean(workspaceId && globalExperimentId && domainExperimentId && stateRevisionId)}
                             showAllConstructs={showAllConstructs}
-                            onToggleAllConstructs={() => setShowAllConstructs((value) => !value)}
+                            onToggleAllConstructs={() => setUnassignedShelfScope(showAllConstructs ? null : projectShelfScope)}
                         />
                         {viewerLayout.showLibraryResizeHandle && (
                             <button
