@@ -106,6 +106,7 @@ function GoldenGateProposal({ proposal, onUse, onEdit, targetSequence, sourceBou
         <div aria-label="Target cut preview" className="text-slate-300">{proposal.cuts.map((cut, i) => <div key={i}>Cut after bp {cut}{sourceBoundary ? ` (source boundary ${sourceBoundary(cut)})` : ''}: <code>{targetSequence.slice(Math.max(0, cut - 8), cut)}|{targetSequence.slice(cut, cut + 8)}</code> · junction {proposal.junctions[i] ?? '—'}</div>)}</div>
         <button type="button" className="rounded border border-slate-600 px-2 py-1" onClick={() => onEdit(proposal.cuts)}>Edit these cuts</button>
         <div className="text-slate-400">Fragments: {proposal.fragment_lengths.join(', ')} bp · cuts at {proposal.cuts.join(', ')}</div>
+        {!!proposal.notes?.length && <ul aria-label="Planning notes" className="text-slate-400">{proposal.notes.map((note, i) => <li key={i}>{note}</li>)}</ul>}
         {(proposal.candidate?.design?.materials ?? []).some(m => m.stage === 'prepared') && <details aria-label="Prepared fragment sequences" className="text-slate-300">
             <summary>Prepared fragments (with removable Type IIS flanks)</summary>
             {(proposal.candidate?.design?.materials ?? []).filter(m => m.stage === 'prepared').map(m => <div key={m.id}>{m.id} · {m.sequence.length} bp<code className="block max-h-24 overflow-auto break-all">{m.sequence}</code></div>)}
@@ -367,9 +368,11 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
             {method === 'golden_gate' && target && <details open={builder} className="min-w-0 space-y-2">
                 <summary>Target sequence and cut positions</summary>
                 <p className="text-slate-400">Select bases to place a cut at the selection end, or enter exact boundaries above. Recommendations do not alter the target. Edit cuts, then run again before using a plan.</p>
-                <SequenceViewer sequenceData={{ name: target.name, sequence: target.sequence, circular: target.circular, sequenceType: 'dna', features: (target.features ?? []).map((f, i) => ({ ...f, id: f.id ?? `target-${i}`, strand: f.strand === -1 ? -1 : 1 })), primers: [] }} visibility={DEFAULT_VISIBILITY}
+                <div aria-label="Target sequence cut editor" className="relative min-w-0 overflow-hidden rounded border border-slate-700" style={{ height: 320 }}>
+                <SequenceViewer viewMode="linear" sequenceData={{ name: target.name, sequence: target.sequence, circular: target.circular, sequenceType: 'dna', features: (target.features ?? []).map((f, i) => ({ ...f, id: f.id ?? `target-${i}`, strand: f.strand === -1 ? -1 : 1 })), primers: [] }} visibility={DEFAULT_VISIBILITY}
                     selection={previewSelection} onSelection={setPreviewSelection}
                     highlightedRegions={(goldenGate?.proposals[0]?.cuts ?? numbers(boundaries)).map(c => ({ start: c, end: Math.min(c + 1, target.sequence.length), color: '#8b5cf6' }))} />
+                </div>
                 <button type="button" disabled={!previewSelection} onClick={() => { if (previewSelection) { const boundary = target.circular && previewSelection.end === target.sequence.length ? 0 : previewSelection.end; setBoundaries([...new Set([...numbers(boundaries), boundary])].sort((a, b) => a - b).join(', ')); } }}>Add cut at selection end{previewSelection ? ` (after bp ${previewSelection.end})` : ''}</button>
                 <details><summary>Unchanged target bases</summary><code data-target-bases className="block max-h-24 overflow-auto break-all">{target.sequence}</code></details>
             </details>}

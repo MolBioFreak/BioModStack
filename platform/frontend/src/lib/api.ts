@@ -3771,6 +3771,7 @@ export interface SuggestGoldenGateProposal {
     candidate?: { design?: { materials: Array<{ id: string; stage: 'source' | 'prepared' | 'digest'; sequence: string }> }; fidelity?: { per_junction?: Array<{ representative: string; probability: number | null }> } };
     pcr_products: Array<{ part_id: string; tailed_length: number; payload_length: number }>;
     donor_retained_fragment_index: number | null;
+    notes?: string[];
 }
 export interface SuggestGoldenGateResponse {
     proposals: SuggestGoldenGateProposal[];

@@ -204,3 +204,23 @@ it('keeps prepared-fragment end controls shrinkable and gives notation a full ro
     expect(editorGrid.querySelector('input')!.classList.contains('min-w-0')).toBe(true);
     expect(editorGrid.parentElement!.parentElement!.className).toContain('grid-cols-[repeat(auto-fit,minmax(min(100%,260px),1fr))]');
 });
+
+
+it('gives the real raw-base cut editor an explicit visible height', async () => {
+    await render(); await click('Golden Gate');
+    const box = host.querySelector<HTMLElement>('[aria-label="Target sequence cut editor"]');
+    expect(box).not.toBeNull();
+    expect(Number.parseInt(box!.style.height)).toBeGreaterThanOrEqual(260);
+    expect(box!.querySelector('.sequence-viewer')).not.toBeNull();
+});
+
+it('shows native repeat compromises beside the exact-cut proposal', async () => {
+    const split = fixture.split_target;
+    const message = 'Repeat compromise: 3 repeat groups are split across fragments under the selected boundaries.';
+    suggestion = { proposals: [{ rank: 1, enzyme_id: split.request.enzyme.enzyme_id, enzyme_name: 'BsaI',
+        empirical: 'no empirical data', internal_sites: 0, junctions: ['AAAA', 'CCCC'], cuts: [20, 80],
+        fragment_lengths: [20, 60, 40], split_request: split.request, pcr_products: [], notes: [message],
+        candidate: split.result.solutions[0] }], enzymes: [], diagnostics: [] };
+    await render(); await click('Golden Gate'); await input('Type IIS enzyme', 'native-BsaI'); await click('Recommend cuts');
+    expect(host.textContent).toContain(message);
+});
