@@ -63,7 +63,7 @@ Authorization gate: execute after the workflow-only implementation is pushed to 
 ### R5 — Protein Design → BoltzGen required caller
 
 - Parent: `workflows/protein_design.nf`
-- Parameters: `diffusion_method=boltzgen`, `run_docking=false`, minimal design count
+- Parameters: `diffusion_method=boltzgen`, minimal design count
 - Forbidden parameter: `run_boltzgen_only` (must not exist)
 - Pass: BoltzGen output continues to parent analysis/publish stages; direct standalone exit path is absent
 

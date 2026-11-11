@@ -3,7 +3,7 @@
 BioModStack is a workstation-first control platform built around four main
 layers:
 
-- Nextflow workflows for compute-heavy design, prediction, docking, sequencing,
+- Nextflow workflows for compute-heavy design, prediction, sequencing,
   and experimental runs
 - a FastAPI backend for orchestration, metadata, artifact serving, runtime
   administration, and bounded instrument integrations
@@ -91,7 +91,6 @@ prove runtime acquisition, scientific qualification, or deployment acceptance:
 - protein local redesign
 - BoltzGen
 - Oligo Designer / RFDpoly
-- docking
 - nanopore methylation and QC
 - experimental protein CAD (La-Proteina / DISCO)
 - Protein Hunter Experimental

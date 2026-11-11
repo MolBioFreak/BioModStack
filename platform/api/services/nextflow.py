@@ -503,10 +503,6 @@ WORKFLOW_ENTRYPOINTS: Dict[str, str] = {
     "antibody_child": "workflows/antibody_child.nf",
     "antibody_backbone": "workflows/rfantibody_backbone.nf",
     "maturation_child": "workflows/maturation_child.nf",
-
-    "docking": "workflows/docking.nf",
-    "unidock": "workflows/docking.nf",
-    "dual_docking": "workflows/docking.nf",
 }
 
 from services.bindcraft2_runtime import NATIVE_ACTIONS as BC2_NATIVE_ACTIONS
@@ -556,12 +552,6 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("antibody_denovo", "nanobody_binder"): "workflows/protein_design.nf",
     ("antibody_denovo", "generator_backbone_refine"): "workflows/ppiflow_generator_design.nf",
 
-    ("diffdock", "dock"): "workflows/docking.nf",
-    ("diffdock", "ntp_dock"): "workflows/docking.nf",
-    ("unidock", "dock"): "workflows/docking.nf",
-    ("unidock", "ntp_dock"): "workflows/docking.nf",
-    ("docking", "compare"): "workflows/docking.nf",
-    ("docking", "consensus"): "workflows/docking.nf",
     ("antibody_child", "validation_batch"): "workflows/antibody_child.nf",
     ("rfantibody_child", "antibody_backbone"): "workflows/rfantibody_backbone.nf",
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
@@ -5952,18 +5942,6 @@ def compile_nextflow_invocation(
             "analyze": "molecular_dynamics_analysis,workstation_ryzen7960x",
         }.get(mode, "molecular_dynamics_experimental,workstation_ryzen7960x")
     
-    # Special case: DiffDock standalone docking uses 'docking' profile
-    if model_id == 'diffdock' and mode in ['dock', 'ntp_dock']:
-        profile = "docking,workstation_ryzen7960x"
-    
-    # Special case: Uni-Dock standalone docking uses 'unidock' profile
-    if model_id == 'unidock' and mode in ['dock', 'ntp_dock']:
-        profile = "unidock,workstation_ryzen7960x"
-    
-    # Special case: Dual docking mode (both DiffDock and Uni-Dock)
-    if model_id == 'docking' and mode in ['compare', 'consensus']:
-        profile = "dual_docking,workstation_ryzen7960x"
-    
 
     workflow_entrypoint = resolve_nextflow_entrypoint(
         effective_profile=effective_profile,
@@ -6452,33 +6430,6 @@ def compile_nextflow_invocation(
     
     # Map model-specific params to Nextflow params
     param_mapping = {
-        # DiffDock param mapping
-        'protein_pdb': 'skip_input_dir',
-        'ligand_smiles': 'diffdock_ligand_smiles',
-        'ligand_sdf': 'diffdock_ligand_sdf',
-        'ntp_type': 'diffdock_ntp_type',
-        'num_poses': 'diffdock_num_poses',
-        'confidence_threshold': 'diffdock_confidence_threshold',
-        # Uni-Dock param mapping
-        'unidock_ligand_smiles': 'unidock_ligand_smiles',
-        'unidock_ntp_type': 'unidock_ntp_type',
-        'unidock_num_poses': 'unidock_num_poses',
-        'unidock_exhaustiveness': 'unidock_exhaustiveness',
-        'unidock_scoring': 'unidock_scoring',
-        'unidock_box_size': 'unidock_box_size',
-        'unidock_box_center': 'unidock_box_center',
-        'unidock_flexible_residues': 'unidock_flexible_residues',
-        'unidock_affinity_threshold': 'unidock_affinity_threshold',
-        'exhaustiveness': 'unidock_exhaustiveness',  # Alias from YAML
-        'scoring_function': 'unidock_scoring',  # Alias from YAML
-        'box_size': 'unidock_box_size',  # Alias from YAML
-        'box_center': 'unidock_box_center',  # Alias from YAML
-        'flexible_residues': 'unidock_flexible_residues',  # Alias from YAML
-        'affinity_threshold': 'unidock_affinity_threshold',  # Alias from YAML
-        'search_mode': 'unidock_search_mode',  # Alias from YAML
-        'min_rmsd': 'unidock_min_rmsd',  # Alias from YAML
-        'energy_range': 'unidock_energy_range',  # Alias from YAML
-        'seed': 'unidock_seed',  # Alias from YAML
         # NOTE: BoltzGen-specific mappings (target_pdb, ligand_description, etc.)
         # are applied conditionally below for model_id == 'boltzgen' only.
         # They were previously here and broke other workflows!
@@ -6604,22 +6555,7 @@ def compile_nextflow_invocation(
         task_chemistry=task_chemistry,
     )
     
-    # Model-specific param preprocessing: Route ntp_type and ligand_smiles to correct targets
-    if model_id == 'unidock':
-        params.setdefault('docking_engine', 'unidock')
-        # For Uni-Dock: ntp_type -> unidock_ntp_type, ligand_smiles -> unidock_ligand_smiles
-        if 'ntp_type' in params:
-            params['unidock_ntp_type'] = params.pop('ntp_type')
-        if 'ligand_smiles' in params and 'unidock_ligand_smiles' not in params:
-            params['unidock_ligand_smiles'] = params.pop('ligand_smiles')
-    elif model_id == 'diffdock':
-        params.setdefault('docking_engine', 'diffdock')
-        # For DiffDock: ntp_type -> diffdock_ntp_type
-        if 'ntp_type' in params:
-            params['diffdock_ntp_type'] = params.pop('ntp_type')
-    elif model_id == 'docking':
-        params.setdefault('docking_engine', 'dual')
-    elif model_id in {'boltzgen', 'boltzgen_child'} or (model_id == 'antibody_denovo' and mode == 'nanobody_binder'):
+    if model_id in {'boltzgen', 'boltzgen_child'} or (model_id == 'antibody_denovo' and mode == 'nanobody_binder'):
         params.setdefault('diffusion_method', 'boltzgen')
         if model_id == 'antibody_denovo':
             from services.boltzgen_request_compatibility import compile_boltzgen_settings

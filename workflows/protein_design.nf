@@ -659,9 +659,6 @@ workflow PROTEIN_DESIGN {
     if (params.complex_json_path) {
         error("complex_json_path jobs are isolated from the core protein-design entrypoint; launch workflows/complex_prediction.nf directly")
     }
-    if (params.unidock_ligand_smiles || params.unidock_ntp_type || params.run_docking) {
-        error("standalone docking is isolated from the core protein-design entrypoint; launch workflows/docking.nf directly")
-    }
 
 
 

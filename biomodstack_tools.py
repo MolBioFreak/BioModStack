@@ -46,7 +46,6 @@ MODULES = {
     "structure_prediction": ("Structure prediction", False),
     "design": ("Protein and binder design", False),
     "molecular_dynamics": ("Molecular dynamics", False),
-    "docking": ("Small-molecule docking", False),
     "alignment": ("Family sequence alignment", False),
 }
 

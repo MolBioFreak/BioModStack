@@ -214,14 +214,6 @@ Purpose:
 
 - multi-polymer design across DNA, RNA, protein, and mixed assemblies
 
-### Docking
-
-Docking support includes:
-
-- [DiffDock](../platform/api/config/models/diffdock.yaml)
-- [Uni-Dock](../platform/api/config/models/unidock.yaml)
-- [shared docking surface](../platform/api/config/models/docking.yaml)
-
 ## Model groups
 
 ### Backbone or generative design
@@ -258,11 +250,6 @@ Docking support includes:
 - AntiBERTy
 - OpenMM
 - ANARCI / ANARCII
-
-### Docking and ligand-aware utilities
-
-- DiffDock
-- Uni-Dock
 
 ## Internal-only orchestrator models
 

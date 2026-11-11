@@ -28,7 +28,7 @@ afterEach(async () => {
     vi.restoreAllMocks(); vi.unstubAllGlobals(); close.mockClear();
 });
 
-const models = ['ppiflow', 'boltzgen', 'bindcraft2', 'esmfold2', 'antibody_denovo', 'docking', 'molecular_dynamics', 'frustrampnn', 'future_model'];
+const models = ['ppiflow', 'boltzgen', 'bindcraft2', 'esmfold2', 'antibody_denovo', 'molecular_dynamics', 'frustrampnn', 'future_model'];
 const statuses = ['completed', 'running', 'queued', 'awaiting_input', 'failed', 'cancelled'] as const;
 it.each(models.flatMap(model => statuses.map(status => [model, status] as const)))('%s / %s stays a job-only summary without candidate requests', async (model_id, status) => {
     await mount({ ...base, model_id, status });

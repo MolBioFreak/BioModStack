@@ -269,8 +269,6 @@ VRAM_PROFILES = {
     'protenix_esm': {'base': 6000, 'scale': 60},      # Protenix ESM2-3B (no-MSA, heavier)
     'protenix_mini_esm': {'base': 5000, 'scale': 50}, # Protenix mini ESM (lighter no-MSA)
     # ──────────────────────────────────────────────────────────────────────────
-    'diffdock': {'base': 4000, 'scale': 12},    # DiffDock
-    'unidock': {'base': 3000, 'scale': 8},      # Uni-Dock
     'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)
     'antibody_child': {'base': 6000, 'scale': 25},  # Antibody validation (Boltz + scoring) ~6-8GB
     'maturation_child': {'base': 18500, 'scale': 25},  # PPIFlow child jobs need one-per-24/32GB GPU, not startup VRAM

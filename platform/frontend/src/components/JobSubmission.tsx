@@ -68,9 +68,9 @@ import {
 import { FileBrowser } from './FileBrowser';
 
 const MODEL_DOCUMENTATION_TOPIC_KEYS = new Set<ModelDocumentationTopic>([
-    'alphafold2', 'boltz2', 'boltzgen', 'caliby', 'chai1', 'confornets', 'diffdock', 'disco', 'esmfold2',
+    'alphafold2', 'boltz2', 'boltzgen', 'caliby', 'chai1', 'confornets', 'disco', 'esmfold2',
     'fampnn', 'fold_cp', 'laproteina', 'ligandmpnn', 'ppiflow', 'protein_hunter', 'proteinmpnn', 'protenix', 'rf3',
-    'rfantibody', 'rfdiffusion', 'rfdpoly', 'unidock',
+    'rfantibody', 'rfdiffusion', 'rfdpoly',
 ]);
 
 const getTemplateDocumentationTopics = (
@@ -2175,7 +2175,7 @@ export function JobSubmission() {
                                 {!isNativeBinderGeneration && !isCalibyNative && !isLigandNative && selectedModelId !== 'protonpottsmpnn' && selectedMode && Object.keys(groupedParams).length > 0 && (
                                     <div className="space-y-6 pt-6 border-t border-slate-700/50">
                                         {/* Render groups in preferred order */}
-                                        {['Inputs', 'Docking Settings', 'General'].filter(g => groupedParams[g]).map(groupName => (
+                                        {['Inputs', 'General'].filter(g => groupedParams[g]).map(groupName => (
                                             <div key={groupName}>
                                                 {groupName !== 'General' && (
                                                     <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">

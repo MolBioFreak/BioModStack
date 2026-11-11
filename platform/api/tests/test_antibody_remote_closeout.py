@@ -27,7 +27,6 @@ CASES = [
         'boltzgen_binding_site_residues': 'T12,T15',
         'boltzgen_filter_biased': False, 'boltzgen_parallel_mode': False,
         'stage_family': 'boltzgen', 'stage_mode': 'nanobody_binder',
-        'run_docking': False, 'run_diffdock': False, 'run_unidock': False,
         'run_frustrampnn': False, 'interactive_gating': False,
     }),
     ('generator_backbone_refine', 'ppiflow_generator_design', 'RunPartialFlow', {

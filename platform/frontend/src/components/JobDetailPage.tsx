@@ -7,7 +7,6 @@ import { resolveApiResourceUrl } from '../runtime/tailnetEnvironment';
 
 import { useParams, Link, Navigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
 import { sourceResultReturn } from '../lib/sourceResultReturn';
 import MolstarViewer from './MolstarViewer';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
@@ -18,21 +17,6 @@ import { jobPollingInterval } from '../lib/queryPolling';
 import { RemoteResultsPrompt } from './RemoteResultsPrompt';
 import { RemoteDiagnosticsPrompt } from './RemoteDiagnosticsPrompt';
 import { remoteResultsState } from './remoteResultsState';
-
-interface DockingResult {
-    name: string;
-    path: string;
-    artifact_path: string;
-    format: 'sdf' | 'pdb';
-    absolute_path: string;
-    confidence: number | null;
-    affinity: number | null;
-    rank: number | null;
-    complex_name?: string;
-    engine?: 'diffdock' | 'unidock';
-    ligand?: string;
-    pose?: number;
-}
 
 interface StructureFile {
     name: string;
@@ -47,7 +31,6 @@ export function JobDetailPage() {
     const location = useLocation();
     const returnParams = new URLSearchParams(location.search);
     const returnTo = sourceResultReturn(returnParams.get('return_to'));
-    const [selectedPose, setSelectedPose] = useState<number>(0);
 
     // Fetch job details
     const { data: job, isLoading: jobLoading, error: jobError } = useQuery<Job>({
@@ -66,10 +49,6 @@ export function JobDetailPage() {
         },
     });
 
-    const isDockingJob = job?.model_id === 'diffdock' ||
-        job?.model_id === 'unidock' ||
-        job?.model_id === 'docking' ||
-        job?.mode?.includes('dock');
     const isMolecularDynamicsJob = job?.model_id === 'molecular_dynamics' ||
         job?.mode === 'molecular_dynamics' ||
         job?.mode === 'md';
@@ -77,17 +56,6 @@ export function JobDetailPage() {
         job?.model_id === 'confornets_experimental';
     const isRFD3GenerationJob = isRFD3GenerationResultJob(job);
     const isNgsResultJob = job ? isNgsJob(job) : false;
-
-    // Fetch docking results
-    const { data: dockingData, isLoading: dockingLoading, error: dockingError } = useQuery<{ sdfs: DockingResult[] }>({
-        queryKey: ['docking-results', jobId],
-        queryFn: async () => {
-            const res = await fetch(`/api/jobs/${jobId}/docking-results`);
-            if (!res.ok) throw new Error('Failed to fetch docking results');
-            return res.json();
-        },
-        enabled: isDockingJob && !isConformationalMappingJob && job?.status === 'completed',
-    });
 
     // Fetch structure files for structure prediction jobs
     const { data: structureData, isLoading: structureLoading } = useQuery<{ structures: StructureFile[], count: number }>({
@@ -97,11 +65,8 @@ export function JobDetailPage() {
             if (!res.ok) throw new Error('Failed to fetch structure files');
             return res.json();
         },
-        enabled: job?.status === 'completed' && !isDockingJob && !isMolecularDynamicsJob && !isConformationalMappingJob && !isNgsResultJob && !isRFD3GenerationJob,
+        enabled: job?.status === 'completed' && !isMolecularDynamicsJob && !isConformationalMappingJob && !isNgsResultJob && !isRFD3GenerationJob,
     });
-
-    const poses = dockingData?.sdfs || [];
-    const currentSdf = poses[selectedPose];
 
     if (jobLoading) {
         return (
@@ -239,99 +204,7 @@ export function JobDetailPage() {
                     </div>
                 )}
 
-                {job.status === 'completed' && isDockingJob && (
-                    <div>
-                        {dockingLoading ? (
-                            <div className="flex items-center justify-center py-8">
-                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" />
-                            </div>
-                        ) : dockingError ? (
-                            <div role="alert" className="text-red-300">Docking results could not be loaded: {dockingError.message}</div>
-                        ) : poses.length > 0 ? (
-                            <div>
-                                {/* Pose Selector */}
-                                <div className="flex items-center gap-4 mb-4">
-                                    <label className="text-slate-400 text-sm">Docking Pose:</label>
-                                    <select
-                                        value={selectedPose}
-                                        onChange={(e) => setSelectedPose(Number(e.target.value))}
-                                        className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-accent"
-                                    >
-                                        {poses.map((pose: DockingResult, idx: number) => {
-                                            // Show appropriate score based on engine
-                                            const scoreLabel = pose.engine === 'unidock'
-                                                ? (pose.affinity !== null ? `(${pose.affinity.toFixed(1)} kcal/mol)` : '')
-                                                : (pose.confidence !== null ? `(conf: ${pose.confidence.toFixed(2)})` : '');
-                                            return (
-                                                <option key={pose.artifact_path} value={idx}>
-                                                    {pose.engine} · {pose.complex_name ?? pose.ligand ?? ''} · {pose.name} {scoreLabel}
-                                                </option>
-                                            );
-                                        })}
-                                    </select>
-                                    <span className="text-slate-500 text-sm">
-                                        {poses.length} poses ranked
-                                    </span>
-                                </div>
-
-                                {/* 3D Viewer - Using MolstarViewer with URL */}
-                                <div className="bg-slate-900/50 rounded-xl overflow-hidden">
-                                    {currentSdf ? (
-                                        <MolstarViewer
-                                            structureUrl={`/api/jobs/${jobId}/docking-results/${currentSdf.artifact_path.split('/').map(encodeURIComponent).join('/')}`}
-                                            format={currentSdf.format}
-                                            height={500}
-                                            backgroundColor="#0f172a"
-                                            alphafoldView={false}
-                                        />
-                                    ) : (
-                                        <div className="flex items-center justify-center h-[500px] text-slate-500">
-                                            Loading 3D structure...
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Score Display - handles both DiffDock confidence and Uni-Dock affinity */}
-                                {(currentSdf?.confidence !== null || currentSdf?.affinity !== null) && (
-                                    <div className="mt-4 text-center">
-                                        {currentSdf?.engine === 'unidock' ? (
-                                            <>
-                                                <span className="text-slate-400">Binding Affinity:</span>
-                                                <span className={`ml-2 font-semibold ${(currentSdf.affinity ?? 0) < -9 ? 'text-green-400' :
-                                                        (currentSdf.affinity ?? 0) < -7 ? 'text-yellow-400' : 'text-red-400'
-                                                    }`}>
-                                                    {currentSdf.affinity?.toFixed(1)} kcal/mol
-                                                </span>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <span className="text-slate-400">Confidence Score:</span>
-                                                <span className={`ml-2 font-semibold ${(currentSdf?.confidence ?? 0) < -2 ? 'text-green-400' :
-                                                        (currentSdf?.confidence ?? 0) < 0 ? 'text-yellow-400' : 'text-red-400'
-                                                    }`}>
-                                                    {currentSdf?.confidence?.toFixed(2)}
-                                                </span>
-                                            </>
-                                        )}
-                                        {/* Show engine badge */}
-                                        <span className={`ml-3 px-2 py-0.5 text-xs rounded ${currentSdf?.engine === 'unidock'
-                                                ? 'bg-emerald-500/20 text-emerald-400'
-                                                : 'bg-accent/20 text-accent'
-                                            }`}>
-                                            {currentSdf?.engine === 'unidock' ? 'Uni-Dock (Physics)' : 'DiffDock (ML)'}
-                                        </span>
-                                    </div>
-                                )}
-                            </div>
-                        ) : (
-                            <div className="text-center py-8 text-slate-500">
-                                No docking results found
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {job.status === 'completed' && !isDockingJob && !isMolecularDynamicsJob && (
+                {job.status === 'completed' && !isMolecularDynamicsJob && (
                     <div>
                         <h3 className="text-md font-medium text-white mb-4">
                             Structure Files ({structureData?.count || 0})

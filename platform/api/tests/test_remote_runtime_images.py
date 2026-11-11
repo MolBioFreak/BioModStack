@@ -160,30 +160,6 @@ def test_runtime_image_projection_rejects_symlinks_before_resolving(package, mon
                                only_kinds=frozenset({'image'}))
 
 
-def test_native_metadata_digest_matches_final_cache_and_bundle_inventory(tmp_path):
-    from types import SimpleNamespace
-    from model_registry import native_checkpoint_dependencies
-    from services.remote_execution import bundle
-    files = []
-    for family in ('score_model', 'confidence_model'):
-        path = tmp_path/'diffdock/workdir/v1.1'/family/'model_parameters.yml'
-        path.parent.mkdir(parents=True)
-        path.write_text('esm_embeddings_model: precomputed\n')
-        files.append(path)
-    dependencies, blockers = native_checkpoint_dependencies('RunDiffDock', {'weights_root': str(tmp_path)})
-    assert not blockers
-    plan = SimpleNamespace(dependencies=dependencies)
-    def actual_inventory():
-        return {record.relative_path: record.sha256 for path in files
-                for record in bundle._records_for_source(path, 'weights/' + path.relative_to(tmp_path).as_posix(), 'runtime')}
-    bundle.verify_selected_runtime_hashes(plan, actual_inventory())
-    files[0].write_text('esm_embeddings_model: esm2_t6_8M_UR50D\n')
-    with pytest.raises(bundle.RemoteBundleError, match='metadata changed or is missing'):
-        bundle.verify_selected_runtime_hashes(plan, actual_inventory())
-    with pytest.raises(bundle.RemoteBundleError, match='metadata changed or is missing'):
-        bundle.verify_selected_runtime_hashes(plan, {})
-
-
 def test_shared_plan_metadata_root_is_server_owned(monkeypatch, tmp_path):
     import model_registry
     import paths

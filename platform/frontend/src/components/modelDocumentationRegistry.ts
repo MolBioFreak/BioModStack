@@ -29,10 +29,6 @@ export const MODEL_DOCUMENTATION_LINKS = {
         { label: 'ConforNets GitHub', href: 'https://github.com/aqlaboratory/confornets' },
         { label: 'ConforNets arXiv', href: 'https://arxiv.org/abs/2604.18559' },
     ],
-    diffdock: [
-        { label: 'DiffDock GitHub', href: 'https://github.com/gcorso/DiffDock' },
-        { label: 'DiffDock arXiv', href: 'https://arxiv.org/abs/2210.01776' },
-    ],
     disco: [
         { label: 'DISCO GitHub', href: 'https://github.com/DISCO-design/DISCO' },
         { label: 'DISCO arXiv', href: 'https://arxiv.org/abs/2604.05181' },
@@ -93,10 +89,6 @@ export const MODEL_DOCUMENTATION_LINKS = {
     rfdpoly: [
         { label: 'RFDpoly GitHub', href: 'https://github.com/RosettaCommons/RFDpoly' },
         { label: 'RFDpoly preprint DOI', href: 'https://doi.org/10.1101/2025.10.01.679929' },
-    ],
-    unidock: [
-        { label: 'Uni-Dock GitHub', href: 'https://github.com/dptech-corp/Uni-Dock' },
-        { label: 'Uni-Dock DOI', href: 'https://doi.org/10.1021/acs.jctc.2c01145' },
     ],
 } as const;
 

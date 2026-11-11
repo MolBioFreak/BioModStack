@@ -1190,9 +1190,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         const boltzgenParams: Record<string, UntypedApiValue> = {
             diffusion_method: 'boltzgen',
             run_boltzgen_only: true,
-            run_docking: false,
-            run_diffdock: false,
-            run_unidock: false,
             boltzgen_mode: 'nanobody_binder',
             boltzgen_protocol: 'nanobody-anything',
             boltzgen_num_designs: numDesigns,

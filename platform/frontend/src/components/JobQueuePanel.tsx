@@ -312,7 +312,6 @@ function StageBadge({ stage, progress }: { stage: string | null; progress?: stri
         'protenix': 'Protenix',
         'maturation_post_validation': 'PPIFlow Repair',
         'af2': 'AlphaFold2',
-        'unidock': 'UniDock',
         'msa': 'MSA Gen',
         'prepfampnn': 'Prep FAMPNN',
         'complete': 'Complete',

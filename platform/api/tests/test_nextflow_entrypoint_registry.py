@@ -53,9 +53,6 @@ EXPECTED_PROFILE_ENTRYPOINTS = {
     "antibody_backbone": "workflows/rfantibody_backbone.nf",
     "maturation_child": "workflows/maturation_child.nf",
 
-    "docking": "workflows/docking.nf",
-    "unidock": "workflows/docking.nf",
-    "dual_docking": "workflows/docking.nf",
 }
 
 EXPECTED_MODEL_MODE_ENTRYPOINTS = {
@@ -71,12 +68,6 @@ EXPECTED_MODEL_MODE_ENTRYPOINTS = {
 
     ("ppiflow", "generator_backbone_refine"): "workflows/ppiflow_generator_design.nf",
 
-    ("diffdock", "dock"): "workflows/docking.nf",
-    ("diffdock", "ntp_dock"): "workflows/docking.nf",
-    ("unidock", "dock"): "workflows/docking.nf",
-    ("unidock", "ntp_dock"): "workflows/docking.nf",
-    ("docking", "compare"): "workflows/docking.nf",
-    ("docking", "consensus"): "workflows/docking.nf",
     ("antibody_denovo", ANTIBODY_DENOVO_PIPELINE): "workflows/antibody_denovo.nf",
     ("antibody_denovo", ANTIBODY_REFINEMENT_PIPELINE): "workflows/antibody_denovo.nf",
     ("antibody_denovo", "default"): "workflows/antibody_denovo.nf",
@@ -151,9 +142,6 @@ def test_api_generated_profiles_are_defined_in_nextflow_config() -> None:
         [
             ("ppiflow", "generator_backbone_refine", {"ppiflow_seed_complex_path": "/tmp/seed.pdb"}),
 
-            ("diffdock", "dock", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}),
-            ("unidock", "dock", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}),
-            ("docking", "compare", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}),
             ("antibody_child", "validation_batch", {"pdb_paths": "/tmp/a.pdb"}),
             ("rfantibody_child", "antibody_backbone", {"target_pdb": "/tmp/target.pdb"}),
             ("fampnn_child", "sequence_design", {"pdb_paths": "/tmp/a.pdb"}),
@@ -284,9 +272,6 @@ def test_remaining_parent_and_child_workflows_route_direct_for_fresh_and_resume(
     cases = [
         ("ppiflow", "generator_backbone_refine", {"ppiflow_seed_complex_path": "/tmp/seed.pdb"}, "workflows/ppiflow_generator_design.nf"),
 
-        ("diffdock", "dock", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}, "workflows/docking.nf"),
-        ("unidock", "dock", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}, "workflows/docking.nf"),
-        ("docking", "compare", {"protein_pdb": "/tmp/receptor.pdb", "ligand_smiles": "CCO"}, "workflows/docking.nf"),
         ("antibody_child", "validation_batch", {"pdb_paths": "/tmp/a.pdb"}, "workflows/antibody_child.nf"),
         ("rfantibody_child", "antibody_backbone", {"target_pdb": "/tmp/target.pdb"}, "workflows/rfantibody_backbone.nf"),
         ("fampnn_child", "sequence_design", {"pdb_paths": "/tmp/a.pdb"}, "workflows/fampnn_child.nf"),

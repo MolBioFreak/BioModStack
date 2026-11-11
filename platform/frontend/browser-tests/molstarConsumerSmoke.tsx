@@ -38,7 +38,7 @@ interface ConsumerSmokeReport {
         readonly epitope: 3;
         readonly total: 15;
         readonly routeReachable: 12;
-        readonly orphanFixtures: readonly ['G1', 'G2', 'G3'];
+        readonly orphanFixtures: readonly ['G3'];
         readonly retiredHistoricalSites: readonly string[];
     };
     readonly generic: readonly SiteResult[];
@@ -217,13 +217,7 @@ async function runMolstarConsumerSmoke(): Promise<ConsumerSmokeReport> {
     const generic: SiteResult[] = [];
     const failures: string[] = [];
     try {
-        generic.push(...await smokeDirectGroup(
-            ['G1', 'G2'],
-            ['DockingComparePane:DiffDock orphan fixture', 'DockingComparePane:Uni-Dock orphan fixture'],
-            [{ ...base, height: 350, backgroundColor: '#1e1b4b' }, { ...base, height: 350, backgroundColor: '#022c22' }],
-        ));
         generic.push(...await smokeDirectGroup(['G3'], ['FloatingViewer orphan fixture'], [{ ...base, height: '100%' }]));
-        generic.push(...await smokeDirectGroup(['G4'], ['JobDetailPage docking result'], [{ ...base, height: 500 }]));
         generic.push(...await smokeDirectGroup(['G5'], ['MutagenesisTemplate FrustraMPNN'], [{ ...base, height: 280, alphafoldView: false, residueMetricLayer: metricLayer, label: 'Frustration Map' }]));
         generic.push(...await smokeDirectGroup(['G6'], ['OligoDesignerTemplate scaffold'], [{ ...base, height: 300, hideControls: false, backgroundColor: '#1e293b' }]));
         generic.push(...await smokeDirectGroup(['G7'], ['Dashboard QuickViewer'], [{ ...base, height: 480, alphafoldView: true }]));
@@ -258,7 +252,7 @@ async function runMolstarConsumerSmoke(): Promise<ConsumerSmokeReport> {
                 epitope: 3,
                 total: 15,
                 routeReachable: 12,
-                orphanFixtures: ['G1', 'G2', 'G3'],
+                orphanFixtures: ['G3'],
                 retiredHistoricalSites: ['one retired template', 'one pre-HEAD epitope site absent from current history'],
             },
             generic,

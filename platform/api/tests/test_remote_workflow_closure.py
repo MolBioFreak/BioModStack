@@ -911,12 +911,12 @@ def test_foundry_filters_do_not_select_inference_checkpoints(process):
     assert not blockers
 
 
-@pytest.mark.parametrize('process', ['RunRFD3', 'RunBoltzGen', 'RunDiffDock', 'RunShapeRFD3'])
+@pytest.mark.parametrize('process', ['RunRFD3', 'RunBoltzGen', 'RunShapeRFD3'])
 def test_native_checkpoint_requirements_never_select_whole_cache(process):
     from model_registry import native_checkpoint_dependencies
     deps, blockers = native_checkpoint_dependencies(process, {'cache_root': '/host/private/cache'})
     assert deps
-    assert bool(blockers) == (process in {'RunBoltzGen', 'RunDiffDock'})
+    assert bool(blockers) == (process == 'RunBoltzGen')
     assert all(row.selector != 'cache_root' for row in deps)
     assert all('provision' in row.blocks for row in blockers)
     if process == 'RunShapeRFD3':
@@ -972,68 +972,10 @@ def test_installed_checkpoint_consumer_bindings_and_generated_cache_policy():
         assert f'--{flag} /weights/boltzgen/{member}' in module
     assert '--design_checkpoints ${checkpointPaths}' in module
     assert '--checkpoint_mode ${checkpointMode}' not in module
-    assert 'weightBind("${params.weights_root}/diffdock/workdir", "/cache/workdir")' in config
-    assert 'weightBind("${params.weights_root}/diffdock/torch/hub/checkpoints", "/cache/torch/hub/checkpoints")' in config
-    assert '--env TORCH_HOME=/cache/torch' in config and '--pwd /cache' in config
-    deps, blockers = native_checkpoint_dependencies('RunDiffDock', {})
-    assert len(deps) == 6
-    assert sum(d.relative_path.endswith('model_parameters.yml') for d in deps) == 2
-    assert any(d.relative_path.endswith('-contact-regression.pt') for d in deps)
-    assert all(not d.relative_path.endswith('.npy') for d in deps)
-    assert blockers[0].component_or_dependency_id == 'weights:diffdock:workdir/v1.1/score_model/model_parameters.yml'
     deps, blockers = native_checkpoint_dependencies('RunRFD3', {})
     assert deps[0].relative_path == 'foundry/checkpoints/rfd3_latest.ckpt'
     assert '2025_12_01_remapped.ckpt' in deps[0].semantic_release
     assert not blockers
-
-
-@pytest.mark.parametrize('esm_name,extra', [(None, 0), ('precomputed', 0),
-    ('esm2_t33_650M_UR50D', 0), ('esm2_t30_150M_UR50D', 2), ('esm1v_t33_650M_UR90S_1', 1)])
-def test_diffdock_present_metadata_resolves_and_pins_auxiliary_assets(tmp_path, esm_name, extra):
-    import hashlib
-    import yaml
-    from model_registry import native_checkpoint_dependencies
-    for family in ['score_model', 'confidence_model']:
-        path = tmp_path / 'diffdock/workdir/v1.1' / family / 'model_parameters.yml'
-        path.parent.mkdir(parents=True)
-        # Synthetic loader-field fixture only: no checkpoint or scientific execution.
-        path.write_text(yaml.safe_dump({'all_atoms': False, 'esm_embeddings_model': esm_name,
-                                      'use_original_model_cache': True}))
-    deps, blockers = native_checkpoint_dependencies('RunDiffDock', {'weights_root': str(tmp_path)})
-    assert not blockers
-    assert len(deps) == 6 + extra
-    for dep in deps:
-        if dep.relative_path.endswith('model_parameters.yml'):
-            assert dep.semantic_release == 'sha256:' + hashlib.sha256((tmp_path / dep.relative_path).read_bytes()).hexdigest()
-    selected = next(d for d in deps if d.relative_path.endswith('score_model/model_parameters.yml'))
-    path = tmp_path / selected.relative_path
-    path.write_text(path.read_text() + '\n# changed immutable metadata\n')
-    changed, _ = native_checkpoint_dependencies('RunDiffDock', {'weights_root': str(tmp_path)})
-    assert next(d for d in changed if d.logical_id == selected.logical_id).semantic_release != selected.semantic_release
-
-
-@pytest.mark.parametrize('bad', ['missing', 'symlink', 'not_mapping', 'local_esm'])
-def test_diffdock_metadata_missing_or_unbound_is_concrete(tmp_path, bad):
-    from model_registry import native_checkpoint_dependencies
-    root = tmp_path / 'diffdock/workdir/v1.1'
-    for family in ['score_model', 'confidence_model']:
-        path = root / family / 'model_parameters.yml'
-        path.parent.mkdir(parents=True)
-        path.write_text('all_atoms: false\n')
-    path = root / 'score_model/model_parameters.yml'
-    if bad == 'missing':
-        path.unlink()
-    elif bad == 'symlink':
-        path.unlink()
-        path.symlink_to(root / 'confidence_model/model_parameters.yml')
-    elif bad == 'not_mapping':
-        path.write_text('[]\n')
-    else:
-        path.write_text('esm_embeddings_model: /private/other.pt\n')
-    _, blockers = native_checkpoint_dependencies('RunDiffDock', {'weights_root': str(tmp_path)})
-    assert len(blockers) == 1
-    assert blockers[0].component_or_dependency_id.endswith('score_model/model_parameters.yml')
-    assert ('Missing native metadata asset' in blockers[0].reason) == (bad == 'missing')
 
 
 def test_native_stage_projects_predecessor_roles_once():
