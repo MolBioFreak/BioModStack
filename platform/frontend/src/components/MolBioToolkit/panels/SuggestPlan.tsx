@@ -29,6 +29,8 @@ import { SequenceViewer } from '../SequenceViewer';
 import { DEFAULT_VISIBILITY } from '../sequenceViewerConstants';
 import { createSelectionSnapshot } from '../utils/selectionActions';
 import { inlineFragmentFeatures } from '../utils/assemblyFeatures';
+import { GoldenGateFragmentsSetup } from './golden-gate/GoldenGateFragmentsSetup'; // GG-FRAGMENTS
+import { GoldenGateOrderList } from './golden-gate/GoldenGateOrderList'; // GG-FRAGMENTS
 
 type Method = 'gibson' | 'golden_gate' | 'restriction';
 type Molecule = { name: string; sequence: string; circular: boolean; features?: SequenceFeature[]; document_id?: string; revision_id?: string; revision_number?: number };
@@ -117,6 +119,7 @@ function GoldenGateProposal({ proposal, onUse, onEdit, targetSequence, sourceBou
             {(proposal.candidate?.design?.materials ?? []).filter(m => m.stage === 'prepared').map(m => <div key={m.id}>{m.id} · {m.sequence.length} bp<code className="block max-h-24 overflow-auto break-all">{m.sequence}</code></div>)}
             <p>Use this plan, then Run Golden Gate task to save or export the fixed workup ZIP, including prepared FASTA. The target sequence above remains unchanged.</p>
         </details>}
+        <GoldenGateOrderList proposal={proposal} />{/* GG-FRAGMENTS */}
         {proposal.pcr_products.length > 0 && <div className="text-slate-400">PCR: {proposal.pcr_products.map((p) => `${p.part_id} ${p.tailed_length} bp with tails (${p.payload_length} bp payload)`).join(', ')}</div>}
         <button type="button" className="rounded bg-violet-600 px-2 py-1 text-white" onClick={() => onUse(proposal.split_request as unknown as WorkflowRequest)}>Use this plan</button>
     </li>;
@@ -147,6 +150,7 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
     const [minMatch, setMinMatch] = useState(30);
     const [boundaries, setBoundaries] = useState('');
     const [enzyme, setEnzyme] = useState('');
+    const [ggMode, setGgMode] = useState<'split' | 'fragments'>('split'); // GG-FRAGMENTS
     const discovery = useQuery({ queryKey: ['molbio-golden-gate-options'], queryFn: async ({ signal }) => (await fetchGoldenGateAssemblyOptions(signal)).data, enabled: open && method === 'golden_gate' && !goldenGateOptions, staleTime: 300000 });
     const options = goldenGateOptions ?? discovery.data;
     const compatibleEnzymes = (options?.enzymes ?? []).filter(e => options?.raw_design?.raw_enzyme_adapters.includes(e.canonical_name));
@@ -290,6 +294,28 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
     if (!open) {
         return <button type="button" onClick={() => setOpen(true)} className="rounded border border-slate-600 px-3 py-1.5 text-xs text-slate-200">Suggest plan</button>;
     }
+    // GG-FRAGMENTS: assemble-from-fragments mode replaces the split controls inside the same panel.
+    const ggModeSwitch = method === 'golden_gate' && <div role="group" aria-label="Golden Gate mode" className="flex flex-wrap gap-2">
+        {([['split', 'Split one sequence or plasmid'], ['fragments', 'Assemble from fragments']] as const).map(([value, label]) => (
+            <button key={value} type="button" aria-pressed={ggMode === value} onClick={() => setGgMode(value)}
+                className={`rounded-full px-3 py-1 ${ggMode === value ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300'}`}>{label}</button>))}
+    </div>;
+    if (method === 'golden_gate' && ggMode === 'fragments') {
+        const selectedMol = selectedTarget ? { name: selectedTarget.name, sequence: selectedTarget.sequence, circular: false } : null;
+        return <section aria-label="Suggest plan" className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3 text-xs">
+            <div className="flex items-center justify-between">
+                <h5 className="font-semibold text-slate-100">{builder ? 'Golden Gate target builder' : 'Suggest plan'}</h5>
+                {!builder && <button type="button" className="px-2 text-slate-400" onClick={() => setOpen(false)}>Close</button>}
+            </div>
+            {!builder && <div className="flex flex-wrap gap-2">
+                {([['gibson', 'HiFi / Gibson'], ['golden_gate', 'Golden Gate'], ['restriction', 'Restriction-ligation']] as const).map(([value, label]) => (
+                    <button key={value} type="button" onClick={() => setMethod(value)}
+                        className={`rounded-full px-3 py-1 ${method === value ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300'}`}>{label}</button>))}
+            </div>}
+            {ggModeSwitch}
+            <GoldenGateFragmentsSetup enzymes={compatibleEnzymes} currentMolecule={{ name: current.name, sequence: current.sequence, circular: current.circular }} selectedMolecule={selectedMol} onUse={onUseGoldenGate} />
+        </section>;
+    }
     return (
         <section aria-label="Suggest plan" className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/50 p-3 text-xs">
             <div className="flex items-center justify-between">
@@ -303,6 +329,7 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
                 ))}
                 <span aria-disabled="true" className="rounded-full border border-dashed border-[#293a59] px-3 py-1 text-[#939fb6]">Gateway: not available yet</span>
             </div>}
+            {ggModeSwitch /* GG-FRAGMENTS */}
 
             <SetupCard plain={method === 'golden_gate'}>
             <fieldset className="min-w-0 space-y-1">

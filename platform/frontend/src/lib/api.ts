@@ -3653,14 +3653,46 @@ export type SuggestGoldenGateSource = { id: string; source:
     | { kind: 'inline'; sequence: string; topology: 'linear' | 'circular'; features: unknown[] }
     | { kind: 'molecular_revision'; revision_id: string } };
 export interface SuggestGoldenGateRequest {
-    target: SuggestGoldenGateSource;
+    target?: SuggestGoldenGateSource;
     enzymes: string[];
     fragment_count?: number | null;
     fixed_boundaries: number[];
     preparation_kind: 'synthesis' | 'pcr';
     terminal_right_fusion?: string | null;
     proposals: number;
+    // Assemble-from-fragments mode (additive)
+    parts?: GoldenGatePartSpec[];
+    order?: 'given' | 'auto';
+    vector?: SuggestGoldenGateSource | null;
+    circular?: boolean;
 }
+export interface GoldenGatePartSpec {
+    source: SuggestGoldenGateSource;
+    name?: string | null;
+    region?: { start: number; end: number } | null;
+    orientation?: 'forward' | 'reverse';
+    left_overhang?: string | null;
+    right_overhang?: string | null;
+    kind?: 'auto' | 'bare' | 'prepared';
+    retained_fragment_index?: number | null;
+}
+export interface GoldenGatePartReport {
+    index: number; name: string; length: number; topology: string; enzyme_id: string; enzyme_name: string;
+    requested_kind: string; kind: 'bare' | 'prepared' | 'ambiguous' | 'invalid';
+    site_count: number; site_positions: number[];
+    left_overhang?: string | null; right_overhang?: string | null; retained_fragment_index?: number | null; payload_length?: number | null;
+    candidates: Array<{ fragment_index: number; length: number; left_overhang: string; right_overhang: string }>;
+    message: string;
+}
+export interface GoldenGateOrderSummary {
+    bare_parts: number; prepared_parts: number; order_lengths: number[]; order_total_bp: number; method: 'synthesis' | 'pcr';
+}
+export interface GoldenGatePreparedRow {
+    part_id: string; name: string; preparation: 'pcr' | 'synthesis' | 'donor'; part_kind: 'bare' | 'prepared';
+    input_index?: number | null; order_sequence: string | null; tailed_length: number | null; payload_length: number | null;
+    primers: string[]; digested_sequence: string | null; left_overhang: string | null; right_overhang: string | null;
+}
+export interface GoldenGateJunctionSlot { index: number; overhang: string; origin: 'user' | 'prepared' | 'vector' | 'optimizer'; between: unknown[] }
 export interface SuggestGoldenGateProposal {
     rank: number; enzyme_id: string; enzyme_name: string; empirical: string; ranking_mode: string;
     internal_sites: number; junction_mode: string; junctions: string[]; cuts: number[]; fragment_lengths: number[];
@@ -3669,9 +3701,17 @@ export interface SuggestGoldenGateProposal {
     candidate?: { fidelity?: { per_junction?: Array<{ representative: string; probability: number | null }> } };
     pcr_products: Array<{ part_id: string; tailed_length: number; payload_length: number }>;
     donor_retained_fragment_index: number | null;
+    notes?: string[];
+    assemble_request?: Record<string, unknown> | null;
+    junction_slots?: GoldenGateJunctionSlot[];
+    prepared_fragments?: GoldenGatePreparedRow[];
+    final_sequence?: string | null;
+    part_order?: number[];
+    order_summary?: GoldenGateOrderSummary | null;
 }
 export interface SuggestGoldenGateResponse {
     proposals: SuggestGoldenGateProposal[];
+    part_reports?: GoldenGatePartReport[];
     enzymes: Array<{ enzyme_id: string; name: string; empirical: string; status: string; internal_sites?: number | null }>;
     diagnostics: string[];
 }
