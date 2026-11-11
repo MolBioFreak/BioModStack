@@ -4,7 +4,7 @@ Nucleotide Sequences API for BioDesigner.
 Provides CRUD operations for DNA/RNA sequences with feature annotations.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Annotated, Optional, List, Any, Literal
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,8 @@ import math
 
 from molbio_database import get_molbio_session
 from molbio_models import MolecularDocument, MolecularRevision, NucleotideSequence, Primer
+from molbio_ngs_database import get_molbio_ngs_session
+from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSDomainStateMember, MolBioNGSMemberReceipt
 from services.molbio_persistence import (
     begin_immediate_molbio_write,
     record_primer_revision,
@@ -748,6 +750,7 @@ def normalize_primer_payloads(
 @router.get("/", response_model=List[NucleotideSequenceListItem])
 async def list_sequences(
     session: AsyncSession = Depends(get_molbio_session),
+    native: AsyncSession = Depends(get_molbio_ngs_session),
     search: Optional[str] = Query(None, description="Search by name, description, accession, organism, or source file"),
     sequence_type: Optional[str] = Query(None, description="Filter by polymer type: dna or rna"),
     topology: str = Query("all", description="Filter by topology: all, circular, linear"),
@@ -756,6 +759,8 @@ async def list_sequences(
     sequence_ids: Annotated[Optional[str], Query(max_length=10000, description="Comma-separated exact sequence IDs, at most 256")] = None,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    project_membership: Annotated[Literal["all", "unassigned"], Query(description="Unassigned excludes sequences in any current Project state")] = "all",
+    response: Response = None,
 ):
     """List all nucleotide sequences."""
     # Match the viewer's annotation count without hydrating sequence blobs.
@@ -814,8 +819,44 @@ async def list_sequences(
     query = query.order_by(
         sort_expression.desc() if sort_desc else sort_expression.asc(),
         NucleotideSequence.id.asc(),
-    ).offset(offset).limit(limit)
-    paginated = (await session.execute(query)).all()
+    )
+    if project_membership == "unassigned":
+        if response is not None:
+            response.headers["X-BNS-Sequence-Scope"] = "unassigned"
+        # The two stores have separate ownership. Resolve current membership for
+        # bounded candidate batches, then page the filtered result. Filtering only
+        # an already limited recent page would hide older unassigned sequences.
+        paginated = []
+        scan_offset = 0
+        remaining_offset = offset
+        batch_size = max(100, limit)
+        receipt_sequence_id = func.json_extract(MolBioNGSMemberReceipt.reopen_destination, "$.params.sequence_id")
+        while len(paginated) < limit:
+            candidates = (await session.execute(query.offset(scan_offset).limit(batch_size))).all()
+            if not candidates:
+                break
+            assigned = set((await native.scalars(
+                select(receipt_sequence_id).select_from(MolBioNGSMemberReceipt)
+                .join(MolBioNGSDomainStateMember, MolBioNGSDomainStateMember.receipt_id == MolBioNGSMemberReceipt.receipt_id)
+                .join(MolBioNGSDomainState, MolBioNGSDomainState.current_state_revision_id == MolBioNGSDomainStateMember.state_revision_id)
+                .where(MolBioNGSMemberReceipt.entity_kind == "molecular_revision",
+                       receipt_sequence_id.in_([candidate.id for candidate in candidates]))
+                .distinct()
+            )).all())
+            for candidate in candidates:
+                if candidate.id in assigned:
+                    continue
+                if remaining_offset:
+                    remaining_offset -= 1
+                    continue
+                paginated.append(candidate)
+                if len(paginated) == limit:
+                    break
+            scan_offset += len(candidates)
+            if len(candidates) < batch_size:
+                break
+    else:
+        paginated = (await session.execute(query.offset(offset).limit(limit))).all()
 
     return [
         NucleotideSequenceListItem(
