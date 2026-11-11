@@ -9,7 +9,12 @@ import os
 import stat
 from pathlib import Path
 
-PROVIDERS = ("colabfold_api", "neurosnap_api")
+from services.msa_provider_credentials import (
+    PROVIDER_DESCRIPTORS, PROVIDER_IDS, credential_state,
+    credential_file as _provider_credential_file,
+)
+
+PROVIDERS = PROVIDER_IDS
 NEUROSNAP_FIELDS = frozenset({
     "msa_neurosnap_coverage_percent", "msa_neurosnap_identity_percent",
     "msa_neurosnap_max_sequences", "msa_neurosnap_force_uppercase",
@@ -71,13 +76,8 @@ def cache_root() -> Path:
 
 
 def credential_file() -> Path | None:
-    value = os.environ.get("BMS_NEUROSNAP_API_KEY_FILE")
-    if not value:
-        return None
-    path = Path(value)
-    if not path.is_absolute():
-        raise ValueError("BMS_NEUROSNAP_API_KEY_FILE must be an absolute protected credential path")
-    return path
+    """Neurosnap key file: BMS_NEUROSNAP_API_KEY_FILE first, then the key saved from the MSA hub."""
+    return _provider_credential_file("neurosnap_api")
 
 
 def controller_config_path() -> Path:
@@ -88,16 +88,7 @@ def controller_config_path() -> Path:
 
 
 def _credential_configured() -> bool:
-    path = credential_file()
-    if path is None:
-        return False
-    try:
-        info = path.lstat()
-    except OSError:
-        return False
-    return (stat.S_ISREG(info.st_mode) and 1 <= info.st_size <= 4096
-            and info.st_uid == os.getuid()
-            and not info.st_mode & 0o077 and os.access(path, os.R_OK))
+    return bool(credential_state("neurosnap_api")["configured"])
 
 
 def _directory_blockers(label: str, root: Path, blockers: list[str]) -> None:
@@ -149,7 +140,7 @@ def provider_readiness() -> dict:
             except ValueError:
                 configured = False
             if not configured:
-                errors.append("Configure BMS_NEUROSNAP_API_KEY_FILE as a readable private nonempty credential file")
+                errors.append("Save a Neurosnap API key in the MSA hub, or configure BMS_NEUROSNAP_API_KEY_FILE as a readable private nonempty credential file")
         result[provider] = {
             "configured": not errors,
             "credential_configured": configured,
