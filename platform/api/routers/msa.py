@@ -4,7 +4,7 @@ Creates a GPU-backed msa_batch job using existing orchestrator pipeline.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,8 +42,70 @@ router = APIRouter(prefix="/api/msa", tags=["msa"])
 @router.get("/providers")
 async def get_msa_provider_readiness():
     """Non-submitting provider/cache configuration for browser and agent setup."""
-    from services.msa_provider_setup import provider_readiness
-    return provider_readiness()
+    from services.msa_provider_setup import provider_hub_items, provider_readiness
+    readiness = provider_readiness()
+    return {**readiness, "items": provider_hub_items(readiness)}
+
+
+LOCAL_ADMIN_HOSTS = {None, "127.0.0.1", "::1", "localhost", "testclient"}
+
+
+def _require_local(request: Request) -> None:
+    if request.client and request.client.host not in LOCAL_ADMIN_HOSTS:
+        raise HTTPException(status_code=403, detail="MSA provider credentials are limited to local requests")
+
+
+def _hub_item(provider_id: str) -> dict:
+    from services.msa_provider_setup import provider_hub_items
+    return next(item for item in provider_hub_items() if item["id"] == provider_id)
+
+
+def _known_provider(provider_id: str) -> str:
+    from services.msa_provider_credentials import PROVIDER_IDS
+    if provider_id not in PROVIDER_IDS:
+        raise HTTPException(status_code=404, detail="Unknown MSA provider")
+    return provider_id
+
+
+@router.put("/providers/{provider_id}/credential")
+async def put_msa_provider_credential(provider_id: str, request: Request):
+    """Save a provider API key. The key is written to the private store and never echoed."""
+    from services.msa_provider_credentials import CredentialError, save_credential
+    _require_local(request)
+    _known_provider(provider_id)
+    # Parsed by hand so a rejected body is never echoed back in a validation error.
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="Body must be a JSON object with api_key")
+    api_key = body.get("api_key")
+    endpoint = body.get("endpoint")
+    if not isinstance(api_key, str) or not api_key.strip():
+        raise HTTPException(status_code=422, detail="API key must not be empty")
+    if endpoint is not None and not isinstance(endpoint, str):
+        raise HTTPException(status_code=422, detail="Endpoint must be text")
+    try:
+        save_credential(provider_id, api_key, endpoint)
+    except CredentialError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except OSError:
+        raise HTTPException(status_code=500, detail="Could not save the provider credential") from None
+    return {"success": True, "provider": _hub_item(provider_id)}
+
+
+@router.delete("/providers/{provider_id}/credential")
+async def delete_msa_provider_credential(provider_id: str, request: Request):
+    """Remove the key saved from the hub. An environment-provided key is not touched."""
+    from services.msa_provider_credentials import clear_credential
+    _require_local(request)
+    _known_provider(provider_id)
+    try:
+        removed = clear_credential(provider_id)
+    except OSError:
+        raise HTTPException(status_code=500, detail="Could not clear the provider credential") from None
+    return {"success": True, "removed": removed, "provider": _hub_item(provider_id)}
 
 class MSACacheInspection(BaseModel):
     model_id: str
@@ -352,9 +414,11 @@ async def start_msa_server(request: MSAServerStartRequest):
 
     By default this starts UniRef only on the scheduler-preferred MSA GPU.
     EnvDB startup follows persisted server settings unless explicitly requested.
+    Refused unless the installation enables the ``local_msa`` feature.
     """
-    from services.msa_policy import LOCAL_DISABLED
-    raise HTTPException(status_code=422, detail=LOCAL_DISABLED)
+    from services.msa_server import LOCAL_MSA_NOT_ENABLED, local_msa_enabled
+    if not local_msa_enabled():
+        raise HTTPException(status_code=422, detail=LOCAL_MSA_NOT_ENABLED)
     try:
         settings = read_server_settings()
         include_envdb = (

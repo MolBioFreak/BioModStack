@@ -125,10 +125,13 @@ RESERVED_AUXILIARY_PORTS: dict[int, str] = {
 _FEATURE_DEFAULTS = {
     "bioxp": True,
     "molecular_dynamics": False,
+    # Legacy local MMseqs2 MSA server. Off unless the installation declares it.
+    "local_msa": False,
 }
 _FEATURE_ENV_NAMES = {
     "bioxp": "BMS_FEATURE_BIOXP",
     "molecular_dynamics": "BMS_FEATURE_MOLECULAR_DYNAMICS",
+    "local_msa": "BMS_FEATURE_LOCAL_MSA",
 }
 
 
@@ -881,6 +884,7 @@ def _compat_env_lines(resolved: Mapping[str, object]) -> list[str]:
         'export BMS_WORKFLOW_ADAPTER_LANE="${BMS_WORKFLOW_ADAPTER_LANE:-production}"',
         f'export BMS_FEATURE_BIOXP="${{BMS_FEATURE_BIOXP:-{1 if resolved["features"]["bioxp"] else 0}}}"',
         f'export BMS_FEATURE_MOLECULAR_DYNAMICS="${{BMS_FEATURE_MOLECULAR_DYNAMICS:-{1 if resolved["features"]["molecular_dynamics"] else 0}}}"',
+        f'export BMS_FEATURE_LOCAL_MSA="${{BMS_FEATURE_LOCAL_MSA:-{1 if resolved["features"]["local_msa"] else 0}}}"',
         f'export BMS_WORKFLOW_ADAPTER_URL="${{BMS_WORKFLOW_ADAPTER_URL:-{resolved["workflow_adapter_url"]}}}"',
         f'export BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL="${{BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL:-{resolved["development_workflow_adapter_url"]}}}"',
         f'export BMS_PRODUCTION_WORKFLOW_ADAPTER_URL="${{BMS_PRODUCTION_WORKFLOW_ADAPTER_URL:-{resolved["production_workflow_adapter_url"]}}}"',
@@ -1005,6 +1009,7 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
         'BMS_WORKFLOW_ADAPTER_LANE=production',
         f'BMS_FEATURE_BIOXP={1 if resolved["features"]["bioxp"] else 0}',
         f'BMS_FEATURE_MOLECULAR_DYNAMICS={1 if resolved["features"]["molecular_dynamics"] else 0}',
+        f'BMS_FEATURE_LOCAL_MSA={1 if resolved["features"]["local_msa"] else 0}',
         f'BMS_WORKFLOW_ADAPTER_URL={resolved["workflow_adapter_url"]}',
         f'BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL={resolved["development_workflow_adapter_url"]}',
         f'BMS_PRODUCTION_WORKFLOW_ADAPTER_URL={resolved["production_workflow_adapter_url"]}',

@@ -51,6 +51,21 @@ DEFAULT_SERVER_SETTINGS: Dict[str, Any] = {
 }
 
 
+LOCAL_MSA_FEATURE = "local_msa"
+LOCAL_MSA_NOT_ENABLED = "Local MSA is not enabled for this installation"
+
+
+def local_msa_enabled() -> bool:
+    """Installation-level switch for the legacy local MMseqs2 server (default off)."""
+    from biomodstack_runtime_profile import install_feature_enabled
+    return install_feature_enabled(LOCAL_MSA_FEATURE)
+
+
+def require_local_msa_enabled() -> None:
+    if not local_msa_enabled():
+        raise ValueError(LOCAL_MSA_NOT_ENABLED)
+
+
 def _pid_is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -457,8 +472,7 @@ def ensure_server_for_db(
     db_load_mode: int = DEFAULT_GPUSERVER_DB_LOAD_MODE,
     startup_wait_seconds: float = DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
 ) -> Dict[str, Any]:
-    from services.msa_policy import reject_local_search
-    reject_local_search()
+    require_local_msa_enabled()
     if db_alias not in DB_ALIASES:
         raise ValueError(f"Unknown db alias '{db_alias}'. Expected one of: {sorted(DB_ALIASES)}")
 

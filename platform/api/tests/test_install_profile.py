@@ -332,6 +332,7 @@ def test_install_profile_persists_only_supported_feature_flags(tmp_path: Path, m
     assert snapshot["resolved"]["features"] == {
         "bioxp": False,
         "molecular_dynamics": True,
+        "local_msa": False,
     }
 
     env_text = runtime_profile.get_compat_env_path().read_text(encoding="utf-8")
@@ -374,6 +375,7 @@ def test_feature_env_override_wins_over_install_profile(tmp_path: Path, monkeypa
     assert resolved["features"] == {
         "bioxp": True,
         "molecular_dynamics": False,
+        "local_msa": False,
     }
     assert runtime_profile.install_feature_enabled("bioxp", profile={"features": {"bioxp": False}}) is True
 

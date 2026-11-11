@@ -153,6 +153,26 @@ def provider_readiness() -> dict:
             "providers": result}
 
 
+def provider_hub_items(readiness: dict | None = None) -> list[dict]:
+    """One row per descriptor for the MSA hub. Never contains a key."""
+    readiness = readiness if readiness is not None else provider_readiness()
+    items = []
+    for descriptor in PROVIDER_DESCRIPTORS:
+        state = credential_state(descriptor.id)
+        blockers = list(readiness["providers"].get(descriptor.id, {}).get("blockers") or [])
+        items.append({
+            "id": descriptor.id,
+            "label": descriptor.label,
+            "needs_key": descriptor.needs_key,
+            "configured": bool(state["configured"]),
+            "source": state["source"],
+            "endpoint_configurable": descriptor.endpoint_env is not None,
+            "ready": not blockers,
+            "message": "Ready" if not blockers else "; ".join(blockers),
+        })
+    return items
+
+
 def preflight_msa_provider(model_id: str, params: dict) -> None:
     """Fail missing provider setup before queue insertion, never submit science."""
     from biomodstack_msa_policy import requires_msa_search

@@ -66,7 +66,8 @@ async def test_internal_construct_cannot_bypass_admission():
 def test_local_batch_and_server_block_before_side_effects(monkeypatch):
     from services import msa_server
     monkeypatch.setattr(msa_server, 'get_colabfold_db', lambda: pytest.fail('DB accessed'))
-    with pytest.raises(ValueError, match='Local MSA search is disabled'):
+    monkeypatch.delenv('BMS_FEATURE_LOCAL_MSA', raising=False)
+    with pytest.raises(ValueError, match='Local MSA is not enabled for this installation'):
         msa_server.ensure_server_for_db('uniref', 0)
     with pytest.raises(ValueError, match='Local MSA search is disabled'):
         _build_msa_batch_command({}, '/unused')
