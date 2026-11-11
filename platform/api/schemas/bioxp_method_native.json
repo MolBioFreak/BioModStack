@@ -1,5 +1,5 @@
 {
-  "source_commit": "dbb664a970360f79c9f1d86e6f9aa3ea87b15b45",
+  "source_commit": "f0bb4dd3393c40c0883262ba23919ae33abeb15a",
   "application": {
     "$defs": {
       "AccountingContext": {
@@ -36168,11 +36168,11 @@
       "park": {
         "finite_operation": "park_gantry",
         "finite_child": "parkGantry",
-        "omitted_rehome": false,
-        "source": "ControlLib.parkGantry:7071-7122",
+        "omitted_rehome": true,
+        "source": "ControlLib.scriptInterpretor:6428-6438; ControlLib.parkGantry:7071-7122",
         "side_effects": [
           "source tip ejection/query when TipExist",
-          "optional authored rehome",
+          "HomeXY by default; explicit rehome false skips homing",
           "source Park location publication"
         ]
       },

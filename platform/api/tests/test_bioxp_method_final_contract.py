@@ -10,7 +10,7 @@ from bioxp_method_model import method_catalog
 
 
 def test_committed_native_pin_and_registration():
-    assert EXPORT['source_commit'] == 'dbb664a970360f79c9f1d86e6f9aa3ea87b15b45'
+    assert EXPORT['source_commit'] == 'f0bb4dd3393c40c0883262ba23919ae33abeb15a'
     assert not any('classifier' in k for k in EXPORT['capabilities'])
     for name, schema in EXPORT['method_contract']['action_params'].items():
         assert all(CONTRACTS[name][key] == value for key, value in schema.items())
@@ -88,3 +88,27 @@ def test_backlash_setting_reaches_native_application():
     assert action['params']['application']['operations'][0]['values'] == {'backlash_increments': 12}
     step['inputs']['values']['backlash_increments'] = 501
     assert compile_method({'method': {'schema': 'bms.bioxp-method.v1', 'steps': [step]}})['document'] is None
+
+
+@pytest.mark.parametrize('inputs', [{}, {'rehome': True}, {'rehome': False}])
+def test_workflow_park_preserves_authored_rehome_and_publishes_native_default(inputs):
+    from copy import deepcopy
+    from bioxp_method_compiler import compile_method
+    binding = EXPORT['method_contract']['bindings']['park']
+    assert binding['omitted_rehome'] is True
+    assert binding['side_effects'] == [
+        'source tip ejection/query when TipExist',
+        'HomeXY by default; explicit rehome false skips homing',
+        'source Park location publication',
+    ]
+    request = {'method': {'schema': 'bms.bioxp-method.v1', 'steps': [
+        {'step_id': 'park', 'type': 'action', 'action': 'park', 'inputs': inputs}]}}
+    original = deepcopy(request)
+    result = compile_method(request)
+    assert result['document'] is not None, result['issues']
+    assert request == original
+    [stage] = result['document']['stages']
+    [action] = stage['actions']
+    assert action['kind'] == 'park'
+    assert action['params'] == inputs
+    assert result['document']['metadata']['bms_method']['method'] == original['method']
