@@ -115,6 +115,8 @@ class ProtocolObservedCommand(ProtocolWireModel):
     state_version: Generation
     status: CommandStatus
     terminal: StrictBool
+    # Native recovery evidence is opaque JSON, shared by full and compact reads.
+    recovery_resolution: dict[str, JsonValue] | None = None
 
 
 class ProtocolCommand(ProtocolObservedCommand):
@@ -281,6 +283,7 @@ class ProtocolJob(ProtocolWireModel):
     created_at: str
     updated_at: str
     status: CommandStatus | Literal["awaiting_review", "running"]
+    recorded_status: CommandStatus | None = None
     protocol: ProtocolSource
     execution: ProtocolExecution
     operator: ProtocolOperator
@@ -316,6 +319,7 @@ class ProtocolJobObservation(ProtocolWireModel):
     schema_version: Literal["bioxp.protocol_job_observation.v1"]
     job_id: Identity
     status: CommandStatus
+    recorded_status: CommandStatus | None = None
     command: ProtocolObservedCommand
     execution: ProtocolObservationExecution
     operator: ProtocolObservationOperator
