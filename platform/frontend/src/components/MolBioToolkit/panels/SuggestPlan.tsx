@@ -334,7 +334,7 @@ export function SuggestPlan({ builder = false, goldenGateOptions, selection, seq
             <SetupCard plain={method === 'golden_gate'}>
             <fieldset className="min-w-0 space-y-1">
                 <legend className="text-slate-300">{method === 'restriction' ? 'Backbone' : 'Target (what you want to end up with)'}</legend>
-                <select aria-label="Target molecule" className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={targetChoice} onChange={(e) => setTargetChoice(e.target.value as TargetChoice)}>
+                <select aria-label="Target molecule" className="min-w-0 max-w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200" value={targetChoice} onChange={(e) => setTargetChoice(e.target.value as TargetChoice)}>
                     <option value="current">Open molecule: {sequenceData.name}</option>
                     <option value="selection" disabled={!snapshot}>Selected range{snapshot ? `: ${snapshot.coordinateLabel}` : " (select bases in the sequence view)"}</option>
                     <option value="saved">Another saved molecule</option>
